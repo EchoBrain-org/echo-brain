@@ -7,7 +7,7 @@ enum ProjectProof {
     static let other = "prj_44444444-4444-4444-8444-444444444444"
     static let member = "mem_33333333-3333-4333-8333-333333333333"
     static let context = "ctx_" + String(repeating: "a", count: 64)
-    static let identity = AccountIdentity(displayName: "Ari", role: "Employee", authority: "https://authority.example", version: "1", membershipID: "mem_22222222-2222-4222-8222-222222222222")
+    static var identity = AccountIdentity(displayName: "Ari", role: "Employee", authority: "https://authority.example", version: "1", membershipID: "mem_22222222-2222-4222-8222-222222222222")
     static func require(_ value: @autoclosure () -> Bool, _ message: String = "proof failed") { if !value() { fatalError(message) } }
     static func data(_ value: Any) -> Data { try! JSONSerialization.data(withJSONObject: value) }
     static func wait(_ label: String, _ ready: () -> Bool) {
@@ -23,7 +23,13 @@ enum ProjectProof {
             .feed(project, "eyJsYXN0Ijoicm93In0"), .search(project, "ship", nil), .readContext(project, context)]
     }
     @MainActor static func main() {
-        let mode = CommandLine.arguments[1]
+        let requestedMode = CommandLine.arguments[1]
+        let mode = requestedMode.hasPrefix("cli-") ? String(requestedMode.dropFirst(4)) : requestedMode
+        if requestedMode.hasPrefix("cli-") {
+            let account = AccountClient(executable: URL(fileURLWithPath: CommandLine.arguments[3]))
+            guard case .signedIn(let current) = account.readStatus(AccountRunning()) else { fatalError("real CLI status") }
+            identity = current
+        }
         let fixture = try! Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[2]))
         let operations = (try! JSONSerialization.jsonObject(with: fixture) as! [String: Any])["operations"] as! [[String: Any]]
         let commands = commands(operations)
@@ -142,7 +148,24 @@ enum ProjectProof {
             require(body.string.isEmpty && controller.window.attachedSheet == nil)
             require(uploads.draft == nil && questions.isEmpty); return
         }
-        button("Save", in: sheet).performClick(nil); wait("project save") { !uploads.busy && uploads.receipt != nil }
+        button("Save", in: sheet).performClick(nil)
+        if mode == "ui-upload-rejected" {
+            wait("upload rejection") { !uploads.busy }
+            require(uploads.receipt == nil && uploads.draft == nil && uploads.recovery?.projectID == other)
+            require(uploads.recovery?.audience.project_id == project && projects.selected == nil)
+            require(body.string.isEmpty && controller.window.attachedSheet == nil); return
+        }
+        if mode == "ui-upload-unknown" {
+            wait("unknown upload") { !uploads.busy }
+            guard let originalDraft = uploads.draft else { fatalError("missing immutable draft") }
+            let id = originalDraft.requestID
+            require(uploads.receipt == nil && uploads.recovery?.requestID == id)
+            button("Retry same save", in: sheet).performClick(nil); wait("rejected exact replay") { !uploads.busy }
+            require(uploads.receipt == nil && uploads.recovery?.requestID == id && uploads.draft?.requestID == id)
+            require(uploads.draft?.audience.project_id == project && uploads.draft?.projectID == other)
+            button("Check status", in: sheet).performClick(nil)
+        }
+        wait("project save") { !uploads.busy && uploads.receipt != nil }
         require(uploads.receipt?.audience == UploadAudience(.project, projectID: project))
         require(uploads.receipt?.project_id == other)
         require(uploads.recovery?.audience.project_id == project && uploads.recovery?.projectID == other)
@@ -159,7 +182,16 @@ enum ProjectProof {
             require(session.availability == .notLive && session.projects.isEmpty); return
         }
         require(session.availability == .live && session.projects.count == 1)
-        session.open(project); wait("project") { !session.busy }
+        session.open(project)
+        if mode == "switch-project" { session.open(other) }
+        wait("project") { !session.busy }
+        if mode == "switch-project" {
+            require(session.selected?.project_id == other && session.items.count == 1)
+            require(session.content == nil); return
+        }
+        if mode == "switch-account" {
+            require(session.identity == nil && session.selected == nil && session.items.isEmpty && session.projects.isEmpty); return
+        }
         if mode == "inaccessible" {
             require(session.selected == nil && session.items.isEmpty && session.availability == .live); return
         }
@@ -169,16 +201,36 @@ enum ProjectProof {
         if mode == "account-clear" {
             session.bind(nil); require(session.content == nil && session.selected == nil && session.projects.isEmpty); return
         }
+        if mode == "pagination" {
+            session.search("ship"); wait("search") { !session.busy }
+            require(session.pageCursor != nil)
+            session.nextPage(); wait("next page") { !session.busy }
+            require(session.pageCursor == nil && session.items.count == 1 && session.items[0].context_id != context)
+            return
+        }
         session.roster(); wait("roster") { !session.busy }
         require(session.members.count == 1)
+        if mode == "demoted" {
+            require(!session.canManage && session.selected?.role == "member")
+            session.directory("ari"); session.setMember(member, role: "lead"); require(!session.busy); return
+        }
         session.directory("ari"); wait("directory") { !session.busy }
         require(session.candidates.count == 1)
         session.setMember(member, role: "member"); wait("membership") { !session.busy }
-        if mode == "uncertain-mutation" {
+        if mode == "uncertain-mutation" || mode == "uncertain-overflow" {
             guard let pending = session.pending else { fatalError("lost replay") }
             let args = pending.arguments
             session.retry(); wait("retry") { !session.busy }
             require(session.pending?.arguments == args)
-        } else { require(session.pending == nil && session.selected != nil) }
+            session.bind(nil); require(session.pending == nil && session.selected == nil)
+            session.bind(identity); wait("return to original account") { !session.busy }
+            require(session.pending?.arguments == args, "account change lost frozen mutation")
+        } else {
+            require(session.pending == nil && session.selected != nil)
+            session.removeMember(member); wait("remove member") { !session.busy }; require(session.pending == nil)
+            session.associate(context, project: project, add: true); wait("associate") { !session.busy }; require(session.pending == nil)
+            session.associate(context, project: project, add: false); wait("dissociate") { !session.busy }; require(session.pending == nil)
+            session.create("Apollo"); wait("create") { !session.busy }; require(session.pending == nil && session.selected?.project_id == project)
+        }
     }
 }

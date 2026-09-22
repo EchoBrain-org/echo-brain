@@ -134,6 +134,10 @@ final class ProjectCLI: @unchecked Sendable {
         guard identity.membershipID?.isEmpty == false,
               case .signedIn(let before) = account.readStatus(running), before == identity else { return .unavailable }
         let output = capture(arguments, running: running)
+        let state = running.state()
+        // A cancelled/overflowed/timed-out subprocess cannot perform a final
+        // account probe. Treat its mutation as unknown, not an account switch.
+        if state.cancelled || state.timedOut { return .failed }
         guard case .signedIn(let after) = account.readStatus(running), after == identity else { return .accountChanged }
         return output
     }
@@ -324,6 +328,8 @@ final class ProjectSession {
     private(set) var authorizationGeneration = UUID()
     private var page: ProjectCommand?
     private var readForRoster = false
+    private var pendingByAccount: [String: ProjectCommand] = [:]
+    private func accountKey(_ account: AccountIdentity) -> String { account.authority + "\n" + (account.membershipID ?? "") }
     private var active: AccountRunning?
     private var generation = UUID()
     private var concealed = false
@@ -335,7 +341,7 @@ final class ProjectSession {
     func bind(_ account: AccountIdentity?) {
         guard identity != account else { return }
         if !hasOutstandingMutation { cancel() }
-        clearAll(); identity = account; pending = nil; availability = .checking; concealed = false
+        clearAll(); identity = account; pending = account.flatMap { pendingByAccount[accountKey($0)] }; availability = .checking; concealed = false
         invalidateDrafts()
         if account != nil && !hasOutstandingMutation { discover() } else { onChange?() }
     }
@@ -398,7 +404,9 @@ final class ProjectSession {
         mutate(.associate(project, context, UUID().uuidString.lowercased(), add))
     }
     private func mutate(_ command: ProjectCommand) {
-        pending = command; clearContent(); status = "Saving project change…"; run(command)
+        guard let identity else { return }
+        pending = command; pendingByAccount[accountKey(identity)] = command
+        clearContent(); status = "Saving project change…"; run(command)
     }
     func retry() {
         guard !busy, let pending else { return }
@@ -406,7 +414,10 @@ final class ProjectSession {
     }
     // Explicit UI acknowledgment is required before abandoning an unknown
     // mutation. Refreshing a roster/feed never silently clears its replay ID.
-    func abandonPending() { guard !busy else { return }; pending = nil; onChange?() }
+    func abandonPending() {
+        guard !busy, let identity else { return }
+        pendingByAccount.removeValue(forKey: accountKey(identity)); pending = nil; onChange?()
+    }
     func leave() {
         guard !hasOutstandingMutation else { return }
         cancel(); clearScoped(); invalidateDrafts(); onChange?()
@@ -416,7 +427,11 @@ final class ProjectSession {
         if !hasOutstandingMutation { cancel() }
         clearAll(); invalidateDrafts(); onChange?()
     }
-    func shutdown() { cancel(); clearAll(); pending = nil }
+    func accessLost() {
+        if !hasOutstandingMutation { cancel() }
+        clearAll(); invalidateDrafts(); onChange?()
+    }
+    func shutdown() { cancel(); clearAll(); pending = nil; pendingByAccount = [:] }
     private func invalidateDrafts() { authorizationGeneration = UUID(); onAccessChanged?() }
     private func cancel() { active?.cancel(); active = nil; generation = UUID(); busy = false; hasOutstandingMutation = false }
     private func clearContent() { items = []; content = nil; pageCursor = nil }
@@ -452,7 +467,7 @@ final class ProjectSession {
                 self.status = items.isEmpty ? "No context you can read on this page." : "Select an original to read."
             case .content(let content): self.content = content; self.status = ""
             case .applied(let project):
-                self.pending = nil
+                self.pending = nil; self.pendingByAccount.removeValue(forKey: self.accountKey(identity))
                 // Receipts describe the committed operation, not current access
                 // or association state. Always issue a fresh authorized read.
                 self.open(project); return
@@ -837,7 +852,10 @@ final class ProjectWriteSheet: NSObject {
         if let selected = projects?.selected, !projectChoices.contains(where: { $0.project_id == selected.project_id }) { projectChoices.append(selected) }
         destination.removeAllItems(); destination.addItem(withTitle: "No project")
         audienceProject.removeAllItems(); audienceProject.addItem(withTitle: "Choose audience project")
-        for project in projectChoices { destination.addItem(withTitle: project.name); audienceProject.addItem(withTitle: project.name) }
+        for project in projectChoices {
+            destination.menu?.addItem(NSMenuItem(title: project.name, action: nil, keyEquivalent: ""))
+            audienceProject.menu?.addItem(NSMenuItem(title: project.name, action: nil, keyEquivalent: ""))
+        }
         if let selected = projects?.selected, let index = projectChoices.firstIndex(where: { $0.project_id == selected.project_id }) { destination.selectItem(at: index + 1) }
         title.stringValue = ""; body.string = ""; visibility = .onlyMe; confirming = false
         refresh()
@@ -1060,8 +1078,10 @@ final class ProjectsController: NSObject, NSWindowDelegate {
         super.init(); configure()
         self.uploads.onChange = { [weak self] in self?.refresh() }
         self.projects.onChange = { [weak self] in self?.refresh() }
+        self.uploads.onProjectAccessChanged = { [weak self] in self?.projects.accessLost() }
         self.projects.onAccessChanged = { [weak self] in
             self?.uploads.projectAccessChanged(); self?.writeSheet.projectAccessChanged()
+            self?.askField.stringValue = ""; self?.memberQuery.stringValue = ""
         }
         refresh()
     }
@@ -1102,10 +1122,16 @@ final class ProjectsController: NSObject, NSWindowDelegate {
         }
         if refreshingProjects && !uploads.busy {
             refreshingProjects = false
-            if projects.identity == uploads.identity && !projects.busy { projects.discover() }
+            if projects.identity != uploads.identity { projects.bind(uploads.identity) }
+            else if !projects.busy { projects.discover() }
         }
         writeSheet.refresh()
-        newProject.title = projects.availability == .live ? "New project" : "New project · Not live yet"
+        switch projects.availability {
+        case .live: newProject.title = "New project"
+        case .notLive: newProject.title = "New project · Not live yet"
+        case .checking: newProject.title = "New project · Check availability"
+        case .failed: newProject.title = "New project · Refresh projects"
+        }
         newProject.isEnabled = projects.canMutate
         accountButton.title = uploads.identity?.displayName ?? "Account · Sign in"
         peopleButton.isHidden = uploads.identity?.role.lowercased() != "owner"
@@ -1235,12 +1261,15 @@ final class ProjectsController: NSObject, NSWindowDelegate {
         } else {
             associationChoices = projects.projects
             associationPicker.removeAllItems(); associationPicker.addItem(withTitle: "Choose a destination project")
-            associationChoices.forEach { associationPicker.addItem(withTitle: $0.name) }
+            associationChoices.forEach { associationPicker.menu?.addItem(NSMenuItem(title: $0.name, action: nil, keyEquivalent: "")) }
             associationPicker.setAccessibilityLabel("Original destination project"); addResult(associationPicker)
             action("Associate original", #selector(associateOriginal), enabled: projects.canMutate && !associationChoices.isEmpty)
         }
     }
-    @objc private func refreshProjects() { projects.discover() }
+    @objc private func refreshProjects() {
+        guard !hasOutstandingMutation, !uploads.busy else { return }
+        refreshingProjects = true; uploads.refreshIdentity()
+    }
     @objc private func nextProjects() { projects.discover(cursor: projects.listCursor) }
     @objc private func openProject(_ sender: NSButton) {
         guard projects.projects.indices.contains(sender.tag) else { return }

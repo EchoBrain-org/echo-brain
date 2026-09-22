@@ -294,6 +294,7 @@ final class UploadSession {
     private let defaults: UserDefaults
     private let isForeground: @MainActor () -> Bool
     var onChange: (() -> Void)?
+    var onProjectAccessChanged: (() -> Void)?
     private(set) var identity: AccountIdentity?
     private(set) var matches: [UploadMatch] = []
     private(set) var content: UploadContent?
@@ -420,7 +421,7 @@ final class UploadSession {
                 self.reset(); self.status = "Sign in from Account to continue."
             case .rejected(let failure):
                 self.matches = []; self.content = nil
-                if failure.losesAccess { self.draft = nil }
+                if failure.losesAccess { self.draft = nil; self.onProjectAccessChanged?() }
                 self.status = self.recovery == nil ? failure.message : "The current attempt was rejected. An earlier save may exist; keep checking its original status."
             case .failed:
                 self.matches = []; self.content = nil
