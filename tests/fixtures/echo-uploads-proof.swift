@@ -14,13 +14,13 @@ enum UploadProof {
         try! UploadDraft(title: "Client memo", bytes: Data(original.utf8), visibility: visibility)
     }
     static func content() -> [String: Any] {
-        ["schema_version": 1, "kind": "echo-person-upload-content-v1", "context_id": contextID,
-         "received_at": "2026-09-21T00:00:00.000Z", "visibility": "only_me", "title": "Client memo", "text": original]
+        ["schema_version": 2, "kind": "echo-person-upload-content-v2", "context_id": contextID,
+         "received_at": "2026-09-21T00:00:00.000Z", "audience": ["kind": "only_me"], "title": "Client memo", "text": original]
     }
     @MainActor static func main() {
         let mode = CommandLine.arguments[1]
         let folder = URL(fileURLWithPath: CommandLine.arguments[3])
-        let client = UploadClient(account: AccountClient(executable: URL(fileURLWithPath: CommandLine.arguments[2])))
+        let client = UploadClient(cli: ProjectCLI(executable: URL(fileURLWithPath: CommandLine.arguments[2])))
         func execute(_ command: UploadCommand) -> UploadResult { client.execute(command, identity: identity, running: AccountRunning()) }
         switch mode {
         case "round-trip":
@@ -65,7 +65,7 @@ enum UploadProof {
             }
             guard case .content(let read) = UploadClient.parse(data(content()), command: .read(contextID)) else { fatalError("valid original") }
             require(read.text == original)
-            for (key, value) in [("context_id", "ctx_" + String(repeating: "c", count: 64)), ("visibility", "public"),
+            for (key, value) in [("context_id", "ctx_" + String(repeating: "c", count: 64)), ("audience", "public"),
                                  ("kind", "other"), ("received_at", "invalid"), ("text", String(repeating: "x", count: 8193)), ("title", "bad\nname")] {
                 var changed = content(); changed[key] = value
                 guard case .failed = UploadClient.parse(data(changed), command: .read(contextID)) else { fatalError(key) }
@@ -74,13 +74,13 @@ enum UploadProof {
             guard case .failed = UploadClient.parse(data(extra), command: .read(contextID)) else { fatalError("extra field") }
             var hit = content(); hit.removeValue(forKey: "schema_version"); hit.removeValue(forKey: "kind"); hit.removeValue(forKey: "text"); hit["excerpt"] = "Memo"
             for hits in [[hit, hit], Array(repeating: hit, count: 11)] {
-                guard case .failed = UploadClient.parse(data(["schema_version": 1, "kind": "echo-person-upload-search-v1", "results": hits]), command: .search("Memo")) else { fatalError("duplicate or overflow") }
+                guard case .failed = UploadClient.parse(data(["schema_version": 2, "kind": "echo-person-upload-search-v2", "results": hits]), command: .search("Memo")) else { fatalError("duplicate or overflow") }
             }
             let attempt = draft()
-            var receipt: [String: Any] = ["schema_version": 1, "kind": "echo-person-update-receipt-v1", "context_id": contextID,
-                                         "received_at": "2026-09-21T00:00:00.000Z", "request_id": attempt.requestID, "visibility": "team", "state": "received"]
+            var receipt: [String: Any] = ["schema_version": 2, "kind": "echo-person-update-receipt-v2", "context_id": contextID,
+                                         "received_at": "2026-09-21T00:00:00.000Z", "request_id": attempt.requestID, "audience": ["kind": "team"], "project_id": NSNull(), "state": "received"]
             guard case .failed = UploadClient.parse(data(receipt), command: .submit(attempt)) else { fatalError("visibility mismatch") }
-            receipt["visibility"] = "only_me"; receipt["request_id"] = UUID().uuidString.lowercased()
+            receipt["audience"] = ["kind": "only_me"]; receipt["request_id"] = UUID().uuidString.lowercased()
             guard case .failed = UploadClient.parse(data(receipt), command: .submit(attempt)) else { fatalError("request mismatch") }
         case "recovery":
             let suite = "org.echobrain.test.uploads." + UUID().uuidString
@@ -92,7 +92,7 @@ enum UploadProof {
             var other = identity; other.membershipID = "mem_other"
             require(UploadRecovery.load(for: other, defaults: defaults) == nil)
             let keys = Set((try! JSONSerialization.jsonObject(with: JSONEncoder().encode(receipt)) as! [String: Any]).keys)
-            require(keys == Set(["authority", "membershipID", "requestID", "visibility"]))
+            require(keys == Set(["authority", "membershipID", "requestID", "audience"]))
             let otherReceipt = UploadRecovery(identity: other, requestID: UUID().uuidString.lowercased(), visibility: .onlyMe)!
             otherReceipt.save(for: other, defaults: defaults)
             UploadRecovery.clear(for: identity, defaults: defaults)
@@ -130,7 +130,7 @@ enum UploadProof {
         }
         let session = UploadSession(client: client, defaults: defaults, isForeground: { true })
         var questions: [String] = []
-        let controller = ProjectsController(uploads: session, onAsk: { questions.append($0) })
+        let controller = ProjectsController(uploads: session, projects: ProjectSession(client: ProjectClient(cli: client.cli), foreground: { true }), onAsk: { questions.append($0) })
         let window = controller.window
         guard let root = window.contentView else { fatalError("home window") }
         func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
