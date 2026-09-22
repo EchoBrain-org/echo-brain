@@ -93,7 +93,7 @@ describe('PC-06 synthetic seams with real V7 custody (not cross-layer qualificat
       );
       delivered.push(response);
     };
-    expect(run).toThrow();
+    denied(run, kind === 'project' ? 'not_found' : kind === 'organization' ? 'unauthorized' : 'stale_access_state');
     expect(delivered).toEqual([]);
     expect(h.database.prepare('SELECT count(*) AS n FROM authority_project_read_audit_v1').get()).toEqual(before);
   });
@@ -122,15 +122,18 @@ describe('PC-06 synthetic seams with real V7 custody (not cross-layer qualificat
     };
     expect(h.status(s.project.request_id).metadata).toBe('pending');
     proveOriginal();
+    let observedDuringHandoff = false;
     const model = vi.fn(async (source: { title: string; text: string }) => {
       expect(source).toEqual(SCENARIO.originals.alpha);
       expect(h.status(s.project.request_id).metadata).toBe('processing');
       proveOriginal();
+      observedDuringHandoff = true;
       if (outcome === 'unavailable') throw new Error('synthetic model failure');
       return 'zenith';
     });
     expect(await h.enrich(s.project.context_id, model)).toBe(outcome);
     expect(model).toHaveBeenCalledTimes(1);
+    expect(observedDuringHandoff).toBe(true);
     expect(h.status(s.project.request_id).metadata).toBe(outcome);
     proveOriginal();
     expect(ids(h.search(PEOPLE.bob, s.alpha, 'zenith').items)).toEqual(outcome === 'ready' ? [s.project.context_id] : []);

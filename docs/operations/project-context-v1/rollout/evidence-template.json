@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "kind": "echo-project-context-v1-prepared-evidence",
+  "status": "not_run",
+  "environment": null,
+  "operation_receipt_reference": null,
+  "reset_eligibility_receipt_reference": null,
+  "runtime_only_inventory_reference": null,
+  "recovery_receipt_reference": null,
+  "candidate": {
+    "integration_sha": null,
+    "pc02_sha": null,
+    "pc03_sha": null,
+    "pc04_sha": null,
+    "pc05_sha": null,
+    "server_image_digest": null,
+    "runtime_profile_digest": null,
+    "release_record_digest": null,
+    "person_client_archive_digest": null,
+    "native_client_source_sha": null
+  },
+  "checks": {
+    "fresh_v7_lineage": "not_run",
+    "reseed_exact_membership_tenures": "not_run",
+    "person_a_exact_client": "not_run",
+    "person_b_exact_client": "not_run",
+    "two_project_visibility": "not_run",
+    "original_before_hints": "not_run",
+    "original_after_hint_success": "not_run",
+    "original_after_hint_failure": "not_run",
+    "revocation_and_rejoin": "not_run",
+    "cursor_and_identifier_misuse": "not_run",
+    "unknown_outcome_reconciliation": "not_run",
+    "unsupported_client": "not_run",
+    "no_project_ask_or_approval_coupling": "not_run",
+    "authority_private_health": "not_run",
+    "proxy_external_reachability": "not_run",
+    "telemetry_preserved": "not_run",
+    "compatible_state_and_artifact_recovery": "not_run"
+  },
+  "sanitized_observations": [],
+  "final_candidate_decision_reference": null
+}

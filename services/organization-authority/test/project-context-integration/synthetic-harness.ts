@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { applyAuthorityBaselineV7 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import {
   validatePersonUpdateSubmitV2,
   type PersonUpdateSubmitV2, type PersonUploadAudienceV2, type ProjectIdV1,
@@ -15,11 +16,24 @@ import type {
   ProjectAuthorizationScopeV1, ProjectAuthorizationSnapshotV1,
   ProjectContextReadTransactionV1, ProjectReadResponseV1,
 } from '../../src/application/ports/project-context-v1.js';
-import { addMembership, authorization, projectContextDatabase, PROJECT_CONTEXT_NOW } from '../fixtures/project-context-sqlite.js';
+import { addMembership, authorization, PROJECT_CONTEXT_NOW } from '../fixtures/project-context-sqlite.js';
 import { PEOPLE, SCENARIO } from '../../../../tests/fixtures/project-context-integration/scenario.js';
 
 export { PEOPLE, SCENARIO };
 export const missingContext = `ctx_${'f'.repeat(64)}`;
+
+function scenarioDatabase(path: string): Database.Database {
+  const database = new Database(path);
+  database.pragma('foreign_keys = ON');
+  applyAuthorityBaselineV7(database);
+  database.prepare(`INSERT INTO authority_metadata
+    (singleton, authority_id, organization_id, organization_display_name, descriptor_json, created_at, last_observed_at)
+    VALUES (1, 'oau_00000000-0000-4000-8000-000000000006', ?, 'PC06 synthetic', '{}', ?, ?)`)
+    .run(PEOPLE.alice.organization_id, PROJECT_CONTEXT_NOW, PROJECT_CONTEXT_NOW);
+  database.prepare('INSERT INTO authority_project_authorization_state_v1 (organization_id, revision, updated_at) VALUES (?, 0, ?)')
+    .run(PEOPLE.alice.organization_id, PROJECT_CONTEXT_NOW);
+  return database;
+}
 
 /**
  * PC-01 SQLite + frozen codecs are real. Person authentication, delivery, and
@@ -29,7 +43,7 @@ export const missingContext = `ctx_${'f'.repeat(64)}`;
 export class SyntheticProjectHarness {
   readonly root = mkdtempSync(join(tmpdir(), 'echo-pc06-'));
   readonly path = join(this.root, 'authority.sqlite');
-  database: Database.Database = projectContextDatabase(this.path);
+  database: Database.Database = scenarioDatabase(this.path);
   repository = new SqliteProjectContextRepositoryV1(this.database, () => PROJECT_CONTEXT_NOW);
   eligibility = new SqliteProjectUploadEnrichmentAuthorizationV1(this.database);
   private sequence = 0;

@@ -2,8 +2,8 @@ import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-
 
 /** Synthetic people only. Alice overlaps both projects; Bob/Carol are disjoint. */
 export const PEOPLE = Object.fromEntries(['alice', 'bob', 'carol', 'dana'].map((name, index) => [name, {
-  organization_id: 'org_project_test',
-  principal_id: `prn_pc06_${name}`,
+  organization_id: 'org_00000000-0000-4000-8000-000000000006',
+  principal_id: `prn_00000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`,
   membership_id: `mem_00000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`,
   membership_type: 'employee',
 }])) as Record<'alice' | 'bob' | 'carol' | 'dana', AuthorityPersonMembershipBinding>;
