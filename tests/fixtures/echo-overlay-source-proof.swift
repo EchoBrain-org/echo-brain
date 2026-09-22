@@ -156,7 +156,7 @@ private enum EchoOverlaySourceFixtureMain {
         case "source-card-layout", "source-card-minimal", "source-card-narrow":
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.prohibited)
-            passed = OverlayController.proveSourceCard(
+            passed = AnswerController.proveSourceCard(
                 record: CliRunner.parseSourceRecord(mode == "source-card-minimal" ? sourceData() : contextData(), source: source())!,
                 screenshot: ProcessInfo.processInfo.environment["ECHO_OVERLAY_FIXTURE_OUTPUT"].map { "\($0)/\(mode).png" },
                 narrow: mode == "source-card-narrow"
@@ -164,7 +164,7 @@ private enum EchoOverlaySourceFixtureMain {
         case "source-final-success":
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.prohibited)
-            passed = OverlayController.proveFinalSourcePresentation(
+            passed = AnswerController.proveFinalSourcePresentation(
                 record: CliRunner.parseSourceRecord(sourceData(), source: source())!
             )
         case "selected-source-priority":
@@ -175,7 +175,7 @@ private enum EchoOverlaySourceFixtureMain {
             defer { try? FileManager.default.removeItem(at: marker) }
             guard let executable = selectedPrioritySourceCLI(marker: marker) else { Darwin.exit(EXIT_FAILURE) }
             defer { try? FileManager.default.removeItem(at: executable) }
-            passed = OverlayController.proveSelectedSourcePriority(
+            passed = AnswerController.proveSelectedSourcePriority(
                 executable: executable,
                 marker: marker,
                 stalledSource: source(),
@@ -184,7 +184,7 @@ private enum EchoOverlaySourceFixtureMain {
         case "uncited-answer-layout":
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.prohibited)
-            passed = OverlayController.proveUncitedAnswerLayout()
+            passed = AnswerController.proveUncitedAnswerLayout()
         case "untitled-source":
             let detail = CliRunner.parseSourceRecord(sourceData(meeting: ["id": "meeting-fixture"]), source: source())
             passed = detail?.title == "Untitled meeting"
@@ -194,7 +194,7 @@ private enum EchoOverlaySourceFixtureMain {
         case "panel-resigns-key":
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.prohibited)
-            passed = OverlayController.proveInactivePanelFocusLoss(source: source())
+            passed = AnswerController.proveInactivePanelFocusLoss(source: source())
         case "large-source":
             let large = String(repeating: "x", count: 130 * 1024)
             let detail = CliRunner.parseSourceRecord(sourceData(decisionText: large), source: source())
@@ -458,9 +458,16 @@ private final class SourceBatchProbe: @unchecked Sendable {
 
 // Exercise the real panel delegate and its private presentation state without
 // showing a window, activating ECHO, reading a session, or launching a client.
-extension OverlayController {
+extension AnswerController {
+    private static func makeController() -> AnswerController {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 680), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        let controller = AnswerController(window: window, container: window.contentView!)
+        window.delegate = controller
+        return controller
+    }
+
     fileprivate static func proveSourceCard(record: SourceRecord, screenshot: String?, narrow: Bool) -> Bool {
-        let controller = OverlayController()
+        let controller = makeController()
         controller.panel.setFrame(NSRect(x: 0, y: 0, width: narrow ? 700 : 1180, height: 720), display: false)
         controller.currentSources = [record.source]
         controller.sourceRecords = [record.source.recordSha256: record]
@@ -470,7 +477,7 @@ extension OverlayController {
         controller.answerColumn?.isHidden = narrow
         controller.sourcePane.isHidden = false
         controller.sourceScrollView.isHidden = false
-        controller.composer.string = "Why did we delay the customer dashboard launch?"
+        controller.question = "Why did we delay the customer dashboard launch?"
         controller.answerView.textStorage?.setAttributedString(NSAttributedString(
             string: "The launch moved from September 15 to September 29 because customer permission checks were incomplete.\n\nEngineering will complete the checks. The recorded follow-up is to share the revised timeline with Sales.",
             attributes: Self.answerAttributes
@@ -535,7 +542,7 @@ extension OverlayController {
     }
 
     fileprivate static func proveInactivePanelFocusLoss(source: DisplaySource) -> Bool {
-        let controller = OverlayController()
+        let controller = makeController()
         let pending = RunningAsk()
         let requestID = UUID()
         controller.currentSources = [source]
@@ -578,7 +585,7 @@ extension OverlayController {
     }
 
     fileprivate static func proveFinalSourcePresentation(record: SourceRecord) -> Bool {
-        let controller = OverlayController()
+        let controller = makeController()
         controller.currentSources = [record.source]
         controller.sourcePaneOpen = true
         controller.sourcePane.isHidden = false
@@ -610,7 +617,7 @@ extension OverlayController {
         stalledSource: DisplaySource,
         selectedSource: DisplaySource
     ) -> Bool {
-        let controller = OverlayController()
+        let controller = makeController()
         controller.runner = CliRunner(executable: executable)
         controller.currentSources = [stalledSource, selectedSource]
         controller.sourcePaneOpen = true
@@ -633,7 +640,7 @@ extension OverlayController {
     }
 
     fileprivate static func proveUncitedAnswerLayout() -> Bool {
-        let controller = OverlayController()
+        let controller = makeController()
         controller.panel.setFrame(NSRect(x: 0, y: 0, width: 960, height: 720), display: false)
         controller.answerHeader.isHidden = false
         controller.answerScrollView.isHidden = false

@@ -6,6 +6,7 @@
   ],
   "neutral_sources": [
     "product/echo-overlay/ui-support.swift",
+    "product/echo-overlay/projects.swift",
     "product/echo-overlay/people.swift",
     "product/echo-overlay/account.swift",
     "product/echo-overlay/uploads.swift"
