@@ -520,6 +520,43 @@ describe("meeting approval journey telemetry v1", () => {
     );
   });
 
+  it("keeps a completed search marker terminal when recovery observes the same approval again", () => {
+    const failures: unknown[] = [];
+    const state = openState(stateFile());
+    const recorder = openMeetingApprovalJourneyTelemetryV1(
+      {
+        vocabulary: TELEMETRY_FIXTURE_VOCABULARY_V1,
+        state_directory: "/unused-with-injected-state",
+        observer: () => undefined,
+        on_observation_failure: (failure) => failures.push(failure),
+        release_sha: RELEASE_SHA,
+        build_number: 42,
+        extraction_provider: "openrouter",
+        extraction_model: "deepseek/deepseek-v3.2",
+      },
+      {
+        state,
+        now: () => "2026-09-02T12:40:00.000Z",
+        now_ms: () => 100,
+      },
+    );
+    const intake = recorder.beginOrResumeSource(source(), SOURCE_STARTED)!;
+    recorder.bindCandidate(intake, {
+      candidate_id: "candidate-completed-search-recovery",
+      approval_id: "approval-completed-search-recovery",
+    });
+    recorder.markAwaitingSearch("approval-completed-search-recovery");
+    const attempts = recorder.beginAwaitingSearch();
+    recorder.completeAwaitingSearch(attempts, "published");
+    expect(state.listApprovedRecordsAwaitingSearch()).toEqual([]);
+
+    recorder.markAwaitingSearch("approval-completed-search-recovery");
+
+    expect(state.listApprovedRecordsAwaitingSearch()).toEqual([]);
+    expect(failures).toEqual([]);
+    recorder.close();
+  });
+
   it("keeps cancelled search pending across restart without counting its continuation as a retry", async () => {
     const path = stateFile();
     const events: JourneyTelemetryEventV1[] = [];
