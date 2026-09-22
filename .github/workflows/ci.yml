@@ -187,12 +187,13 @@ jobs:
           node tests/fixtures/person-onboarding-smoke.mjs --kit-root "$graphical_resources"
           test -x "$person_home/Applications/ECHO.app/Contents/MacOS/ECHO"
           test -x "$person_home/Library/Application Support/ECHO/bin/echo-brain"
-      - name: Exercise native Account, People, Uploads, and Sources with offline fixtures
+      - name: Exercise native Account, People, Projects, Uploads, and Sources with offline fixtures
         run: >-
           npx vitest run --config vitest.config.ts
           tests/architecture/person-account-ui.test.ts
           tests/architecture/swift-source-boundaries.test.ts
           tests/architecture/echo-people.test.ts
+          tests/architecture/echo-projects.test.ts
           tests/architecture/echo-uploads.test.ts
           tests/architecture/echo-overlay-sources-fixture.test.ts
 
