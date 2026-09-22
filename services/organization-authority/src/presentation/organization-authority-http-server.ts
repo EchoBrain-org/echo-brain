@@ -792,8 +792,15 @@ export function createOrganizationAuthorityHttpServer(
         return;
       }
       if (options.project_context !== undefined) {
-        const release = await projectRoute(request, url, options.project_context);
-        if (release !== undefined) { release(response); return; }
+        try {
+          const release = await projectRoute(request, url, options.project_context);
+          if (release !== undefined) { release(response); return; }
+        } catch (error) {
+          if (error instanceof AuthorityOperationError) throw error;
+          // Persistence/audit failures must keep the closed project error
+          // contract while withholding the response and private diagnostics.
+          throw new AuthorityOperationError('unavailable', 'request failed');
+        }
       }
       if (options.person_updates !== undefined && url.search === '') {
         if (method === 'POST' && url.pathname === PERSON_UPDATES_PATH_V1) {
