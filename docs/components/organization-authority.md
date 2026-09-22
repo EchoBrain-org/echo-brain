@@ -21,6 +21,7 @@ decision_ids:
   - ADR-0008
   - ADR-0010
   - ADR-0011
+  - ADR-0013
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -93,6 +94,7 @@ Authority boundary.
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)
 - [Permission release-boundary invariant](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)
+- [Project context V1 contract](../decisions/ADR-0013-project-context-v1-contract.md)
 - [`services/organization-authority/`](../../services/organization-authority)
 - [`packages/organization-control-plane/`](../../packages/organization-control-plane)
 - [`packages/organization-record/`](../../packages/organization-record)
@@ -103,10 +105,13 @@ its complete compatible state generation as one qualification boundary.
 
 ## Original Person upload custody
 
-Authority V6 saves authenticated original text with the selected Only me/Team
+Authority V7 retains authenticated V1 original-text uploads with the selected Only me/Team
 visibility and an immutable receipt. Upload-specific read/search verifies the
 current reader, enforces that visibility, and audits before release. Optional
 search enrichment cannot change permissions or source text. Uploads remain in
 protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits, indefinite retention, and the offline V5 copy.
+The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persistence.md)
+describes the fresh V7 project/V2 storage. Project routes and client operations
+are not live yet; the historical V5-to-V6 copy does not initialize V7.

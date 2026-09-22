@@ -13,6 +13,7 @@ reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
 decision_ids:
   - ADR-0001
   - ADR-0002
+  - ADR-0013
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-RUNTIME-001
@@ -47,6 +48,7 @@ integration policy, and the organization record.
 
 - [Person client architecture](../architecture/person-client-architecture.md)
 - [Identity and onboarding](../architecture/identity-and-onboarding.md)
+- [Project context V1 contract](../decisions/ADR-0013-project-context-v1-contract.md)
 - Source: [`src/product/person-client/`](../../src/product/person-client)
 - Tests: [`tests/person-client/`](../../tests/person-client)
 

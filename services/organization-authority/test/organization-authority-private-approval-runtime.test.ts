@@ -1895,7 +1895,18 @@ it('transitions a stopped V5 fixture with sessions, signed records, pending and 
     try { copyAuthorityV5ToV6(previous, next); for (const [name, rows] of oldRows) expect(next.prepare(`SELECT * FROM ${name}`).all(), name).toEqual(rows); }
     finally { previous.close(); next.close(); }
     expect(readFileSync(recordPath)).toEqual(recordBefore); expect(readFileSync(controlPath)).toEqual(controlBefore);
-    renameSync(nextPath, path); chmodSync(path, 0o600);
+    // The offline V5-to-V6 copier remains a frozen compatibility proof, but a
+    // current runtime must never accept its historical output as active state.
+    // Exercise the strict V7 pre-open gate before restoring the live V7 file.
+    const preservedCurrentPath = join(root(), 'v7.sqlite');
+    renameSync(path, preservedCurrentPath);
+    try {
+      renameSync(nextPath, path); chmodSync(path, 0o600);
+      await expect(openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } })).rejects.toThrow('schema version is not exactly 7');
+    } finally {
+      if (existsSync(path)) renameSync(path, nextPath);
+      renameSync(preservedCurrentPath, path); chmodSync(path, 0o600);
+    }
     const count = fixture.poster.markers.length;
     runtime = await openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } });
     await runtime.drain(AbortSignal.timeout(5000));

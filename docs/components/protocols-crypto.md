@@ -16,6 +16,7 @@ decision_ids:
   - ADR-0004
   - ADR-0005
   - ADR-0006
+  - ADR-0013
 invariant_ids:
   - INV-IDENTITY-002
 failure_pattern_ids:
@@ -52,6 +53,7 @@ Any protocol or cryptographic change must state:
 ## Current references
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
+- [Project context V1 contract](../decisions/ADR-0013-project-context-v1-contract.md)
 - [`packages/federation-protocol/`](../../packages/federation-protocol)
 - [`packages/organization-protocol/`](../../packages/organization-protocol)
 - [`packages/organization-api/`](../../packages/organization-api)

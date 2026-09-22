@@ -34,6 +34,7 @@ separately.
 | [ADR-0010](ADR-0010-disposable-related-atom-projection-v1.md)           | Disposable related-atom projection V1            | accepted   |
 | [ADR-0011](ADR-0011-bm25-lexical-scoring-v1.md)                         | BM25 lexical scoring V1                          | accepted   |
 | [ADR-0012](ADR-0012-person-public-response-privacy.md) | Person public response privacy and internal release witnesses | accepted |
+| [ADR-0013](ADR-0013-project-context-v1-contract.md) | Project context V1 contract | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

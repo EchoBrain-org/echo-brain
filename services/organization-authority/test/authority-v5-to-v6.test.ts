@@ -26,7 +26,7 @@ it('copies the exact V5 admission/cursor/frozen/ambiguous state without changing
   previous.close();
   const before = createHash('sha256').update(readFileSync(path)).digest('hex');
   const input = new Database(path, { readonly: true }); const output = new Database(join(root, 'v6.sqlite')); databases.push(input, output);
-  expect(() => new SqlitePersonUpdateInboxV1(input)).toThrow('explicit offline');
+  expect(() => new SqlitePersonUpdateInboxV1(input)).toThrow('require Authority V6 or fresh V7 state');
   copyAuthorityV5ToV6(input, output);
   expect(createHash('sha256').update(readFileSync(path)).digest('hex')).toBe(before);
   for (const [name, snapshot] of rows) expect(output.prepare(`SELECT * FROM ${name}`).all(), name).toEqual(snapshot);

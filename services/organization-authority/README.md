@@ -3,11 +3,15 @@
 `organization-authority` is the Organization Authority service. It owns state
 initialization, Person OIDC sessions, initial-owner Slack identity linking,
 admitted meeting processing, approval finalization, immutable V4 records, and
-permission-aware Person reads and answer composition. Authority V6 also owns the
+permission-aware Person reads and answer composition. Authority V7 also owns the
 durable original-text upload store, explicit visibility, audited read/search, and
-optional search enrichment. Uploads do not require Slack approval. Runtime opening never migrates state. The explicit
+optional search enrichment. Uploads do not require Slack approval. V7 adds the
+[PC-01 project persistence foundation](../../docs/product/2026-09-21-project-context-pc01-persistence.md);
+project routes and client operations are not live yet. Runtime opening never
+migrates state. The historical
 [offline V5-to-V6 compatibility copy](../../docs/product/2026-09-21-person-update-inbox-v1.md#compatibility-and-custody)
-preserves an exact stopped V5 snapshot; unsupported older state remains refused.
+preserves an exact stopped V5 snapshot for a V6 artifact. The current V7
+artifact requires fresh state and refuses V5/V6 databases.
 
 For any deployed staging initial-owner setup, do not run the lower-level setup
 commands in this service reference. Start with the
@@ -362,7 +366,7 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses Authority V6, control-plane V3, record-log V3, retrieval
+Current state uses Authority V7, control-plane V3, record-log V3, retrieval
 facts V2, and retrieval lexical/content V1. The V2 root binds exactly these six
 roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
@@ -373,11 +377,13 @@ The immutable approval-delivery quarantine fences unrepresentable approval
 packages before any provider post and retains them for audit. A temporarily
 missing reviewer identity leaves its durable outbox queued for reconciliation.
 
-The checkout also retains the exact pinned Authority V5 baseline and the
+The checkout also retains the exact pinned Authority V5 and V6 baselines and the
 explicit [offline V5-to-V6 copier](../../tools/copy-authority-v5-to-v6.mjs).
 It reads a stopped V5 snapshot and writes a separate V6 database, preserving
 existing rows and updating only the Authority database's schema binding.
-It does not activate a release or replace live state. Earlier historical
+It does not activate a release or replace live state, and does not produce V7
+state. PC-06 owns the explicit reset/reseed and matched-artifact qualification
+for the project sprint. Earlier historical
 baselines and converters remain in Git history.
 
 Routine releases use baseline-preserving image replacements through the

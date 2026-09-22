@@ -94,3 +94,5 @@ export type { PersonToolJsonRequestV1, PersonToolGetRequestV1, PersonToolTranspo
 export { PersonQueryInputError, validatePersonQueryText } from "./person-query.js";
 
 export * from './person-updates.js';
+export * from './person-updates-v2.js';
+export * from './project-context-v1.js';
