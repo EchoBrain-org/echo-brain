@@ -1,4 +1,15 @@
-import type { ProjectContextApplicationV1 } from '../src/application/ports/project-context-v1.js';
+import { HUMAN_ACT_RECORD_INPUT_CODECS_V4 } from '@echo-brain/organization-protocol';
+import { createPersonPolicyFactProjectorV2, createRecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { AdapterError, type DecisionProcessorAdapter } from '@echo-brain/organization-processing/core';
+import type { AnswerCompositionGenerationBindingV1 } from '@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1';
+import { personLoginGrantExpectedEmailSha256 } from '@echo-brain/organization-authority-kernel/domain/person-email-binding';
+import { createSyntheticDemoMeetingSourceBundleV1 } from '@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-bundle-v1';
+import { SYNTHETIC_DEMO_INITIAL_CURSOR_V1, loadSyntheticDemoMeetingCorpusV1, syntheticDemoMeetingSourceIdentityV1 } from '@echo-brain/provider-synthetic-demo/source/synthetic-demo-meeting-source-v1';
+import { openOrganizationAuthorityRuntime } from '../src/composition/organization-authority-runtime.js';
+import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
+import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
+import { authorization } from './fixtures/project-context-sqlite.js';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   chmodSync,
   mkdirSync,
@@ -10,7 +21,7 @@ import {
 import { Buffer } from "node:buffer";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
 import {
   PersonIdentitySessionApplication,
@@ -123,34 +134,103 @@ afterEach(() => {
 });
 
 describe("Organization Authority API runtime", () => {
-  it("mounts the frozen project application adapter only when supplied", async () => {
+  it("runs V2 enrichment through the existing serialized meeting worker and drains it on shutdown", async () => {
     const initialized = bootstrapOrganizationAuthorityState({
-      state_directory: join(root(), "state"), organization_display_name: "Fixture Organization",
-      owner_display_name: "Fixture Owner", created_at: new Date(Date.now() - 1000).toISOString(),
-      creating_artifact_revision: "pc03-http-checkpoint",
+      state_directory: join(root(), "state"), organization_display_name: "Worker fixture",
+      owner_display_name: "Owner", created_at: new Date(Date.now() - 1000).toISOString(),
+      creating_artifact_revision: "pc03-worker-composition",
     });
     const credentials = initializePersonSessionCredentials({ state_directory: initialized.state_directory });
-    const config = {
-      state_directory: initialized.state_directory, host: "127.0.0.1" as const, port: 19994,
-      authority_url: "https://authority.example",
-      oidc: { issuer: "https://issuer.example", client_id: "founder-client", redirect_uri: "https://authority.example/v2/session/oidc/callback", tenant: { kind: "issuer" as const }, id_token_algorithms: ["RS256"] },
-      client_authentication: { method: "none" as const },
-      pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(credentials.pkce_sealing_key_reference),
+    const directory = new URL('../../../demo/meetings/', import.meta.url).pathname;
+    const corpus = await loadSyntheticDemoMeetingCorpusV1(directory);
+    const sourceBundle = await createSyntheticDemoMeetingSourceBundleV1({ meetings_directory: directory, owner_email: 'founder@example.com' });
+    const database = openAuthorityDatabase(join(initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
+    const actor = authorization({ organization_id: initialized.organization_id, principal_id: initialized.owner_principal_id, membership_id: initialized.owner_membership_id, membership_type: 'owner' });
+    const application = createProjectContextApplicationV1({ authenticate: () => actor, repository: new SqliteProjectContextRepositoryV1(database) });
+    const events: string[] = [];
+    const errors: unknown[] = [];
+    const processorIdentity = { kind: 'decision-processor' as const, adapter_id: 'pc03-processor', instance_id: 'pc03-processor', version: '1.0.0' };
+    const processor: DecisionProcessorAdapter = {
+      identity: processorIdentity, validateConfig: () => ({ ok: true, errors: [] }),
+      healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
+      extract: async () => { throw new Error('uploads must not enter extraction'); },
     };
-    const response = { schema_version: 1 as const, kind: "echo-project-list-v1" as const, items: [], next_cursor: null };
-    const calls: unknown[][] = [];
-    const application = { listProjects(...args: unknown[]) { calls.push(args); return response; } } as unknown as ProjectContextApplicationV1;
-    for (const enabled of [false, true]) {
-      const runtime = await startOrganizationAuthorityApiRuntime(config, {
-        oidc_provider: new MockOidcProvider(), ...(enabled ? { project_context: application } : {}),
-      });
-      try {
-        const result = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/projects`, { headers: { authorization: "Bearer synthetic-fixture-session" } });
-        expect(result.status).toBe(enabled ? 200 : 404);
-        expect(await result.json()).toEqual(enabled ? response : { error: { code: "not_found", message: "request failed" } });
-      } finally { await runtime.close(); }
-    }
-    expect(calls).toEqual([["synthetic-fixture-session", { limit: 10 }]]);
+    let releaseModel!: () => void;
+    const modelPending = new Promise<void>(resolve => { releaseModel = resolve; });
+    let generationCalls = 0;
+    let active = 0;
+    let maximumActive = 0;
+    const generation: AnswerCompositionGenerationBindingV1 = {
+      generation: { generation_adapter_id: 'pc03-generation', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000 },
+      structured_output: { async generate() {
+        active++; maximumActive = Math.max(maximumActive, active); generationCalls++;
+        events.push('upload');
+        try { if (generationCalls === 1) await modelPending; return { search_hints: 'telephone' }; }
+        finally { active--; }
+      } },
+    };
+    const now = new Date().toISOString();
+    database.prepare(`INSERT INTO authority_live_source_admission_v2 (
+      singleton, organization_id, principal_id, membership_id, membership_type,
+      source_adapter_id, source_adapter_version, source_adapter_instance_id, normalizer_version,
+      source_custodian_sha256, source_custodian_assurance, source_custodian_observed_at,
+      source_credential_reference_sha256, initial_cursor, cutoff_at,
+      processor_adapter_id, processor_adapter_version, processor_instance_id,
+      processor_configuration_sha256, processor_credential_reference_sha256, semantic_input_sha256, admitted_at
+    ) VALUES (1, ?, ?, ?, 'owner', ?, ?, ?, ?, ?, 'authority_initial_owner_identity', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(initialized.organization_id, initialized.owner_principal_id, initialized.owner_membership_id,
+        syntheticDemoMeetingSourceIdentityV1.adapter_id, syntheticDemoMeetingSourceIdentityV1.version, syntheticDemoMeetingSourceIdentityV1.instance_id,
+        syntheticDemoMeetingSourceIdentityV1.version, personLoginGrantExpectedEmailSha256('founder@example.com'), now,
+        corpus.corpus_digest, SYNTHETIC_DEMO_INITIAL_CURSOR_V1, now,
+        processorIdentity.adapter_id, processorIdentity.version, processorIdentity.instance_id,
+        canonicalSha256('processor-config'), canonicalSha256('processor-reference'), canonicalSha256('pc03-admission'), now);
+    const project = application.createProject('fixture', { schema_version: 1, kind: 'echo-project-create-v1', request_id: '00000000-0000-4000-8000-000000000011', name: 'Worker' });
+    const request = { schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: '00000000-0000-4000-8000-000000000012', title: 'Original', text: 'Call the customer.', project_id: project.project_id, audience: { kind: 'project', project_id: project.project_id } };
+    const receipt = application.submitUpload('fixture', request);
+    const config = {
+      state_directory: initialized.state_directory, host: '127.0.0.1' as const, port: 19995,
+      authority_url: 'https://authority.example',
+      oidc: { issuer: 'https://issuer.example', client_id: 'founder-client', redirect_uri: 'https://authority.example/v2/session/oidc/callback', tenant: { kind: 'issuer' as const }, id_token_algorithms: ['RS256'] },
+      client_authentication: { method: 'none' as const }, pkce_key_file: credentials.pkce_sealing_key_reference.slice('file:'.length),
+      meeting_source_bundle: { ...sourceBundle, create_source(admission: Parameters<typeof sourceBundle.create_source>[0]) {
+        const source = sourceBundle.create_source(admission);
+        vi.spyOn(source, 'pull').mockImplementation(async () => { events.push('meeting'); throw new AdapterError('temporarily_unavailable', 'fixture source unavailable', true); });
+        return source;
+      } },
+      decision_processor_bundle: { processor_adapter_id: processorIdentity.adapter_id, assert_admission_commitments() {}, create_processor: () => processor },
+      approval_workflow_bundle: {
+        async assert_existing_presentations_owned() {}, async load() {
+          return {
+            stager: { async stage(): Promise<never> { throw new Error('upload must not stage approval'); }, async reconcilePendingDeliveries() {}, async reconcileSuperseded() {} },
+            processing: { async recoverV4Appends() {}, async observeAndFinalizePendingApprovals() {}, async appendFinalizedApprovalsToV4() {} },
+          };
+        },
+      },
+      answer_composition_generation_bundle: { load: () => generation }, record_input_codecs: HUMAN_ACT_RECORD_INPUT_CODECS_V4,
+      record_policy_fact_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2()]),
+      worker_interval_ms: 10, on_worker_error: (error: unknown) => { errors.push(error); },
+    };
+    let runtime: Awaited<ReturnType<typeof openOrganizationAuthorityRuntime>> | undefined;
+    try {
+      runtime = await openOrganizationAuthorityRuntime(config, { api: { oidc_provider: new MockOidcProvider() } });
+      await vi.waitFor(() => expect(generationCalls).toBe(1), { timeout: 2000 });
+      expect(events.slice(0, 2)).toEqual(['meeting', 'upload']);
+      expect(application.readUpload('fixture', receipt.context_id).text).toBe(request.text);
+      let stopped = false;
+      const closing = runtime.close().then(() => { stopped = true; });
+      await new Promise(resolve => setTimeout(resolve, 30));
+      expect(stopped).toBe(false); expect(generationCalls).toBe(1); expect(maximumActive).toBe(1);
+      releaseModel(); await closing; runtime = undefined;
+      expect(application.uploadStatus('fixture', request.request_id).metadata).toBe('processing');
+      runtime = await openOrganizationAuthorityRuntime(config, { api: { oidc_provider: new MockOidcProvider() } });
+      await vi.waitFor(() => expect(application.uploadStatus('fixture', request.request_id).metadata).toBe('ready'));
+      await runtime.close(); runtime = undefined;
+      expect(generationCalls).toBe(2); expect(maximumActive).toBe(1); expect(errors).toEqual([]);
+      expect(application.searchUploads('fixture', { query: 'telephone' }).results[0]?.context_id).toBe(receipt.context_id);
+      expect(application.readUpload('fixture', receipt.context_id).text).toBe(request.text);
+      expect(database.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
+      expect(database.prepare('SELECT count(*) AS n FROM authority_person_update_work_v2').get()).toEqual({ n: 1 });
+    } finally { releaseModel(); await runtime?.close(); database.close(); }
   });
 
   it("wires an injected external-identity application without selecting a provider", async () => {
@@ -1012,24 +1092,18 @@ describe("Organization Authority API runtime", () => {
     const invitationBody = JSON.parse(readFileSync(invitationPath, "utf8")) as {
       login_grant: string;
     };
-    const runtime = await startOrganizationAuthorityApiRuntime(
-      {
-        state_directory: initialized.state_directory,
-        host: "127.0.0.1",
-        port: 19_991,
-        authority_url: "https://authority.example",
-        oidc,
-        client_authentication: { method: "none" },
-        pkce_sealing_key: pkce,
-      },
-      {
-        oidc_provider: new MockOidcProvider(),
-        external_identity_runtime_bundle:
-          createSlackPersonExternalIdentityRuntimeBundleV1({}),
-      },
-    );
+    const apiConfig = {
+      state_directory: initialized.state_directory, host: "127.0.0.1" as const, port: 19_991,
+      authority_url: "https://authority.example", oidc,
+      client_authentication: { method: "none" as const }, pkce_sealing_key: pkce,
+    };
+    const apiDependencies = {
+      oidc_provider: new MockOidcProvider(),
+      external_identity_runtime_bundle: createSlackPersonExternalIdentityRuntimeBundleV1({}),
+    };
+    let runtime = await startOrganizationAuthorityApiRuntime(apiConfig, apiDependencies);
     try {
-      const origin = `http://127.0.0.1:${String(runtime.address.port)}`;
+      let origin = `http://127.0.0.1:${String(runtime.address.port)}`;
       const descriptor = await fetch(`${origin}/v1/authority-descriptor`);
       expect(descriptor.status).toBe(200);
       expect((await json(descriptor)).authority_descriptor).toMatchObject({
@@ -1183,6 +1257,81 @@ describe("Organization Authority API runtime", () => {
       });
       expect((await fetch(`${origin}/v3/person/tools`)).status).toBe(401);
 
+      // Exercise the actual composed project application against fresh V7 storage.
+      const projectHeaders = { authorization: `Bearer ${session.access_token as string}`, "content-type": "application/json" };
+      const post = async (path: string, body: unknown, status = 200) => {
+        const response = await fetch(origin + path, { method: "POST", headers: projectHeaders, body: JSON.stringify(body) });
+        expect(response.status).toBe(status);
+        return json(response);
+      };
+      const get = async (path: string, status = 200) => {
+        const response = await fetch(origin + path, { headers: projectHeaders });
+        expect(response.status).toBe(status);
+        return json(response);
+      };
+      const create = { schema_version: 1, kind: "echo-project-create-v1", request_id: "00000000-0000-4000-8000-000000000001", name: "Runtime project" };
+      const created = await post("/v1/person/projects", create, 201);
+      const project_id = created.project_id as string;
+      expect(await get(`/v1/person/projects/${project_id}`)).toMatchObject({ name: create.name, role: "lead" });
+      expect(await get("/v1/person/projects")).toMatchObject({ items: [{ project_id }] });
+      const upload = {
+        schema_version: 2, kind: "echo-person-update-submit-v2", request_id: "00000000-0000-4000-8000-000000000002",
+        title: "Runtime original", text: "Ship the original immediately.\n", project_id, audience: { kind: "project", project_id },
+      };
+      const receipt = await post("/v2/person/updates", upload, 202);
+      const context_id = receipt.context_id as string;
+      expect(await get(`/v2/person/updates/${upload.request_id}`)).toMatchObject({ status: "stored", metadata: "pending" });
+      expect(await get(`/v2/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text, audience: upload.audience });
+      expect(await get(`/v1/person/projects/${project_id}/context/${context_id}`)).toMatchObject({ text: upload.text, project_id });
+      const feed = await post("/v1/person/projects/context/feed", { project_id, limit: 10 });
+      expect(feed).toMatchObject({ items: [{ context_id }] });
+      expect(await post("/v1/person/projects/context/search", { project_id, query: "original" })).toMatchObject({ items: [{ context_id }] });
+      expect(await post("/v2/person/updates/search", { query: "original" })).toMatchObject({ results: [{ context_id }] });
+      expect(await post("/v1/person/projects/members", { project_id })).toMatchObject({ items: [{ membership_id: initialized.owner_membership_id, role: "lead" }] });
+      expect(await post("/v1/person/projects/directory", { project_id, query: "Founder" })).toMatchObject({ items: [{ membership_id: initialized.owner_membership_id }] });
+      await post("/v1/person/projects/members/set", { schema_version: 1, kind: "echo-project-member-set-v1", request_id: "00000000-0000-4000-8000-000000000003", project_id, membership_id: initialized.owner_membership_id, role: "lead" });
+      expect(await post("/v1/person/projects/members/remove", { schema_version: 1, kind: "echo-project-member-remove-v1", request_id: "00000000-0000-4000-8000-000000000004", project_id, membership_id: initialized.owner_membership_id }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
+      await post("/v1/person/projects/context/dissociate", { schema_version: 1, kind: "echo-project-context-dissociate-v1", request_id: "00000000-0000-4000-8000-000000000005", project_id, context_id });
+      expect(await post("/v1/person/projects/context/feed", { project_id })).toMatchObject({ items: [] });
+      expect(await get(`/v1/person/projects/${project_id}/context/${context_id}`, 404)).toEqual({ error: { code: "not_found", message: "request failed" } });
+      expect(await get(`/v2/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text });
+      await post("/v1/person/projects/context/associate", { schema_version: 1, kind: "echo-project-context-associate-v1", request_id: "00000000-0000-4000-8000-000000000006", project_id, context_id });
+      expect(await post("/v1/person/projects/context/feed", { project_id })).toEqual(feed);
+      const inspection = openAuthorityDatabase(join(initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
+      try {
+        expect(inspection.prepare("SELECT json_extract(body_json, '$.response_sha256') AS response_sha256 FROM authority_project_read_audit_v1 WHERE json_extract(body_json, '$.operation') = 'feed' ORDER BY rowid DESC LIMIT 1").get()).toEqual({ response_sha256: canonicalSha256(feed) });
+        const auditCount = () => inspection.prepare("SELECT count(*) AS n FROM authority_project_read_audit_v1").get();
+        const before = auditCount();
+        let authentications = 0;
+        const now = Date.now();
+        const clock = vi.spyOn(SystemAuthorityClock.prototype, "now").mockImplementation(() =>
+          new Date(now + (++authentications === 1 ? 0 : 365 * 24 * 60 * 60 * 1000)).toISOString(),
+        );
+        try {
+          expect(await get(`/v1/person/projects/${project_id}/context/${context_id}`, 401)).toEqual({ error: { code: "unauthorized", message: "request failed" } });
+          expect(authentications).toBe(2);
+          expect(auditCount()).toEqual(before);
+        } finally { clock.mockRestore(); }
+        inspection.exec("CREATE TRIGGER fixture_project_audit_failure BEFORE INSERT ON authority_project_read_audit_v1 BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END");
+        try {
+          expect(await get(`/v2/person/updates/content/${context_id}`, 500)).toEqual({ error: { code: "internal", message: "request failed" } });
+          expect(auditCount()).toEqual(before);
+        } finally { inspection.exec("DROP TRIGGER fixture_project_audit_failure"); }
+        expect(inspection.prepare("SELECT count(*) AS n FROM authority_live_source_candidates_v2").get()).toEqual({ n: 0 });
+        expect(inspection.prepare("SELECT count(*) AS n FROM authority_person_update_work_v2").get()).toEqual({ n: 1 });
+      } finally { inspection.close(); }
+      await runtime.close();
+      runtime = await startOrganizationAuthorityApiRuntime({ ...apiConfig, port: 19996 }, apiDependencies);
+      origin = `http://127.0.0.1:${runtime.address.port}`;
+      expect(await post("/v1/person/projects", create, 201)).toEqual(created);
+      expect(await post("/v2/person/updates", upload, 202)).toEqual(receipt);
+      expect(await post("/v2/person/updates", { ...upload, audience: { kind: "team" } }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
+      expect(await get(`/v2/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text, audience: upload.audience });
+      const legacy = { schema_version: 1, kind: "echo-person-update-submit-v1", request_id: "00000000-0000-4000-8000-000000000007", title: "V1 remains strict", text: "Legacy original" };
+      expect(await post("/v1/person/updates", upload, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
+      expect(await post("/v1/person/updates", { ...legacy, project_id }, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
+      expect(await post("/v1/person/updates", legacy, 202)).toMatchObject({ kind: "echo-person-update-receipt-v1", visibility: "only_me" });
+
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,
         {
@@ -1230,6 +1379,7 @@ describe("Organization Authority API runtime", () => {
         body: "{}",
       });
       expect(logout.status).toBe(204);
+      expect(await get("/v1/person/projects", 401)).toEqual({ error: { code: "unauthorized", message: "request failed" } });
       const afterLogout = await fetch(`${origin}/v2/session/refresh`, {
         method: "POST",
         headers: { "content-type": "application/json" },
