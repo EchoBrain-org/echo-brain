@@ -1,11 +1,22 @@
 import { validatePersonUploadSearchV1, validatePersonUploadContextId, type PersonUploadSearchV1 } from '@echo-brain/organization-api';
 import { validatePersonUpdateSubmitV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
+import {
+  validateProjectPageRequestV1, validateProjectCreateV1, validateProjectIdV1,
+  validateProjectContextBrowseV1, validateProjectDirectorySearchV1,
+  validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
+  validateProjectContextSearchV1, validateProjectContextReadRequestV1, validatePersonUpdateSubmitV2, validatePersonUploadSearchV2,
+  type ProjectPageRequestV1, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
+  type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
+  type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2,
+} from '@echo-brain/organization-api';
 import { randomBytes, randomUUID } from "node:crypto";
 import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonMeetingIngestionExclusionSelectorV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 import {
   PersonAuthorityClient,
   PersonAuthorityClientError,
+  PersonContextMutationError,
+  unknownContextMutation,
   type EmployeeRosterV1,
   type PersonAnswerV2,
   type PersonRecordListV1,
@@ -386,6 +397,114 @@ export class PersonClient {
     const request = validatePersonUploadSearchV1(input);
     const stored = await this.accessSession();
     return this.authority(stored.authority_origin).searchUploads(stored.session.access_token, request);
+  }
+
+  private async withContextSession<T>(
+    operation: (authority: PersonAuthorityClient, accessToken: string) => Promise<T>,
+    mutation?: { request_id: string; upload?: boolean },
+  ): Promise<T> {
+    let stored: StoredPersonClientSessionV1;
+    try {
+      stored = await this.accessSession();
+    } catch (error) {
+      if (mutation === undefined) throw error;
+      throw new PersonContextMutationError(
+        error instanceof PersonClientSessionUnavailableError ? 'sign_in_required' : 'unavailable',
+        error instanceof PersonAuthorityClientError ? error.status : null,
+        'Person request could not start. Retain the same request ID and draft.', mutation.request_id, 'not_submitted');
+    }
+    const result = await operation(this.authority(stored.authority_origin), stored.session.access_token);
+    try {
+      this.assertCurrentSession(stored);
+    } catch {
+      if (mutation !== undefined) throw unknownContextMutation(mutation.request_id, mutation.upload === true, null);
+      throw new PersonAuthorityClientError('stale_access_state', null, 'Person account changed during the request');
+    }
+    return result;
+  }
+
+  async projects(value: ProjectPageRequestV1 = {}) {
+    const request = validateProjectPageRequestV1(value);
+    return this.withContextSession((authority, token) => authority.projects(token, request));
+  }
+
+  async createProject(value: ProjectCreateV1) {
+    const request = validateProjectCreateV1(value);
+    return this.withContextSession((authority, token) => authority.createProject(token, request), request);
+  }
+
+  async readProject(projectId: string) {
+    const project = validateProjectIdV1(projectId);
+    return this.withContextSession((authority, token) => authority.readProject(token, project));
+  }
+
+  async projectMembers(value: ProjectContextBrowseV1) {
+    const request = validateProjectContextBrowseV1(value);
+    return this.withContextSession((authority, token) => authority.projectMembers(token, request));
+  }
+
+  async projectDirectory(value: ProjectDirectorySearchV1) {
+    const request = validateProjectDirectorySearchV1(value);
+    return this.withContextSession((authority, token) => authority.projectDirectory(token, request));
+  }
+
+  async setProjectMember(value: ProjectMemberSetV1) {
+    const request = validateProjectMemberSetV1(value);
+    return this.withContextSession((authority, token) => authority.setProjectMember(token, request), request);
+  }
+
+  async removeProjectMember(value: ProjectMemberRemoveV1) {
+    const request = validateProjectMemberRemoveV1(value);
+    return this.withContextSession((authority, token) => authority.removeProjectMember(token, request), request);
+  }
+
+  async associateProjectContext(value: ProjectContextAssociateV1) {
+    const request = validateProjectContextAssociateV1(value);
+    return this.withContextSession((authority, token) => authority.associateProjectContext(token, request), request);
+  }
+
+  async dissociateProjectContext(value: ProjectContextDissociateV1) {
+    const request = validateProjectContextDissociateV1(value);
+    return this.withContextSession((authority, token) => authority.dissociateProjectContext(token, request), request);
+  }
+
+  async projectFeed(value: ProjectContextBrowseV1) {
+    const request = validateProjectContextBrowseV1(value);
+    return this.withContextSession((authority, token) => authority.projectFeed(token, request));
+  }
+
+  async searchProjectContext(value: ProjectContextSearchV1) {
+    const request = validateProjectContextSearchV1(value);
+    return this.withContextSession((authority, token) => authority.searchProjectContext(token, request));
+  }
+
+  async readProjectContext(value: ProjectContextReadRequestV1) {
+    const request = validateProjectContextReadRequestV1(value);
+    return this.withContextSession((authority, token) => authority.readProjectContext(token, request));
+  }
+
+  async submitUpdateV2(value: PersonUpdateSubmitV2) {
+    // Copy and freeze before session refresh can yield. No reread, retry, or
+    // request-ID generation may change this attempt's original or coordinates.
+    const request = validatePersonUpdateSubmitV2(value);
+    Object.freeze(request.audience);
+    Object.freeze(request);
+    return this.withContextSession((authority, token) => authority.submitUpdateV2(token, request), { request_id: request.request_id, upload: true });
+  }
+
+  async updateStatusV2(requestId: string) {
+    validatePersonUpdateRequestId(requestId);
+    return this.withContextSession((authority, token) => authority.updateStatusV2(token, requestId));
+  }
+
+  async readUploadV2(contextId: string) {
+    validatePersonUploadContextId(contextId);
+    return this.withContextSession((authority, token) => authority.readUploadV2(token, contextId));
+  }
+
+  async searchUploadsV2(value: PersonUploadSearchV2) {
+    const request = validatePersonUploadSearchV2(value);
+    return this.withContextSession((authority, token) => authority.searchUploadsV2(token, request));
   }
 
   async records(
