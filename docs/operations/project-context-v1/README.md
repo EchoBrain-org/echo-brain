@@ -4,9 +4,11 @@ Status: synthetic checkpoint and local real-layer integration are implemented,
 including default API composition with real Person sessions and native clients
 calling the real CLI. This reconciliation candidate retains the latest committed
 PC-05 native robustness and CLI assertions, PC-06's real CLI/HTTP proof, and
-PC-04's service-owned transport proof. Focused local verification of the
-reconciled sources passed; the aggregate `npm run check` remains pending, and
-live capability evidence remains unexecuted. This directory records PC-06
+PC-04's service-owned transport proof. The integrated checkpoint `5f8501c` passed the full local check (206 files,
+2,547 tests passed and one skipped) and all CI jobs. Final review added durable
+project-mutation recovery and fair V1/V2 enrichment scheduling; PR #204 records
+the final candidate SHA and complete verification results. Live capability
+evidence remains unexecuted. This directory records PC-06
 results and candidate-specific evidence requirements; the existing
 [Authority operator playbook](../PB-OPERATIONS-001-authority-operator-lane.md)
 remains the sole operator router.
@@ -162,8 +164,33 @@ passing and one failing: test-layer ownership rejected PC-04's then-stale
 repository-backed test into Authority service tests. The current reconciliation
 passed `npm run build`, 32 real integration/transport tests, 87 native tests,
 18 test-layer ownership tests and the architecture-boundary check. The
-aggregate `npm run check` remains pending and is the only final local
-qualification claim.
+aggregate check at `5f8501c` then passed all architecture, documentation, lint,
+build and type checks, plus 206 test files / 2,547 tests with one skipped.
+That result predates the two final review corrections below; PR #204 records
+their final combined check at the exact committed candidate.
+
+## Final review corrections
+
+Pending native project mutations now retain bounded, account-scoped command
+recovery metadata before submission. Normal shutdown does not discard the
+request ID or exact command; a matching account can retry after reconstruction
+with a fresh preferences instance. The record contains operation coordinates
+and the bounded creation name when needed, never original-note text, session
+credentials or an authoritative project cache. Missing and damaged records
+are distinct: damaged recovery blocks a new mutation until explicit abandonment.
+Storage acknowledgement failure prevents submission or clearing and restores
+the previous record. Confirmed success and explicit abandonment are the only
+clear paths. Focused recovery proofs cover exact create/member replay, account
+isolation, damaged/oversized records, successful clearing and storage failures.
+The persistence acknowledgement follows Foundation's documented disk-save
+contract; this is not a hardware power-loss guarantee.
+
+The existing upload worker alternates V1/V2 claims after each claimed item.
+It retains one item per pass and the existing meeting-before-upload lifecycle.
+A sustained V1 backlog or V1 source-integrity failure cannot indefinitely block
+due V2 enrichment. The source-integrity failure still surfaces on its own turn.
+The focused worker/adversarial suite passes 25 tests, including both progress
+regressions. No new queue, scheduler or public contract was added.
 
 ## Rollout preparation
 
