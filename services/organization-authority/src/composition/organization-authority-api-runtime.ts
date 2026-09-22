@@ -1,3 +1,4 @@
+import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
 import { PersonUpdatesApplicationV1 } from '../application/person-updates.js';
 import { SqlitePersonUpdateInboxV1 } from '../adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { createPersonToolsHttpApplicationV3 } from '../presentation/person-tools-http-application-v3.js';
@@ -60,6 +61,8 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 }
 
 export interface OrganizationAuthorityApiRuntimeDependencies {
+  /** Integration seam until the committed project application/worker binding is available. */
+  readonly project_context?: ProjectContextApplicationV1;
   /** Historical record protocol projection, independent of live ingress. */
   readonly record_approver?: RecordApproverProjectorV1;
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
@@ -243,6 +246,7 @@ export async function startOrganizationAuthorityApiRuntime(
                 : { on_failure: dependencies.answer_failure }),
             }),
           }),
+      ...(dependencies.project_context === undefined ? {} : { project_context: dependencies.project_context }),
       person_updates: new PersonUpdatesApplicationV1((accessToken) => sessions.authenticateAccess({ access_token: accessToken }), new SqlitePersonUpdateInboxV1(database)),
       person_employees: createPersonEmployeeHttpApplication(
         new PersonEmployeeLifecycleApplication(sessions, {
