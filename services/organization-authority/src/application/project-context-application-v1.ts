@@ -52,14 +52,14 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
 
   createProject(accessToken: string, value: unknown): ProjectCreateReceiptV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectCreateV1(value));
-    return this.write(actor, { operation: 'create', request }, transaction => transaction.createProject(transaction.captureAuthorization(actor, { operation: 'create', request }), request));
+    return this.write(actor, { operation: 'create', request }, (transaction, snapshot) => transaction.createProject(snapshot, request));
   }
   listProjects(accessToken: string, value: unknown): ProjectListV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectPageRequestV1(value));
     return this.read(accessToken, actor, { operation: 'project_list' }, (transaction, snapshot) => transaction.listProjects(snapshot, request));
   }
   readProject(accessToken: string, value: unknown): ProjectSummaryV1 {
-    const actor = this.authenticate(accessToken); const projectId = this.notFound(() => validateProjectIdV1(value));
+    const actor = this.authenticate(accessToken); const projectId = this.input(() => validateProjectIdV1(value));
     return this.read(accessToken, actor, { operation: 'project_read', project_id: projectId }, (transaction, snapshot) => transaction.readProject(snapshot, projectId));
   }
   listMembers(accessToken: string, value: unknown): ProjectMembersV1 {
@@ -72,19 +72,19 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
   }
   setMember(accessToken: string, value: unknown): ProjectMutationReceiptV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectMemberSetV1(value));
-    return this.write(actor, { operation: 'member_set', request }, transaction => transaction.setMember(transaction.captureAuthorization(actor, { operation: 'member_set', request }), request));
+    return this.write(actor, { operation: 'member_set', request }, (transaction, snapshot) => transaction.setMember(snapshot, request));
   }
   removeMember(accessToken: string, value: unknown): ProjectMutationReceiptV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectMemberRemoveV1(value));
-    return this.write(actor, { operation: 'member_remove', request }, transaction => transaction.removeMember(transaction.captureAuthorization(actor, { operation: 'member_remove', request }), request));
+    return this.write(actor, { operation: 'member_remove', request }, (transaction, snapshot) => transaction.removeMember(snapshot, request));
   }
   associateContext(accessToken: string, value: unknown): ProjectMutationReceiptV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextAssociateV1(value));
-    return this.write(actor, { operation: 'associate', request }, transaction => transaction.associateContext(transaction.captureAuthorization(actor, { operation: 'associate', request }), request));
+    return this.write(actor, { operation: 'associate', request }, (transaction, snapshot) => transaction.associateContext(snapshot, request));
   }
   dissociateContext(accessToken: string, value: unknown): ProjectMutationReceiptV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextDissociateV1(value));
-    return this.write(actor, { operation: 'dissociate', request }, transaction => transaction.dissociateContext(transaction.captureAuthorization(actor, { operation: 'dissociate', request }), request));
+    return this.write(actor, { operation: 'dissociate', request }, (transaction, snapshot) => transaction.dissociateContext(snapshot, request));
   }
   feed(accessToken: string, value: unknown): ProjectContextFeedV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextBrowseV1(value));
@@ -95,19 +95,19 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
     return this.read(accessToken, actor, { operation: 'search', project_id: request.project_id }, (transaction, snapshot) => transaction.search(snapshot, request));
   }
   readContext(accessToken: string, project: unknown, context: unknown): ProjectContextReadV1 {
-    const actor = this.authenticate(accessToken); const projectId = this.notFound(() => validateProjectIdV1(project)); const contextId = this.notFound(() => validatePersonUploadContextId(context));
+    const actor = this.authenticate(accessToken); const projectId = this.input(() => validateProjectIdV1(project)); const contextId = this.input(() => validatePersonUploadContextId(context));
     return this.read(accessToken, actor, { operation: 'context_read', project_id: projectId, context_id: contextId }, (transaction, snapshot) => transaction.readContext(snapshot, projectId, contextId));
   }
   submitUpload(accessToken: string, value: unknown): PersonUpdateReceiptV2 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validatePersonUpdateSubmitV2(value));
-    return this.write(actor, { operation: 'upload_submit', request }, transaction => transaction.submitUpload(transaction.captureAuthorization(actor, { operation: 'upload_submit', request }), request));
+    return this.write(actor, { operation: 'upload_submit', request }, (transaction, snapshot) => transaction.submitUpload(snapshot, request));
   }
   uploadStatus(accessToken: string, value: unknown): PersonUpdateStatusV2 {
-    const actor = this.authenticate(accessToken); const requestId = this.notFound(() => validatePersonUpdateRequestId(value));
+    const actor = this.authenticate(accessToken); const requestId = this.input(() => validatePersonUpdateRequestId(value));
     return this.read(accessToken, actor, { operation: 'upload_status', request_id: requestId }, (transaction, snapshot) => transaction.uploadStatus(snapshot, requestId));
   }
   readUpload(accessToken: string, value: unknown): PersonUploadContentV2 {
-    const actor = this.authenticate(accessToken); const contextId = this.notFound(() => validatePersonUploadContextId(value));
+    const actor = this.authenticate(accessToken); const contextId = this.input(() => validatePersonUploadContextId(value));
     return this.read(accessToken, actor, { operation: 'upload_read', context_id: contextId }, (transaction, snapshot) => transaction.readUpload(snapshot, contextId));
   }
   searchUploads(accessToken: string, value: unknown): PersonUploadSearchResultV2 {
@@ -117,9 +117,8 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
 
   private authenticate(accessToken: string): PersonAccessAuthorization { return this.dependencies.authenticate(accessToken); }
   private input<T>(validate: () => T): T { try { return validate(); } catch { throw new AuthorityOperationError('invalid_request', 'request failed'); } }
-  private notFound<T>(validate: () => T): T { try { return validate(); } catch { throw new AuthorityOperationError('not_found', 'request failed'); } }
-  private write<T>(actor: PersonAccessAuthorization, _scope: ProjectAuthorizationScopeV1, operation: (transaction: ProjectContextWriteTransactionV1) => T): T {
-    return this.dependencies.repository.withWriteTransaction(operation);
+  private write<T>(actor: PersonAccessAuthorization, scope: ProjectAuthorizationScopeV1, operation: (transaction: ProjectContextWriteTransactionV1, snapshot: ReturnType<ProjectContextWriteTransactionV1['captureAuthorization']>) => T): T {
+    return this.dependencies.repository.withWriteTransaction(transaction => operation(transaction, transaction.captureAuthorization(actor, scope)));
   }
   private read<T extends ProjectReadResponseV1>(accessToken: string, actor: PersonAccessAuthorization, scope: ProjectAuthorizationScopeV1, select: (transaction: ProjectContextReadTransactionV1, snapshot: ReturnType<ProjectContextReadTransactionV1['captureAuthorization']>) => T): T {
     return this.dependencies.repository.withReadTransaction(transaction => {
