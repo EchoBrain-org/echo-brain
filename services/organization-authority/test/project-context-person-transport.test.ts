@@ -3,11 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
-import { createOrganizationAuthorityHttpServer } from '../../services/organization-authority/src/presentation/organization-authority-http-server.js';
-import { createProjectContextApplicationV1 } from '../../services/organization-authority/src/application/project-context-application-v1.js';
-import { SqliteProjectContextRepositoryV1 } from '../../services/organization-authority/src/adapters/persistence/sqlite/project-context-v1.js';
-import { OWNER, MEMBER, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from '../../services/organization-authority/test/fixtures/project-context-sqlite.js';
+import { PersonAuthorityClient } from '../../../src/product/person-client/authority-client.js';
+import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
+import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
+import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
+import { OWNER, MEMBER, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from './fixtures/project-context-sqlite.js';
 
 // Real PC-03 HTTP checkpoint 77e1b75 and PC-02 application checkpoint 7244fc5,
 // with the actual V7 repository. Authentication uses synthetic fixture people;
