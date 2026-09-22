@@ -1,5 +1,5 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { validateProjectContextAudienceV1, validateProjectIdV1, type ProjectContextAudienceV1, type ProjectIdV1 } from './project-context-v1.js';
+import { PROJECT_CONTEXT_RESPONSE_MAX_BYTES, validateProjectContextAudienceV1, validateProjectIdV1, type ProjectContextAudienceV1, type ProjectIdV1 } from './project-context-v1.js';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   asRecord,
@@ -87,8 +87,11 @@ function coordinates(record: Record<string, unknown>): { project_id: ProjectIdV1
   const project_id = record.project_id === null ? null : validateProjectIdV1(record.project_id, 'Person update project_id');
   return { project_id, audience: validatePersonUploadAudienceV2(record.audience) };
 }
-function bodyBound(value: unknown, label: string): void {
+function requestBound(value: unknown, label: string): void {
   if (canonicalJsonBytes(value).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail(`${label} exceeds JSON byte bound`);
+}
+function responseBound(value: unknown, label: string): void {
+  if (canonicalJsonBytes(value).byteLength > PROJECT_CONTEXT_RESPONSE_MAX_BYTES) fail(`${label} exceeds JSON byte bound`);
 }
 export function validatePersonUpdateSubmitV2(value: unknown): PersonUpdateSubmitV2 {
   const record = object(value, 'Person update');
@@ -96,28 +99,28 @@ export function validatePersonUpdateSubmitV2(value: unknown): PersonUpdateSubmit
   if (record.schema_version !== 2 || record.kind !== 'echo-person-update-submit-v2') fail('Person update version or kind is unsupported');
   validatePersonUpdateRequestId(record.request_id); text(record.title, 'Person update title', PERSON_UPDATE_TITLE_MAX_BYTES, false); text(record.text, 'Person update text', PERSON_UPDATE_TEXT_MAX_BYTES, true);
   const result = { schema_version: 2 as const, kind: 'echo-person-update-submit-v2' as const, request_id: record.request_id as string, title: record.title as string, text: record.text as string, ...coordinates(record) };
-  bodyBound(result, 'Person update'); return result;
+  requestBound(result, 'Person update'); return result;
 }
 export function validatePersonUpdateReceiptV2(value: unknown): PersonUpdateReceiptV2 {
   const record = object(value, 'Person update receipt'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'context_id', 'received_at', 'project_id', 'audience', 'state'], 'Person update receipt');
   if (record.schema_version !== 2 || record.kind !== 'echo-person-update-receipt-v2' || record.state !== 'received') fail('Person update receipt is invalid');
   validatePersonUpdateRequestId(record.request_id); validatePersonUploadContextId(record.context_id); timestamp(record.received_at);
   const response = { schema_version: 2 as const, kind: 'echo-person-update-receipt-v2' as const, request_id: record.request_id as string, context_id: record.context_id as string, received_at: record.received_at as string, ...coordinates(record), state: 'received' as const };
-  bodyBound(response, 'Person update receipt'); return response;
+  responseBound(response, 'Person update receipt'); return response;
 }
 export function validatePersonUpdateStatusV2(value: unknown): PersonUpdateStatusV2 {
   const record = object(value, 'Person update status'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'context_id', 'received_at', 'project_id', 'audience', 'status', 'metadata'], 'Person update status');
   if (record.schema_version !== 2 || record.kind !== 'echo-person-update-status-v2' || record.status !== 'stored' || !['pending', 'processing', 'ready', 'unavailable'].includes(record.metadata as string)) fail('Person update status is invalid');
   validatePersonUpdateRequestId(record.request_id); validatePersonUploadContextId(record.context_id); timestamp(record.received_at);
   const response = { schema_version: 2 as const, kind: 'echo-person-update-status-v2' as const, request_id: record.request_id as string, context_id: record.context_id as string, received_at: record.received_at as string, ...coordinates(record), status: 'stored' as const, metadata: record.metadata as PersonUploadMetadataStateV1 };
-  bodyBound(response, 'Person update status'); return response;
+  responseBound(response, 'Person update status'); return response;
 }
 export function validatePersonUploadContentV2(value: unknown): PersonUploadContentV2 {
   const record = object(value, 'Person upload content'); assertExactKeys(record, ['schema_version', 'kind', 'context_id', 'received_at', 'audience', 'title', 'text'], 'Person upload content');
   if (record.schema_version !== 2 || record.kind !== 'echo-person-upload-content-v2') fail('Person upload content is invalid');
   validatePersonUploadContextId(record.context_id); timestamp(record.received_at); text(record.title, 'Person upload content title', PERSON_UPDATE_TITLE_MAX_BYTES, false); text(record.text, 'Person upload content text', PERSON_UPDATE_TEXT_MAX_BYTES, true);
   const response = { schema_version: 2 as const, kind: 'echo-person-upload-content-v2' as const, context_id: record.context_id as string, received_at: record.received_at as string, audience: validatePersonUploadAudienceV2(record.audience), title: record.title as string, text: record.text as string };
-  bodyBound(response, 'Person upload content'); return response;
+  responseBound(response, 'Person upload content'); return response;
 }
 export function validatePersonUploadSearchV2(value: unknown): PersonUploadSearchV2 { return validatePersonUploadSearchV1(value); }
 export function validatePersonUploadSearchResultV2(value: unknown): PersonUploadSearchResultV2 {
@@ -131,5 +134,5 @@ export function validatePersonUploadSearchResultV2(value: unknown): PersonUpload
     if ([...(item.excerpt as string)].length > 300) fail('Person upload result excerpt is invalid');
     return { context_id, received_at: item.received_at as string, audience: validatePersonUploadAudienceV2(item.audience), title: item.title as string, excerpt: item.excerpt as string };
   });
-  const response = { schema_version: 2 as const, kind: 'echo-person-upload-search-v2' as const, results }; bodyBound(response, 'Person upload results'); return response;
+  const response = { schema_version: 2 as const, kind: 'echo-person-upload-search-v2' as const, results }; responseBound(response, 'Person upload results'); return response;
 }

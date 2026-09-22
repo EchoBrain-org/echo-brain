@@ -15,6 +15,8 @@ import { validatePersonUpdateRequestId, validatePersonUploadContextId } from './
 export const PERSON_PROJECTS_PATH_V1 = '/v1/person/projects';
 export const PROJECT_NAME_MAX_BYTES = 200;
 export const PROJECT_PAGE_MAX_ITEMS = 10;
+/** New project/original responses may carry bounded original bytes and pages. */
+export const PROJECT_CONTEXT_RESPONSE_MAX_BYTES = 32 * 1024;
 export type ProjectIdV1 = `prj_${string}`;
 export type ProjectRoleV1 = 'lead' | 'member';
 
@@ -143,8 +145,8 @@ function snapshot(value: unknown, label: string): Record<string, unknown> {
   if (bytes.byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail(`${label} exceeds JSON byte bound`);
   return JSON.parse(canonicalJson(record)) as Record<string, unknown>;
 }
-function bodyBound(value: unknown, label: string): void {
-  if (canonicalJsonBytes(value).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail(`${label} exceeds JSON byte bound`);
+function responseBound(value: unknown, label: string): void {
+  if (canonicalJsonBytes(value).byteLength > PROJECT_CONTEXT_RESPONSE_MAX_BYTES) fail(`${label} exceeds JSON byte bound`);
 }
 function text(value: unknown, label: string, maximum: number, multiline = false): asserts value is string {
   if (typeof value !== 'string' || value.trim().length === 0 ||
@@ -231,7 +233,7 @@ export function validateProjectListV1(value: unknown): ProjectListV1 {
   const record = object(value, 'Project list'); assertExactKeys(record, ['schema_version', 'kind', 'items', 'next_cursor'], 'Project list');
   if (record.schema_version !== 1 || record.kind !== 'echo-project-list-v1') fail('Project list version or kind is unsupported');
   const result = page({ items: record.items, next_cursor: record.next_cursor }, 'Project list', validateProjectSummaryV1); unique(result.items as ProjectSummaryV1[], 'project_id', 'Project list');
-  const response = { schema_version: 1 as const, kind: 'echo-project-list-v1' as const, ...result }; bodyBound(response, 'Project list'); return response;
+  const response = { schema_version: 1 as const, kind: 'echo-project-list-v1' as const, ...result }; responseBound(response, 'Project list'); return response;
 }
 function member(value: unknown): ProjectMemberV1 {
   const record = object(value, 'Project member'); assertExactKeys(record, ['membership_id', 'display_name', 'role'], 'Project member');
@@ -242,7 +244,7 @@ export function validateProjectMembersV1(value: unknown): ProjectMembersV1 {
   const record = object(value, 'Project members'); assertExactKeys(record, ['schema_version', 'kind', 'project_id', 'items', 'next_cursor'], 'Project members');
   if (record.schema_version !== 1 || record.kind !== 'echo-project-members-v1') fail('Project members version or kind is unsupported');
   const result = page({ items: record.items, next_cursor: record.next_cursor }, 'Project members', member); unique(result.items as ProjectMemberV1[], 'membership_id', 'Project members');
-  const response = { schema_version: 1 as const, kind: 'echo-project-members-v1' as const, project_id: project(record, 'Project members'), ...result }; bodyBound(response, 'Project members'); return response;
+  const response = { schema_version: 1 as const, kind: 'echo-project-members-v1' as const, project_id: project(record, 'Project members'), ...result }; responseBound(response, 'Project members'); return response;
 }
 function directoryEntry(value: unknown): ProjectDirectoryEntryV1 {
   const record = object(value, 'Project directory entry'); assertExactKeys(record, ['membership_id', 'display_name'], 'Project directory entry');
@@ -256,7 +258,7 @@ export function validateProjectDirectoryV1(value: unknown): ProjectDirectoryV1 {
   const record = object(value, 'Project directory'); assertExactKeys(record, ['schema_version', 'kind', 'project_id', 'items', 'next_cursor'], 'Project directory');
   if (record.schema_version !== 1 || record.kind !== 'echo-project-directory-v1') fail('Project directory version or kind is unsupported');
   const result = page({ items: record.items, next_cursor: record.next_cursor }, 'Project directory', directoryEntry); unique(result.items as ProjectDirectoryEntryV1[], 'membership_id', 'Project directory');
-  const response = { schema_version: 1 as const, kind: 'echo-project-directory-v1' as const, project_id: project(record, 'Project directory'), ...result }; bodyBound(response, 'Project directory'); return response;
+  const response = { schema_version: 1 as const, kind: 'echo-project-directory-v1' as const, project_id: project(record, 'Project directory'), ...result }; responseBound(response, 'Project directory'); return response;
 }
 export function validateProjectMemberSetV1(value: unknown): ProjectMemberSetV1 {
   const record = snapshot(value, 'Project member set'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'project_id', 'membership_id', 'role'], 'Project member set');
@@ -301,7 +303,7 @@ function contextPage(value: unknown, kind: ProjectContextFeedV1['kind'] | Projec
   if (record.schema_version !== 1 || record.kind !== kind) fail('Project context page version or kind is unsupported');
   const result = page({ items: record.items, next_cursor: record.next_cursor }, 'Project context page', item); unique(result.items as ProjectContextItemV1[], 'context_id', 'Project context page');
   const response = { schema_version: 1 as const, kind, project_id: project(record, 'Project context page'), ...result } as ProjectContextFeedV1 | ProjectContextSearchResultV1;
-  bodyBound(response, 'Project context page'); return response;
+  responseBound(response, 'Project context page'); return response;
 }
 export function validateProjectContextFeedV1(value: unknown): ProjectContextFeedV1 { return contextPage(value, 'echo-project-context-feed-v1') as ProjectContextFeedV1; }
 export function validateProjectContextSearchResultV1(value: unknown): ProjectContextSearchResultV1 { return contextPage(value, 'echo-project-context-search-result-v1') as ProjectContextSearchResultV1; }
@@ -310,5 +312,5 @@ export function validateProjectContextReadV1(value: unknown): ProjectContextRead
   if (record.schema_version !== 1 || record.kind !== 'echo-project-context-read-v1') fail('Project context read version or kind is unsupported');
   const project_id = project(record, 'Project context read'); validatePersonUploadContextId(record.context_id); assertTimestamp(record.received_at, 'Project context read received_at'); text(record.title, 'Project context read title', 200); text(record.text, 'Project context read text', 8 * 1024, true);
   const response = { schema_version: 1 as const, kind: 'echo-project-context-read-v1' as const, project_id, context_id: record.context_id as string, received_at: record.received_at as string, title: record.title as string, text: record.text as string, audience: validateProjectContextAudienceV1(record.audience) };
-  bodyBound(response, 'Project context read'); return response;
+  responseBound(response, 'Project context read'); return response;
 }

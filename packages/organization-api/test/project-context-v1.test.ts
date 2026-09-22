@@ -101,6 +101,25 @@ describe('project context V1 public codecs', () => {
     expect(() => validatePersonUpdateSubmitV2({ ...common, text: '"'.repeat(8192) })).toThrow();
   });
 
+  it('keeps an accepted near-request-bound original immediately readable through both response paths', () => {
+    const text = '\n'.repeat(8047) + 'a';
+    const submit = { schema_version: 2 as const, kind: 'echo-person-update-submit-v2' as const, request_id, title: 'x', text, project_id: null, audience: { kind: 'only_me' as const } };
+    expect(validatePersonUpdateSubmitV2(submit).text).toBe(text);
+    expect(validatePersonUploadContentV2({ schema_version: 2, kind: 'echo-person-upload-content-v2', context_id, received_at, title: 'x', text, audience: { kind: 'only_me' } }).text).toBe(text);
+    expect(validateProjectContextReadV1({ schema_version: 1, kind: 'echo-project-context-read-v1', project_id, context_id, received_at, title: 'x', text, audience: { kind: 'only_me' } }).text).toBe(text);
+  });
+
+  it('admits the worst bounded escaped page under the dedicated response ceiling', () => {
+    const items = Array.from({ length: 10 }, (_, index) => ({
+      context_id: `ctx_${String(index).padStart(64, '0')}`,
+      received_at,
+      title: 'x',
+      excerpt: '"'.repeat(300),
+      audience: { kind: 'team' as const },
+    }));
+    expect(validateProjectContextFeedV1({ schema_version: 1, kind: 'echo-project-context-feed-v1', project_id, items, next_cursor: null }).items).toHaveLength(10);
+  });
+
   it('rejects hostile recursive input before any project contract can observe a different shape', () => {
     const base = { schema_version: 2, kind: 'echo-person-update-submit-v2', request_id, title: 'Original', text: 'Body', project_id: null, audience: { kind: 'only_me' } };
     const accessor = { ...base }; Object.defineProperty(accessor, 'title', { enumerable: true, get: () => 'Original' });
