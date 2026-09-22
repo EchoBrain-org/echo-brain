@@ -17,7 +17,10 @@ enum NativeIntegrationProof {
         let args = CommandLine.arguments
         let cli = ProjectCLI(executable: URL(fileURLWithPath: args[1]))
         guard case .signedIn(let identity) = cli.account.readStatus(AccountRunning()) else { fatalError("real CLI status unavailable") }
-        let session = ProjectSession(client: ProjectClient(cli: cli), foreground: { true })
+        let suite = "org.echobrain.test.native-projects." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let session = ProjectSession(client: ProjectClient(cli: cli), defaults: defaults, foreground: { true })
         session.bind(identity); wait("discovery") { !session.busy }
         if args[2] == "unsupported" {
             require(session.availability == .notLive && session.projects.isEmpty, "unsupported list must stay not live")

@@ -130,7 +130,7 @@ enum UploadProof {
         }
         let session = UploadSession(client: client, defaults: defaults, isForeground: { true })
         var questions: [String] = []
-        let controller = ProjectsController(uploads: session, projects: ProjectSession(client: ProjectClient(cli: client.cli), foreground: { true }), onAsk: { questions.append($0) })
+        let controller = ProjectsController(uploads: session, projects: ProjectSession(client: ProjectClient(cli: client.cli), defaults: defaults, foreground: { true }), onAsk: { questions.append($0) })
         let window = controller.window
         guard let root = window.contentView else { fatalError("home window") }
         func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }

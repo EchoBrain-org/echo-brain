@@ -1,6 +1,16 @@
 import AppKit
 import Foundation
 
+final class ProofRecoveryStore: ProjectMutationRecoveryStore {
+    var values: [String: Any] = [:]
+    var synchronizes = true
+    func data(forKey defaultName: String) -> Data? { values[defaultName] as? Data }
+    func object(forKey defaultName: String) -> Any? { values[defaultName] }
+    func set(_ value: Any?, forKey defaultName: String) { values[defaultName] = value }
+    func removeObject(forKey defaultName: String) { values.removeValue(forKey: defaultName) }
+    func synchronize() -> Bool { synchronizes }
+}
+
 @main
 enum ProjectProof {
     static let project = "prj_11111111-1111-4111-8111-111111111111"
@@ -115,7 +125,7 @@ enum ProjectProof {
         let suite = "org.echo.pc05.ui." + UUID().uuidString; let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let uploads = UploadSession(client: UploadClient(cli: cli), defaults: defaults, isForeground: { true })
-        let projects = ProjectSession(client: ProjectClient(cli: cli), foreground: { true })
+        let projects = ProjectSession(client: ProjectClient(cli: cli), defaults: defaults, foreground: { true })
         var questions: [String] = []
         let controller = ProjectsController(uploads: uploads, projects: projects, onAsk: { questions.append($0) })
         defer { controller.shutdown() }
@@ -188,7 +198,38 @@ enum ProjectProof {
     @MainActor static func scenario(_ mode: String, executable: URL) {
         let cli = ProjectCLI(executable: executable)
         let client = ProjectClient(cli: cli)
-        let session = ProjectSession(client: client, foreground: { true })
+        if mode == "recovery-store-failure" {
+            let store = ProofRecoveryStore(); store.synchronizes = false
+            let guarded = ProjectSession(client: client, defaults: store, foreground: { true })
+            guarded.bind(identity); wait("store-failure list") { !guarded.busy }
+            guarded.create("Apollo")
+            require(!guarded.busy && guarded.pending == nil && guarded.status.contains("safely record"), "unacknowledged recovery launched a mutation")
+            let recovery = ProjectMutationRecovery(identity: identity, command: .create("Apollo", UUID().uuidString.lowercased()))!
+            store.synchronizes = true; require(recovery.save(for: identity, defaults: store), "recovery setup")
+            let restarting = ProjectSession(client: client, defaults: store, foreground: { true })
+            restarting.bind(identity); wait("clear-failure list") { !restarting.busy }
+            require(restarting.pending?.arguments == recovery.command?.arguments, "recovery setup was not loaded")
+            let key = ProjectMutationRecovery.recoveryKey(for: identity); let stored = store.data(forKey: key)
+            store.synchronizes = false; restarting.abandonPending()
+            require(restarting.needsRecoveryReview && restarting.pending?.arguments == recovery.command?.arguments && store.data(forKey: key) == stored, "unacknowledged clear unlocked mutation")
+            return
+        }
+        let suite = "org.echobrain.test.projects." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        if mode == "malformed-recovery" {
+            defaults.set(Data("{bad".utf8), forKey: ProjectMutationRecovery.recoveryKey(for: identity))
+            let blocked = ProjectSession(client: client, defaults: defaults, foreground: { true })
+            blocked.bind(identity); wait("blocked list") { !blocked.busy }
+            require(blocked.needsRecoveryReview && !blocked.canMutate && blocked.pending == nil, "corrupt recovery must block")
+            blocked.create("Apollo"); require(!blocked.busy, "corrupt recovery launched a mutation")
+            blocked.abandonPending(); require(!blocked.needsRecoveryReview && blocked.canMutate, "explicit abandon must clear corrupt recovery")
+            let restarted = ProjectSession(client: client, defaults: UserDefaults(suiteName: suite)!, foreground: { true })
+            restarted.bind(identity); wait("cleared restart") { !restarted.busy }
+            require(!restarted.needsRecoveryReview && restarted.canMutate, "cleared recovery returned after restart")
+            return
+        }
+        let session = ProjectSession(client: client, defaults: defaults, foreground: { true })
         session.bind(identity); wait("list") { !session.busy }
         if mode == "unsupported" {
             require(session.availability == .notLive && session.projects.isEmpty); return
@@ -229,11 +270,23 @@ enum ProjectProof {
         session.directory("ari"); wait("directory") { !session.busy }
         require(session.candidates.count == 1)
         session.setMember(member, role: "member"); wait("membership") { !session.busy }
-        if mode == "uncertain-mutation" || mode == "uncertain-overflow" {
+        if mode == "uncertain-mutation" || mode == "restart-recovery" || mode == "uncertain-overflow" {
             guard let pending = session.pending else { fatalError("lost replay") }
             let args = pending.arguments
             session.retry(); wait("retry") { !session.busy }
             require(session.pending?.arguments == args)
+            if mode == "restart-recovery" {
+                var inactive = identity; inactive.membershipID = member
+                guard case .missing = ProjectMutationRecovery.load(for: inactive, defaults: defaults) else { fatalError("recovery leaked to another account") }
+                let restarted = ProjectSession(client: client, defaults: UserDefaults(suiteName: suite)!, foreground: { true })
+                restarted.bind(identity); wait("restart") { !restarted.busy }
+                require(restarted.pending?.arguments == args, "restart lost frozen mutation")
+                restarted.abandonPending(); require(!restarted.needsRecoveryReview, "explicit abandon retained recovery")
+                let cleared = ProjectSession(client: client, defaults: UserDefaults(suiteName: suite)!, foreground: { true })
+                cleared.bind(identity); wait("cleared restart") { !cleared.busy }
+                require(cleared.pending == nil && cleared.canMutate, "abandoned recovery returned after restart")
+                return
+            }
             session.bind(nil); require(session.pending == nil && session.selected == nil)
             session.bind(identity); wait("return to original account") { !session.busy }
             require(session.pending?.arguments == args, "account change lost frozen mutation")
@@ -242,6 +295,18 @@ enum ProjectProof {
             session.removeMember(member); wait("remove member") { !session.busy }; require(session.pending == nil)
             session.associate(context, project: project, add: true); wait("associate") { !session.busy }; require(session.pending == nil)
             session.associate(context, project: project, add: false); wait("dissociate") { !session.busy }; require(session.pending == nil)
+            if mode == "restart-create" {
+                session.create("Apollo"); wait("unknown create") { !session.busy }
+                guard let args = session.pending?.arguments else { fatalError("create lost replay") }
+                let restarted = ProjectSession(client: client, defaults: UserDefaults(suiteName: suite)!, foreground: { true })
+                restarted.bind(identity); wait("create restart") { !restarted.busy }
+                require(restarted.pending?.arguments == args, "restart lost exact create")
+                restarted.retry(); wait("create retry") { !restarted.busy && restarted.pending == nil }
+                let cleared = ProjectSession(client: client, defaults: UserDefaults(suiteName: suite)!, foreground: { true })
+                cleared.bind(identity); wait("create cleared restart") { !cleared.busy }
+                require(cleared.pending == nil, "successful create did not clear recovery")
+                return
+            }
             session.create("Apollo"); wait("create") { !session.busy }; require(session.pending == nil && session.selected?.project_id == project)
         }
     }

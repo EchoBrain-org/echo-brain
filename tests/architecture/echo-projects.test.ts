@@ -18,7 +18,7 @@ describe.skipIf(process.platform !== "darwin")("native project CLI boundary", ()
       ...["ui-support", "account", "projects", "uploads"].map(name => join(repo, `product/echo-overlay/${name}.swift`)),
       join(repo, "tests/fixtures/echo-projects-proof.swift"), "-o", binary], { stdio: "pipe", timeout: 120_000 });
   }, 120_000);
-  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-inaccessible", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow"])("handles %s", mode => {
+  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "restart-recovery", "restart-create", "malformed-recovery", "recovery-store-failure", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-inaccessible", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow"])("handles %s", mode => {
     const folder = mkdtempSync(join(root, "case-"));
     const script = join(folder, "client.mjs");
     const executable = join(folder, "echo-brain");
@@ -39,7 +39,10 @@ if (args[1] === 'status') {
     console.error(JSON.stringify(errors.find(x => x.id === (mode === 'unsupported' ? 'unavailable-project-capability' : 'individual-project-non-disclosure')).cli)); process.exit(1);
   }
   if (mode === 'uncertain-overflow' && id === 'projects-member-set') { console.log('x'.repeat(40000)); process.exit(0); }
-  if (mode === 'uncertain-mutation' && id === 'projects-member-set') {
+  if ((mode === 'uncertain-mutation' || mode === 'restart-recovery') && id === 'projects-member-set') {
+    console.error(JSON.stringify({ok:false,action:id,error:'Outcome unknown',code:'outcome_unknown',mutation_outcome:'unknown',request_id:value('--request-id')})); process.exit(1);
+  }
+  if (mode === 'restart-create' && id === 'projects-create' && calls.filter(x => x[1] === 'projects' && x[2] === 'create').length === 1) {
     console.error(JSON.stringify({ok:false,action:id,error:'Outcome unknown',code:'outcome_unknown',mutation_outcome:'unknown',request_id:value('--request-id')})); process.exit(1);
   }
   if (mode === 'ui-access-loss' && id === 'projects-read-context') {
@@ -88,6 +91,11 @@ if (args[1] === 'status') {
     if (mode === "uncertain-mutation" || mode === "cli-uncertain-mutation" || mode === "uncertain-overflow") {
       const calls = readFileSync(log, "utf8").trim().split("\n").map(line => (mode.startsWith("cli-") ? JSON.parse(line).args : JSON.parse(line)) as string[]);
       const writes = calls.filter(args => args[2] === "member-set");
+      expect(writes).toHaveLength(2); expect(writes[0]).toEqual(writes[1]);
+    }
+    if (mode === "restart-create") {
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+      const writes = calls.filter(args => args[2] === "create");
       expect(writes).toHaveLength(2); expect(writes[0]).toEqual(writes[1]);
     }
     if (mode === "cli-ui-round-trip") {

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 
 // Closed, bounded CLI replies. Authority remains responsible for permission;
@@ -270,6 +271,156 @@ enum ProjectCommand {
         return args
     }
 }
+
+protocol ProjectMutationRecoveryStore: AnyObject {
+    func data(forKey defaultName: String) -> Data?
+    func object(forKey defaultName: String) -> Any?
+    func set(_ value: Any?, forKey defaultName: String)
+    func removeObject(forKey defaultName: String)
+    @discardableResult func synchronize() -> Bool
+}
+extension UserDefaults: ProjectMutationRecoveryStore {}
+
+// A single account-scoped replay locator, not a project/content cache. It
+// keeps the exact bounded command needed to reconcile an unknown mutation
+// after a normal quit or process restart.
+struct ProjectMutationRecovery {
+    enum Load { case missing, recovered(ProjectMutationRecovery), invalid }
+    let authority: String
+    let membershipID: String
+    let operation: String
+    let requestID: String
+    let projectID: String?
+    let membership: String?
+    let contextID: String?
+    let role: String?
+    let name: String?
+
+    init?(identity: AccountIdentity, command: ProjectCommand) {
+        guard validateAuthorityOrigin(identity.authority) == identity.authority,
+              let membershipID = identity.membershipID, ProjectWire.id(membershipID, prefix: "mem_") else { return nil }
+        authority = identity.authority; self.membershipID = membershipID
+        switch command {
+        case .create(let name, let requestID):
+            guard ProjectWire.name(name), ProjectWire.id(requestID, prefix: "") else { return nil }
+            operation = "create"; self.requestID = requestID; projectID = nil; membership = nil; contextID = nil; role = nil; self.name = name
+        case .setMember(let projectID, let membership, let role, let requestID):
+            guard ProjectWire.id(projectID, prefix: "prj_"), ProjectWire.id(membership, prefix: "mem_"),
+                  ["member", "lead"].contains(role), ProjectWire.id(requestID, prefix: "") else { return nil }
+            operation = "member-set"; self.requestID = requestID; self.projectID = projectID; self.membership = membership; contextID = nil; self.role = role; name = nil
+        case .removeMember(let projectID, let membership, let requestID):
+            guard ProjectWire.id(projectID, prefix: "prj_"), ProjectWire.id(membership, prefix: "mem_"),
+                  ProjectWire.id(requestID, prefix: "") else { return nil }
+            operation = "member-remove"; self.requestID = requestID; self.projectID = projectID; self.membership = membership; contextID = nil; role = nil; name = nil
+        case .associate(let projectID, let contextID, let requestID, let add):
+            guard ProjectWire.id(projectID, prefix: "prj_"), contextID.range(of: "^ctx_[0-9a-f]{64}$", options: .regularExpression) != nil,
+                  ProjectWire.id(requestID, prefix: "") else { return nil }
+            operation = add ? "associate" : "dissociate"; self.requestID = requestID; self.projectID = projectID; membership = nil; self.contextID = contextID; role = nil; name = nil
+        default:
+            return nil
+        }
+    }
+
+    private init?(identity: AccountIdentity, object: [String: Any]) {
+        guard let authority = object["authority"] as? String, authority == identity.authority,
+              validateAuthorityOrigin(authority) == authority,
+              let membershipID = object["membership_id"] as? String, membershipID == identity.membershipID,
+              ProjectWire.id(membershipID, prefix: "mem_"),
+              let operation = object["operation"] as? String,
+              let requestID = object["request_id"] as? String, ProjectWire.id(requestID, prefix: "")
+        else { return nil }
+        self.authority = authority; self.membershipID = membershipID; self.operation = operation; self.requestID = requestID
+        switch operation {
+        case "create":
+            guard ProjectWire.keys(object, ["schema_version", "kind", "authority", "membership_id", "operation", "request_id", "name"]),
+                  ProjectWire.header(object, version: 1, kind: "echo-project-mutation-recovery-v1"),
+                  let name = object["name"] as? String, ProjectWire.name(name) else { return nil }
+            projectID = nil; membership = nil; contextID = nil; role = nil; self.name = name
+        case "member-set":
+            guard ProjectWire.keys(object, ["schema_version", "kind", "authority", "membership_id", "operation", "request_id", "project_id", "target_membership_id", "role"]),
+                  ProjectWire.header(object, version: 1, kind: "echo-project-mutation-recovery-v1"),
+                  let projectID = object["project_id"] as? String, ProjectWire.id(projectID, prefix: "prj_"),
+                  let membership = object["target_membership_id"] as? String, ProjectWire.id(membership, prefix: "mem_"),
+                  let role = object["role"] as? String, ["member", "lead"].contains(role) else { return nil }
+            self.projectID = projectID; self.membership = membership; contextID = nil; self.role = role; name = nil
+        case "member-remove":
+            guard ProjectWire.keys(object, ["schema_version", "kind", "authority", "membership_id", "operation", "request_id", "project_id", "target_membership_id"]),
+                  ProjectWire.header(object, version: 1, kind: "echo-project-mutation-recovery-v1"),
+                  let projectID = object["project_id"] as? String, ProjectWire.id(projectID, prefix: "prj_"),
+                  let membership = object["target_membership_id"] as? String, ProjectWire.id(membership, prefix: "mem_") else { return nil }
+            self.projectID = projectID; self.membership = membership; contextID = nil; role = nil; name = nil
+        case "associate", "dissociate":
+            guard ProjectWire.keys(object, ["schema_version", "kind", "authority", "membership_id", "operation", "request_id", "project_id", "context_id"]),
+                  ProjectWire.header(object, version: 1, kind: "echo-project-mutation-recovery-v1"),
+                  let projectID = object["project_id"] as? String, ProjectWire.id(projectID, prefix: "prj_"),
+                  let contextID = object["context_id"] as? String, contextID.range(of: "^ctx_[0-9a-f]{64}$", options: .regularExpression) != nil else { return nil }
+            self.projectID = projectID; membership = nil; self.contextID = contextID; role = nil; name = nil
+        default:
+            return nil
+        }
+    }
+
+    var command: ProjectCommand? {
+        switch operation {
+        case "create": guard let name else { return nil }; return .create(name, requestID)
+        case "member-set": guard let projectID, let membership, let role else { return nil }; return .setMember(projectID, membership, role, requestID)
+        case "member-remove": guard let projectID, let membership else { return nil }; return .removeMember(projectID, membership, requestID)
+        case "associate": guard let projectID, let contextID else { return nil }; return .associate(projectID, contextID, requestID, true)
+        case "dissociate": guard let projectID, let contextID else { return nil }; return .associate(projectID, contextID, requestID, false)
+        default: return nil
+        }
+    }
+
+    static func recoveryKey(for identity: AccountIdentity) -> String {
+        let bytes = Data("\(identity.authority)\n\(identity.membershipID ?? "")".utf8)
+        return "org.echobrain.echo.project-mutation." + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private var object: [String: Any] {
+        var result: [String: Any] = ["schema_version": 1, "kind": "echo-project-mutation-recovery-v1", "authority": authority,
+                                     "membership_id": membershipID, "operation": operation, "request_id": requestID]
+        if let projectID { result["project_id"] = projectID }
+        if let membership { result["target_membership_id"] = membership }
+        if let contextID { result["context_id"] = contextID }
+        if let role { result["role"] = role }
+        if let name { result["name"] = name }
+        return result
+    }
+
+    func save(for identity: AccountIdentity, defaults: ProjectMutationRecoveryStore) -> Bool {
+        guard authority == identity.authority, membershipID == identity.membershipID,
+              let data = try? JSONSerialization.data(withJSONObject: object), data.count <= 4096 else { return false }
+        let key = Self.recoveryKey(for: identity); let original = defaults.object(forKey: key)
+        defaults.set(data, forKey: key)
+        guard defaults.synchronize() && defaults.data(forKey: key) == data else {
+            Self.restore(original, forKey: key, defaults: defaults); return false
+        }
+        return true
+    }
+
+    static func clear(for identity: AccountIdentity, defaults: ProjectMutationRecoveryStore) -> Bool {
+        let key = recoveryKey(for: identity); let original = defaults.object(forKey: key)
+        defaults.removeObject(forKey: key)
+        guard defaults.synchronize() && defaults.object(forKey: key) == nil else {
+            restore(original, forKey: key, defaults: defaults); return false
+        }
+        return true
+    }
+
+    static func load(for identity: AccountIdentity, defaults: ProjectMutationRecoveryStore) -> Load {
+        let key = recoveryKey(for: identity)
+        guard let value = defaults.object(forKey: key) else { return .missing }
+        guard let data = value as? Data, data.count <= 4096,
+              let object = ProjectWire.object(data), let recovery = ProjectMutationRecovery(identity: identity, object: object)
+        else { return .invalid }
+        return .recovered(recovery)
+    }
+
+    private static func restore(_ value: Any?, forKey key: String, defaults: ProjectMutationRecoveryStore) {
+        if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+        _ = defaults.synchronize()
+    }
+}
 enum ProjectResult {
     case projects([ProjectSummary], String?), summary(ProjectSummary), members([ProjectMember], String?)
     case items([UploadMatch], String?), content(UploadContent), applied(String), failure(ProjectFailure), accountChanged
@@ -362,6 +513,7 @@ final class ProjectClient: @unchecked Sendable {
 final class ProjectSession {
     enum Availability { case checking, live, notLive, failed }
     let client: ProjectClient
+    private let defaults: ProjectMutationRecoveryStore
     var onChange: (() -> Void)?
     var onAccessChanged: (() -> Void)?
     private let foreground: @MainActor () -> Bool
@@ -384,19 +536,37 @@ final class ProjectSession {
     private var page: ProjectCommand?
     private var readForRoster = false
     private var pendingByAccount: [String: ProjectCommand] = [:]
+    private var recoveryBlockedByAccount: Set<String> = []
     private func accountKey(_ account: AccountIdentity) -> String { account.authority + "\n" + (account.membershipID ?? "") }
     private var active: AccountRunning?
     private var generation = UUID()
     private var concealed = false
-    var canManage: Bool { availability == .live && selected?.role == "lead" && !busy && pending == nil }
-    var canMutate: Bool { availability == .live && identity != nil && !busy && pending == nil }
-    init(client: ProjectClient = ProjectClient(), foreground: @escaping @MainActor () -> Bool = { NSApp.isActive }) {
-        self.client = client; self.foreground = foreground
+    private var recoveryBlocked: Bool { identity.map { recoveryBlockedByAccount.contains(accountKey($0)) } ?? false }
+    var needsRecoveryReview: Bool { pending != nil || recoveryBlocked }
+    var canManage: Bool { availability == .live && selected?.role == "lead" && !busy && pending == nil && !recoveryBlocked }
+    var canMutate: Bool { availability == .live && identity != nil && !busy && pending == nil && !recoveryBlocked }
+    init(client: ProjectClient = ProjectClient(), defaults: ProjectMutationRecoveryStore = UserDefaults.standard,
+         foreground: @escaping @MainActor () -> Bool = { NSApp.isActive }) {
+        self.client = client; self.defaults = defaults; self.foreground = foreground
     }
     func bind(_ account: AccountIdentity?) {
         guard identity != account else { return }
         if !hasOutstandingMutation { cancel() }
-        clearAll(); identity = account; pending = account.flatMap { pendingByAccount[accountKey($0)] }; availability = .checking; concealed = false
+        clearAll(); identity = account
+        if let account {
+            let key = accountKey(account)
+            switch ProjectMutationRecovery.load(for: account, defaults: defaults) {
+            case .missing:
+                recoveryBlockedByAccount.remove(key)
+            case .recovered(let recovery):
+                recoveryBlockedByAccount.remove(key)
+                if let command = recovery.command { pendingByAccount[key] = command }
+            case .invalid:
+                pendingByAccount.removeValue(forKey: key)
+                recoveryBlockedByAccount.insert(key)
+            }
+        }
+        pending = account.flatMap { pendingByAccount[accountKey($0)] }; availability = .checking; concealed = false
         invalidateDrafts()
         if account != nil && !hasOutstandingMutation { discover() } else { onChange?() }
     }
@@ -460,6 +630,10 @@ final class ProjectSession {
     }
     private func mutate(_ command: ProjectCommand) {
         guard let identity else { return }
+        guard let recovery = ProjectMutationRecovery(identity: identity, command: command), recovery.save(for: identity, defaults: defaults) else {
+            status = "Could not safely record this project change. Try again before it is sent."
+            onChange?(); return
+        }
         pending = command; pendingByAccount[accountKey(identity)] = command
         clearContent(); status = "Saving project change…"; run(command)
     }
@@ -470,8 +644,13 @@ final class ProjectSession {
     // Explicit UI acknowledgment is required before abandoning an unknown
     // mutation. Refreshing a roster/feed never silently clears its replay ID.
     func abandonPending() {
-        guard !busy, let identity else { return }
-        pendingByAccount.removeValue(forKey: accountKey(identity)); pending = nil; onChange?()
+        guard !busy, let identity, needsRecoveryReview else { return }
+        guard ProjectMutationRecovery.clear(for: identity, defaults: defaults) else {
+            status = "Could not safely clear this project recovery. Try again."
+            onChange?(); return
+        }
+        let key = accountKey(identity)
+        pendingByAccount.removeValue(forKey: key); recoveryBlockedByAccount.remove(key); pending = nil; onChange?()
     }
     func leave() {
         guard !hasOutstandingMutation else { return }
@@ -486,6 +665,8 @@ final class ProjectSession {
         if !hasOutstandingMutation { cancel() }
         clearAll(); invalidateDrafts(); onChange?()
     }
+    // Recovery locators survive normal termination. A command is not launched
+    // until its locator has been acknowledged by the recovery store.
     func shutdown() { cancel(); clearAll(); pending = nil; pendingByAccount = [:] }
     private func invalidateDrafts() { authorizationGeneration = UUID(); onAccessChanged?() }
     private func cancel() { active?.cancel(); active = nil; generation = UUID(); busy = false; hasOutstandingMutation = false }
@@ -522,7 +703,12 @@ final class ProjectSession {
                 self.status = items.isEmpty ? "No context you can read on this page." : "Select an original to read."
             case .content(let content): self.content = content; self.status = ""
             case .applied(let project):
-                self.pending = nil; self.pendingByAccount.removeValue(forKey: self.accountKey(identity))
+                guard ProjectMutationRecovery.clear(for: identity, defaults: self.defaults) else {
+                    self.status = "Saved, but could not safely clear project recovery. Retry the same change."
+                    self.onChange?(); return
+                }
+                let key = self.accountKey(identity)
+                self.pending = nil; self.pendingByAccount.removeValue(forKey: key); self.recoveryBlockedByAccount.remove(key)
                 // Receipts describe the committed operation, not current access
                 // or association state. Always issue a fresh authorized read.
                 self.open(project); return
@@ -1234,9 +1420,13 @@ final class ProjectsController: NSObject, NSWindowDelegate {
         button.isEnabled = enabled; button.tag = tag; addResult(button); return button
     }
     private func renderProjects() {
-        if let pending = projects.pending {
-            label("An earlier \(pending.operation) change needs reconciliation.")
-            action("Retry same project change", #selector(retryProject), enabled: !projects.busy)
+        if projects.needsRecoveryReview {
+            if let pending = projects.pending {
+                label("An earlier \(pending.operation) change needs reconciliation.")
+                action("Retry same project change", #selector(retryProject), enabled: !projects.busy)
+            } else {
+                label("A saved project recovery record needs review before another change.")
+            }
             action("Review a different change…", #selector(abandonProject), enabled: !projects.busy)
         }
         switch mode {
