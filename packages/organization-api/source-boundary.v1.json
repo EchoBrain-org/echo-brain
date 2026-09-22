@@ -48,6 +48,16 @@
         "name": "Person update contracts",
         "path": "packages/organization-api/src/person-updates.ts",
         "export": "validatePersonUpdateSubmitV1"
+      },
+      {
+        "name": "Person update V2 contracts",
+        "path": "packages/organization-api/src/person-updates-v2.ts",
+        "export": "validatePersonUpdateSubmitV2"
+      },
+      {
+        "name": "Project context V1 contracts",
+        "path": "packages/organization-api/src/project-context-v1.ts",
+        "export": "validateProjectCreateV1"
       }
     ],
     "compatibility_entrypoints": [],
