@@ -58,6 +58,7 @@ if (args[1] === 'status') {
   if (id === 'documents-read' && mode==='ui-documents') {
     const next=args.includes('--cursor'); console.log(JSON.stringify({ok:true,result:{metadata:listedDocument,text:{schema_version:1,kind:'echo-person-document-text-v1',document_id:listedDocument.document_id,original_sha256:listedDocument.sha256,extractor:listedDocument.extractor,extraction_state:'ready',chunks:[{ordinal:next?1:0,anchor_kind:'page',anchor_start:next?2:1,text:next?'Second page':'First page'}],next_cursor:next?null:'Mg'}}}));process.exit(0);
   }
+  if (id === 'documents-abandon') { console.log(JSON.stringify({ok:true,result:{schema_version:1,kind:'echo-person-document-abandoned-v1',request_id:value('--request-id'),local_snapshot_removed:true,authority_outcome:'unchanged'}}));process.exit(0); }
   if (id === 'documents-upload' || id === 'documents-status') {
     let document;
     if (id === 'documents-upload') {
@@ -164,7 +165,7 @@ if (args[1] === 'status') {
         // The project-page bar ran the scoped project search, not global Ask.
         expect(calls.some(args => args[1] === "projects" && args[2] === "search" && flag(args, "--project-id") === apollo && flag(args, "--query") === "ship")).toBe(true);
         expect(submits).toHaveLength(mode === "ui-member" || mode === "ui-access-loss" ? 0 : mode.endsWith("ui-upload-unknown") ? 2 : mode === "ui-round-trip" ? 3 : 1);
-        // One To choice (Apollo) maps to audience = association = Apollo, and
+        // Both independent choices are Apollo for the first save, and
         // the title comes from the first non-empty line.
         for (const args of mode === "ui-round-trip" ? submits.slice(0, 1) : submits) {
           expect(flag(args, args[1] === "documents" ? "--audience" : "--visibility")).toBe("project");
@@ -176,11 +177,13 @@ if (args[1] === 'status') {
         if (mode.endsWith("ui-upload-unknown")) expect(submits[0]).toEqual(submits[1]);
       }
       if (mode === "ui-round-trip") {
-        // Choosing Only me inside Apollo sends only-me with no project at
-        // all; choosing Organization sends team with no project at all.
+        // Only me retains the independent Apollo association; the Organization
+        // save explicitly selects No project without changing its audience.
         expect(flag(submits[1], "--visibility")).toBe("only-me");
         expect(flag(submits[2], "--visibility")).toBe("team");
-        for (const args of submits.slice(1)) expect(args.some(arg => arg === "--project-id" || arg === "--audience-project-id")).toBe(false);
+        expect(flag(submits[1], "--project-id")).toBe(apollo);
+        expect(submits[1]).not.toContain("--audience-project-id");
+        expect(submits[2].some(arg => arg === "--project-id" || arg === "--audience-project-id")).toBe(false);
         expect(new Set(submits.map(args => flag(args, "--request-id"))).size).toBe(3);
       }
       if (mode === "ui-search-controls") {

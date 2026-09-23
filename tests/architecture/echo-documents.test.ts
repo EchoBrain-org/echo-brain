@@ -16,7 +16,7 @@ describe.skipIf(process.platform !== "darwin")("native document custody and boun
       ...["ui-support", "account", "projects", "uploads"].map(file => join(repo, `product/echo-overlay/${file}.swift`)),
       join(repo, "tests/fixtures/echo-documents-proof.swift"), "-o", binary], { stdio: "pipe", timeout: 120_000 });
   }, 120_000);
-  it.each(["snapshot", "bounds", "parser", "recovery", "round-trip", "unknown-retry", "pagination", "download"])("handles %s", mode => {
+  it.each(["snapshot", "bounds", "parser", "failures", "recovery", "minimal-saved", "restart-retry", "abandon", "association-retry", "round-trip", "unknown-retry", "pagination", "download"])("handles %s", mode => {
     const folder = mkdtempSync(join(root, "case-"));
     const executable = join(folder, "echo-brain"), script = join(folder, "client.mjs"), log = join(folder, "calls.jsonl");
     writeFileSync(script, `import fs from 'node:fs';
@@ -29,11 +29,15 @@ fs.appendFileSync(log,JSON.stringify(entry)+'\\n');
 if(args[1]==='status') { console.log(JSON.stringify({schema_version:1,kind:'echo-person-client-status-v1',signed_in:true,display_name:'Casey',membership_type:'employee',connected_authority:'https://authority.example',installed_version:'1',membership_id:'mem_original',client_build:{source_sha:'a'.repeat(40),source_kind:'materialized-commit'}})); process.exit(0); }
 const bytes=fs.readFileSync(${JSON.stringify(join(folder, "Robot PRD.pdf"))});
 const original=args[2]==='upload'?fs.readFileSync(flag('--file')):bytes;
-const metadata={schema_version:1,kind:'echo-person-document-metadata-v1',request_id:args[2]==='upload'?flag('--request-id'):'11111111-1111-4111-8111-111111111111',document_id:'doc_'+'d'.repeat(64),filename:'Robot PRD.pdf',title:'Robot PRD',content_length:original.length,sha256:'sha256:'+createHash('sha256').update(original).digest('hex'),audience:{kind:'only_me'},project_id:null,detected_media_type:'application/pdf',received_at:'2026-09-23T00:00:00.000Z',state:'saved',extraction_state:'ready',extraction_detail:null,extractor:'fixture-v1',extracted_text_bytes:26};
+const metadata={schema_version:1,kind:'echo-person-document-metadata-v1',request_id:['upload','retry'].includes(args[2])?flag('--request-id'):'11111111-1111-4111-8111-111111111111',document_id:'doc_'+'d'.repeat(64),filename:'Robot PRD.pdf',title:'Robot PRD',content_length:original.length,sha256:'sha256:'+createHash('sha256').update(original).digest('hex'),audience:{kind:'only_me'},project_id:null,detected_media_type:'application/pdf',received_at:'2026-09-23T00:00:00.000Z',state:'saved',extraction_state:'ready',extraction_detail:null,extractor:'fixture-v1',extracted_text_bytes:26};
 let result;
-if(args[2]==='upload') {
+if(['upload','retry'].includes(args[2])) {
  if(mode==='unknown-retry'&&!prior.some(x=>x.args[2]==='upload')) { console.error(JSON.stringify({ok:false,action:'documents-upload',error:'Outcome unknown',code:'outcome_unknown',request_id:flag('--request-id'),mutation_outcome:'unknown'})); process.exit(1); }
  const {extraction_detail,extractor,extracted_text_bytes,...receipt}=metadata;result={...receipt,kind:'echo-person-document-receipt-v1',extraction_state:'extracting'};
+} else if(args[2]==='abandon') result={schema_version:1,kind:'echo-person-document-abandoned-v1',request_id:flag('--request-id'),local_snapshot_removed:true,authority_outcome:'unchanged'};
+else if(['associate','dissociate'].includes(args[2])) {
+ if(mode==='association-retry'&&!prior.some(x=>x.args[2]==='associate')) { console.error(JSON.stringify({ok:false,action:'documents-associate',error:'Outcome unknown',code:'outcome_unknown',request_id:flag('--request-id'),mutation_outcome:'unknown'})); process.exit(1); }
+ result={schema_version:1,kind:'echo-person-document-association-receipt-v1',request_id:flag('--request-id'),document_id:flag('--document-id'),project_id:flag('--project-id'),operation:args[2],received_at:'2026-09-23T00:00:00.000Z',state:'applied'};
 } else if(args[2]==='search') result={schema_version:1,kind:'echo-person-document-search-result-v1',documents:[{...metadata,excerpt:'First page',anchor:{kind:'page',start:1}}],next_cursor:null};
 else if(args[2]==='read') { const next=args.includes('--cursor'); result={metadata,text:{schema_version:1,kind:'echo-person-document-text-v1',document_id:metadata.document_id,original_sha256:metadata.sha256,extractor:metadata.extractor,extraction_state:'ready',chunks:[{ordinal:next?1:0,anchor_kind:'page',anchor_start:next?2:1,text:next?'Second page':'First page'}],next_cursor:next?null:'Mg'}}; }
 else if(args[2]==='download') { fs.writeFileSync(flag('--out'),original);result={document_id:metadata.document_id,output_path:flag('--out'),content_length:original.length,sha256:metadata.sha256}; }
@@ -47,6 +51,17 @@ console.log(JSON.stringify({ok:true,result}));
       const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[] });
       for (const { args } of calls.filter(call => ["read", "download"].includes(call.args[2]))) {
         expect(args[args.indexOf("--project-id") + 1]).toBe("prj_11111111-1111-4111-8111-111111111111");
+      }
+    }
+    if (["restart-retry", "abandon", "association-retry"].includes(mode)) {
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[] });
+      const changes = calls.filter(call => ["retry", "abandon", "associate"].includes(call.args[2]));
+      expect(changes).toHaveLength(mode === "association-retry" ? 2 : 1);
+      if (mode === "association-retry") expect(changes[0]).toEqual(changes[1]);
+      for (const { args } of changes) {
+        expect(args).not.toContain("--file");
+        expect(args[args.indexOf("--expected-membership-id") + 1]).toBe("mem_original");
+        expect(args[args.indexOf("--expected-authority") + 1]).toBe("https://authority.example");
       }
     }
     if (["round-trip", "unknown-retry"].includes(mode)) {

@@ -1,9 +1,10 @@
+import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { validatePersonUploadContentV1, validatePersonUploadSearchV1, validatePersonUploadSearchResultV1, validatePersonUploadContextId, type PersonUploadContentV1, type PersonUploadSearchV1, type PersonUploadSearchResultV1 } from '@echo-brain/organization-api';
 import { PERSON_UPDATES_PATH_V1, validatePersonUpdateSubmitV1, validatePersonUpdateReceiptV1, validatePersonUpdateStatusV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1, type PersonUpdateReceiptV1, type PersonUpdateStatusV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
-import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENT_JSON_MAX_BYTES, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentReceiptV1, validatePersonDocumentMetadataV1, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchResultV1, type PersonDocumentSearchV1 } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENT_JSON_MAX_BYTES, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1, validatePersonDocumentMetadataV1, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchResultV1, type PersonDocumentSearchV1 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
 import {
   PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
@@ -880,7 +881,9 @@ export class PersonAuthorityClient {
       };
       const response = await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${metadata.request_id}`, init, 120_000);
       status = response.status;
-      const receipt = await this.documentResponse(response, validatePersonDocumentReceiptV1, 201);
+      const receipt = await this.documentResponse(response, validatePersonDocumentUploadResultV1, 201);
+      if (receipt.request_id !== metadata.request_id) throw new Error('Document receipt request changed');
+      if (receipt.kind === 'echo-person-document-saved-v1') return receipt;
       for (const key of ['request_id', 'filename', 'title', 'content_length', 'sha256', 'project_id'] as const) {
         if (receipt[key] !== metadata[key]) throw new Error('Document receipt coordinates changed');
       }
@@ -895,11 +898,21 @@ export class PersonAuthorityClient {
     } finally { stream.destroy(); }
   }
 
+  async changeDocumentAssociation(accessToken: string, value: PersonDocumentAssociateV1 | PersonDocumentDissociateV1) {
+    const add = value.kind === 'echo-person-document-associate-v1';
+    const request = add ? validatePersonDocumentAssociateV1(value) : validatePersonDocumentDissociateV1(value);
+    const operation = add ? 'associate' : 'dissociate';
+    return this.contextRequest(accessToken, { path: `${PERSON_DOCUMENTS_PATH_V1}/${request.document_id}/${operation}`, body: request,
+      request_id: request.request_id, validate: validatePersonDocumentAssociationReceiptV1,
+      matches: result => result.request_id === request.request_id && result.document_id === request.document_id &&
+        result.project_id === request.project_id && result.operation === operation });
+  }
+
   async documentStatus(accessToken: string, requestId: string) {
     validatePersonUpdateRequestId(requestId);
     const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V1}/requests/${requestId}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validatePersonDocumentMetadataV1);
+    }), validatePersonDocumentStatusV1);
     if (result.request_id !== requestId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document status coordinates changed.');
     return result;
   }

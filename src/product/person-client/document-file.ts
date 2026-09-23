@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import { closeSync, constants, createReadStream, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { canonicalJson } from '@echo-brain/federation-protocol';
-import { PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonUpdateRequestId, type PersonDocumentUploadMetadataV1, type ProjectContextAudienceV1 } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonUpdateRequestId, type PersonDocumentUploadMetadataV1, type PersonDocumentStatusV1, type ProjectContextAudienceV1 } from '@echo-brain/organization-api';
 import { personSessionStorePaths } from './session-store.js';
 
 export interface DocumentFileUpload {
@@ -17,7 +17,7 @@ export interface DocumentFileUpload {
 }
 
 export class DocumentFileError extends Error {
-  constructor(readonly code: 'invalid_file' | 'snapshot_conflict' | 'snapshot_limit' | 'invalid_download', message: string) {
+  constructor(readonly code: 'invalid_file' | 'snapshot_conflict' | 'snapshot_limit' | 'snapshot_not_found' | 'invalid_download', message: string) {
     super(message); this.name = 'DocumentFileError';
   }
 }
@@ -71,24 +71,65 @@ export interface DocumentSnapshot {
   remove(): void;
 }
 
+const snapshotRequestPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function snapshotAccount(homeDirectory: string, accountBinding: string): string {
+  const root = join(personSessionStorePaths(homeDirectory).directory, 'document-snapshots');
+  privateDirectory(root);
+  const account = join(root, createHash('sha256').update(accountBinding).digest('hex'));
+  privateDirectory(account);
+  return account;
+}
+function snapshotManifest(directory: string, requestId: string): PersonDocumentUploadMetadataV1 {
+  privateDirectory(directory);
+  const path = join(directory, 'metadata.json');
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 || (stat.mode & 0o077) !== 0 ||
+      (process.getuid !== undefined && stat.uid !== process.getuid())) throw new DocumentFileError('invalid_file', 'Document snapshot metadata is invalid.');
+  const saved = JSON.parse(readFileSync(path, 'utf8')) as { metadata: unknown };
+  const metadata = validatePersonDocumentUploadMetadataV1(saved.metadata);
+  if (metadata.request_id !== requestId) throw new DocumentFileError('invalid_file', 'Document snapshot metadata is inconsistent.');
+  return metadata;
+}
+function snapshot(directory: string, requestId: string, reused: boolean): DocumentSnapshot {
+  const metadata = snapshotManifest(directory, requestId);
+  const originalPath = join(directory, 'original');
+  const descriptor = regularFile(originalPath);
+  try {
+    const proof = copyAndHash(descriptor);
+    if (proof.content_length !== metadata.content_length || proof.sha256 !== metadata.sha256) throw new DocumentFileError('invalid_file', 'Document snapshot integrity check failed.');
+  } finally { closeSync(descriptor); }
+  return {
+    metadata, reused,
+    open: () => createReadStream(originalPath, { fd: regularFile(originalPath), autoClose: true, highWaterMark: 64 * 1024 }),
+    remove: () => rmSync(directory, { recursive: true, force: true }),
+  };
+}
+/** Crash leftovers are neither upload receipts nor slots. Only old, private preparation directories are collected. */
+function cleanPreparationDirectories(account: string): void {
+  for (const name of readdirSync(account)) {
+    if (!name.startsWith('.preparing-')) continue;
+    const path = join(account, name);
+    const stat = lstatSync(path);
+    if (Date.now() - stat.mtimeMs < 24 * 60 * 60 * 1000) continue;
+    privateDirectory(path);
+    rmSync(path, { recursive: true, force: true });
+  }
+}
+
 /** Uncertain submissions retain a private byte snapshot, scoped to the exact membership tenure. */
 export function prepareDocumentSnapshot(homeDirectory: string, accountBinding: string, input: DocumentFileUpload): DocumentSnapshot {
   validatePersonUpdateRequestId(input.request_id);
   const sourcePath = resolve(input.file);
   const filename = basename(sourcePath);
   if (!/\.(?:txt|md|markdown|pdf|docx)$/i.test(filename)) throw new DocumentFileError('invalid_file', 'Choose a .txt, .md, .pdf, or .docx document. Legacy .doc is unsupported.');
-  // Validate all coordinates before reserving local custody.
   validatePersonDocumentUploadMetadataV1({ schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: input.request_id,
     filename, title: input.title, audience: input.audience, project_id: input.project_id, content_length: 1, sha256: `sha256:${'0'.repeat(64)}` });
-  const root = join(personSessionStorePaths(homeDirectory).directory, 'document-snapshots');
-  privateDirectory(root);
-  const account = join(root, createHash('sha256').update(accountBinding).digest('hex'));
-  privateDirectory(account);
+  const account = snapshotAccount(homeDirectory, accountBinding);
   const directory = join(account, input.request_id);
-  const coordinates = { source_path: sourcePath, filename, title: input.title, audience: input.audience, project_id: input.project_id };
   const reused = existsSync(directory);
   if (!reused) {
-    if (readdirSync(account).length >= 10) throw new DocumentFileError('snapshot_limit', 'Ten document snapshots await reconciliation. Resolve existing submissions before starting another.');
+    cleanPreparationDirectories(account);
+    if (readdirSync(account).filter(name => snapshotRequestPattern.test(name)).length >= 10) throw new DocumentFileError('snapshot_limit', 'Ten document snapshots await reconciliation. Run documents pending, then status, retry, or explicitly abandon a retained snapshot.');
     let temporary: string | undefined;
     let source: number | undefined;
     let destination: number | undefined;
@@ -101,7 +142,7 @@ export function prepareDocumentSnapshot(homeDirectory: string, accountBinding: s
       closeSync(destination); destination = undefined;
       const metadata = validatePersonDocumentUploadMetadataV1({ schema_version: 1, kind: 'echo-person-document-upload-v1',
         request_id: input.request_id, filename, title: input.title, audience: input.audience, project_id: input.project_id, ...proof });
-      writeFileSync(join(temporary, 'metadata.json'), canonicalJson({ coordinates, metadata }), { mode: 0o600, flag: 'wx' });
+      writeFileSync(join(temporary, 'metadata.json'), canonicalJson({ metadata }), { mode: 0o600, flag: 'wx' });
       try { renameSync(temporary, directory); temporary = undefined; }
       catch (error) { if (!existsSync(directory)) throw error; }
     } catch (error) {
@@ -113,28 +154,43 @@ export function prepareDocumentSnapshot(homeDirectory: string, accountBinding: s
       if (temporary !== undefined) rmSync(temporary, { recursive: true, force: true });
     }
   }
-  privateDirectory(directory);
-  const manifestPath = join(directory, 'metadata.json');
-  const manifestStat = lstatSync(manifestPath);
-  if (!manifestStat.isFile() || manifestStat.size > 16 * 1024 || (manifestStat.mode & 0o077) !== 0) throw new DocumentFileError('invalid_file', 'Document snapshot metadata is invalid.');
-  const saved = JSON.parse(readFileSync(manifestPath, 'utf8')) as { coordinates: unknown; metadata: unknown };
-  if (canonicalJson(saved.coordinates) !== canonicalJson(coordinates)) throw new DocumentFileError('snapshot_conflict', 'This request ID has a retained document snapshot with different upload coordinates. Retry its exact original command or use a new request ID.');
-  const metadata = validatePersonDocumentUploadMetadataV1(saved.metadata);
-  if (metadata.request_id !== input.request_id || metadata.filename !== filename || metadata.title !== input.title ||
-      canonicalJson(metadata.audience) !== canonicalJson(input.audience) || metadata.project_id !== input.project_id) {
-    throw new DocumentFileError('invalid_file', 'Document snapshot metadata is inconsistent.');
+  const result = snapshot(directory, input.request_id, reused);
+  if (result.metadata.filename !== filename || result.metadata.title !== input.title ||
+      canonicalJson(result.metadata.audience) !== canonicalJson(input.audience) || result.metadata.project_id !== input.project_id) {
+    throw new DocumentFileError('snapshot_conflict', 'This request ID has different retained upload coordinates. Use documents retry with its request ID to resend the exact original.');
   }
-  const originalPath = join(directory, 'original');
-  const descriptor = regularFile(originalPath);
-  try {
-    const proof = copyAndHash(descriptor);
-    if (proof.content_length !== metadata.content_length || proof.sha256 !== metadata.sha256) throw new DocumentFileError('invalid_file', 'Document snapshot integrity check failed.');
-  } finally { closeSync(descriptor); }
-  return {
-    metadata, reused,
-    open: () => createReadStream(originalPath, { fd: regularFile(originalPath), autoClose: true, highWaterMark: 64 * 1024 }),
-    remove: () => rmSync(directory, { recursive: true, force: true }),
-  };
+  return result;
+}
+
+/** Resume uses only the membership-scoped retained bytes; no original pathname is needed. */
+export function resumeDocumentSnapshot(homeDirectory: string, accountBinding: string, requestId: string): DocumentSnapshot {
+  validatePersonUpdateRequestId(requestId);
+  const directory = join(snapshotAccount(homeDirectory, accountBinding), requestId);
+  if (!existsSync(directory)) throw new DocumentFileError('snapshot_not_found', 'No retained document snapshot exists for this request in the current account. Check its Authority status before making a new upload.');
+  try { return snapshot(directory, requestId, true); }
+  catch (error) {
+    if (error instanceof DocumentFileError) throw error;
+    throw new DocumentFileError('invalid_file', 'The retained document snapshot is unavailable or damaged. Check its Authority status before abandoning it or making a new upload.');
+  }
+}
+
+export function listDocumentSnapshots(homeDirectory: string, accountBinding: string) {
+  const account = snapshotAccount(homeDirectory, accountBinding);
+  cleanPreparationDirectories(account);
+  return readdirSync(account).filter(name => snapshotRequestPattern.test(name)).sort().map(requestId => {
+    try { return { ...snapshotManifest(join(account, requestId), requestId), local_state: 'retained' as const }; }
+    catch { return { request_id: requestId, local_state: 'unreadable' as const }; }
+  });
+}
+
+/** Explicit local abandonment never deletes or cancels an Authority original. */
+export function abandonDocumentSnapshot(homeDirectory: string, accountBinding: string, requestId: string): boolean {
+  validatePersonUpdateRequestId(requestId);
+  const directory = join(snapshotAccount(homeDirectory, accountBinding), requestId);
+  if (!existsSync(directory)) return false;
+  privateDirectory(directory);
+  rmSync(directory, { recursive: true, force: true });
+  return true;
 }
 
 /** Publishes a new file only after exact byte/hash verification and the current-account fence. */
@@ -180,18 +236,16 @@ export async function saveDocumentDownload(response: Response, outputPath: strin
 }
 
 /** A current, exact server status settles a retained uncertain upload without rereading its source. */
-export function reconcileDocumentSnapshot(homeDirectory: string, accountBinding: string, receipt: { request_id: string; sha256: string; content_length: number; filename: string; title: string; audience: ProjectContextAudienceV1; project_id: PersonDocumentUploadMetadataV1['project_id'] }): void {
+export function reconcileDocumentSnapshot(homeDirectory: string, accountBinding: string, receipt: PersonDocumentStatusV1): void {
   validatePersonUpdateRequestId(receipt.request_id);
-  const root = join(personSessionStorePaths(homeDirectory).directory, 'document-snapshots');
-  const account = join(root, createHash('sha256').update(accountBinding).digest('hex'));
-  const directory = join(account, receipt.request_id);
-  if (!existsSync(directory)) return;
-  privateDirectory(root); privateDirectory(account); privateDirectory(directory);
-  const path = join(directory, 'metadata.json'); const stat = lstatSync(path);
-  if (!stat.isFile() || stat.size > 16 * 1024) return;
-  const saved = JSON.parse(readFileSync(path, 'utf8')) as { metadata: unknown };
-  const metadata = validatePersonDocumentUploadMetadataV1(saved.metadata);
-  for (const key of ['request_id', 'sha256', 'content_length', 'filename', 'title', 'project_id'] as const) if (metadata[key] !== receipt[key]) return;
-  if (canonicalJson(metadata.audience) !== canonicalJson(receipt.audience)) return;
-  rmSync(directory, { recursive: true, force: true });
+  // The authenticated status reader validates the exact account and request. A minimal
+  // saved receipt deliberately exposes no original metadata after content access loss.
+  if (receipt.kind !== 'echo-person-document-saved-v1') {
+    const directory = join(snapshotAccount(homeDirectory, accountBinding), receipt.request_id);
+    if (!existsSync(directory)) return;
+    const metadata = snapshotManifest(directory, receipt.request_id);
+    for (const key of ['request_id', 'sha256', 'content_length', 'filename', 'title'] as const) if (metadata[key] !== receipt[key]) return;
+    if (canonicalJson(metadata.audience) !== canonicalJson(receipt.audience)) return;
+  }
+  abandonDocumentSnapshot(homeDirectory, accountBinding, receipt.request_id);
 }

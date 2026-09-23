@@ -509,6 +509,13 @@ enum ProjectProof {
         // The chip is drivable without its menu.
         guard let choose = to.onChoose else { fatalError("compose-to has no onChoose") }
         choose(0); require(to.title == "Only me", "choosing Only me did not update To")
+        let association = ProofUI.find(ChipMenuButton.self, "compose-association", in: compose)
+        require(association.title == "Apollo", "changing audience changed the project association")
+        association.onChoose?(0)
+        require(association.title == "No project" && to.title == "Only me", "association changed audience")
+        association.onChoose?(association.choices.firstIndex(of: "Beacon")!)
+        require(to.title == "Only me", "linking a private note changed audience")
+        association.onChoose?(association.choices.firstIndex(of: "Apollo")!)
         guard let apollo = to.choices.firstIndex(of: "Apollo") else { fatalError("Apollo is not a To choice") }
         choose(apollo); require(to.title == "Apollo", "choosing Apollo did not update To")
         require(body.string == "We agreed to ship.\n" && send.isEnabled, "changing To altered the draft")
@@ -552,7 +559,7 @@ enum ProjectProof {
             recheck.performClick(nil)
         }
         wait("project save") { !uploads.busy && uploads.receipt != nil }
-        // To = Apollo means audience = association = Apollo.
+        // Audience and independently selected association are both Apollo for this save.
         require(uploads.receipt?.audience == UploadAudience(.project, projectID: project))
         require(uploads.receipt?.project_id == project)
         require(uploads.recovery?.audience.project_id == project && uploads.recovery?.projectID == project)
@@ -579,18 +586,21 @@ enum ProjectProof {
             controller.refreshIdentity(); wait("signed in again") { !uploads.busy && uploads.identity != nil && !projects.busy && projects.projects.count == 2 }
             settle("signed in settle")
             openApollo()
-            // Only me and Organization chosen inside a project send no project at all.
+            // Audience changes preserve the selected project; association can also be explicitly cleared.
             for (choice, title, visibility) in [("Only me", "Saved for you", UploadVisibility.onlyMe), ("Organization", "Sent to your organization", .team)] {
                 controller.startWrite(); wait("compose \(choice)") { window.attachedSheet != nil }
                 compose = sheetRoot("compose \(choice)")
                 let chip = ProofUI.find(ChipMenuButton.self, "compose-to", in: compose)
                 require(chip.title == "Apollo", "compose inside Apollo must default To to Apollo")
                 chip.onChoose?(chip.choices.firstIndex(of: choice)!)
+                let association = ProofUI.find(ChipMenuButton.self, "compose-association", in: compose)
+                require(association.title == "Apollo", "audience selection silently changed association")
+                if choice == "Organization" { association.onChoose?(0) }
                 let text = ProofUI.find(NSTextView.self, "compose-body", in: compose)
                 text.string = "\(choice) note\n"; text.didChangeText()
                 ProofUI.find(NSButton.self, "compose-send", in: compose).performClick(nil)
                 wait("\(choice) save") { !uploads.busy && uploads.receipt != nil }
-                require(uploads.receipt?.visibility == visibility && uploads.receipt?.project_id == nil, "\(choice) sent with a project")
+                require(uploads.receipt?.visibility == visibility && uploads.receipt?.project_id == (choice == "Only me" ? project : nil), "\(choice) association mismatch")
                 require(ProofUI.showsText(title, in: sheetRoot("sent \(choice)")), "\(choice) sent title")
                 ProofUI.find(NSButton.self, "compose-done", in: sheetRoot("sent \(choice)")).performClick(nil)
                 wait("\(choice) closed") { window.attachedSheet == nil }; settle("\(choice) settle")

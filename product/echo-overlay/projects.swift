@@ -133,6 +133,11 @@ struct ProjectFailure {
         switch code {
         case "not_found": return "This project or original is no longer available to you."
         case "unauthorized", "stale_access_state", "sign_in_required": return "Your access changed. Refresh your account and projects."
+        case "invalid_file": return "Choose a supported, readable document up to 25 MiB."
+        case "snapshot_conflict": return "This request already has a different saved original. Retry its retained upload."
+        case "snapshot_limit": return "Resolve or abandon a retained upload before starting another."
+        case "snapshot_not_found": return "The local retry copy is unavailable. Check the saved upload status before starting another."
+        case "quota_exceeded": return "Document storage is full. Contact your organization owner."
         case "conflict": return "The change conflicts with current state. A project must keep at least one lead. Refresh and review before another change."
         default: return "Could not confirm the result. Refresh and try again."
         }
@@ -148,6 +153,9 @@ struct ProjectFailure {
             guard CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue == Double(n.intValue), (400...599).contains(n.intValue) else { return nil }
             expected.append("status"); status = n.intValue
         }
+        if o["status"] is NSNull { expected.append("status") }
+        let documentCodes = action.hasPrefix("documents-") ? ["invalid_file", "snapshot_conflict", "snapshot_limit", "snapshot_not_found", "invalid_download", "quota_exceeded"] : []
+        let localRejections = ["invalid_request", "sign_in_required", "stale_access_state"] + documentCodes.filter { $0 != "quota_exceeded" }
         if let requestID {
             expected += ["request_id", "mutation_outcome"]
             guard o["request_id"] as? String == requestID else { return nil }
@@ -156,9 +164,9 @@ struct ProjectFailure {
                 return ProjectFailure(code: code, status: status, unknown: true)
             }
             guard o["mutation_outcome"] as? String == "not_submitted",
-                  status.map({ (400...499).contains($0) }) ?? ["invalid_request", "sign_in_required"].contains(code) else { return nil }
+                  status.map({ (400...499).contains($0) }) ?? localRejections.contains(code) else { return nil }
         }
-        guard ProjectWire.keys(o, expected), ["invalid_request", "conflict", "invalid_output", "not_found", "stale_access_state", "unauthorized", "rate_limited", "unavailable", "sign_in_required"].contains(code) else { return nil }
+        guard ProjectWire.keys(o, expected), (["invalid_request", "conflict", "invalid_output", "not_found", "stale_access_state", "unauthorized", "rate_limited", "unavailable", "sign_in_required"] + documentCodes).contains(code) else { return nil }
         return ProjectFailure(code: code, status: status, unknown: false)
     }
 }
@@ -1789,7 +1797,7 @@ private func boxedField(_ field: NSTextField, in box: FieldBox, placeholder: Str
 
 // MARK: - Compose sheet
 
-/// Where a note goes. One choice sets both audience and association.
+/// Who can read a note or document. Project association is selected separately.
 enum ComposeTarget: Equatable {
     case onlyMe, team, project(String, String)
     var title: String {
@@ -1806,8 +1814,10 @@ enum ComposeTarget: Equatable {
 /// with a receipt; an unknown outcome stays visible and actionable.
 @MainActor
 final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
-    private let sheet = sheetWindow(width: 560, height: 420)
+    private let sheet = sheetWindow(width: 560, height: 460)
     private let toChip = ChipMenuButton()
+    private let associationChip = ChipMenuButton()
+    private let associationLabel = label("Project", size: 13, color: EchoTheme.mutedText)
     private let body = ComposeTextView(frame: NSRect(x: 0, y: 0, width: 524, height: 240))
     private let bodyScroll = NSScrollView()
     private let placeholder = PassthroughLabel(labelWithString: "What happened?")
@@ -1826,6 +1836,8 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     private let closeButton = pill("Close", .quiet, height: 30, target: nil, action: nil)
     private var targets: [ComposeTarget] = []
     private(set) var target = ComposeTarget.onlyMe
+    private var associationTargets: [ComposeTarget] = []
+    private(set) var associationProjectID: String?
     private var loadedFile: DocumentSnapshot?
     private let attachmentLabel = NSTextField(wrappingLabelWithString: "")
     private let removeFile = pill("Remove file", .quiet, height: 28, target: nil, action: nil)
@@ -1850,7 +1862,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
                  placeholder text: String, file: DocumentSnapshot? = nil) {
         guard !isPresented else { return }
         self.session = session; self.projects = projects; admittedIdentity = session.identity
-        self.target = target; loadedFile = file; setBody("")
+        self.target = target; associationProjectID = target.projectID; loadedFile = file; setBody("")
         placeholder.stringValue = text; problem.stringValue = ""; sentBody = false; didSave = false; strandedStatus = nil
         if session.receipt != nil { session.startAnother() }
         owns = session.recovery != nil && session.receipt == nil
@@ -1894,6 +1906,13 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         toChip.choices = targets.map(\.title)
         toChip.selectedIndex = targets.firstIndex(of: target) ?? 0
         toChip.title = target.title
+        associationTargets = [.onlyMe] + projectTargets
+        if let associated = associationProjectID, !projectTargets.contains(where: { $0.projectID == associated }), projects.listLoaded {
+            associationProjectID = nil
+        }
+        associationChip.choices = ["No project"] + projectTargets.map(\.title)
+        associationChip.selectedIndex = associationTargets.firstIndex(where: { $0.projectID == associationProjectID }) ?? 0
+        associationChip.title = associationChip.choices[associationChip.selectedIndex]
 
         let sending = session.hasOutstandingMutation
         let stranded = strandedStatus != nil && !sending
@@ -1908,6 +1927,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         send.isEnabled = !sending && (hasText || loadedFile != nil) && session.canCompose
         attach.isEnabled = !sending && body.isEditable
         toChip.isEnabled = !sending
+        associationChip.isEnabled = !sending
         placeholder.isHidden = !body.string.isEmpty || loadedFile != nil
         bodyScroll.isHidden = loadedFile != nil
         attachmentLabel.isHidden = loadedFile == nil; removeFile.isHidden = loadedFile == nil
@@ -1917,8 +1937,8 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         if sent, let receipt = session.receipt {
             showMark("checkmark.circle.fill", gold: true)
             outcomeTitle.stringValue = sentTitle(receipt)
-            outcomeDetail.stringValue = receipt.document.map { $0.display + "\n" + $0.stateMessage } ?? ""
-            outcomeDetail.isHidden = receipt.document == nil
+            outcomeDetail.stringValue = receipt.contentUnavailable == true ? receipt.message : (receipt.document.map { $0.display + "\n" + $0.stateMessage } ?? "")
+            outcomeDetail.isHidden = receipt.document == nil && receipt.contentUnavailable != true
             done.isHidden = false
             for button in [check, retry, another, closeButton] { button.isHidden = true }
             didSave = true
@@ -1935,7 +1955,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
             done.isHidden = true
             // Only offer what can run for this account right now.
             check.isHidden = stranded || session.recovery == nil; check.isEnabled = !session.busy
-            retry.isHidden = stranded || session.draft == nil; retry.isEnabled = !session.busy
+            retry.isHidden = stranded || !session.canRetry; retry.isEnabled = !session.busy
             another.isHidden = stranded || session.identity == nil; another.isEnabled = !session.busy
             closeButton.isHidden = false; closeButton.isEnabled = !session.hasOutstandingMutation
         }
@@ -2017,14 +2037,19 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         target = targets[index]; refresh()
     }
 
+    private func chooseAssociation(_ index: Int) {
+        guard associationTargets.indices.contains(index), session?.hasOutstandingMutation != true else { return }
+        associationProjectID = associationTargets[index].projectID; refresh()
+    }
+
     @objc private func sendNote() {
         guard let session, session.canCompose, admittedIdentity == session.identity else { return }
         if let snapshot = loadedFile {
             let title = suggestedNoteTitle(snapshot.file.deletingPathExtension().lastPathComponent)
             switch target {
-            case .onlyMe: session.submitDocument(title: title, snapshot: snapshot, visibility: .onlyMe)
-            case .team: session.submitDocument(title: title, snapshot: snapshot, visibility: .team)
-            case .project(let id, _): session.submitDocument(title: title, snapshot: snapshot, visibility: .project, audienceProjectID: id, projectID: id)
+            case .onlyMe: session.submitDocument(title: title, snapshot: snapshot, visibility: .onlyMe, projectID: associationProjectID)
+            case .team: session.submitDocument(title: title, snapshot: snapshot, visibility: .team, projectID: associationProjectID)
+            case .project(let id, _): session.submitDocument(title: title, snapshot: snapshot, visibility: .project, audienceProjectID: id, projectID: associationProjectID)
             }
         } else {
             let text = body.string
@@ -2032,9 +2057,9 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
             guard ProjectWire.text(text, max: 8192, multiline: true) else { problem.stringValue = "Up to 8 KiB of text."; return }
             let title = suggestedNoteTitle(text)
             switch target {
-            case .onlyMe: session.submit(title: title, text: text, visibility: .onlyMe)
-            case .team: session.submit(title: title, text: text, visibility: .team)
-            case .project(let id, _): session.submit(title: title, text: text, visibility: .project, audienceProjectID: id, projectID: id)
+            case .onlyMe: session.submit(title: title, text: text, visibility: .onlyMe, projectID: associationProjectID)
+            case .team: session.submit(title: title, text: text, visibility: .team, projectID: associationProjectID)
+            case .project(let id, _): session.submit(title: title, text: text, visibility: .project, audienceProjectID: id, projectID: associationProjectID)
             }
         }
         guard session.busy else { problem.stringValue = session.status; refresh(); return }
@@ -2063,7 +2088,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     @objc private func writeNew() {
         guard let session, !session.busy else { return }
         let identity = session.identity
-        confirm("Start another note?", detail: "The previous save may have completed. Check its status or search first to avoid a duplicate.",
+        confirm("Start another note?", detail: "The previous save may have completed. Check its status or search first to avoid a duplicate. Continuing removes the local retry copy; it does not delete any saved original in ECHO.",
                 action: "Start another note", cancel: "Keep previous save", on: sheet) { [weak self] in
             // Only the recovery this alert was shown for, on the same account.
             guard let self, self.isPresented, let session = self.session, !session.busy, session.identity == identity else { return }
@@ -2093,6 +2118,8 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         let to = label("To", size: 13, color: EchoTheme.faintText)
         mark(toChip, "compose-to", label: "Send to")
         toChip.onChoose = { [weak self] index in self?.chooseTarget(index) }
+        mark(associationChip, "compose-association", label: "Associated project; does not change audience")
+        associationChip.onChoose = { [weak self] index in self?.chooseAssociation(index) }
 
         body.isRichText = false; body.importsGraphics = false; body.allowsUndo = true
         body.isAutomaticQuoteSubstitutionEnabled = false; body.isAutomaticDashSubstitutionEnabled = false
@@ -2126,7 +2153,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         mark(attachmentLabel, "compose-document", label: "Attached original document")
         attachmentLabel.font = .systemFont(ofSize: 15); attachmentLabel.textColor = EchoTheme.text
         removeFile.target = self; removeFile.action = #selector(removeAttachment); mark(removeFile, "compose-remove-file")
-        for view in [to, toChip, bodyScroll, placeholder, attach, problem, hint, send, attachmentLabel, removeFile] {
+        for view in [to, toChip, associationLabel, associationChip, bodyScroll, placeholder, attach, problem, hint, send, attachmentLabel, removeFile] {
             view.translatesAutoresizingMaskIntoConstraints = false; composeGroup.addSubview(view)
         }
 
@@ -2166,14 +2193,20 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
             toChip.heightAnchor.constraint(equalToConstant: 30),
             toChip.trailingAnchor.constraint(lessThanOrEqualTo: composeGroup.trailingAnchor),
 
+            associationLabel.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor),
+            associationLabel.centerYAnchor.constraint(equalTo: associationChip.centerYAnchor),
+            associationChip.leadingAnchor.constraint(equalTo: associationLabel.trailingAnchor, constant: 10),
+            associationChip.topAnchor.constraint(equalTo: toChip.bottomAnchor, constant: 8),
+            associationChip.heightAnchor.constraint(equalToConstant: 30),
+            associationChip.trailingAnchor.constraint(lessThanOrEqualTo: composeGroup.trailingAnchor),
             attachmentLabel.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor),
             attachmentLabel.trailingAnchor.constraint(equalTo: composeGroup.trailingAnchor),
-            attachmentLabel.topAnchor.constraint(equalTo: toChip.bottomAnchor, constant: 24),
+            attachmentLabel.topAnchor.constraint(equalTo: associationChip.bottomAnchor, constant: 24),
             removeFile.leadingAnchor.constraint(equalTo: attachmentLabel.leadingAnchor),
             removeFile.topAnchor.constraint(equalTo: attachmentLabel.bottomAnchor, constant: 16),
             bodyScroll.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor),
             bodyScroll.trailingAnchor.constraint(equalTo: composeGroup.trailingAnchor),
-            bodyScroll.topAnchor.constraint(equalTo: toChip.bottomAnchor, constant: 14),
+            bodyScroll.topAnchor.constraint(equalTo: associationChip.bottomAnchor, constant: 14),
             bodyScroll.bottomAnchor.constraint(equalTo: send.topAnchor, constant: -12),
             placeholder.leadingAnchor.constraint(equalTo: bodyScroll.leadingAnchor),
             placeholder.topAnchor.constraint(equalTo: bodyScroll.topAnchor),
@@ -2647,7 +2680,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
         if file.state == .uncertain, uploads.recovery != nil {
             let check = pill("Check status", .quiet, height: 24, target: self, action: #selector(checkFile(_:)))
             check.tag = index; check.isEnabled = !uploads.busy; controls.append(check)
-            if uploads.draft != nil {
+            if uploads.canRetry {
                 let retry = pill("Retry same save", .quiet, height: 24, target: self, action: #selector(retryFile(_:)))
                 retry.tag = index; retry.isEnabled = !uploads.busy; controls.append(retry)
             }
@@ -3369,7 +3402,31 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         return view
     }
 
+    private func documentRecoveryColumn() -> Column? {
+        guard documents.identity != nil, documents.associationRecoveryNeeded else { return nil }
+        let text = NSTextField(wrappingLabelWithString: documents.status.isEmpty ? "A document project-link change needs reconciliation." : documents.status)
+        text.font = .systemFont(ofSize: 13); text.textColor = EchoTheme.mutedText; text.alignment = .center; text.preferredMaxLayoutWidth = 440
+        var views: [NSView] = [text]
+        if documents.pendingAssociation != nil {
+            let retry = pill("Retry same project-link change", .quiet, height: 30, target: self, action: #selector(retryDocumentAssociation))
+            retry.isEnabled = !documents.busy; mark(retry, "document-association-retry"); views.append(retry)
+        }
+        let dismiss = pill("Dismiss reminder…", .quiet, height: 30, target: self, action: #selector(dismissDocumentAssociation))
+        dismiss.isEnabled = !documents.busy; mark(dismiss, "document-association-dismiss"); views.append(dismiss)
+        return .empty(views, "document-recovery|\(documents.pendingAssociation?.requestID ?? "invalid")|\(documents.busy)|\(documents.status)")
+    }
+    @objc private func dismissDocumentAssociation() {
+        guard !documents.busy else { return }
+        let identity = documents.identity, pending = documents.pendingAssociation
+        confirm("Dismiss this project-link reminder?", detail: "The change may already have completed. Dismissing only clears this local reminder; it does not undo a saved project link. Refresh the document before making another change.",
+                action: "Dismiss reminder", cancel: "Keep reminder", on: window) { [weak self] in
+            guard let self, self.documents.identity == identity, self.documents.pendingAssociation == pending, !self.documents.busy else { return }
+            self.documents.dismissAssociationRecovery()
+        }
+    }
+
     private func homeColumn() -> Column {
+        if let recovery = documentRecoveryColumn() { return recovery }
         let recovery = projects.needsRecoveryReview
         let recoveryKey = recovery ? "recovery|\(projects.pending != nil)|\(projects.busy)" : ""
         if uploads.identity == nil {
@@ -3430,6 +3487,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     }
 
     private func searchColumn() -> Column {
+        if let recovery = documentRecoveryColumn() { return recovery }
         if showSearchReader, documents.metadata != nil { return documentReader() }
         if showSearchReader, let content = uploads.content {
             reader.show(id: "saved|" + content.context_id, title: content.title,
@@ -3454,6 +3512,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     }
 
     private func projectColumn() -> Column {
+        if let recovery = documentRecoveryColumn() { return recovery }
         guard let selected = projects.selected else {
             if projects.busy { return .empty([spinner()], "project-loading") }
             // The project did not open, or stopped being readable: say so
@@ -3540,8 +3599,34 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
                                         ("Refresh document", #selector(refreshDocument), !documents.busy)] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: ""); item.target = self; item.isEnabled = enabled; menu.addItem(item)
         }
+        if documents.pendingAssociation != nil {
+            let retry = NSMenuItem(title: "Retry project-link change", action: #selector(retryDocumentAssociation), keyEquivalent: "")
+            retry.target = self; retry.isEnabled = !documents.busy; menu.addItem(retry)
+        } else if let document = documents.metadata {
+            if document.project_id != nil {
+                let remove = NSMenuItem(title: "Remove project link (keep audience)", action: #selector(dissociateDocument), keyEquivalent: "")
+                remove.target = self; remove.isEnabled = !documents.busy; menu.addItem(remove)
+            } else {
+                let add = NSMenuItem(title: "Link to project (keep audience)", action: nil, keyEquivalent: "")
+                let choices = NSMenu(); choices.autoenablesItems = false
+                for project in projects.projects where projects.availability == .live {
+                    let item = NSMenuItem(title: project.name, action: #selector(associateDocument(_:)), keyEquivalent: "")
+                    item.target = self; item.representedObject = project.project_id; item.isEnabled = !documents.busy; choices.addItem(item)
+                }
+                add.submenu = choices; add.isEnabled = !documents.busy && !choices.items.isEmpty; menu.addItem(add)
+            }
+        }
         return menu
     }
+    @objc private func associateDocument(_ sender: NSMenuItem) {
+        guard let document = documents.metadata, let projectID = sender.representedObject as? String else { return }
+        documents.associate(document.document_id, projectID: projectID, add: true)
+    }
+    @objc private func dissociateDocument() {
+        guard let document = documents.metadata, let projectID = document.project_id else { return }
+        documents.associate(document.document_id, projectID: projectID, add: false)
+    }
+    @objc private func retryDocumentAssociation() { documents.retryAssociation() }
     @objc private func openDocument(_ sender: NSButton) {
         guard documents.matches.indices.contains(sender.tag), !documents.busy else { return }
         showSearchReader = true; documents.read(documents.matches[sender.tag].document_id)

@@ -65,6 +65,17 @@ enum DocumentProof {
                 "chunks": [["ordinal": 0, "anchor_kind": "page", "anchor_start": 1, "text": "First page"]], "next_cursor": "Mg"]
             require(DocumentTextPage.parse(page, metadata: parsed)?.display == "Page 1\nFirst page")
             page["original_sha256"] = "sha256:" + String(repeating: "0", count: 64); require(DocumentTextPage.parse(page, metadata: parsed) == nil)
+        case "failures":
+            for code in ["invalid_file", "snapshot_conflict", "snapshot_limit", "snapshot_not_found", "stale_access_state"] {
+                let failure: [String: Any] = ["ok": false, "action": "documents-upload", "error": "Rejected", "code": code,
+                    "status": NSNull(), "request_id": requestID, "mutation_outcome": "not_submitted"]
+                require(ProjectFailure.parse(data(failure), action: "documents-upload", requestID: requestID)?.unknown == false, code)
+            }
+            let quota: [String: Any] = ["ok": false, "action": "documents-upload", "error": "Rejected", "code": "quota_exceeded",
+                "status": 429, "request_id": requestID, "mutation_outcome": "not_submitted"]
+            require(ProjectFailure.parse(data(quota), action: "documents-upload", requestID: requestID)?.unknown == false)
+            var invalid = quota; invalid["status"] = true
+            require(ProjectFailure.parse(data(invalid), action: "documents-upload", requestID: requestID) == nil)
         case "recovery":
             let suite = "echo-document-proof-" + UUID().uuidString
             let defaults = UserDefaults(suiteName: suite)!
@@ -79,6 +90,47 @@ enum DocumentProof {
             let other = AccountIdentity(displayName: "Other", role: "Employee", authority: identity.authority, version: "1", membershipID: "mem_other")
             require(!restored.belongs(to: other) && UploadRecovery.load(for: other, defaults: defaults) == nil)
             recovery.carrier = "document-v9"; require(!recovery.save(for: identity, defaults: defaults))
+        case "minimal-saved", "restart-retry", "abandon":
+            let suite = "echo-document-proof-" + UUID().uuidString
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            var recovery = UploadRecovery(identity: identity, requestID: requestID, visibility: .onlyMe)!
+            recovery.carrier = "document-v1"; recovery.documentFilename = snapshot.filename; recovery.documentSize = snapshot.size
+            recovery.documentSha256 = snapshot.sha256; recovery.documentTitle = "Robot PRD"
+            require(recovery.save(for: identity, defaults: defaults))
+            if mode == "minimal-saved" {
+                let saved: [String: Any] = ["schema_version": 1, "kind": "echo-person-document-saved-v1", "request_id": requestID,
+                    "document_id": documentID, "received_at": "2026-09-23T00:00:00.000Z", "state": "saved"]
+                guard case .saved(let receipt) = UploadClient.parse(data(["ok": true, "result": saved]), command: .status(recovery)) else { fatalError("minimal saved") }
+                require(receipt.contentUnavailable == true && receipt.document == nil && receipt.message.contains("no longer available"))
+                var metadata = metadata(snapshot); metadata["project_id"] = "prj_11111111-1111-4111-8111-111111111111"
+                guard case .saved = UploadClient.parse(data(["ok": true, "result": metadata]), command: .status(recovery)) else { fatalError("current association is not original receipt association") }
+            } else {
+                let session = UploadSession(client: UploadClient(cli: cli), defaults: defaults, isForeground: { true })
+                session.refreshIdentity(); wait("recover identity") { !session.busy }
+                require(session.draft == nil && session.canRetry && session.recovery == recovery)
+                if mode == "restart-retry" {
+                    session.retry(); wait("retry stored document") { !session.busy }
+                    require(session.receipt?.document?.sha256 == snapshot.sha256)
+                } else {
+                    session.startAnother(); wait("abandon stored document") { !session.busy }
+                    require(session.canCompose && UploadRecovery.load(for: identity, defaults: defaults) == nil)
+                }
+            }
+        case "association-retry":
+            let suite = "echo-document-proof-" + UUID().uuidString
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let first = DocumentSession(cli: cli, defaults: defaults, foreground: { true }); first.bind(identity)
+            first.associate(documentID, projectID: "prj_11111111-1111-4111-8111-111111111111", add: true)
+            wait("unknown association") { !first.busy }
+            guard let pending = first.pendingAssociation else { fatalError("retained exact mutation") }
+            let restored = DocumentSession(cli: cli, defaults: defaults, foreground: { true }); restored.bind(identity)
+            require(restored.pendingAssociation == pending)
+            restored.retryAssociation(); wait("association replay") { !restored.busy }
+            require(restored.pendingAssociation == nil && !restored.associationRecoveryNeeded)
+            let next = DocumentSession(cli: cli, defaults: defaults, foreground: { true }); next.bind(identity)
+            require(!next.associationRecoveryNeeded)
         case "round-trip", "unknown-retry":
             let client = UploadClient(cli: cli), draft = try! UploadDraft(title: "Robot PRD", document: snapshot, visibility: .onlyMe)
             let first = client.execute(.submit(draft), identity: identity, running: AccountRunning())

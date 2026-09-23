@@ -1,3 +1,4 @@
+import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { DocumentFileError } from './document-file.js';
 import { validateProjectContextAudienceV1, validatePersonDocumentSearchV1 } from '@echo-brain/organization-api';
 import { readUpdateFile } from './update-file.js';
@@ -73,6 +74,11 @@ const RULES: Readonly<
   Record<string, { accepts?: readonly Option[]; requires?: readonly Option[] }>
 > = {
   "documents-upload": { accepts: ["file", "audience", "audience-project-id", "project-id", "title", "request-id", "expected-membership-id", "expected-authority"], requires: ["file", "audience", "title", "request-id"] },
+  "documents-associate": { accepts: ["request-id", "document-id", "project-id", "expected-membership-id", "expected-authority"], requires: ["request-id", "document-id", "project-id"] },
+  "documents-dissociate": { accepts: ["request-id", "document-id", "project-id", "expected-membership-id", "expected-authority"], requires: ["request-id", "document-id", "project-id"] },
+  "documents-pending": { accepts: [], requires: [] },
+  "documents-retry": { accepts: ["request-id", "expected-membership-id", "expected-authority"], requires: ["request-id"] },
+  "documents-abandon": { accepts: ["request-id", "expected-membership-id", "expected-authority"], requires: ["request-id"] },
   "documents-status": { accepts: ["request-id"], requires: ["request-id"] },
   "documents-read": { accepts: ["document-id", "cursor", "project-id"], requires: ["document-id"] },
   "documents-search": { accepts: ["project-id", "query", "limit", "cursor"] },
@@ -184,13 +190,33 @@ Ask one question using at most 240 Unicode code points, 1–32 distinct normaliz
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
 `,
-  documents: `usage: echo-brain person documents <upload|status|read|search|download> [options]
+  documents: `usage: echo-brain person documents <upload|status|pending|retry|abandon|read|search|download|associate|dissociate> [options]
 
 Supports UTF-8 text/Markdown, PDF and Word .docx originals up to 25 MiB. Saving and text extraction are separate states. Project association does not change audience. Documents are not Ask sources.
 `,
   "documents-upload": `usage: echo-brain person documents upload --file <path> --audience <only-me|team|project> [--audience-project-id <id>] [--project-id <id>] --title <title> --request-id <uuid>
 
-Saves exact original bytes; prints a bounded receipt. PDF and DOCX extraction may finish later or fail while the original stays saved. Legacy .doc is unsupported. If the outcome is unknown, the private exact snapshot is retained for retry with the same command; source file changes are ignored for that retained request. At most ten unresolved snapshots are retained per membership. Use status to reconcile before starting another upload. Optional paired --expected-membership-id and --expected-authority bind automation to its captured signed-in account.
+Saves exact original bytes; prints a bounded receipt. PDF and DOCX extraction may finish later or fail while the original stays saved. Legacy .doc is unsupported. If the outcome is unknown, the private exact snapshot is retained for documents retry --request-id with no source pathname required; source file changes are ignored for that retained request. At most ten unresolved snapshots are retained per membership. Use pending to list retained requests and status to reconcile before starting another upload. Explicit abandon removes only local retry bytes; it never cancels or deletes a saved Authority document. Optional paired --expected-membership-id and --expected-authority bind automation to its captured signed-in account.
+`,
+  "documents-associate": `usage: echo-brain person documents associate --document-id <id> --project-id <id> --request-id <uuid>
+
+Links your saved document to a project without changing its audience. An Only me document remains private. Keep the exact request ID and coordinates for retry after an unknown outcome. Optional paired --expected-membership-id and --expected-authority bind the operation to its captured account.
+`,
+  "documents-dissociate": `usage: echo-brain person documents dissociate --document-id <id> --project-id <id> --request-id <uuid>
+
+Removes the project association without deleting the original or changing its audience. The uploader or a project lead may remove an association they can read. Retry unknown outcomes using the same request ID and coordinates.
+`,
+  "documents-pending": `usage: echo-brain person documents pending
+
+Lists this account's retained upload requests without reading source files or contacting the Authority.
+`,
+  "documents-retry": `usage: echo-brain person documents retry --request-id <uuid>
+
+Resends the exact retained original and metadata, even after restart or source-file deletion. Check status first. Optional paired --expected-membership-id and --expected-authority bind the operation to its captured account.
+`,
+  "documents-abandon": `usage: echo-brain person documents abandon --request-id <uuid>
+
+Explicitly removes only this account's local retry snapshot. This does not cancel or delete an Authority upload. Keep the request ID and check status or search before starting a new upload to avoid a duplicate. Optional paired --expected-membership-id and --expected-authority bind local cleanup to its captured account.
 `,
   "documents-status": `usage: echo-brain person documents status --request-id <uuid>
 
@@ -342,7 +368,7 @@ function isContextAction(action: string): boolean {
 }
 
 function contextCliFailure(action: string, error: unknown, values: Record<Option, string | boolean | undefined>) {
-  const mutation = ['projects-create', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit', 'documents-upload'].includes(action);
+  const mutation = ['projects-create', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit', 'documents-upload', 'documents-retry', 'documents-associate', 'documents-dissociate'].includes(action);
   let requestId: string | undefined;
   try { requestId = validatePersonUpdateRequestId(values['request-id']); } catch { /* Never echo invalid caller input. */ }
   return {
@@ -768,6 +794,30 @@ export async function runPersonClientCli(
           title: requiredText(values, 'title'), audience, project_id: values['project-id'] === undefined ? null : validateProjectIdV1(values['project-id']),
           ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
           ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }) }));
+        break;
+      }
+      case 'documents-associate':
+      case 'documents-dissociate': {
+        const validate = action === 'documents-associate' ? validatePersonDocumentAssociateV1 : validatePersonDocumentDissociateV1;
+        const request = validate({ schema_version: 1, kind: action === 'documents-associate' ? 'echo-person-document-associate-v1' : 'echo-person-document-dissociate-v1',
+          request_id: requiredText(values, 'request-id'), document_id: requiredText(values, 'document-id'), project_id: requiredText(values, 'project-id') });
+        printDocument(stdout, await client.changeDocumentAssociation(request, {
+          ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
+          ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }),
+        }));
+        break;
+      }
+      case 'documents-pending':
+        printDocument(stdout, client.pendingDocuments());
+        break;
+      case 'documents-retry':
+      case 'documents-abandon': {
+        const expected = {
+          ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
+          ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }),
+        };
+        const requestId = requiredText(values, 'request-id');
+        printDocument(stdout, action === 'documents-retry' ? await client.retryDocument(requestId, expected) : client.abandonDocument(requestId, expected));
         break;
       }
       case 'documents-status':

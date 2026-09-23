@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -102,6 +102,35 @@ describe('document CLI custody and bounded transport', () => {
     expect(status.code, status.stderr).toBe(0); expect(existsSync(pending)).toBe(false);
   });
 
+  it('lists and retries retained original bytes by request ID after a fresh process without the source path', async () => {
+    const f = setup();
+    await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });
+    unlinkSync(f.file);
+    const offline = vi.fn();
+    const pending = await run(f.home, ['documents', 'pending'], offline);
+    expect(pending.code, pending.stderr).toBe(0);
+    expect(pending.result).toMatchObject({ ok: true, result: { snapshots: [{ request_id: requestId, filename: 'SCOUT.md', sha256: f.upload.sha256 }] } });
+    expect(pending.stdout).not.toContain(f.file); expect(offline).not.toHaveBeenCalled();
+    const retry = await run(f.home, ['documents', 'retry', '--request-id', requestId], async (_url, init) => {
+      expect(await consume(init)).toEqual(f.bytes); return json(f.receipt, 201);
+    });
+    expect(retry.code, retry.stderr).toBe(0);
+    expect((await run(f.home, ['documents', 'pending'], offline)).result).toMatchObject({ ok: true, result: { snapshots: [] } });
+  });
+
+  it('explicitly abandons a retained local snapshot without claiming the Authority upload was cancelled', async () => {
+    const f = setup();
+    await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });
+    const offline = vi.fn();
+    const abandoned = await run(f.home, ['documents', 'abandon', '--request-id', requestId], offline);
+    expect(abandoned.code, abandoned.stderr).toBe(0);
+    expect(abandoned.result).toMatchObject({ ok: true, result: { request_id: requestId, local_snapshot_removed: true, authority_outcome: 'unchanged' } });
+    expect(offline).not.toHaveBeenCalled();
+    const retry = await run(f.home, ['documents', 'retry', '--request-id', requestId], offline);
+    expect(retry.failure).toMatchObject({ code: 'snapshot_not_found', mutation_outcome: 'not_submitted' });
+    expect(offline).not.toHaveBeenCalled();
+  });
+
   it('checks the captured GUI account before opening a file or submitting bytes', async () => {
     const f = setup(); unlinkSync(f.file); const fetch = vi.fn();
     const outcome = await run(f.home, [...uploadArgs(f.file), '--expected-authority', 'https://authority.example', '--expected-membership-id', 'mem_00000000-0000-4000-8000-000000000002'], fetch);
@@ -189,8 +218,63 @@ describe('document CLI custody and bounded transport', () => {
       extractor: 'fixture-v1', extraction_state: 'ready', chunks: [{ ordinal: 0, anchor_kind: 'paragraph', anchor_start: 1, text: 'Robot requirements' }], next_cursor: 'bmV4dA' };
     const read = await run(f.home, ['documents', 'read', '--document-id', documentId, '--project-id', projectId], async url => {
       expect(new URL(String(url)).searchParams.get('project_id')).toBe(projectId);
-      return json(new URL(String(url)).pathname.endsWith('/text') ? page : f.metadata);
-    }); expect(read.code, read.stderr).toBe(0); expect(read.result).toEqual({ ok: true, result: { metadata: f.metadata, text: page } });
+      return json(new URL(String(url)).pathname.endsWith('/text') ? page : { ...f.metadata, extractor: 'fixture-v1', extraction_state: 'ready', extracted_text_bytes: 18 });
+    }); expect(read.code, read.stderr).toBe(0); expect(read.result).toEqual({ ok: true, result: { metadata: { ...f.metadata, extractor: 'fixture-v1', extraction_state: 'ready', extracted_text_bytes: 18 }, text: page } });
+  });
+
+  it('reconciles extraction completion between metadata and text reads without losing provenance', async () => {
+    const f = setup(); let reads = 0;
+    const ready = { ...f.metadata, extractor: 'fixture-v1', extraction_state: 'ready', extracted_text_bytes: 18 };
+    const text = { schema_version: 1, kind: 'echo-person-document-text-v1', document_id: documentId, original_sha256: f.upload.sha256,
+      extractor: 'fixture-v1', extraction_state: 'ready', chunks: [{ ordinal: 0, anchor_kind: 'paragraph', anchor_start: 1, text: 'Robot requirements' }], next_cursor: null };
+    const result = await run(f.home, ['documents', 'read', '--document-id', documentId], async url => {
+      if (String(url).endsWith('/text')) return json(text);
+      return json(reads++ === 0 ? f.metadata : ready);
+    });
+    expect(result.code, result.stderr).toBe(0); expect(reads).toBe(2);
+    expect(result.result).toEqual({ ok: true, result: { metadata: ready, text } });
+    const bad = await run(f.home, ['documents', 'read', '--document-id', documentId], async url => json(String(url).endsWith('/text') ? { ...text, original_sha256: `sha256:${'b'.repeat(64)}` } : f.metadata));
+    expect(bad.failure).toMatchObject({ code: 'invalid_response' }); expect(bad.stdout).toBe('');
+  });
+
+  it('settles a retained request from a minimal saved receipt after project access loss', async () => {
+    const f = setup();
+    await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });
+    const saved = { schema_version: 1, kind: 'echo-person-document-saved-v1', request_id: requestId, document_id: documentId, received_at: NOW, state: 'saved' };
+    const result = await run(f.home, ['documents', 'status', '--request-id', requestId], async () => json(saved));
+    expect(result.code, result.stderr).toBe(0); expect(result.result).toEqual({ ok: true, result: saved });
+    expect((await run(f.home, ['documents', 'pending'], vi.fn())).result).toMatchObject({ ok: true, result: { snapshots: [] } });
+  });
+
+  it.each(['associate', 'dissociate'])('binds a document %s mutation to its exact request and unchanged audience', async operation => {
+    const f = setup(); const args = ['documents', operation, '--request-id', requestId, '--document-id', documentId, '--project-id', projectId];
+    const receipt = { schema_version: 1, kind: 'echo-person-document-association-receipt-v1', request_id: requestId,
+      document_id: documentId, project_id: projectId, operation, received_at: NOW, state: 'applied' };
+    const sent: unknown[] = [];
+    const fetch = vi.fn<typeof globalThis.fetch>(async (url, init) => {
+      expect(String(url)).toBe(`https://authority.example/v1/person/documents/${documentId}/${operation}`);
+      expect(init?.method).toBe('POST'); const body = JSON.parse(String(init?.body)); sent.push(body);
+      expect(body).toEqual({ schema_version: 1, kind: `echo-person-document-${operation}-v1`, request_id: requestId, document_id: documentId, project_id: projectId });
+      if (sent.length === 1) throw new Error('lost');
+      return json(receipt);
+    });
+    expect((await run(f.home, args, fetch)).failure).toMatchObject({ code: 'outcome_unknown', mutation_outcome: 'unknown', request_id: requestId });
+    expect((await run(f.home, args, fetch)).result).toEqual({ ok: true, result: receipt }); expect(sent[0]).toEqual(sent[1]);
+    const mismatch = await run(f.home, args, async () => json({ ...receipt, document_id: `doc_${'b'.repeat(64)}` }));
+    expect(mismatch.failure).toMatchObject({ code: 'outcome_unknown' });
+    const offline = vi.fn();
+    const stale = await run(f.home, [...args, '--expected-authority', 'https://authority.example', '--expected-membership-id', 'mem_other'], offline);
+    expect(stale.failure).toMatchObject({ code: 'stale_access_state', mutation_outcome: 'not_submitted' }); expect(offline).not.toHaveBeenCalled();
+  });
+
+  it('does not count interrupted preparation directories against the retained-request limit', async () => {
+    const f = setup();
+    await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });
+    const root = join(f.home, '.local/share/echo-brain/person/document-snapshots'); const account = join(root, readdirSync(root)[0]!);
+    for (let index = 0; index < 10; index++) mkdirSync(join(account, `.preparing-fixture-${index}`), { mode: 0o700 });
+    const nextId = '10000000-0000-4000-8000-000000000002'; const args = uploadArgs(f.file); args[args.indexOf('--request-id') + 1] = nextId;
+    const result = await run(f.home, args, async (_url, init) => { await consume(init); return json({ ...f.receipt, request_id: nextId }, 201); });
+    expect(result.code, result.stderr).toBe(0);
   });
 
   it('downloads exact bytes to a new atomic file and prints only byte/hash proof', async () => {
