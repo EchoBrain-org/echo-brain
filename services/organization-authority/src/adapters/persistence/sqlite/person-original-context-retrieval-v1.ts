@@ -117,8 +117,13 @@ function matchingPacket(title: string, body: string, terms: readonly string[]): 
 
 /** Labels cross the public API boundary; evidence retains the full filename. */
 function presentationLabel(value: string): string {
-  const codepoints = [...value];
-  return codepoints.length <= 200 ? value : `${codepoints.slice(0, 197).join("")}…`;
+  // Upload filenames deliberately permit a broader set of Unicode than Ask
+  // citation labels. This is presentation-only; packets and anchors retain
+  // the exact immutable filename.
+  const sanitized = value.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, " ").trim();
+  const label = sanitized.length === 0 ? "Saved context" : sanitized;
+  const codepoints = [...label];
+  return codepoints.length <= 200 ? label : `${codepoints.slice(0, 197).join("")}…`;
 }
 
 /**

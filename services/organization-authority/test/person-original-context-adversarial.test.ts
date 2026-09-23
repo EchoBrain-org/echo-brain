@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
+import { validatePersonAnswerResponseV3, validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
@@ -302,6 +302,35 @@ describe("adversarial original-context retrieval", () => {
       scope,
       citation: { ...citationOf(atom), label: atom.label },
       text: atom.text,
+    })).not.toThrow();
+  });
+
+  it.each([
+    { filename: "  launch.md", label: "launch.md" },
+    { filename: "QA\u2028plan.md", label: "QA plan.md" },
+  ])("sanitizes the valid upload filename %j only for its public label", ({ filename, label }) => {
+    const f = fixture();
+    f.upload("Short title", `public-label-roundtrip-${label}`, { filename });
+    const scope = { kind: "global" as const };
+    const atom = f.retrieval.retrieve({ access_token: "member", queries: [`public-label-roundtrip-${label}`], scope }).release.released_atoms[0]!;
+    expect(atom.text.startsWith(`${filename}\n`)).toBe(true);
+    expect(atom.label).toBe(label);
+    const citation = citationOf(atom);
+    const proof = f.retrieval.read({ access_token: "member", scope, citation }).atom;
+    expect(proof).toMatchObject({ label, text: atom.text, anchor_sha256: atom.anchor_sha256 });
+    expect(() => validatePersonAnswerResponseV3({
+      schema_version: 3,
+      kind: "echo-clean-person-answer-v3",
+      answer: "Found it.",
+      citations: [{ ...citation, label }],
+      scope,
+    })).not.toThrow();
+    expect(() => validatePersonSourceEvidenceV1({
+      schema_version: 1,
+      kind: "echo-person-source-evidence-v1",
+      scope,
+      citation: { ...citation, label },
+      text: proof.text,
     })).not.toThrow();
   });
 
