@@ -7,20 +7,25 @@ V5-to-V6 staging transition. It does not manage client fleets.
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current Authority V7, private-approval control-plane V3, record-log V3, and
+current Authority V8, private-approval control-plane V3, record-log V3, and
 six-role V2 root lineage. For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
 mutation. The named [V5-to-V6 staging migration](#state-preserving-v5-to-v6-staging-migration)
 preserves an accepted V5 organization only for a historical V6 candidate. It
-cannot prepare state for V7. The project-context sprint selects fresh V7 state
-and an explicit PC-06 reset/reseed, as described in the
+cannot prepare state for V7 or V8. The project-context sprint selected fresh
+V7 state and an explicit PC-06 reset/reseed, as described in the historical
 [PC-01 handoff](../../docs/product/2026-09-21-project-context-pc01-persistence.md).
-Other incompatible baselines require an
-explicit migration design or an authorized reset. For an authorized reset with no live users,
-run `onboard-clean-v1.sh
-replace-rehearsal --confirm-no-live-users`, then prepare the organization again
-with the new release record and matching profile. Ordinary `stage` never migrates an older baseline.
+The document-capable candidate instead requires fresh V8 state: ordinary
+`stage` cannot move V7 state to V8. For the disposable staging rehearsal, use
+the explicit unreleased-rehearsal reset in the
+[operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md#choose-the-lane),
+then prepare the organization again with the V8 release record and matching
+profile. The [Project documents V1 feature contract](../../docs/features/project-documents-v1.md)
+and [SCOUT readiness guide](../../docs/simulations/scout/LIVE-READINESS.md)
+define the pending document-capable rehearsal. Other incompatible baselines
+require an explicit migration design or an authorized reset. Ordinary `stage`
+never migrates an older baseline.
 
 ## Release record
 
@@ -243,14 +248,15 @@ recovery as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. A change that needs a schema
 migration requires a separately named operation. The only implemented schema
-transition is the historical V5-to-V6 staging migration below. If persisted state lacks the candidate's exact V7/V3/V3 databases and
+transition is the historical V5-to-V6 staging migration below. If persisted state lacks the candidate's exact V8/V3/V3 databases and
 V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
 
 ### State-preserving V5-to-V6 staging migration
 
-This retained operation applies to V5 and V6 release artifacts only. A current
-V7 candidate refuses its V6 output; it is not the project-context rollout path.
+This retained operation applies to V5 and V6 release artifacts only. V7 was
+the PC-01 handoff baseline, and the current V8 candidate also refuses its V6
+output; this migration is neither the project-context nor document rollout path.
 
 Use `plan --action stage-v5-to-v6` through the reviewed release CLI after
 installing the merged migration tooling. Supply the same accepted release,
@@ -701,7 +707,10 @@ status** also checks optional search metadata; the original is searchable while
 that metadata is pending or unavailable. Ask and approved Sources currently use
 approved records and do not include these uploads. This window requires a
 matching app/client kit and an Authority with the Person-upload V1 wire contract
-(retained in fresh V7 state). Project-aware V2 uploads are not live yet.
+(retained in fresh V8 state). Deployment and installed-client acceptance remain
+pending; use the [Project documents V1 feature contract](../../docs/features/project-documents-v1.md)
+and [SCOUT readiness guide](../../docs/simulations/scout/LIVE-READINESS.md)
+before treating project-aware uploads as available.
 
 **Account → Connected tools…** shows tools enabled by the organization. Choose
 **Connect Slack**, complete Slack sign-in in the browser, and keep the panel
