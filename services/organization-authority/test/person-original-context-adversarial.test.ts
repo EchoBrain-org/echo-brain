@@ -176,6 +176,7 @@ describe("adversarial original-context retrieval", () => {
     for (const [name, audience, associations] of [
       ["shared-modern-marker", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, [PROJECT_ALPHA]],
       ["private-modern-marker", { kind: "only_me" }, [PROJECT_ALPHA, PROJECT_BETA]],
+      ["home-personal-note-marker", { kind: "only_me" }, []],
       ["unassociated-modern-marker", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, []],
     ] as const) {
       projects.submitUploadV3("owner", { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: name, text: name, audience, association_project_ids: associations });
@@ -192,6 +193,11 @@ describe("adversarial original-context retrieval", () => {
     expect(texts(retrieve("private-modern-marker", PROJECT_ALPHA, "owner"))).toEqual([expect.stringContaining("private-modern-marker")]);
     expect(texts(retrieve("unassociated-modern-marker", PROJECT_ALPHA))).toEqual([]);
     expect(texts(retrieve("unassociated-modern-marker"))).toEqual([expect.stringContaining("unassociated-modern-marker")]);
+    const home = retrieve("home-personal-note-marker", undefined, "owner");
+    expect(texts(home)).toEqual([expect.stringContaining("home-personal-note-marker")]);
+    expect(texts(retrieve("home-personal-note-marker"))).toEqual([]);
+    expect(texts(retrieve("home-personal-note-marker", PROJECT_ALPHA, "owner"))).toEqual([]);
+    expect(f.retrieval.read({ access_token: "owner", scope: { kind: "global" }, citation: citationOf(home.release.released_atoms[0]!) }).atom.text).toContain("home-personal-note-marker");
     grant(f.database, PROJECT_BETA, MEMBER, "member");
     expect(texts(retrieve("shared-modern-marker", PROJECT_BETA))).toEqual([]);
     expect(texts(retrieve("document-modern-marker", PROJECT_BETA))).toEqual([expect.stringContaining("document-modern-marker")]);

@@ -220,13 +220,17 @@ Reads one bounded immutable source-evidence packet cited by Ask. Use the exact c
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
 `,
-  documents: `usage: echo-brain person documents <upload|status|pending|retry|abandon|read|search|download|associate|dissociate> [options]
+  documents: `usage: echo-brain person documents <upload|upload-v2|status|status-v2|pending|retry|abandon|read|read-v2|search|search-v2|download|download-v2|associate|dissociate> [options]
 
 Supports UTF-8 text/Markdown, PDF and Word .docx originals up to 25 MiB. Saving and text extraction are separate states. Project association does not change audience. Extracted originals can contribute typed evidence to authorized Ask results.
 `,
   "documents-upload": `usage: echo-brain person documents upload --file <path> --audience <only-me|team|project> [--audience-project-id <id>] [--project-id <id>] --title <title> --request-id <uuid>
 
 Saves exact original bytes; prints a bounded receipt. PDF and DOCX extraction may finish later or fail while the original stays saved. Legacy .doc is unsupported. If the outcome is unknown, the private exact snapshot is retained for documents retry --request-id with no source pathname required; source file changes are ignored for that retained request. At most ten unresolved snapshots are retained per membership. Use pending to list retained requests and status to reconcile before starting another upload. Explicit abandon removes only local retry bytes; it never cancels or deletes a saved Authority document. Optional paired --expected-membership-id and --expected-authority bind automation to its captured signed-in account.
+`,
+  "documents-upload-v2": `usage: echo-brain person documents upload-v2 --file <path> --title <title> --request-id <uuid> [--association-project-ids-json <canonical-project-id-array>] [--audience <only-me|team|project|projects>] [--audience-project-id <id>] [--audience-project-ids-json <canonical-project-id-array>]
+
+Saves one exact original record with an immutable initial association set and independently selected audience. Defaults to Only me and no initial associations. Associations do not change who can read it. Project requires --audience-project-id, while projects requires --audience-project-ids-json. Project ID arrays must be canonical JSON: sorted, unique project IDs, at most 20. If the outcome is unknown, retain and retry the same request through documents retry; later association changes do not alter the saved receipt.
 `,
   "documents-associate": `usage: echo-brain person documents associate --document-id <id> --project-id <id> --request-id <uuid>
 
@@ -252,9 +256,17 @@ Explicitly removes only this account's local retry snapshot. This does not cance
 
 Reads the saved document metadata and current extraction state.
 `,
+  "documents-status-v2": `usage: echo-brain person documents status-v2 --request-id <uuid>
+
+Reads V2 metadata and its immutable initial association set. Current associations are available from V2 read and search results.
+`,
   "documents-read": `usage: echo-brain person documents read --document-id <id> [--cursor <opaque>] [--project-id <id>]
 
 Returns metadata and one bounded page of extracted text with original hash and page/paragraph anchors. Follow text.next_cursor for more.
+`,
+  "documents-read-v2": `usage: echo-brain person documents read-v2 --document-id <id> [--cursor <opaque>] [--project-id <id>]
+
+Returns V2 metadata and one bounded page of extracted text. It preserves the selected audience union and current authorized project associations.
 `,
   "documents-search": `usage: echo-brain person documents search [--project-id <id>] [--query <text>] [--limit <1-20>] [--cursor <opaque>]
 
@@ -340,7 +352,7 @@ Read the original under current project and audience access checks.
 
 Read an original with its exact V3 audience union under current project and audience checks.
 `,
-  updates: `usage: echo-brain person updates <submit|status|search|read> [options]
+  updates: `usage: echo-brain person updates <submit|submit-v3|status|status-v3|search|search-v3|read|read-v3> [options]
 
 Uploads preserve the original text. Only me is the default; Team explicitly shares it with current organization members. No Slack approval or decision extraction is required.
 `,
@@ -348,17 +360,33 @@ Uploads preserve the original text. Only me is the default; Team explicitly shar
 
 Saves this UTF-8 file (at most 8 KiB) unchanged in your organization. Only me is the default; Team makes it readable to current organization members immediately. It is searchable without waiting for optional metadata. Project sharing requires --audience-project-id; Only me and Team forbid it. The independent --project-id associates the original with a project without changing its audience. Keep the request ID and immutable file, title, audience, and both project coordinates: after an unknown outcome, check V2 status with the same ID before an exact replay. No V1 fallback is performed.
 `,
+  "updates-submit-v3": `usage: echo-brain person updates submit-v3 --request-id <uuid> --title <title> --file <utf8-text-file> [--association-project-ids-json <canonical-project-id-array>] [--audience <only-me|team|project|projects>] [--audience-project-id <project-id>] [--audience-project-ids-json <canonical-project-id-array>]
+
+Saves one UTF-8 text original (at most 8 KiB) with independent initial association and audience sets. Only me and no association are the defaults. Project requires --audience-project-id; projects requires --audience-project-ids-json. Both project ID arrays are canonical JSON: sorted, unique project IDs, at most 20. An association never widens the audience. Keep the same request ID and immutable fields for exact V3 status/replay after an unknown outcome.
+`,
   "updates-status": `usage: echo-brain person updates status --request-id <uuid>
 
 Shows your saved V2 receipt, selected audience, initial association, and optional search-metadata progress. The initial association does not report later association changes. Metadata failure does not prevent reading or searching the original.
+`,
+  "updates-status-v3": `usage: echo-brain person updates status-v3 --request-id <uuid>
+
+Shows the saved V3 receipt, selected audience union, immutable initial association set, and optional search-metadata progress. Later association changes do not alter this receipt.
 `,
   "updates-search": `usage: echo-brain person updates search --query <text> [--limit <1-10>]
 
 Find original uploads you may read. Optional search hints help matching; excerpts come from the original text.
 `,
+  "updates-search-v3": `usage: echo-brain person updates search-v3 --query <text> [--limit <1-10>]
+
+Find V3 original uploads you may read. Results preserve the exact selected audience union and current access checks.
+`,
   "updates-read": `usage: echo-brain person updates read --context-id <id>
 
 Open the original uploaded text under its current access checks.
+`,
+  "updates-read-v3": `usage: echo-brain person updates read-v3 --context-id <id>
+
+Open one V3 original under its current audience access checks.
 `,
   employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 
