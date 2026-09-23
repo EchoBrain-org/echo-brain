@@ -264,10 +264,12 @@ enum ProjectProof {
             wait("binary compose") { window.attachedSheet != nil }
             let compose = sheetRoot("binary compose")
             require(ProofUI.find(NSTextView.self, "compose-body", in: compose).string.isEmpty, "binary decoded into note")
-            require(ProofUI.find(NSTextField.self, "compose-document", in: compose).stringValue.contains("Robot PRD.pdf"))
+            wait("binary attachment prepared") {
+                ProofUI.find(NSTextField.self, "compose-document", in: compose).stringValue.contains("Robot PRD.pdf")
+            }
             ProofUI.find(NSButton.self, "compose-send", in: compose).performClick(nil)
             wait("document saved") { !uploads.busy && uploads.receipt?.document != nil }
-            require(uploads.receipt?.document?.content_length == 6 && uploads.receipt?.document?.extraction_state == "extracting")
+            require(uploads.receipt?.document?.content_length == 6 && uploads.receipt?.document?.extraction_state == "extracting", "document receipt")
             require(ProofUI.views(compose).compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Original saved · Extracting text.") }, "custody vs extraction state not shown")
             return
         }
@@ -279,9 +281,9 @@ enum ProjectProof {
                 let compose = sheetRoot(label)
                 require(ProofUI.find(ChipMenuButton.self, "compose-to", in: compose).title == title, "\(label): To is not \(title)")
                 require(ProofUI.find(NSTextView.self, "compose-body", in: compose).string.isEmpty, "\(label): document entered note editor")
-                require(ProofUI.find(NSTextField.self, "compose-document", in: compose).stringValue.contains("Kickoff notes.txt"), "\(label): attachment missing")
-                let until = Date().addingTimeInterval(0.3)
-                while Date() < until { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+                wait("\(label): attachment prepared") {
+                    ProofUI.find(NSTextField.self, "compose-document", in: compose).stringValue.contains("Kickoff notes.txt")
+                }
                 require(uploads.draft == nil && uploads.receipt == nil && !uploads.hasOutstandingMutation, "\(label): a drop sent by itself")
                 window.attachedSheet?.cancelOperation(nil); wait("\(label) closed") { window.attachedSheet == nil }
                 settle("\(label) settle")
