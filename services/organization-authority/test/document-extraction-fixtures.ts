@@ -24,6 +24,30 @@ export function pdf(text: string, pages = 1): Buffer {
   return Buffer.from(value);
 }
 
+/** One word split across contiguous regular and bold PDF text runs. */
+export function styledWordPdf(): Buffer {
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [5 0 R] /Count 1 >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>',
+    '',
+  ];
+  const stream = 'BT /F1 12 Tf 50 750 Td (hard) Tj /F2 12 Tf (ware) Tj ET';
+  objects[5] = `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`;
+  let value = '%PDF-1.7\n';
+  const offsets = [0];
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.byteLength(value)); value += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+  const xref = Buffer.byteLength(value);
+  value += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets.slice(1)) value += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  value += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(value);
+}
+
 export function zip(entries: Array<{ name: string; value: string; claimedSize?: number; flags?: number; crc?: number }>): Buffer {
   const local: Buffer[] = []; const central: Buffer[] = []; let offset = 0;
   for (const entry of entries) {
@@ -52,4 +76,3 @@ export function entries(paragraphs: string[]) {
     { name: 'word/document.xml', value: `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs.map((text) => `<w:p><w:r><w:t>${escape(text)}</w:t></w:r></w:p>`).join('')}</w:body></w:document>` },
   ];
 }
-

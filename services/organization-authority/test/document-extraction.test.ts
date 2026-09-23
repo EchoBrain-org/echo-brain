@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { pdf, zip, entries } from './document-extraction-fixtures.js';
+import { pdf, styledWordPdf, zip, entries } from './document-extraction-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { createDocumentExtractor, extractDocument, DOCUMENT_EXTRACTION_LIMITS } from '../src/adapters/documents/document-extraction.js';
 
@@ -22,6 +22,18 @@ describe('bounded isolated document extraction', () => {
     expect(result.chunks.map((c) => c.text).join('')).toContain('SCOUT hardware software QA');
     expect(result.chunks[0]).toMatchObject({ anchor_kind: 'page', anchor_start: 1 });
   });
+  it('preserves CR-only UTF-8 lines', async () => {
+    const text = 'Alpha\rHardware acceptance\rOmega';
+    const plain = await extractDocument(input(Buffer.from(text), 'acceptance.txt'));
+    expect(plain.status).toBe('ready');
+    expect(plain.chunks.map((chunk) => chunk.text).join('')).toBe(text);
+    expect(plain.chunks.map((chunk) => chunk.anchor_start)).toEqual([1, 2, 3]);
+  });
+  it('preserves contiguous PDF style runs as one word', async () => {
+    const styled = await extractDocument(input(styledWordPdf(), 'styled.pdf'));
+    expect(styled.status).toBe('ready');
+    expect(styled.chunks.map((chunk) => chunk.text).join('').trim()).toBe('hardware');
+  });
   it('extracts a real zipped Word document with paragraph anchors through Mammoth', async () => {
     const result = await extractDocument(input(zip(entries(['SCOUT kickoff', 'Hardware & software requirements', 'PRD-END-ROBOT'])), 'SCOUT.docx'));
     expect(result.status).toBe('ready'); expect(result.chunks.map((c) => c.text).join('')).toContain('Hardware & software requirements');
@@ -35,6 +47,7 @@ describe('bounded isolated document extraction', () => {
     const result = await createDocumentExtractor({ textBytes: 31, chunkBytes: 12 })(input(Buffer.from('🙂'.repeat(100)), 'unicode.txt'));
     expect(result.status).toBe('partial'); expect(result.chunks.map((c) => c.text).join('')).toBe('🙂'.repeat(7));
     expect(result.chunks.every((c) => Buffer.byteLength(c.text) <= 12)).toBe(true);
+    expect(result.message).toContain('extracted-text byte limit');
   });
   it('keeps ordinary search words whole at chunk boundaries while preserving exact text', async () => {
     const text = 'a '.repeat(1534) + 'hardware requirements';
@@ -47,8 +60,10 @@ describe('bounded isolated document extraction', () => {
   it('marks PDF page and extracted chunk limits partial with retained anchored text', async () => {
     const pages = await createDocumentExtractor({ pdfPages: 1 })(input(pdf('Robot', 2), 'pages.pdf'));
     expect(pages.status).toBe('partial'); expect(pages.chunks.every((c) => c.anchor_start === 1)).toBe(true);
+    expect(pages.message).toContain('PDF page limit');
     const chunks = await createDocumentExtractor({ chunks: 2 })(input(Buffer.from('one\ntwo\nthree'), 'many.txt'));
     expect(chunks.status).toBe('partial'); expect(chunks.chunks).toHaveLength(2);
+    expect(chunks.message).toContain('extracted-text chunk limit');
   });
   it('rejects invalid UTF-8, NUL, MIME mismatch, malformed PDF, and unsupported legacy Word', async () => {
     for (const [bytes, filename] of [[Buffer.from([0xff]), 'x.txt'], [Buffer.from('x\0y'), 'x.md'], [Buffer.from('not a PDF'), 'x.pdf'], [Buffer.from('%PDF-1.7 garbage'), 'x.pdf'], [Buffer.from('garbage'), 'x.docx']] as const) {

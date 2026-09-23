@@ -44,6 +44,8 @@ class TextCollector {
   chunks: DocumentTextChunk[] = [];
   bytes = 0;
   partial = false;
+  partialMessage: string | null = null;
+  markPartial(message: string): void { this.partial = true; this.partialMessage ??= message; }
   append(text: string, anchor_kind: DocumentTextChunk['anchor_kind'], anchor_start: number): void {
     // NUL cannot be represented safely by downstream search; retain a visible
     // replacement. All other whitespace and Unicode survive extraction.
@@ -54,7 +56,12 @@ class TextCollector {
       const previous = last?.anchor_kind === anchor_kind && last.anchor_start === anchor_start ? last : undefined;
       const room = previous ? limits.chunkBytes - Buffer.byteLength(previous.text) : 0;
       let merge = room >= Math.min(4, encoded.length - cursor);
-      if ((!merge && this.chunks.length >= limits.chunks) || this.bytes >= limits.textBytes) { this.partial = true; return; }
+      if (this.bytes >= limits.textBytes) {
+        this.markPartial('Some text was omitted because the extracted-text byte limit was reached.'); return;
+      }
+      if (!merge && this.chunks.length >= limits.chunks) {
+        this.markPartial('Some text was omitted because the extracted-text chunk limit was reached.'); return;
+      }
       const boundedEnd = (capacity: number) => {
         let end = Math.min(encoded.length, cursor + capacity, cursor + limits.textBytes - this.bytes);
         while (end < encoded.length && end > cursor && (encoded[end]! & 0xc0) === 0x80) end--;
@@ -68,7 +75,9 @@ class TextCollector {
         let whitespace = /\s+(?=\S*$)/u.exec(prefix);
         if (!whitespace && merge) {
           merge = false;
-          if (this.chunks.length >= limits.chunks) { this.partial = true; return; }
+          if (this.chunks.length >= limits.chunks) {
+            this.markPartial('Some text was omitted because the extracted-text chunk limit was reached.'); return;
+          }
           end = boundedEnd(limits.chunkBytes);
           prefix = encoded.subarray(cursor, end).toString('utf8');
           whitespace = /\s+(?=\S*$)/u.exec(prefix);
@@ -77,7 +86,9 @@ class TextCollector {
           end = cursor + Buffer.byteLength(prefix.slice(0, whitespace.index + whitespace[0].length));
         }
       }
-      if (end === cursor) { this.partial = true; return; }
+      if (end === cursor) {
+        this.markPartial('Some text was omitted because the extracted-text byte limit was reached.'); return;
+      }
       const textPart = encoded.subarray(cursor, end).toString('utf8');
       if (merge) previous!.text += textPart;
       else this.chunks.push({ anchor_kind, anchor_start, text: textPart });
@@ -85,7 +96,7 @@ class TextCollector {
     }
   }
   finish(): DocumentExtractionResult {
-    if (this.partial) return result('partial', this.chunks, 'Some text was omitted because an extraction limit was reached.');
+    if (this.partial) return result('partial', this.chunks, this.partialMessage);
     if (!this.chunks.some((chunk) => chunk.text.trim().length)) return result('no_text', [], 'No extractable text was found. Image-only documents require OCR.');
     return result('ready', this.chunks);
   }
@@ -193,7 +204,7 @@ async function extract(): Promise<DocumentExtractionResult> {
     if (text.includes('\0') || /^(?:%PDF-|PK\u0003\u0004)/.test(text)) malformed();
     let paragraph = 1;
     // Preserve separators and whitespace. Anchors identify extracted paragraphs.
-    for (const match of text.matchAll(/[^\r\n]*(?:\r?\n|$)/g)) {
+    for (const match of text.matchAll(/[^\r\n]*(?:\r\n|\r|\n|$)/g)) {
       if (!match[0]) continue;
       collector.append(match[0], 'paragraph', paragraph++);
       if (collector.partial) break;
@@ -214,7 +225,9 @@ async function extract(): Promise<DocumentExtractionResult> {
       collector.append(part, 'paragraph', paragraph++);
       if (collector.partial) break;
     }
-    if (extracted.messages.some((message) => message.type === 'error')) collector.partial = true;
+    if (extracted.messages.some((message) => message.type === 'error')) {
+      collector.markPartial('Some Word text was omitted because the document parser reported an error.');
+    }
     return collector.finish();
   }
   if (extension === 'pdf') {
@@ -235,20 +248,34 @@ async function extract(): Promise<DocumentExtractionResult> {
         try {
           const reader = page.streamTextContent().getReader();
           try {
+            type PdfTextItem = { str: string; hasEOL: boolean; width: number; height: number; transform: number[] };
+            let pending: PdfTextItem | null = null;
+            const separator = (left: PdfTextItem, right: PdfTextItem): string => {
+              if (left.hasEOL) return '\n';
+              if (/\s$/u.test(left.str) || /^\s/u.test(right.str)) return '';
+              const sameLine = Math.abs(left.transform[5]! - right.transform[5]!) <= Math.max(left.height, right.height) * 0.1;
+              const gap = right.transform[4]! - (left.transform[4]! + left.width);
+              return sameLine && gap <= Math.max(left.height, right.height) * 0.1 ? '' : ' ';
+            };
             while (!collector.partial) {
               const read = await reader.read();
               if (read.done) break;
               for (const item of read.value.items) {
                 if (!('str' in item)) continue;
-                collector.append(item.str + (item.hasEOL ? '\n' : ' '), 'page', pageNumber);
+                const current = item as PdfTextItem;
+                if (pending) collector.append(pending.str + separator(pending, current), 'page', pageNumber);
+                pending = current;
                 if (collector.partial) break;
               }
             }
+            if (pending && !collector.partial) collector.append(pending.str + (pending.hasEOL ? '\n' : ' '), 'page', pageNumber);
           } finally { await reader.cancel(); reader.releaseLock(); }
         } finally { page.cleanup(); }
         if (collector.partial) break;
       }
-      if (document.numPages > count) collector.partial = true;
+      if (document.numPages > count) {
+        collector.markPartial('Some text was omitted because the PDF page limit was reached.');
+      }
       return collector.finish();
     } catch (error) {
       if (error instanceof Error && error.name === 'PasswordException') return result('encrypted', [], 'Encrypted PDFs cannot be extracted without a password.');
