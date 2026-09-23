@@ -111,7 +111,7 @@ describe('frozen project context CLI contract', () => {
 
   it.each(fixtures.operations.filter(isMutation))('$id classifies closed 4xx and uncertain failures without retrying', async item => {
     for (const [status, code] of [[400, 'invalid_request'], [400, 'stale_access_state'], [401, 'unauthorized'], [404, 'not_found'],
-      [409, 'conflict'], [429, 'rate_limited'], [502, 'invalid_output'], [503, 'unavailable']] as const) {
+      [409, 'conflict'], [409, 'quota_exceeded'], [429, 'rate_limited'], [502, 'invalid_output'], [503, 'unavailable']] as const) {
       const network = vi.fn<typeof fetch>(async () => json({ error: { code, message: 'sensitive diagnostic' } }, status));
       const result = await run(item, network);
       expect(result.code).toBe(1); expect(result.stdout).toBe('');

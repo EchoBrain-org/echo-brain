@@ -14,6 +14,7 @@ decision_ids:
   - ADR-0001
   - ADR-0002
   - ADR-0013
+  - ADR-0014
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-RUNTIME-001
@@ -39,8 +40,10 @@ without becoming part of its responsibility.
 
 ## Data authority
 
-The Person client owns only its private Person session and the Authority
-descriptor verified while installing that session. The server owns source
+The Person client's authorization state is its private Person session and the
+Authority descriptor verified while installing that session. Bounded,
+account-scoped immutable document snapshots support explicit local retry and
+abandonment; they grant no access and are not server source custody. The server owns source
 custody, processing state, pending approvals, organization membership,
 integration policy, and the organization record.
 

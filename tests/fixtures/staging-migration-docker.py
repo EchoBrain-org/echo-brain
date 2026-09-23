@@ -2,6 +2,7 @@
 """Docker seam for the full updater: SQLite copy/verifiers execute real code."""
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -35,11 +36,18 @@ if args[0] == 'run':
         accepted = image == os.environ['ECHO_TEST_ACCEPTED_IMAGE']
         if not accepted and (root / 'fail-candidate-verify').exists(): raise SystemExit(1)
         # This fixture rehearses the historical V5 -> V6 images. The current
-        # product initializes V7 and deliberately rejects both old versions.
+        # product initializes its current schema and rejects both old versions.
         # Execute the complete verifier with each historical image's baseline
         # pin; never relax the current product verifier for these test images.
         source = pathlib.Path('packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js').resolve()
-        script = source.read_text().replace('V7', 'V5' if accepted else 'V6').replace('"../', '"' + str(source.parent.parent) + '/')
+        historical_version = '5' if accepted else '6'
+        script, replacements = re.subn(
+            r'\b(AUTHORITY_BASELINE_SCHEMA_VERSION_V|authorityBaselineSha256V)\d+\b',
+            lambda match: match.group(1) + historical_version,
+            source.read_text(),
+        )
+        assert replacements == 4, 'historical verifier must replace both baseline imports and uses'
+        script = script.replace('"../', '"' + str(source.parent.parent) + '/')
         script += '\nverifyAuthorityStateLineage(' + repr(state) + ');'
     raise SystemExit(subprocess.run(['node', '--input-type=module', '-e', script]).returncode)
 os.execv(str(root / 'bin/docker-fallback'), [str(root / 'bin/docker-fallback'), *args])

@@ -493,6 +493,26 @@ describe("native ECHO hotkey overlay", () => {
   });
 
 
+  it("routes ⌘⇧E to capture without reading the pasteboard or the selection", () => {
+    const source = readFileSync(SOURCE, "utf8");
+    const projects = readFileSync(resolve(REPO, "product/echo-overlay/projects.swift"), "utf8");
+
+    expect(source).toContain("EventHotKeyID(signature: hotKeySignature, id: 2)");
+    expect(source).toContain("UInt32(cmdKey | shiftKey)");
+    expect(source).toContain("EventParamName(kEventParamDirectObject)");
+    expect(source).toContain("EventParamType(typeEventHotKeyID)");
+    expect(source).toContain("case captureHotKeyIdentifier.id:");
+    expect(source).toContain("DispatchQueue.main.async { delegate.showCapture() }");
+    expect(source).toContain("projects?.capture()");
+    expect(source).toContain("if let captureHotKey { UnregisterEventHotKey(captureHotKey) }");
+    expect(projects).toContain("func capture()");
+    for (const text of [source, projects]) {
+      expect(text).not.toMatch(
+        /NSPasteboard\.general\.(string|data|propertyList|readObjects|pasteboardItems)|AXUIElement|kAXSelectedText/,
+      );
+    }
+  });
+
   it("keeps the answer visible while loading permission-checked source cards", () => {
     const source = readFileSync(SOURCE, "utf8");
 

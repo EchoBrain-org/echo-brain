@@ -139,6 +139,28 @@ describe("workspace source boundaries", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
   });
 
+  it.each([
+    ["services/organization-authority/src/application/document-v1.ts", "pdfjs-dist", "authority-application-depends-inward"],
+    ["services/organization-authority/src/presentation/person-documents-http-route-v1.ts", "node:fs/promises", "authority-presentation-calls-application"],
+  ])("keeps document parser and filesystem work out of %s", (path, dependency, layer) => {
+    const fixture = fixtureRepository();
+    const file = join(fixture, path);
+    writeFileSync(file, `import '${dependency}';\n${readFileSync(file, "utf8")}`);
+    const result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(`layer rule '${layer}' rejects`);
+    expect(result.stdout + result.stderr).toContain(dependency);
+  });
+
+  it("ships the compiled document extraction worker in the Authority package", () => {
+    const packed = spawnSync("npm", ["pack", "--dry-run", "--ignore-scripts", "--json", "--workspace", "services/organization-authority"], {
+      cwd: REPO, encoding: "utf8", timeout: 30_000,
+    });
+    expect(packed.status, packed.stderr).toBe(0);
+    const artifacts = JSON.parse(packed.stdout) as Array<{ files: Array<{ path: string }> }>;
+    expect(artifacts[0]!.files.map(file => file.path)).toContain("dist/adapters/documents/document-extraction-worker.js");
+  });
+
   it("retains dirty and untracked inputs in isolated coherent worktrees", () => {
     const sourceRoot = mkdtempSync(join(tmpdir(), "echo-coherent-source-"));
     tmpDirs.push(sourceRoot);
@@ -563,6 +585,7 @@ describe("workspace source boundaries", () => {
         "authority-baseline-v5.sql",
         "authority-baseline-v6.sql",
         "authority-baseline-v7.sql",
+        "authority-baseline-v8.sql",
       ],
       "packages/organization-control-plane": [
         "organization-control-plane-baseline-v3.sql",

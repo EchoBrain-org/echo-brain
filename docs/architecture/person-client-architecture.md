@@ -24,11 +24,17 @@ service manager.
 
 ## Local state authority
 
-The machine owns only the signed-in Person session below
+The machine's authorization state is the signed-in Person session below
 `~/.local/share/echo-brain/person/`. The directory is `0700`; session files are
 `0600`. Refresh is single-claim: once a refresh credential is taken for a
 request it cannot be replayed after an ambiguous transport outcome. Logout
 removes local session authority even if the remote outcome is unknown.
+
+The document client also retains bounded, account-scoped immutable retry
+snapshots for explicitly selected uploads. These are local recovery material,
+not source custody or permission authority. They cannot make a user readable on
+the server, run background processing or redirect a request to another account.
+The 2026-09-23 extension below defines their explicit cleanup/retry lifecycle.
 
 Granola, Slack service, and model-provider credentials are server-owned. They
 must not enter the Person session, CLI output, or package artifact.
@@ -191,7 +197,9 @@ file, title, and visibility on retry; no local queue or automatic upload exists.
 The current bounded text carrier does not decide the context taxonomy. Optional
 LLM search hints remain derived metadata. Existing records/Ask/native Sources
 continue to use approved decision records; connecting uploads to those surfaces
-awaits a source contract. See the [current upload scope](../product/2026-09-21-person-update-inbox-v1.md).
+requires a separately qualified retrieval/evidence contract. Shared source
+admission alone does not enable those reads. See the
+[historical upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
 The native menu bar's **Uploads…** window wraps these four commands through
 the release-installed Person client. Owners and employees can choose a file,
@@ -200,19 +208,48 @@ open through a fresh permission-aware `read`, and **Check upload status** shows
 whether the original is saved and optional metadata is ready. The window states
 that Ask currently uses approved records.
 
-The window snapshots the selected file into a temporary private directory and
-keeps a single request ID, title, visibility, and original for explicit retries.
-It never automatically retries a submission. A content-free last-attempt locator
-is retained per Authority/membership in app preferences so status can be checked
-after restart; original text and search results are not persisted there. Temporary
-snapshots are removed when the attempt is released or on orderly shutdown. An
-unclean process termination may leave a private temporary file for OS cleanup.
-Starting another upload after an unconfirmed attempt requires an explicit choice.
-Starting a new upload clears the prior locator for that account, including on restart.
-No background uploader or local queue is introduced.
+The legacy text-upload window snapshots its selected input for explicit retries
+and keeps an account-bound last-attempt locator for status. The document
+extension below adds persistent, bounded original snapshots and recovery
+commands; the earlier temporary-file-only description does not govern those
+document requests. Neither path silently uploads files or runs a background
+uploader.
 
 Each operation checks the exact membership and Authority before and after the
 CLI call. Account changes and deactivation clear fetched content and invalidate
 read callbacks. A submitted upload finishes while the window is hidden, with its
 outcome retained, and blocks simultaneous in-app account switching. Provider
 diagnostics and credentials never enter the native upload window.
+
+## 2026-09-23 document recovery extension
+
+The refined native project interface invokes the installed
+`person documents` CLI for text/Markdown, PDF and Word `.docx` files up to
+25 MiB. Audience and project association are selected independently. Explicit
+multi-file selection is a bounded foreground interaction; the native queue is
+not a durable background processing service. Authority retains accepted
+originals and performs extraction through the shared Person source adapter.
+
+Before a document submission, the CLI retains an immutable private copy with
+the exact request metadata, scoped to the captured Authority and membership.
+The copy survives restart so `documents retry --request-id` does not depend on
+the original source pathname. `documents pending` lists local retained requests
+without a network call or revealing paths. A matching full or minimal saved
+receipt resolves the local attempt. A minimal receipt confirms admission after
+project access is lost without returning document content or access coordinates.
+
+`documents abandon --request-id` explicitly removes only local retry material.
+It cannot cancel or delete a possibly completed Authority upload. The native
+recovery flow exposes status, retry and explicit abandonment when starting
+another upload. A user must check status/search before creating a replacement
+request if the earlier outcome remains unknown. Known input/quota/snapshot
+rejections are presented as known non-submissions, not uncertain saves.
+
+Document linking and unlinking retain their exact account-bound request for an
+uncertain retry after restart. Dismissing the local reminder does not cancel a
+server mutation. Reader refresh tolerates extraction completing between its
+metadata/text requests only while immutable original identity and session
+fences still match. No fetched search corpus, decision model or approval state
+is made authoritative on the client. See
+[project documents](../features/project-documents-v1.md) and
+[ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md).

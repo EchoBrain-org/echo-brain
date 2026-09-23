@@ -107,7 +107,7 @@ export function canonicalSha256(value: JsonValue | unknown): Sha256Digest {
   return `sha256:${createHash("sha256").update(canonicalJsonBytes(value)).digest("hex")}`;
 }
 
-export function sha256Digest(value: Buffer | string): Sha256Digest {
+export function sha256Digest(value: Uint8Array | string): Sha256Digest {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 

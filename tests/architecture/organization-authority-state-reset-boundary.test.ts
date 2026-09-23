@@ -41,13 +41,16 @@ const ALLOWED_LEAF_IMPORTS = new Set([
   "node:fs/promises",
   "node:http",
   "node:net",
+  "node:os",
   "node:path",
+  "node:worker_threads",
   "openid-client",
 ]);
 
 const FORBIDDEN_SELECTED_MODULES = [
   /(?:^|\/)migrations(?:\/|$)/,
   /(?:^|\/)migrate\.ts$/,
+  /(?:^|\/)adapters\/persistence\/sqlite\/authority-v\d+-to-v\d+\.ts$/,
   /(?:^|\/)open-database\.ts$/,
   /(?:^|\/)composition\/operator-state\.ts$/,
   /(?:^|\/)composition\/runtime\.ts$/,

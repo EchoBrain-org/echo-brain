@@ -26,20 +26,24 @@
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-api": "0.0.0-dev.0",
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
     "@echo-brain/organization-control-plane": "0.0.0-dev.0",
+    "@echo-brain/organization-processing": "0.0.0-dev.0",
     "@echo-brain/organization-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-record": "0.0.0-dev.0",
     "@echo-brain/organization-retrieval": "0.0.0-dev.0",
-    "better-sqlite3": "12.10.0",
-    "openid-client": "6.8.4",
-    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
-    "@echo-brain/organization-processing": "0.0.0-dev.0",
+    "@echo-brain/provider-granola": "0.0.0-dev.0",
     "@echo-brain/provider-openrouter": "0.0.0-dev.0",
     "@echo-brain/provider-slack-server": "0.0.0-dev.0",
-    "@echo-brain/provider-granola": "0.0.0-dev.0",
-    "@echo-brain/provider-synthetic-demo": "0.0.0-dev.0"
+    "@echo-brain/provider-synthetic-demo": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0",
+    "mammoth": "1.12.3",
+    "openid-client": "6.8.4",
+    "pdfjs-dist": "6.3.289",
+    "yauzl": "3.4.0"
   },
   "devDependencies": {
+    "@types/yauzl": "3.4.0",
     "ajv": "8.20.0"
   },
   "engines": {

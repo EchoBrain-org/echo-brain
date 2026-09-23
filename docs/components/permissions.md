@@ -21,6 +21,7 @@ decision_ids:
   - ADR-0010
   - ADR-0011
   - ADR-0013
+  - ADR-0014
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-IDENTITY-005

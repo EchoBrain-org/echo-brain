@@ -7,6 +7,7 @@ import {
 import {
   assertCanonicalDecisionSet,
   assertCanonicalMeetingDocument,
+  type AdapterIdentity,
   type DecisionSet,
   type MeetingDocument,
 } from "../core/index.js";
@@ -205,6 +206,29 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
         this.expectedProcessorAdapterId,
       );
     })();
+  }
+
+  /**
+   * Recheck custody after an awaited provider pull, inside the transaction that
+   * will retain the source. This closes revocation between readAdmission and
+   * source admission without coupling the generic store to meeting policy.
+   */
+  assertCurrentSourceAdmission(expectedSource: AdapterIdentity): void {
+    if (!this.database.inTransaction) throw new Error("source admission guard requires the custody transaction");
+    const admission = this.admission();
+    if (admission.membership_status !== "active") throw new AuthorityMeetingProcessingRevokedError();
+    const current = admissionFrom(
+      admission,
+      this.progress(admission.semantic_input_sha256),
+      this.sourceCursorPolicy,
+      this.expectedProcessorAdapterId,
+    );
+    if (
+      expectedSource.kind !== "meeting-source" ||
+      expectedSource.adapter_id !== current.source.adapter_id ||
+      expectedSource.instance_id !== current.source.instance_id ||
+      expectedSource.version !== current.source.version
+    ) throw new Error("source custody differs from the current admitted source identity");
   }
 
   async stageCandidate(

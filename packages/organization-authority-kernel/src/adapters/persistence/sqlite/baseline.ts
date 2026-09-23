@@ -145,3 +145,50 @@ export function applyAuthorityBaselineV7(database: Database.Database): void {
     throw error;
   }
 }
+
+/** Active fresh-state schema; V5/V6/V7 remain pinned historical baselines. */
+export const AUTHORITY_BASELINE_SCHEMA_VERSION_V8 = 8;
+
+export function authorityBaselineSqlV8(): string {
+  return readFileSync(new URL("../../../../baselines/authority-baseline-v8.sql", import.meta.url), "utf8");
+}
+
+export function authorityBaselineSha256V8(): Sha256Digest {
+  return sha256Digest(authorityBaselineSqlV8());
+}
+
+/** V8 applies only to a completely empty fresh Authority database. */
+export function applyAuthorityBaselineV8(database: Database.Database): void {
+  const sql = authorityBaselineSqlV8();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const userVersion = database.pragma("user_version", {
+      simple: true,
+    }) as number;
+    const currentApplicationId = database.pragma("application_id", {
+      simple: true,
+    }) as number;
+    const objectCount = database
+      .prepare("SELECT count(*) AS objects FROM sqlite_master")
+      .pluck()
+      .get() as number;
+    if (
+      userVersion !== 0 ||
+      currentApplicationId !== 0 ||
+      objectCount !== 0
+    ) {
+      throw new Error(
+        "authority baseline requires a completely empty database",
+      );
+    }
+    database.exec(sql);
+    database.pragma(`application_id = ${AUTHORITY_BASELINE_APPLICATION_ID_V1}`);
+    database.pragma(`user_version = ${AUTHORITY_BASELINE_SCHEMA_VERSION_V8}`);
+    database.exec("COMMIT");
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {}
+    throw error;
+  }
+}

@@ -1,3 +1,6 @@
+import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
+import { validatePersonDocumentIdV1, validatePersonDocumentSearchV1, type PersonDocumentSearchV1 } from '@echo-brain/organization-api';
+import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUpload, type DocumentSnapshot } from './document-file.js';
 import { validatePersonUploadSearchV1, validatePersonUploadContextId, type PersonUploadSearchV1 } from '@echo-brain/organization-api';
 import { validatePersonUpdateSubmitV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
@@ -17,6 +20,7 @@ import {
   PersonAuthorityClientError,
   PersonContextMutationError,
   unknownContextMutation,
+  unknownDocumentMutation,
   type EmployeeRosterV1,
   type PersonAnswerV2,
   type PersonRecordListV1,
@@ -421,6 +425,123 @@ export class PersonClient {
       throw new PersonAuthorityClientError('stale_access_state', null, 'Person account changed during the request');
     }
     return result;
+  }
+
+  private documentBinding(stored: StoredPersonClientSessionV1): string {
+    return JSON.stringify([stored.authority_origin, stored.authority_id, stored.session.organization_id, stored.session.membership_id]);
+  }
+
+  private assertDocumentAccount(stored: StoredPersonClientSessionV1, requestId: string, expected: { expected_authority?: string; expected_membership_id?: string }): void {
+    if ((expected.expected_authority !== undefined || expected.expected_membership_id !== undefined) &&
+        (expected.expected_authority !== stored.authority_origin || expected.expected_membership_id !== stored.session.membership_id)) {
+      throw new PersonContextMutationError('stale_access_state', null, 'The signed-in account changed before the document operation. Restore the selected account before retrying.', requestId, 'not_submitted');
+    }
+  }
+
+  private async submitDocumentSnapshot(stored: StoredPersonClientSessionV1, snapshot: DocumentSnapshot) {
+    let submitted = false;
+    try {
+      this.assertCurrentSession(stored);
+      submitted = true;
+      const receipt = await this.authority(stored.authority_origin).uploadDocument(stored.session.access_token, snapshot);
+      try { this.assertCurrentSession(stored); } catch { throw unknownDocumentMutation(snapshot.metadata.request_id, null); }
+      try { snapshot.remove(); } catch { /* A retained successful snapshot can be safely reconciled later. */ }
+      return receipt;
+    } catch (error) {
+      if (!snapshot.reused && (!submitted || (error instanceof PersonContextMutationError && error.mutation_outcome === 'not_submitted'))) snapshot.remove();
+      throw error;
+    }
+  }
+
+  async uploadDocument(input: DocumentFileUpload) {
+    validatePersonUpdateRequestId(input.request_id);
+    const stored = await this.accessSession();
+    this.assertDocumentAccount(stored, input.request_id, input);
+    return this.submitDocumentSnapshot(stored, prepareDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), input));
+  }
+
+  async retryDocument(requestId: string, expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
+    validatePersonUpdateRequestId(requestId);
+    const stored = await this.accessSession();
+    this.assertDocumentAccount(stored, requestId, expected);
+    return this.submitDocumentSnapshot(stored, resumeDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId));
+  }
+
+  pendingDocuments() {
+    const stored = this.store.read();
+    const snapshots = listDocumentSnapshots(this.options.home_directory, this.documentBinding(stored));
+    this.assertCurrentSession(stored);
+    return { schema_version: 1, kind: 'echo-person-document-pending-v1', snapshots };
+  }
+
+  abandonDocument(requestId: string, expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
+    validatePersonUpdateRequestId(requestId);
+    const stored = this.store.read();
+    this.assertDocumentAccount(stored, requestId, expected);
+    this.assertCurrentSession(stored);
+    const removed = abandonDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), requestId);
+    this.assertCurrentSession(stored);
+    return { schema_version: 1, kind: 'echo-person-document-abandoned-v1', request_id: requestId,
+      local_snapshot_removed: removed, authority_outcome: 'unchanged' };
+  }
+
+  async changeDocumentAssociation(value: PersonDocumentAssociateV1 | PersonDocumentDissociateV1,
+    expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
+    const request = value.kind === 'echo-person-document-associate-v1' ? validatePersonDocumentAssociateV1(value) : validatePersonDocumentDissociateV1(value);
+    const stored = await this.accessSession();
+    this.assertDocumentAccount(stored, request.request_id, expected);
+    const result = await this.authority(stored.authority_origin).changeDocumentAssociation(stored.session.access_token, request);
+    try { this.assertCurrentSession(stored); } catch { throw unknownContextMutation(request.request_id, false, null); }
+    return result;
+  }
+
+  async documentStatus(requestId: string) {
+    validatePersonUpdateRequestId(requestId);
+    const stored = await this.accessSession();
+    const receipt = await this.authority(stored.authority_origin).documentStatus(stored.session.access_token, requestId);
+    this.assertCurrentSession(stored);
+    try { reconcileDocumentSnapshot(this.options.home_directory, JSON.stringify([stored.authority_origin, stored.authority_id, stored.session.organization_id, stored.session.membership_id]), receipt); }
+    catch { /* Status remains useful even if local snapshot cleanup is unavailable. */ }
+    return receipt;
+  }
+
+  async readDocument(documentId: string, cursor?: string, projectId?: string) {
+    validatePersonDocumentIdV1(documentId);
+    if (cursor !== undefined && (!/^[A-Za-z0-9_-]+$/.test(cursor) || cursor.length > 1024)) throw new Error('Document cursor is invalid');
+    return this.withContextSession(async (authority, token) => {
+      let metadata = await authority.documentMetadata(token, documentId, projectId);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const text = await authority.documentText(token, documentId, cursor, projectId);
+        if (metadata.document_id !== text.document_id || metadata.sha256 !== text.original_sha256) throw new PersonAuthorityClientError('invalid_response', 200, 'Document text provenance did not match its original.');
+        if (metadata.extractor === text.extractor && metadata.extraction_state === text.extraction_state) return { metadata, text };
+        // Extraction can finish between the two reads. Refresh the metadata under the
+        // same current session instead of returning a pair native clients must reject.
+        const refreshed = await authority.documentMetadata(token, documentId, projectId);
+        if (refreshed.document_id !== metadata.document_id || refreshed.sha256 !== metadata.sha256 ||
+            refreshed.request_id !== metadata.request_id || refreshed.content_length !== metadata.content_length) {
+          throw new PersonAuthorityClientError('invalid_response', 200, 'Document original changed while loading its text.');
+        }
+        metadata = refreshed;
+        if (metadata.extractor === text.extractor && metadata.extraction_state === text.extraction_state) return { metadata, text };
+      }
+      throw new PersonAuthorityClientError('unavailable', null, 'Document extraction changed while loading. Retry the read.');
+    });
+  }
+
+  async searchDocuments(input: PersonDocumentSearchV1) {
+    const request = validatePersonDocumentSearchV1(input);
+    return this.withContextSession((authority, token) => authority.searchDocuments(token, request));
+  }
+
+  async downloadDocument(documentId: string, outputPath: string, projectId?: string) {
+    validatePersonDocumentIdV1(documentId);
+    const stored = await this.accessSession();
+    const authority = this.authority(stored.authority_origin);
+    const metadata = await authority.documentMetadata(stored.session.access_token, documentId, projectId);
+    this.assertCurrentSession(stored);
+    const response = await authority.documentOriginal(stored.session.access_token, documentId, projectId);
+    const output = await saveDocumentDownload(response, outputPath, metadata, () => this.assertCurrentSession(stored));
+    return { document_id: documentId, output_path: output, content_length: metadata.content_length, sha256: metadata.sha256 };
   }
 
   async projects(value: ProjectPageRequestV1 = {}) {
