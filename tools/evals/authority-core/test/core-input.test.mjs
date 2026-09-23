@@ -10,7 +10,7 @@ import { bootstrapOrganizationAuthorityState } from "../../../../services/organi
 import { createCoreIdentity } from "../core-identity.mjs";
 import { coreInputIdentities, createCoreInput } from "../core-input.mjs";
 
-test("statically admits the authenticated owner and replays an offered tuple at its durable cursor", async () => {
+test("statically admits the authenticated owner and replays immutable offered evidence at its durable cursor", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "echo-capacity-core-input-"));
   chmodSync(directory, 0o700);
   const initialized = bootstrapOrganizationAuthorityState({
@@ -51,6 +51,31 @@ test("statically admits the authenticated owner and replays an offered tuple at 
     assert.deepEqual(retry, first);
     assert.equal(first.next_cursor, "core-input:v1:1");
     assert.equal((await input.processor.extract(first.meetings[0])).signals[0].id, "decision-1");
+
+    await t.test("accepts an equivalent snapshot without sharing object identity", async () => {
+      const snapshot = structuredClone(first.meetings[0]);
+      assert.notEqual(snapshot, first.meetings[0]);
+      assert.deepEqual(await input.processor.extract(snapshot), decisions);
+    });
+
+    await t.test("rejects changed content or provenance under the same offered identity and revision", async () => {
+      const changedContent = structuredClone(first.meetings[0]);
+      changedContent.content[0].text = "Evidence that was never offered.";
+      await assert.rejects(input.processor.extract(changedContent), /unoffered meeting revision/);
+      const changedProvenance = structuredClone(first.meetings[0]);
+      changedProvenance.provenance.external_id = "different-provider-item";
+      await assert.rejects(input.processor.extract(changedProvenance), /unoffered meeting revision/);
+    });
+
+    await t.test("pins meeting and decisions against caller mutations after offer", async () => {
+      meeting.content[0].text = "Caller changed the source after offer.";
+      decisions.signals[0].text = "Caller changed the result after offer.";
+      const replay = await input.source.pull({ cursor: "core-input:v1:0", limit: 1 });
+      assert.equal(replay.meetings[0].content[0].text, text);
+      const result = await input.processor.extract(structuredClone(replay.meetings[0]));
+      assert.equal(result.signals[0].text, text);
+      assert.throws(() => { result.signals[0].text = "Mutation through returned result."; }, TypeError);
+    });
   } finally {
     authority?.close();
     identity?.close();

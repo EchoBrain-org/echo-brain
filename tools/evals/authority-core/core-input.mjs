@@ -1,5 +1,5 @@
 /** Core-stage deterministic meeting input. Provider admission is fixture setup only. */
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import { assertCanonicalDecisionSet, assertCanonicalMeetingDocument } from "../../../packages/organization-processing/dist/core/index.js";
 
 const SOURCE = Object.freeze({ kind: "meeting-source", adapter_id: "core-input", instance_id: "core-input-v1", version: "1.0.0" });
@@ -26,6 +26,17 @@ const source_cursor_policy = Object.freeze({
 
 function health() {
   return Object.freeze({ status: "healthy", checked_at: new Date().toISOString() });
+}
+
+function immutableSnapshot(value) {
+  const freeze = (item) => {
+    if (item !== null && typeof item === "object") {
+      Object.values(item).forEach(freeze);
+      Object.freeze(item);
+    }
+    return item;
+  };
+  return freeze(JSON.parse(canonicalJson(value)));
 }
 
 /**
@@ -98,7 +109,9 @@ export function createCoreInput({ authority, coordinates: { organization_id }, o
     async extract(meeting) {
       assertCanonicalMeetingDocument(meeting, SOURCE);
       const tuple = offered.find((candidate) => candidate.meeting.id === meeting.id && candidate.meeting.provenance.canonical_revision === meeting.provenance.canonical_revision);
-      if (tuple === undefined || tuple.meeting !== meeting) throw new Error("core processor received an unoffered meeting revision");
+      // Admission may snapshot/deserialize the canonical evidence. Bind to all
+      // offered bytes instead of relying on an in-process object reference.
+      if (tuple === undefined || tuple.meeting_sha256 !== canonicalSha256(meeting)) throw new Error("core processor received an unoffered meeting revision");
       return tuple.decisions;
     },
   });
@@ -112,7 +125,8 @@ export function createCoreInput({ authority, coordinates: { organization_id }, o
       if (offered.some((candidate) => candidate.meeting.id === meeting.id && candidate.meeting.provenance.canonical_revision === meeting.provenance.canonical_revision)) {
         throw new Error("core input meeting revision was already offered");
       }
-      offered.push(Object.freeze({ meeting, decisions }));
+      const meetingSnapshot = immutableSnapshot(meeting);
+      offered.push(Object.freeze({ meeting: meetingSnapshot, decisions: immutableSnapshot(decisions), meeting_sha256: canonicalSha256(meetingSnapshot) }));
       return Object.freeze({ cursor: cursor(offered.length - 1), next_cursor: cursor(offered.length) });
     },
   });
