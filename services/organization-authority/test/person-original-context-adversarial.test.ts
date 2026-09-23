@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
+import { validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
@@ -61,13 +62,14 @@ function fixture() {
   const uploadChunks = (title: string, chunks: readonly string[], changes: {
     readonly audience?: { readonly kind: "only_me" | "team" } | { readonly kind: "project"; readonly project_id: string };
     readonly project_id?: string | null;
+    readonly filename?: string;
   } = {}) => {
     const bytes = Buffer.from(chunks.join("\n"));
     const saved = documents.upload("owner", {
       schema_version: 1,
       kind: "echo-person-document-upload-v1",
       request_id: randomUUID(),
-      filename: `${title.replaceAll(" ", "-")}.md`,
+      filename: changes.filename ?? `${title.replaceAll(" ", "-")}.md`,
       title,
       content_length: bytes.byteLength,
       sha256: sha256Digest(bytes),
@@ -258,6 +260,49 @@ describe("adversarial original-context retrieval", () => {
     f.database.prepare("UPDATE authority_source_representations_v1 SET content_json=?").run('{"tampered":true}');
     expect(() => f.retrieval.revalidate({ access_token: "member", release: released.release }))
       .toThrow(expect.objectContaining({ code: "unavailable" }));
+  });
+
+  it("excludes a mutable document title from released evidence and its citation", () => {
+    const f = fixture();
+    const documentId = f.upload("Immutable title", "document-title-integrity-marker");
+    const input = { access_token: "member", queries: ["document-title-integrity-marker"], scope: { kind: "global" as const } };
+    const released = f.retrieval.retrieve(input);
+    const citation = citationOf(released.release.released_atoms[0]!);
+
+    // The document row has no immutable title column. A retained-row title
+    // must therefore never enter source evidence or its citation anchor.
+    f.database.exec("DROP TRIGGER authority_person_documents_v1_update_denied");
+    f.database.prepare("UPDATE authority_person_documents_v1 SET title=? WHERE document_id=?")
+      .run("Forged document title", documentId);
+    expect(f.retrieval.retrieve({ ...input, queries: ["Forged"] }).release.released_atoms).toEqual([]);
+    expect(f.retrieval.retrieve({ ...input, queries: ["Immutable-title.md"] }).release.released_atoms)
+      .toHaveLength(1);
+    const after = f.retrieval.retrieve(input).release.released_atoms[0]!;
+    expect(after).toMatchObject({ label: "Immutable-title.md", anchor_sha256: released.release.released_atoms[0]!.anchor_sha256 });
+    expect(after.text).not.toContain("Forged document title");
+    expect(f.retrieval.revalidate({ access_token: "member", release: released.release }))
+      .toMatchObject({ checked_at: expect.any(String) });
+    expect(f.retrieval.read({ access_token: "member", scope: input.scope, citation }).atom)
+      .toMatchObject({ label: "Immutable-title.md", anchor_sha256: citation.anchor_sha256 });
+  });
+
+  it("bounds a long immutable filename only at the presentation label", () => {
+    const f = fixture();
+    const filename = `${"a".repeat(247)}.md`;
+    f.upload("Short title", "long-filename-roundtrip-marker", { filename });
+    const scope = { kind: "global" as const };
+    const atom = f.retrieval.retrieve({ access_token: "member", queries: ["long-filename-roundtrip-marker"], scope }).release.released_atoms[0]!;
+    expect(atom.text.startsWith(`${filename}\n`)).toBe(true);
+    expect([...(atom.label ?? "")]).toHaveLength(198);
+    const proof = f.retrieval.read({ access_token: "member", scope, citation: citationOf(atom) }).atom;
+    expect(proof).toMatchObject({ label: atom.label, text: atom.text, anchor_sha256: atom.anchor_sha256 });
+    expect(() => validatePersonSourceEvidenceV1({
+      schema_version: 1,
+      kind: "echo-person-source-evidence-v1",
+      scope,
+      citation: { ...citationOf(atom), label: atom.label },
+      text: atom.text,
+    })).not.toThrow();
   });
 
   it("finds a lexical term crossing a proof-packet boundary and opens that exact packet", () => {

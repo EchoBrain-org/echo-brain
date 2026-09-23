@@ -115,6 +115,12 @@ function matchingPacket(title: string, body: string, terms: readonly string[]): 
   return Object.freeze({ index, text: values[index]! });
 }
 
+/** Labels cross the public API boundary; evidence retains the full filename. */
+function presentationLabel(value: string): string {
+  const codepoints = [...value];
+  return codepoints.length <= 200 ? value : `${codepoints.slice(0, 197).join("")}…`;
+}
+
 /**
  * Reads only immutable Person-upload source revisions. Meeting/source adapters
  * are intentionally excluded here: admission alone never makes raw meetings
@@ -285,8 +291,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const scopeSql = scope.kind === "project"
       ? "AND association.project_id=? AND association.organization_id=d.organization_id"
       : "";
-    const conditions = terms.map(() => "echo_original_context_contains_v1(d.title,t.text,?)=1");
-    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at
+    // The admitted source binds filename, but not the document's display title.
+    // Use the verified filename for both matching and the packet's title field.
+    const conditions = terms.map(() => "echo_original_context_contains_v1(d.filename,t.text,?)=1");
+    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_text_v1 t ON t.document_id=d.document_id
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial') AND work.extractor=t.extractor
@@ -314,7 +322,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     this.assertDocumentSourceRevision(row);
     this.assertDocumentChunk(row, this.representationChunks(row));
     const selected = matchingPacket(row.title, row.text, terms);
-    return Object.freeze({ kind: "source_revision" as const, source_id: row.source_id, revision_id: row.revision_id, source_sha256: row.source_sha256, representation_sha256: row.representation_sha256, anchor_sha256: canonicalSha256({ kind: "document", document_id: row.document_id, ordinal: row.ordinal, anchor_kind: row.anchor_kind, anchor_start: row.anchor_start, segment: selected.index, text: selected.text }), document_id: row.document_id, label: row.title, text: selected.text });
+    return Object.freeze({ kind: "source_revision" as const, source_id: row.source_id, revision_id: row.revision_id, source_sha256: row.source_sha256, representation_sha256: row.representation_sha256, anchor_sha256: canonicalSha256({ kind: "document", document_id: row.document_id, ordinal: row.ordinal, anchor_kind: row.anchor_kind, anchor_start: row.anchor_start, segment: selected.index, text: selected.text }), document_id: row.document_id, label: presentationLabel(row.title), text: selected.text });
   }
 
   private assertIntegrity(row: Pick<SourceRow, "source_id" | "revision_id" | "source_sha256" | "representation_sha256">): void {
@@ -387,7 +395,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const represented = chunks[row.ordinal] as Record<string, unknown> | undefined;
     if (represented?.anchor_kind !== row.anchor_kind || represented.anchor_start !== row.anchor_start || represented.text !== row.text) unavailable();
     for (const [segment, text] of packets(row.title, row.text).entries()) {
-      const atom = Object.freeze({ kind: "source_revision" as const, source_id: row.source_id, revision_id: row.revision_id, source_sha256: row.source_sha256, representation_sha256: row.representation_sha256, anchor_sha256: canonicalSha256({ kind: "document", document_id: row.document_id, ordinal: row.ordinal, anchor_kind: row.anchor_kind, anchor_start: row.anchor_start, segment, text }), document_id: row.document_id, label: row.title, text });
+      const atom = Object.freeze({ kind: "source_revision" as const, source_id: row.source_id, revision_id: row.revision_id, source_sha256: row.source_sha256, representation_sha256: row.representation_sha256, anchor_sha256: canonicalSha256({ kind: "document", document_id: row.document_id, ordinal: row.ordinal, anchor_kind: row.anchor_kind, anchor_start: row.anchor_start, segment, text }), document_id: row.document_id, label: presentationLabel(row.title), text });
       if (this.citationMatches(atom, citation)) return atom;
     }
     return undefined;
@@ -436,7 +444,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   private documentSourceMeta(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string, documentId: string, representationSha256: Sha256Digest): Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text"> | undefined {
     const acl = this.acl(actor, "d");
     const scopeSql = scope.kind === "project" ? "AND association.project_id=? AND association.organization_id=d.organization_id" : "";
-    return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,work.extractor,representation.content_json AS representation_json,d.received_at
+    return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,work.extractor,representation.content_json AS representation_json,d.received_at
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial')
       LEFT JOIN authority_person_document_associations_v1 association ON association.document_id=d.document_id
