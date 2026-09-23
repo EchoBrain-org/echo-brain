@@ -36,6 +36,7 @@ separately.
 | [ADR-0012](ADR-0012-person-public-response-privacy.md) | Person public response privacy and internal release witnesses | accepted |
 | [ADR-0013](ADR-0013-project-context-v1-contract.md) | Project context V1 contract | accepted |
 | [ADR-0014](ADR-0014-unified-source-ingestion-and-document-custody.md) | Unified source ingestion and project-owned document processing | accepted |
+| [ADR-0015](ADR-0015-global-and-project-scoped-person-ask.md) | Global and project-scoped Person Ask over authorized evidence | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

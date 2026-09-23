@@ -9,6 +9,7 @@ import {
   type AnswerCompositionFailureDiagnosticV1,
   type AnswerCompositionStageObservationV1,
   type ReleasedRetrievalBatch,
+  type ReleasedApprovedRecordAtom,
   type ReleasedRetrievalPort,
   type StructuredGenerationInput,
   type StructuredGenerationPort,
@@ -25,7 +26,11 @@ it("accepts 32 unique retrieval terms and rejects 33", () => {
   );
 });
 
-function release(atoms = true, queryCount = 1): ReleasedRetrievalBatch {
+type ApprovedRecordBatch = Omit<ReleasedRetrievalBatch, "released_atoms"> & {
+  readonly released_atoms: readonly ReleasedApprovedRecordAtom[];
+};
+
+function release(atoms = true, queryCount = 1): ApprovedRecordBatch {
   return {
     release_id: digest("release"),
     authority_id: "oau_clean",

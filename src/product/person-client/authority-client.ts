@@ -2,6 +2,19 @@ import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, 
 import { validatePersonUploadContentV1, validatePersonUploadSearchV1, validatePersonUploadSearchResultV1, validatePersonUploadContextId, type PersonUploadContentV1, type PersonUploadSearchV1, type PersonUploadSearchResultV1 } from '@echo-brain/organization-api';
 import { PERSON_UPDATES_PATH_V1, validatePersonUpdateSubmitV1, validatePersonUpdateReceiptV1, validatePersonUpdateStatusV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1, type PersonUpdateReceiptV1, type PersonUpdateStatusV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
+import {
+  PERSON_ANSWER_PATH_V2,
+  PERSON_SOURCE_EVIDENCE_PATH_V1,
+  validatePersonAnswerRequestV2,
+  validatePersonAnswerResponseV3,
+  validatePersonSourceEvidenceReadRequestV1,
+  validatePersonSourceEvidenceV1,
+  type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
+  type PersonAnswerResponseV3 as OrganizationPersonAnswerV3,
+  type PersonSourceEvidenceReadRequestV1,
+  type PersonSourceEvidenceV1,
+  type ProjectIdV1,
+} from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1, validatePersonDocumentMetadataV1, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchResultV1, type PersonDocumentSearchV1 } from '@echo-brain/organization-api';
@@ -10,14 +23,14 @@ import {
   PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
   validateProjectPageRequestV1, validateProjectListV1, validateProjectCreateV1, validateProjectCreateReceiptV1,
   validateProjectIdV1, validateProjectSummaryV1, validateProjectContextBrowseV1, validateProjectMembersV1,
-  validateProjectDirectorySearchV1, validateProjectDirectoryV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1,
+  validateProjectDirectorySearchV1, validateProjectDirectoryV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1,
   validateProjectMutationReceiptV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
   validateProjectContextFeedV1, validateProjectContextSearchV1, validateProjectContextSearchResultV1,
   validateProjectContextReadRequestV1, validateProjectContextReadV1,
   validatePersonUpdateSubmitV2, validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2,
   validatePersonUploadContentV2, validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
   type ProjectPageRequestV1, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
-  type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
+  type ProjectMemberAddV1, type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
   type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2,
 } from '@echo-brain/organization-api';
 import { canonicalJson } from "@echo-brain/federation-protocol";
@@ -95,6 +108,11 @@ export interface PersonAnswerCitationV1 {
     | "organization-member-readable-person-v2"
     | "restricted-reviewer-person-v2";
 }
+
+/** Current global-or-project Ask response. V1 remains available for old installed clients. */
+export type PersonAnswerV3 = OrganizationPersonAnswerV3;
+export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
+export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 
 export class PersonAuthorityClientError extends Error {
   constructor(
@@ -994,6 +1012,14 @@ export class PersonAuthorityClient {
       matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
   }
 
+  async addProjectMember(accessToken: string, value: ProjectMemberAddV1) {
+    const request = validateProjectMemberAddV1(value);
+    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/members/add`, body: request,
+      request_id: request.request_id, validate: validateProjectMutationReceiptV1,
+      matches: result => result.operation === 'member_set' && result.request_id === request.request_id &&
+        result.project_id === request.project_id && result.membership_id === request.membership_id });
+  }
+
   async setProjectMember(accessToken: string, value: ProjectMemberSetV1) {
     const request = validateProjectMemberSetV1(value);
     return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/members/set`, body: request,
@@ -1241,7 +1267,8 @@ export class PersonAuthorityClient {
     });
   }
 
-  ask(accessToken: string, question: string): Promise<PersonAnswerV2> {
+  /** Legacy approved-record Ask endpoint retained for older installed client compatibility. */
+  askV1(accessToken: string, question: string): Promise<PersonAnswerV2> {
     return this.json({
       path: PERSON_ANSWER_PATH_V1,
       body: { question },
@@ -1251,6 +1278,52 @@ export class PersonAuthorityClient {
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
       timeout_ms: ASK_TIMEOUT_MS,
     });
+  }
+
+  /** Global by default; a supplied project ID is a strict project-only scope. */
+  async ask(accessToken: string, question: string, projectId?: ProjectIdV1): Promise<PersonAnswerV3> {
+    const request = validatePersonAnswerRequestV2({
+      schema_version: 2,
+      question,
+      ...(projectId === undefined ? {} : { project_id: projectId }),
+    });
+    const response = await this.json({
+      path: PERSON_ANSWER_PATH_V2,
+      body: request,
+      validate_request: validatePersonAnswerRequestV2,
+      validate_response: validatePersonAnswerResponseV3,
+      access_token: accessToken,
+      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+      timeout_ms: ASK_TIMEOUT_MS,
+    });
+    const expectedScope = projectId === undefined
+      ? { kind: 'global' as const }
+      : { kind: 'project' as const, project_id: projectId };
+    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
+    }
+    return response;
+  }
+
+  async askSourceEvidence(accessToken: string, value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
+    const request = validatePersonSourceEvidenceReadRequestV1(value);
+    const response = await this.json({
+      path: PERSON_SOURCE_EVIDENCE_PATH_V1,
+      body: request,
+      validate_request: validatePersonSourceEvidenceReadRequestV1,
+      validate_response: validatePersonSourceEvidenceV1,
+      access_token: accessToken,
+      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+      timeout_ms: ASK_TIMEOUT_MS,
+    });
+    const { label: _label, ...citation } = response.citation;
+    if (
+      canonicalJson(response.scope) !== canonicalJson(request.scope) ||
+      canonicalJson(citation) !== canonicalJson(request.citation)
+    ) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different source evidence coordinates');
+    }
+    return response;
   }
 
   changeMeetingIngestionExclusion(

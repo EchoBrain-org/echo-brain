@@ -4,7 +4,7 @@ import {
   validateProjectPageRequestV1, validateProjectIdV1, validateProjectSummaryV1,
   validateProjectContextBrowseV1, validateProjectMembersV1,
   validateProjectDirectorySearchV1, validateProjectDirectoryV1,
-  validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
+  validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
   validateProjectContextAssociateV1, validateProjectContextDissociateV1,
   validateProjectContextFeedV1, validateProjectContextSearchV1, validateProjectContextSearchResultV1,
   validateProjectContextReadV1, validatePersonUploadContextId, validatePersonUpdateRequestId,
@@ -59,6 +59,13 @@ import {
   PERSON_ANSWER_PATH_V1,
   type PersonAnswerHttpApplicationV1,
 } from "./person-answer-http-application.js";
+import {
+  PERSON_ANSWER_PATH_V2,
+  PERSON_SOURCE_EVIDENCE_PATH_V1,
+  validatePersonAnswerRequestV2,
+  validatePersonSourceEvidenceReadRequestV1,
+} from "@echo-brain/organization-api";
+import type { PersonAnswerV2HttpApplication } from "./person-answer-v2-http-application.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
@@ -86,6 +93,8 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `GET ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V1}`,
+  `POST ${PERSON_ANSWER_PATH_V2}`,
+  `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
 ]);
 
 function routeKey(method: string, path: string): string {
@@ -116,6 +125,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_employees?: PersonEmployeeHttpApplication;
   /** Optional until the active Organization Authority runtime has a configured answer model. */
   readonly person_answer?: PersonAnswerHttpApplicationV1;
+  /** V2 keeps scope and typed source provenance inside the Authority boundary. */
+  readonly person_answer_v2?: PersonAnswerV2HttpApplication;
   readonly person_updates?: PersonUpdatesApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
   readonly project_context?: ProjectContextApplicationV1;
@@ -533,6 +544,7 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [PERSON_PROJECTS_PATH_V1, { operation: 'createProject', request: validateProjectCreateV1, response: validateProjectCreateReceiptV1, status: 201 }],
   [`${PERSON_PROJECTS_PATH_V1}/members`, { operation: 'listMembers', request: validateProjectContextBrowseV1, response: validateProjectMembersV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/directory`, { operation: 'searchDirectory', request: validateProjectDirectorySearchV1, response: validateProjectDirectoryV1, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V1}/members/add`, { operation: 'addMember', request: validateProjectMemberAddV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/members/set`, { operation: 'setMember', request: validateProjectMemberSetV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/associate`, { operation: 'associateContext', request: validateProjectContextAssociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
@@ -951,6 +963,52 @@ export function createOrganizationAuthorityHttpServer(
             ...answerInput(await body(request)),
           }),
         );
+        return;
+      }
+      if (
+        method === "POST" &&
+        url.pathname === PERSON_ANSWER_PATH_V2 &&
+        url.search === ""
+      ) {
+        if (options.person_answer_v2 === undefined) {
+          fail(response, 503, "unavailable");
+          return;
+        }
+        let requestBody;
+        try {
+          requestBody = validatePersonAnswerRequestV2(await body(request));
+        } catch {
+          throw new AuthorityOperationError("invalid_request", "request is invalid");
+        }
+        json(
+          response,
+          200,
+          await options.person_answer_v2.ask({
+            access_token: accessToken(request.headers.authorization),
+            request: requestBody,
+          }),
+        );
+        return;
+      }
+      if (
+        method === "POST" &&
+        url.pathname === PERSON_SOURCE_EVIDENCE_PATH_V1 &&
+        url.search === ""
+      ) {
+        if (options.person_answer_v2 === undefined) {
+          fail(response, 503, "unavailable");
+          return;
+        }
+        let requestBody;
+        try {
+          requestBody = validatePersonSourceEvidenceReadRequestV1(await body(request));
+        } catch {
+          throw new AuthorityOperationError("invalid_request", "request is invalid");
+        }
+        json(response, 200, options.person_answer_v2.readSource({
+          access_token: accessToken(request.headers.authorization),
+          request: requestBody,
+        }));
         return;
       }
       fail(response, 404, "not_found");

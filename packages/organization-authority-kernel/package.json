@@ -5,6 +5,10 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./shared/released-source-context-v1": {
+      "types": "./dist/shared/released-source-context-v1.d.ts",
+      "import": "./dist/shared/released-source-context-v1.js"
+    },
     "./shared/core-runtime-observation-v1": {
       "types": "./dist/shared/core-runtime-observation-v1.d.ts",
       "import": "./dist/shared/core-runtime-observation-v1.js"

@@ -85,7 +85,7 @@ if (args[1] === 'status') {
     if (id === 'projects-read') response.name = response.project_id === beacon ? 'Beacon' : 'Apollo';
   }
   if (mode.startsWith('ui-') && ['projects-associate', 'projects-dissociate'].includes(id)) response.context_id = value('--context-id');
-  if (mode.startsWith('ui-') && ['projects-member-set', 'projects-member-remove'].includes(id)) response.membership_id = value('--membership-id');
+  if (mode.startsWith('ui-') && ['projects-member-add', 'projects-member-set', 'projects-member-remove'].includes(id)) response.membership_id = value('--membership-id');
   // The viewer (Ari) plus Bea, so a lead has someone else to manage.
   if (['ui-round-trip', 'ui-people', 'ui-member'].includes(mode) && id === 'projects-members' && !calls.some(x => x[2] === 'member-remove')) {
     response.items.push({membership_id:'mem_33333333-3333-4333-8333-333333333333',display_name:'Bea',role:'member'});
@@ -162,8 +162,9 @@ if (args[1] === 'status') {
       const submits = calls.filter(args => (args[1] === "updates" && args[2] === "submit") || (args[1] === "documents" && args[2] === "upload"));
       const roundTrip = ["ui-round-trip", "cli-ui-round-trip", "ui-member", "ui-access-loss", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown"].includes(mode);
       if (roundTrip) {
-        // The project-page bar ran the scoped project search, not global Ask.
-        expect(calls.some(args => args[1] === "projects" && args[2] === "search" && flag(args, "--project-id") === apollo && flag(args, "--query") === "ship")).toBe(true);
+        // The project-page bar is now an Ask callback with explicit scope. It
+        // must not revive the old project-search transport behind the UI.
+        expect(calls.some(args => args[1] === "projects" && args[2] === "search" && flag(args, "--query") === "ship")).toBe(false);
         expect(submits).toHaveLength(mode === "ui-member" || mode === "ui-access-loss" ? 0 : mode.endsWith("ui-upload-unknown") ? 2 : mode === "ui-round-trip" ? 3 : 1);
         // Both independent choices are Apollo for the first save, and
         // the title comes from the first non-empty line.
@@ -187,14 +188,10 @@ if (args[1] === 'status') {
         expect(new Set(submits.map(args => flag(args, "--request-id"))).size).toBe(3);
       }
       if (mode === "ui-search-controls") {
-        // Clearing a search and Escape (field editor, window) each brought
-        // the feed back; a search and a click made during a load still ran.
-        const scoped = calls.filter(args => args[1] === "projects" && ["search", "feed", "read-context"].includes(args[2]));
-        const searches = scoped.filter(args => args[2] === "search").map(args => flag(args, "--query"));
-        expect(searches).toEqual(["ship", "ship", "late"]);
-        scoped.forEach((args, index) => {
-          if (args[2] === "search" && flag(args, "--query") === "ship") expect(scoped[index + 1]?.[2]).toBe("feed");
-        });
+        // The project Ask proof owns scope and input-clearing assertions inside
+        // the native fixture. Project CLI search remains covered by the direct
+        // ProjectSession scenarios, and must not be invoked by Ask.
+        expect(op("search")).toHaveLength(0);
         expect(op("read-context").length).toBeGreaterThanOrEqual(2);
         expect(submits).toHaveLength(0);
       }
@@ -202,22 +199,25 @@ if (args[1] === 'status') {
       if (mode === "ui-people") {
         // Only confirmed changes ran, each on the person the alert named;
         // a cancelled alert and an alert left open across concealment ran nothing.
-        expect(op("directory").map(args => flag(args, "--query"))).toEqual(["cleo"]);
-        expect(op("member-set").map(args => [flag(args, "--project-id"), flag(args, "--membership-id"), flag(args, "--role")]))
-          .toEqual([[apollo, "mem_55555555-5555-4555-8555-555555555555", "member"]]);
+        // Opening the picker browses the initial active organization page;
+        // entering a name then narrows it. Add preserves any existing role by
+        // using the additive command instead of member-set.
+        expect(op("directory").map(args => args.includes("--query") ? flag(args, "--query") : undefined)).toEqual([undefined, "cleo", undefined]);
+        expect(op("member-add").map(args => [flag(args, "--project-id"), flag(args, "--membership-id")]))
+          .toEqual([[apollo, "mem_55555555-5555-4555-8555-555555555555"]]);
         expect(op("member-remove").map(args => [flag(args, "--project-id"), flag(args, "--membership-id")]))
           .toEqual([[apollo, "mem_33333333-3333-4333-8333-333333333333"]]);
         // Each change re-read the roster.
         const after = (name: string) => calls.slice(calls.findIndex(args => args[2] === name) + 1);
-        expect(after("member-set").some(args => args[2] === "members")).toBe(true);
+        expect(after("member-add").some(args => args[2] === "members")).toBe(true);
         expect(after("member-remove").some(args => args[2] === "members")).toBe(true);
       }
       if (mode === "ui-associate") {
-        // "Add to project" associated the read original with Beacon only;
-        // "Remove from this project" dissociated it from the open Beacon.
-        expect(op("associate").map(args => [flag(args, "--project-id"), flag(args, "--context-id")])).toEqual([[beacon, context]]);
-        expect(op("dissociate").map(args => [flag(args, "--project-id"), flag(args, "--context-id")])).toEqual([[beacon, context]]);
-        expect(calls.findIndex(args => args[2] === "associate")).toBeLessThan(calls.findIndex(args => args[2] === "dissociate"));
+        // With saved-context browsing removed, the project original still
+        // supports "Remove from this project". Direct association is covered
+        // separately by ProjectSession/API proofs and capture project choice.
+        expect(op("associate")).toHaveLength(0);
+        expect(op("dissociate").map(args => [flag(args, "--project-id"), flag(args, "--context-id")])).toEqual([[apollo, context]]);
         expect(submits).toHaveLength(0);
       }
       if (mode.startsWith("ui-recovery")) expect(op("create")).toHaveLength(0);
@@ -249,9 +249,10 @@ if (args[1] === 'status') {
       }
       if (mode === "ui-create-read-fail") {
         // The receipt confirmed the create: a failed reopen never leads to a
-        // second create, only a re-read of the same project.
+        // There is one create. After the failed opening read, Open retries the
+        // same project and the post-create picker refreshes its roster.
         expect(op("create")).toHaveLength(1);
-        expect(op("read").map(args => flag(args, "--project-id"))).toEqual([apollo, apollo]);
+        expect(op("read").map(args => flag(args, "--project-id"))).toEqual([apollo, apollo, apollo]);
       }
       if (mode === "ui-drop") expect(submits).toHaveLength(0);
     }

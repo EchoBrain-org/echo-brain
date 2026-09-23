@@ -2,6 +2,31 @@ import AppKit
 import CryptoKit
 import Foundation
 
+/// The authority is the sole source of what a person may retrieve. The UI can
+/// optionally narrow an Ask to one project, but it never builds a client-side
+/// collection of records to search.
+enum AskScope: Equatable, Sendable {
+    case global
+    case project(id: String, name: String)
+
+    var projectID: String? {
+        if case .project(let id, _) = self { return id }
+        return nil
+    }
+
+    var displayName: String {
+        switch self {
+        case .global: return "All accessible context"
+        case .project(_, let name): return name
+        }
+    }
+}
+
+enum AskSubmission: Equatable {
+    case accepted
+    case rejected(String)
+}
+
 // Closed, bounded CLI replies. Authority remains responsible for permission;
 // a local project selection is never a read grant.
 enum ProjectWire {
@@ -236,7 +261,7 @@ final class ProjectCLI: @unchecked Sendable {
 
 enum ProjectCommand {
     case list(String?), create(String, String), read(String), members(String, String?)
-    case directory(String, String, String?), setMember(String, String, String, String), removeMember(String, String, String)
+    case directory(String, String?, String?), memberAdd(String, String, String), setMember(String, String, String, String), removeMember(String, String, String)
     case associate(String, String, String, Bool), feed(String, String?), search(String, String, String?), readContext(String, String)
     var operation: String {
         switch self {
@@ -245,6 +270,7 @@ enum ProjectCommand {
         case .read: return "read"
         case .members: return "members"
         case .directory: return "directory"
+        case .memberAdd: return "member-add"
         case .setMember: return "member-set"
         case .removeMember: return "member-remove"
         case .associate(_, _, _, let add): return add ? "associate" : "dissociate"
@@ -256,13 +282,13 @@ enum ProjectCommand {
     var projectID: String? {
         switch self {
         case .list, .create: return nil
-        case .read(let id), .members(let id, _), .directory(let id, _, _), .setMember(let id, _, _, _),
+        case .read(let id), .members(let id, _), .directory(let id, _, _), .memberAdd(let id, _, _), .setMember(let id, _, _, _),
              .removeMember(let id, _, _), .associate(let id, _, _, _), .feed(let id, _), .search(let id, _, _), .readContext(let id, _): return id
         }
     }
     var requestID: String? {
         switch self {
-        case .create(_, let id), .setMember(_, _, _, let id), .removeMember(_, _, let id), .associate(_, _, let id, _): return id
+        case .create(_, let id), .memberAdd(_, _, let id), .setMember(_, _, _, let id), .removeMember(_, _, let id), .associate(_, _, let id, _): return id
         default: return nil
         }
     }
@@ -274,7 +300,11 @@ enum ProjectCommand {
         switch self {
         case .list(let cursor), .members(_, let cursor), .feed(_, let cursor): page(cursor)
         case .create(let name, _): args += ["--name", name]
-        case .directory(_, let query, let cursor), .search(_, let query, let cursor): args += ["--query", query]; page(cursor)
+        case .directory(_, let query, let cursor):
+            if let query { args += ["--query", query] }
+            page(cursor)
+        case .search(_, let query, let cursor): args += ["--query", query]; page(cursor)
+        case .memberAdd(_, let member, _): args += ["--membership-id", member]
         case .setMember(_, let member, let role, _): args += ["--membership-id", member, "--role", role]
         case .removeMember(_, let member, _): args += ["--membership-id", member]
         case .associate(_, let context, _, _), .readContext(_, let context): args += ["--context-id", context]
@@ -320,6 +350,10 @@ struct ProjectMutationRecovery {
             guard ProjectWire.id(projectID, prefix: "prj_"), ProjectWire.id(membership, prefix: "mem_"),
                   ["member", "lead"].contains(role), ProjectWire.id(requestID, prefix: "") else { return nil }
             operation = "member-set"; self.requestID = requestID; self.projectID = projectID; self.membership = membership; contextID = nil; self.role = role; name = nil
+        case .memberAdd(let projectID, let membership, let requestID):
+            guard ProjectWire.id(projectID, prefix: "prj_"), ProjectWire.id(membership, prefix: "mem_"),
+                  ProjectWire.id(requestID, prefix: "") else { return nil }
+            operation = "member-add"; self.requestID = requestID; self.projectID = projectID; self.membership = membership; contextID = nil; role = nil; name = nil
         case .removeMember(let projectID, let membership, let requestID):
             guard ProjectWire.id(projectID, prefix: "prj_"), ProjectWire.id(membership, prefix: "mem_"),
                   ProjectWire.id(requestID, prefix: "") else { return nil }
@@ -355,6 +389,12 @@ struct ProjectMutationRecovery {
                   let membership = object["target_membership_id"] as? String, ProjectWire.id(membership, prefix: "mem_"),
                   let role = object["role"] as? String, ["member", "lead"].contains(role) else { return nil }
             self.projectID = projectID; self.membership = membership; contextID = nil; self.role = role; name = nil
+        case "member-add":
+            guard ProjectWire.keys(object, ["schema_version", "kind", "authority", "membership_id", "operation", "request_id", "project_id", "target_membership_id"]),
+                  ProjectWire.header(object, version: 1, kind: "echo-project-mutation-recovery-v1"),
+                  let projectID = object["project_id"] as? String, ProjectWire.id(projectID, prefix: "prj_"),
+                  let membership = object["target_membership_id"] as? String, ProjectWire.id(membership, prefix: "mem_") else { return nil }
+            self.projectID = projectID; self.membership = membership; contextID = nil; role = nil; name = nil
         case "member-remove":
             guard ProjectWire.keys(object, ["schema_version", "kind", "authority", "membership_id", "operation", "request_id", "project_id", "target_membership_id"]),
                   ProjectWire.header(object, version: 1, kind: "echo-project-mutation-recovery-v1"),
@@ -376,6 +416,7 @@ struct ProjectMutationRecovery {
         switch operation {
         case "create": guard let name else { return nil }; return .create(name, requestID)
         case "member-set": guard let projectID, let membership, let role else { return nil }; return .setMember(projectID, membership, role, requestID)
+        case "member-add": guard let projectID, let membership else { return nil }; return .memberAdd(projectID, membership, requestID)
         case "member-remove": guard let projectID, let membership else { return nil }; return .removeMember(projectID, membership, requestID)
         case "associate": guard let projectID, let contextID else { return nil }; return .associate(projectID, contextID, requestID, true)
         case "dissociate": guard let projectID, let contextID else { return nil }; return .associate(projectID, contextID, requestID, false)
@@ -507,13 +548,14 @@ final class ProjectClient: @unchecked Sendable {
                   o["project_id"] as? String == command.projectID, o["context_id"] as? String == context,
                   UploadContent.validFields(o), let content = decode(UploadContent.self, o) else { return failure }
             return .content(content)
-        case .setMember, .removeMember, .associate:
+        case .memberAdd, .setMember, .removeMember, .associate:
             let member = command.operation.hasPrefix("member-")
             let field = member ? "membership_id" : "context_id"
             let args = command.arguments; let expected = args[args.firstIndex(of: member ? "--membership-id" : "--context-id")! + 1]
+            let receiptOperation = command.operation == "member-add" ? "member_set" : command.operation.replacingOccurrences(of: "-", with: "_")
             guard header("echo-project-mutation-receipt-v1", ["request_id", "project_id", "operation", field, "received_at", "state"]),
                   o["request_id"] as? String == command.requestID, o["project_id"] as? String == command.projectID,
-                  o["operation"] as? String == command.operation.replacingOccurrences(of: "-", with: "_"),
+                  o["operation"] as? String == receiptOperation,
                   o[field] as? String == expected, o["state"] as? String == "applied",
                   ProjectWire.date(o["received_at"] as? String ?? "") else { return failure }
             return .applied(command.projectID!)
@@ -543,6 +585,7 @@ final class ProjectSession {
     private(set) var listFetched = false
     private(set) var pageCursor: String?
     private(set) var directoryCursor: String?
+    private var directoryQuery: String?
     private(set) var memberCursor: String?
     private(set) var scopeGeneration = 0
     private(set) var status = ""
@@ -620,9 +663,19 @@ final class ProjectSession {
         clearContent(); members = []; memberCursor = nil; candidates = []; status = "Loading project members…"
         readForRoster = true; run(.read(selected.project_id))
     }
-    func directory(_ source: String, cursor: String? = nil) {
-        guard canManage, let selected, let query = uploadQuery(source) else { return }
-        candidates = []; directoryCursor = nil; run(.directory(selected.project_id, query, cursor))
+    func directory(_ source: String? = nil, cursor: String? = nil) {
+        guard canManage, let selected else { return }
+        let trimmed = (source ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty || uploadQuery(trimmed) != nil else {
+            status = "Search with up to 240 characters and 32 distinct words."; notice = status; onChange?(); return
+        }
+        let query = trimmed.isEmpty ? nil : uploadQuery(trimmed)
+        if cursor == nil { candidates = []; directoryCursor = nil; directoryQuery = query }
+        run(.directory(selected.project_id, query, cursor))
+    }
+    func nextDirectory() {
+        guard !busy, let selected, let cursor = directoryCursor else { return }
+        run(.directory(selected.project_id, directoryQuery, cursor))
     }
     func nextPage() {
         guard !busy, let page, let cursor = pageCursor else { return }
@@ -654,6 +707,12 @@ final class ProjectSession {
     func setMember(_ membership: String, role: String) {
         guard canManage, let selected, ["member", "lead"].contains(role) else { return }
         mutate(.setMember(selected.project_id, membership, role, UUID().uuidString.lowercased()))
+    }
+    func addMember(_ membership: String) {
+        guard canManage, let selected else { return }
+        // This is deliberately distinct from member-set: an existing lead
+        // stays a lead if a stale picker row is acted on.
+        mutate(.memberAdd(selected.project_id, membership, UUID().uuidString.lowercased()))
     }
     func removeMember(_ membership: String) {
         guard canManage, let selected else { return }
@@ -707,7 +766,7 @@ final class ProjectSession {
     private func cancel() { active?.cancel(); active = nil; generation = UUID(); busy = false; hasOutstandingMutation = false }
     private func clearContent() { items = []; content = nil; pageCursor = nil }
     private func clearScoped() {
-        selected = nil; members = []; memberCursor = nil; candidates = []; directoryCursor = nil; page = nil; clearContent()
+        selected = nil; members = []; memberCursor = nil; candidates = []; directoryCursor = nil; directoryQuery = nil; page = nil; clearContent()
         scopeGeneration += 1
     }
     private func clearAll() { projects = []; listCursor = nil; listFetched = false; clearScoped() }
@@ -742,7 +801,12 @@ final class ProjectSession {
                 else { self.feed() }
                 return
             case .members(let members, let cursor):
-                if command.operation == "directory" { self.candidates = members; self.directoryCursor = cursor }
+                if command.operation == "directory" {
+                    if case .directory(_, _, let from) = command, from != nil {
+                        self.candidates += members.filter { page in !self.candidates.contains { $0.membership_id == page.membership_id } }
+                    } else { self.candidates = members }
+                    self.directoryCursor = cursor
+                }
                 else {
                     if case .members(_, let from) = command, from != nil {
                         self.members += members.filter { page in !self.members.contains { $0.membership_id == page.membership_id } }
@@ -2266,6 +2330,7 @@ final class ProjectPeopleSheet: NSObject {
     private var projects: ProjectSession?
     private var rosterGeneration: Int?
     private var shownCandidate: String?
+    private var didLoadDirectory = false
     private var signature = ""
     private(set) var isPresented = false
     var onWillClose: (() -> Void)?
@@ -2275,7 +2340,7 @@ final class ProjectPeopleSheet: NSObject {
 
     func present(over parent: NSWindow, projects: ProjectSession) {
         guard !isPresented, projects.selected != nil else { return }
-        self.projects = projects; isPresented = true; signature = ""; shownCandidate = nil
+        self.projects = projects; isPresented = true; signature = ""; shownCandidate = nil; didLoadDirectory = false
         addField.stringValue = ""
         rosterGeneration = projects.scopeGeneration
         projects.roster()
@@ -2302,15 +2367,20 @@ final class ProjectPeopleSheet: NSObject {
         }
         let lead = projects.selected?.role == "lead"
         let manage = projects.canManage
+        if lead, !projects.busy, !didLoadDirectory {
+            didLoadDirectory = true
+            projects.directory()
+            return
+        }
         addBox.isHidden = !lead
         addField.isEnabled = manage
         toField?.isActive = lead; toBottom?.isActive = !lead
         notice.stringValue = projects.notice; notice.isHidden = projects.notice.isEmpty
 
         let viewer = projects.identity?.membershipID
-        let key = [String(lead), String(manage), String(projects.memberCursor != nil), viewer ?? ""]
+        let key = [String(lead), String(manage), String(projects.memberCursor != nil), String(projects.directoryCursor != nil), viewer ?? ""]
             + projects.members.map { "\($0.membership_id)|\($0.display_name)|\($0.role ?? "")" }
-            + ["--"] + projects.candidates.map { "\($0.membership_id)|\($0.display_name)" }
+            + ["--"] + candidates(projects).map { "\($0.membership_id)|\($0.display_name)" }
         let joined = key.joined(separator: "\n")
         guard joined != signature else { return }
         signature = joined
@@ -2335,22 +2405,28 @@ final class ProjectPeopleSheet: NSObject {
             rows.append(.init(view: more, height: 30, centered: true, gap: 10))
         }
         if lead {
-            for (index, person) in projects.candidates.enumerated() {
+            for (index, person) in candidates(projects).enumerated() {
                 let add = pill("Add", .quiet, height: 30, target: self, action: #selector(addCandidate(_:)))
                 add.tag = index; add.isEnabled = manage
                 add.setAccessibilityLabel("Add \(person.display_name)")
                 rows.append(.init(view: PersonRowView(name: person.display_name, id: person.membership_id, isLead: false,
                                                       leadChip: false, fontSize: 14, trailing: add), height: 44, gap: index == 0 ? 10 : 0))
             }
+            if projects.directoryCursor != nil {
+                let more = PillButton(title: "More people", target: self, action: #selector(morePeople))
+                more.style = .quiet; more.isEnabled = manage
+                rows.append(.init(view: more, height: 30, centered: true, gap: 10))
+            }
         }
         list.set(rows)
         // Directory results land under the roster; bring them into view.
-        if lead, let first = projects.candidates.first, first.membership_id != shownCandidate {
-            let top = rows.dropLast(projects.candidates.count).reduce(CGFloat(0)) { $0 + $1.gap + $1.height }
+        let candidateRows = candidates(projects)
+        if lead, let first = candidateRows.first, first.membership_id != shownCandidate {
+            let top = rows.dropLast(candidateRows.count).reduce(CGFloat(0)) { $0 + $1.gap + $1.height }
             scroll.layoutSubtreeIfNeeded()
             list.scrollToVisible(NSRect(x: 0, y: top, width: 1, height: min(scroll.contentSize.height, list.frame.height - top)))
         }
-        shownCandidate = lead ? projects.candidates.first?.membership_id : nil
+        shownCandidate = lead ? candidateRows.first?.membership_id : nil
     }
 
     private func menu(for member: ProjectMember) -> NSMenu {
@@ -2397,19 +2473,27 @@ final class ProjectPeopleSheet: NSObject {
     }
 
     @objc private func addCandidate(_ sender: NSButton) {
-        guard let projects, projects.candidates.indices.contains(sender.tag) else { return }
-        let person = projects.candidates[sender.tag]
+        guard let projects, candidates(projects).indices.contains(sender.tag) else { return }
+        let person = candidates(projects)[sender.tag]
         confirm("Add \(person.display_name)?", detail: "They'll see what's shared with this project.", action: "Add", on: sheet,
-                apply: confirmed { $0.setMember(person.membership_id, role: "member") })
+                apply: confirmed { $0.addMember(person.membership_id) })
     }
 
     @objc private func findPeople() {
         let query = addField.stringValue
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         projects?.directory(query)
     }
 
     @objc private func moreMembers() { projects?.nextMembers() }
+
+    @objc private func morePeople() { projects?.nextDirectory() }
+
+    private func candidates(_ projects: ProjectSession) -> [ProjectMember] {
+        let memberIDs = Set(projects.members.map(\.membership_id))
+        // A directory read and a member change can cross. Excluding a row
+        // already on the roster prevents a stale add from changing its role.
+        return projects.candidates.filter { !memberIDs.contains($0.membership_id) }
+    }
 
     @objc private func closeIfLost() {
         guard isPresented, let projects, !projects.busy, projects.selected == nil else { return }
@@ -2432,8 +2516,8 @@ final class ProjectPeopleSheet: NSObject {
         let heading = label("People", size: 17, weight: .semibold)
         let done = pill("Done", .quiet, height: 30, target: self, action: #selector(close))
         mark(done, "people-done"); done.keyEquivalent = "\u{1b}"
-        boxedField(addField, in: addBox, placeholder: "Add someone", size: 14)
-        mark(addField, "people-add-field", label: "Add someone")
+        boxedField(addField, in: addBox, placeholder: "Find people by name", size: 14)
+        mark(addField, "people-add-field", label: "Find people by name")
         addField.target = self; addField.action = #selector(findPeople)
         notice.font = .systemFont(ofSize: 12.5); notice.textColor = EchoTheme.faintText
         for view in [heading, done, scroll, notice, addBox] { view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view) }
@@ -2508,6 +2592,8 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
     private let snapshotQueue = DispatchQueue(label: "org.echobrain.echo.project-document-snapshots", qos: .userInitiated)
     private var snapshotGeneration = UUID()
     private var peopleSignature = ""
+    private var didLoadRoster = false
+    private var didLoadDirectory = false
     private var fileSignature = ""
     private var fileProblem = ""
     private(set) var isPresented = false
@@ -2533,6 +2619,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
         self.projects = projects; self.uploads = uploads; admittedIdentity = uploads.identity
         project = nil; files = []; awaitingCreate = false; createdFrom = nil; createdBefore = nil; createdNotOpened = nil
         closeRequested = false; focusAdd = false
+        didLoadRoster = false; didLoadDirectory = false
         peopleSignature = ""; fileSignature = ""; fileProblem = ""; addField.stringValue = ""
         if case .create(let name, _) = projects.pending { nameField.stringValue = name } else { nameField.stringValue = "" }
         isPresented = true
@@ -2619,6 +2706,16 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
         if admittedIdentity != nil { nameLabel.stringValue = project.name }
         let lead = admittedIdentity != nil && projects.selected?.role == "lead"
         let saving = inFlight
+        if lead, !projects.busy, !didLoadRoster {
+            didLoadRoster = true
+            projects.roster()
+            return
+        }
+        if lead, !projects.busy, didLoadRoster, !didLoadDirectory {
+            didLoadDirectory = true
+            projects.directory()
+            return
+        }
         addBox.isHidden = !lead
         // Directory reads guard themselves; keep the field (and its focus)
         // steady through the post-create loads.
@@ -2657,7 +2754,8 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
     private func renderPeople(lead: Bool, manage: Bool) {
         guard let projects else { return }
         let members = admittedIdentity == nil ? [] : projects.members
-        let candidates = lead ? projects.candidates : []
+        let memberIDs = Set(members.map(\.membership_id))
+        let candidates = lead ? projects.candidates.filter { !memberIDs.contains($0.membership_id) } : []
         let key = ([String(lead), String(manage)] + members.map { "\($0.membership_id)|\($0.display_name)|\($0.role ?? "")" }
             + ["--"] + candidates.map { "\($0.membership_id)|\($0.display_name)" }).joined(separator: "\n")
         guard key != peopleSignature else { return }
@@ -2672,6 +2770,11 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
             add.setAccessibilityLabel("Add \(person.display_name)")
             rows.append(.init(view: PersonRowView(name: person.display_name, id: person.membership_id, isLead: false,
                                                   leadChip: true, fontSize: 14.5, trailing: add), height: 42))
+        }
+        if lead, projects.directoryCursor != nil {
+            let more = pill("More people", .quiet, height: 30, target: self, action: #selector(morePeople))
+            more.isEnabled = manage
+            rows.append(.init(view: more, height: 30, centered: true, gap: 10))
         }
         people.set(rows)
         peopleHeight?.constant = min(max(CGFloat(rows.count) * 42, 42), 42 * 4)
@@ -2807,14 +2910,18 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
 
     @objc private func findPeople() {
         let query = addField.stringValue
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         projects?.directory(query)
     }
 
     @objc private func addCandidate(_ sender: NSButton) {
-        guard let projects, uploads?.busy != true, !inFlight, projects.candidates.indices.contains(sender.tag) else { return }
-        projects.setMember(projects.candidates[sender.tag].membership_id, role: "member")
+        guard let projects, uploads?.busy != true, !inFlight else { return }
+        let memberIDs = Set(projects.members.map(\.membership_id))
+        let candidates = projects.candidates.filter { !memberIDs.contains($0.membership_id) }
+        guard candidates.indices.contains(sender.tag) else { return }
+        projects.addMember(candidates[sender.tag].membership_id)
     }
+
+    @objc private func morePeople() { projects?.nextDirectory() }
 
     @objc private func chooseFiles() {
         guard project != nil, projects?.busy != true else { return }
@@ -3031,7 +3138,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     private let composeSheet = ProjectComposeSheet()
     private let peopleSheet = ProjectPeopleSheet()
     let createSheet = ProjectCreateSheet()
-    private let onAsk: (String) -> Void
+    private let onAsk: (String, AskScope) -> AskSubmission
     var onConceal: (() -> Void)?
     var onIdentityChanged: (() -> Void)?
     private var observedIdentity: AccountIdentity?
@@ -3053,8 +3160,6 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     private let peopleButton = PeopleStackButton()
     private lazy var captureRow = SidebarRowButton(title: "Capture", symbol: "plus.app", target: self, action: #selector(captureAction))
     private lazy var newProjectRow = SidebarRowButton(title: "New project", symbol: "folder.badge.plus", target: self, action: #selector(newProject))
-    private lazy var searchRow = SidebarRowButton(title: "Find saved context", symbol: "magnifyingglass", target: self, action: #selector(findSaved))
-    private lazy var orgPeopleRow = SidebarRowButton(title: "Organization people…", symbol: "person.2", target: self, action: #selector(showOrgPeople))
     private let accountRow = AccountRowButton()
     private let askField = NSTextField()
     private let writeButton = CircleButton(symbol: "plus", label: "Write", style: .quiet)
@@ -3100,9 +3205,13 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     // when the sheet closes.
     private var pendingRefresh = false
     private var shownPlaceholder = ""
+    // A scoped Ask is still an Ask. Back returns to the project the person
+    // deliberately narrowed to, rather than unexpectedly dropping them home.
+    private var askReturnProject = false
+    private var askScope = AskScope.global
     var hasOutstandingMutation: Bool { uploads.hasOutstandingMutation || projects.hasOutstandingMutation }
 
-    init(uploads: UploadSession? = nil, projects: ProjectSession? = nil, documents: DocumentSession? = nil, onAsk: @escaping (String) -> Void) {
+    init(uploads: UploadSession? = nil, projects: ProjectSession? = nil, documents: DocumentSession? = nil, onAsk: @escaping (String, AskScope) -> AskSubmission) {
         self.uploads = uploads ?? UploadSession(); self.projects = projects ?? ProjectSession(); self.onAsk = onAsk
         self.documents = documents ?? DocumentSession(cli: self.uploads.client.cli)
         super.init(); configure()
@@ -3296,7 +3405,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         let pageTitle: String
         switch mode {
         case .project: pageTitle = openName ?? "ECHO"
-        case .search: pageTitle = "Find saved context"
+        case .search: pageTitle = "ECHO"
         case .home, .ask: pageTitle = "ECHO"
         }
         // renderedTitle starts nil, so the first render applies the tracked
@@ -3320,7 +3429,6 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         case .failed: newProjectRow.title = "New project · Refresh projects"
         }
         newProjectRow.isEnabled = projects.canMutate
-        orgPeopleRow.isHidden = uploads.identity?.role.lowercased() != "owner"
         accountRow.name = uploads.identity?.displayName
         accountRow.role = uploads.identity?.role ?? ""
         accountRow.colorKey = uploads.identity?.membershipID ?? uploads.identity?.displayName ?? ""
@@ -3328,8 +3436,8 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         let placeholder: String
         switch mode {
         case .home, .ask: placeholder = "Ask ECHO"
-        case .search: placeholder = "Find saved context"
-        case .project: placeholder = "Search \(openName ?? "this project")"
+        case .search: placeholder = "Ask ECHO"
+        case .project: placeholder = "Ask \(openName ?? "this project")"
         }
         if placeholder != shownPlaceholder {
             shownPlaceholder = placeholder
@@ -3734,9 +3842,17 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         switch mode {
         case .home: return
         case .ask:
-            mode = .home
-            if projects.projects.isEmpty, !projects.busy, uploads.identity != nil { projects.discover() }
-            refresh()
+            if askReturnProject, projects.selected != nil {
+                askReturnProject = false
+                askScope = .global
+                mode = .project
+                requestFeed()
+            } else {
+                askScope = .global
+                mode = .home
+                if projects.projects.isEmpty, !projects.busy, uploads.identity != nil { projects.discover() }
+                refresh()
+            }
         case .search:
             if showSearchReader { showSearchReader = false; refresh() } else { goHome() }
         case .project:
@@ -3765,18 +3881,39 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         localNotice = ""
         switch mode {
-        case .home, .ask:
-            mode = .ask; refresh(); onAsk(question)
+        case .home:
+            // Clear only after the controller accepts a valid, non-duplicate
+            // request. Invalid input and a question entered while pending stay
+            // available for the person to revise or send later.
+            guard acceptAsk(question, scope: .global) else { return }
+            askField.stringValue = ""
+            askScope = .global
+            askReturnProject = false
+            mode = .ask; refresh()
+        case .ask:
+            guard acceptAsk(question, scope: askScope) else { return }
+            askField.stringValue = ""
+            mode = .ask; refresh()
         case .search:
             showSearchReader = false; uploads.search(question); documents.search(question)
         case .project:
-            guard projects.selected != nil else { return }
-            // A load is running (the avatar-stack members, say): run the
-            // search as soon as it ends instead of dropping it.
-            if projects.busy { pendingSearch = question; pendingRead = nil; projectSearchShown = true; refresh(); return }
-            projects.search(question)
-            if projects.busy { projectSearchShown = true; shownProjectQuery = question }
+            guard let project = projects.selected else { return }
+            let scope = AskScope.project(id: project.project_id, name: project.name)
+            guard acceptAsk(question, scope: scope) else { return }
+            askField.stringValue = ""
+            askReturnProject = true
+            askScope = scope
+            mode = .ask; refresh()
+        }
+    }
+
+    private func acceptAsk(_ question: String, scope: AskScope) -> Bool {
+        switch onAsk(question, scope) {
+        case .accepted: return true
+        case .rejected(let message):
+            localNotice = message
             refresh()
+            return false
         }
     }
 
@@ -3889,15 +4026,6 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         createSheet.present(over: window, projects: projects, uploads: uploads)
     }
 
-    @objc private func findSaved() {
-        guard !hasOutstandingMutation else { return }
-        projects.leave(); mode = .search; showSearchReader = false; projectSearchShown = false; restorePending = nil; clearPendingIntents()
-        askField.stringValue = ""; localNotice = ""; onConceal?(); refresh()
-        window.makeFirstResponder(askField)
-    }
-
-    @objc private func showOrgPeople() { onPeople?() }
-
     @objc private func showProjectPeople() {
         guard mode == .project, projects.selected != nil, window.attachedSheet == nil, !projects.busy else { return }
         // Opening People reloads the roster, which clears the column: bring
@@ -3949,14 +4077,13 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
 
         mark(captureRow, "sidebar-capture", label: "Capture"); captureRow.trailing = "⌘⇧E"
         mark(newProjectRow, "sidebar-new-project")
-        mark(searchRow, "sidebar-search", label: "Find saved context")
         accountRow.target = self; accountRow.action = #selector(showAccount)
-        let rows = NSStackView(views: [captureRow, newProjectRow, searchRow, orgPeopleRow])
+        let rows = NSStackView(views: [captureRow, newProjectRow])
         rows.orientation = .vertical; rows.alignment = .leading; rows.spacing = 2
         rows.setHuggingPriority(.required, for: .vertical)
         sidebar.isHidden = true
 
-        mark(askField, "ask-field", label: "Ask or find context")
+        mark(askField, "ask-field", label: "Ask ECHO")
         askField.font = .systemFont(ofSize: 15); askField.textColor = EchoTheme.text
         askField.isBordered = false; askField.drawsBackground = false; askField.focusRingType = .none
         askField.cell?.isScrollable = true; askField.cell?.wraps = false; askField.maximumNumberOfLines = 1

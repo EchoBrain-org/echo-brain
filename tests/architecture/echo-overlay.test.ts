@@ -477,9 +477,9 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain(
       '"Library/Application Support/ECHO/bin/echo-brain"',
     );
-    expect(source).toContain(
-      'process.arguments = ["person", "ask", "--question", question]',
-    );
+    expect(source).toContain('var arguments = ["person", "ask", "--question", question]');
+    expect(source).toContain('arguments += ["--project", projectID]');
+    expect(source).toContain('"person", "ask-source", "--source-id", reference.sourceID');
     expect(source).toContain('process.arguments = ["person", "status"]');
     expect(source).toContain("status.display_name");
     expect(source).toContain('identityText = "Signed in as \\(firstName)"');
@@ -490,6 +490,23 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).not.toMatch(
       /NSFullUserName|NSUserName|URLSession|https?:\/\/|addGlobalMonitorForEvents/,
     );
+  });
+
+  it("uses a global Ask by default and a visibly bounded project Ask without a saved-context browser", () => {
+    const source = readFileSync(SOURCE, "utf8");
+    const projects = readFileSync(resolve(REPO, "product/echo-overlay/projects.swift"), "utf8");
+
+    expect(projects).toContain('case .global: return "All accessible context"');
+    expect(source).toContain('submittedQuestionLabel.stringValue = "You asked: \\(question)"');
+    expect(source).toContain('scopeLabel.stringValue = "Scope: \\(scope.displayName)"');
+    expect(source).toContain('guard activeAsk == nil else');
+    expect(source).toContain('askButton.title = "Retry"');
+    expect(projects).not.toContain("Find saved context");
+    expect(projects).not.toContain("Organization people…");
+    expect(projects).toContain('guard acceptAsk(question, scope: .global) else { return }');
+    expect(projects).toContain('let scope = AskScope.project(id: project.project_id, name: project.name)');
+    expect(projects).toContain('guard acceptAsk(question, scope: scope) else { return }');
+    expect(projects).toContain('askField.stringValue = ""');
   });
 
 

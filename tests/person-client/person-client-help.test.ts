@@ -43,7 +43,10 @@ describe("Person client help", () => {
       "echo-brain person logout",
     );
     await expect(help(["ask", "--help"])).resolves.toContain(
-      "echo-brain person ask --question <text>",
+      "echo-brain person ask --question <text> [--project <project-id>]",
+    );
+    await expect(help(["ask-source", "--help"])).resolves.toContain(
+      "echo-brain person ask-source --source-id <source-id>",
     );
     await expect(help(["employee", "--help"])).resolves.toContain(
       "<list|invite|reissue|revoke>",

@@ -2,8 +2,9 @@ import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1 }
 import { DocumentFileError } from './document-file.js';
 import { validateProjectContextAudienceV1, validatePersonDocumentSearchV1 } from '@echo-brain/organization-api';
 import { readUpdateFile } from './update-file.js';
-import { validatePersonUpdateSubmitV2, validatePersonUpdateRequestId, validatePersonUploadAudienceV2, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1 } from '@echo-brain/organization-api';
+import { validatePersonUpdateSubmitV2, validatePersonUpdateRequestId, validatePersonUploadAudienceV2, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
+import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolCommandV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -47,6 +48,12 @@ const OPTIONS = {
   "context-id": { type: "string" },
   visibility: { type: "string" },
   "project-id": { type: "string" },
+  project: { type: "string" },
+  "source-id": { type: "string" },
+  "revision-id": { type: "string" },
+  "source-sha256": { type: "string" },
+  "representation-sha256": { type: "string" },
+  "anchor-sha256": { type: "string" },
   "audience-project-id": { type: "string" },
   "membership-id": { type: "string" },
   role: { type: "string" },
@@ -87,7 +94,8 @@ const RULES: Readonly<
   "projects-create": { accepts: ["request-id", "name"], requires: ["request-id", "name"] },
   "projects-read": { accepts: ["project-id"], requires: ["project-id"] },
   "projects-members": { accepts: ["project-id", "limit", "cursor"], requires: ["project-id"] },
-  "projects-directory": { accepts: ["project-id", "query", "limit", "cursor"], requires: ["project-id", "query"] },
+  "projects-directory": { accepts: ["project-id", "query", "limit", "cursor"], requires: ["project-id"] },
+  "projects-member-add": { accepts: ["request-id", "project-id", "membership-id"], requires: ["request-id", "project-id", "membership-id"] },
   "projects-member-set": { accepts: ["request-id", "project-id", "membership-id", "role"], requires: ["request-id", "project-id", "membership-id", "role"] },
   "projects-member-remove": { accepts: ["request-id", "project-id", "membership-id"], requires: ["request-id", "project-id", "membership-id"] },
   "projects-associate": { accepts: ["request-id", "project-id", "context-id"], requires: ["request-id", "project-id", "context-id"] },
@@ -110,8 +118,12 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question"],
+    accepts: ["question", "project"],
     requires: ["question"],
+  },
+  "ask-source": {
+    accepts: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256", "document-id", "project"],
+    requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
   },
   records: { accepts: ["limit", "query", "record-sha256"] },
   exclusions: {
@@ -182,9 +194,13 @@ Client provenance does not identify the Authority build serving requests. Status
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text>
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id>]
 
-Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. ECHO searches only records you may read and returns a cited answer.
+Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, it retrieves only context proven associated with that current project. Answers include typed citations.
+`,
+  "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
+
+Reads one bounded immutable source-evidence packet cited by Ask. Use the exact citation fields. The server rechecks your current access and project association before returning it; this never downloads an original file.
 `,
   records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex>]
 
@@ -192,7 +208,7 @@ Search --limit is 1–10; list --limit is 1–100. Queries use the same text bou
 `,
   documents: `usage: echo-brain person documents <upload|status|pending|retry|abandon|read|search|download|associate|dissociate> [options]
 
-Supports UTF-8 text/Markdown, PDF and Word .docx originals up to 25 MiB. Saving and text extraction are separate states. Project association does not change audience. Documents are not Ask sources.
+Supports UTF-8 text/Markdown, PDF and Word .docx originals up to 25 MiB. Saving and text extraction are separate states. Project association does not change audience. Extracted originals can contribute typed evidence to authorized Ask results.
 `,
   "documents-upload": `usage: echo-brain person documents upload --file <path> --audience <only-me|team|project> [--audience-project-id <id>] [--project-id <id>] --title <title> --request-id <uuid>
 
@@ -234,9 +250,9 @@ Omit --query to list currently accessible documents. Search queries are at most 
 
 Streams the exact saved original to a new file, verifies its length and SHA-256, and publishes it atomically. Prints only the file path and byte/hash proof.
 `,
-  projects: `usage: echo-brain person projects <list|create|read|members|directory|member-set|member-remove|associate|dissociate|feed|search|read-context> [options]
+  projects: `usage: echo-brain person projects <list|create|read|members|directory|member-add|member-set|member-remove|associate|dissociate|feed|search|read-context> [options]
 
-Projects organize original context. Association does not change its audience. Only projects list is the capability probe; a canonical 404 there means Not live yet. Project Ask is not live yet.
+Projects organize original context. Association does not change its audience. Only projects list is the capability probe; a canonical 404 there means Not live yet. Use person ask --project for a strict project-scoped answer.
 `,
   "projects-list": `usage: echo-brain person projects list [--limit <1-10>] [--cursor <opaque-base64url>]
 
@@ -254,9 +270,13 @@ Read one currently accessible project.
 
 Lists the project's current members and leads.
 `,
-  "projects-directory": `usage: echo-brain person projects directory --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
+  "projects-directory": `usage: echo-brain person projects directory --project-id <project-id> [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 
-Leads can search current organization members by display name to select an exact membership tenure.
+Leads can browse active organization members by name, or narrow the directory with a display-name search.
+`,
+  "projects-member-add": `usage: echo-brain person projects member-add --request-id <uuid> --project-id <project-id> --membership-id <membership-id>
+
+Leads add a member without changing an existing member's role. Retain the exact request for replay.
 `,
   "projects-member-set": `usage: echo-brain person projects member-set --request-id <uuid> --project-id <project-id> --membership-id <membership-id> --role <member|lead>
 
@@ -368,7 +388,7 @@ function isContextAction(action: string): boolean {
 }
 
 function contextCliFailure(action: string, error: unknown, values: Record<Option, string | boolean | undefined>) {
-  const mutation = ['projects-create', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit', 'documents-upload', 'documents-retry', 'documents-associate', 'documents-dissociate'].includes(action);
+  const mutation = ['projects-create', 'projects-member-add', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit', 'documents-upload', 'documents-retry', 'documents-associate', 'documents-dissociate'].includes(action);
   let requestId: string | undefined;
   try { requestId = validatePersonUpdateRequestId(values['request-id']); } catch { /* Never echo invalid caller input. */ }
   return {
@@ -848,7 +868,11 @@ export async function runPersonClientCli(
         print(stdout, await client.projectMembers({ project_id: validateProjectIdV1(values['project-id']), ...contextPaging(values) }));
         break;
       case 'projects-directory':
-        print(stdout, await client.projectDirectory({ project_id: validateProjectIdV1(values['project-id']), query: requiredText(values, 'query'), ...contextPaging(values) }));
+        print(stdout, await client.projectDirectory({ project_id: validateProjectIdV1(values['project-id']), ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }), ...contextPaging(values) }));
+        break;
+      case 'projects-member-add':
+        print(stdout, await client.addProjectMember(validateProjectMemberAddV1({ schema_version: 1, kind: 'echo-project-member-add-v1',
+          request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), membership_id: requiredText(values, 'membership-id') })));
         break;
       case 'projects-member-set':
         print(stdout, await client.setProjectMember(validateProjectMemberSetV1({ schema_version: 1, kind: 'echo-project-member-set-v1',
@@ -1017,9 +1041,34 @@ export async function runPersonClientCli(
         validatePersonQueryText(values.question);
         print(stdout, {
           ok: true,
-          result: await client.ask(requiredText(values, "question")),
+          result: await client.ask(
+            requiredText(values, "question"),
+            values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project")),
+          ),
         });
         break;
+      case "ask-source": {
+        const project_id = values.project === undefined
+          ? undefined
+          : validateProjectIdV1(requiredText(values, "project"));
+        print(stdout, {
+          ok: true,
+          result: await client.askSourceEvidence(validatePersonSourceEvidenceReadRequestV1({
+            schema_version: 1,
+            scope: project_id === undefined ? { kind: "global" } : { kind: "project", project_id },
+            citation: {
+              kind: "source_revision",
+              source_id: requiredText(values, "source-id"),
+              revision_id: requiredText(values, "revision-id"),
+              source_sha256: requiredText(values, "source-sha256"),
+              representation_sha256: requiredText(values, "representation-sha256"),
+              anchor_sha256: requiredText(values, "anchor-sha256"),
+              ...(values["document-id"] === undefined ? {} : { document_id: requiredText(values, "document-id") }),
+            },
+          })),
+        });
+        break;
+      }
       case "records": {
         const query = values.query;
         const recordSha256 = values["record-sha256"];

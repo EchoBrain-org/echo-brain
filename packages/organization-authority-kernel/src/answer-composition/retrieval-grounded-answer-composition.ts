@@ -6,6 +6,7 @@ import {
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
 import { extractSingleCanonicalReleaseId } from "../shared/canonical-release-id.js";
+import type { ReleasedSourceContextAtomV1 } from "../shared/released-source-context-v1.js";
 
 /** Lean V1 deliberately has one bounded plan, retrieval batch, and answer. */
 export const ANSWER_COMPOSITION_MAX_ADDITIONAL_QUERIES = 3;
@@ -93,12 +94,25 @@ export interface StructuredGenerationObservedResultV1 {
   readonly provider_latency_ms: number | null;
 }
 
-export interface ReleasedRetrievalAtom {
+export interface ReleasedApprovedRecordAtom {
+  /** Omitted only for the pre-V2 internal record packet shape. */
+  readonly kind?: "approved_record";
   readonly atom_id: Sha256Digest;
   readonly record_sha256: Sha256Digest;
   readonly policy_id: string;
   readonly text: string;
 }
+
+/**
+ * An immutable Person source revision. This is deliberately distinct from an
+ * approved record: source originals can support an answer without acquiring
+ * a decision/action label or a record policy identifier.
+ */
+export type ReleasedSourceRevisionAtom = ReleasedSourceContextAtomV1;
+
+export type ReleasedRetrievalAtom =
+  | ReleasedApprovedRecordAtom
+  | ReleasedSourceRevisionAtom;
 
 /**
  * This is intentionally structural. The released-retrieval response may
@@ -288,6 +302,13 @@ export interface RetrievalGroundedAnswerCompositionOptions {
   readonly answerer: StructuredGenerationPort;
   readonly released_retrieval: ReleasedRetrievalPort;
   readonly audit: AnswerCompositionAuditPort;
+  /**
+   * Optional route-owned public projection. When supplied, the audit binds
+   * the exact validated response the route returns instead of the core shape.
+   * The projection must be pure: it runs after final authorization and before
+   * the audit write, and a failure prevents publication.
+   */
+  readonly audit_response?: (result: RetrievalGroundedAnswerCompositionResult) => unknown;
   /** Stable adapter identifier bound into the redacted audit hash. */
   readonly generation_adapter_id: string;
   readonly planner_model: string;
@@ -307,11 +328,10 @@ export interface RetrievalGroundedAnswerCompositionResult {
   readonly schema_version: 2;
   readonly kind: "echo-clean-person-answer-v2";
   readonly answer: string;
-  readonly citations: readonly {
-    readonly atom_id: Sha256Digest;
-    readonly record_sha256: Sha256Digest;
-    readonly policy_id: string;
-  }[];
+  readonly citations: readonly (
+    | Omit<ReleasedApprovedRecordAtom, "text">
+    | Omit<ReleasedSourceRevisionAtom, "text">
+  )[];
   /** Omitted for the existing ordinary answer and insufficient-evidence paths. */
   readonly outcome?: PersonAnswerOutcomeV1;
 }
@@ -537,8 +557,31 @@ export function validateReleasedRetrievalBatchV1(
   }
 }
 
-interface ContextAtom extends ReleasedRetrievalAtom {
+type ContextAtom = ReleasedRetrievalAtom & {
   readonly citation_id: string;
+};
+
+function releasedAtomIdentity(atom: ReleasedRetrievalAtom): string {
+  return atom.kind !== "source_revision"
+    ? atom.atom_id
+    : `${atom.source_id}\u0000${atom.revision_id}\u0000${atom.representation_sha256}\u0000${atom.anchor_sha256}`;
+}
+
+function validReleasedAtom(atom: ReleasedRetrievalAtom): boolean {
+  if (typeof atom.text !== "string" || atom.text.length === 0) return false;
+  if (atom.kind !== "source_revision") {
+    return SHA256.test(atom.atom_id) &&
+      SHA256.test(atom.record_sha256) &&
+      typeof atom.policy_id === "string" && POLICY_IDS.has(atom.policy_id);
+  }
+  return typeof atom.source_id === "string" && atom.source_id.length > 0 &&
+    typeof atom.revision_id === "string" && atom.revision_id.length > 0 &&
+    SHA256.test(atom.source_sha256) && SHA256.test(atom.representation_sha256) &&
+    SHA256.test(atom.anchor_sha256) &&
+    (atom.document_id === undefined ||
+      (typeof atom.document_id === "string" && atom.document_id.length > 0)) &&
+    (atom.label === undefined ||
+      (typeof atom.label === "string" && atom.label.length > 0));
 }
 
 /** Preserve released retrieval's deterministic order and never truncate source text. */
@@ -547,23 +590,17 @@ function boundedContext(release: ReleasedRetrievalBatch): readonly ContextAtom[]
   const seen = new Set<string>();
   let bytes = 0;
   for (const atom of release.released_atoms) {
-    if (
-      !SHA256.test(atom.atom_id) ||
-      !SHA256.test(atom.record_sha256) ||
-      typeof atom.policy_id !== "string" || !POLICY_IDS.has(atom.policy_id) ||
-      typeof atom.text !== "string" || atom.text.length === 0
-    ) {
+    if (!validReleasedAtom(atom)) {
       throw new RetrievalGroundedAnswerCompositionError("released retrieval atom is invalid");
     }
-    if (seen.has(atom.atom_id)) continue;
-    seen.add(atom.atom_id);
+    const identity = releasedAtomIdentity(atom);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     // The complete atom payload is either included or skipped.  This avoids
     // changing the meaning of a source merely to fit a model context window.
     const atomBytes = Buffer.byteLength(
       canonicalJson({
-        atom_id: atom.atom_id,
-        record_sha256: atom.record_sha256,
-        policy_id: atom.policy_id,
+        ...atom,
         text: atom.text,
       }),
       "utf8",
@@ -629,7 +666,11 @@ function plannerPrompt(question: string): string {
 function answerPrompt(question: string, context: readonly ContextAtom[]): string {
   return JSON.stringify({
     question,
-    sources: context.map(({ citation_id, text }) => ({ citation_id, text })),
+    sources: context.map(({ citation_id, text, ...atom }) => ({
+      citation_id,
+      kind: atom.kind ?? "approved_record",
+      text,
+    })),
   });
 }
 
@@ -642,6 +683,7 @@ const ANSWER_SYSTEM_PROMPT =
     "Choose that null branch before writing text if no requested part is supported. Do not write an answer object merely to explain that evidence is missing. An answer object with an empty citations array is invalid; every non-null answer must have at least one supplied source ID supporting its text.",
     "Address each requested part: give the supported conclusion with its material scope, conditions, deadlines and rationale; explicitly identify any part lacking accessible evidence. If any part is supported, return a non-null answer with text and the supplied source IDs supporting it.",
     "A supported negative conclusion is an answered result: return a non-null cited answer. Correct unsupported premises using supplied evidence.",
+    "A source_revision is contextual source evidence only. It never establishes that a decision or action was human approved. Only an approved_record establishes approval status.",
     "For a commitments or deadlines summary, synthesize the individual supplied facts; do not require a pre-existing summary or imply completeness beyond these sources.",
     "Preserve action state: an assigned, planned or promised action does not prove completion. Claim completion only when supplied evidence establishes it. Keep each task paired with its own deadline, duration and conditions; do not transfer dates between tasks or omit independent tasks. Preserve relative dates with their source context; do not reinterpret them as today.",
     "Before returning, check coverage of each requested part and verify that all factual claims are supported and citations refer only to supplied source IDs.",
@@ -1094,9 +1136,25 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
             content: {
               atoms: context.map((atom) => ({
                 citation_id: atom.citation_id,
-                atom_id: atom.atom_id,
-                record_sha256: atom.record_sha256,
-                policy_id: atom.policy_id,
+                ...(atom.kind !== "source_revision"
+                  ? {
+                      kind: "approved_record",
+                      atom_id: atom.atom_id,
+                      record_sha256: atom.record_sha256,
+                      policy_id: atom.policy_id,
+                    }
+                  : {
+                      kind: atom.kind,
+                      source_id: atom.source_id,
+                      revision_id: atom.revision_id,
+                      source_sha256: atom.source_sha256,
+                      representation_sha256: atom.representation_sha256,
+                      anchor_sha256: atom.anchor_sha256,
+                      ...(atom.document_id === undefined
+                        ? {}
+                        : { document_id: atom.document_id }),
+                      ...(atom.label === undefined ? {} : { label: atom.label }),
+                    }),
                 text: atom.text,
               })),
             },
@@ -1305,15 +1363,24 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
         schema_version: 2,
         kind: "echo-clean-person-answer-v2",
         answer: parsed.answer,
-        citations: Object.freeze(
-          parsed.citations.map((atom) =>
-            Object.freeze({
-              atom_id: atom.atom_id,
-              record_sha256: atom.record_sha256,
-              policy_id: atom.policy_id,
-            }),
-          ),
-        ),
+        citations: Object.freeze(parsed.citations.map((atom) =>
+          atom.kind === "source_revision"
+            ? Object.freeze({
+                kind: atom.kind,
+                source_id: atom.source_id,
+                revision_id: atom.revision_id,
+                source_sha256: atom.source_sha256,
+                representation_sha256: atom.representation_sha256,
+                anchor_sha256: atom.anchor_sha256,
+                ...(atom.document_id === undefined ? {} : { document_id: atom.document_id }),
+                ...(atom.label === undefined ? {} : { label: atom.label }),
+              })
+            : Object.freeze({
+                atom_id: atom.atom_id,
+                record_sha256: atom.record_sha256,
+                policy_id: atom.policy_id,
+              }),
+        )),
         ...(authorshipUnsupported
           ? { outcome: "authorship_unsupported" as const }
           : {}),
@@ -1331,11 +1398,26 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           generation_id: release.generation_id,
           record_head: release.record_head,
           released_atoms_sha256: digest(
-            release.released_atoms.map((atom) => ({
-              atom_id: atom.atom_id,
-              record_sha256: atom.record_sha256,
-              policy_id: atom.policy_id,
-            })),
+            release.released_atoms.map((atom) =>
+              atom.kind !== "source_revision"
+                ? {
+                    kind: "approved_record",
+                    atom_id: atom.atom_id,
+                    record_sha256: atom.record_sha256,
+                    policy_id: atom.policy_id,
+                  }
+                : {
+                    kind: atom.kind,
+                    source_id: atom.source_id,
+                    revision_id: atom.revision_id,
+                    source_sha256: atom.source_sha256,
+                    representation_sha256: atom.representation_sha256,
+                    anchor_sha256: atom.anchor_sha256,
+                    ...(atom.document_id === undefined
+                      ? {}
+                      : { document_id: atom.document_id }),
+                  },
+            ),
           ),
           prompt_sha256: digest({
             generation_adapter_id: generationAdapterId,
@@ -1348,7 +1430,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
             answer: parsed.answer,
             citations: parsed.citations.map((atom) => atom.citation_id),
           }),
-          response_sha256: digest(result),
+          response_sha256: digest(options.audit_response?.(result) ?? result),
           citation_count: parsed.citations.length,
           outcome: result.outcome ?? parsed.status,
           retrieval: Object.freeze({

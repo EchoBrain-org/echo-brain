@@ -55,6 +55,12 @@ afterAll(() => rmSync(temporaryRoot, { recursive: true, force: true }));
 
   it.each([
     "valid-answer",
+    "scoped-v3-answer",
+    "v3-authorship-unsupported",
+    "source-evidence",
+    "pending-composer",
+    "unavailable-source-evidence",
+    "original-source-evidence-card",
     "invalid-output-failure",
     "retired-global-metadata",
     "duplicate-atom",

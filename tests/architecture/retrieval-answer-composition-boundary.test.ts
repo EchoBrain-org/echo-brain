@@ -7,6 +7,7 @@ const REPO = resolve(import.meta.dirname, '../..');
 const read = (path: string): string => readFileSync(join(REPO, path), 'utf8');
 const ANSWER_ROOT = 'packages/organization-authority-kernel/src/answer-composition';
 const ANSWER_ROUTE = 'services/organization-authority/src/composition/person-answer-route.ts';
+const ANSWER_V2_ROUTE = 'services/organization-authority/src/composition/person-answer-v2-route.ts';
 const AUDIT = 'services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts';
 function files(root: string): string[] {
   return readdirSync(join(REPO, root)).flatMap(name => {
@@ -31,6 +32,8 @@ describe('retrieval and answer-composition boundaries', () => {
       ...files('packages/organization-record/src/retrieve'), ...files('packages/organization-retrieval/src'),
       'packages/organization-authority-kernel/src/application/readable-search-authorization-fence.ts',
       ...['person-record-read-route', 'person-record-search-route'].map(name => `services/organization-authority/src/composition/${name}.ts`),
+      'services/organization-authority/src/application/ports/person-original-context-retrieval-v1.ts',
+      'services/organization-authority/src/adapters/persistence/sqlite/person-original-context-retrieval-v1.ts',
     ];
     const visited = new Set<string>();
     while (pending.length) {
@@ -43,7 +46,7 @@ describe('retrieval and answer-composition boundaries', () => {
     expect(visited.size).toBeGreaterThan(10);
   });
   it('keeps answer composition behind released contracts without direct record, retrieval or storage access', () => {
-    const implementation = [...files(ANSWER_ROOT), ANSWER_ROUTE];
+    const implementation = [...files(ANSWER_ROOT), ANSWER_ROUTE, ANSWER_V2_ROUTE];
     expect(implementation.length).toBeGreaterThan(1);
     for (const path of implementation) for (const target of graph.targets(path)) {
       if (target === AUDIT) continue; // The route may write its bounded, dedicated audit event.

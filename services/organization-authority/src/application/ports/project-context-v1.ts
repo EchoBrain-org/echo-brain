@@ -15,6 +15,7 @@ import type {
   ProjectContextSearchResultV1,
   ProjectCreateReceiptV1,
   ProjectCreateV1,
+  ProjectMemberAddV1,
   ProjectDirectorySearchV1,
   ProjectDirectoryV1,
   ProjectIdV1,
@@ -43,6 +44,8 @@ export interface ProjectContextApplicationV1 {
   listMembers(accessToken: string, request: unknown): ProjectMembersV1;
   /** Lead-only directory for selecting active organization membership targets. */
   searchDirectory(accessToken: string, request: unknown): ProjectDirectoryV1;
+  /** Add as a member without changing an already-active project's role. */
+  addMember(accessToken: string, request: unknown): ProjectMutationReceiptV1;
   setMember(accessToken: string, request: unknown): ProjectMutationReceiptV1;
   removeMember(accessToken: string, request: unknown): ProjectMutationReceiptV1;
   associateContext(accessToken: string, request: unknown): ProjectMutationReceiptV1;
@@ -63,7 +66,7 @@ export type ProjectReadOperationV1 =
 
 export type ProjectMutationV1 =
   | { readonly operation: 'create'; readonly request: ProjectCreateV1 }
-  | { readonly operation: 'member_set'; readonly request: ProjectMemberSetV1 }
+  | { readonly operation: 'member_set'; readonly request: ProjectMemberAddV1 | ProjectMemberSetV1 }
   | { readonly operation: 'member_remove'; readonly request: ProjectMemberRemoveV1 }
   | { readonly operation: 'associate'; readonly request: ProjectContextAssociateV1 }
   | { readonly operation: 'dissociate'; readonly request: ProjectContextDissociateV1 }
@@ -163,6 +166,7 @@ export interface ProjectContextWriteTransactionV1 extends ProjectContextReadTran
    * Replays never restore membership, associations or enrichment work.
    */
   createProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectCreateV1): ProjectCreateReceiptV1;
+  addMember(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectMemberAddV1): ProjectMutationReceiptV1;
   setMember(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectMemberSetV1): ProjectMutationReceiptV1;
   removeMember(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectMemberRemoveV1): ProjectMutationReceiptV1;
   associateContext(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextAssociateV1): ProjectMutationReceiptV1;

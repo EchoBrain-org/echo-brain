@@ -72,9 +72,10 @@ enum ProjectProof {
     static func commands(_ operations: [[String: Any]]) -> [ProjectCommand] {
         func request(_ index: Int) -> String { (operations[index]["http"] as! [String: Any])["body"].map { ($0 as! [String: Any])["request_id"] as! String }! }
         return [.list("eyJsYXN0Ijoicm93In0"), .create("Apollo", request(1)), .read(project), .members(project, nil),
-            .directory(project, "ari", nil), .setMember(project, member, "member", request(5)), .removeMember(project, member, request(6)),
-            .associate(project, context, request(7), true), .associate(project, context, request(8), false),
-            .feed(project, "eyJsYXN0Ijoicm93In0"), .search(project, "ship", nil), .readContext(project, context)]
+            .directory(project, "ari", nil), .memberAdd(project, member, request(5)), .setMember(project, member, "member", request(6)),
+            .removeMember(project, member, request(7)), .associate(project, context, request(8), true),
+            .associate(project, context, request(9), false), .feed(project, "eyJsYXN0Ijoicm93In0"),
+            .search(project, "ship", nil), .readContext(project, context)]
     }
     @MainActor static func main() {
         let requestedMode = CommandLine.arguments[1]
@@ -103,13 +104,13 @@ enum ProjectProof {
                 }
             }
             let draft = try! UploadDraft(title: "Apollo update", bytes: Data("We agreed to ship.\n".utf8), visibility: .project, audienceProjectID: project, projectID: project)
-            var receipt = response(12); receipt["request_id"] = draft.requestID
+            var receipt = response(13); receipt["request_id"] = draft.requestID
             guard case .saved = UploadClient.parse(data(receipt), command: .submit(draft)) else { fatalError("V2 receipt") }
             let recovery = UploadRecovery(identity: identity, requestID: draft.requestID, visibility: .project, audienceProjectID: project, projectID: project)!
-            var status = response(13); status["request_id"] = draft.requestID
+            var status = response(14); status["request_id"] = draft.requestID
             guard case .saved = UploadClient.parse(data(status), command: .status(recovery)),
-                  case .matches = UploadClient.parse(data(response(14)), command: .search("ship")),
-                  case .content = UploadClient.parse(data(response(15)), command: .read(context)) else { fatalError("V2 read fixtures") }
+                  case .matches = UploadClient.parse(data(response(15)), command: .search("ship")),
+                  case .content = UploadClient.parse(data(response(16)), command: .read(context)) else { fatalError("V2 read fixtures") }
         } else if mode == "strict-replies" {
             for (index, command) in commands.enumerated() {
                 var o = response(index); o["unknown"] = "private"
@@ -121,14 +122,14 @@ enum ProjectProof {
                     guard case .failure = ProjectClient.parse(data(o), command: command) else { fatalError("cross project") }
                 }
             }
-            var feed = response(9); var item = (feed["items"] as! [[String: Any]])[0]
+            var feed = response(10); var item = (feed["items"] as! [[String: Any]])[0]
             item["audience"] = ["kind": "team", "project_id": project]; feed["items"] = [item]
-            guard case .failure = ProjectClient.parse(data(feed), command: commands[9]) else { fatalError("audience widening") }
-            feed = response(9); feed["items"] = Array(repeating: (feed["items"] as! [[String: Any]])[0], count: 2)
-            guard case .failure = ProjectClient.parse(data(feed), command: commands[9]) else { fatalError("duplicate item") }
-            feed = response(9); feed["next_cursor"] = "a"
-            guard case .failure = ProjectClient.parse(data(feed), command: commands[9]) else { fatalError("invalid cursor") }
-            guard case .failure = ProjectClient.parse(Data(repeating: 32, count: 32770), command: commands[9]) else { fatalError("oversize") }
+            guard case .failure = ProjectClient.parse(data(feed), command: commands[10]) else { fatalError("audience widening") }
+            feed = response(10); feed["items"] = Array(repeating: (feed["items"] as! [[String: Any]])[0], count: 2)
+            guard case .failure = ProjectClient.parse(data(feed), command: commands[10]) else { fatalError("duplicate item") }
+            feed = response(10); feed["next_cursor"] = "a"
+            guard case .failure = ProjectClient.parse(data(feed), command: commands[10]) else { fatalError("invalid cursor") }
+            guard case .failure = ProjectClient.parse(Data(repeating: 32, count: 32770), command: commands[10]) else { fatalError("oversize") }
             let duplicateRoot = #"""
 {"schema_version":1,"kind":"echo-project-list-v1","k\u0069nd":"echo-project-list-v1","items":[],"next_cursor":null}
 """#
@@ -136,7 +137,7 @@ enum ProjectProof {
             let duplicateNested = #"""
 {"schema_version":1,"kind":"echo-project-context-feed-v1","project_id":"prj_11111111-1111-4111-8111-111111111111","items":[{"context_id":"ctx_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","received_at":"2026-09-21T22:01:00.000Z","title":"Apollo","excerpt":"note","audience":{"kind":"project","k\u0069nd":"project","project_id":"prj_11111111-1111-4111-8111-111111111111"}}],"next_cursor":null}
 """#
-            guard case .failure = ProjectClient.parse(Data(duplicateNested.utf8), command: commands[9]) else { fatalError("duplicate nested key") }
+            guard case .failure = ProjectClient.parse(Data(duplicateNested.utf8), command: commands[10]) else { fatalError("duplicate nested key") }
             let duplicateError = #"""
 {"ok":false,"action":"projects-member-set","error":"Request failed","code":"conflict","c\u006fde":"conflict","status":409,"request_id":"00000000-0000-4000-8000-000000000002","mutation_outcome":"not_submitted","mutation_\u006futcome":"not_submitted"}
 """#
@@ -151,7 +152,7 @@ enum ProjectProof {
             defer { defaults.removePersistentDomain(forName: suite) }
             recovery.save(for: identity, defaults: defaults)
             require(UploadRecovery.load(for: identity, defaults: UserDefaults(suiteName: suite)!) == recovery)
-            var changed = response(13); changed["request_id"] = draft.requestID
+            var changed = response(14); changed["request_id"] = draft.requestID
             guard case .failed = UploadClient.parse(data(changed), command: .status(recovery)) else { fatalError("initial association mismatch") }
             changed["project_id"] = other
             guard case .saved = UploadClient.parse(data(changed), command: .status(recovery)) else { fatalError("frozen coordinates") }
@@ -174,8 +175,10 @@ enum ProjectProof {
         }
         let uploads = UploadSession(client: UploadClient(cli: client), defaults: defaults, isForeground: { true })
         let projects = ProjectSession(client: ProjectClient(cli: client), defaults: defaults, foreground: { true })
-        var questions: [String] = []
-        let controller = ProjectsController(uploads: uploads, projects: projects, documents: DocumentSession(cli: client, foreground: { true }), onAsk: { questions.append($0) })
+        var questions: [(String, AskScope)] = []
+        let controller = ProjectsController(uploads: uploads, projects: projects, documents: DocumentSession(cli: client, foreground: { true }), onAsk: { question, scope in
+            questions.append((question, scope)); return .accepted
+        })
         defer { controller.shutdown() }
         let window = controller.window
         // The frame view includes the titlebar accessories (sidebar toggle,
@@ -396,51 +399,41 @@ enum ProjectProof {
         }
 
         if mode == "ui-associate" {
-            // Association to a project other than a note's audience happens
-            // from the saved-context reader, then is undone from the project.
-            ProofUI.find(NSButton.self, "sidebar-toggle", in: chrome).performClick(nil)
-            ProofUI.find(NSButton.self, "sidebar-search", in: chrome).performClick(nil)
-            query.stringValue = "ship"; submit.performClick(nil)
-            wait("saved search") { !uploads.busy && uploads.matches.count == 1 }
-            wait("result row") { visibleButton("item-row", in: chrome) != nil }
-            visibleButton("item-row", in: chrome)!.performClick(nil)
-            wait("saved original") { !uploads.busy && uploads.content?.context_id == context }
-            guard let menu = ProofUI.all(IconButton.self, "reader-actions", in: chrome).first(where: ProofUI.visible)?.menuProvider?(),
-                  let add = menu.items.first(where: { $0.title == "Add to project" })?.submenu,
-                  let beacon = add.items.first(where: { $0.title == "Beacon" }), let action = beacon.action else { fatalError("Add to project → Beacon missing") }
-            require(beacon.isEnabled, "Add to Beacon disabled")
-            NSApp.sendAction(action, to: beacon.target, from: beacon)
-            wait("associated") { !projects.busy && projects.selected?.project_id == other && projects.items.count == 1 }
-            settle("beacon open")
-            require(window.title == "Beacon", "association did not open Beacon")
+            // Open the original in its existing Apollo project context and
+            // exercise the remaining project-reader association control.
+            openApollo()
             visibleButton("item-row", in: chrome)!.performClick(nil)
             wait("project original") { !projects.busy && projects.content?.context_id == context }
+            // Global saved-context browsing is gone, so it can no longer be a
+            // hidden way to add an original to another project. The supported
+            // reader action remains explicit dissociation from this project;
+            // direct ProjectSession proofs retain the association API coverage.
             guard let actions = ProofUI.all(IconButton.self, "reader-actions", in: chrome).first(where: ProofUI.visible)?.menuProvider?(),
                   let remove = actions.items.first(where: { $0.title == "Remove from this project" }), let removal = remove.action else {
                 fatalError("Remove from this project missing")
             }
             require(remove.isEnabled, "Remove disabled")
             NSApp.sendAction(removal, to: remove.target, from: remove)
-            wait("dissociated") { !projects.busy && projects.selected?.project_id == other }
+            wait("dissociated") { !projects.busy && projects.selected?.project_id == project }
             settle("after dissociate")
             return
         }
 
         if mode == "ui-search-controls" {
             openApollo()
-            let clear = ProofUI.find(NSButton.self, "clear-search", "Clear search", in: chrome)
-            // × clears the search and brings the feed back.
-            query.stringValue = "ship"; submit.performClick(nil); settle("search")
-            require(ProofUI.visible(clear), "× missing while a search is shown")
-            clear.performClick(nil); settle("cleared")
-            require(!ProofUI.visible(clear) && query.stringValue.isEmpty && projects.items.count == 1, "× did not restore the feed")
-            // Escape in the bar goes back to the feed, not home.
-            query.stringValue = "ship"; submit.performClick(nil); settle("search 2")
-            window.makeFirstResponder(query)
-            if let editor = query.currentEditor() as? NSTextView { editor.doCommand(by: #selector(NSResponder.cancelOperation(_:))) }
-            else { _ = controller.control(query, textView: NSTextView(), doCommandBy: #selector(NSResponder.cancelOperation(_:))) }
-            settle("escaped")
-            require(window.title == "Apollo" && ProofUI.visible(back) && !ProofUI.visible(clear) && query.stringValue.isEmpty, "Escape left the project")
+            // A project page scopes Ask to its current project. A second Ask
+            // stays scoped after the composer clears; it is never converted to
+            // the old project-search flow or silently widened to global.
+            query.stringValue = "ship"; submit.performClick(nil)
+            require(questions.count == 1 && questions[0].0 == "ship" && questions[0].1 == .project(id: project, name: "Apollo"),
+                    "project Ask did not carry Apollo scope")
+            require(query.stringValue.isEmpty && !controller.answerContainer.isHidden, "accepted project Ask did not clear its composer")
+            query.stringValue = "late"; submit.performClick(nil)
+            require(questions.count == 2 && questions[1].0 == "late" && questions[1].1 == .project(id: project, name: "Apollo"),
+                    "follow-up Ask silently widened project scope")
+            require(query.stringValue.isEmpty, "follow-up Ask did not clear its composer")
+            back.performClick(nil); wait("back to project") { !projects.busy && projects.selected?.project_id == project && controller.answerContainer.isHidden }
+            settle("project restored")
             // Escape on the window closes the reader.
             visibleButton("item-row", in: chrome)!.performClick(nil)
             wait("reader") { !projects.busy && projects.content != nil }
@@ -451,12 +444,6 @@ enum ProjectProof {
             visibleButton("item-row", in: chrome)!.performClick(nil)
             wait("replayed read") { !projects.busy && projects.content != nil }
             window.cancelOperation(nil); settle("reader closed 2")
-            // So is a search.
-            projects.loadMembers(); require(projects.busy, "members load did not start")
-            query.stringValue = "late"; submit.performClick(nil)
-            settle("replayed search")
-            require(ProofUI.visible(clear), "search made during a load was dropped")
-            require(questions.isEmpty)
             return
         }
 
@@ -468,13 +455,16 @@ enum ProjectProof {
         require(ProofUI.all(NSButton.self, "Apollo · \(otherRole)", in: chrome).isEmpty, "row shows the wrong role")
         openApollo()
         require(window.title == "Apollo", "window title must be the open project")
-        // No project-scoped Ask exists anywhere.
-        require(!ProofUI.views(chrome).compactMap({ $0 as? NSButton }).contains(where: { $0.title.contains("Ask this project") }))
-        // The project-page bar runs the scoped project search, never global Ask.
-        // (The driver also checks the CLI log for the scoped `projects search`.)
+        // The project page has one Ask composer. It sends an explicit project
+        // scope, clears only after the accepted request, then Back restores the
+        // project without turning the question into a legacy search.
         query.stringValue = "ship"; submit.performClick(nil)
-        wait("scoped search") { !projects.busy && projects.items.count == 1 }; require(questions.isEmpty, "project bar reached onAsk")
-        settle("search settle")
+        require(questions.count == 1 && questions[0].0 == "ship" && questions[0].1 == .project(id: project, name: "Apollo"),
+                "project composer did not send an Apollo-scoped Ask")
+        require(query.stringValue.isEmpty && !controller.answerContainer.isHidden, "accepted project Ask did not clear its composer")
+        back.performClick(nil)
+        wait("project after Ask") { !projects.busy && projects.selected?.project_id == project && controller.answerContainer.isHidden }
+        settle("project Ask back")
         // People is a sheet opened from the people stack; opening it re-reads
         // the roster (it does not show the avatar stack's earlier page).
         ProofUI.find(NSButton.self, "people-button", "Project members", in: chrome).performClick(nil)
@@ -503,10 +493,11 @@ enum ProjectProof {
         ProofUI.find(NSButton.self, "people-done", in: people).performClick(nil)
         wait("people closed") { window.attachedSheet == nil && !projects.busy && !uploads.busy }
         settle("people closed settle")
-        // The search shown before People comes back with its query (the
-        // roster load cleared the column).
-        require(query.stringValue == "ship" && ProofUI.visible(ProofUI.find(NSButton.self, "clear-search", in: chrome)) && projects.items.count == 1,
-                "People replaced the search with the feed")
+        // People returns to Apollo's feed. Ask is intentionally not retained in
+        // the bar after accepted submission, so there is no stale query to turn
+        // into a project search.
+        require(query.stringValue.isEmpty && projects.items.count == 1,
+                "People did not restore the project feed after Ask")
         controller.startWrite(); wait("compose sheet") { window.attachedSheet != nil }
         var compose = sheetRoot("compose")
         let body = ProofUI.find(NSTextView.self, "compose-body", "Original note text", in: compose)
@@ -538,7 +529,7 @@ enum ProjectProof {
             projects.read(context); wait("lost project") { !projects.busy }
             require(projects.selected == nil && projects.items.isEmpty && projects.content == nil)
             require(body.string.isEmpty && window.attachedSheet == nil)
-            require(uploads.draft == nil && questions.isEmpty)
+            require(uploads.draft == nil && questions.count == 1)
             // The page says so (no stale project title) and offers a reload.
             require(window.title == "ECHO" && ProofUI.showsText("This project or original is no longer available to you.", in: chrome), "lost project page")
             require(visibleButton("reload-project", in: chrome) != nil, "no reload on a lost project")
@@ -627,7 +618,7 @@ enum ProjectProof {
         query.stringValue = "unsent question"
         controller.accountWillChange()
         require(projects.selected == nil && projects.projects.isEmpty && uploads.recovery == nil && query.stringValue.isEmpty)
-        require(questions.isEmpty)
+        require(questions.count == 1)
 
         func peopleProof() {
             func sheetMenu(_ person: String) -> NSMenu {
@@ -642,7 +633,10 @@ enum ProjectProof {
                 menu.performActionForItem(at: index)
             }
             func settled(_ label: String) {
-                wait(label) { !projects.busy && window.attachedSheet?.attachedSheet == nil && !projects.members.isEmpty }
+                let ready = { !projects.busy && window.attachedSheet?.attachedSheet == nil && !projects.members.isEmpty }
+                let deadline = Date().addingTimeInterval(12)
+                while !ready() && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+                require(ready(), "\(label): busy=\(projects.busy) members=\(projects.members.count) selected=\(projects.selected?.project_id ?? "nil") pending=\(projects.pending != nil) status=\(projects.status) child=\(window.attachedSheet?.attachedSheet != nil)")
                 settle(label)
             }
             // Add from the directory, behind a confirm naming the person.
