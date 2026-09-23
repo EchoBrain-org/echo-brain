@@ -661,20 +661,24 @@ export class PersonClient {
     validatePersonQueryText(question);
     if (projectId !== undefined) validateProjectIdV1(projectId, 'Ask project_id');
     const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).ask(
+    const result = await this.authority(stored.authority_origin).ask(
       stored.session.access_token,
       question,
       projectId,
     );
+    this.assertCurrentSession(stored);
+    return result;
   }
 
   async askSourceEvidence(value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
     const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).askSourceEvidence(
+    const result = await this.authority(stored.authority_origin).askSourceEvidence(
       stored.session.access_token,
       request,
     );
+    this.assertCurrentSession(stored);
+    return result;
   }
 
   async changeMeetingIngestionExclusion(

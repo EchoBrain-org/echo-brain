@@ -745,6 +745,72 @@ describe("Person client", () => {
     });
   });
 
+  it("does not return an Ask answer after the local account changes while its response is pending", async () => {
+    await withHome(async home => {
+      let resolveResponse: ((response: Response) => void) | undefined;
+      const pendingResponse = new Promise<Response>(resolve => { resolveResponse = resolve; });
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async input => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authorityDescriptor() });
+          }
+          return pendingResponse;
+        },
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      const answer = client.ask("What is current?");
+      await Promise.resolve();
+      await client.installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_id: fixtureId("mem", 2), principal_id: fixtureId("prn", 2), session_family_id: fixtureId("psf", 2),
+      });
+      resolveResponse?.(json({
+        schema_version: 3, kind: "echo-clean-person-answer-v3", answer: "Prior account answer.",
+        citations: [], scope: { kind: "global" },
+      }));
+      await expect(answer).rejects.toThrow("current account");
+    });
+  });
+
+  it("does not return an Ask source proof after the local account changes while its response is pending", async () => {
+    await withHome(async home => {
+      const citation = {
+        kind: "source_revision" as const,
+        source_id: `source:${"a".repeat(64)}` as `source:${string}`,
+        revision_id: `sha256:${"b".repeat(64)}` as `sha256:${string}`,
+        source_sha256: `sha256:${"c".repeat(64)}` as `sha256:${string}`,
+        representation_sha256: `sha256:${"d".repeat(64)}` as `sha256:${string}`,
+        anchor_sha256: `sha256:${"e".repeat(64)}` as `sha256:${string}`,
+      } satisfies PersonSourceEvidenceCitationV1;
+      let resolveResponse: ((response: Response) => void) | undefined;
+      const pendingResponse = new Promise<Response>(resolve => { resolveResponse = resolve; });
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async input => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authorityDescriptor() });
+          }
+          return pendingResponse;
+        },
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      const proof = client.askSourceEvidence({ schema_version: 1, scope: { kind: "global" }, citation });
+      await Promise.resolve();
+      await client.installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_id: fixtureId("mem", 3), principal_id: fixtureId("prn", 3), session_family_id: fixtureId("psf", 3),
+      });
+      resolveResponse?.(json({
+        schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" },
+        citation: { ...citation, label: "Prior account source" }, text: "Prior account proof.",
+      }));
+      await expect(proof).rejects.toThrow("current account");
+    });
+  });
+
   it("accepts 32 unique question terms and rejects 33 before the request", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
