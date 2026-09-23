@@ -24,6 +24,7 @@ import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { projectCommandIdentityV1 } from '../../../application/project-context-command-v1.js';
+import { assertPersonRequestNamespaceV1 } from './person-request-namespace-v1.js';
 import type {
   ProjectAuthorizationScopeV1, ProjectAuthorizationSnapshotV1, ProjectContextReadTransactionV1,
   ProjectContextRepositoryV1, ProjectContextWriteTransactionV1, ProjectMembershipGrantV1,
@@ -212,6 +213,7 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
   }
   private replay<T extends ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2>(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1): T | undefined {
     const identity = projectCommandIdentityV1(actor, mutation);
+    assertPersonRequestNamespaceV1(this.database, actor, identity.request_id, 'project');
     const stored = this.receipts(actor, identity.request_id);
     if (stored === undefined) return undefined;
     if (stored.operation !== mutation.operation || stored.command_sha256 !== identity.command_sha256 || canonicalSha256(JSON.parse(stored.receipt_json)) !== stored.receipt_sha256) denied('conflict');

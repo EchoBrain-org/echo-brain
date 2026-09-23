@@ -1,4 +1,5 @@
 import { SqlitePersonUpdateInboxV1 } from '../adapters/persistence/sqlite/person-update-inbox-v1.js';
+import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { createPersonUpdateProcessingV1, type PersonUpdateProcessingBindingV1 } from './person-update-processing-v1.js';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../adapters/persistence/sqlite/project-upload-enrichment-v1.js';
@@ -423,6 +424,15 @@ export async function openOrganizationAuthorityRuntime(
     openedApprovals = approvals;
     const sourceCycle = new AdmittedMeetingProcessingCycleV1({
       source,
+      source_ingestion: {
+        store: new SqliteSourceAdmissionStoreV1(authority, () => sourceState.assertCurrentSourceAdmission(source.identity)),
+        scope: {
+          organization_id: lineage.root.organization_id,
+          custody_ref: `organization:${lineage.root.organization_id}`,
+          access_policy_ref: `meeting-admission:${source.identity.adapter_id}:${source.identity.instance_id}`,
+          analysis_policy: 'automatic',
+        },
+      },
       processor,
       state: sourceState,
       stager: approvals.stager,

@@ -1868,4 +1868,98 @@ WHEN OLD.state = 'complete'
 BEGIN SELECT RAISE(ABORT, 'completed document extraction is immutable'); END;
 CREATE TRIGGER authority_person_document_work_delete_denied_v1 BEFORE DELETE ON authority_person_document_work_v1
 BEGIN SELECT RAISE(ABORT, 'document work deletion is denied'); END;
+-- Shared source admission. Provider content is separate from stable identity.
+CREATE TABLE authority_sources_v1 (
+  organization_id TEXT NOT NULL REFERENCES authority_metadata(organization_id),
+  source_id TEXT NOT NULL,
+  adapter_id TEXT NOT NULL,
+  instance_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  custody_ref TEXT NOT NULL,
+  access_policy_ref TEXT NOT NULL,
+  analysis_policy TEXT NOT NULL CHECK(analysis_policy IN ('on_request','automatic')),
+  PRIMARY KEY(organization_id, source_id),
+  UNIQUE(organization_id, adapter_id, instance_id, external_id)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE authority_source_revisions_v1 (
+  organization_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  revision_id TEXT NOT NULL,
+  adapter_version TEXT NOT NULL,
+  captured_at TEXT NOT NULL CHECK(unixepoch(captured_at) IS NOT NULL),
+  content_sha256 TEXT NOT NULL CHECK(length(content_sha256)=64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
+  revision_sha256 TEXT NOT NULL CHECK(length(revision_sha256)=64 AND revision_sha256 NOT GLOB '*[^0-9a-f]*'),
+  manifest_json TEXT NOT NULL CHECK(json_valid(manifest_json)),
+  PRIMARY KEY(organization_id,source_id,revision_id),
+  FOREIGN KEY(organization_id,source_id) REFERENCES authority_sources_v1(organization_id,source_id)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE authority_source_contents_v1 (
+  organization_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  revision_id TEXT NOT NULL,
+  content_json TEXT NOT NULL CHECK(json_valid(content_json) AND length(CAST(content_json AS BLOB))<=33554432),
+  PRIMARY KEY(organization_id,source_id,revision_id),
+  FOREIGN KEY(organization_id,source_id,revision_id) REFERENCES authority_source_revisions_v1(organization_id,source_id,revision_id)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE authority_source_representations_v1 (
+  organization_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  revision_id TEXT NOT NULL,
+  representation_id TEXT NOT NULL,
+  processor_version TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL CHECK(length(content_sha256)=64 AND content_sha256 NOT GLOB '*[^0-9a-f]*'),
+  content_json TEXT NOT NULL CHECK(json_valid(content_json) AND length(CAST(content_json AS BLOB))<=33554432),
+  PRIMARY KEY(organization_id,source_id,revision_id,representation_id),
+  FOREIGN KEY(organization_id,source_id,revision_id) REFERENCES authority_source_revisions_v1(organization_id,source_id,revision_id)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER authority_sources_v1_update_denied BEFORE UPDATE ON authority_sources_v1
+BEGIN SELECT RAISE(ABORT, 'source identity and custody are immutable'); END;
+CREATE TRIGGER authority_sources_v1_delete_denied BEFORE DELETE ON authority_sources_v1
+BEGIN SELECT RAISE(ABORT, 'source identity and custody are immutable'); END;
+CREATE TRIGGER authority_source_revisions_v1_update_denied BEFORE UPDATE ON authority_source_revisions_v1
+BEGIN SELECT RAISE(ABORT, 'source revisions are immutable'); END;
+CREATE TRIGGER authority_source_revisions_v1_delete_denied BEFORE DELETE ON authority_source_revisions_v1
+BEGIN SELECT RAISE(ABORT, 'source revisions are immutable'); END;
+CREATE TRIGGER authority_source_contents_v1_update_denied BEFORE UPDATE ON authority_source_contents_v1
+BEGIN SELECT RAISE(ABORT, 'source evidence is immutable'); END;
+CREATE TRIGGER authority_source_contents_v1_delete_denied BEFORE DELETE ON authority_source_contents_v1
+BEGIN SELECT RAISE(ABORT, 'source evidence is immutable'); END;
+CREATE TRIGGER authority_source_representations_v1_update_denied BEFORE UPDATE ON authority_source_representations_v1
+BEGIN SELECT RAISE(ABORT, 'source representations are immutable'); END;
+CREATE TRIGGER authority_source_representations_v1_delete_denied BEFORE DELETE ON authority_source_representations_v1
+BEGIN SELECT RAISE(ABORT, 'source representations are immutable'); END;
+
+CREATE TABLE authority_person_document_association_receipts_v1 (
+  organization_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  membership_id TEXT NOT NULL,
+  membership_type TEXT NOT NULL CHECK(membership_type IN ('owner','employee')),
+  request_id TEXT NOT NULL,
+  operation TEXT NOT NULL CHECK(operation IN ('associate','dissociate')),
+  command_sha256 TEXT NOT NULL CHECK(length(command_sha256) = 71 AND substr(command_sha256, 1, 7) = 'sha256:' AND substr(command_sha256, 8) NOT GLOB '*[^0-9a-f]*'),
+  receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json)),
+  receipt_sha256 TEXT NOT NULL CHECK(length(receipt_sha256) = 71 AND substr(receipt_sha256, 1, 7) = 'sha256:' AND substr(receipt_sha256, 8) NOT GLOB '*[^0-9a-f]*'),
+  committed_at TEXT NOT NULL CHECK(unixepoch(committed_at) IS NOT NULL),
+  PRIMARY KEY(organization_id, membership_id, request_id),
+  FOREIGN KEY(membership_id, organization_id, principal_id, membership_type)
+    REFERENCES authority_memberships(membership_id, organization_id, principal_id, membership_type)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER authority_person_document_association_receipts_v1_update_denied BEFORE UPDATE ON authority_person_document_association_receipts_v1
+BEGIN SELECT RAISE(ABORT, 'document association receipts are immutable'); END;
+CREATE TRIGGER authority_person_document_association_receipts_v1_delete_denied BEFORE DELETE ON authority_person_document_association_receipts_v1
+BEGIN SELECT RAISE(ABORT, 'document association receipts are immutable'); END;
+CREATE TRIGGER authority_project_auth_revision_document_association_insert
+AFTER INSERT ON authority_person_document_associations_v1
+BEGIN
+  UPDATE authority_project_authorization_state_v1 SET revision = revision + 1,
+    updated_at = CASE WHEN updated_at < NEW.associated_at THEN NEW.associated_at ELSE updated_at END
+   WHERE organization_id = NEW.organization_id;
+END;
+CREATE TRIGGER authority_project_auth_revision_document_association_delete
+AFTER DELETE ON authority_person_document_associations_v1
+BEGIN
+  UPDATE authority_project_authorization_state_v1 SET revision = revision + 1
+   WHERE organization_id = OLD.organization_id;
+END;
+
 PRAGMA user_version = 8;

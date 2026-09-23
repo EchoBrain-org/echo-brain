@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, assertPersonDocumentOriginalV1,
-  detectPersonDocumentMediaTypeV1, validatePersonDocumentUploadMetadataV1,
+  detectPersonDocumentMediaTypeV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentSavedV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1,
 } from '../src/person-documents-v1.js';
 
 const bytes = new TextEncoder().encode(`# SCOUT PRD\n${'robot requirement\n'.repeat(700)}`);
@@ -48,5 +48,15 @@ describe('document metadata rejection boundaries', () => {
   it('accepts ordinary Unicode basenames and independently selected project audience', () => {
     const project='prj_00000000-0000-4000-8000-000000000002';
     expect(validatePersonDocumentUploadMetadataV1(metadata({filename:'机器人-PRD.md', audience:{kind:'project',project_id:project},project_id:null}))).toMatchObject({filename:'机器人-PRD.md',project_id:null});
+  });
+});
+
+
+describe('minimal document admission proof',()=>{
+  it('accepts the same strict minimal object for upload replay and status, never retained metadata',()=>{
+    const value={schema_version:1,kind:'echo-person-document-saved-v1',request_id:'12345678-1234-4123-8123-123456789abc',document_id:`doc_${'a'.repeat(64)}`,received_at:'2026-09-21T22:01:00.000Z',state:'saved'};
+    expect(validatePersonDocumentUploadResultV1(value)).toEqual(value);expect(validatePersonDocumentStatusV1(value)).toEqual(value);
+    for(const extra of [{title:'private'},{audience:{kind:'team'}},{project_id:null},{sha256:`sha256:${'b'.repeat(64)}`}])expect(()=>validatePersonDocumentSavedV1({...value,...extra})).toThrow();
+    expect(()=>validatePersonDocumentSavedV1({...value,request_id:'wrong'})).toThrow();expect(()=>validatePersonDocumentSavedV1({...value,document_id:'doc_wrong'})).toThrow();expect(()=>validatePersonDocumentSavedV1({...value,schema_version:2})).toThrow();
   });
 });

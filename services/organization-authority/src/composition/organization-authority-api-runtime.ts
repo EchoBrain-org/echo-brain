@@ -1,5 +1,6 @@
 import { createPersonDocumentApplicationV1 } from '../application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../adapters/persistence/sqlite/document-v1.js';
+import { SqlitePersonTextSourceInboxV1 } from '../adapters/persistence/sqlite/person-text-source-v1.js';
 import { createPersonDocumentUploadStagingV1 } from '../adapters/files/document-upload-staging-v1.js';
 import { startPersonDocumentProcessingV1 } from './person-document-processing-v1.js';
 import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
@@ -287,7 +288,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const address = server.address();
     if (address === null || typeof address === "string")
       throw new Error("Organization Authority API did not bind TCP");
-    documentWorker = startPersonDocumentProcessingV1(documents);
+    documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database));
     let serverClosed: Promise<unknown> | undefined;
     const stopAcceptingRequests = (): void => {
       closing = true;

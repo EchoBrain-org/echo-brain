@@ -4,9 +4,10 @@ import { parseCanonicalJson } from '@echo-brain/federation-protocol';
 import {
   PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, PERSON_DOCUMENT_JSON_MAX_BYTES,
   validatePersonDocumentUploadMetadataV1, validatePersonDocumentIdV1, validatePersonUpdateRequestId,
-  validateProjectIdV1, validatePersonDocumentReceiptV1, validatePersonDocumentMetadataV1,
+  validateProjectIdV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1, validatePersonDocumentMetadataV1,
   validatePersonDocumentTextV1, validatePersonDocumentSearchResultV1,
   type PersonDocumentUploadMetadataV1,
+  validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1,
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
@@ -111,13 +112,14 @@ export function createPersonDocumentsHttpHandlerV1(
     const method = request.method ?? 'GET';
     const upload = method === 'PUT' && path.length === 1;
     const search = method === 'POST' && path.length === 1 && path[0] === 'search';
+    const association = method === 'POST' && path.length === 2 && (path[1] === 'associate' || path[1] === 'dissociate');
     const status = method === 'GET' && path.length === 2 && path[0] === 'requests';
     const read = method === 'GET' && path.length === 1;
     const original = method === 'GET' && path.length === 2 && path[1] === 'original';
     const text = method === 'GET' && path.length === 2 && path[1] === 'text';
-    if (!upload && !search && !status && !read && !original && !text) return false;
+    if (!upload && !search && !association && !status && !read && !original && !text) return false;
     const token = bearer(request);
-    if ((upload || search || status) && url.search !== '') invalid();
+    if ((upload || search || association || status) && url.search !== '') invalid();
     if (upload) {
       const requestId = validate(() => validatePersonUpdateRequestId(path[0]));
       const metadata = metadataHeader(request, requestId);
@@ -133,12 +135,25 @@ export function createPersonDocumentsHttpHandlerV1(
         if (!request.complete) invalid();
         current();
         const receipt = application.upload(token, metadata, bytes);
-        output(receipt, validatePersonDocumentReceiptV1, receipt.request_id === metadata.request_id && receipt.sha256 === metadata.sha256 && receipt.content_length === metadata.content_length && receipt.filename === metadata.filename && receipt.title === metadata.title && receipt.project_id === metadata.project_id && JSON.stringify(receipt.audience) === JSON.stringify(metadata.audience));
-        json(response, 201, receipt, validatePersonDocumentReceiptV1);
+        output(receipt, validatePersonDocumentUploadResultV1, receipt.request_id === metadata.request_id && (receipt.kind === 'echo-person-document-saved-v1' || (receipt.sha256 === metadata.sha256 && receipt.content_length === metadata.content_length && receipt.filename === metadata.filename && receipt.title === metadata.title && receipt.project_id === metadata.project_id && JSON.stringify(receipt.audience) === JSON.stringify(metadata.audience))));
+        json(response, 201, receipt, validatePersonDocumentUploadResultV1);
       } finally { uploading -= 1; }
       return true;
     }
     application.preflight(token);
+    if (association) {
+      if (header(request, 'content-type')?.split(';')[0]?.trim() !== 'application/json') invalid();
+      const id = validate(() => validatePersonDocumentIdV1(path[0]));
+      const bytes = await smallBody(request, 4096);
+      const input = validate(() => jsonInput(bytes));
+      const command = validate(() => path[1] === 'associate' ? validatePersonDocumentAssociateV1(input) : validatePersonDocumentDissociateV1(input));
+      if (command.document_id !== id) invalid();
+      current();
+      const receipt = path[1] === 'associate' ? application.associate(token, command) : application.dissociate(token, command);
+      output(receipt, validatePersonDocumentAssociationReceiptV1, receipt.document_id === id && receipt.project_id === command.project_id && receipt.request_id === command.request_id && receipt.operation === path[1]);
+      json(response, 200, receipt, validatePersonDocumentAssociationReceiptV1);
+      return true;
+    }
     if (search) {
       if (header(request, 'content-type')?.split(';')[0]?.trim() !== 'application/json') invalid();
       const bytes = await smallBody(request, 4096);
@@ -152,8 +167,8 @@ export function createPersonDocumentsHttpHandlerV1(
     if (status) {
       const id = validate(() => validatePersonUpdateRequestId(path[1]));
       const value = application.status(token, id);
-      output(value, validatePersonDocumentMetadataV1, value.request_id === id);
-      json(response, 200, value, validatePersonDocumentMetadataV1);
+      output(value, validatePersonDocumentStatusV1, value.request_id === id);
+      json(response, 200, value, validatePersonDocumentStatusV1);
       return true;
     }
     const id = validate(() => validatePersonDocumentIdV1(path[0]));

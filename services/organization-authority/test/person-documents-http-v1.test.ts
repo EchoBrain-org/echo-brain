@@ -57,6 +57,16 @@ describe('document binary HTTP boundary and real service integration',()=>{
   const original=await fetch(`${h.origin}/v1/person/documents/${receipt.document_id}/original?project_id=${PROJECT_ALPHA}`,{headers:{authorization:`Bearer ${memberToken}`}});expect(original.status).toBe(200);expect(original.headers.get('x-echo-document-sha256')).toBe(value.sha256);expect(original.headers.get('content-disposition')).toContain(encodeURIComponent(value.filename));expect(Buffer.from(await original.arrayBuffer())).toEqual(bytes);
   expect(readdirSync(h.directory)).toEqual([]);
  });
+ it('returns only the saved request proof after project removal on status and exact HTTP replay',async()=>{
+  const h=await fixture();const bytes=Buffer.from('project secret');const value=input(bytes,{audience:{kind:'project',project_id:PROJECT_ALPHA}});
+  const first=await fetch(`${h.origin}/v1/person/documents/${value.request_id}`,{method:'PUT',headers:headers(value,memberToken),body:new Uint8Array(bytes)});expect(first.status).toBe(201);const receipt=validatePersonDocumentReceiptV1(await first.json());
+  h.db.prepare(`UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE membership_id=? AND project_id=?`).run(PROJECT_CONTEXT_NOW,PEOPLE.bob.membership_id,PROJECT_ALPHA);
+  const minimal={schema_version:1,kind:'echo-person-document-saved-v1',request_id:value.request_id,document_id:receipt.document_id,received_at:receipt.received_at,state:'saved'};
+  const status=await fetch(`${h.origin}/v1/person/documents/requests/${value.request_id}`,{headers:{authorization:`Bearer ${memberToken}`}});expect(status.status).toBe(200);expect(await status.json()).toEqual(minimal);
+  const replay=await fetch(`${h.origin}/v1/person/documents/${value.request_id}`,{method:'PUT',headers:headers(value,memberToken),body:new Uint8Array(bytes)});expect(replay.status).toBe(201);expect(await replay.json()).toEqual(minimal);
+  await failure(await fetch(`${h.origin}/v1/person/documents/${receipt.document_id}/original`,{headers:{authorization:`Bearer ${memberToken}`}}),404,'not_found');
+  await failure(await fetch(`${h.origin}/v1/person/documents/requests/${value.request_id}`,{headers:{authorization:`Bearer ${token}`}}),404,'not_found');expect(readdirSync(h.directory)).toEqual([]);
+ });
  it.each([
   ['SCOUT-MRD.pdf',()=>pdf('SCOUT-END-SENTINEL'),'page'],
   ['SCOUT-PRD.docx',()=>zip(entries(['SCOUT-END-SENTINEL'])),'paragraph'],

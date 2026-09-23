@@ -19,6 +19,14 @@ export interface PersonDocumentReceiptV1 extends Omit<PersonDocumentUploadMetada
   readonly detected_media_type: PersonDocumentMediaTypeV1; readonly received_at: string;
   readonly state: 'saved'; readonly extraction_state: PersonDocumentExtractionStateV1;
 }
+/** Own account-scoped admission proof; contains no retained content or access coordinates. */
+export interface PersonDocumentSavedV1 {
+  readonly schema_version: 1; readonly kind: 'echo-person-document-saved-v1';
+  readonly request_id: string; readonly document_id: `doc_${string}`;
+  readonly received_at: string; readonly state: 'saved';
+}
+export type PersonDocumentUploadResultV1 = PersonDocumentReceiptV1 | PersonDocumentSavedV1;
+export type PersonDocumentStatusV1 = PersonDocumentMetadataV1 | PersonDocumentSavedV1;
 
 function plainObject(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new Error('Document metadata must be an object');
@@ -172,6 +180,17 @@ function documentBase(value: Record<string,unknown>): void {
 }
 export function validatePersonDocumentReceiptV1(value: unknown): PersonDocumentReceiptV1 {
   const input=plainObject(value);exactDocumentKeys(input,documentReceiptKeys);if(input.kind!=='echo-person-document-receipt-v1')throw new Error('Document receipt kind is invalid');documentBase(input);documentJsonBound(input);return input as unknown as PersonDocumentReceiptV1;
+}
+export function validatePersonDocumentSavedV1(value: unknown): PersonDocumentSavedV1 {
+  const input=plainObject(value);exactDocumentKeys(input,['schema_version','kind','request_id','document_id','received_at','state']);
+  if(input.schema_version!==1||input.kind!=='echo-person-document-saved-v1'||input.state!=='saved'||typeof input.received_at!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input.received_at)||!Number.isFinite(Date.parse(input.received_at)))throw new Error('Document saved receipt is invalid');
+  validatePersonUpdateRequestId(input.request_id);validatePersonDocumentIdV1(input.document_id);documentJsonBound(input);return input as unknown as PersonDocumentSavedV1;
+}
+export function validatePersonDocumentUploadResultV1(value: unknown): PersonDocumentUploadResultV1 {
+  return plainObject(value).kind==='echo-person-document-saved-v1'?validatePersonDocumentSavedV1(value):validatePersonDocumentReceiptV1(value);
+}
+export function validatePersonDocumentStatusV1(value: unknown): PersonDocumentStatusV1 {
+  return plainObject(value).kind==='echo-person-document-saved-v1'?validatePersonDocumentSavedV1(value):validatePersonDocumentMetadataV1(value);
 }
 export function validatePersonDocumentMetadataV1(value: unknown): PersonDocumentMetadataV1 {
   const input=plainObject(value);exactDocumentKeys(input,[...documentReceiptKeys,'extraction_detail','extractor','extracted_text_bytes']);if(input.kind!=='echo-person-document-metadata-v1')throw new Error('Document metadata kind is invalid');documentBase(input);

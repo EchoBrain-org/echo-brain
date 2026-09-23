@@ -1,5 +1,6 @@
 import { assertPersonDocumentCapacityV1 } from './document-quota-v1.js';
 import type Database from 'better-sqlite3';
+import { assertPersonRequestNamespaceV1 } from './person-request-namespace-v1.js';
 import { randomUUID } from 'node:crypto';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import { validatePersonUpdateSubmitV1, validatePersonUpdateReceiptV1, validatePersonUpdateStatusV1, validatePersonUploadContentV1, validatePersonUploadSearchResultV1, type PersonUpdateSubmitV1, type PersonUpdateReceiptV1, type PersonUpdateStatusV1, type PersonUploadContentV1, type PersonUploadSearchV1, type PersonUploadSearchResultV1, type PersonUploadVisibilityV1, type PersonUploadMetadataStateV1 } from '@echo-brain/organization-api';
@@ -49,6 +50,7 @@ export class SqlitePersonUpdateInboxV1 {
     const request = validatePersonUpdateSubmitV1(value);
     return this.database.transaction(() => {
       this.assertActive(actor);
+      assertPersonRequestNamespaceV1(this.database, actor, request.request_id, 'legacy_text');
       const digest = canonicalSha256(request);
       const existing = this.read(actor, request.request_id);
       if (existing !== undefined) {

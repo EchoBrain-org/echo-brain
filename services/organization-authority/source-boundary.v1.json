@@ -397,7 +397,8 @@
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel"
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-processing"
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": [
@@ -466,7 +467,8 @@
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel"
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-processing"
       ],
       "allowed_external_packages": [
         "better-sqlite3"
@@ -651,6 +653,18 @@
         "dns",
         "zlib"
       ]
+    },
+    {
+      "name": "authority-source-adapters-implement-source-port",
+      "from": "services/organization-authority/src/adapters/sources/**",
+      "allowed_imports": [
+        "services/organization-authority/src/application/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-processing"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     }
   ]
 }

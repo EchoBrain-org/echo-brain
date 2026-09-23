@@ -498,6 +498,28 @@ function liveCycle(
 }
 
 describe("admitted meeting-processing cycle", () => {
+  it.each(["fixed", "resolved"] as const)("rejects %s on-request policy before admission, analysis or cursor advancement", async (kind) => {
+    let admitted = false;
+    let extracted = false;
+    const state = new FakeState(admission());
+    const scope = { organization_id: "org-1", custody_ref: "organization:org-1", access_policy_ref: "meeting-source:fixture", analysis_policy: "on_request" as const };
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()], next_cursor: fixtureCursor("2026-08-22T02:05:00.000Z") }),
+      source_ingestion: {
+        scope: kind === "fixed" ? scope : () => scope,
+        store: { admitSourceRevision: async () => { admitted = true; return "admitted"; } },
+      },
+      processor: processor((value) => { extracted = true; return decisions(value); }),
+      state,
+      stager: stager({ kind: "staged", stage_id: "never" }),
+    });
+    await expect(cycle.runOnce()).rejects.toThrow("automatic meeting processing requires automatic source analysis policy");
+    expect(admitted).toBe(false);
+    expect(extracted).toBe(false);
+    expect(state.advances).toHaveLength(0);
+    expect(state.candidates).toHaveLength(0);
+  });
+
   it("durably admits meeting context before analysis and does not lose it when analysis fails", async () => {
     const events: string[] = [];
     const state = new FakeState(admission());
