@@ -4,7 +4,7 @@ Updated: 2026-09-23. This records the conversation's decisions and the proposed 
 
 ## Current position
 
-SCOUT is not ready for the intended document-capable live kickoff. PR #206 implements the source-ingestion and document/client changes described below. The original reviewed candidate was `6d90a187221258bba37a8b7a052c12f3911dc002`; its earlier passing checks did not cover subsequently discovered defects. Final code-check evidence belongs in the PR. Installed-client and live readiness still require separate qualification.
+SCOUT is not ready for the intended document-capable live kickoff. PR #206 is merged and implements the source-ingestion and document/client changes described below. Its final reviewed code is `4b8bdcf663e4819ce51d0d8c3bf883ba8f2e1409`; all five checks passed in [CI run 35840845610](https://github.com/EchoBrain-org/echo-brain/actions/runs/35840845610). Installed-client and live readiness still require separate qualification.
 
 This readiness assessment refers to the reviewed candidate. Installed client and serving Authority identities must be verified during release qualification; this document does not assert their current versions.
 
@@ -32,7 +32,13 @@ The PR contains the code and regression coverage for gates 1–5. Final reposito
 | 5. Access isolation and usable retrieval | Provide supported project discovery, search, original/text read and download through each role's own account. Authorize metadata, originals, derived content and citations consistently using current grants. | Four-account access matrix for only-me/team/project audiences; association does not widen audience; cross-person privacy is exercised; full document reference and version can be cited by each role. |
 | 6. Release and operational qualification | Use the reviewed operator lane for an explicitly selected fresh V8 staging setup; build matched Authority/Mac/Linux artifacts; run required checks; release through the exact-candidate human decision. The user confirmed all staging data is disposable and there are no live users, so retained-data migration is not a launch gate. | Identify installed/serving versions, verify restart recovery within the new setup, then run the document acceptance matrix against those artifacts. Capture receipts, hashes, identities and failures. |
 
-The 25 MiB maximum is the current candidate target. Document and verify the final supported limit, format set, extraction bounds and quota behavior. Do not describe PDF/DOCX support as support for every possible document; scanned/encrypted inputs need accurate extraction outcomes. Validate bounded processing on representative large inputs.
+## Temporary capacity limits for this rehearsal
+
+The current implementation allows **100 saved Person uploads per employee/person's organization membership** and **1,000 across the organization**. **Editor notes and uploaded files count together**, across all projects and audiences. Document originals additionally have **250 MiB per membership**, **25 GiB per organization**, and **25 MiB per file** limits. The [feature contract](../../features/project-documents-v1.md#current-v1-capacity-limits) defines the accounting and rejection behavior.
+
+Budget fixture uploads before each phase. These are cumulative caps with no time-based reset or server-side deletion command; unlinking a document or clearing a local retry copy does not free quota. Existing reads and exact saved-request retries remain available. Failed extraction still counts because the original was saved. At 20 members, the organization cap allows only 50 uploads per person on average. Revisit capacity and quota management before the longer or 10–20-person simulation; the initial four-account rehearsal must stay within these limits.
+
+Verify these limits, the supported format set and extraction bounds on the released artifacts. Do not describe PDF/DOCX support as support for every possible document; scanned/encrypted inputs need accurate extraction outcomes. Validate bounded processing on representative large inputs.
 
 The earlier stress report's cross-person privacy result was NOT RUN and therefore remains open. Its isolated Ask 503 remains an unresolved Ask reliability finding. If Ask is exercised in a later checkpoint, reproduce or characterize that failure and validate source access/citations before making an Ask reliability claim. Do not hide failed operations with retries or treat the old stress score as qualification for a new candidate.
 

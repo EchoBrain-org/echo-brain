@@ -1,6 +1,6 @@
 # Project documents V1
 
-Status: implementation candidate. Not deployed or accepted on an installed client. This feature adds file custody and retrieval; it does not add project documents to Ask or approve their contents as decisions. The accepted extension to the earlier text-only scope is [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md).
+Status: merged in PR #206; deployment and installed-client acceptance remain pending. This feature adds file custody and retrieval; it does not add project documents to Ask or approve their contents as decisions. The accepted extension to the earlier text-only scope is [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md).
 
 ## User behavior
 
@@ -12,6 +12,23 @@ Hardware, Software and QA participants can discover authorized documents in thei
 
 Audience and project association have separate controls. An uploader who can read the document and belongs to a target project may link it after upload. An uploader or current project lead who can read it may remove that link. A second project association conflicts: remove the existing link before linking another project. Association changes never edit the original or its audience, and an uncertain mutation retains its exact request for retry. Metadata reports the current association; the immutable full upload receipt retains the initial association. Recovery must not mistake a valid later link change for a changed original.
 
+## Current V1 capacity limits
+
+These are temporary limits for the initial release and SCOUT rehearsal, not a target for long-term company use. They are fixed in this version; there is no quota configuration or reset command.
+
+| Scope | Maximum saved uploads | Maximum retained document bytes |
+| --- | --- | --- |
+| Each employee/person's organization membership | **100** | **250 MiB** |
+| Entire organization | **1,000** | **25 GiB** |
+
+**Notes and files share the upload count.** For example, 80 documents plus 20 editor notes fills one person's 100-upload allowance. Counts span all projects and audiences, including Only me; the organization total includes every member. The personal cap is tied to the organization membership tenure, not a device or project. These limits apply to Person uploads, not meeting or other adapter sources.
+
+Document byte quotas count retained file originals only. Editor notes use an upload slot but do not consume that byte budget. Each file is also limited to **25 MiB**. Whichever applicable cap is reached first prevents a new save; ten 25 MiB files exhaust a person's document byte budget even though only ten upload slots are used. Small editor notes can still save until an item-count cap is reached.
+
+These are cumulative retained-content limits, with no daily or monthly reset. Saved originals count even when extraction fails. Removing a project association, abandoning a local retry copy, or a contributor leaving does not delete the retained original or free organization capacity. Exact retries of an already saved request do not consume another slot; existing authorized reads remain available when a quota is full. This version has no server-side original deletion command.
+
+A rejected document returns `quota_exceeded` (HTTP 409); legacy note count-cap errors retain their existing `rate_limited` contract. Waiting alone does not restore capacity. Revisit these caps and quota management before a longer simulation or the planned 10–20-person scale-up: with 20 members, the 1,000-upload organization cap permits only 50 uploads per person on average, despite the individual cap of 100.
+
 ## Permissions and custody
 
 Only me, organization (`team`) and project audiences remain independent of project association. Reads opened inside a project require both a current project grant and association with that project, in addition to the audience check. Global retrieval follows the audience independently. Current authorization is rechecked and a minimized audit committed before response release. Request replay is scoped to the uploader's exact organization membership tenure and commits the entire immutable payload. Request IDs share the Person mutation namespace, so reusing an ID for another operation conflicts.
@@ -20,7 +37,7 @@ Accepted shared documents remain in Authority custody. A contributor's departure
 
 After losing project access, the uploader's still-active original membership may recover a minimal `echo-person-document-saved-v1` receipt. It contains schema/kind, request ID, document ID, receipt time and saved state, without title, filename, audience, project IDs or bytes. Status and an exact upload replay can return that proof without restoring content access.
 
-V8 separates immutable metadata, original BLOBs, extracted chunks, work state, associations, receipts and audits. Lists and searches never load original BLOBs. Original admission, quota accounting, receipt and initial extraction work commit together. The retained-item count caps remain shared across notes and documents: **100 originals per membership**, **1,000 per organization**. Document bytes have separate caps of **250 MiB per membership** and **25 GiB per organization**. Filling the document byte budget does not prevent small editor notes; the shared item count still applies. A rejected document returns `quota_exceeded` (HTTP 409); legacy note count-cap errors retain their existing `rate_limited` contract. These are retained-corpus limits, not rolling rate limits; this version has no deletion or quota-reset command.
+V8 separates immutable metadata, original BLOBs, extracted chunks, work state, associations, receipts and audits. Lists and searches never load original BLOBs. Original admission, [quota accounting](#current-v1-capacity-limits), receipt and initial extraction work commit together.
 
 Document search uses an opaque continuation bound to its account and query with the last returned sort key. New uploads do not shift an offset and repeat earlier results. Text pages use bounded chunk ordinals tied to the original and extractor. Continuation never grants access; each page applies current authorization again.
 
