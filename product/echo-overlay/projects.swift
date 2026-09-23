@@ -570,6 +570,8 @@ final class ProjectSession {
     private let defaults: ProjectMutationRecoveryStore
     var onChange: (() -> Void)?
     var onAccessChanged: (() -> Void)?
+    /// Only terminal authorization/account loss, never an ordinary fresh read.
+    var onAccessLost: (() -> Void)?
     private let foreground: @MainActor () -> Bool
     private(set) var identity: AccountIdentity?
     private(set) var availability = Availability.checking
@@ -677,12 +679,14 @@ final class ProjectSession {
         guard !busy, let selected, let cursor = directoryCursor else { return }
         run(.directory(selected.project_id, directoryQuery, cursor))
     }
+    /// Load another feed/search page without discarding the rows already shown.
+    /// A cursor is an opaque continuation, so dedupe on the stable context id.
     func nextPage() {
         guard !busy, let page, let cursor = pageCursor else { return }
-        clearContent()
+        content = nil
         switch page {
-        case .feed(let project, _): run(.feed(project, cursor))
-        case .search(let project, let query, _): run(.search(project, query, cursor))
+        case .feed(let project, _): status = "Loading project context…"; run(.feed(project, cursor))
+        case .search(let project, let query, _): status = "Searching this project…"; run(.search(project, query, cursor))
         default: break
         }
     }
@@ -757,7 +761,7 @@ final class ProjectSession {
     }
     func accessLost() {
         if !hasOutstandingMutation { cancel() }
-        clearAll(); invalidateDrafts(); onChange?()
+        clearAll(); invalidateDrafts(); onAccessLost?(); onChange?()
     }
     // Recovery locators survive normal termination. A command is not launched
     // until its locator has been acknowledged by the recovery store.
@@ -815,8 +819,13 @@ final class ProjectSession {
                 }
                 self.status = members.isEmpty ? "No members on this page." : "Current project members. Leads manage membership."
             case .items(let items, let cursor):
-                self.items = items; self.pageCursor = cursor; self.page = command
-                self.status = items.isEmpty ? "No context you can read on this page." : "Select an original to read."
+                if case .feed(_, let from) = command, from != nil {
+                    self.items += items.filter { next in !self.items.contains { $0.context_id == next.context_id } }
+                } else if case .search(_, _, let from) = command, from != nil {
+                    self.items += items.filter { next in !self.items.contains { $0.context_id == next.context_id } }
+                } else { self.items = items }
+                self.pageCursor = cursor; self.page = command
+                self.status = self.items.isEmpty ? "No context you can read on this page." : "Select an original to read."
             case .content(let content): self.content = content; self.status = ""
             case .applied(let project):
                 guard ProjectMutationRecovery.clear(for: identity, defaults: self.defaults) else {
@@ -831,6 +840,7 @@ final class ProjectSession {
                 self.open(project); return
             case .failure(let failure):
                 self.clearAll(); self.invalidateDrafts()
+                if failure.losesAccess { self.onAccessLost?() }
                 if command.operation == "list", failure.code == "not_found", failure.status == 404 {
                     self.availability = .notLive; self.status = "Projects · Not live yet"
                 } else {
@@ -842,7 +852,7 @@ final class ProjectSession {
                 // committed attempt. Keep the frozen pending command.
             case .accountChanged:
                 self.clearAll(); self.identity = nil; self.pending = nil; self.availability = .checking; self.createdProjectID = nil
-                self.invalidateDrafts(); self.status = "Your account changed. Reopen ECHO after signing in."
+                self.invalidateDrafts(); self.onAccessLost?(); self.status = "Your account changed. Reopen ECHO after signing in."
                 self.notice = self.status
             }
             self.onChange?()
@@ -1038,6 +1048,30 @@ class HoverButton: NSButton {
 
 /// A small glyph button (titlebar, "…" menus). It may pop a menu instead of
 /// sending its action.
+/// Back: a chevron and the page it returns to. The visible destination avoids
+/// ambiguous navigation when a project reader, documents, and Ask share a window.
+final class BackButton: HoverButton {
+    static let maximumWidth: CGFloat = 180
+    private let labelFont = NSFont.systemFont(ofSize: 13)
+
+    override init() { super.init(); setAccessibilityLabel("Back") }
+    @available(*, unavailable) required init?(coder: NSCoder) { nil }
+    override var title: String {
+        didSet { setAccessibilityLabel(title.isEmpty ? "Back" : "Back to \(title)"); needsDisplay = true }
+    }
+    var fittingWidth: CGFloat { min(Self.maximumWidth, 6 + 10 + 5 + textWidth(title, labelFont) + 8) }
+    override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill() }
+    override func draw(_ dirtyRect: NSRect) {
+        let active = isEnabled && (isHighlighted || hovering)
+        if active { EchoTheme.text.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill(); NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill() }
+        let color = active ? EchoTheme.text : EchoTheme.mutedText
+        let chevron = NSRect(x: 6, y: 0, width: 10, height: bounds.height)
+        if let image = tintedSymbol("chevron.left", size: 12, weight: .semibold, color: color) { drawImage(image, centeredIn: chevron) }
+        let x = chevron.maxX + 5
+        drawLine(title, font: labelFont, color: color, in: NSRect(x: x, y: 0, width: bounds.width - x - 8, height: bounds.height))
+    }
+}
+
 final class IconButton: HoverButton {
     var symbolName: String { didSet { needsDisplay = true } }
     var round = false
@@ -1087,7 +1121,7 @@ final class IconButton: HoverButton {
 
 /// The 34pt circles: bar write/send, compose attach/send, clear search.
 final class CircleButton: HoverButton {
-    enum Style { case quiet, attach, gold, clear }
+    enum Style { case quiet, attach, gold, clear, close }
     private let symbolName: String
     private let style: Style
     private let progress = NSProgressIndicator()
@@ -1130,6 +1164,8 @@ final class CircleButton: HoverButton {
             fill = EchoTheme.text.withAlphaComponent(isHighlighted ? 0.16 : (hovering && isEnabled ? 0.12 : 0.08)); glyph = EchoTheme.mutedText
         case .clear:
             fill = EchoTheme.text.withAlphaComponent(isHighlighted ? 0.20 : 0.12); glyph = EchoTheme.mutedText
+        case .close:
+            fill = EchoTheme.text.withAlphaComponent(isHighlighted ? 0.20 : (hovering && isEnabled ? 0.14 : 0.08)); glyph = EchoTheme.mutedText
         }
         fill.withAlphaComponent(fill.alphaComponent * alpha).setFill()
         NSBezierPath(ovalIn: bounds).fill()
@@ -1806,6 +1842,8 @@ final class ComposeTextView: NSTextView {
 
 private final class ProjectsWindow: NSWindow {
     var onCancel: (() -> Void)?
+    /// Main-window-only navigation; sheets leave this unset.
+    var onBack: (() -> Void)?
 
     // Accessory apps have no Edit menu to route field-editor shortcuts.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -1825,11 +1863,18 @@ private final class ProjectsWindow: NSWindow {
            let editor = firstResponder as? NSTextView {
             editor.undoManager?.redo(); return true
         }
+        if modifiers == .command, event.charactersIgnoringModifiers == "[", let onBack {
+            onBack(); return true
+        }
         return super.performKeyEquivalent(with: event)
     }
 
     override func cancelOperation(_ sender: Any?) {
         if let onCancel { onCancel() } else { super.cancelOperation(sender) }
+    }
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 3, let onBack { onBack(); return }
+        super.otherMouseDown(with: event)
     }
 }
 
@@ -1902,6 +1947,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     private let retry = pill("Retry same save", .quiet, height: 30, target: nil, action: nil)
     private let another = pill("Write new…", .quiet, height: 30, target: nil, action: nil)
     private let closeButton = pill("Close", .quiet, height: 30, target: nil, action: nil)
+    private let sheetClose = CircleButton(symbol: "xmark", label: "Close", style: .close)
     private var targets: [ComposeTarget] = []
     private(set) var target = ComposeTarget.onlyMe
     private var associationTargets: [ComposeTarget] = []
@@ -1955,7 +2001,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         }
         if let admitted = admittedIdentity, admitted != session.identity {
             setBody(""); loadedFile = nil
-            if strandedStatus == nil, !session.hasOutstandingMutation, isPresented { close(); return }
+            if strandedStatus == nil, !session.hasOutstandingMutation, isPresented { closeNow(); return }
         }
         admittedIdentity = session.identity
         // A confirmed receipt this sheet did not produce (an earlier note
@@ -1987,6 +2033,8 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         associationChip.title = associationChip.choices[associationChip.selectedIndex]
 
         let sending = session.hasOutstandingMutation
+        sheetClose.isEnabled = !sending
+        closeButton.isHidden = true
         let stranded = strandedStatus != nil && !sending
         let sent = !stranded && owns && session.receipt != nil
         let attention = stranded || (!sent && session.recovery != nil && session.receipt == nil && !sending)
@@ -2031,7 +2079,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
             check.isHidden = stranded || session.recovery == nil; check.isEnabled = !session.busy
             retry.isHidden = stranded || !session.canRetry; retry.isEnabled = !session.busy
             another.isHidden = stranded || session.identity == nil; another.isEnabled = !session.busy
-            closeButton.isHidden = false; closeButton.isEnabled = !session.hasOutstandingMutation
+            closeButton.isHidden = true; closeButton.isEnabled = false
         }
     }
 
@@ -2068,13 +2116,13 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         snapshotGeneration = UUID(); preparingFile = false; setBody(""); loadedFile = nil
         if session?.hasOutstandingMutation != true {
             target = .onlyMe
-            if isPresented { close() }
+            if isPresented { closeNow() }
         }
     }
 
     func accountWillChange() {
         snapshotGeneration = UUID(); preparingFile = false; setBody(""); loadedFile = nil
-        if session?.hasOutstandingMutation != true, isPresented { close() }
+        if session?.hasOutstandingMutation != true, isPresented { closeNow() }
         refresh()
     }
 
@@ -2169,7 +2217,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     @objc private func finish() {
         // Start the next note before the parent regains key and refreshes.
         session?.startAnother()
-        close()
+        closeNow()
     }
     @objc private func checkSave() { session?.checkStatus() }
     @objc private func retrySave() { session?.retry() }
@@ -2187,7 +2235,17 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         }
     }
 
-    @objc private func close() {
+    @objc private func requestClose() {
+        guard session?.hasOutstandingMutation != true else { return }
+        let hasUnsentDraft = !body.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || loadedFile != nil
+        let needsDiscardConfirmation = hasUnsentDraft && session?.receipt == nil && session?.recovery == nil
+        guard needsDiscardConfirmation else { closeNow(); return }
+        confirm("Discard this note?", detail: "", action: "Discard", cancel: "Keep writing", on: sheet) { [weak self] in
+            self?.closeNow()
+        }
+    }
+
+    private func closeNow() {
         guard session?.hasOutstandingMutation != true, let parent = sheet.sheetParent else { return }
         // A confirm alert or file panel never outlives the sheet it belongs to.
         if let child = sheet.attachedSheet { sheet.endSheet(child, returnCode: .cancel) }
@@ -2202,7 +2260,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
 
     private func build() {
         guard let root = sheet.contentView else { return }
-        sheet.onCancel = { [weak self] in self?.close() }
+        sheet.onCancel = { [weak self] in self?.requestClose() }
         let to = label("To", size: 13, color: EchoTheme.faintText)
         mark(toChip, "compose-to", label: "Send to")
         toChip.onChoose = { [weak self] index in self?.chooseTarget(index) }
@@ -2224,7 +2282,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         body.delegate = self
         mark(body, "compose-body", label: "Original note text")
         body.onDropFile = { [weak self] url in self?.load(url) }
-        body.onCancel = { [weak self] in self?.close() }
+        body.onCancel = { [weak self] in self?.requestClose() }
         body.registerForDraggedTypes([.fileURL])
         bodyScroll.documentView = body; bodyScroll.drawsBackground = false
         bodyScroll.hasVerticalScroller = true; bodyScroll.autohidesScrollers = true; bodyScroll.borderType = .noBorder
@@ -2249,7 +2307,8 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         mark(check, "compose-check"); check.target = self; check.action = #selector(checkSave)
         mark(retry, "compose-retry"); retry.target = self; retry.action = #selector(retrySave)
         mark(another, "compose-new"); another.target = self; another.action = #selector(writeNew)
-        mark(closeButton, "compose-close"); closeButton.target = self; closeButton.action = #selector(close)
+        mark(closeButton, "compose-close"); closeButton.target = self; closeButton.action = #selector(requestClose)
+        mark(sheetClose, "sheet-close", label: "Close"); sheetClose.target = self; sheetClose.action = #selector(requestClose)
         outcomeMark.imageScaling = .scaleNone
         outcomeMark.translatesAutoresizingMaskIntoConstraints = false
         outcomeMark.widthAnchor.constraint(equalToConstant: 44).isActive = true
@@ -2264,15 +2323,19 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
 
         composeGroup.translatesAutoresizingMaskIntoConstraints = false
         outcome.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(composeGroup); root.addSubview(outcome)
+        root.addSubview(composeGroup); root.addSubview(outcome); root.addSubview(sheetClose)
+        sheetClose.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             composeGroup.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
             composeGroup.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
-            composeGroup.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
+            composeGroup.topAnchor.constraint(equalTo: root.topAnchor, constant: 54),
             composeGroup.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
             outcome.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             outcome.centerYAnchor.constraint(equalTo: root.centerYAnchor),
             outcome.widthAnchor.constraint(lessThanOrEqualToConstant: 480),
+            sheetClose.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            sheetClose.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
+            sheetClose.widthAnchor.constraint(equalToConstant: 28), sheetClose.heightAnchor.constraint(equalToConstant: 28),
 
             to.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor),
             to.centerYAnchor.constraint(equalTo: toChip.centerYAnchor),
@@ -2324,6 +2387,7 @@ final class ProjectPeopleSheet: NSObject {
     private lazy var scroll = listScroll(list)
     private let addBox = FieldBox(stroke: EchoTheme.border, radius: 8)
     private let addField = NSTextField()
+    private let sheetClose = CircleButton(symbol: "xmark", label: "Close", style: .close)
     private let notice = NSTextField(wrappingLabelWithString: "")
     private var toBottom: NSLayoutConstraint?
     private var toField: NSLayoutConstraint?
@@ -2376,6 +2440,7 @@ final class ProjectPeopleSheet: NSObject {
         addField.isEnabled = manage
         toField?.isActive = lead; toBottom?.isActive = !lead
         notice.stringValue = projects.notice; notice.isHidden = projects.notice.isEmpty
+        sheetClose.isEnabled = !projects.hasOutstandingMutation
 
         let viewer = projects.identity?.membershipID
         let key = [String(lead), String(manage), String(projects.memberCursor != nil), String(projects.directoryCursor != nil), viewer ?? ""]
@@ -2501,7 +2566,7 @@ final class ProjectPeopleSheet: NSObject {
     }
 
     @objc func close() {
-        guard isPresented else { return }
+        guard isPresented, projects?.hasOutstandingMutation != true else { return }
         // A confirm alert never outlives the sheet it belongs to.
         if let child = sheet.attachedSheet { sheet.endSheet(child, returnCode: .cancel) }
         isPresented = false; signature = ""
@@ -2514,20 +2579,20 @@ final class ProjectPeopleSheet: NSObject {
         guard let root = sheet.contentView else { return }
         sheet.onCancel = { [weak self] in self?.close() }
         let heading = label("People", size: 17, weight: .semibold)
-        let done = pill("Done", .quiet, height: 30, target: self, action: #selector(close))
-        mark(done, "people-done"); done.keyEquivalent = "\u{1b}"
+        mark(sheetClose, "sheet-close", label: "Close"); sheetClose.target = self; sheetClose.action = #selector(close)
         boxedField(addField, in: addBox, placeholder: "Find people by name", size: 14)
         mark(addField, "people-add-field", label: "Find people by name")
         addField.target = self; addField.action = #selector(findPeople)
         notice.font = .systemFont(ofSize: 12.5); notice.textColor = EchoTheme.faintText
-        for view in [heading, done, scroll, notice, addBox] { view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view) }
+        for view in [heading, sheetClose, scroll, notice, addBox] { view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view) }
         toField = notice.bottomAnchor.constraint(equalTo: addBox.topAnchor, constant: -10)
         toBottom = notice.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20)
         NSLayoutConstraint.activate([
-            heading.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22),
-            heading.topAnchor.constraint(equalTo: root.topAnchor, constant: 22),
-            done.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
-            done.centerYAnchor.constraint(equalTo: heading.centerYAnchor),
+            sheetClose.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            sheetClose.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
+            sheetClose.widthAnchor.constraint(equalToConstant: 28), sheetClose.heightAnchor.constraint(equalToConstant: 28),
+            heading.leadingAnchor.constraint(equalTo: sheetClose.trailingAnchor, constant: 10),
+            heading.centerYAnchor.constraint(equalTo: sheetClose.centerYAnchor),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
             scroll.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 14),
@@ -2570,6 +2635,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
     private let addFiles = pill("Add files…", .quiet, height: 30, target: nil, action: nil)
     private let finishFirst = label("Finish the last save first.", size: 12.5, color: EchoTheme.faintText)
     private let notice = NSTextField(wrappingLabelWithString: "")
+    private let sheetClose = CircleButton(symbol: "xmark", label: "Close", style: .close)
     private let cancel = pill("Cancel", .quiet, height: 34, target: nil, action: nil)
     private let submit = pill("Create", .primary, height: 34, target: nil, action: nil)
     private let done = pill("Done", .primary, height: 34, target: nil, action: nil)
@@ -2585,6 +2651,9 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
     // receipt for *this* create counts as "created".
     private var createdBefore: String?
     private var createdNotOpened: String?
+    /// A Create pressed during a read reload is retained and starts only after
+    /// that read ends. Mutations, recovery, and lost access never queue it.
+    private var queuedCreate: String?
     private var closeRequested = false
     private var focusAdd = false
     private var files: [QueuedFile] = []
@@ -2617,7 +2686,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
     func present(over parent: NSWindow, projects: ProjectSession, uploads: UploadSession) {
         guard !isPresented else { return }
         self.projects = projects; self.uploads = uploads; admittedIdentity = uploads.identity
-        project = nil; files = []; awaitingCreate = false; createdFrom = nil; createdBefore = nil; createdNotOpened = nil
+        project = nil; files = []; awaitingCreate = false; createdFrom = nil; createdBefore = nil; createdNotOpened = nil; queuedCreate = nil
         closeRequested = false; focusAdd = false
         didLoadRoster = false; didLoadDirectory = false
         peopleSignature = ""; fileSignature = ""; fileProblem = ""; addField.stringValue = ""
@@ -2677,8 +2746,13 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
             focusAdd = true
         }
         if let selected = projects.selected, selected.project_id == project?.project_id { project = selected }
+        if let queued = queuedCreate, project == nil {
+            if projects.canMutate { queuedCreate = nil; startCreate(queued, projects); return }
+            if !canQueueCreate(projects) { queuedCreate = nil }
+        }
         pump()
         if closeRequested && !inFlight { close(); return }
+        sheetClose.isEnabled = !inFlight
         first.isHidden = project != nil
         second.isHidden = project == nil
         notice.stringValue = fileProblem.isEmpty ? projects.notice : fileProblem; notice.isHidden = notice.stringValue.isEmpty
@@ -2695,9 +2769,9 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
                 notice.stringValue = "Created, but it did not open."; notice.isHidden = false
             } else {
                 let pendingCreate: Bool = { if case .create = projects.pending { return true }; return false }()
-                submit.title = pendingCreate ? "Retry" : "Create"
-                submit.isEnabled = pendingCreate ? !projects.busy : (ProjectWire.text(normalizedName, max: 200) && projects.canMutate)
-                nameField.isEnabled = !projects.hasOutstandingMutation && !pendingCreate
+                submit.title = pendingCreate ? "Retry" : (queuedCreate == nil ? "Create" : "Creating when ready…")
+                submit.isEnabled = pendingCreate ? !projects.busy : (queuedCreate == nil && ProjectWire.text(normalizedName, max: 200) && (projects.canMutate || canQueueCreate(projects)))
+                nameField.isEnabled = !projects.hasOutstandingMutation && !pendingCreate && queuedCreate == nil
                 cancel.title = "Cancel"; cancel.isEnabled = !projects.hasOutstandingMutation
             }
             fitHeight()
@@ -2900,12 +2974,25 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
             projects.retry(); return
         }
         let name = normalizedName
-        guard ProjectWire.text(name, max: 200), projects.canMutate else { return }
+        guard ProjectWire.text(name, max: 200), queuedCreate == nil else { return }
+        guard projects.canMutate else {
+            if canQueueCreate(projects) { queuedCreate = name; refresh() }
+            return
+        }
+        startCreate(name, projects)
+    }
+
+    private func startCreate(_ name: String, _ projects: ProjectSession) {
         createdFrom = projects.selected?.project_id; createdBefore = projects.createdProjectID
         projects.create(name)
         // Only a create the session actually recorded is awaited.
         if case .create = projects.pending { awaitingCreate = true }
         refresh()
+    }
+
+    private func canQueueCreate(_ projects: ProjectSession) -> Bool {
+        projects.busy && !projects.hasOutstandingMutation && projects.pending == nil && !projects.needsRecoveryReview
+            && projects.availability == .live && projects.identity != nil && admittedIdentity != nil && !closeRequested
     }
 
     @objc private func findPeople() {
@@ -2968,7 +3055,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
         guard isPresented else { return }
         // A confirm alert or file panel never outlives the sheet it belongs to.
         if let child = sheet.attachedSheet { sheet.endSheet(child, returnCode: .cancel) }
-        snapshotGeneration = UUID(); isPresented = false; awaitingCreate = false; closeRequested = false
+        snapshotGeneration = UUID(); isPresented = false; awaitingCreate = false; queuedCreate = nil; closeRequested = false
         for index in files.indices { files[index].snapshot = nil }
         onWillClose?()
         if let parent = sheet.sheetParent { parent.endSheet(sheet) }
@@ -2978,11 +3065,12 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
     private func build() {
         guard let root = sheet.contentView else { return }
         sheet.onCancel = { [weak self] in self?.cancelOrDone() }
+        mark(sheetClose, "sheet-close", label: "Close"); sheetClose.target = self; sheetClose.action = #selector(cancelOrDone)
         boxedField(nameField, in: nameBox, placeholder: "Name", size: 20, weight: .semibold)
         mark(nameField, "create-name", label: "Project name")
         nameField.delegate = self; nameField.target = self; nameField.action = #selector(createProject)
         mark(submit, "create-submit"); submit.target = self; submit.action = #selector(createProject)
-        cancel.target = self; cancel.action = #selector(cancelOrDone); cancel.keyEquivalent = "\u{1b}"
+        cancel.isHidden = true; cancel.target = self; cancel.action = #selector(cancelOrDone); cancel.keyEquivalent = "\u{1b}"
         mark(done, "create-done"); done.target = self; done.action = #selector(cancelOrDone)
         mark(addFiles, "create-add-files"); addFiles.target = self; addFiles.action = #selector(chooseFiles)
         mark(filesBox, "create-files")
@@ -2999,9 +3087,12 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
         for view in [fileScroll, addFiles, finishFirst] {
             view.translatesAutoresizingMaskIntoConstraints = false; filesBox.addSubview(view)
         }
-        for view in [first, second, notice] { view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view) }
+        for view in [first, second, notice, sheetClose] { view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view) }
         let footerGuide = NSLayoutGuide(); root.addLayoutGuide(footerGuide)
         NSLayoutConstraint.activate([
+            sheetClose.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
+            sheetClose.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
+            sheetClose.widthAnchor.constraint(equalToConstant: 28), sheetClose.heightAnchor.constraint(equalToConstant: 28),
             footerGuide.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
             footerGuide.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
             footerGuide.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -22),
@@ -3014,7 +3105,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
             NSLayoutConstraint.activate([
                 group.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
                 group.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
-                group.topAnchor.constraint(equalTo: root.topAnchor, constant: 28),
+                group.topAnchor.constraint(equalTo: root.topAnchor, constant: 54),
             ])
         }
         // Only the visible step is pinned to the bottom (see fitHeight), so
@@ -3144,7 +3235,14 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     private var observedIdentity: AccountIdentity?
     var onActivateAnswer: (() -> Void)?
     var onResizeAnswer: (() -> Void)?
+    /// main.swift cancels/removes an answer whose authorization scope was lost.
+    var onInvalidateAnswer: (() -> Void)?
     var onPeople: (() -> Void)?
+    /// main.swift supplies an Ask subpage (currently Sources) without coupling
+    /// this navigation adapter to answer/source transport details.
+    var askSubPage: (() -> String?)?
+    var closeAskSubPage: (() -> Void)?
+    func askPageChanged() { refresh() }
     var accountMenu: NSMenu?
 
     private let sidebar = SidebarView()
@@ -3154,9 +3252,10 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     // carries the same text for the Window menu and accessibility.
     private let titleLabel = label("ECHO", size: 13, weight: .semibold, color: EchoTheme.mutedText)
     private var renderedTitle: String?
+    private var titleRoom: NSLayoutConstraint?
     private var sidebarWidth: NSLayoutConstraint?
     private let sidebarToggle = IconButton(symbol: "sidebar.left", label: "Show sidebar", size: 14)
-    private let back = IconButton(symbol: "chevron.left", label: "Back", size: 13)
+    private let back = BackButton()
     private let peopleButton = PeopleStackButton()
     private lazy var captureRow = SidebarRowButton(title: "Capture", symbol: "plus.app", target: self, action: #selector(captureAction))
     private lazy var newProjectRow = SidebarRowButton(title: "New project", symbol: "folder.badge.plus", target: self, action: #selector(newProject))
@@ -3193,6 +3292,20 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     private var pendingRead: String?
     private var pendingSearch: String?
     private var shownProjectQuery: String?
+    /// A paged list and its vertical position are restored after a sheet,
+    /// reader, or child project returns. The source remains authorized through
+    /// the normal fresh read; this only restores presentation state.
+    private struct ListPlace { let rows: Int; let offset: CGFloat; let query: String? }
+    private var listPlace: ListPlace?
+    private var homePlace: ListPlace?
+    private var scrollTarget: CGFloat?
+    private struct ProjectOrigin { let id: String; let name: String; let query: String?; let reading: String?; let documentID: String?; let list: ListPlace? }
+    private var createOrigin: ProjectOrigin?
+    /// Project presentation behind a scoped Ask. The answer is a different
+    /// page, so Back returns through a fresh authorized reader/list restore.
+    private var askOrigin: ProjectOrigin?
+    private var restoreDocumentID: String?
+    private var createdInSheet = false
     private var localNotice = ""
     // The session's last To, never Organization (Team is always an explicit
     // choice), cleared when the account changes.
@@ -3220,9 +3333,17 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         self.projects.onChange = { [weak self] in self?.refresh() }
         self.uploads.onProjectAccessChanged = { [weak self] in self?.projects.accessLost() }
         self.projects.onAccessChanged = { [weak self] in
-            self?.documents.clear(); self?.documentScope = nil
-            self?.uploads.projectAccessChanged(); self?.composeSheet.projectAccessChanged()
-            self?.askField.stringValue = ""; self?.peopleSheet.clearQuery(); self?.createSheet.clearQuery()
+            guard let self else { return }
+            self.documents.clear(); self.documentScope = nil
+            self.uploads.projectAccessChanged(); self.composeSheet.projectAccessChanged()
+            self.askField.stringValue = ""; self.peopleSheet.clearQuery(); self.createSheet.clearQuery()
+        }
+        self.projects.onAccessLost = { [weak self] in
+            guard let self else { return }
+            // Never turn a revoked project question into a global one.
+            if self.askScope != .global, self.mode == .ask { self.mode = .home; self.onConceal?() }
+            self.askScope = .global; self.askReturnProject = false; self.askField.stringValue = ""
+            self.onInvalidateAnswer?(); self.clearPresentationRestore()
         }
         // Organization is never carried forward: Team is an explicit choice.
         composeSheet.onSent = { [weak self] target in self?.lastTarget = target == .team ? .onlyMe : target }
@@ -3231,7 +3352,9 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         createSheet.onWillClose = { [weak self] in self?.closingSheet = true }
         composeSheet.onClose = { [weak self] in
             guard let self else { return }
-            if self.composeSheet.didSave, self.mode == .project, self.projects.selected != nil { self.restorePending = .feed; self.documentScope = nil }
+            if self.composeSheet.didSave, self.mode == .project, self.projects.selected != nil {
+                self.listPlace = self.shownList(); self.restorePending = .feed; self.documentScope = nil
+            }
             self.sheetClosed()
         }
         peopleSheet.onClose = { [weak self] in
@@ -3242,12 +3365,21 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         }
         createSheet.onCreated = { [weak self] project in
             guard let self else { return }
+            self.createdInSheet = true
             self.mode = .project; self.openProjectName = project.name; self.lastOpenedProjectID = project.project_id
-            self.projectSearchShown = false; self.showSearchReader = false; self.askField.stringValue = ""; self.localNotice = ""
+            self.projectSearchShown = false; self.showSearchReader = false; self.listPlace = nil
+            self.askField.stringValue = ""; self.localNotice = ""
         }
         createSheet.onClose = { [weak self] in
             guard let self else { return }
-            if self.mode == .project, self.projects.selected != nil { self.restorePending = .feed; self.documentScope = nil }
+            if self.createdInSheet, self.mode == .project, self.projects.selected != nil {
+                self.restorePending = .feed; self.documentScope = nil
+            } else if let origin = self.createOrigin, self.projects.selected?.project_id != origin.id {
+                // A cancelled sheet can sit over a reader that was cleared by a
+                // concurrent reload. Return through the normal authorized read.
+                self.returnToCreateOrigin()
+            }
+            self.createdInSheet = false
             if self.createSheet.unsavedFiles > 0 { self.localNotice = "Some files may not have been saved." }
             self.sheetClosed()
         }
@@ -3296,6 +3428,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         if mode == .project || mode == .search {
             mode = .home; projectSearchShown = false; showSearchReader = false; restorePending = nil
         }
+        clearPresentationRestore(); askScope = .global; askReturnProject = false
         clearPendingIntents()
         if window.attachedSheet != nil { pendingRefresh = true }
         documents.clear(); documentScope = nil
@@ -3309,7 +3442,8 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         uploads.accountWillChange(); projects.bind(nil); composeSheet.accountWillChange()
         peopleSheet.close(); createSheet.closeWhenIdle()
         askField.stringValue = ""; mode = .home; projectSearchShown = false; showSearchReader = false
-        restorePending = nil; clearPendingIntents(); localNotice = ""; refresh()
+        clearPresentationRestore(); askScope = .global; askReturnProject = false
+        clearPendingIntents(); localNotice = ""; refresh()
     }
     func shutdown() { documents.clear(); uploads.shutdown(); projects.shutdown(); window.orderOut(nil) }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -3321,7 +3455,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         if mode == .ask { onActivateAnswer?() }
     }
     func windowDidResignKey(_ notification: Notification) { onConceal?() }
-    func windowDidResize(_ notification: Notification) { onResizeAnswer?() }
+    func windowDidResize(_ notification: Notification) { onResizeAnswer?(); fitTitle() }
 
     // Escape in the bar goes Back.
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -3350,6 +3484,40 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     }
 
     private func clearPendingIntents() { pendingRead = nil; pendingSearch = nil }
+    private func clearPresentationRestore() {
+        restorePending = nil; restoreDocumentID = nil; createOrigin = nil; askOrigin = nil
+        listPlace = nil; homePlace = nil; scrollTarget = nil; peopleRestore = nil
+    }
+    private var scrollOffset: CGFloat { scroll.isHidden ? 0 : scroll.contentView.bounds.origin.y }
+    private func shownList() -> ListPlace? {
+        guard mode == .project, projects.content == nil, documents.metadata == nil, !projects.items.isEmpty else { return nil }
+        return ListPlace(rows: projects.items.count, offset: scrollOffset, query: projectSearchShown ? shownProjectQuery : nil)
+    }
+    private func shownHome() -> ListPlace? {
+        guard mode == .home, !projects.projects.isEmpty else { return nil }
+        return ListPlace(rows: projects.projects.count, offset: scrollOffset, query: nil)
+    }
+    private func currentProjectOrigin() -> ProjectOrigin? {
+        guard mode == .project, let selected = projects.selected else { return nil }
+        return ProjectOrigin(id: selected.project_id, name: selected.name,
+                             query: projectSearchShown ? shownProjectQuery : nil,
+                             reading: projects.content?.context_id,
+                             documentID: documents.metadata?.document_id,
+                             list: projects.content == nil && documents.metadata == nil ? shownList() : listPlace)
+    }
+    private func returnToProjectOrigin(_ origin: ProjectOrigin) {
+        guard !projects.hasOutstandingMutation else { return }
+        mode = .project; openProjectName = origin.name; lastOpenedProjectID = origin.id
+        projectSearchShown = origin.query != nil; shownProjectQuery = origin.query
+        askField.stringValue = origin.query ?? ""; listPlace = origin.list
+        restoreDocumentID = origin.documentID
+        restorePending = origin.reading.map { .read($0) } ?? origin.query.map { .search($0) }
+        projects.open(origin.id); refresh()
+    }
+    private func returnToCreateOrigin() {
+        guard let origin = createOrigin else { return }
+        createOrigin = nil; returnToProjectOrigin(origin)
+    }
 
     // MARK: State
 
@@ -3358,7 +3526,8 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             observedIdentity = uploads.identity
             documents.bind(uploads.identity); documentScope = nil
             askField.stringValue = ""; mode = .home; projectSearchShown = false; showSearchReader = false
-            restorePending = nil; clearPendingIntents(); lastTarget = .onlyMe; onIdentityChanged?()
+            clearPresentationRestore(); askScope = .global; askReturnProject = false
+            onInvalidateAnswer?(); clearPendingIntents(); lastTarget = .onlyMe; onIdentityChanged?()
             // A save that may exist under the account that just went away
             // stays said on the page until the person moves on.
             if uploads.identity == nil, uploads.status.hasPrefix("The save may have completed") { localNotice = uploads.status }
@@ -3371,11 +3540,22 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         }
         composeSheet.refresh(); peopleSheet.refresh(); createSheet.refresh()
         if mode == .project, let selected = projects.selected, uploads.identity != nil, !uploads.hasOutstandingMutation {
+            let restoringDocument: Bool
+            if let documentID = restoreDocumentID, !documents.busy {
+                restoreDocumentID = nil; showSearchReader = true; documents.read(documentID, projectID: selected.project_id); restoringDocument = true
+            } else { restoringDocument = false }
             let query = projectSearchShown ? askField.stringValue : ""
             let key = "\(selected.project_id)|\(projects.scopeGeneration)|\(query)"
-            if documentScope != key, query.isEmpty || uploadQuery(query) != nil {
+            // A reader restoration is the authoritative next operation. Do not
+            // replace it with the routine list refresh in this or its completion turn.
+            if restoringDocument { documentScope = key }
+            if !restoringDocument, !documents.busy, documentScope != key, query.isEmpty || uploadQuery(query) != nil {
                 documentScope = key; documents.search(query, projectID: selected.project_id)
             }
+        }
+        if mode == .home, let place = homePlace, window.attachedSheet == nil, !projects.busy, projects.listFetched {
+            if projects.projects.count < place.rows, projects.listCursor != nil { projects.nextProjects() }
+            else { homePlace = nil; scrollTarget = place.offset }
         }
         if mode == .project, !projects.busy, let selected = projects.selected {
             openProjectName = selected.name
@@ -3390,6 +3570,11 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
                 pendingRead = nil; projects.read(context)
             } else if let query = pendingSearch, window.attachedSheet == nil {
                 pendingSearch = nil; projectSearchShown = true; shownProjectQuery = query; projects.search(query)
+            } else if let place = listPlace, window.attachedSheet == nil, projects.content == nil, documents.metadata == nil {
+                let query = projectSearchShown ? shownProjectQuery : nil
+                if place.query != query { listPlace = nil }
+                else if projects.items.count < place.rows, projects.pageCursor != nil { projects.nextPage() }
+                else { listPlace = nil; scrollTarget = place.offset }
             } else if !peopleSheet.isPresented, projects.members.isEmpty, membersGeneration != projects.scopeGeneration {
                 // After the feed has loaded, the first member page, once per open.
                 membersGeneration = projects.scopeGeneration; projects.loadMembers()
@@ -3404,20 +3589,37 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         let openName = projects.selected?.name ?? (projects.busy ? openProjectName : nil)
         let pageTitle: String
         switch mode {
-        case .project: pageTitle = openName ?? "ECHO"
+        case .project: pageTitle = (projects.content != nil || documents.metadata != nil) ? "" : (openName ?? "ECHO")
         case .search: pageTitle = "ECHO"
         case .home, .ask: pageTitle = "ECHO"
         }
+        // Keep the Window menu and accessibility title meaningful even when
+        // the centred reader label is deliberately empty under Back.
+        let windowTitle = mode == .project ? (openName ?? "ECHO") : "ECHO"
+        if window.title != windowTitle { window.title = windowTitle }
         // renderedTitle starts nil, so the first render applies the tracked
         // "ECHO" style too (the label is created without it).
-        if window.title != pageTitle || renderedTitle != pageTitle {
+        if renderedTitle != pageTitle {
             renderedTitle = pageTitle
-            window.title = pageTitle
             titleLabel.attributedStringValue = NSAttributedString(string: pageTitle, attributes: [
                 .font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: EchoTheme.mutedText,
                 .kern: pageTitle == "ECHO" ? 1.8 : 0])
         }
-        back.isHidden = mode == .home
+        let backDestination: String?
+        switch mode {
+        case .home: backDestination = nil
+        case .ask: backDestination = askSubPage?() ?? (askReturnProject ? (projects.selected?.name ?? "Projects") : "Projects")
+        case .project:
+            if documents.metadata != nil || projects.content != nil || projectSearchShown { backDestination = openName ?? "Projects" }
+            else if let origin = createOrigin { backDestination = origin.name }
+            else { backDestination = "Projects" }
+        case .search: backDestination = "Projects"
+        }
+        back.isHidden = backDestination == nil
+        if let backDestination, back.title != backDestination {
+            back.title = backDestination
+            back.frame.size.width = back.fittingWidth
+        }
         peopleButton.isHidden = mode != .project || projects.selected == nil
         peopleButton.people = projects.members.prefix(3).map { (initials: Look.initial($0.display_name), id: $0.membership_id) }
         peopleButton.isEnabled = !projects.busy
@@ -3469,6 +3671,20 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         }
         if status.isEmpty, mode == .project || mode == .search { status = documents.status }
         statusLine.stringValue = quietStatus ? "" : status
+        fitTitle()
+    }
+
+    /// The centred title never runs under the visible Back destination or members.
+    private func fitTitle() {
+        guard let host = back.superview, let root = window.contentView else { return }
+        let centre = ((sidebarWidth?.constant ?? 0) + root.bounds.width) / 2
+        var left = host.convert(back.isHidden ? sidebarToggle.frame : back.frame, to: nil).maxX
+        if host.window == nil || left < 60 { left = 78 + (back.isHidden ? 34 : back.frame.maxX) }
+        var right = root.bounds.width
+        if !peopleButton.isHidden, let people = peopleButton.superview, people.window != nil {
+            right = min(right, people.convert(people.bounds, to: nil).minX)
+        }
+        titleRoom?.constant = max(60, floor(2 * (min(centre - left, right - centre) - 16)))
     }
 
     /// Upload status minus routine progress, which the column already shows.
@@ -3501,6 +3717,13 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
                 let reset = listSignature.isEmpty
                 listSignature = signature; list.set(rows)
                 if reset { list.scroll(.zero) }
+            }
+            if let offset = scrollTarget {
+                scroll.layoutSubtreeIfNeeded()
+                let maximum = max(0, list.bounds.height - scroll.contentView.bounds.height)
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: min(max(0, offset), maximum)))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                scrollTarget = nil
             }
         case .empty(let views, let signature):
             emptyHost.isHidden = false; listSignature = ""
@@ -3838,15 +4061,19 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     }
 
     @objc private func goBack() {
+        // A sheet owns Escape and all its draft/discard policy. Main-window
+        // navigation must not leak through to the page beneath it.
+        guard window.attachedSheet == nil else { return }
         localNotice = ""
         switch mode {
         case .home: return
         case .ask:
-            if askReturnProject, projects.selected != nil {
-                askReturnProject = false
-                askScope = .global
-                mode = .project
-                requestFeed()
+            if askSubPage?() != nil { closeAskSubPage?(); return }
+            if askReturnProject {
+                askReturnProject = false; askScope = .global
+                if let origin = askOrigin { askOrigin = nil; returnToProjectOrigin(origin) }
+                else if projects.selected != nil { mode = .project; requestFeed() }
+                else { mode = .home; refresh() }
             } else {
                 askScope = .global
                 mode = .home
@@ -3856,15 +4083,20 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         case .search:
             if showSearchReader { showSearchReader = false; refresh() } else { goHome() }
         case .project:
-            if projects.selected != nil, projects.content != nil || documents.metadata != nil || projectSearchShown {
+            if documents.metadata != nil {
+                documents.closeReader(); showSearchReader = false; refresh()
+            } else if projects.selected != nil, projects.content != nil || projectSearchShown {
                 askField.stringValue = ""; requestFeed()
+            } else if createOrigin != nil {
+                returnToCreateOrigin()
             } else { goHome() }
         }
     }
 
     private func goHome() {
         documents.clear(); documentScope = nil
-        mode = .home; askField.stringValue = ""; projectSearchShown = false; showSearchReader = false; restorePending = nil
+        mode = .home; askField.stringValue = ""; projectSearchShown = false; showSearchReader = false
+        clearPresentationRestore(); askScope = .global; askReturnProject = false
         clearPendingIntents()
         projects.discover(); onConceal?(); refresh()
         window.makeFirstResponder(askField)
@@ -3887,6 +4119,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             // available for the person to revise or send later.
             guard acceptAsk(question, scope: .global) else { return }
             askField.stringValue = ""
+            homePlace = shownHome(); askOrigin = nil
             askScope = .global
             askReturnProject = false
             mode = .ask; refresh()
@@ -3901,6 +4134,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             let scope = AskScope.project(id: project.project_id, name: project.name)
             guard acceptAsk(question, scope: scope) else { return }
             askField.stringValue = ""
+            askOrigin = currentProjectOrigin()
             askReturnProject = true
             askScope = scope
             mode = .ask; refresh()
@@ -3925,6 +4159,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     @objc private func openProject(_ sender: NSButton) {
         guard projects.projects.indices.contains(sender.tag), !projects.hasOutstandingMutation, uploads.identity != nil else { return }
         let project = projects.projects[sender.tag]
+        createOrigin = nil; restoreDocumentID = nil; listPlace = nil
         mode = .project; openProjectName = project.name; lastOpenedProjectID = project.project_id
         projectSearchShown = false; restorePending = nil; clearPendingIntents()
         askField.stringValue = ""; localNotice = ""; onConceal?()
@@ -3935,6 +4170,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     @objc private func readProjectOriginal(_ sender: NSButton) {
         guard projects.items.indices.contains(sender.tag) else { return }
         documents.closeReader()
+        listPlace = shownList()
         let context = projects.items[sender.tag].context_id
         // A click during a load is kept and replayed once it ends.
         if projects.busy { pendingRead = context; pendingSearch = nil; return }
@@ -4023,6 +4259,9 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
 
     @objc private func newProject() {
         guard window.attachedSheet == nil, projects.canMutate else { return }
+        if mode == .home { homePlace = shownHome() }
+        createdInSheet = false
+        createOrigin = currentProjectOrigin()
         createSheet.present(over: window, projects: projects, uploads: uploads)
     }
 
@@ -4031,8 +4270,8 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         // Opening People reloads the roster, which clears the column: bring
         // back what was shown (the original, the search, or the feed).
         if let content = projects.content { peopleRestore = .read(content.context_id) }
-        else if projectSearchShown, let query = shownProjectQuery { peopleRestore = .search(query) }
-        else { peopleRestore = .feed }
+        else if projectSearchShown, let query = shownProjectQuery { listPlace = shownList(); peopleRestore = .search(query) }
+        else { listPlace = shownList(); peopleRestore = .feed }
         peopleSheet.present(over: window, projects: projects)
     }
 
@@ -4054,14 +4293,18 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         // the page title is centred on the content column, not the window.
         window.titlebarAppearsTransparent = true; window.titleVisibility = .hidden
         (window as? ProjectsWindow)?.onCancel = { [weak self] in self?.goBack() }
+        (window as? ProjectsWindow)?.onBack = { [weak self] in
+            guard self?.window.attachedSheet == nil else { return }
+            self?.goBack()
+        }
 
         mark(sidebarToggle, "sidebar-toggle", label: "Show sidebar")
         sidebarToggle.target = self; sidebarToggle.action = #selector(toggleSidebar)
         mark(back, "back-button", label: "Back")
         back.target = self; back.action = #selector(goBack)
-        let leftHost = NSView(frame: NSRect(x: 0, y: 0, width: 70, height: 28))
+        let leftHost = NSView(frame: NSRect(x: 0, y: 0, width: 220, height: 28))
         sidebarToggle.frame = NSRect(x: 8, y: 2, width: 26, height: 24)
-        back.frame = NSRect(x: 38, y: 2, width: 26, height: 24)
+        back.frame = NSRect(x: 38, y: 2, width: BackButton.maximumWidth, height: 24)
         // AppKit grows the accessory to the titlebar height: stay centred.
         sidebarToggle.autoresizingMask = [.minYMargin, .maxYMargin]; back.autoresizingMask = [.minYMargin, .maxYMargin]
         leftHost.addSubview(sidebarToggle); leftHost.addSubview(back)
@@ -4120,6 +4363,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         fieldToClear = askField.trailingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: -6)
         let listHeight = scroll.heightAnchor.constraint(equalTo: region.heightAnchor, constant: -140)
         listHeight.priority = .defaultHigh
+        let titleRoom = titleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 520); self.titleRoom = titleRoom
         let listCentre = scroll.centerYAnchor.constraint(equalTo: region.centerYAnchor)
         listCentre.priority = NSLayoutConstraint.Priority(740)
         NSLayoutConstraint.activate([
@@ -4138,7 +4382,8 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             titlebar.topAnchor.constraint(equalTo: root.topAnchor), titlebar.bottomAnchor.constraint(equalTo: below.topAnchor),
             titleLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             titleLabel.centerYAnchor.constraint(equalTo: titlebar.centerYAnchor),
-            titleLabel.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -220),
+            titleLabel.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -64),
+            titleRoom,
 
             bar.centerXAnchor.constraint(equalTo: content.centerXAnchor), bar.widthAnchor.constraint(equalToConstant: 520),
             bar.heightAnchor.constraint(equalToConstant: 46), bar.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -28),

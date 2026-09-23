@@ -1055,6 +1055,9 @@ private final class AnswerController: NSObject, NSWindowDelegate {
     private var answerColumnTrailing: NSLayoutConstraint?
     private var sourcePaneWidth: NSLayoutConstraint?
     private var sourcePaneOpen = false
+    // A narrow Sources pane covers the answer and is a Back destination.
+    var onSourcesCoverChanged: (() -> Void)?
+    var sourcesCoverAnswer: Bool { sourcePaneOpen && answerColumn?.isHidden == true }
     private var sourceRecords: [String: SourceRecord] = [:]
     private var selectedSourceIndex = 0
     private let answerHeader = NSStackView()
@@ -1425,6 +1428,8 @@ private final class AnswerController: NSObject, NSWindowDelegate {
 
     @objc private func closeSources() { showAnswer() }
 
+    func closeSourcesForBack() { showAnswer() }
+
     private func openSourcePane() {
         guard !sourcePaneOpen else { return }
         sourcePaneOpen = true
@@ -1439,6 +1444,7 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         sourceScrollView.isHidden = false
         sourcesButton.title = "Back to answer"
         refreshSourceChips()
+        onSourcesCoverChanged?()
     }
 
     private func closeSourcePane() {
@@ -1450,6 +1456,7 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         sourcePaneWidth?.constant = 420
         sourcesButton.title = "Sources (\(currentSources.count))"
         refreshSourceChips()
+        onSourcesCoverChanged?()
     }
 
     private func refreshSourceChips() {
@@ -1907,11 +1914,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         home.accountMenu = account?.menuItem.submenu
         home.onPeople = { [weak self] in self?.people?.show() }
         home.onIdentityChanged = { [weak self] in self?.controller?.accountWillChange() }
+        home.onInvalidateAnswer = { [weak self] in self?.controller?.accountWillChange() }
         home.onConceal = { [weak self] in self?.controller?.applicationDidDeactivate() }
         home.onActivateAnswer = { [weak self, weak home] in
             guard let home else { return }
             self?.controller?.windowDidBecomeKey(Notification(name: NSWindow.didBecomeKeyNotification, object: home.window))
         }
+        home.askSubPage = { [weak self] in self?.controller?.sourcesCoverAnswer == true ? "Answer" : nil }
+        home.closeAskSubPage = { [weak self] in self?.controller?.closeSourcesForBack() }
+        controller?.onSourcesCoverChanged = { [weak home] in home?.askPageChanged() }
         home.onResizeAnswer = { [weak self, weak home] in
             guard let home else { return }
             self?.controller?.windowDidResize(Notification(name: NSWindow.didResizeNotification, object: home.window))

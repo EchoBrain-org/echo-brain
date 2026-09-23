@@ -820,11 +820,15 @@ final class DocumentSession {
         }
     }
     func more() { if let nextCursor { search(query, projectID: projectID, cursor: nextCursor) } }
-    func read(_ id: String, cursor: String? = nil) {
+    /// An explicit project scope is used when restoring a project reader after
+    /// a fresh project open cleared this session's previous browse scope.
+    func read(_ id: String, projectID explicitProjectID: String? = nil, cursor: String? = nil) {
         guard !busy, DocumentMetadata.id(id) else { return }
+        if let explicitProjectID { self.projectID = explicitProjectID }
+        let scopedProjectID = explicitProjectID ?? projectID
         metadata = nil; page = nil
         var args = ["person", "documents", "read", "--document-id", id]
-        if let projectID { args += ["--project-id", projectID] }
+        if let scopedProjectID { args += ["--project-id", scopedProjectID] }
         if let cursor { args += ["--cursor", cursor] }
         run(args) { [weak self] result in
             guard let self, ProjectWire.keys(result, ["metadata", "text"]), let raw = result["metadata"] as? [String: Any],

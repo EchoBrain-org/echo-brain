@@ -567,6 +567,10 @@ describe("native ECHO hotkey overlay", () => {
     expect(source).toContain("func applicationDidDeactivate()");
     expect(source).toContain("activeSources?.cancel()");
     expect(source).toContain("Back to answer");
+    expect(source).toContain('home.askSubPage = { [weak self] in self?.controller?.sourcesCoverAnswer == true ? "Answer" : nil }');
+    expect(source).toContain("home.closeAskSubPage = { [weak self] in self?.controller?.closeSourcesForBack() }");
+    expect(source).toContain("controller?.onSourcesCoverChanged = { [weak home] in home?.askPageChanged() }");
+    expect(source).toContain("home.onInvalidateAnswer = { [weak self] in self?.controller?.accountWillChange() }");
 
   });
 

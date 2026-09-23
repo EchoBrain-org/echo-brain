@@ -51,6 +51,9 @@ private enum EchoOverlaySourceFixtureMain {
             case .success(let label, let text): passed = label == "Hardware brief" && text == "Bounded immutable evidence."
             default: passed = false
             }
+        case "sources-back":
+            _ = NSApplication.shared
+            passed = AnswerController.proveSourcesBack()
         case "pending-composer":
             _ = NSApplication.shared
             NSApp.setActivationPolicy(.prohibited)
@@ -531,6 +534,28 @@ extension AnswerController {
         let controller = AnswerController(window: window, container: window.contentView!)
         window.delegate = controller
         return controller
+    }
+
+    fileprivate static func proveSourcesBack() -> Bool {
+        let controller = makeController()
+        controller.question = "What is the battery target?"
+        controller.scope = .project(id: "project-scout", name: "SCOUT")
+        controller.answerView.string = "The target remains 12 hours."
+        var covers: [Bool] = []
+        controller.onSourcesCoverChanged = { [weak controller] in
+            if let controller { covers.append(controller.sourcesCoverAnswer) }
+        }
+        controller.openSourcePane()
+        guard controller.sourcesCoverAnswer, covers == [true] else { return false }
+        controller.closeSourcesForBack()
+        guard !controller.sourcesCoverAnswer, covers == [true, false],
+              !controller.answerScrollView.isHidden,
+              controller.answerView.string == "The target remains 12 hours.",
+              controller.question == "What is the battery target?",
+              controller.scope == .project(id: "project-scout", name: "SCOUT") else { return false }
+        controller.openSourcePane()
+        controller.applicationDidDeactivate()
+        return !controller.sourcesCoverAnswer && covers == [true, false, true, false]
     }
 
     fileprivate static func provePendingComposer(screenshot: String? = nil) -> Bool {

@@ -247,6 +247,77 @@ enum ProjectProof {
             return
         }
 
+        if mode == "ui-back" {
+            openApollo()
+            // Reader Back names the current project and restores the exact
+            // reader/list state instead of jumping home.
+            ProofUI.find(NSButton.self, "item-row", in: chrome).performClick(nil)
+            wait("source reader") { !projects.busy && projects.content != nil }
+            require(back.title == "Apollo", "source reader Back does not name its destination")
+            // Create can be cancelled over a reader without losing it.
+            ProofUI.find(NSButton.self, "sidebar-toggle", in: chrome).performClick(nil)
+            ProofUI.find(NSButton.self, "sidebar-new-project", in: chrome).performClick(nil)
+            wait("create over reader") { window.attachedSheet != nil }
+            ProofUI.find(NSButton.self, "sheet-close", in: sheetRoot("create over reader")).performClick(nil)
+            wait("create cancelled") { window.attachedSheet == nil && projects.content != nil }
+            back.performClick(nil); wait("source list") { !projects.busy && projects.content == nil && projects.items.count == 1 }
+            // A scoped Ask opened from a reader returns to that same reader.
+            ProofUI.find(NSButton.self, "item-row", in: chrome).performClick(nil)
+            wait("source reader again") { !projects.busy && projects.content != nil }
+            query.stringValue = "What changed?"; submit.performClick(nil)
+            require(questions.last?.1 == .project(id: project, name: "Apollo"), "reader Ask lost project scope")
+            var sourcesCovered = true
+            controller.askSubPage = { sourcesCovered ? "Answer" : nil }
+            controller.closeAskSubPage = { sourcesCovered = false; controller.askPageChanged() }
+            controller.askPageChanged()
+            require(back.title == "Answer", "source-cover Back does not name Answer")
+            back.performClick(nil)
+            require(!sourcesCovered && !controller.answerContainer.isHidden && questions.last?.1 == .project(id: project, name: "Apollo"),
+                    "source-cover Back changed the scoped answer instead of closing sources")
+            controller.askSubPage = nil; controller.closeAskSubPage = nil
+            back.performClick(nil); wait("reader after Ask") { !projects.busy && projects.content != nil }
+            // The same scoped Ask round trip must preserve a document reader,
+            // including its exact document id, rather than dropping to feed.
+            back.performClick(nil); wait("source list before document") { !projects.busy && projects.content == nil }
+            wait("document feed") { !controller.documents.busy && controller.documents.matches.count == 1 }
+            ProofUI.find(NSButton.self, "document-row", in: chrome).performClick(nil)
+            wait("document reader") { !controller.documents.busy && controller.documents.metadata?.document_id != nil }
+            let documentID = controller.documents.metadata!.document_id
+            query.stringValue = "What does the PRD say?"; submit.performClick(nil)
+            require(questions.last?.1 == .project(id: project, name: "Apollo"), "document Ask lost project scope")
+            back.performClick(nil)
+            wait("document after Ask") { !projects.busy && !controller.documents.busy && controller.documents.metadata?.document_id == documentID }
+            // Cancelling New project over a document reader returns to that
+            // reader. Main-window Back inputs cannot navigate beneath its sheet.
+            ProofUI.find(NSButton.self, "sidebar-new-project", in: chrome).performClick(nil)
+            wait("create over document") { window.attachedSheet != nil }
+            let commandBack = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                                                timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                                characters: "[", charactersIgnoringModifiers: "[", isARepeat: false, keyCode: 33)!
+            // With an attached sheet AppKit may route the key to that sheet
+            // and report it unhandled by the main window. Either route must
+            // leave the reader beneath it unchanged.
+            _ = window.performKeyEquivalent(with: commandBack)
+            let cgMouseBack = CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown,
+                                      mouseCursorPosition: .zero, mouseButton: CGMouseButton(rawValue: 3)!)!
+            let mouseBack = NSEvent(cgEvent: cgMouseBack)!
+            window.otherMouseDown(with: mouseBack)
+            require(window.attachedSheet != nil && controller.documents.metadata?.document_id == documentID,
+                    "sheet-bound Back navigated away from the document")
+            ProofUI.find(NSButton.self, "sheet-close", in: sheetRoot("create over document")).performClick(nil)
+            wait("document create cancelled") { window.attachedSheet == nil && controller.documents.metadata?.document_id == documentID }
+            // Revoking/resetting the account ends the scoped Ask state. Once
+            // signed in again, the next accepted question is explicitly global.
+            query.stringValue = "Scoped before reset"; submit.performClick(nil)
+            require(questions.last?.1 == .project(id: project, name: "Apollo"), "second scoped Ask widened")
+            controller.accountWillChange(); wait("account reset") { uploads.identity == nil && projects.identity == nil }
+            require(query.stringValue.isEmpty && controller.answerContainer.isHidden, "revoked scoped Ask stayed visible")
+            controller.refreshIdentity(); wait("account restored") { !uploads.busy && uploads.identity != nil && !projects.busy }
+            query.stringValue = "General after reset"; submit.performClick(nil)
+            require(questions.last?.1 == .global, "post-reset Ask retained revoked project scope")
+            return
+        }
+
         if mode == "ui-documents" {
             openApollo()
             wait("document feed") { !controller.documents.busy && controller.documents.matches.count == 1 }
@@ -288,7 +359,10 @@ enum ProjectProof {
                     ProofUI.find(NSTextField.self, "compose-document", in: compose).stringValue.contains("Kickoff notes.txt")
                 }
                 require(uploads.draft == nil && uploads.receipt == nil && !uploads.hasOutstandingMutation, "\(label): a drop sent by itself")
-                window.attachedSheet?.cancelOperation(nil); wait("\(label) closed") { window.attachedSheet == nil }
+                window.attachedSheet?.cancelOperation(nil)
+                let discard = alert("\(label) discard", onSheet: true)
+                require(ProofUI.showsText("Discard this note?", in: discard), "\(label): attached draft closed without confirmation")
+                press("Discard", in: discard); wait("\(label) closed") { window.attachedSheet == nil }
                 settle("\(label) settle")
             }
             // Onto the Beacon row: To is that row's project, not the default.
@@ -329,7 +403,14 @@ enum ProjectProof {
             name.stringValue = "Apollo"; NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: name)
             let create = ProofUI.find(NSButton.self, "create-submit", in: sheet)
             require(create.title == "Create" && create.isEnabled, "Create not offered")
-            create.performClick(nil)
+            if mode == "ui-create" {
+                // A non-mutation refresh can race with the first Create. The
+                // sheet retains the request and starts it exactly when that
+                // read settles, rather than losing the person's action.
+                projects.discover(); require(projects.busy && !projects.hasOutstandingMutation, "setup read did not start")
+                create.performClick(nil)
+                require(create.title == "Creating when ready…" && !create.isEnabled, "Create was not retained behind the read")
+            } else { create.performClick(nil) }
             if mode == "ui-create-read-fail" {
                 // The receipt came back; the new project's read failed once.
                 wait("read failed") { !projects.busy && projects.createdProjectID == project && projects.selected == nil }
@@ -395,6 +476,12 @@ enum ProjectProof {
             wait("create closed") { window.attachedSheet == nil }
             settle("after create")
             require(window.title == "Apollo", "create did not land on the new project")
+            if mode == "ui-create" {
+                // A completed project setup has a real page behind it; Back
+                // returns to the home origin instead of reopening the sheet.
+                back.performClick(nil)
+                wait("created project Back") { !projects.busy && projects.selected == nil && projects.projects.count >= 2 }
+            }
             return
         }
 
@@ -490,7 +577,7 @@ enum ProjectProof {
         require(addFields.count == 1 && addFields[0].isEnabled, "lead is missing an enabled Add someone field")
         if mode == "ui-people" { peopleProof(); return }
         // The People sheet must be closed first, so the attached sheet below is compose.
-        ProofUI.find(NSButton.self, "people-done", in: people).performClick(nil)
+        ProofUI.find(NSButton.self, "sheet-close", in: people).performClick(nil)
         wait("people closed") { window.attachedSheet == nil && !projects.busy && !uploads.busy }
         settle("people closed settle")
         // People returns to Apollo's feed. Ask is intentionally not retained in
@@ -510,6 +597,13 @@ enum ProjectProof {
         require(body.string.isEmpty && !send.isEnabled, "Send enabled with an empty body")
         body.string = " \n\t"; body.didChangeText(); require(!send.isEnabled, "Send enabled with a whitespace body")
         body.string = "We agreed to ship.\n"; body.didChangeText(); require(send.isEnabled, "Send disabled with text")
+        // A close cannot silently drop an unsent note. Keeping it leaves the
+        // original draft and target untouched, so the person can still send it.
+        ProofUI.find(NSButton.self, "sheet-close", in: compose).performClick(nil)
+        let discard = alert("discard draft", onSheet: true)
+        require(ProofUI.showsText("Discard this note?", in: discard), "draft close did not request discard confirmation")
+        press("Keep writing", in: discard)
+        require(window.attachedSheet != nil && body.string == "We agreed to ship.\n" && send.isEnabled, "keeping draft lost compose state")
         // The chip is drivable without its menu.
         guard let choose = to.onChoose else { fatalError("compose-to has no onChoose") }
         choose(0); require(to.title == "Only me", "choosing Only me did not update To")
@@ -672,7 +766,7 @@ enum ProjectProof {
             press("Remove", in: alert("remove alert 2", onSheet: true))
             wait("removed") { !projects.busy && window.attachedSheet?.attachedSheet == nil && projects.members.count == 1 }
             settle("removed settle")
-            ProofUI.find(NSButton.self, "people-done", in: sheetRoot("people")).performClick(nil)
+            ProofUI.find(NSButton.self, "sheet-close", in: sheetRoot("people")).performClick(nil)
             wait("people closed") { window.attachedSheet == nil }
         }
     }
@@ -750,7 +844,7 @@ enum ProjectProof {
             session.search("ship"); wait("search") { !session.busy }
             require(session.pageCursor != nil)
             session.nextPage(); wait("next page") { !session.busy }
-            require(session.pageCursor == nil && session.items.count == 1 && session.items[0].context_id != context)
+            require(session.pageCursor == nil && session.items.map(\.context_id) == [context, "ctx_" + String(repeating: "b", count: 64)], "search page replaced, not appended")
             // …and Older / More results never clears them.
             require(session.members.count == 2, "paging the feed cleared the members")
             return

@@ -27,6 +27,21 @@ Invalid input remains editable. A second submission must not silently replace
 a running request. This is one question and answer at a time; it does not add
 persistent chat history or conversational memory.
 
+Pages name their Back destination at the top left. Back, Escape, Command-[,
+and the mouse Back button return to that destination; a Sources pane covering
+an answer returns to the answer first. Returning from project Ask preserves
+its project scope. Returning from a project reader restores the loaded feed
+pages and scroll position through fresh authorized reads. Sheets use a
+consistent close control, and closing an unsent note or attached-file draft asks before
+discarding it. Saves and membership changes in flight cannot be dismissed.
+
+Global Write, Capture, and file drop use the same upload composer as a
+project. Its **To** selector can choose Only me, an accessible project, or
+Organization. Its separate **Project** selector associates context without
+granting audience access. The initial global target is Only me; subsequent
+compositions remember the last non-Organization target for the current
+account. Opening Write inside a project defaults to that project.
+
 ## Evidence and permission boundaries
 
 Supported originals include saved editor text and usable extracted text from
@@ -40,6 +55,11 @@ citations bind the original/revision and derived representation actually used.
 Opening cited evidence uses current authorization and exact immutable
 coordinates. It must not substitute the latest revision silently. Source
 statements do not become approved decisions by appearing in an answer.
+Document evidence uses the original filename verified against source admission;
+its display label is bounded without changing the full evidence or anchor.
+The client rechecks its current local session before returning either an Ask
+answer or cited evidence, so an account change cannot release an older session's
+response.
 
 Global scope does not widen permissions. Only-me material remains private even
 when associated with a project. Association, audience, and project membership
@@ -63,6 +83,10 @@ readers lose access, while newly authorized project members can access history.
   requested-only analysis policy remains unchanged.
 - Professional role/title/team metadata and Undo of completed uploads or
   approvals are outside this round.
+- The upload composer's project selectors use the project pages already
+  loaded on Home (10 projects per page). They do not yet have independent
+  search/pagination. Use **More projects** on Home to make later projects
+  available; the first list load must finish before its projects appear.
 - The next search and answer refinement must define whether personal context
   can be related without an explicit project association, how that relationship
   is established, and how to explain it. Keyword similarity alone does not widen

@@ -241,7 +241,7 @@ enum UploadProof {
             require(ProofUI.showsText("This may not have been saved.", in: root) && ProofUI.showsText(status, in: root), "outcome not shown")
             require(!ProofUI.claimsSent(root), "claimed saved without a receipt")
             require(!ProofUI.visible(ProofUI.find(NSButton.self, "compose-check", in: root)), "Check status offered without the original account")
-            let close = ProofUI.find(NSButton.self, "compose-close", in: root)
+            let close = ProofUI.find(NSButton.self, "sheet-close", in: root)
             require(ProofUI.visible(close) && close.isEnabled); close.performClick(nil)
             wait("closed") { window.attachedSheet == nil }
             require(ProofUI.showsText(status, in: chrome), "home does not say the save may exist")
@@ -314,7 +314,14 @@ enum UploadProof {
         require(captureBody.isEditable && ProofUI.visible(captureBody), "capture did not open a fresh note")
         captureBody.string = "Pasted text"; captureBody.didChangeText()
         require(ProofUI.find(NSButton.self, "compose-send", in: capture).isEnabled && session.canCompose, "capture after Escape cannot send")
-        window.attachedSheet?.cancelOperation(nil); wait("capture closed") { window.attachedSheet == nil }
+        window.attachedSheet?.cancelOperation(nil)
+        wait("capture discard confirmation") { window.attachedSheet?.attachedSheet != nil }
+        guard let discardPrompt = window.attachedSheet?.attachedSheet?.contentView,
+              let discard = ProofUI.views(discardPrompt).compactMap({ $0 as? NSButton }).first(where: { $0.title == "Discard" })
+        else { fatalError("capture discard control") }
+        require(ProofUI.showsText("Discard this note?", in: discardPrompt), "Escape discarded a typed capture without confirmation")
+        require(captureBody.string == "Pasted text" && session.receipt == nil, "capture changed before the discard choice")
+        discard.performClick(nil); wait("capture closed") { window.attachedSheet == nil }
         controller.conceal(); require(session.matches.isEmpty && session.content == nil)
         query.stringValue = "unsent question"
         controller.accountWillChange(); require(query.stringValue.isEmpty)

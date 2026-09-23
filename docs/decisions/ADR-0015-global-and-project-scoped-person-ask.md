@@ -106,6 +106,7 @@ scope binding, submission, directory pagination, and role-preserving Add.
 Boundary tests cover the new release path.
 
 This decision does not reset data, deploy, or install a client. Implementation
-evidence and limitations belong in the PR and feature documentation. Claude's
-separate navigation/draft reversibility patch requires its own integration and
-verification. This feature does not add Undo of completed uploads or approvals.
+evidence and limitations belong in the PR and feature documentation. The native
+navigation/draft reversibility work is integrated against these Ask and people
+contracts, with focused proofs for Back destinations and safe sheet closure.
+This feature does not add Undo of completed uploads or approvals.

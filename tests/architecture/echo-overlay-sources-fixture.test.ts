@@ -59,6 +59,7 @@ afterAll(() => rmSync(temporaryRoot, { recursive: true, force: true }));
     "v3-authorship-unsupported",
     "source-evidence",
     "pending-composer",
+    "sources-back",
     "unavailable-source-evidence",
     "original-source-evidence-card",
     "invalid-output-failure",

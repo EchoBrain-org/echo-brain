@@ -85,7 +85,23 @@ notes. Relevance must operate inside current permissions; it must never grant
 access to another person's private material or introduce a silent global
 fallback.
 
-### Source anchors
+### Integration addendum: navigation and upload targeting
+
+The implementation candidate integrates the navigation work with the refined Ask flow:
+named Back destinations, keyboard/mouse Back, restoration of project feed
+pages and scroll position, a consistent sheet close control, unsent-draft
+discard confirmation, and reliable Create submission during a background
+reload. The removed saved-context browser and organization sidebar entry stay
+removed. Back from a covering Sources pane returns to its answer before
+leaving the Ask page. This does not add Undo of completed mutations.
+
+Global upload already allows choosing a specific accessible project through
+the **To** selector. The independent **Project** association selector does not
+change audience. This round preserves the current defaults. The selectors
+currently include only loaded project pages; independent picker pagination
+or search is a follow-up, not a promise of this candidate.
+
+### Original source anchors (pre-implementation)
 
 - `product/echo-overlay/projects.swift`: `askSubmitted` near line 3763; global search near 3530 and 3770; picker/Add near 2318 and 2399; navigation near 3892.
 - `product/echo-overlay/main.swift`: approved-record-only Ask scope near 747; submission/cancellation near 780 and 845; retained Organization → People menu near 1597.
