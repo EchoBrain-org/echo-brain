@@ -157,3 +157,30 @@ association, cross-project misuse, last-lead behavior, replay/restart, optional
 enrichment failure, no disclosure on denied reads/search/feed, and matched
 server/client artifacts. Its reset/reseed work is separate from this design
 decision and requires the existing operator lane.
+
+## 2026-09-23 addendum: document custody extension
+
+The original accepted text-only scope and uploader-bound enrichment policy
+above record the 2026-09-21 decision. The founder subsequently authorized
+25 MiB text/Markdown, PDF and Word `.docx` documents, common source admission,
+and shared project context that survives contributor departure. The accepted
+extension is [ADR-0014](ADR-0014-unified-source-ingestion-and-document-custody.md).
+
+For accepted `team` and `project` **document** originals, deterministic text
+extraction and indexing continue under Authority custody after the uploader
+leaves. This replaces the uploader-bound eligibility rule only for that shared
+document work. Private `only_me` document processing retains its contributor
+tenure requirement; association alone never makes private content shared.
+Legacy note enrichment and the existing meeting analysis policy are unchanged.
+
+The extension authorizes the bounded document worker and source contracts; it
+does not add documents to native Ask or approved-record retrieval, auto-propose
+decisions from Person files, or approve publishing without a human. New source
+tables retain identity, immutable revisions and versioned derived content
+separately. The original association, audience, membership-tenure, minimal
+receipt and non-disclosure rules continue to apply.
+
+The founder confirmed staging is disposable with no live users. Fresh exact V8
+state may be selected through the existing operator lane for qualification; a
+retained-data migration is not a staging prerequisite. Startup still must never
+reset implicitly, and an implementation PR is not a live release decision.

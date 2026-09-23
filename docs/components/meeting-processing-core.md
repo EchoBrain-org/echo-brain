@@ -15,6 +15,7 @@ decision_ids:
   - ADR-0003
   - ADR-0004
   - ADR-0006
+  - ADR-0014
 invariant_ids:
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
@@ -33,7 +34,7 @@ qualification_ids:
 ## Responsibility
 
 `packages/organization-processing/src/core/` owns the
-provider-neutral decision pipeline, domain contracts, ports, processing rules,
+provider-neutral source admission and decision pipeline, domain contracts, ports, processing rules,
 approval state, delivery contracts, and storage interfaces.
 
 It does not own provider HTTP behavior, operating-system lifecycle,

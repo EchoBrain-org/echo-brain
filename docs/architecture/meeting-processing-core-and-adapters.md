@@ -33,7 +33,55 @@ source file, not only today's entry-point closure. Processing tests live in `pac
 live in their provider workspaces; cross-workspace source and artifact checks live under
 `tests/architecture/`.
 
-## Canonical flow
+## Shared source admission
+
+Context sources share a versioned port before their domain-specific processing:
+
+```text
+Person HTTP upload -> durable Authority inbox -> PersonSourceAdapterV1 --+
+                                                                       |
+meeting provider -> MeetingSourceAdapter -> MeetingSourceBridgeV1 ------+
+                                                                       |
+                         SourceAdapterV1<TContent>.pull() <--------------+
+                                      |
+                         pullAndAdmitSourceBatchV1()
+                                      |
+                         SourceAdmissionStoreV1
+                           /                    \
+            document extraction/index       meeting decision workflow
+```
+
+Person submission pushes into an edge inbox; core ingestion pulls from the
+server-owned inbox. The source adapter does not need a contributor's computer
+after acceptance. PDF, Word and text decoding are format handlers behind one
+Person source capability, not separate identities or permission tunnels.
+
+`SourceItemV1` identifies an item by adapter/instance/external identity and a
+stable source ID. `SourceRevisionV1` pins captured content and artifact digests;
+`SourceEnvelopeV1<TContent>` carries typed content or an artifact descriptor.
+`SourceAdmissionScopeV1` binds organization, custody, access-policy reference
+and analysis policy from trusted Authority state, outside the adapter payload.
+The core validates the whole bounded batch and canonical hashes before durable
+admission. Changed bytes cannot overwrite a retained revision. A duplicate
+admission remains eligible for downstream job recovery.
+
+Authority V8 stores these records in `authority_sources_v1`,
+`authority_source_revisions_v1`, `authority_source_contents_v1` and
+`authority_source_representations_v1`. Stable identity excludes adapter version;
+captured provenance retains it. New representations name their input revision
+and processor version. These internal records provide no direct read grant.
+Domain read ports still enforce current membership/audience and final release
+fences; a source association cannot widen access.
+
+The meeting bridge removes volatile `provenance.observed_at` from captured
+typed content and records it as `revision.captured_at`, restoring it before
+existing processors run. Repeated observation therefore keeps the content
+digest stable. The production cycle uses shared admission before extraction.
+`assertCurrentSourceAdmission()` checks its current owner membership and source
+identity inside the custody transaction, closing revocation during provider
+pull. Existing candidate, approval and cursor fences remain in place.
+
+## Meeting decision flow
 
 ```text
 meeting source
@@ -54,8 +102,11 @@ server adapters remain outside its dependency closure.
 
 ## Typed capabilities
 
-- A **meeting source** pulls changed meetings and returns canonical documents
-  plus an opaque cursor.
+- A **source** pulls versioned context through `SourceAdapterV1<TContent>`;
+  trusted composition separately binds custody and analysis policy. The
+  **meeting source** capability remains behind its compatibility bridge and
+  supplies canonical meetings plus an opaque cursor. Person sources use durable
+  inbox leases instead of inventing provider cursors.
 - A **decision processor** turns one canonical revision into decisions,
   actions, rationales, and source-linked evidence.
 - An **approval surface** presents the exact staged brief and records an
@@ -78,7 +129,8 @@ claiming this target invariant and before compatibility deletion.
 
 ## Cross-capability invariants
 
-- Source identity includes adapter, instance, external ID, and revision.
+- Stable source identity includes adapter, instance and external ID within an
+  organization; source revisions are separately immutable.
   Processing identity also includes processor adapter, instance, and version.
 - Adapter identity names a capability implementation, not a provider account,
   ECHO human, membership, or permission. Consequential provider actions must
@@ -168,8 +220,8 @@ and
   OpenRouter, and Slack profile; there is no universal source-onboarding flow.
 - The boundary covers external capabilities, not interchangeable SQLite,
   file-key, Node-runtime, or authentication-protocol implementations. The
-  meeting-source port is pull-oriented; push sources need an edge buffer or a
-  versioned provider-independent capability.
+  source port is pull-oriented; Person push submissions use the durable edge
+  inbox. New push providers need an equivalent explicit buffering boundary.
 - V3 physically stores `provider_message_ts`; shared code treats it as opaque
   `presentation_external_id` until an explicit schema migration.
 - Bundles are trusted static composition, and ownership/dependency checks cannot
@@ -182,14 +234,36 @@ and
 
 ## Explicit Person uploads
 
-Person uploads preserve original text and selected visibility in Authority V6.
-They do not normalize through `MeetingDocument`, run decision extraction, create
-frozen meeting candidates, or require Slack approval. The existing meeting
-admission, cursor, approval, and signed record path remain separate.
+The `/v1/person/documents` family preserves exact originals up to 25 MiB and
+uses the common Person source adapter for text/Markdown, PDF and `.docx`.
+The generic source content is an immutable document descriptor; original bytes
+stay in the document BLOB table. A serialized, cancellable worker performs
+bounded deterministic extraction and indexes the result without a model.
+Originals, derived representations, job state and live read policy remain
+separate facts.
 
-The serialized worker can enrich at most one saved upload per tick using the
-existing generation port. Its bounded free-text search hints are optional,
-replaceable metadata. They cannot change the original or its access policy.
-Model failure/cancellation preserves source readability; integrity failures
-remain visible. Handled source failures do not starve enrichment or already
-queued approval publication. See the [upload scope and compatibility](../product/2026-09-21-person-update-inbox-v1.md).
+Accepted `team` and `project` documents continue processing after the
+contributor departs. Current project grants admit new members to shared history
+and deny removed members. `only_me` stays private and retains its private
+processing-tenure requirement, regardless of project association. An
+account-scoped minimal receipt can acknowledge an earlier save without
+disclosing content after project access is lost.
+
+Person documents carry `on_request` analysis policy. Admission and extraction
+do not invoke the meeting decision processor, create approval cards or publish
+approved records. This implementation adds neither a requested-analysis API nor
+document retrieval for Ask. Existing meeting sources retain their explicitly
+composed `automatic` decision workflow; common admission does not imply every
+source executes every downstream stage.
+
+Legacy `/v1/person/updates` and `/v2/person/updates` note contracts retain their
+existing original inbox, read indexes and optional search-enrichment worker.
+Server pull also admits accepted text notes through the same Person source
+capability as documents, without requiring a model. Its typed content
+distinguishes `person-text` from `person-document`; neither invents
+`MeetingDocument` facts. Existing enrichment hints cannot alter the original or
+audience and are not decision/action proposals; model failure preserves source
+readability. See
+[ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md),
+[project documents](../features/project-documents-v1.md), and the historical
+[upload scope](../product/2026-09-21-person-update-inbox-v1.md).
