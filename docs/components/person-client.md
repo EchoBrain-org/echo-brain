@@ -15,6 +15,7 @@ decision_ids:
   - ADR-0002
   - ADR-0013
   - ADR-0014
+  - ADR-0015
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-RUNTIME-001

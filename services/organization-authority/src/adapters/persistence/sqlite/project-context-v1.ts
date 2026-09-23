@@ -17,7 +17,7 @@ import {
   type ProjectContextFeedV1, type ProjectContextReadV1, type ProjectContextSearchResultV1,
   type ProjectContextSearchV1, type ProjectCreateReceiptV1, type ProjectCreateV1,
   type ProjectDirectorySearchV1, type ProjectDirectoryV1, type ProjectIdV1, type ProjectListV1,
-  type ProjectMembersV1, type ProjectMemberRemoveV1, type ProjectMemberSetV1,
+  type ProjectMembersV1, type ProjectMemberAddV1, type ProjectMemberRemoveV1, type ProjectMemberSetV1,
   type ProjectMutationReceiptV1, type ProjectPageRequestV1, type ProjectRoleV1, type ProjectSummaryV1,
 } from '@echo-brain/organization-api';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
@@ -304,7 +304,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
   searchDirectory(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectDirectorySearchV1): ProjectDirectoryV1 {
     this.open(); const input = this.input(() => validateProjectDirectorySearchV1(request)); this.require(snapshot, 'directory', input.project_id);
     const limit = input.limit ?? 10; const scope = cursorScope(snapshot, limit, input.query); const position = decodeProjectCursorV1(input.cursor, scope);
-    const terms = projectSearchTermsV1(input.query);
+    const terms = input.query === undefined ? [] : projectSearchTermsV1(input.query);
     const rows = (this.store.database.prepare(`SELECT membership.membership_id, principal.display_name FROM authority_memberships AS membership JOIN authority_principals AS principal USING (principal_id)
       WHERE membership.organization_id = ? AND membership.status = 'active' ORDER BY principal.display_name ASC, membership.membership_id ASC`).all(snapshot.person.organization_id) as { membership_id: string; display_name: string }[])
       .filter(row => terms.every(term => normalizeProjectSearchQueryV1(row.display_name).includes(term)));
@@ -362,6 +362,16 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       this.store.database.prepare(`INSERT INTO authority_project_memberships_v1 (project_membership_id, project_id, organization_id, principal_id, membership_id, membership_type, role, status, granted_at) VALUES (?, ?, ?, ?, ?, ?, 'lead', 'active', ?)`).run(`pgm_${randomUUID()}`, project_id, snapshot.person.organization_id, snapshot.person.principal_id, snapshot.person.membership_id, snapshot.person.membership_type, created_at);
       const result = validateProjectCreateReceiptV1({ schema_version: 1, kind: 'echo-project-create-receipt-v1', request_id: request.request_id, project_id, created_at, state: 'created' });
       this.store.record(snapshot.person, mutation, result); return result;
+    });
+  }
+  addMember(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectMemberAddV1): ProjectMutationReceiptV1 {
+    return this.mutate(() => {
+      this.writable(); this.require(snapshot, 'member_set', request.project_id); const mutation = { operation: 'member_set' as const, request }; this.store.assertActive(snapshot.person);
+      const replay = this.replay(snapshot, mutation) as ProjectMutationReceiptV1 | undefined; if (replay) return replay;
+      this.requireLead(snapshot, request.project_id); const target = this.store.activeMembership(request.membership_id); if (!target || target.organization_id !== snapshot.person.organization_id) denied();
+      const existing = this.store.database.prepare(`SELECT project_membership_id FROM authority_project_memberships_v1 WHERE project_id = ? AND membership_id = ? AND status = 'active'`).get(request.project_id, target.membership_id) as { project_membership_id:string } | undefined;
+      if (!existing) this.store.database.prepare(`INSERT INTO authority_project_memberships_v1 (project_membership_id, project_id, organization_id, principal_id, membership_id, membership_type, role, status, granted_at) VALUES (?, ?, ?, ?, ?, ?, 'member', 'active', ?)`).run(`pgm_${randomUUID()}`, request.project_id, target.organization_id, target.principal_id, target.membership_id, target.membership_type, this.store.now());
+      const result = mutationReceipt(request, this.store.now()); this.store.record(snapshot.person, mutation, result); return result;
     });
   }
   setMember(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectMemberSetV1): ProjectMutationReceiptV1 {
@@ -472,10 +482,10 @@ function receipt(operation: ProjectMutationV1['operation'], body: unknown) {
   if (operation === 'upload_submit') return validatePersonUpdateReceiptV2(body);
   return validateProjectMutationReceiptV1(body);
 }
-function mutationReceipt(request: ProjectMemberSetV1 | ProjectMemberRemoveV1 | ProjectContextAssociateV1 | ProjectContextDissociateV1, received_at: string): ProjectMutationReceiptV1 {
+function mutationReceipt(request: ProjectMemberAddV1 | ProjectMemberSetV1 | ProjectMemberRemoveV1 | ProjectContextAssociateV1 | ProjectContextDissociateV1, received_at: string): ProjectMutationReceiptV1 {
   const memberOperation = request.kind.includes('member');
   const operation = memberOperation
-    ? (request.kind.includes('set') ? 'member_set' : 'member_remove')
+    ? (request.kind.includes('remove') ? 'member_remove' : 'member_set')
     : (request.kind.includes('dissociate') ? 'dissociate' : 'associate');
   return validateProjectMutationReceiptV1({
     schema_version: 1,
@@ -483,7 +493,7 @@ function mutationReceipt(request: ProjectMemberSetV1 | ProjectMemberRemoveV1 | P
     request_id: request.request_id,
     project_id: request.project_id,
     operation,
-    ...(memberOperation ? { membership_id: (request as ProjectMemberSetV1).membership_id } : { context_id: (request as ProjectContextAssociateV1).context_id }),
+    ...(memberOperation ? { membership_id: (request as ProjectMemberAddV1).membership_id } : { context_id: (request as ProjectContextAssociateV1).context_id }),
     received_at,
     state: 'applied',
   });

@@ -84,6 +84,20 @@ describe('ProjectContextApplicationV1', () => {
     })).toThrow(expect.objectContaining({ code: 'not_found' }));
   });
 
+  it('lets a lead add a selected organization member without treating a stale selection as a role change', () => {
+    const f = fixture(); const created = project(f, 14);
+    const add = { schema_version: 1 as const, kind: 'echo-project-member-add-v1' as const, request_id: requestId(15), project_id: created.project_id, membership_id: MEMBER.membership_id };
+    expect(f.application.addMember('owner', add)).toMatchObject({ operation: 'member_set', membership_id: MEMBER.membership_id });
+    f.application.setMember('owner', { schema_version: 1, kind: 'echo-project-member-set-v1', request_id: requestId(16), project_id: created.project_id, membership_id: MEMBER.membership_id, role: 'lead' });
+    expect(f.application.addMember('owner', { ...add, request_id: requestId(17) })).toMatchObject({ operation: 'member_set' });
+    expect(f.application.listMembers('owner', { project_id: created.project_id }).items.find(item => item.membership_id === MEMBER.membership_id)).toMatchObject({ role: 'lead' });
+    const unshared = project(f, 18);
+    expect(() => f.application.addMember('member', { ...add, request_id: requestId(19), project_id: unshared.project_id, membership_id: OWNER.membership_id })).toThrow(expect.objectContaining({ code: 'not_found' }));
+    const reused = { ...add, request_id: requestId(20) };
+    f.application.addMember('owner', reused);
+    expect(() => f.application.setMember('owner', { schema_version: 1, kind: 'echo-project-member-set-v1', request_id: reused.request_id, project_id: reused.project_id, membership_id: reused.membership_id, role: 'member' })).toThrow(expect.objectContaining({ code: 'conflict' }));
+  });
+
   it('keeps source audience separate from association, visibility, and association replay', () => {
     const f = fixture(); const alpha = project(f, 20); const beta = project(f, 21);
     f.application.setMember('owner', { schema_version: 1, kind: 'echo-project-member-set-v1', request_id: requestId(22), project_id: alpha.project_id, membership_id: MEMBER.membership_id, role: 'member' });

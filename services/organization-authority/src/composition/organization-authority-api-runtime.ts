@@ -42,6 +42,8 @@ import {
   createPersonAnswerRouteV1,
   type AnswerCompositionFailureEventV1,
 } from "./person-answer-route.js";
+import { createPersonAnswerV2Route } from "./person-answer-v2-route.js";
+import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import type { AnswerCompositionGenerationBindingV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
 import type {
@@ -256,6 +258,22 @@ export async function startOrganizationAuthorityApiRuntime(
               ...(dependencies.answer_failure === undefined
                 ? {}
                 : { on_failure: dependencies.answer_failure }),
+            }),
+            person_answer_v2: createPersonAnswerV2Route({
+              authority_id: metadata.authority_id,
+              organization_id: metadata.organization_id,
+              state_lineage_id: lineage.root.state_lineage_id,
+              records: recordSearch,
+              originals: new SqlitePersonOriginalContextRetrievalV1(
+                database,
+                sessions,
+                metadata.organization_id,
+              ),
+              model: dependencies.answer_composition_generation.structured_output,
+              generation: dependencies.answer_composition_generation.generation,
+              audit: new SqlitePersonAnswerCompositionAuditV1(database),
+              ...(dependencies.ask_journey_telemetry === undefined ? {} : { ask_journey_telemetry: dependencies.ask_journey_telemetry }),
+              ...(dependencies.answer_failure === undefined ? {} : { on_failure: dependencies.answer_failure }),
             }),
           }),
       person_documents: createPersonDocumentApplicationV1({

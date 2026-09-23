@@ -8,6 +8,7 @@ import {
   validateProjectContextDissociateV1,
   validateProjectContextSearchV1,
   validateProjectCreateV1,
+  validateProjectMemberAddV1,
   validateProjectDirectorySearchV1,
   validateProjectIdV1,
   validateProjectMemberRemoveV1,
@@ -69,6 +70,10 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
   searchDirectory(accessToken: string, value: unknown): ProjectDirectoryV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectDirectorySearchV1(value));
     return this.read(accessToken, actor, { operation: 'directory', project_id: request.project_id }, (transaction, snapshot) => transaction.searchDirectory(snapshot, request));
+  }
+  addMember(accessToken: string, value: unknown): ProjectMutationReceiptV1 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectMemberAddV1(value));
+    return this.write(actor, { operation: 'member_set', request }, (transaction, snapshot) => transaction.addMember(snapshot, request));
   }
   setMember(accessToken: string, value: unknown): ProjectMutationReceiptV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectMemberSetV1(value));

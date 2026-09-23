@@ -93,7 +93,53 @@ function setMember(repository: SqliteProjectContextRepositoryV1, projectId: Proj
   );
 }
 
+function addMember(repository: SqliteProjectContextRepositoryV1, projectId: ProjectIdV1, actor: AuthorityPersonMembershipBinding, membership: AuthorityPersonMembershipBinding, number: number) {
+  const request = {
+    schema_version: 1 as const,
+    kind: "echo-project-member-add-v1" as const,
+    request_id: requestId(number),
+    project_id: projectId,
+    membership_id: membership.membership_id,
+  };
+  return repository.withWriteTransaction(transaction =>
+    transaction.addMember(snapshot(transaction, actor, { operation: "member_set", request }), request),
+  );
+}
+
 describe("SQLite project context V1", () => {
+  it("browses every active organization member and an additive retry cannot demote an existing lead", () => {
+    const { database, repository } = open();
+    const project = createProject(repository);
+    setMember(repository, project.project_id, OWNER, MEMBER, "lead", 2);
+    expect(addMember(repository, project.project_id, OWNER, MEMBER, 3)).toMatchObject({ operation: "member_set", membership_id: MEMBER.membership_id });
+    expect(repository.withReadTransaction(transaction => transaction.listMembers(
+      snapshot(transaction, OWNER, { operation: "members", project_id: project.project_id }), { project_id: project.project_id },
+    ).items.find(item => item.membership_id === MEMBER.membership_id))).toMatchObject({ role: "lead" });
+
+    for (let number = 4; number <= 13; number += 1) {
+      const suffix = String(number).padStart(12, "0");
+      addMembership(database, {
+        organization_id: OWNER.organization_id,
+        principal_id: `prn_directory_${number}`,
+        membership_id: `mem_00000000-0000-4000-8000-${suffix}`,
+        membership_type: "employee",
+      }, `Directory ${number}`, `directory-${number}@example.test`);
+    }
+    repository.withReadTransaction(transaction => {
+      const first = transaction.searchDirectory(
+        snapshot(transaction, OWNER, { operation: "directory", project_id: project.project_id }), { project_id: project.project_id, limit: 10 },
+      );
+      expect(first.items).toHaveLength(10);
+      expect(first.next_cursor).not.toBeNull();
+      const final = transaction.searchDirectory(
+        snapshot(transaction, OWNER, { operation: "directory", project_id: project.project_id }), { project_id: project.project_id, limit: 10, cursor: first.next_cursor! },
+      );
+      expect(final.items).toHaveLength(2);
+      expect([...first.items, ...final.items]).toContainEqual(expect.objectContaining({ membership_id: OWNER.membership_id }));
+      expect(final.next_cursor).toBeNull();
+    });
+  });
+
   it("persists every project port and preserves V2's independent custody coordinates", () => {
     const { repository } = open();
     const project = createProject(repository);

@@ -18,7 +18,7 @@ describe.skipIf(process.platform !== "darwin")("native project CLI boundary", ()
       ...["ui-support", "account", "projects", "uploads"].map(name => join(repo, `product/echo-overlay/${name}.swift`)),
       join(repo, "tests/fixtures/echo-projects-proof.swift"), "-o", binary], { stdio: "pipe", timeout: 120_000 });
   }, 120_000);
-  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "restart-recovery", "restart-create", "malformed-recovery", "recovery-store-failure", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-inaccessible", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow", "ui-people", "ui-associate", "ui-recovery", "ui-recovery-pending", "ui-create", "ui-create-skip", "ui-create-read-fail", "ui-create-account", "ui-drop", "ui-search-controls", "ui-documents"])("handles %s", mode => {
+  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "restart-recovery", "restart-create", "malformed-recovery", "recovery-store-failure", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-inaccessible", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow", "ui-people", "ui-associate", "ui-recovery", "ui-recovery-pending", "ui-create", "ui-create-skip", "ui-create-read-fail", "ui-create-account", "ui-drop", "ui-search-controls", "ui-documents", "ui-back", "ui-home-back"])("handles %s", mode => {
     const folder = mkdtempSync(join(root, "case-"));
     const script = join(folder, "client.mjs");
     const executable = join(folder, "echo-brain");
@@ -54,8 +54,8 @@ if (args[1] === 'status') {
     console.error(JSON.stringify({ok:false,action:id,error:'Unavailable',code:'unavailable',status:503})); process.exit(1);
   }
   const listedDocument={schema_version:1,kind:'echo-person-document-metadata-v1',request_id:'11111111-1111-4111-8111-111111111111',document_id:'doc_'+'d'.repeat(64),filename:'Robot PRD.pdf',title:'Robot PRD',content_length:12000,sha256:'sha256:'+'a'.repeat(64),audience:{kind:'project',project_id:value('--project-id')},project_id:value('--project-id'),detected_media_type:'application/pdf',received_at:'2026-09-21T00:00:00.000Z',state:'saved',extraction_state:'ready',extraction_detail:null,extractor:'fixture-v1',extracted_text_bytes:21};
-  if (id === 'documents-search') { console.log(JSON.stringify({ok:true,result:{schema_version:1,kind:'echo-person-document-search-result-v1',documents:mode==='ui-documents'?[{...listedDocument,excerpt:'First page',anchor:{kind:'page',start:1}}]:[],next_cursor:null}})); process.exit(0); }
-  if (id === 'documents-read' && mode==='ui-documents') {
+  if (id === 'documents-search') { console.log(JSON.stringify({ok:true,result:{schema_version:1,kind:'echo-person-document-search-result-v1',documents:(mode==='ui-documents'||mode==='ui-back')?[{...listedDocument,excerpt:'First page',anchor:{kind:'page',start:1}}]:[],next_cursor:null}})); process.exit(0); }
+  if (id === 'documents-read' && (mode==='ui-documents'||mode==='ui-back')) {
     const next=args.includes('--cursor'); console.log(JSON.stringify({ok:true,result:{metadata:listedDocument,text:{schema_version:1,kind:'echo-person-document-text-v1',document_id:listedDocument.document_id,original_sha256:listedDocument.sha256,extractor:listedDocument.extractor,extraction_state:'ready',chunks:[{ordinal:next?1:0,anchor_kind:'page',anchor_start:next?2:1,text:next?'Second page':'First page'}],next_cursor:next?null:'Mg'}}}));process.exit(0);
   }
   if (id === 'documents-abandon') { console.log(JSON.stringify({ok:true,result:{schema_version:1,kind:'echo-person-document-abandoned-v1',request_id:value('--request-id'),local_snapshot_removed:true,authority_outcome:'unchanged'}}));process.exit(0); }
@@ -79,13 +79,19 @@ if (args[1] === 'status') {
     response.items.push({...response.items[0],project_id:beacon,name:'Beacon'});
     if (mode === 'ui-member') response.items.forEach(x => x.role = 'member');
   }
+  if (mode === 'ui-home-back' && id === 'projects-list') {
+    const names=['Apollo','Beacon','Cinder','Delta','Ember','Fjord','Grove','Harbor','Ion','Juniper','Kite','Lumen','Mica','Nova','Orbit'];
+    const rows=names.map((name,index)=>({...response.items[0],project_id:index===0?'prj_11111111-1111-4111-8111-111111111111':'prj_'+String(index+1).padStart(8,'0')+'-0000-4000-8000-'+String(index+1).padStart(12,'0'),name}));
+    response.items=args.includes('--cursor') ? rows.slice(10) : rows.slice(0,10);
+    response.next_cursor=args.includes('--cursor') ? null : 'eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ';
+  }
   // UI modes: every scoped reply names the project the command asked for.
   if (mode.startsWith('ui-') && args.includes('--project-id') && 'project_id' in response) {
     response.project_id = value('--project-id');
     if (id === 'projects-read') response.name = response.project_id === beacon ? 'Beacon' : 'Apollo';
   }
   if (mode.startsWith('ui-') && ['projects-associate', 'projects-dissociate'].includes(id)) response.context_id = value('--context-id');
-  if (mode.startsWith('ui-') && ['projects-member-set', 'projects-member-remove'].includes(id)) response.membership_id = value('--membership-id');
+  if (mode.startsWith('ui-') && ['projects-member-add', 'projects-member-set', 'projects-member-remove'].includes(id)) response.membership_id = value('--membership-id');
   // The viewer (Ari) plus Bea, so a lead has someone else to manage.
   if (['ui-round-trip', 'ui-people', 'ui-member'].includes(mode) && id === 'projects-members' && !calls.some(x => x[2] === 'member-remove')) {
     response.items.push({membership_id:'mem_33333333-3333-4333-8333-333333333333',display_name:'Bea',role:'member'});
@@ -156,14 +162,15 @@ if (args[1] === 'status') {
       // The UI proofs drive the window; the CLI log shows what actually ran.
       const calls = readFileSync(log, "utf8").trim().split("\n").map(line => (mode.startsWith("cli-") ? JSON.parse(line).args : JSON.parse(line)) as string[]);
       const flag = (args: string[], name: string) => args[args.indexOf(name) + 1];
-      const apollo = "prj_11111111-1111-4111-8111-111111111111", beacon = "prj_44444444-4444-4444-8444-444444444444";
+      const apollo = "prj_11111111-1111-4111-8111-111111111111";
       const context = "ctx_" + "a".repeat(64);
       const op = (name: string) => calls.filter(args => args[1] === "projects" && args[2] === name);
       const submits = calls.filter(args => (args[1] === "updates" && args[2] === "submit") || (args[1] === "documents" && args[2] === "upload"));
       const roundTrip = ["ui-round-trip", "cli-ui-round-trip", "ui-member", "ui-access-loss", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown"].includes(mode);
       if (roundTrip) {
-        // The project-page bar ran the scoped project search, not global Ask.
-        expect(calls.some(args => args[1] === "projects" && args[2] === "search" && flag(args, "--project-id") === apollo && flag(args, "--query") === "ship")).toBe(true);
+        // The project-page bar is now an Ask callback with explicit scope. It
+        // must not revive the old project-search transport behind the UI.
+        expect(calls.some(args => args[1] === "projects" && args[2] === "search" && flag(args, "--query") === "ship")).toBe(false);
         expect(submits).toHaveLength(mode === "ui-member" || mode === "ui-access-loss" ? 0 : mode.endsWith("ui-upload-unknown") ? 2 : mode === "ui-round-trip" ? 3 : 1);
         // Both independent choices are Apollo for the first save, and
         // the title comes from the first non-empty line.
@@ -187,14 +194,10 @@ if (args[1] === 'status') {
         expect(new Set(submits.map(args => flag(args, "--request-id"))).size).toBe(3);
       }
       if (mode === "ui-search-controls") {
-        // Clearing a search and Escape (field editor, window) each brought
-        // the feed back; a search and a click made during a load still ran.
-        const scoped = calls.filter(args => args[1] === "projects" && ["search", "feed", "read-context"].includes(args[2]));
-        const searches = scoped.filter(args => args[2] === "search").map(args => flag(args, "--query"));
-        expect(searches).toEqual(["ship", "ship", "late"]);
-        scoped.forEach((args, index) => {
-          if (args[2] === "search" && flag(args, "--query") === "ship") expect(scoped[index + 1]?.[2]).toBe("feed");
-        });
+        // The project Ask proof owns scope and input-clearing assertions inside
+        // the native fixture. Project CLI search remains covered by the direct
+        // ProjectSession scenarios, and must not be invoked by Ask.
+        expect(op("search")).toHaveLength(0);
         expect(op("read-context").length).toBeGreaterThanOrEqual(2);
         expect(submits).toHaveLength(0);
       }
@@ -202,22 +205,25 @@ if (args[1] === 'status') {
       if (mode === "ui-people") {
         // Only confirmed changes ran, each on the person the alert named;
         // a cancelled alert and an alert left open across concealment ran nothing.
-        expect(op("directory").map(args => flag(args, "--query"))).toEqual(["cleo"]);
-        expect(op("member-set").map(args => [flag(args, "--project-id"), flag(args, "--membership-id"), flag(args, "--role")]))
-          .toEqual([[apollo, "mem_55555555-5555-4555-8555-555555555555", "member"]]);
+        // Opening the picker browses the initial active organization page;
+        // entering a name then narrows it. Add preserves any existing role by
+        // using the additive command instead of member-set.
+        expect(op("directory").map(args => args.includes("--query") ? flag(args, "--query") : undefined)).toEqual([undefined, "cleo", undefined]);
+        expect(op("member-add").map(args => [flag(args, "--project-id"), flag(args, "--membership-id")]))
+          .toEqual([[apollo, "mem_55555555-5555-4555-8555-555555555555"]]);
         expect(op("member-remove").map(args => [flag(args, "--project-id"), flag(args, "--membership-id")]))
           .toEqual([[apollo, "mem_33333333-3333-4333-8333-333333333333"]]);
         // Each change re-read the roster.
         const after = (name: string) => calls.slice(calls.findIndex(args => args[2] === name) + 1);
-        expect(after("member-set").some(args => args[2] === "members")).toBe(true);
+        expect(after("member-add").some(args => args[2] === "members")).toBe(true);
         expect(after("member-remove").some(args => args[2] === "members")).toBe(true);
       }
       if (mode === "ui-associate") {
-        // "Add to project" associated the read original with Beacon only;
-        // "Remove from this project" dissociated it from the open Beacon.
-        expect(op("associate").map(args => [flag(args, "--project-id"), flag(args, "--context-id")])).toEqual([[beacon, context]]);
-        expect(op("dissociate").map(args => [flag(args, "--project-id"), flag(args, "--context-id")])).toEqual([[beacon, context]]);
-        expect(calls.findIndex(args => args[2] === "associate")).toBeLessThan(calls.findIndex(args => args[2] === "dissociate"));
+        // With saved-context browsing removed, the project original still
+        // supports "Remove from this project". Direct association is covered
+        // separately by ProjectSession/API proofs and capture project choice.
+        expect(op("associate")).toHaveLength(0);
+        expect(op("dissociate").map(args => [flag(args, "--project-id"), flag(args, "--context-id")])).toEqual([[apollo, context]]);
         expect(submits).toHaveLength(0);
       }
       if (mode.startsWith("ui-recovery")) expect(op("create")).toHaveLength(0);
@@ -235,6 +241,12 @@ if (args[1] === 'status') {
         }
         expect(submits.map(args => flag(args, "--title"))).toEqual(["Alpha", "Beta"]);
       }
+      if (mode === "ui-home-back") {
+        // Initial page, explicit More projects, then fresh home page and its
+        // single bounded restoration page. A stale cursor must not loop.
+        expect(op("list").map(args => args.includes("--cursor") ? flag(args, "--cursor") : undefined))
+          .toEqual([undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ", undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ", undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ"]);
+      }
       if (mode === "ui-create-skip") {
         expect(op("create")).toHaveLength(1);
         expect(submits.map(args => flag(args, "--title"))).toEqual(["Alpha", "Beta"]);
@@ -249,9 +261,10 @@ if (args[1] === 'status') {
       }
       if (mode === "ui-create-read-fail") {
         // The receipt confirmed the create: a failed reopen never leads to a
-        // second create, only a re-read of the same project.
+        // There is one create. After the failed opening read, Open retries the
+        // same project and the post-create picker refreshes its roster.
         expect(op("create")).toHaveLength(1);
-        expect(op("read").map(args => flag(args, "--project-id"))).toEqual([apollo, apollo]);
+        expect(op("read").map(args => flag(args, "--project-id"))).toEqual([apollo, apollo, apollo]);
       }
       if (mode === "ui-drop") expect(submits).toHaveLength(0);
     }

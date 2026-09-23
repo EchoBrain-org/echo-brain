@@ -30,6 +30,42 @@ private enum EchoOverlaySourceFixtureMain {
             if case .success(let answer) = CliRunner.parseSuccess(answerData(citations: [citation()])), answer.sources.count == 1 {
                 passed = true
             } else { passed = false }
+        case "scoped-v3-answer":
+            let project = "prj_fixture"
+            if case .success(let answer) = CliRunner.parseSuccess(answerDataV3(projectID: project), expectedProjectID: project) {
+                passed = answer.sources.count == 2 && answer.sources[0].loadable && !answer.sources[1].loadable
+                    && answer.sources[1].label == "Hardware brief"
+                    && { if case .failure = CliRunner.parseSuccess(answerDataV3(projectID: project), expectedProjectID: "prj_other") { return true }; return false }()
+            } else { passed = false }
+        case "v3-authorship-unsupported":
+            let project = "prj_fixture"
+            if case .success(let answer) = CliRunner.parseSuccess(answerDataV3(projectID: project, outcome: "authorship_unsupported", citations: []), expectedProjectID: project) {
+                passed = answer.sources.isEmpty
+            } else { passed = false }
+        case "source-evidence":
+            let reference = SourceRevisionReference(sourceID: "source:" + String(repeating: "a", count: 64), revisionID: "revision-fixture",
+                                                    sourceSha256: otherRecordHash, representationSha256: atomHash, anchorSha256: recordHash,
+                                                    documentID: nil)
+            switch CliRunner.parseSourceEvidence(sourceEvidenceData(reference: reference, projectID: "prj_11111111-1111-4111-8111-111111111111"),
+                                                reference: reference, expectedProjectID: "prj_11111111-1111-4111-8111-111111111111") {
+            case .success(let label, let text): passed = label == "Hardware brief" && text == "Bounded immutable evidence."
+            default: passed = false
+            }
+        case "sources-back":
+            _ = NSApplication.shared
+            passed = AnswerController.proveSourcesBack()
+        case "pending-composer":
+            _ = NSApplication.shared
+            NSApp.setActivationPolicy(.prohibited)
+            passed = AnswerController.provePendingComposer(screenshot: ProcessInfo.processInfo.environment["ECHO_OVERLAY_FIXTURE_OUTPUT"].map { "\($0)/pending-composer.png" })
+        case "unavailable-source-evidence":
+            _ = NSApplication.shared
+            NSApp.setActivationPolicy(.prohibited)
+            passed = AnswerController.proveUnavailableEvidenceDoesNotRetry()
+        case "original-source-evidence-card":
+            _ = NSApplication.shared
+            NSApp.setActivationPolicy(.prohibited)
+            passed = AnswerController.proveOriginalSourceEvidenceCard(screenshot: ProcessInfo.processInfo.environment["ECHO_OVERLAY_FIXTURE_OUTPUT"].map { "\($0)/original-source-evidence.png" })
         case "retired-global-metadata":
             var envelope = try! JSONSerialization.jsonObject(with: answerData()) as! [String: Any]
             var result = envelope["result"] as! [String: Any]
@@ -314,13 +350,47 @@ private enum EchoOverlaySourceFixtureMain {
         answer: String = "Approved answer.",
         citations: [[String: Any]] = [citation()]
     ) -> Data {
-        data([
+        return data([
             "ok": true,
             "result": [
                 "schema_version": 2,
                 "kind": "echo-clean-person-answer-v2",
                 "answer": answer,
                 "citations": citations,
+            ],
+        ])
+    }
+
+    private static func answerDataV3(projectID: String, outcome: String? = nil, citations: [[String: Any]]? = nil) -> Data {
+        var result: [String: Any] = [
+            "schema_version": 3,
+            "kind": "echo-clean-person-answer-v3",
+            "answer": "Scoped answer.",
+            "scope": ["kind": "project", "project_id": projectID],
+            "citations": citations ?? [
+                ["kind": "approved_record", "atom_id": atomHash, "record_sha256": recordHash, "policy_id": policy],
+                ["kind": "source_revision", "source_id": "source:" + String(repeating: "a", count: 64), "revision_id": "rev_fixture", "source_sha256": otherRecordHash,
+                 "representation_sha256": atomHash, "anchor_sha256": recordHash, "label": "Hardware brief"],
+            ],
+        ]
+        if let outcome { result["outcome"] = outcome }
+        return data([
+            "ok": true,
+            "result": result,
+        ])
+    }
+
+    private static func sourceEvidenceData(reference: SourceRevisionReference, projectID: String) -> Data {
+        data([
+            "ok": true,
+            "result": [
+                "schema_version": 1,
+                "kind": "echo-person-source-evidence-v1",
+                "scope": ["kind": "project", "project_id": projectID],
+                "citation": ["kind": "source_revision", "source_id": reference.sourceID, "revision_id": reference.revisionID,
+                             "source_sha256": reference.sourceSha256, "representation_sha256": reference.representationSha256,
+                             "anchor_sha256": reference.anchorSha256, "label": "Hardware brief"],
+                "text": "Bounded immutable evidence.",
             ],
         ])
     }
@@ -464,6 +534,100 @@ extension AnswerController {
         let controller = AnswerController(window: window, container: window.contentView!)
         window.delegate = controller
         return controller
+    }
+
+    fileprivate static func proveSourcesBack() -> Bool {
+        let controller = makeController()
+        controller.question = "What is the battery target?"
+        controller.scope = .project(id: "project-scout", name: "SCOUT")
+        controller.answerView.string = "The target remains 12 hours."
+        var covers: [Bool] = []
+        controller.onSourcesCoverChanged = { [weak controller] in
+            if let controller { covers.append(controller.sourcesCoverAnswer) }
+        }
+        controller.openSourcePane()
+        guard controller.sourcesCoverAnswer, covers == [true] else { return false }
+        controller.closeSourcesForBack()
+        guard !controller.sourcesCoverAnswer, covers == [true, false],
+              !controller.answerScrollView.isHidden,
+              controller.answerView.string == "The target remains 12 hours.",
+              controller.question == "What is the battery target?",
+              controller.scope == .project(id: "project-scout", name: "SCOUT") else { return false }
+        controller.openSourcePane()
+        controller.applicationDidDeactivate()
+        return !controller.sourcesCoverAnswer && covers == [true, false, true, false]
+    }
+
+    fileprivate static func provePendingComposer(screenshot: String? = nil) -> Bool {
+        let executable = FileManager.default.temporaryDirectory.appendingPathComponent("echo-overlay-pending-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: executable) }
+        let script = "#!/bin/sh\nsleep 3\nprintf '%s' '{\"ok\":true,\"result\":{\"schema_version\":2,\"kind\":\"echo-clean-person-answer-v2\",\"answer\":\"Later\",\"citations\":[]}}'\n"
+        guard (try? script.data(using: .utf8)?.write(to: executable)) != nil,
+              (try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)) != nil
+        else { return false }
+        let controller = makeController()
+        controller.runner = CliRunner(executable: executable)
+        guard case .accepted = controller.submit(question: "Where is the launch plan?", scope: .global),
+              case .rejected = controller.submit(question: "A second question", scope: .global),
+              !controller.answerHeader.isHidden,
+              controller.submittedQuestionLabel.stringValue == "You asked: Where is the launch plan?",
+              controller.scopeLabel.stringValue == "Scope: All accessible context",
+              controller.activeAsk != nil
+        else { return false }
+        if let screenshot, let content = controller.panel.contentView,
+           let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+            content.cacheDisplay(in: content.bounds, to: bitmap)
+            guard let png = bitmap.representation(using: .png, properties: [:]) else { return false }
+            try? png.write(to: URL(fileURLWithPath: screenshot))
+        }
+        controller.cancelActiveAsk()
+        return true
+    }
+
+    fileprivate static func proveUnavailableEvidenceDoesNotRetry() -> Bool {
+        let marker = FileManager.default.temporaryDirectory.appendingPathComponent("echo-overlay-evidence-failure-\(UUID().uuidString)")
+        let executable = FileManager.default.temporaryDirectory.appendingPathComponent("echo-overlay-evidence-cli-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker); try? FileManager.default.removeItem(at: executable) }
+        let script = "#!/bin/sh\necho x >> '\(marker.path)'\nexit 1\n"
+        guard (try? script.data(using: .utf8)?.write(to: executable)) != nil,
+              (try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)) != nil
+        else { return false }
+        let reference = SourceRevisionReference(sourceID: "source:" + String(repeating: "a", count: 64), revisionID: "revision-fixture",
+                                                sourceSha256: "sha256:" + String(repeating: "d", count: 64), representationSha256: "sha256:" + String(repeating: "c", count: 64),
+                                                anchorSha256: "sha256:" + String(repeating: "b", count: 64), documentID: nil)
+        let controller = makeController()
+        controller.runner = CliRunner(executable: executable)
+        controller.currentSources = [DisplaySource(label: "Hardware brief", recordSha256: reference.sourceSha256, policyID: "source_revision", loadable: false, sourceRevision: reference)]
+        controller.renderSelectedSource()
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline && controller.activeSourceEvidence != nil {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        guard controller.unavailableSourceEvidence.contains(reference) else { return false }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        let calls = (try? String(contentsOf: marker, encoding: .utf8).split(whereSeparator: \.isNewline).count) ?? 0
+        return calls == 1
+    }
+
+    fileprivate static func proveOriginalSourceEvidenceCard(screenshot: String?) -> Bool {
+        let controller = makeController()
+        controller.panel.setFrame(NSRect(x: 0, y: 0, width: 960, height: 720), display: false)
+        let reference = SourceRevisionReference(sourceID: "source:" + String(repeating: "a", count: 64), revisionID: "revision-fixture",
+                                                sourceSha256: "sha256:" + String(repeating: "d", count: 64), representationSha256: "sha256:" + String(repeating: "c", count: 64),
+                                                anchorSha256: "sha256:" + String(repeating: "b", count: 64), documentID: nil)
+        let source = DisplaySource(label: "Hardware design brief", recordSha256: reference.sourceSha256, policyID: "source_revision", loadable: false, sourceRevision: reference)
+        controller.currentSources = [source]
+        controller.sourceEvidence[reference] = ("Hardware design brief", "Verified evidence packet\n\nThe battery envelope remains 22 Wh, with a 12-hour target under field use.")
+        controller.sourcePaneOpen = true; controller.sourcePane.isHidden = false; controller.sourceScrollView.isHidden = false
+        controller.renderSelectedSource()
+        guard let content = controller.panel.contentView else { return false }
+        content.layoutSubtreeIfNeeded()
+        if let screenshot, let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+            content.cacheDisplay(in: content.bounds, to: bitmap)
+            guard let png = bitmap.representation(using: .png, properties: [:]) else { return false }
+            do { try png.write(to: URL(fileURLWithPath: screenshot)) } catch { return false }
+        }
+        return controller.sourceDetails.subviews.count >= 3
     }
 
     fileprivate static func proveSourceCard(record: SourceRecord, screenshot: String?, narrow: Bool) -> Bool {

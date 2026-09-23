@@ -1,6 +1,6 @@
 # Project documents V1
 
-Status: implementation candidate. Not deployed or accepted on an installed client. This feature adds file custody and retrieval; it does not add project documents to Ask or approve their contents as decisions. The accepted extension to the earlier text-only scope is [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md).
+Status: implementation candidate; exact release acceptance is separate. This feature adds file custody and retrieval without approving document contents as decisions. The accepted extension to the earlier text-only scope is [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md). The subsequent [global/project Ask candidate](global-project-ask-v1.md), authorized by ADR-0015, adds permission-aware answering from usable extracted evidence.
 
 ## User behavior
 

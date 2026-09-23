@@ -3,15 +3,17 @@ import { validatePersonDocumentIdV1, validatePersonDocumentSearchV1, type Person
 import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUpload, type DocumentSnapshot } from './document-file.js';
 import { validatePersonUploadSearchV1, validatePersonUploadContextId, type PersonUploadSearchV1 } from '@echo-brain/organization-api';
 import { validatePersonUpdateSubmitV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1 } from '@echo-brain/organization-api';
+import { validatePersonQueryText } from '@echo-brain/organization-api';
+import { validatePersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import {
   validateProjectPageRequestV1, validateProjectCreateV1, validateProjectIdV1,
   validateProjectContextBrowseV1, validateProjectDirectorySearchV1,
-  validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
+  validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
   validateProjectContextSearchV1, validateProjectContextReadRequestV1, validatePersonUpdateSubmitV2, validatePersonUploadSearchV2,
   type ProjectPageRequestV1, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
-  type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
-  type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2,
+  type ProjectMemberAddV1, type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
+  type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2, type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import { randomBytes, randomUUID } from "node:crypto";
 import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonMeetingIngestionExclusionSelectorV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
@@ -22,7 +24,8 @@ import {
   unknownContextMutation,
   unknownDocumentMutation,
   type EmployeeRosterV1,
-  type PersonAnswerV2,
+  type PersonAnswerV3,
+  type PersonAskSourceEvidenceV1,
   type PersonRecordListV1,
   type PersonRecordSearchV2,
 } from "./authority-client.js";
@@ -569,6 +572,11 @@ export class PersonClient {
     return this.withContextSession((authority, token) => authority.projectDirectory(token, request));
   }
 
+  async addProjectMember(value: ProjectMemberAddV1) {
+    const request = validateProjectMemberAddV1(value);
+    return this.withContextSession((authority, token) => authority.addProjectMember(token, request), request);
+  }
+
   async setProjectMember(value: ProjectMemberSetV1) {
     const request = validateProjectMemberSetV1(value);
     return this.withContextSession((authority, token) => authority.setProjectMember(token, request), request);
@@ -648,12 +656,29 @@ export class PersonClient {
     );
   }
 
-  async ask(question: string): Promise<PersonAnswerV2> {
+  async ask(question: string, projectId?: ProjectIdV1): Promise<PersonAnswerV3> {
+    // Preserve the public query error type before transport schema validation.
+    validatePersonQueryText(question);
+    if (projectId !== undefined) validateProjectIdV1(projectId, 'Ask project_id');
     const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).ask(
+    const result = await this.authority(stored.authority_origin).ask(
       stored.session.access_token,
       question,
+      projectId,
     );
+    this.assertCurrentSession(stored);
+    return result;
+  }
+
+  async askSourceEvidence(value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
+    const request = validatePersonSourceEvidenceReadRequestV1(value);
+    const stored = await this.accessSession();
+    const result = await this.authority(stored.authority_origin).askSourceEvidence(
+      stored.session.access_token,
+      request,
+    );
+    this.assertCurrentSession(stored);
+    return result;
   }
 
   async changeMeetingIngestionExclusion(

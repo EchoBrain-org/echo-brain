@@ -14,6 +14,7 @@ decision_ids:
   - ADR-0006
   - ADR-0007
   - ADR-0010
+  - ADR-0015
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Clean V1 current-Person Layer 1 listing and Layer 2 exact-generation search release, the ADR-0010 rebuild-time related-atom projection boundary, plus the Layer 4 request-local release and citation boundary
@@ -44,8 +45,9 @@ directly can see every restricted-reviewer record in the organization. This is
 the confused-deputy failure that a latency shortcut would create. The rule
 prevents provenance, execution identity, provider custody, or service
 possession from being mistaken for human permission. It covers clean V1 Layer 1
-listing, Layer 2 search, and the single composed Layer 4 `ask` path. It does not
-authorize any additional Layer 4 execution path.
+listing, Layer 2 search, and the composed Layer 4 `ask` path. ADR-0015 extends
+that bounded path to authorized Person originals and optional project scope;
+it does not grant generic raw-meeting access or permit a privileged model read.
 
 ADR-0010 adds one non-serving exception to the otherwise model-free lower
 layers: during construction of a fresh Layer 2 generation, an Authority-owned
@@ -69,6 +71,13 @@ most one answer call; it receives no lower-layer handles and may pass citations
 only after checking that they are a subset of the batch release. Planner or
 answer-model failure, malformed model output, or an invalid citation MUST stop
 the request without releasing an answer.
+
+For ADR-0015, original-context storage remains behind a Layer 3 release port.
+Both original and approved-record citations bind the exact released evidence.
+Project scope additionally checks current membership and actual association
+without widening audience. Revalidate all evidence supplied to the answerer,
+including uncited sources, before response release. A revision or representation
+reference is provenance, not continuing permission to read it.
 
 ## Verification and change procedure
 

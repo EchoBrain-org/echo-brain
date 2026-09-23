@@ -76,9 +76,10 @@ console.log(JSON.stringify(result));
         expect(writes[0]?.args[writes[0].args.indexOf("--title") + 1]?.normalize("NFC")).toBe("Original café note.");
         expect(writes[0]?.args[writes[0].args.indexOf("--visibility") + 1]).toBe("only-me");
         expect(writes[0]?.args.some(arg => arg === "--project-id" || arg === "--audience-project-id")).toBe(false);
-        // Saved-context search and read ran through the upload CLI, not a project scope.
-        expect(calls.some(call => call.args[1] === "updates" && call.args[2] === "search")).toBe(true);
-        expect(calls.some(call => call.args[1] === "updates" && call.args[2] === "read")).toBe(true);
+        // The home bar is now Ask. Saved originals still have direct client
+        // parser/read coverage in the round-trip fixture, but this UI path
+        // must not quietly revive the removed browse/search route.
+        expect(calls.some(call => call.args[1] === "updates" && ["search", "read"].includes(call.args[2]))).toBe(false);
       }
     }
   });

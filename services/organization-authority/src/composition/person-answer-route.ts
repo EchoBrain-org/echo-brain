@@ -82,13 +82,16 @@ function publicResponse(
     kind: "echo-clean-person-answer-v2",
     answer: value.answer,
     citations: Object.freeze(
-      value.citations.map((citation) =>
-        Object.freeze({
+      value.citations.map((citation) => {
+        // V1 predates source-original citations. It must never silently
+        // reinterpret one as an approved record for old clients.
+        if (citation.kind === "source_revision") unavailable();
+        return Object.freeze({
           atom_id: citation.atom_id,
           record_sha256: citation.record_sha256,
           policy_id: policy(citation.policy_id),
-        }),
-      ),
+        });
+      }),
     ),
     ...(value.outcome === undefined ? {} : { outcome: value.outcome }),
   });
@@ -185,7 +188,7 @@ export function createPersonAnswerRouteV1(
             }
             internalRelease = batch.release;
             const authorization = batch.release.current_authorization;
-            releasedRetrievalBatch = Object.freeze({
+            const nextReleasedRetrievalBatch: ReleasedRetrievalBatch = Object.freeze({
               release_id: batch.release
                 .record_read_audit_row_sha256 as Sha256Digest,
               authority_id: options.authority_id,
@@ -203,6 +206,7 @@ export function createPersonAnswerRouteV1(
               released_atoms: Object.freeze(
                 batch.response.items.map((item) =>
                   Object.freeze({
+                    kind: "approved_record" as const,
                     atom_id: item.atom_id as Sha256Digest,
                     record_sha256: item.record_sha256 as Sha256Digest,
                     policy_id: item.policy_id,
@@ -213,9 +217,10 @@ export function createPersonAnswerRouteV1(
               query_hit_counts: Object.freeze([...batch.query_hit_counts]),
               checked_at: authorization.checked_at,
             });
+            releasedRetrievalBatch = nextReleasedRetrievalBatch;
             if (journey !== undefined) {
               validateReleasedRetrievalBatchV1(
-                releasedRetrievalBatch,
+                nextReleasedRetrievalBatch,
                 request.queries.length,
               );
             }
@@ -227,7 +232,7 @@ export function createPersonAnswerRouteV1(
               ),
               released_atom_count: batch.response.items.length,
             });
-            return releasedRetrievalBatch;
+            return nextReleasedRetrievalBatch;
           } catch (error) {
             const failure =
               request.signal?.aborted === true

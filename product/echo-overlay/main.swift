@@ -27,12 +27,26 @@ private let allowedCitationPolicies: Set<String> = [
 ]
 
 private let sha256Pattern = try! NSRegularExpression(pattern: "^sha256:[a-f0-9]{64}$")
+private let sourceIDPattern = try! NSRegularExpression(pattern: "^source:[a-f0-9]{64}$")
+private let documentIDPattern = try! NSRegularExpression(pattern: "^doc_[a-f0-9]{64}$")
+private let projectIDPattern = try! NSRegularExpression(pattern: "^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 private func isSha256(_ value: String) -> Bool {
     sha256Pattern.firstMatch(
         in: value,
         range: NSRange(location: 0, length: (value as NSString).length)
     ) != nil
+}
+
+private func matches(_ expression: NSRegularExpression, _ value: String) -> Bool {
+    expression.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) != nil
+}
+
+private func isSourceRevisionID(_ value: String) -> Bool {
+    value == value.precomposedStringWithCanonicalMapping
+        && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        && !value.isEmpty && value.unicodeScalars.count <= 512
+        && !value.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
 }
 
 private struct DynamicCodingKey: CodingKey, Hashable {
@@ -68,6 +82,98 @@ private struct CliCitation: Decodable {
     }
 }
 
+private struct CliSourceRevisionCitation: Decodable {
+    let source_id: String
+    let revision_id: String
+    let source_sha256: String
+    let representation_sha256: String
+    let anchor_sha256: String
+    let document_id: String?
+    let label: String?
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        let required: Set<String> = ["kind", "source_id", "revision_id", "source_sha256", "representation_sha256", "anchor_sha256"]
+        let optional: Set<String> = ["document_id", "label"]
+        guard values.allKeys.map(\.stringValue).allSatisfy({ required.contains($0) || optional.contains($0) }),
+              required.isSubset(of: Set(values.allKeys.map(\.stringValue))),
+              try values.decode(String.self, forKey: DynamicCodingKey("kind")) == "source_revision"
+        else { throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("kind"), in: values, debugDescription: "Unexpected source citation fields") }
+        source_id = try values.decode(String.self, forKey: DynamicCodingKey("source_id"))
+        revision_id = try values.decode(String.self, forKey: DynamicCodingKey("revision_id"))
+        source_sha256 = try values.decode(String.self, forKey: DynamicCodingKey("source_sha256"))
+        representation_sha256 = try values.decode(String.self, forKey: DynamicCodingKey("representation_sha256"))
+        anchor_sha256 = try values.decode(String.self, forKey: DynamicCodingKey("anchor_sha256"))
+        document_id = try values.decodeIfPresent(String.self, forKey: DynamicCodingKey("document_id"))
+        label = try values.decodeIfPresent(String.self, forKey: DynamicCodingKey("label"))
+    }
+}
+
+private struct SourceRevisionReference: Sendable, Equatable, Hashable {
+    let sourceID: String
+    let revisionID: String
+    let sourceSha256: String
+    let representationSha256: String
+    let anchorSha256: String
+    let documentID: String?
+
+    var isValid: Bool {
+        matches(sourceIDPattern, sourceID) && isSourceRevisionID(revisionID)
+            && isSha256(sourceSha256) && isSha256(representationSha256) && isSha256(anchorSha256)
+            && (documentID == nil || matches(documentIDPattern, documentID!))
+    }
+}
+
+private struct CliAskScopeV3: Decodable {
+    let projectID: String?
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        let kind = try values.decode(String.self, forKey: DynamicCodingKey("kind"))
+        switch kind {
+        case "global":
+            guard hasExactCodingKeys(values.allKeys, ["kind"]) else { throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("kind"), in: values, debugDescription: "Unexpected global scope") }
+            projectID = nil
+        case "project":
+            guard hasExactCodingKeys(values.allKeys, ["kind", "project_id"]) else { throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("kind"), in: values, debugDescription: "Unexpected project scope") }
+            projectID = try values.decode(String.self, forKey: DynamicCodingKey("project_id"))
+        default:
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("kind"), in: values, debugDescription: "Unknown Ask scope")
+        }
+    }
+}
+
+private struct CliApprovedRecordCitationV3: Decodable {
+    let atom_id: String
+    let record_sha256: String
+    let policy_id: String
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard hasExactCodingKeys(values.allKeys, ["kind", "atom_id", "record_sha256", "policy_id"]),
+              try values.decode(String.self, forKey: DynamicCodingKey("kind")) == "approved_record"
+        else { throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("kind"), in: values, debugDescription: "Unexpected approved-record citation fields") }
+        atom_id = try values.decode(String.self, forKey: DynamicCodingKey("atom_id"))
+        record_sha256 = try values.decode(String.self, forKey: DynamicCodingKey("record_sha256"))
+        policy_id = try values.decode(String.self, forKey: DynamicCodingKey("policy_id"))
+    }
+}
+
+private enum CliCitationV3: Decodable {
+    case approved(CliApprovedRecordCitationV3)
+    case sourceRevision(CliSourceRevisionCitation)
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        let kind = try values.decode(String.self, forKey: DynamicCodingKey("kind"))
+        switch kind {
+        case "approved_record": self = .approved(try CliApprovedRecordCitationV3(from: decoder))
+        case "source_revision": self = .sourceRevision(try CliSourceRevisionCitation(from: decoder))
+        default: throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("kind"), in: values, debugDescription: "Unknown citation kind")
+        }
+    }
+}
+
 private struct CliAnswer: Decodable {
     let schema_version: Int
     let kind: String
@@ -98,6 +204,68 @@ private struct CliSuccessEnvelope: Decodable {
     let result: CliAnswer
 }
 
+private struct CliAnswerV3: Decodable {
+    let schema_version: Int
+    let kind: String
+    let answer: String
+    let citations: [CliCitationV3]
+    let scope: CliAskScopeV3
+    let outcome: String?
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        let base: Set<String> = ["schema_version", "kind", "answer", "citations", "scope"]
+        guard hasExactCodingKeys(values.allKeys, base) || hasExactCodingKeys(values.allKeys, base.union(["outcome"])) else {
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("answer"), in: values, debugDescription: "Unexpected answer fields")
+        }
+        schema_version = try values.decode(Int.self, forKey: DynamicCodingKey("schema_version"))
+        kind = try values.decode(String.self, forKey: DynamicCodingKey("kind"))
+        answer = try values.decode(String.self, forKey: DynamicCodingKey("answer"))
+        citations = try values.decode([CliCitationV3].self, forKey: DynamicCodingKey("citations"))
+        scope = try values.decode(CliAskScopeV3.self, forKey: DynamicCodingKey("scope"))
+        let outcomeKey = DynamicCodingKey("outcome")
+        outcome = values.contains(outcomeKey) ? try values.decode(String.self, forKey: outcomeKey) : nil
+        guard outcome == nil || (outcome == "authorship_unsupported" && citations.isEmpty) else {
+            throw DecodingError.dataCorruptedError(forKey: outcomeKey, in: values, debugDescription: "Unsupported answer outcome")
+        }
+    }
+}
+
+private struct CliSuccessEnvelopeV3: Decodable { let ok: Bool; let result: CliAnswerV3 }
+
+private struct CliSourceEvidence: Decodable {
+    let schema_version: Int
+    let kind: String
+    let scope: CliAskScopeV3
+    let citation: CliSourceRevisionCitation
+    let text: String
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard hasExactCodingKeys(values.allKeys, ["schema_version", "kind", "scope", "citation", "text"]) else {
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("text"), in: values, debugDescription: "Unexpected evidence fields")
+        }
+        schema_version = try values.decode(Int.self, forKey: DynamicCodingKey("schema_version"))
+        kind = try values.decode(String.self, forKey: DynamicCodingKey("kind"))
+        scope = try values.decode(CliAskScopeV3.self, forKey: DynamicCodingKey("scope"))
+        citation = try values.decode(CliSourceRevisionCitation.self, forKey: DynamicCodingKey("citation"))
+        text = try values.decode(String.self, forKey: DynamicCodingKey("text"))
+    }
+}
+
+private struct CliSourceEvidenceEnvelope: Decodable {
+    let ok: Bool
+    let result: CliSourceEvidence
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: DynamicCodingKey.self)
+        guard hasExactCodingKeys(values.allKeys, ["ok", "result"]) else {
+            throw DecodingError.dataCorruptedError(forKey: DynamicCodingKey("ok"), in: values, debugDescription: "Unexpected evidence envelope")
+        }
+        ok = try values.decode(Bool.self, forKey: DynamicCodingKey("ok"))
+        result = try values.decode(CliSourceEvidence.self, forKey: DynamicCodingKey("result"))
+    }
+}
+
 private struct CliFailureEnvelope: Decodable {
     let ok: Bool
     let action: String
@@ -120,6 +288,12 @@ private struct DisplaySource: Sendable {
     let label: String
     let recordSha256: String
     let policyID: String
+    let loadable: Bool
+    let sourceRevision: SourceRevisionReference?
+
+    init(label: String, recordSha256: String, policyID: String, loadable: Bool = true, sourceRevision: SourceRevisionReference? = nil) {
+        self.label = label; self.recordSha256 = recordSha256; self.policyID = policyID; self.loadable = loadable; self.sourceRevision = sourceRevision
+    }
 }
 
 private struct SourceRecord: Sendable {
@@ -164,6 +338,12 @@ private enum SourceOutcome: Sendable {
     case cancelled
 }
 
+private enum SourceEvidenceOutcome: Sendable {
+    case success(label: String?, text: String)
+    case unavailable
+    case cancelled
+}
+
 private final class CliRunner: @unchecked Sendable {
     private let executable: URL
 
@@ -174,12 +354,13 @@ private final class CliRunner: @unchecked Sendable {
 
     func ask(
         question: String,
+        projectID: String? = nil,
         completion: @escaping @Sendable (AskOutcome) -> Void
     ) -> RunningAsk {
         let running = RunningAsk()
         let executable = self.executable
         DispatchQueue.global(qos: .userInitiated).async {
-            let outcome = Self.execute(executable: executable, question: question, running: running)
+            let outcome = Self.execute(executable: executable, question: question, projectID: projectID, running: running)
             DispatchQueue.main.async { completion(outcome) }
         }
         return running
@@ -221,9 +402,24 @@ private final class CliRunner: @unchecked Sendable {
         return running
     }
 
+    func sourceEvidence(
+        source: DisplaySource,
+        projectID: String?,
+        completion: @escaping @Sendable (SourceEvidenceOutcome) -> Void
+    ) -> RunningAsk {
+        let running = RunningAsk()
+        let executable = self.executable
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcome = Self.executeSourceEvidence(executable: executable, source: source, projectID: projectID, running: running)
+            DispatchQueue.main.async { completion(outcome) }
+        }
+        return running
+    }
+
     private static func execute(
         executable: URL,
         question: String,
+        projectID: String?,
         running: RunningAsk
     ) -> AskOutcome {
         guard executable.isFileURL,
@@ -237,7 +433,9 @@ private final class CliRunner: @unchecked Sendable {
         let stdout = Pipe()
         let stderr = Pipe()
         process.executableURL = executable
-        process.arguments = ["person", "ask", "--question", question]
+        var arguments = ["person", "ask", "--question", question]
+        if let projectID { arguments += ["--project", projectID] }
+        process.arguments = arguments
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = stdout
         process.standardError = stderr
@@ -297,13 +495,20 @@ private final class CliRunner: @unchecked Sendable {
         }
 
         if process.terminationStatus == 0 {
-            return parseSuccess(stdoutReader.data())
+            return parseSuccess(stdoutReader.data(), expectedProjectID: projectID)
         }
         return parseFailure(stderrReader.data())
     }
 
-    fileprivate static func parseSuccess(_ data: Data) -> AskOutcome {
-        guard let envelope = try? JSONDecoder().decode(CliSuccessEnvelope.self, from: data),
+    fileprivate static func parseSuccess(_ data: Data, expectedProjectID: String? = nil) -> AskOutcome {
+        if let envelope = try? JSONDecoder().decode(CliSuccessEnvelopeV3.self, from: data), envelope.ok,
+           envelope.result.schema_version == 3, envelope.result.kind == "echo-clean-person-answer-v3",
+           !envelope.result.answer.isEmpty, envelope.result.answer.unicodeScalars.count <= maximumAnswerScalars,
+           envelope.result.scope.projectID == expectedProjectID {
+            return parseV3(envelope.result)
+        }
+        guard expectedProjectID == nil,
+              let envelope = try? JSONDecoder().decode(CliSuccessEnvelope.self, from: data),
               envelope.ok,
               envelope.result.schema_version == 2,
               envelope.result.kind == "echo-clean-person-answer-v2",
@@ -338,6 +543,40 @@ private final class CliRunner: @unchecked Sendable {
             ))
         }
         return .success(DisplayAnswer(answer: envelope.result.answer, sources: sources))
+    }
+
+    private static func parseV3(_ answer: CliAnswerV3) -> AskOutcome {
+        var citedAtoms = Set<String>()
+        var sourceKeys = Set<String>()
+        var sources: [DisplaySource] = []
+        for citation in answer.citations {
+            switch citation {
+            case .approved(let record):
+                guard isSha256(record.atom_id), isSha256(record.record_sha256),
+                      allowedCitationPolicies.contains(record.policy_id), citedAtoms.insert(record.atom_id).inserted
+                else { return .failure("The installed ECHO client returned an invalid response.") }
+                let key = "approved|\(record.record_sha256)|\(record.policy_id)"
+                guard sourceKeys.insert(key).inserted else { continue }
+                sources.append(DisplaySource(label: "Approved record \(sources.count + 1)", recordSha256: record.record_sha256, policyID: record.policy_id))
+            case .sourceRevision(let source):
+                let reference = SourceRevisionReference(sourceID: source.source_id, revisionID: source.revision_id,
+                                                        sourceSha256: source.source_sha256, representationSha256: source.representation_sha256,
+                                                        anchorSha256: source.anchor_sha256, documentID: source.document_id)
+                guard reference.isValid
+                else { return .failure("The installed ECHO client returned an invalid response.") }
+                let key = "source|\(source.source_id)|\(source.revision_id)|\(source.anchor_sha256)"
+                guard sourceKeys.insert(key).inserted else { continue }
+                let label = source.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+                sources.append(DisplaySource(
+                    label: label?.isEmpty == false ? label! : "Original source \(sources.count + 1)",
+                    recordSha256: source.source_sha256,
+                    policyID: "source_revision",
+                    loadable: false,
+                    sourceRevision: reference
+                ))
+            }
+        }
+        return .success(DisplayAnswer(answer: answer.answer, sources: sources))
     }
 
     fileprivate static func executeSources(
@@ -432,6 +671,62 @@ private final class CliRunner: @unchecked Sendable {
               !stderrReader.didExceedLimit()
         else { return nil }
         return parseSourceRecord(stdoutReader.data(), source: source)
+    }
+
+    private static func executeSourceEvidence(
+        executable: URL,
+        source: DisplaySource,
+        projectID: String?,
+        running: RunningAsk
+    ) -> SourceEvidenceOutcome {
+        guard executable.isFileURL, executable.path.hasPrefix("/"),
+              FileManager.default.isExecutableFile(atPath: executable.path),
+              let reference = source.sourceRevision, reference.isValid,
+              projectID == nil || matches(projectIDPattern, projectID!)
+        else { return .unavailable }
+        var arguments = ["person", "ask-source", "--source-id", reference.sourceID, "--revision-id", reference.revisionID,
+                         "--source-sha256", reference.sourceSha256, "--representation-sha256", reference.representationSha256,
+                         "--anchor-sha256", reference.anchorSha256]
+        if let documentID = reference.documentID { arguments += ["--document-id", documentID] }
+        if let projectID { arguments += ["--project", projectID] }
+        let process = Process(); let stdout = Pipe(); let stderr = Pipe()
+        process.executableURL = executable; process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice; process.standardOutput = stdout; process.standardError = stderr
+        let stdoutReader = BoundedReader(maximumBytes: maximumProcessOutputBytes)
+        let stderrReader = BoundedReader(maximumBytes: maximumProcessOutputBytes)
+        let readers = DispatchGroup()
+        readers.enter(); DispatchQueue.global(qos: .userInitiated).async { stdoutReader.read(from: stdout.fileHandleForReading) { running.exceedOutputLimit() }; readers.leave() }
+        readers.enter(); DispatchQueue.global(qos: .userInitiated).async { stderrReader.read(from: stderr.fileHandleForReading) { running.exceedOutputLimit() }; readers.leave() }
+        do {
+            guard try running.launch(process) else {
+                try? stdout.fileHandleForWriting.close(); try? stderr.fileHandleForWriting.close(); readers.wait(); return .cancelled
+            }
+        } catch {
+            try? stdout.fileHandleForWriting.close(); try? stderr.fileHandleForWriting.close(); readers.wait(); running.detach(process); return .unavailable
+        }
+        try? stdout.fileHandleForWriting.close(); try? stderr.fileHandleForWriting.close()
+        let timeout = DispatchWorkItem { running.timeOut() }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + sourceTimeoutSeconds, execute: timeout)
+        process.waitUntilExit(); timeout.cancel(); readers.wait(); running.detach(process)
+        let state = running.state()
+        guard !state.cancelled else { return .cancelled }
+        guard !state.timedOut, !state.outputExceeded, !stdoutReader.didExceedLimit(), !stderrReader.didExceedLimit(), process.terminationStatus == 0 else { return .unavailable }
+        return parseSourceEvidence(stdoutReader.data(), reference: reference, expectedProjectID: projectID)
+    }
+
+    fileprivate static func parseSourceEvidence(_ data: Data, reference: SourceRevisionReference, expectedProjectID: String?) -> SourceEvidenceOutcome {
+        guard let envelope = try? JSONDecoder().decode(CliSourceEvidenceEnvelope.self, from: data), envelope.ok,
+              envelope.result.schema_version == 1, envelope.result.kind == "echo-person-source-evidence-v1",
+              envelope.result.scope.projectID == expectedProjectID,
+              envelope.result.text.utf8.count <= 3 * 1024, !envelope.result.text.isEmpty
+        else { return .unavailable }
+        let citation = envelope.result.citation
+        let returned = SourceRevisionReference(sourceID: citation.source_id, revisionID: citation.revision_id,
+                                               sourceSha256: citation.source_sha256, representationSha256: citation.representation_sha256,
+                                               anchorSha256: citation.anchor_sha256, documentID: citation.document_id)
+        guard returned == reference, returned.isValid else { return .unavailable }
+        let label = citation.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .success(label: label?.isEmpty == false ? label : nil, text: envelope.result.text)
     }
 
     fileprivate static func parseSourceRecord(_ data: Data, source: DisplaySource) -> SourceRecord? {
@@ -705,7 +1000,7 @@ private func validateQuestion(_ source: String) -> QuestionValidation {
 
     let message: String?
     if question.isEmpty {
-        message = "Ask a question to search your approved team context."
+        message = "Ask a question about the context you can access."
     } else if uniqueTermCount == 0 {
         message = "Include at least one word or number in the question."
     } else if scalarCount > maximumQuestionScalars {
@@ -738,13 +1033,14 @@ private final class AnswerController: NSObject, NSWindowDelegate {
     private let panel: NSWindow
     private let container: NSView
     private var question = ""
+    private var scope = AskScope.global
     private let askButton = PillButton(title: "Ask", target: nil, action: nil)
     private let copyButton = PillButton(title: "Copy answer", target: nil, action: nil)
     private let sourcesButton = PillButton(title: "Sources (0)", target: nil, action: nil)
     private let spinner = NSProgressIndicator()
     private let identityLabel = NSTextField(labelWithString: "Signed in")
     private let statusLabel = NSTextField(labelWithString: "Ready when you are")
-    private let emptyAnswerLabel = NSTextField(wrappingLabelWithString: "Ask about the approved decisions you can access.\n\nNot live yet: answers from saved notes or scoped to a project.")
+    private let emptyAnswerLabel = NSTextField(wrappingLabelWithString: "Ask across the context you can access, or scope a question to one project.")
     private let answerView = NSTextView()
     private let answerScrollView = NSScrollView()
     private let sourceScrollView = NSScrollView()
@@ -759,36 +1055,69 @@ private final class AnswerController: NSObject, NSWindowDelegate {
     private var answerColumnTrailing: NSLayoutConstraint?
     private var sourcePaneWidth: NSLayoutConstraint?
     private var sourcePaneOpen = false
+    // A narrow Sources pane covers the answer and is a Back destination.
+    var onSourcesCoverChanged: (() -> Void)?
+    var sourcesCoverAnswer: Bool { sourcePaneOpen && answerColumn?.isHidden == true }
     private var sourceRecords: [String: SourceRecord] = [:]
     private var selectedSourceIndex = 0
     private let answerHeader = NSStackView()
+    private let answerTitle = NSTextField(labelWithString: "ANSWER")
+    private let submittedQuestionLabel = NSTextField(wrappingLabelWithString: "")
+    private let scopeLabel = NSTextField(labelWithString: "")
     private var activeAsk: RunningAsk?
     private var requestIdentifier: UUID?
     private var activeSources: RunningAsk?
     private var sourceRequestIdentifier: UUID?
+    private var activeSourceEvidence: RunningAsk?
+    private var sourceEvidenceRequestIdentifier: UUID?
+    private var sourceEvidence: [SourceRevisionReference: (label: String?, text: String)] = [:]
+    private var unavailableSourceEvidence = Set<SourceRevisionReference>()
     private var currentSources: [DisplaySource] = []
     private var activeIdentityLookup: RunningAsk?
     private var identityRequestIdentifier: UUID?
     private var identityText = "Signed in"
     private var copyFeedbackWorkItem: DispatchWorkItem?
+    private var retryAvailable = false
 
     init(window: NSWindow, container: NSView) {
         panel = window; self.container = container
         super.init(); configureContent()
     }
 
-    func submit(question: String) {
-        guard question.utf16.count <= maximumRawQuestionUTF16Units else {
-            statusLabel.stringValue = "That question is too long. Use up to 240 characters."; return
+    /// Rejects without changing the draft when it cannot be sent. In
+    /// particular, a second Enter never silently cancels or replaces an Ask
+    /// that is still running.
+    func submit(question: String, scope: AskScope) -> AskSubmission {
+        guard activeAsk == nil else {
+            statusLabel.stringValue = "ECHO is still answering your earlier question."
+            statusLabel.textColor = EchoTheme.mutedText
+            announce(statusLabel.stringValue)
+            return .rejected(statusLabel.stringValue)
         }
-        cancelActiveAsk()
-        self.question = question
-        submitOrCancel()
+        guard question.utf16.count <= maximumRawQuestionUTF16Units else {
+            statusLabel.stringValue = "That question is too long. Use up to 240 characters."
+            statusLabel.textColor = EchoTheme.ember
+            return .rejected(statusLabel.stringValue)
+        }
+        let validation = validateQuestion(question)
+        guard validation.isValid else {
+            statusLabel.stringValue = validation.message ?? "Check the question and try again."
+            statusLabel.textColor = EchoTheme.ember
+            announce(statusLabel.stringValue)
+            return .rejected(statusLabel.stringValue)
+        }
+        self.question = validation.question
+        self.scope = scope
+        retryAvailable = false
+        startAsk()
+        return .accepted
     }
 
     private func resetConversation() {
         clearSources()
         question = ""
+        scope = .global
+        retryAvailable = false
         askButton.title = "Ask"
         askButton.style = .primary
         askButton.setAccessibilityLabel("Ask ECHO")
@@ -799,12 +1128,14 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         statusLabel.stringValue = "Ready when you are"
         statusLabel.textColor = EchoTheme.mutedText
         answerView.string = ""
+        submittedQuestionLabel.stringValue = ""
+        scopeLabel.stringValue = ""
         answerHeader.isHidden = true
         answerScrollView.isHidden = true
         sourceScrollView.isHidden = true
         emptyAnswerLabel.isHidden = false
         emptyAnswerLabel.textColor = EchoTheme.faintText
-        emptyAnswerLabel.stringValue = "Ask about the approved decisions you can access.\n\nNot live yet: answers from saved notes or scoped to a project."
+        emptyAnswerLabel.stringValue = "Ask across the context you can access, or scope a question to one project."
         setThinking(false)
     }
 
@@ -852,18 +1183,15 @@ private final class AnswerController: NSObject, NSWindowDelegate {
             statusLabel.textColor = EchoTheme.mutedText
             return
         }
+        guard !question.isEmpty else { return }
+        retryAvailable = false
+        startAsk()
+    }
 
+    private func startAsk() {
         let validation = validateQuestion(question)
-        guard validation.isValid else {
-            let message = validation.message ?? "Check the question and try again."
-            statusLabel.stringValue = message
-            statusLabel.textColor = EchoTheme.ember
-            announce(message)
-            return
-        }
-        if question != validation.question { question = validation.question }
-
-        cancelActiveAsk()
+        guard validation.isValid else { return }
+        question = validation.question
         clearSources()
         resetCopyFeedback()
         let identifier = UUID()
@@ -876,18 +1204,20 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         sourcesButton.isEnabled = false
         sourcesButton.title = "Sources (0)"
         answerView.string = ""
-        answerHeader.isHidden = true
+        submittedQuestionLabel.stringValue = "You asked: \(question)"
+        scopeLabel.stringValue = "Scope: \(scope.displayName)"
+        answerHeader.isHidden = false
         answerScrollView.isHidden = true
         sourceScrollView.isHidden = true
         emptyAnswerLabel.isHidden = false
         emptyAnswerLabel.textColor = EchoTheme.faintText
-        emptyAnswerLabel.stringValue = "ECHO is checking the approved context available to you."
+        emptyAnswerLabel.stringValue = "ECHO is checking \(scope.displayName.lowercased())."
         statusLabel.stringValue = "Thinking…"
         statusLabel.textColor = EchoTheme.mutedText
         setThinking(true)
         announce("ECHO is thinking.")
 
-        activeAsk = runner.ask(question: validation.question) { [weak self] outcome in
+        activeAsk = runner.ask(question: validation.question, projectID: scope.projectID) { [weak self] outcome in
             Task { @MainActor in self?.handle(outcome, identifier: identifier) }
         }
     }
@@ -903,11 +1233,14 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         askButton.isEnabled = true
         switch outcome {
         case .success(let answer):
+            retryAvailable = false
             statusLabel.stringValue = "Answer ready"
             statusLabel.textColor = EchoTheme.mutedText
             answerView.textStorage?.setAttributedString(
                 NSAttributedString(string: answer.answer, attributes: Self.answerAttributes)
             )
+            submittedQuestionLabel.stringValue = "You asked: \(question)"
+            scopeLabel.stringValue = "Scope: \(scope.displayName)"
             answerView.scrollRangeToVisible(NSRange(location: 0, length: 0))
             answerHeader.isHidden = false
             answerScrollView.isHidden = false
@@ -921,10 +1254,14 @@ private final class AnswerController: NSObject, NSWindowDelegate {
             if panel.isVisible, panel.isKeyWindow { loadSources() }
             announce("ECHO answer ready.")
         case .failure(let message):
+            retryAvailable = true
+            askButton.title = "Retry"
+            askButton.setAccessibilityLabel("Retry ECHO request")
+            setThinking(false)
             statusLabel.stringValue = "Couldn’t answer"
             statusLabel.textColor = EchoTheme.ember
             answerView.string = ""
-            answerHeader.isHidden = true
+            answerHeader.isHidden = false
             answerScrollView.isHidden = true
             sourceScrollView.isHidden = true
             emptyAnswerLabel.isHidden = false
@@ -937,7 +1274,7 @@ private final class AnswerController: NSObject, NSWindowDelegate {
     }
 
     private func setThinking(_ thinking: Bool) {
-        askButton.isHidden = !thinking
+        askButton.isHidden = !(thinking || retryAvailable)
         spinner.isHidden = !thinking
         if thinking {
             spinner.startAnimation(nil)
@@ -950,6 +1287,7 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         requestIdentifier = nil
         activeAsk?.cancel()
         activeAsk = nil
+        retryAvailable = false
         setThinking(false)
     }
 
@@ -966,7 +1304,7 @@ private final class AnswerController: NSObject, NSWindowDelegate {
 
     private func loadSources(prioritizingSelected: Bool = false) {
         guard activeSources == nil, !currentSources.isEmpty else { return }
-        let missingSources = currentSources.filter { sourceRecords[$0.recordSha256] == nil }
+        let missingSources = currentSources.filter { $0.loadable && sourceRecords[$0.recordSha256] == nil }
         guard !missingSources.isEmpty else { return }
         let selectedSource = currentSources.indices.contains(selectedSourceIndex)
             ? currentSources[selectedSourceIndex]
@@ -974,13 +1312,13 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         let sourcesToLoad: [DisplaySource]
         if prioritizingSelected,
            let selectedSource,
-           sourceRecords[selectedSource.recordSha256] == nil {
+           selectedSource.loadable, sourceRecords[selectedSource.recordSha256] == nil {
             sourcesToLoad = [selectedSource] + missingSources.filter {
                 $0.recordSha256 != selectedSource.recordSha256
             }
         } else if !sourceRecords.isEmpty,
            let selectedSource,
-           sourceRecords[selectedSource.recordSha256] == nil {
+           selectedSource.loadable, sourceRecords[selectedSource.recordSha256] == nil {
             sourcesToLoad = [selectedSource]
         } else if sourceRecords.isEmpty {
             sourcesToLoad = missingSources
@@ -1053,6 +1391,11 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         sourceRequestIdentifier = nil
         activeSources?.cancel()
         activeSources = nil
+        sourceEvidenceRequestIdentifier = nil
+        activeSourceEvidence?.cancel()
+        activeSourceEvidence = nil
+        sourceEvidence = [:]
+        unavailableSourceEvidence = []
         sourceRecords = [:]
         clearSourceDetails()
         closeSourcePane()
@@ -1085,6 +1428,8 @@ private final class AnswerController: NSObject, NSWindowDelegate {
 
     @objc private func closeSources() { showAnswer() }
 
+    func closeSourcesForBack() { showAnswer() }
+
     private func openSourcePane() {
         guard !sourcePaneOpen else { return }
         sourcePaneOpen = true
@@ -1099,6 +1444,7 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         sourceScrollView.isHidden = false
         sourcesButton.title = "Back to answer"
         refreshSourceChips()
+        onSourcesCoverChanged?()
     }
 
     private func closeSourcePane() {
@@ -1110,6 +1456,7 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         sourcePaneWidth?.constant = 420
         sourcesButton.title = "Sources (\(currentSources.count))"
         refreshSourceChips()
+        onSourcesCoverChanged?()
     }
 
     private func refreshSourceChips() {
@@ -1135,7 +1482,9 @@ private final class AnswerController: NSObject, NSWindowDelegate {
                 button.tag = index
                 button.toolTip = title
                 button.setAccessibilityLabel("Source \(index + 1): \(title)\(date)")
-                button.setAccessibilityHelp("Show the approved record and supporting excerpts")
+                button.setAccessibilityHelp(source.loadable
+                    ? "Show the approved record and supporting excerpts"
+                    : "Show the verified evidence packet for this original source")
                 button.translatesAutoresizingMaskIntoConstraints = false
                 button.heightAnchor.constraint(equalToConstant: 28).isActive = true
                 row.addArrangedSubview(button)
@@ -1149,6 +1498,29 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         for view in sourceDetails.arrangedSubviews {
             sourceDetails.removeArrangedSubview(view)
             view.removeFromSuperview()
+        }
+    }
+
+    private func loadSourceEvidence(_ source: DisplaySource) {
+        guard activeSourceEvidence == nil, let reference = source.sourceRevision,
+              sourceEvidence[reference] == nil else { return }
+        let identifier = UUID()
+        sourceEvidenceRequestIdentifier = identifier
+        let expectedProjectID = scope.projectID
+        activeSourceEvidence = runner.sourceEvidence(source: source, projectID: expectedProjectID) { [weak self] outcome in
+            Task { @MainActor in
+                guard let self, self.sourceEvidenceRequestIdentifier == identifier,
+                      self.currentSources.contains(where: { $0.sourceRevision == reference }),
+                      self.scope.projectID == expectedProjectID
+                else { return }
+                self.activeSourceEvidence = nil; self.sourceEvidenceRequestIdentifier = nil
+                if case .success(let label, let text) = outcome {
+                    self.sourceEvidence[reference] = (label, text)
+                } else if case .unavailable = outcome {
+                    self.unavailableSourceEvidence.insert(reference)
+                }
+                self.renderSelectedSource()
+            }
         }
     }
 
@@ -1173,6 +1545,23 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         clearSourceDetails()
         guard currentSources.indices.contains(selectedSourceIndex) else { return }
         let source = currentSources[selectedSourceIndex]
+        if !source.loadable {
+            appendDetail(sourceLabel("ORIGINAL SOURCE", size: 10.5, color: EchoTheme.goldBright, weight: .semibold))
+            let evidence = source.sourceRevision.flatMap { sourceEvidence[$0] }
+            appendDetail(sourceLabel(evidence?.label ?? source.label, size: 18, weight: .semibold))
+            if let evidence {
+                appendDetail(sourceLabel(evidence.text, color: EchoTheme.text))
+            } else if let reference = source.sourceRevision, unavailableSourceEvidence.contains(reference) {
+                appendDetail(sourceLabel("Evidence is unavailable.", color: EchoTheme.mutedText))
+                let retry = PillButton(title: "Retry evidence", target: self, action: #selector(retrySourceEvidence(_:)))
+                retry.style = .quiet; retry.tag = selectedSourceIndex
+                appendDetail(retry)
+            } else {
+                appendDetail(sourceLabel(activeSourceEvidence == nil ? "Evidence is unavailable." : "Loading verified evidence…", color: EchoTheme.mutedText))
+                loadSourceEvidence(source)
+            }
+            return
+        }
         guard let record = sourceRecords[source.recordSha256] else {
             appendDetail(sourceLabel(activeSources == nil ? "Source details are unavailable." : "Loading sources…", color: EchoTheme.mutedText))
             return
@@ -1205,6 +1594,12 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         }
         sourceScrollView.contentView.scroll(to: .zero)
         sourceScrollView.reflectScrolledClipView(sourceScrollView.contentView)
+    }
+
+    @objc private func retrySourceEvidence(_ sender: NSButton) {
+        guard currentSources.indices.contains(sender.tag), let reference = currentSources[sender.tag].sourceRevision else { return }
+        unavailableSourceEvidence.remove(reference)
+        renderSelectedSource()
     }
 
     private func sourceSignalCard(_ signal: SourceSignal) -> NSView {
@@ -1397,10 +1792,20 @@ private final class AnswerController: NSObject, NSWindowDelegate {
         sourceChips.widthAnchor.constraint(equalTo: basedOn.widthAnchor).isActive = true; basedOn.isHidden = true
         copyButton.target = self; copyButton.action = #selector(copyAnswer); copyButton.style = .quiet; copyButton.isEnabled = false
         sourcesButton.target = self; sourcesButton.action = #selector(showSources); sourcesButton.style = .quiet; sourcesButton.isEnabled = false
-        let title = sourceLabel("ANSWER · APPROVED CONTEXT", size: 11, color: EchoTheme.mutedText, weight: .semibold)
+        answerTitle.font = .systemFont(ofSize: 11, weight: .semibold)
+        answerTitle.textColor = EchoTheme.mutedText
+        answerTitle.stringValue = "ANSWER"
+        scopeLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        scopeLabel.textColor = EchoTheme.goldBright
+        submittedQuestionLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        submittedQuestionLabel.textColor = EchoTheme.text
+        submittedQuestionLabel.maximumNumberOfLines = 2
+        submittedQuestionLabel.setAccessibilityLabel("Submitted question")
         let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        answerHeader.setViews([title, spacer, sourcesButton, copyButton], in: .leading)
-        answerHeader.spacing = 8; answerHeader.isHidden = true
+        let titleRow = NSStackView(views: [answerTitle, scopeLabel, spacer, sourcesButton, copyButton])
+        titleRow.orientation = .horizontal; titleRow.alignment = .centerY; titleRow.spacing = 8
+        answerHeader.setViews([titleRow, submittedQuestionLabel], in: .top)
+        answerHeader.orientation = .vertical; answerHeader.alignment = .leading; answerHeader.spacing = 5; answerHeader.isHidden = true
         emptyAnswerLabel.font = .systemFont(ofSize: 14); emptyAnswerLabel.textColor = EchoTheme.faintText
         emptyAnswerLabel.alignment = .center; emptyAnswerLabel.maximumNumberOfLines = 0
         for view in [statusRow, answerHeader, answerScrollView, basedOn, emptyAnswerLabel] {
@@ -1501,17 +1906,23 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             },
             changed: { [weak self] in self?.people?.checkAccess(); self?.projects?.refreshIdentity() }
         )
-        let home = ProjectsController(onAsk: { [weak self] question in self?.controller?.submit(question: question) })
+        let home = ProjectsController(onAsk: { [weak self] question, scope in
+            self?.controller?.submit(question: question, scope: scope) ?? .rejected("ECHO is unavailable.")
+        })
         projects = home
         controller = AnswerController(window: home.window, container: home.answerContainer)
         home.accountMenu = account?.menuItem.submenu
         home.onPeople = { [weak self] in self?.people?.show() }
         home.onIdentityChanged = { [weak self] in self?.controller?.accountWillChange() }
+        home.onInvalidateAnswer = { [weak self] in self?.controller?.accountWillChange() }
         home.onConceal = { [weak self] in self?.controller?.applicationDidDeactivate() }
         home.onActivateAnswer = { [weak self, weak home] in
             guard let home else { return }
             self?.controller?.windowDidBecomeKey(Notification(name: NSWindow.didBecomeKeyNotification, object: home.window))
         }
+        home.askSubPage = { [weak self] in self?.controller?.sourcesCoverAnswer == true ? "Answer" : nil }
+        home.closeAskSubPage = { [weak self] in self?.controller?.closeSourcesForBack() }
+        controller?.onSourcesCoverChanged = { [weak home] in home?.askPageChanged() }
         home.onResizeAnswer = { [weak self, weak home] in
             guard let home else { return }
             self?.controller?.windowDidResize(Notification(name: NSWindow.didResizeNotification, object: home.window))

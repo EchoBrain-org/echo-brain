@@ -91,6 +91,7 @@ describe('frozen project context CLI contract', () => {
     ['projects-create', { request_id: '00000000-0000-4000-8000-000000000009' }],
     ['projects-read', { project_id: otherProject }],
     ['projects-members', { project_id: otherProject }], ['projects-directory', { project_id: otherProject }],
+    ['projects-member-add', { membership_id: 'mem_44444444-4444-4444-8444-444444444444' }],
     ['projects-member-set', { operation: 'member_remove' }],
     ['projects-member-set', { membership_id: 'mem_44444444-4444-4444-8444-444444444444' }],
     ['projects-member-remove', { project_id: otherProject }],

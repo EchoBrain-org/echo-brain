@@ -82,6 +82,15 @@ not claim that the employee is currently online or has a live device session.
 
 ## Account and answer Sources
 
+The [global/project Ask extension](../features/global-project-ask-v1.md) uses
+the versioned `/v2/person/ask` transport and typed schema-3 citations. Global
+scope includes authorized originals and approved records; explicit project
+scope is restricted to readable associated context. Uploaded sources remain
+unapproved evidence. The `/v1/person/ask` endpoint retains its legacy
+approved-record-only contract. The source-card behavior below describes approved
+records; original evidence uses its exact source/revision/representation
+coordinates and a fresh authorized read.
+
 The installed app's **Account** menu and graphical setup use the same Person
 CLI and session store. An existing member can sign in through Google without
 another invitation; a new member chooses the private invitation file. Sign-out

@@ -24,6 +24,7 @@ const fixtures = (JSON.parse(readFileSync(new URL('../../../tests/fixtures/proje
 const operations: Record<string, Operation> = {
   'projects-list': 'listProjects', 'projects-create': 'createProject', 'projects-read': 'readProject',
   'projects-members': 'listMembers', 'projects-directory': 'searchDirectory',
+  'projects-member-add': 'addMember',
   'projects-member-set': 'setMember', 'projects-member-remove': 'removeMember',
   'projects-associate': 'associateContext', 'projects-dissociate': 'dissociateContext',
   'projects-feed': 'feed', 'projects-search': 'search', 'projects-read-context': 'readContext',
@@ -92,10 +93,11 @@ describe('frozen project/V2 HTTP transport', () => {
     const row = fixture('projects-feed');
     expect((await send(origin, row, { body: JSON.stringify({ project_id: row.http.body!.project_id }) })).status).toBe(200);
     expect(calls.map(call => call.args[1])).toEqual([{ limit: 10 }, { project_id: row.http.body!.project_id, limit: 10 }]);
-    for (const id of ['projects-search', 'projects-directory', 'updates-search-v2']) {
+    expect((await send(origin, { ...fixture('projects-directory'), http: { ...fixture('projects-directory').http, body: { project_id: fixture('projects-directory').http.body!.project_id } } })).status).toBe(200);
+    for (const id of ['projects-search', 'updates-search-v2']) {
       await failure(await send(origin, fixture(id), { body: JSON.stringify({ ...fixture(id).http.body, query: '' }) }));
     }
-    expect(calls.map(call => call.operation)).toEqual(['listProjects', 'feed']);
+    expect(calls.map(call => call.operation)).toEqual(['listProjects', 'feed', 'searchDirectory']);
   });
 
   it('rejects caller authority fields and cross-version bodies before application calls', async () => {

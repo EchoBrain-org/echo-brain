@@ -65,7 +65,7 @@ export interface ProjectMembersV1 {
   readonly next_cursor: string | null;
 }
 export interface ProjectDirectoryEntryV1 { readonly membership_id: string; readonly display_name: string }
-export interface ProjectDirectorySearchV1 { readonly project_id: ProjectIdV1; readonly query: string; readonly limit?: number; readonly cursor?: string }
+export interface ProjectDirectorySearchV1 { readonly project_id: ProjectIdV1; readonly query?: string; readonly limit?: number; readonly cursor?: string }
 export interface ProjectDirectoryV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-project-directory-v1';
@@ -80,6 +80,14 @@ export interface ProjectMemberSetV1 {
   readonly project_id: ProjectIdV1;
   readonly membership_id: string;
   readonly role: ProjectRoleV1;
+}
+/** Add is intentionally distinct from member_set: it never changes an existing role. */
+export interface ProjectMemberAddV1 {
+  readonly schema_version: 1;
+  readonly kind: 'echo-project-member-add-v1';
+  readonly request_id: string;
+  readonly project_id: ProjectIdV1;
+  readonly membership_id: string;
 }
 export interface ProjectMemberRemoveV1 {
   readonly schema_version: 1;
@@ -251,8 +259,9 @@ function directoryEntry(value: unknown): ProjectDirectoryEntryV1 {
   assertId(record.membership_id, 'mem', 'Project directory entry membership_id'); displayName(record.display_name); return record as unknown as ProjectDirectoryEntryV1;
 }
 export function validateProjectDirectorySearchV1(value: unknown): ProjectDirectorySearchV1 {
-  const record = snapshot(value, 'Project directory search'); assertExactKeys(record, ['project_id', 'query', ...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], 'Project directory search');
-  const query = validatePersonQueryText(record.query); const paging = optionalPaging(record, 'Project directory search'); return { project_id: project(record, 'Project directory search'), query, ...paging };
+  const record = snapshot(value, 'Project directory search'); assertExactKeys(record, ['project_id', ...(Object.hasOwn(record, 'query') ? ['query'] : []), ...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], 'Project directory search');
+  const query = Object.hasOwn(record, 'query') ? validatePersonQueryText(record.query) : undefined;
+  const paging = optionalPaging(record, 'Project directory search'); return { project_id: project(record, 'Project directory search'), ...(query === undefined ? {} : { query }), ...paging };
 }
 export function validateProjectDirectoryV1(value: unknown): ProjectDirectoryV1 {
   const record = object(value, 'Project directory'); assertExactKeys(record, ['schema_version', 'kind', 'project_id', 'items', 'next_cursor'], 'Project directory');
@@ -264,6 +273,11 @@ export function validateProjectMemberSetV1(value: unknown): ProjectMemberSetV1 {
   const record = snapshot(value, 'Project member set'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'project_id', 'membership_id', 'role'], 'Project member set');
   if (record.schema_version !== 1 || record.kind !== 'echo-project-member-set-v1') fail('Project member set version or kind is unsupported');
   validatePersonUpdateRequestId(record.request_id); project(record, 'Project member set'); assertId(record.membership_id, 'mem', 'Project member set membership_id'); role(record.role); return record as unknown as ProjectMemberSetV1;
+}
+export function validateProjectMemberAddV1(value: unknown): ProjectMemberAddV1 {
+  const record = snapshot(value, 'Project member add'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'project_id', 'membership_id'], 'Project member add');
+  if (record.schema_version !== 1 || record.kind !== 'echo-project-member-add-v1') fail('Project member add version or kind is unsupported');
+  validatePersonUpdateRequestId(record.request_id); project(record, 'Project member add'); assertId(record.membership_id, 'mem', 'Project member add membership_id'); return record as unknown as ProjectMemberAddV1;
 }
 export function validateProjectMemberRemoveV1(value: unknown): ProjectMemberRemoveV1 {
   const record = snapshot(value, 'Project member remove'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'project_id', 'membership_id'], 'Project member remove');

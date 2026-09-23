@@ -19,6 +19,7 @@ import {
   validateProjectDirectoryV1,
   validateProjectDirectorySearchV1,
   validateProjectListV1,
+  validateProjectMemberAddV1,
   validateProjectMemberRemoveV1,
   validateProjectMemberSetV1,
   validateProjectMembersV1,
@@ -41,6 +42,8 @@ describe('project context V1 public codecs', () => {
       .toEqual({ schema_version: 1, kind: 'echo-project-create-receipt-v1', request_id, project_id, created_at: received_at, state: 'created' });
     expect(validateProjectMutationReceiptV1({ schema_version: 1, kind: 'echo-project-mutation-receipt-v1', request_id, project_id, operation: 'member_set', membership_id, received_at, state: 'applied' }))
       .toMatchObject({ operation: 'member_set', membership_id });
+    expect(validateProjectMemberAddV1({ schema_version: 1, kind: 'echo-project-member-add-v1', request_id, project_id, membership_id }))
+      .toMatchObject({ request_id, project_id, membership_id });
     expect(validateProjectCreateV1({ schema_version: 1, kind: 'echo-project-create-v1', request_id, name: 'é'.repeat(100) }).name).toBe('é'.repeat(100));
   });
 
@@ -64,7 +67,8 @@ describe('project context V1 public codecs', () => {
     expect(validateProjectContextReadV1({ schema_version: 1, kind: 'echo-project-context-read-v1', project_id, context_id, received_at, title: 'Original', text: 'Exact original bytes.\n', audience: { kind: 'only_me' } }).text).toBe('Exact original bytes.\n');
   });
 
-  it('bounds project directory input to its lead-scoped project and never permits empty search', () => {
+  it('admits an initial project-directory browse without a search query', () => {
+    expect(validateProjectDirectorySearchV1({ project_id, limit: 2 })).toEqual({ project_id, limit: 2 });
     expect(validateProjectDirectorySearchV1({ project_id, query: 'Ada', limit: 2 })).toEqual({ project_id, query: 'Ada', limit: 2 });
     expect(() => validateProjectDirectorySearchV1({ project_id, query: ' ', limit: 2 })).toThrow();
   });

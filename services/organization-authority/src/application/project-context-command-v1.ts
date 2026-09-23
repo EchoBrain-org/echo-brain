@@ -4,6 +4,7 @@ import {
   validateProjectContextAssociateV1,
   validateProjectContextDissociateV1,
   validateProjectCreateV1,
+  validateProjectMemberAddV1,
   validateProjectMemberRemoveV1,
   validateProjectMemberSetV1,
 } from '@echo-brain/organization-api';
@@ -32,7 +33,9 @@ export function projectCommandIdentityV1(
   const request = (() => {
     switch (mutation.operation) {
       case 'create': return validateProjectCreateV1(mutation.request);
-      case 'member_set': return validateProjectMemberSetV1(mutation.request);
+      case 'member_set': return mutation.request.kind === 'echo-project-member-add-v1'
+        ? validateProjectMemberAddV1(mutation.request)
+        : validateProjectMemberSetV1(mutation.request);
       case 'member_remove': return validateProjectMemberRemoveV1(mutation.request);
       case 'associate': return validateProjectContextAssociateV1(mutation.request);
       case 'dissociate': return validateProjectContextDissociateV1(mutation.request);

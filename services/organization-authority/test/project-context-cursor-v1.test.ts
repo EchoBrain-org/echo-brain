@@ -34,6 +34,14 @@ describe('project untrusted keyset cursors', () => {
     expect(decodeProjectCursorV1(encoded, scope)).toEqual(['Ari', member]);
   });
 
+  it('keeps an unfiltered directory continuation distinct from a searched one', () => {
+    const directory = { ...scope, operation: 'directory' as const };
+    const unfiltered = encodeProjectCursorV1(directory, ['Ari', member]);
+    expect(decodeProjectCursorV1(unfiltered, directory)).toEqual(['Ari', member]);
+    expect(() => decodeProjectCursorV1(unfiltered, { ...directory, canonical_query: 'ari' }))
+      .toThrow(expect.objectContaining({ code: 'invalid_request' }));
+  });
+
   it('rejects noncanonical encodings, malformed UTF-8 and invalid ordering coordinates', () => {
     const encoded = encodeProjectCursorV1(scope, ['Ari', member]);
     const raw = Buffer.from(encoded, 'base64url');

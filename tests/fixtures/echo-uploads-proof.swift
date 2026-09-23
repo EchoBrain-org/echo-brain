@@ -173,8 +173,10 @@ enum UploadProof {
             UploadRecovery(identity: identity, requestID: UUID().uuidString.lowercased(), visibility: .onlyMe)!.save(for: identity, defaults: defaults)
         }
         let session = UploadSession(client: client, defaults: defaults, isForeground: { true })
-        var questions: [String] = []
-        let controller = ProjectsController(uploads: session, projects: ProjectSession(client: ProjectClient(cli: client.cli), defaults: defaults, foreground: { true }), onAsk: { questions.append($0) })
+        var questions: [(String, AskScope)] = []
+        let controller = ProjectsController(uploads: session, projects: ProjectSession(client: ProjectClient(cli: client.cli), defaults: defaults, foreground: { true }), onAsk: { question, scope in
+            questions.append((question, scope)); return .accepted
+        })
         let window = controller.window
         // The frame view includes the titlebar accessories and the content view.
         let chrome = ProofUI.chrome(window)
@@ -239,7 +241,7 @@ enum UploadProof {
             require(ProofUI.showsText("This may not have been saved.", in: root) && ProofUI.showsText(status, in: root), "outcome not shown")
             require(!ProofUI.claimsSent(root), "claimed saved without a receipt")
             require(!ProofUI.visible(ProofUI.find(NSButton.self, "compose-check", in: root)), "Check status offered without the original account")
-            let close = ProofUI.find(NSButton.self, "compose-close", in: root)
+            let close = ProofUI.find(NSButton.self, "sheet-close", in: root)
             require(ProofUI.visible(close) && close.isEnabled); close.performClick(nil)
             wait("closed") { window.attachedSheet == nil }
             require(ProofUI.showsText(status, in: chrome), "home does not say the save may exist")
@@ -259,35 +261,20 @@ enum UploadProof {
             require(session.draft == nil && session.receipt?.request_id == id)
             controller.shutdown(); return
         }
-        // Saved-context search is reached from the sidebar, then the bar.
+        // Ask is the only home context entrypoint. It submits authorized global
+        // retrieval, clears the composer only after acceptance, and does not
+        // expose a saved-context browser in the sidebar.
         ProofUI.find(NSButton.self, "sidebar-toggle", in: chrome).performClick(nil)
-        let findSaved = ProofUI.find(NSButton.self, "sidebar-search", "Find saved context", in: chrome)
-        wait("sidebar open") { ProofUI.visible(findSaved) }
-        findSaved.performClick(nil)
-        let query = ProofUI.find(NSTextField.self, "ask-field", "Ask or find context", in: chrome)
+        require(!ProofUI.views(chrome).compactMap({ $0 as? NSButton }).contains(where: {
+            ($0.accessibilityIdentifier() == "sidebar-search" || $0.title == "Find saved context") && ProofUI.visible($0)
+        }), "saved-context browser remains in the sidebar")
+        let query = ProofUI.find(NSTextField.self, "ask-field", "Ask ECHO", in: chrome)
         let submit = ProofUI.find(NSButton.self, "submit-button", "Submit", in: chrome)
-        query.stringValue = "café"; submit.performClick(nil)
-        wait("search") { !session.busy && session.matches.count == 1 }
-        require(questions.isEmpty, "saved-context search reached onAsk")
-        wait("result row") { ProofUI.all(NSButton.self, "item-row", in: chrome).contains(where: ProofUI.visible) }
-        ProofUI.find(NSButton.self, "item-row", in: chrome).performClick(nil)
-        wait("original") { !session.busy && session.content?.text == original }
-        // The reader shows the full original, read-only.
-        let reader = ProofUI.find(NSTextView.self, "reader-text", "Original text", in: chrome)
-        require(reader.string == original && !reader.isEditable, "reader must show the verbatim original, read-only")
-        // Back to home (Back is hidden on home), then ask from the home bar.
-        let back = ProofUI.find(NSButton.self, "back-button", "Back", in: chrome)
-        func home() -> Bool {
-            !ProofUI.visible(back) || ProofUI.all(NSButton.self, "new-project-empty", in: chrome).contains(where: ProofUI.visible)
-        }
-        var presses = 0
-        while !home() && presses < 3 {
-            back.performClick(nil); presses += 1
-            wait("back") { !session.busy && !controller.projects.busy }
-        }
-        require(presses > 0 && home(), "Back did not return home")
         query.stringValue = "Why did we delay launch?"; submit.performClick(nil)
-        require(questions == ["Why did we delay launch?"] && !controller.answerContainer.isHidden)
+        require(questions.count == 1 && questions[0].0 == "Why did we delay launch?" && questions[0].1 == .global,
+                "home Ask did not use authorized global scope")
+        require(query.stringValue.isEmpty && !controller.answerContainer.isHidden,
+                "accepted home Ask did not clear its composer and show the answer")
         // Real compose sheet must retain the full original, including its first
         // line and trailing newline, when it creates a CLI draft.
         window.makeKeyAndOrderFront(nil)
@@ -327,7 +314,14 @@ enum UploadProof {
         require(captureBody.isEditable && ProofUI.visible(captureBody), "capture did not open a fresh note")
         captureBody.string = "Pasted text"; captureBody.didChangeText()
         require(ProofUI.find(NSButton.self, "compose-send", in: capture).isEnabled && session.canCompose, "capture after Escape cannot send")
-        window.attachedSheet?.cancelOperation(nil); wait("capture closed") { window.attachedSheet == nil }
+        window.attachedSheet?.cancelOperation(nil)
+        wait("capture discard confirmation") { window.attachedSheet?.attachedSheet != nil }
+        guard let discardPrompt = window.attachedSheet?.attachedSheet?.contentView,
+              let discard = ProofUI.views(discardPrompt).compactMap({ $0 as? NSButton }).first(where: { $0.title == "Discard" })
+        else { fatalError("capture discard control") }
+        require(ProofUI.showsText("Discard this note?", in: discardPrompt), "Escape discarded a typed capture without confirmation")
+        require(captureBody.string == "Pasted text" && session.receipt == nil, "capture changed before the discard choice")
+        discard.performClick(nil); wait("capture closed") { window.attachedSheet == nil }
         controller.conceal(); require(session.matches.isEmpty && session.content == nil)
         query.stringValue = "unsent question"
         controller.accountWillChange(); require(query.stringValue.isEmpty)

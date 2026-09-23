@@ -83,6 +83,17 @@ describe('PC-00 immutable command identity (no persistence or authorization impl
     }
   });
 
+  it('keeps additive membership distinct from an intentional role assignment in the shared receipt namespace', () => {
+    const add = projectCommandIdentityV1(actor, { operation: 'member_set', request: {
+      schema_version: 1, kind: 'echo-project-member-add-v1', request_id: id, project_id: project, membership_id: actor.membership_id,
+    } });
+    const set = projectCommandIdentityV1(actor, { operation: 'member_set', request: {
+      schema_version: 1, kind: 'echo-project-member-set-v1', request_id: id, project_id: project, membership_id: actor.membership_id, role: 'member',
+    } });
+    expect({ ...add, command_sha256: null }).toEqual({ ...set, command_sha256: null });
+    expect(add.command_sha256).not.toBe(set.command_sha256);
+  });
+
   it('rejects forged fields before deriving an apparently valid replay identity', () => {
     expect(() => identity({ ...upload, authorization_revision: 'caller-selected' } as PersonUpdateSubmitV2)).toThrow();
     expect(() => projectCommandIdentityV1(actor, { operation: 'create', request: upload } as never)).toThrow();
