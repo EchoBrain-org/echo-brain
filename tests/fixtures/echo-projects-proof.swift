@@ -59,6 +59,8 @@ enum ProofUI {
 enum ProjectProof {
     static let project = "prj_11111111-1111-4111-8111-111111111111"
     static let other = "prj_44444444-4444-4444-8444-444444444444"
+    static let beacon = other
+    static let cinder = "prj_33333333-3333-4333-8333-333333333333"
     static let member = "mem_33333333-3333-4333-8333-333333333333"
     static let context = "ctx_" + String(repeating: "a", count: 64)
     static var identity = AccountIdentity(displayName: "Ari", role: "Employee", authority: "https://authority.example", version: "1", membershipID: "mem_22222222-2222-4222-8222-222222222222")
@@ -74,8 +76,8 @@ enum ProjectProof {
         return [.list("eyJsYXN0Ijoicm93In0"), .create("Apollo", request(1)), .read(project), .members(project, nil),
             .directory(project, "ari", nil), .memberAdd(project, member, request(5)), .setMember(project, member, "member", request(6)),
             .removeMember(project, member, request(7)), .associate(project, context, request(8), true),
-            .associate(project, context, request(9), false), .feed(project, "eyJsYXN0Ijoicm93In0"),
-            .search(project, "ship", nil), .readContext(project, context)]
+            .associate(project, context, request(9), false), .feedV2(project, "eyJsYXN0Ijoicm93In0"),
+            .searchV2(project, "ship", nil), .readContextV2(project, context)]
     }
     @MainActor static func main() {
         let requestedMode = CommandLine.arguments[1]
@@ -88,10 +90,34 @@ enum ProjectProof {
         let fixture = try! Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[2]))
         let operations = (try! JSONSerialization.jsonObject(with: fixture) as! [String: Any])["operations"] as! [[String: Any]]
         let commands = commands(operations)
-        func response(_ index: Int) -> [String: Any] { (operations[index]["http"] as! [String: Any])["response"] as! [String: Any] }
+        func response(_ index: Int) -> [String: Any] {
+            var result = (operations[index]["http"] as! [String: Any])["response"] as! [String: Any]
+            // The static V1 fixture predates plural project audiences. Project
+            // content commands deliberately target the V2 read boundary, so
+            // derive the exact V2 wire shape here rather than accepting V1.
+            guard let argv = operations[index]["argv"] as? [String], argv.first == "projects",
+                  let operation = argv.dropFirst().first else { return result }
+            let v2Kind: String?
+            switch operation {
+            case "feed": v2Kind = "echo-project-context-feed-v2"
+            case "search": v2Kind = "echo-project-context-search-result-v2"
+            case "read-context": v2Kind = "echo-project-context-read-v2"
+            default: v2Kind = nil
+            }
+            guard let kind = v2Kind else { return result }
+            result["schema_version"] = 2; result["kind"] = kind
+            let projectID = result["project_id"] as? String ?? project
+            let audience: [String: Any] = ["kind": "projects", "project_ids": [projectID]]
+            if var items = result["items"] as? [[String: Any]] {
+                for index in items.indices { items[index]["audience"] = audience }
+                result["items"] = items
+            } else { result["audience"] = audience }
+            return result
+        }
         if mode == "frozen-fixtures" {
             for (index, command) in commands.enumerated() {
-                let fixtureArgs = operations[index]["argv"] as! [String]
+                var fixtureArgs = operations[index]["argv"] as! [String]
+                if command.operation.hasSuffix("-v2") { fixtureArgs[1] = command.operation }
                 let args = Array(command.arguments.dropFirst())
                 require(Array(args.prefix(2)) == Array(fixtureArgs.prefix(2)))
                 func flags(_ values: [String]) -> [String: String] {
@@ -201,6 +227,16 @@ enum ProjectProof {
         }
         func visibleButton(_ key: String, in scope: NSView) -> NSButton? {
             ProofUI.all(NSButton.self, key, in: scope).first(where: ProofUI.visible)
+        }
+        func pickerRoot(_ label: String) -> NSView {
+            var result: NSView?
+            wait(label) {
+                result = NSApp.windows.compactMap(\.contentView).first(where: {
+                    ProofUI.all(NSButton.self, "compose-project-none", in: $0).contains(where: ProofUI.visible)
+                })
+                return result != nil
+            }
+            return result!
         }
         func settle(_ label: String) {
             wait(label) { !projects.busy && !uploads.busy }
@@ -381,7 +417,11 @@ enum ProjectProof {
             wait("binary attachment prepared") {
                 ProofUI.find(NSTextField.self, "compose-document", in: compose).stringValue.contains("Robot PRD.pdf")
             }
-            ProofUI.find(NSButton.self, "compose-send", in: compose).performClick(nil)
+            let sharing = ProofUI.find(NSButton.self, "compose-next-sharing", in: compose)
+            sharing.performClick(nil)
+            wait("document sharing") { ProofUI.visible(ProofUI.find(NSButton.self, "compose-upload", in: sheetRoot("document sharing"))) }
+            ProofUI.find(NSButton.self, "compose-sharing-projects", in: compose).performClick(nil)
+            ProofUI.find(NSButton.self, "compose-upload", in: compose).performClick(nil)
             wait("document saved") { !uploads.busy && uploads.receipt?.document != nil }
             require(uploads.receipt?.document?.content_length == 6 && uploads.receipt?.document?.extraction_state == "extracting", "document receipt")
             require(ProofUI.views(compose).compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Original saved · Extracting text.") }, "custody vs extraction state not shown")
@@ -393,7 +433,7 @@ enum ProjectProof {
             func dropped(_ label: String, to title: String) {
                 wait(label) { window.attachedSheet != nil }
                 let compose = sheetRoot(label)
-                require(ProofUI.find(ChipMenuButton.self, "compose-to", in: compose).title == title, "\(label): To is not \(title)")
+                require(ProofUI.find(NSButton.self, "compose-projects", in: compose).title == title, "\(label): project selection is not \(title)")
                 require(ProofUI.find(NSTextView.self, "compose-body", in: compose).string.isEmpty, "\(label): document entered note editor")
                 wait("\(label): attachment prepared") {
                     ProofUI.find(NSTextField.self, "compose-document", in: compose).stringValue.contains("Kickoff notes.txt")
@@ -405,31 +445,82 @@ enum ProjectProof {
                 press("Discard", in: discard); wait("\(label) closed") { window.attachedSheet == nil }
                 settle("\(label) settle")
             }
-            // Onto the Beacon row: To is that row's project, not the default.
+            // Onto the Beacon row: that row is preselected, still private.
             guard let onRow = ProofUI.find(ProjectRowButton.self, "Beacon · Lead", in: chrome).onDropFile else { fatalError("row takes no drop") }
             onRow(file); dropped("row drop", to: "Beacon")
-            // Anywhere on the window: the last choice on home (initially Only me)…
+            // Anywhere on the window: no project is preselected…
             let area = ProofUI.find(FileDropView.self, "content-drop", in: chrome)
             guard let onArea = area.onDropFile else { fatalError("window takes no drop") }
-            onArea(file); dropped("home drop", to: "Only me")
+            onArea(file); dropped("home drop", to: "None")
             // …and the open project inside one.
             openApollo(); onArea(file); dropped("project drop", to: "Apollo")
             // Not text: refused, with the one status line.
             onArea(textFile("image.bin", "\u{0}\u{1}")); settle("binary drop")
             require(window.attachedSheet == nil && ProofUI.showsText("Choose TXT, Markdown, PDF, or DOCX up to 25 MiB.", in: chrome), "non-text drop not refused")
-            // ⌘⇧E after the app was in the background (the list was cleared):
-            // To still offers every live project once the list reloads.
+            // ⌘⇧E after the app was in the background starts unassociated.
             back.performClick(nil); settle("home")
             controller.conceal(); require(projects.projects.isEmpty, "conceal kept the list")
             controller.capture(); wait("capture") { window.attachedSheet != nil }
             settle("capture list")
-            let captureTo = ProofUI.find(ChipMenuButton.self, "compose-to", in: sheetRoot("capture"))
-            require(captureTo.choices.contains("Apollo") && captureTo.choices.contains("Beacon"), "capture To lacks the live projects: \(captureTo.choices)")
+            require(ProofUI.find(NSButton.self, "compose-projects", in: sheetRoot("capture")).title == "None", "capture retained a project")
             // A sheet left open across concealment: closing it reloads the
             // list instead of leaving a bare Reload.
             controller.conceal(); require(projects.projects.isEmpty && window.attachedSheet != nil, "compose closed on conceal")
             window.attachedSheet?.cancelOperation(nil); wait("capture closed") { window.attachedSheet == nil }
             wait("list reloaded") { !uploads.busy && !projects.busy && projects.projects.count == 2 }
+            return
+        }
+
+        if mode == "ui-upload-sharing" {
+            openApollo()
+            controller.startWrite(); wait("sharing compose") { window.attachedSheet != nil }
+            var compose = sheetRoot("sharing compose")
+            let projectButton = ProofUI.find(NSButton.self, "compose-projects", in: compose)
+            require(projectButton.title == "Apollo", "project compose did not seed Apollo")
+            projectButton.performClick(nil)
+            var picker = pickerRoot("project picker")
+            let pickerDeadline = Date().addingTimeInterval(2)
+            while Date() < pickerDeadline && !ProofUI.all(NSButton.self, "compose-project-\(beacon)", in: picker).contains(where: ProofUI.visible) {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            require(ProofUI.all(NSButton.self, "compose-project-\(beacon)", in: picker).contains(where: ProofUI.visible),
+                    "first picker page: \(ProofUI.views(picker).compactMap { $0 as? NSTextField }.map(\.stringValue))")
+            ProofUI.find(NSButton.self, "compose-project-\(beacon)", in: picker).performClick(nil)
+            ProofUI.find(NSButton.self, "compose-more-projects", in: picker).performClick(nil)
+            wait("second picker page") {
+                let windows = NSApp.windows.compactMap(\.contentView)
+                return windows.contains { ProofUI.all(NSButton.self, "compose-project-\(cinder)", in: $0).contains(where: ProofUI.visible) }
+            }
+            picker = pickerRoot("second picker root")
+            ProofUI.find(NSButton.self, "compose-project-\(cinder)", in: picker).performClick(nil)
+            require(projectButton.title.contains("+ 2"), "project summary lost multi-select")
+            let body = ProofUI.find(ComposeTextView.self, "compose-body", in: compose)
+            let file = textFile("sharing.txt", "selected projects survive Back\n")
+            body.onDropFile?(file)
+            wait("sharing attachment") { ProofUI.find(NSTextField.self, "compose-document", in: compose).stringValue.contains("sharing.txt") }
+            ProofUI.find(NSButton.self, "compose-next-sharing", in: compose).performClick(nil)
+            wait("sharing page") { ProofUI.visible(ProofUI.find(NSButton.self, "compose-upload", in: sheetRoot("sharing page"))) }
+            compose = sheetRoot("sharing page")
+            require(ProofUI.find(NSButton.self, "compose-sharing-only-me", in: compose).state == .on, "sharing did not default private")
+            require(ProofUI.find(NSButton.self, "compose-sharing-projects", in: compose).isEnabled, "project-members option absent with projects")
+            require(ProofUI.showsText("Selected projects: Apollo + 2 more.", in: compose), "sharing page did not summarize selected projects")
+            ProofUI.find(NSButton.self, "compose-sharing-back", in: compose).performClick(nil)
+            wait("back to content") { ProofUI.visible(ProofUI.find(NSButton.self, "compose-next-sharing", in: sheetRoot("back to content"))) }
+            compose = sheetRoot("back to content")
+            require(projectButton.title.contains("+ 2") && ProofUI.find(NSTextField.self, "compose-document", in: compose).stringValue.contains("sharing.txt"),
+                    "Back lost project or file draft state")
+            ProofUI.find(NSButton.self, "compose-next-sharing", in: compose).performClick(nil)
+            wait("sharing page again") { ProofUI.visible(ProofUI.find(NSButton.self, "compose-upload", in: sheetRoot("sharing page again"))) }
+            compose = sheetRoot("sharing page again")
+            ProofUI.find(NSButton.self, "compose-sharing-projects", in: compose).performClick(nil)
+            ProofUI.find(NSButton.self, "compose-upload", in: compose).performClick(nil)
+            wait("multi project upload") { !uploads.busy && uploads.receipt != nil }
+            let expectedProjects = [project, cinder, beacon]
+            let audienceMatches = uploads.receipt?.audience.project_ids == expectedProjects
+            let associationMatches = uploads.receipt?.association_project_ids == expectedProjects
+            require(audienceMatches && associationMatches,
+                    "multi-project upload did not freeze exact canonical coordinates: \(String(describing: uploads.receipt?.audience.project_ids)) / \(String(describing: uploads.receipt?.association_project_ids)) expected \(expectedProjects); matches \(audienceMatches) / \(associationMatches)")
+            require(ProofUI.showsText("Shared with selected project members", in: sheetRoot("multi sent")), "multi-project receipt title")
             return
         }
 
@@ -448,8 +539,13 @@ enum ProjectProof {
                 // sheet retains the request and starts it exactly when that
                 // read settles, rather than losing the person's action.
                 projects.discover(); require(projects.busy && !projects.hasOutstandingMutation, "setup read did not start")
-                create.performClick(nil)
-                require(create.title == "Creating when ready…" && !create.isEnabled, "Create was not retained behind the read")
+                // `discover()` synchronously refreshes the attached sheet.
+                // Drive the current visible control, as a person does, rather
+                // than a control reference captured before that refresh.
+                let queuedCreate = ProofUI.find(NSButton.self, "create-submit", in: sheetRoot("queued create"))
+                require(queuedCreate.title == "Create" && queuedCreate.isEnabled, "Create was disabled during an eligible read")
+                queuedCreate.performClick(nil)
+                require(queuedCreate.title == "Creating when ready…" && !queuedCreate.isEnabled, "Create was not retained behind the read")
             } else { create.performClick(nil) }
             if mode == "ui-create-read-fail" {
                 // The receipt came back; the new project's read failed once.
@@ -625,38 +721,40 @@ enum ProjectProof {
         // into a project search.
         require(query.stringValue.isEmpty && projects.items.count == 1,
                 "People did not restore the project feed after Ask")
+        func sharingPage(_ label: String, from compose: NSView) -> NSView {
+            ProofUI.find(NSButton.self, "compose-next-sharing", in: compose).performClick(nil)
+            wait(label) { ProofUI.visible(ProofUI.find(NSButton.self, "compose-upload", in: sheetRoot(label))) }
+            return sheetRoot(label)
+        }
+        func chooseSharing(_ identifier: String, in compose: NSView) {
+            ProofUI.find(NSButton.self, identifier, in: compose).performClick(nil)
+        }
+        func uploadFrom(_ compose: NSView) {
+            ProofUI.find(NSButton.self, "compose-upload", in: compose).performClick(nil)
+        }
+
         controller.startWrite(); wait("compose sheet") { window.attachedSheet != nil }
         var compose = sheetRoot("compose")
         let body = ProofUI.find(NSTextView.self, "compose-body", "Original note text", in: compose)
-        let to = ProofUI.find(ChipMenuButton.self, "compose-to", "Send to", in: compose)
-        let send = ProofUI.find(NSButton.self, "compose-send", "Send", in: compose)
-        // Composing inside Apollo defaults To to Apollo; the choices are
-        // Only me, the live projects, then Organization.
-        require(to.title == "Apollo", "compose inside a project must default To to it")
-        require(to.choices.first == "Only me" && to.choices.last == "Organization" && to.choices.contains("Apollo") && to.choices.contains("Beacon"), "To choices")
-        require(body.string.isEmpty && !send.isEnabled, "Send enabled with an empty body")
-        body.string = " \n\t"; body.didChangeText(); require(!send.isEnabled, "Send enabled with a whitespace body")
-        body.string = "We agreed to ship.\n"; body.didChangeText(); require(send.isEnabled, "Send disabled with text")
-        // A close cannot silently drop an unsent note. Keeping it leaves the
-        // original draft and target untouched, so the person can still send it.
+        let projectPicker = ProofUI.find(NSButton.self, "compose-projects", "Selected projects", in: compose)
+        let next = ProofUI.find(NSButton.self, "compose-next-sharing", "Next: Sharing", in: compose)
+        // Opening from Apollo preselects an association but never changes the
+        // private sharing default.
+        require(projectPicker.title == "Apollo", "compose inside a project must preselect it")
+        require(body.string.isEmpty && !next.isEnabled, "Next enabled with an empty body")
+        body.string = " \n\t"; body.didChangeText(); require(!next.isEnabled, "Next enabled with a whitespace body")
+        body.string = String(repeating: "a", count: 8193); body.didChangeText(); require(next.isEnabled, "Next did not reflect nonempty oversized text")
+        next.performClick(nil)
+        require(ProofUI.visible(next) && ProofUI.showsText("Up to 8 KiB of text.", in: compose),
+                "oversized text left the visible content page without a validation message")
+        body.string = "We agreed to ship.\n"; body.didChangeText(); require(next.isEnabled, "Next disabled with text")
+        // A close cannot silently drop an unsent note. Keeping it preserves the
+        // first page's original and selected projects.
         ProofUI.find(NSButton.self, "sheet-close", in: compose).performClick(nil)
         let discard = alert("discard draft", onSheet: true)
         require(ProofUI.showsText("Discard this note?", in: discard), "draft close did not request discard confirmation")
         press("Keep writing", in: discard)
-        require(window.attachedSheet != nil && body.string == "We agreed to ship.\n" && send.isEnabled, "keeping draft lost compose state")
-        // The chip is drivable without its menu.
-        guard let choose = to.onChoose else { fatalError("compose-to has no onChoose") }
-        choose(0); require(to.title == "Only me", "choosing Only me did not update To")
-        let association = ProofUI.find(ChipMenuButton.self, "compose-association", in: compose)
-        require(association.title == "Apollo", "changing audience changed the project association")
-        association.onChoose?(0)
-        require(association.title == "No project" && to.title == "Only me", "association changed audience")
-        association.onChoose?(association.choices.firstIndex(of: "Beacon")!)
-        require(to.title == "Only me", "linking a private note changed audience")
-        association.onChoose?(association.choices.firstIndex(of: "Apollo")!)
-        guard let apollo = to.choices.firstIndex(of: "Apollo") else { fatalError("Apollo is not a To choice") }
-        choose(apollo); require(to.title == "Apollo", "choosing Apollo did not update To")
-        require(body.string == "We agreed to ship.\n" && send.isEnabled, "changing To altered the draft")
+        require(window.attachedSheet != nil && body.string == "We agreed to ship.\n" && next.isEnabled, "keeping draft lost compose state")
         if mode == "ui-access-loss" {
             wait("idle before read") { !projects.busy }
             require(projects.selected?.project_id == project)
@@ -664,17 +762,21 @@ enum ProjectProof {
             require(projects.selected == nil && projects.items.isEmpty && projects.content == nil)
             require(body.string.isEmpty && window.attachedSheet == nil)
             require(uploads.draft == nil && questions.count == 1)
-            // The page says so (no stale project title) and offers a reload.
             require(window.title == "ECHO" && ProofUI.showsText("This project or original is no longer available to you.", in: chrome), "lost project page")
-            require(visibleButton("reload-project", in: chrome) != nil, "no reload on a lost project")
+            require(visibleButton("reload-project", in: chrome) != nil, "no reload on lost project")
             return
         }
-        send.performClick(nil)
-        require(uploads.hasOutstandingMutation && !body.isEditable, "body must lock while sending")
+        compose = sharingPage("sharing", from: compose)
+        let privateChoice = ProofUI.find(NSButton.self, "compose-sharing-only-me", in: compose)
+        let projectChoice = ProofUI.find(NSButton.self, "compose-sharing-projects", in: compose)
+        require(privateChoice.state == .on && projectChoice.state == .off, "private sharing is not the default")
+        chooseSharing("compose-sharing-projects", in: compose)
+        uploadFrom(compose)
+        require(uploads.hasOutstandingMutation && !body.isEditable, "body must lock while uploading")
         if mode == "ui-upload-rejected" {
             wait("upload rejection") { !uploads.busy }
-            require(uploads.receipt == nil && uploads.draft == nil && uploads.recovery?.projectID == project)
-            require(uploads.recovery?.audience.project_id == project && projects.selected == nil)
+            require(uploads.receipt == nil && uploads.draft == nil && uploads.recovery?.projectIDs == [project])
+            require(uploads.recovery?.audience.project_ids == [project] && projects.selected == nil)
             require(body.string.isEmpty && window.attachedSheet == nil); return
         }
         if mode == "ui-upload-unknown" {
@@ -690,64 +792,47 @@ enum ProjectProof {
             require(ProofUI.visible(retry) && retry.isEnabled && ProofUI.visible(check) && check.isEnabled, "recovery is not actionable")
             retry.performClick(nil); wait("rejected exact replay") { !uploads.busy }
             require(uploads.receipt == nil && uploads.recovery?.requestID == id && uploads.draft?.requestID == id)
-            require(uploads.draft?.audience.project_id == project && uploads.draft?.projectID == project)
+            require(uploads.draft?.audience.project_ids == [project] && uploads.draft?.projectIDs == [project])
             require(!ProofUI.claimsSent(sheetRoot("attention")), "sent claimed after a rejected replay")
-            let recheck = ProofUI.find(NSButton.self, "compose-check", in: sheetRoot("attention"))
-            require(ProofUI.visible(recheck) && recheck.isEnabled, "Check status lost after a rejected replay")
-            recheck.performClick(nil)
+            ProofUI.find(NSButton.self, "compose-check", in: sheetRoot("attention")).performClick(nil)
         }
-        wait("project save") { !uploads.busy && uploads.receipt != nil }
-        // Audience and independently selected association are both Apollo for this save.
-        require(uploads.receipt?.audience == UploadAudience(.project, projectID: project))
-        require(uploads.receipt?.project_id == project)
-        require(uploads.recovery?.audience.project_id == project && uploads.recovery?.projectID == project)
+        let projectSaveDeadline = Date().addingTimeInterval(12)
+        while (!(!uploads.busy && uploads.receipt != nil)) && Date() < projectSaveDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        require(!uploads.busy && uploads.receipt != nil,
+                "project save status=\(uploads.status) receipt=\(uploads.receipt != nil) recovery=\(String(describing: uploads.recovery?.projectIDs)) draft=\(String(describing: uploads.draft?.projectIDs))")
+        require(uploads.receipt?.audience == UploadAudience(.projects, projectIDs: [project]))
+        require(uploads.receipt?.association_project_ids == [project])
         let sent = sheetRoot("sent")
         require(!ProofUI.offersUndo(sent) && !ProofUI.offersUndo(chrome), "Undo offered after save")
-        require(ProofUI.showsText("Sent to Apollo", in: sent), "sent state does not name the project")
-        let done = ProofUI.find(NSButton.self, "compose-done", in: sent)
-        require(done.title == "Done"); done.performClick(nil)
+        require(ProofUI.showsText("Shared with selected project members", in: sent), "sent state does not name multi-project audience")
+        ProofUI.find(NSButton.self, "compose-done", in: sent).performClick(nil)
         wait("compose closed") { window.attachedSheet == nil }
         require(uploads.receipt == nil && uploads.recovery == nil && uploads.canCompose, "Done must start another note")
         if mode == "ui-round-trip" && !cli {
             settle("after first send")
-            // The last To carries over outside the project…
             back.performClick(nil); wait("home again") { !projects.busy && projects.projects.count == 2 }; settle("home settle")
             controller.startWrite(); wait("home compose") { window.attachedSheet != nil }
-            require(ProofUI.find(ChipMenuButton.self, "compose-to", in: sheetRoot("home compose")).title == "Apollo", "last project choice not remembered")
-            window.attachedSheet?.cancelOperation(nil); wait("home compose closed") { window.attachedSheet == nil }
-            // …but never into another account (or a signed-out window).
-            controller.accountWillChange(); settle("signed out")
-            controller.startWrite(); wait("signed-out compose") { window.attachedSheet != nil }
-            let reset = ProofUI.find(ChipMenuButton.self, "compose-to", in: sheetRoot("signed-out compose"))
-            require(reset.title == "Only me" && !reset.choices.contains("Apollo"), "last To survived an account change")
-            window.attachedSheet?.cancelOperation(nil); wait("signed-out compose closed") { window.attachedSheet == nil }
-            controller.refreshIdentity(); wait("signed in again") { !uploads.busy && uploads.identity != nil && !projects.busy && projects.projects.count == 2 }
-            settle("signed in settle")
+            compose = sheetRoot("home compose")
+            require(ProofUI.find(NSButton.self, "compose-projects", in: compose).title == "None", "global compose retained a project")
+            let privateBody = ProofUI.find(NSTextView.self, "compose-body", in: compose)
+            privateBody.string = "Private note\n"; privateBody.didChangeText()
+            compose = sharingPage("private sharing", from: compose)
+            require(ProofUI.find(NSButton.self, "compose-sharing-only-me", in: compose).state == .on, "global compose is not private by default")
+            uploadFrom(compose); wait("private save") { !uploads.busy && uploads.receipt != nil }
+            require(uploads.receipt?.visibility == .onlyMe && uploads.receipt?.association_project_ids == [], "private association mismatch")
+            ProofUI.find(NSButton.self, "compose-done", in: sheetRoot("private sent")).performClick(nil); wait("private closed") { window.attachedSheet == nil }
             openApollo()
-            // Audience changes preserve the selected project; association can also be explicitly cleared.
-            for (choice, title, visibility) in [("Only me", "Saved for you", UploadVisibility.onlyMe), ("Organization", "Sent to your organization", .team)] {
-                controller.startWrite(); wait("compose \(choice)") { window.attachedSheet != nil }
-                compose = sheetRoot("compose \(choice)")
-                let chip = ProofUI.find(ChipMenuButton.self, "compose-to", in: compose)
-                require(chip.title == "Apollo", "compose inside Apollo must default To to Apollo")
-                chip.onChoose?(chip.choices.firstIndex(of: choice)!)
-                let association = ProofUI.find(ChipMenuButton.self, "compose-association", in: compose)
-                require(association.title == "Apollo", "audience selection silently changed association")
-                if choice == "Organization" { association.onChoose?(0) }
-                let text = ProofUI.find(NSTextView.self, "compose-body", in: compose)
-                text.string = "\(choice) note\n"; text.didChangeText()
-                ProofUI.find(NSButton.self, "compose-send", in: compose).performClick(nil)
-                wait("\(choice) save") { !uploads.busy && uploads.receipt != nil }
-                require(uploads.receipt?.visibility == visibility && uploads.receipt?.project_id == (choice == "Only me" ? project : nil), "\(choice) association mismatch")
-                require(ProofUI.showsText(title, in: sheetRoot("sent \(choice)")), "\(choice) sent title")
-                ProofUI.find(NSButton.self, "compose-done", in: sheetRoot("sent \(choice)")).performClick(nil)
-                wait("\(choice) closed") { window.attachedSheet == nil }; settle("\(choice) settle")
-            }
-            // Organization is never remembered as the next default.
-            back.performClick(nil); wait("home after org") { !projects.busy && projects.projects.count == 2 }; settle("home after org")
-            controller.startWrite(); wait("compose after org") { window.attachedSheet != nil }
-            require(ProofUI.find(ChipMenuButton.self, "compose-to", in: sheetRoot("compose after org")).title == "Only me", "Organization became the default To")
-            window.attachedSheet?.cancelOperation(nil); wait("compose after org closed") { window.attachedSheet == nil }
+            controller.startWrite(); wait("organization compose") { window.attachedSheet != nil }
+            compose = sheetRoot("organization compose")
+            let orgBody = ProofUI.find(NSTextView.self, "compose-body", in: compose)
+            orgBody.string = "Organization note\n"; orgBody.didChangeText()
+            compose = sharingPage("organization sharing", from: compose)
+            chooseSharing("compose-sharing-organization", in: compose)
+            uploadFrom(compose); wait("organization save") { !uploads.busy && uploads.receipt != nil }
+            require(uploads.receipt?.visibility == .team && uploads.receipt?.association_project_ids == [project], "organization association mismatch")
+            ProofUI.find(NSButton.self, "compose-done", in: sheetRoot("organization sent")).performClick(nil); wait("organization closed") { window.attachedSheet == nil }
         }
         query.stringValue = "unsent question"
         controller.accountWillChange()

@@ -16,7 +16,7 @@ describe.skipIf(process.platform !== "darwin")("native document custody and boun
       ...["ui-support", "account", "projects", "uploads"].map(file => join(repo, `product/echo-overlay/${file}.swift`)),
       join(repo, "tests/fixtures/echo-documents-proof.swift"), "-o", binary], { stdio: "pipe", timeout: 120_000 });
   }, 120_000);
-  it.each(["snapshot", "bounds", "parser", "failures", "recovery", "minimal-saved", "restart-retry", "abandon", "association-retry", "round-trip", "unknown-retry", "retry-rejected-after-unknown", "pagination", "document-search-pages", "dissociation-project-scope", "download"])("handles %s", mode => {
+  it.each(["snapshot", "bounds", "modern-recovery", "parser", "failures", "recovery", "minimal-saved", "restart-retry", "abandon", "association-retry", "round-trip", "unknown-retry", "retry-rejected-after-unknown", "pagination", "document-search-pages", "dissociation-project-scope", "download"])("handles %s", mode => {
     const folder = mkdtempSync(join(root, "case-"));
     const executable = join(folder, "echo-brain"), script = join(folder, "client.mjs"), log = join(folder, "calls.jsonl");
     writeFileSync(script, `import fs from 'node:fs';
@@ -30,6 +30,7 @@ if(args[1]==='status') { console.log(JSON.stringify({schema_version:1,kind:'echo
 const bytes=fs.readFileSync(${JSON.stringify(join(folder, "Robot PRD.pdf"))});
 const original=args[2]==='upload'?fs.readFileSync(flag('--file')):bytes;
 const metadata={schema_version:1,kind:'echo-person-document-metadata-v1',request_id:['upload','retry'].includes(args[2])?flag('--request-id'):'11111111-1111-4111-8111-111111111111',document_id:'doc_'+'d'.repeat(64),filename:'Robot PRD.pdf',title:'Robot PRD',content_length:original.length,sha256:'sha256:'+createHash('sha256').update(original).digest('hex'),audience:{kind:'only_me'},project_id:null,detected_media_type:'application/pdf',received_at:'2026-09-23T00:00:00.000Z',state:'saved',extraction_state:'ready',extraction_detail:null,extractor:'fixture-v1',extracted_text_bytes:26};
+if(['search-v2','read-v2','download-v2'].includes(args[2])) { delete metadata.project_id; metadata.schema_version=2; metadata.kind='echo-person-document-metadata-v2'; metadata.association_project_ids=args.includes('--project-id')?[flag('--project-id')]:[]; }
 let result;
 if(['upload','retry'].includes(args[2])) {
  if(mode==='unknown-retry'&&!prior.some(x=>x.args[2]==='upload')) { console.error(JSON.stringify({ok:false,action:'documents-upload',error:'Outcome unknown',code:'outcome_unknown',request_id:flag('--request-id'),mutation_outcome:'unknown'})); process.exit(1); }
@@ -40,14 +41,14 @@ if(['upload','retry'].includes(args[2])) {
 else if(['associate','dissociate'].includes(args[2])) {
  if(mode==='association-retry'&&!prior.some(x=>x.args[2]==='associate')) { console.error(JSON.stringify({ok:false,action:'documents-associate',error:'Outcome unknown',code:'outcome_unknown',request_id:flag('--request-id'),mutation_outcome:'unknown'})); process.exit(1); }
  result={schema_version:1,kind:'echo-person-document-association-receipt-v1',request_id:flag('--request-id'),document_id:flag('--document-id'),project_id:flag('--project-id'),operation:args[2],received_at:'2026-09-23T00:00:00.000Z',state:'applied'};
-} else if(args[2]==='search') {
- const scoped=(suffix)=>({...metadata,document_id:'doc_'+suffix.repeat(64),filename:suffix+'.pdf',sha256:'sha256:'+suffix.repeat(64),audience:{kind:'project',project_id:flag('--project-id')},project_id:flag('--project-id'),excerpt:'First page',anchor:{kind:'page',start:1}});
- if(mode==='document-search-pages') result={schema_version:1,kind:'echo-person-document-search-result-v1',documents:args.includes('--cursor')?[scoped('b')]:'0123456789'.split('').map((_,index)=>scoped(index === 0 ? 'a' : String(index))),next_cursor:args.includes('--cursor')?null:'Y3Vyc29yMQ'};
- else if(mode==='dissociation-project-scope') result={schema_version:1,kind:'echo-person-document-search-result-v1',documents:prior.some(x=>x.args[2]==='dissociate')?[]:[scoped('d')],next_cursor:null};
- else result={schema_version:1,kind:'echo-person-document-search-result-v1',documents:[{...metadata,excerpt:'First page',anchor:{kind:'page',start:1}}],next_cursor:null};
+} else if(args[2]==='search-v2') {
+ const scoped=(suffix)=>({...metadata,document_id:'doc_'+suffix.repeat(64),filename:suffix+'.pdf',sha256:'sha256:'+suffix.repeat(64),audience:{kind:'project',project_id:flag('--project-id')},association_project_ids:[flag('--project-id')],excerpt:'First page',anchor:{kind:'page',start:1}});
+ if(mode==='document-search-pages') result={schema_version:2,kind:'echo-person-document-search-result-v2',documents:args.includes('--cursor')?[scoped('b')]:'0123456789'.split('').map((_,index)=>scoped(index === 0 ? 'a' : String(index))),next_cursor:args.includes('--cursor')?null:'Y3Vyc29yMQ'};
+ else if(mode==='dissociation-project-scope') result={schema_version:2,kind:'echo-person-document-search-result-v2',documents:prior.some(x=>x.args[2]==='dissociate')?[]:[scoped('d')],next_cursor:null};
+ else result={schema_version:2,kind:'echo-person-document-search-result-v2',documents:[{...metadata,excerpt:'First page',anchor:{kind:'page',start:1}}],next_cursor:null};
 }
-else if(args[2]==='read') { const next=args.includes('--cursor'); result={metadata,text:{schema_version:1,kind:'echo-person-document-text-v1',document_id:metadata.document_id,original_sha256:metadata.sha256,extractor:metadata.extractor,extraction_state:'ready',chunks:[{ordinal:next?1:0,anchor_kind:'page',anchor_start:next?2:1,text:next?'Second page':'First page'}],next_cursor:next?null:'Mg'}}; }
-else if(args[2]==='download') { fs.writeFileSync(flag('--out'),original);result={document_id:metadata.document_id,output_path:flag('--out'),content_length:original.length,sha256:metadata.sha256}; }
+else if(args[2]==='read-v2') { const next=args.includes('--cursor'); result={metadata,text:{schema_version:1,kind:'echo-person-document-text-v1',document_id:metadata.document_id,original_sha256:metadata.sha256,extractor:metadata.extractor,extraction_state:'ready',chunks:[{ordinal:next?1:0,anchor_kind:'page',anchor_start:next?2:1,text:next?'Second page':'First page'}],next_cursor:next?null:'Mg'}}; }
+else if(args[2]==='download-v2') { fs.writeFileSync(flag('--out'),original);result={document_id:metadata.document_id,output_path:flag('--out'),content_length:original.length,sha256:metadata.sha256}; }
 else process.exit(2);
 console.log(JSON.stringify({ok:true,result}));
 `);
@@ -56,7 +57,7 @@ console.log(JSON.stringify({ok:true,result}));
     expect(result.status, result.stdout + result.stderr).toBe(0);
     if (["pagination", "download"].includes(mode)) {
       const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[] });
-      for (const { args } of calls.filter(call => ["read", "download"].includes(call.args[2]))) {
+      for (const { args } of calls.filter(call => ["read-v2", "download-v2"].includes(call.args[2]))) {
         expect(args[args.indexOf("--project-id") + 1]).toBe("prj_11111111-1111-4111-8111-111111111111");
       }
     }
@@ -81,7 +82,7 @@ console.log(JSON.stringify({ok:true,result}));
     }
     if (["document-search-pages", "dissociation-project-scope"].includes(mode)) {
       const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[] });
-      const searches = calls.filter(call => call.args[2] === "search");
+      const searches = calls.filter(call => call.args[2] === "search-v2");
       expect(searches).toHaveLength(2);
       for (const { args } of searches) expect(args[args.indexOf("--project-id") + 1]).toBe("prj_11111111-1111-4111-8111-111111111111");
       if (mode === "document-search-pages") expect(searches[1].args).toContain("--cursor");

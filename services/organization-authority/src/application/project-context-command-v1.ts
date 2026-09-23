@@ -1,6 +1,7 @@
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   validatePersonUpdateSubmitV2,
+  validatePersonUpdateSubmitV3,
   validateProjectContextAssociateV1,
   validateProjectContextDissociateV1,
   validateProjectCreateV1,
@@ -40,6 +41,7 @@ export function projectCommandIdentityV1(
       case 'associate': return validateProjectContextAssociateV1(mutation.request);
       case 'dissociate': return validateProjectContextDissociateV1(mutation.request);
       case 'upload_submit': return validatePersonUpdateSubmitV2(mutation.request);
+      case 'upload_submit_v3': return validatePersonUpdateSubmitV3(mutation.request);
       default: throw new Error('Unsupported project command');
     }
   })();

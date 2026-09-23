@@ -15,9 +15,13 @@ import {
   type PersonSourceEvidenceV1,
   type ProjectIdV1,
 } from '@echo-brain/organization-api';
+import {
+  PERSON_PROJECTS_PATH_V2,
+  validateProjectContextFeedV2, validateProjectContextSearchResultV2, validateProjectContextReadV2,
+} from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
-import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1, validatePersonDocumentMetadataV1, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchResultV1, type PersonDocumentSearchV1 } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV1, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV1, validatePersonDocumentMetadataV2, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV1, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV1, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
 import {
   PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
@@ -32,6 +36,12 @@ import {
   type ProjectPageRequestV1, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
   type ProjectMemberAddV1, type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
   type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2,
+} from '@echo-brain/organization-api';
+import {
+  PERSON_UPDATES_PATH_V3,
+  validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusV3,
+  validatePersonUploadContentV3, validatePersonUploadSearchV3, validatePersonUploadSearchResultV3,
+  type PersonUpdateSubmitV3, type PersonUploadSearchV3,
 } from '@echo-brain/organization-api';
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH, ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isCanonicalPersonEmail, isExpectedPersonEmail, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonMeetingIngestionExclusionChangeRequest, validateOrganizationMeetingIngestionExclusionListResponse, validateOrganizationPersonMeetingIngestionExclusionListRequest, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationPersonMeetingIngestionExclusionChangeRequestV2, type OrganizationMeetingIngestionExclusionListResponseV2, type OrganizationPersonMeetingIngestionExclusionListRequestV2, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
@@ -888,7 +898,8 @@ export class PersonAuthorityClient {
   }
 
   async uploadDocument(accessToken: string, snapshot: DocumentSnapshot) {
-    const metadata = validatePersonDocumentUploadMetadataV1(snapshot.metadata);
+    const v2 = snapshot.metadata.schema_version === 2;
+    const metadata = v2 ? validatePersonDocumentUploadMetadataV2(snapshot.metadata) : validatePersonDocumentUploadMetadataV1(snapshot.metadata);
     const stream = snapshot.open();
     let status: number | null = null;
     try {
@@ -897,15 +908,22 @@ export class PersonAuthorityClient {
         headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/octet-stream',
           'content-length': String(metadata.content_length), 'x-echo-document-metadata': Buffer.from(canonicalJson(metadata)).toString('base64url') },
       };
-      const response = await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${metadata.request_id}`, init, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
+      const path = v2 ? PERSON_DOCUMENTS_PATH_V2 : PERSON_DOCUMENTS_PATH_V1;
+      const response = await this.send(`${path}/${metadata.request_id}`, init, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
       status = response.status;
-      const receipt = await this.documentResponse(response, validatePersonDocumentUploadResultV1, 201);
+      const receipt = await this.documentResponse<PersonDocumentUploadResultV1 | PersonDocumentUploadResultV2>(response, (value) =>
+        v2 ? validatePersonDocumentUploadResultV2(value) : validatePersonDocumentUploadResultV1(value), 201);
       if (receipt.request_id !== metadata.request_id) throw new Error('Document receipt request changed');
-      if (receipt.kind === 'echo-person-document-saved-v1') return receipt;
-      for (const key of ['request_id', 'filename', 'title', 'content_length', 'sha256', 'project_id'] as const) {
+      if (receipt.kind === 'echo-person-document-saved-v1' || receipt.kind === 'echo-person-document-saved-v2') return receipt;
+      for (const key of ['request_id', 'filename', 'title', 'content_length', 'sha256'] as const) {
         if (receipt[key] !== metadata[key]) throw new Error('Document receipt coordinates changed');
       }
       if (canonicalJson(receipt.audience) !== canonicalJson(metadata.audience)) throw new Error('Document receipt audience changed');
+      if (metadata.schema_version === 2) {
+        if (receipt.schema_version !== 2 || canonicalJson(receipt.association_project_ids) !== canonicalJson(metadata.association_project_ids)) throw new Error('Document receipt associations changed');
+      } else if (receipt.schema_version !== 1 || receipt.project_id !== metadata.project_id) {
+        throw new Error('Document receipt associations changed');
+      }
       return receipt;
     } catch (error) {
       if (error instanceof PersonAuthorityClientError && status !== null && status >= 400 && status < 500 &&
@@ -935,11 +953,29 @@ export class PersonAuthorityClient {
     return result;
   }
 
+  async documentStatusV2(accessToken: string, requestId: string) {
+    validatePersonUpdateRequestId(requestId);
+    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/requests/${requestId}`, {
+      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+    }), validatePersonDocumentStatusV2);
+    if (result.request_id !== requestId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document status coordinates changed.');
+    return result;
+  }
+
   async documentMetadata(accessToken: string, documentId: string, projectId?: string) {
     validatePersonDocumentIdV1(documentId);
     const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${documentId}${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
     }), validatePersonDocumentMetadataV1);
+    if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document metadata coordinates changed.');
+    return result;
+  }
+
+  async documentMetadataV2(accessToken: string, documentId: string, projectId?: string) {
+    validatePersonDocumentIdV1(documentId);
+    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/${documentId}${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
+      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+    }), validatePersonDocumentMetadataV2);
     if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document metadata coordinates changed.');
     return result;
   }
@@ -958,6 +994,17 @@ export class PersonAuthorityClient {
     return result;
   }
 
+  async documentTextV2(accessToken: string, documentId: string, cursor?: string, projectId?: string) {
+    validatePersonDocumentIdV1(documentId);
+    if (cursor !== undefined && (!/^[A-Za-z0-9_-]+$/.test(cursor) || cursor.length > 1024)) throw new Error('Document cursor is invalid');
+    const params = new URLSearchParams(); if (cursor !== undefined) params.set('cursor', cursor); if (projectId !== undefined) params.set('project_id', validateProjectIdV1(projectId));
+    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/${documentId}/text${params.size === 0 ? '' : `?${params}`}`, {
+      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+    }), validatePersonDocumentTextV1);
+    if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document text coordinates changed.');
+    return result;
+  }
+
   async searchDocuments(accessToken: string, input: PersonDocumentSearchV1) {
     const request = validatePersonDocumentSearchV1(input);
     const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V1}/search`, {
@@ -969,9 +1016,30 @@ export class PersonAuthorityClient {
     return result;
   }
 
+  async searchDocumentsV2(accessToken: string, input: PersonDocumentSearchV2) {
+    const request = validatePersonDocumentSearchV2(input);
+    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/search`, {
+      method: 'POST', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/json' }, body: canonicalJson(request),
+    }), validatePersonDocumentSearchResultV2);
+    if (result.documents.length > request.limit || new Set(result.documents.map(item => item.document_id)).size !== result.documents.length) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Document search page was invalid.');
+    }
+    return result;
+  }
+
   async documentOriginal(accessToken: string, documentId: string, projectId?: string): Promise<Response> {
     validatePersonDocumentIdV1(documentId);
     const response = await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${documentId}/original${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
+      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/octet-stream' },
+    }, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
+    if (!response.ok) await this.documentResponse(response, () => { throw new Error('Unexpected document response'); });
+    if (response.status !== 200) { await response.body?.cancel(); throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response status was unexpected.'); }
+    return response;
+  }
+
+  async documentOriginalV2(accessToken: string, documentId: string, projectId?: string): Promise<Response> {
+    validatePersonDocumentIdV1(documentId);
+    const response = await this.send(`${PERSON_DOCUMENTS_PATH_V2}/${documentId}/original${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/octet-stream' },
     }, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
     if (!response.ok) await this.documentResponse(response, () => { throw new Error('Unexpected document response'); });
@@ -1070,6 +1138,24 @@ export class PersonAuthorityClient {
       validate: validateProjectContextReadV1, matches: result => result.project_id === request.project_id && result.context_id === request.context_id });
   }
 
+  async projectFeedV2(accessToken: string, value: ProjectContextBrowseV1) {
+    const request = validateProjectContextBrowseV1(value);
+    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/context/feed`, body: request, validate: validateProjectContextFeedV2,
+      matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
+  }
+
+  async searchProjectContextV2(accessToken: string, value: ProjectContextSearchV1) {
+    const request = validateProjectContextSearchV1(value);
+    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/context/search`, body: request, validate: validateProjectContextSearchResultV2,
+      matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
+  }
+
+  async readProjectContextV2(accessToken: string, value: ProjectContextReadRequestV1) {
+    const request = validateProjectContextReadRequestV1(value);
+    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/${request.project_id}/context/${request.context_id}`,
+      validate: validateProjectContextReadV2, matches: result => result.project_id === request.project_id && result.context_id === request.context_id });
+  }
+
   async submitUpdateV2(accessToken: string, value: PersonUpdateSubmitV2) {
     const request = validatePersonUpdateSubmitV2(value);
     return this.contextRequest(accessToken, { path: PERSON_UPDATES_PATH_V2, body: request, status: 202,
@@ -1093,6 +1179,33 @@ export class PersonAuthorityClient {
   async searchUploadsV2(accessToken: string, value: PersonUploadSearchV2) {
     const request = validatePersonUploadSearchV2(value);
     return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V2}/search`, body: request, validate: validatePersonUploadSearchResultV2,
+      matches: result => result.results.length <= (request.limit ?? 10) });
+  }
+
+  async submitUpdateV3(accessToken: string, value: PersonUpdateSubmitV3) {
+    const request = validatePersonUpdateSubmitV3(value);
+    return this.contextRequest(accessToken, { path: PERSON_UPDATES_PATH_V3, body: request, status: 202,
+      request_id: request.request_id, validate: validatePersonUpdateReceiptV3,
+      matches: result => result.request_id === request.request_id &&
+        canonicalJson(result.association_project_ids) === canonicalJson(request.association_project_ids) &&
+        canonicalJson(result.audience) === canonicalJson(request.audience) });
+  }
+
+  async updateStatusV3(accessToken: string, requestId: string) {
+    validatePersonUpdateRequestId(requestId);
+    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V3}/${requestId}`, validate: validatePersonUpdateStatusV3,
+      matches: result => result.request_id === requestId });
+  }
+
+  async readUploadV3(accessToken: string, contextId: string) {
+    validatePersonUploadContextId(contextId);
+    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V3}/content/${contextId}`, validate: validatePersonUploadContentV3,
+      matches: result => result.context_id === contextId });
+  }
+
+  async searchUploadsV3(accessToken: string, value: PersonUploadSearchV3) {
+    const request = validatePersonUploadSearchV3(value);
+    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V3}/search`, body: request, validate: validatePersonUploadSearchResultV3,
       matches: result => result.results.length <= (request.limit ?? 10) });
   }
 

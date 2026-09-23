@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { assertPersonDocumentOriginalV1, PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonDocumentIdV1, type PersonDocumentSavedV1, type PersonDocumentUploadResultV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1, type PersonDocumentAssociationReceiptV1, type PersonDocumentUploadMetadataV1, type PersonDocumentReceiptV1, type PersonDocumentMetadataV1, type PersonDocumentMediaTypeV1, type PersonDocumentExtractionStateV1, type PersonDocumentTextChunkV1, type PersonDocumentSearchV1, type PersonDocumentSearchResultV1, type ProjectIdV1 } from '@echo-brain/organization-api';
+import { assertPersonDocumentOriginalV1, PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentIdV1, type PersonDocumentSavedV1, type PersonDocumentSavedV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1, type PersonDocumentAssociationReceiptV1, type PersonDocumentUploadMetadataV1, type PersonDocumentUploadMetadataV2, type PersonDocumentReceiptV1, type PersonDocumentReceiptV2, type PersonDocumentMetadataV1, type PersonDocumentMetadataV2, type PersonDocumentMediaTypeV1, type PersonDocumentExtractionStateV1, type PersonDocumentTextChunkV1, type PersonDocumentTextV1, type PersonDocumentSearchV1, type PersonDocumentSearchV2, type PersonDocumentSearchResultV1, type PersonDocumentSearchResultV2, type PersonDocumentStatusV2, type ProjectIdV1, type PersonUploadAudienceV3 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import type { PersonDocumentRepositoryV1, DocumentReadRequestV1, DocumentReadResultV1, DocumentExtractionClaimV1, DocumentExtractionResultV1 } from '../../../application/ports/document-v1.js';
+import type { PersonDocumentRepositoryV1, DocumentReadRequestV1, DocumentReadResultV1, DocumentExtractionClaimV1, DocumentExtractionResultV1, PersonDocumentOriginalV2 } from '../../../application/ports/document-v1.js';
 
 import { assertPersonDocumentCapacityV1 } from './document-quota-v1.js';
 import { assertPersonRequestNamespaceV1 } from './person-request-namespace-v1.js';
@@ -14,14 +14,20 @@ import { assertPersonSourceAdmissionV1 } from './person-source-admission-v1.js';
 import { personDocumentSourceEnvelopeV1 } from '../../../application/person-document-source-v1.js';
 import { SqlitePersonDocumentAssociationRepositoryV1 } from './document-associations-v1.js';
 export { PERSON_DOCUMENT_MEMBER_QUOTA_BYTES, PERSON_DOCUMENT_ORGANIZATION_QUOTA_BYTES } from './document-quota-v1.js';
-const SELECT = `SELECT d.*, w.extraction_state,w.extraction_detail,w.extractor,w.extracted_text_bytes,a.project_id AS current_project_id FROM authority_person_documents_v1 d JOIN authority_person_document_work_v1 w USING(document_id) LEFT JOIN authority_person_document_associations_v1 a USING(document_id)`;
-type Row = AuthorityPersonMembershipBinding & { document_id: `doc_${string}`; request_id: string; filename: string; title: string; detected_media_type: PersonDocumentMediaTypeV1; original_size: number; original_sha256: `sha256:${string}`; payload_sha256: string; audience_kind: 'only_me'|'team'|'project'; audience_project_id: ProjectIdV1|null; project_id: ProjectIdV1|null; current_project_id: ProjectIdV1|null; received_at: string; extraction_state: PersonDocumentExtractionStateV1; extraction_detail: string|null; extractor: string|null; extracted_text_bytes: number };
+const SELECT = `SELECT d.*, w.extraction_state,w.extraction_detail,w.extractor,w.extracted_text_bytes FROM authority_person_documents_v1 d JOIN authority_person_document_work_v1 w USING(document_id)`;
+type Row = AuthorityPersonMembershipBinding & { document_id: `doc_${string}`; request_id: string; request_version: 1|2; filename: string; title: string; detected_media_type: PersonDocumentMediaTypeV1; original_size: number; original_sha256: `sha256:${string}`; payload_sha256: string; audience_kind: 'only_me'|'team'|'project'|'projects'; audience_project_id: ProjectIdV1|null; submitted_association_project_ids_json: string; audience_project_ids_json: string; project_id: ProjectIdV1|null; received_at: string; extraction_state: PersonDocumentExtractionStateV1; extraction_detail: string|null; extractor: string|null; extracted_text_bytes: number };
 type Grant = { project_id: string; project_membership_id: string; role: string };
 type Permissions = { actor: AuthorityPersonMembershipBinding; grants: readonly Grant[]; digest: string };
 function fail(code: 'not_found'|'unauthorized'|'conflict'|'stale_access_state'|'rate_limited'|'invalid_request'|'invalid_output' = 'not_found'): never { throw new AuthorityOperationError(code, 'Document request failed'); }
 function actorIdentity(actor: PersonAccessAuthorization): string { const { checked_at: _checked, ...rest } = actor; return canonicalJson(rest); }
 function immutable<T>(value: T): T { const copy = JSON.parse(canonicalJson(value)) as T; const freeze = (v: unknown): void => { if (v && typeof v === 'object') { Object.values(v).forEach(freeze); Object.freeze(v); } }; freeze(copy); return copy; }
-function audience(row: Row): PersonDocumentUploadMetadataV1['audience'] { return row.audience_kind === 'project' ? { kind: 'project', project_id: row.audience_project_id! } : { kind: row.audience_kind }; }
+function audience(row: Row): PersonDocumentUploadMetadataV1['audience'] {
+  if (row.audience_kind === 'project') return { kind: 'project', project_id: row.audience_project_id! };
+  if (row.audience_kind === 'only_me' || row.audience_kind === 'team') return { kind: row.audience_kind };
+  return fail('invalid_output');
+}
+function projectIds(json: string): readonly ProjectIdV1[] { try { const ids: unknown = JSON.parse(json); if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string') || canonicalJson(ids) !== json) throw new Error(); return Object.freeze(ids as ProjectIdV1[]); } catch { return fail('invalid_output'); } }
+function audienceV3(row: Row): PersonUploadAudienceV3 { return row.audience_kind === 'projects' ? Object.freeze({ kind: 'projects' as const, project_ids: projectIds(row.audience_project_ids_json) }) : audience(row); }
 function cursorEncode(value: unknown): string { return Buffer.from(canonicalJson(value)).toString('base64url'); }
 function cursorDecode(cursor: string|null, scope: string): number { if (cursor === null) return 0; try { const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {scope:unknown;offset:unknown}; if (Object.keys(value).sort().join() !== 'offset,scope' || value.scope !== scope || !Number.isSafeInteger(value.offset) || (value.offset as number) < 0 || (value.offset as number) > 65536) fail('invalid_request'); if (cursorEncode(value) !== cursor) fail('invalid_request'); return value.offset as number; } catch { return fail('invalid_request'); } }
 function searchCursorDecode(cursor: string|null, scope: string): {received_at:string;document_id:string}|null {
@@ -36,17 +42,25 @@ function saved(row: Pick<Row,'request_id'|'document_id'|'received_at'>): PersonD
   return {schema_version:1,kind:'echo-person-document-saved-v1',request_id:row.request_id,document_id:row.document_id,received_at:row.received_at,state:'saved'};
 }
 function claimFromRow(row:Row,bytes:Uint8Array,lease_token:string,authorization_sha256:string):DocumentExtractionClaimV1 {
-  return {document_id:row.document_id,lease_token,bytes,filename:row.filename,source_sha256:row.original_sha256,authorization_sha256,received_at:row.received_at,contributor:{principal_id:row.principal_id,membership_id:row.membership_id},media_type:row.detected_media_type,source_scope:{organization_id:row.organization_id,custody_ref:row.audience_kind==='project'?`project:${row.audience_project_id}`:row.audience_kind==='team'?`organization:${row.organization_id}`:`membership:${row.membership_id}`,access_policy_ref:`document-audience:${row.document_id}`,analysis_policy:'on_request'}};
+  const custodyRef = row.audience_kind === 'project' ? `project:${row.audience_project_id}` : row.audience_kind === 'projects' ? `projects:${canonicalSha256(projectIds(row.audience_project_ids_json))}` : row.audience_kind === 'team' ? `organization:${row.organization_id}` : `membership:${row.membership_id}`;
+  return {document_id:row.document_id,lease_token,bytes,filename:row.filename,source_sha256:row.original_sha256,authorization_sha256,received_at:row.received_at,contributor:{principal_id:row.principal_id,membership_id:row.membership_id},media_type:row.detected_media_type,source_scope:{organization_id:row.organization_id,custody_ref:custodyRef,access_policy_ref:`document-audience:${row.document_id}`,analysis_policy:'on_request'}};
 }
-function metadata(row: Row, permission: Permissions): PersonDocumentMetadataV1 {
-  return { schema_version: 1, kind: 'echo-person-document-metadata-v1', request_id: row.request_id, filename: row.filename, title: row.title, content_length: row.original_size, sha256: row.original_sha256, audience: audience(row), project_id: permission.grants.some(g => g.project_id === row.current_project_id) ? row.current_project_id : null, document_id: row.document_id, detected_media_type: row.detected_media_type, received_at: row.received_at, state: 'saved', extraction_state: row.extraction_state, extraction_detail: row.extraction_detail, extractor: row.extractor, extracted_text_bytes: row.extracted_text_bytes };
+function metadata(row: Row, permission: Permissions, database?: Database.Database): PersonDocumentMetadataV1 {
+  const granted = new Set(permission.grants.map((grant) => grant.project_id));
+  const current = database === undefined ? row.project_id : (database.prepare(`SELECT project_id FROM authority_person_document_associations_v1 WHERE document_id=? AND organization_id=? ORDER BY project_id`).all(row.document_id,row.organization_id) as { project_id: ProjectIdV1 }[]).map((item) => item.project_id).find((project_id) => granted.has(project_id)) ?? null;
+  return { schema_version: 1, kind: 'echo-person-document-metadata-v1', request_id: row.request_id, filename: row.filename, title: row.title, content_length: row.original_size, sha256: row.original_sha256, audience: audience(row), project_id: current, document_id: row.document_id, detected_media_type: row.detected_media_type, received_at: row.received_at, state: 'saved', extraction_state: row.extraction_state, extraction_detail: row.extraction_detail, extractor: row.extractor, extracted_text_bytes: row.extracted_text_bytes };
+}
+
+function savedV2(row: Pick<Row,'request_id'|'document_id'|'received_at'>): PersonDocumentSavedV2 { return {schema_version:2,kind:'echo-person-document-saved-v2',request_id:row.request_id,document_id:row.document_id,received_at:row.received_at,state:'saved'}; }
+function metadataV2(row: Row, association_project_ids: readonly ProjectIdV1[]): PersonDocumentMetadataV2 {
+  return { schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: row.request_id, filename: row.filename, title: row.title, content_length: row.original_size, sha256: row.original_sha256, audience: audienceV3(row), association_project_ids, document_id: row.document_id, detected_media_type: row.detected_media_type, received_at: row.received_at, state: 'saved', extraction_state: row.extraction_state, extraction_detail: row.extraction_detail, extractor: row.extractor, extracted_text_bytes: row.extracted_text_bytes };
 }
 
 /** Dedicated document transactions never load originals while listing or matching text. */
 export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositoryV1 {
   readonly sourceAdmission: SqliteSourceAdmissionStoreV1;
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
-    if (database.pragma('user_version', { simple: true }) !== 8 || database.pragma('foreign_keys', { simple: true }) !== 1) throw new Error('Documents require Authority V8 and foreign keys');
+    if (database.pragma('user_version', { simple: true }) !== 9 || database.pragma('foreign_keys', { simple: true }) !== 1) throw new Error('Documents require Authority V9 and foreign keys');
     // SQLite lower() only folds ASCII. Keep title filtering inside the paged,
     // authorized query while applying the same Unicode rules as request input.
     database.function('echo_document_title_contains_v1', { deterministic: true }, (title, query) =>
@@ -89,6 +103,15 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
   private current(actor: PersonAccessAuthorization, permission: Permissions, reauthenticate: () => PersonAccessAuthorization): void {
     const current = reauthenticate(); if (actorIdentity(current) !== actorIdentity(actor) || this.permissions(current).digest !== permission.digest) fail('stale_access_state');
   }
+  private auditRead<T>(actor: PersonAccessAuthorization, permission: Permissions, authorizationRevision: number, reauthenticate: () => PersonAccessAuthorization, operation: DocumentReadRequestV1['operation'], response: T): T {
+    const value = response as { readonly bytes?: Uint8Array; readonly metadata?: { readonly sha256: string }; readonly documents?: readonly unknown[] };
+    const auditResponse = value.bytes === undefined ? response : { metadata: value.metadata, original_sha256: value.metadata?.sha256, original_bytes: value.bytes.byteLength };
+    if (Buffer.byteLength(canonicalJson(auditResponse)) > (operation === 'text' ? 24 * 1024 : 32 * 1024)) fail('invalid_output');
+    this.current(actor, permission, reauthenticate); if (this.authorizationRevision(actor.organization_id) !== authorizationRevision) fail('stale_access_state');
+    const audit = {schema_version:1,kind:'echo-document-read-audit-v1',audit_id:randomUUID(),organization_id:actor.organization_id,principal_id:actor.principal_id,membership_id:actor.membership_id,session_family_id:actor.session_family_id,operation,authorization_sha256:canonicalSha256({person:JSON.parse(actorIdentity(actor)),permission:permission.digest}),response_sha256:canonicalSha256(auditResponse),released_count:value.documents?.length ?? 1,checked_at:actor.checked_at};
+    this.database.prepare(`INSERT INTO authority_person_document_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)`).run(canonicalSha256(audit),canonicalJson(audit),actor.checked_at);
+    return response;
+  }
   upload(actor: PersonAccessAuthorization, input: PersonDocumentUploadMetadataV1, bytes: Uint8Array, reauthenticate: () => PersonAccessAuthorization): PersonDocumentUploadResultV1 {
     let value: PersonDocumentUploadMetadataV1; let media: PersonDocumentMediaTypeV1;
     try { value = validatePersonDocumentUploadMetadataV1(input); media = assertPersonDocumentOriginalV1(value, bytes); } catch { return fail('invalid_request'); }
@@ -103,17 +126,76 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
       const document_id = `doc_${canonicalSha256({kind:'echo-person-document-id-v1',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:value.request_id}).slice(7)}` as const;
       const received_at = this.now();
       const receipt: PersonDocumentReceiptV1 = { ...value, kind:'echo-person-document-receipt-v1', document_id, detected_media_type:media, received_at, state:'saved', extraction_state:'extracting' };
-      this.database.prepare(`INSERT INTO authority_person_documents_v1(document_id,organization_id,principal_id,membership_id,membership_type,request_id,filename,title,detected_media_type,original_size,original_sha256,payload_sha256,audience_kind,audience_project_id,project_id,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(document_id,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,value.request_id,value.filename,value.title,media,value.content_length,value.sha256,payload,value.audience.kind,value.audience.kind==='project'?value.audience.project_id:null,value.project_id,received_at);
+      this.database.prepare(`INSERT INTO authority_person_documents_v1(document_id,organization_id,principal_id,membership_id,membership_type,request_id,request_version,filename,title,detected_media_type,original_size,original_sha256,payload_sha256,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(document_id,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,value.request_id,1,value.filename,value.title,media,value.content_length,value.sha256,payload,value.audience.kind,value.audience.kind==='project'?value.audience.project_id:null,canonicalJson(value.project_id===null?[]:[value.project_id]),canonicalJson(value.audience.kind==='project'?[value.audience.project_id]:[]),value.project_id,received_at);
       this.database.prepare(`INSERT INTO authority_person_document_originals_v1(document_id,original) VALUES (?,?)`).run(document_id,bytes);
       this.database.prepare(`INSERT INTO authority_person_document_work_v1(document_id,retry_at) VALUES (?,?)`).run(document_id,received_at);
       if (value.project_id !== null) this.database.prepare(`INSERT INTO authority_person_document_associations_v1(document_id,project_id,organization_id,associated_at) VALUES (?,?,?,?)`).run(document_id,value.project_id,actor.organization_id,received_at);
+      if (value.audience.kind === 'project') this.database.prepare(`INSERT INTO authority_person_document_audience_projects_v1(document_id,project_id,organization_id) VALUES (?,?,?)`).run(document_id,value.audience.project_id,actor.organization_id);
       this.database.prepare(`INSERT INTO authority_person_document_receipts_v1(organization_id,membership_id,request_id,payload_sha256,receipt_json,receipt_sha256,committed_at) VALUES (?,?,?,?,?,?,?)`).run(actor.organization_id,actor.membership_id,value.request_id,payload,canonicalJson(receipt),canonicalSha256(receipt),received_at);
       this.current(actor,permission,reauthenticate); return immutable(receipt);
     });
   }
+  private coordinatesV2(permission: Permissions, value: PersonDocumentUploadMetadataV2): void {
+    for (const project_id of value.association_project_ids) this.requireProject(permission, project_id);
+    if (value.audience.kind === 'projects') for (const project_id of value.audience.project_ids) this.requireProject(permission, project_id);
+    if (value.audience.kind === 'project') this.requireProject(permission, value.audience.project_id);
+  }
+  preflightV2(actor: PersonAccessAuthorization, value?: PersonDocumentUploadMetadataV2): void {
+    const permission = this.permissions(actor); if (!value) return;
+    const input = validatePersonDocumentUploadMetadataV2(value); assertPersonRequestNamespaceV1(this.database, actor, input.request_id, 'document');
+    if (this.priorReceiptV2(actor, input) === undefined) this.coordinatesV2(permission, input);
+  }
+  private priorReceiptV2(actor: AuthorityPersonMembershipBinding, value: PersonDocumentUploadMetadataV2): PersonDocumentReceiptV2 | undefined {
+    const prior=this.database.prepare(`SELECT payload_sha256,receipt_json,receipt_sha256 FROM authority_person_document_receipts_v1 WHERE organization_id=? AND membership_id=? AND request_id=?`).get(actor.organization_id,actor.membership_id,value.request_id) as {payload_sha256:string;receipt_json:string;receipt_sha256:string}|undefined;
+    if (!prior) return undefined; const receipt = JSON.parse(prior.receipt_json) as PersonDocumentReceiptV2;
+    if (prior.payload_sha256 !== canonicalSha256(value) || canonicalSha256(receipt) !== prior.receipt_sha256) fail('conflict'); return receipt;
+  }
+  private receiptVisibleV2(permission: Permissions, value: Pick<PersonDocumentUploadMetadataV2, 'association_project_ids' | 'audience'>): boolean {
+    const audienceIds = value.audience.kind === 'projects' ? value.audience.project_ids : value.audience.kind === 'project' ? [value.audience.project_id] : [];
+    return [...value.association_project_ids, ...audienceIds].every((project_id) => permission.grants.some((grant) => grant.project_id === project_id));
+  }
+  uploadV2(actor: PersonAccessAuthorization, input: PersonDocumentUploadMetadataV2, bytes: Uint8Array, reauthenticate: () => PersonAccessAuthorization): PersonDocumentUploadResultV2 {
+    let value: PersonDocumentUploadMetadataV2; let media: PersonDocumentMediaTypeV1;
+    try { value=validatePersonDocumentUploadMetadataV2(input); media=assertPersonDocumentOriginalV1({...value, schema_version:1, kind:'echo-person-document-upload-v1', audience:{kind:'only_me'}, project_id:null},bytes); } catch { return fail('invalid_request'); }
+    return this.transaction(() => {
+      const permission=this.permissions(actor); assertPersonRequestNamespaceV1(this.database,actor,value.request_id,'document'); const payload=canonicalSha256(value); const prior=this.priorReceiptV2(actor,value);
+      if (prior) { this.current(actor,permission,reauthenticate); return immutable(this.receiptVisibleV2(permission,value) ? prior : savedV2(prior)); }
+      this.coordinatesV2(permission,value); assertPersonDocumentCapacityV1(this.database,actor,bytes.byteLength);
+      const document_id=`doc_${canonicalSha256({kind:'echo-person-document-id-v1',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:value.request_id}).slice(7)}` as const;
+      const received_at=this.now(); const audienceProjects=value.audience.kind==='projects'?value.audience.project_ids:value.audience.kind==='project'?[value.audience.project_id]:[];
+      const receipt: PersonDocumentReceiptV2={...value,kind:'echo-person-document-receipt-v2',document_id,detected_media_type:media,received_at,state:'saved',extraction_state:'extracting'};
+      this.database.prepare(`INSERT INTO authority_person_documents_v1(document_id,organization_id,principal_id,membership_id,membership_type,request_id,request_version,filename,title,detected_media_type,original_size,original_sha256,payload_sha256,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(document_id,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,value.request_id,2,value.filename,value.title,media,value.content_length,value.sha256,payload,value.audience.kind,value.audience.kind==='project'?value.audience.project_id:null,canonicalJson(value.association_project_ids),canonicalJson(audienceProjects),null,received_at);
+      this.database.prepare(`INSERT INTO authority_person_document_originals_v1(document_id,original) VALUES (?,?)`).run(document_id,bytes); this.database.prepare(`INSERT INTO authority_person_document_work_v1(document_id,retry_at) VALUES (?,?)`).run(document_id,received_at);
+      for (const project_id of value.association_project_ids) this.database.prepare(`INSERT INTO authority_person_document_associations_v1(document_id,project_id,organization_id,associated_at) VALUES (?,?,?,?)`).run(document_id,project_id,actor.organization_id,received_at);
+      for (const project_id of audienceProjects) this.database.prepare(`INSERT INTO authority_person_document_audience_projects_v1(document_id,project_id,organization_id) VALUES (?,?,?)`).run(document_id,project_id,actor.organization_id);
+      this.database.prepare(`INSERT INTO authority_person_document_receipts_v1(organization_id,membership_id,request_id,payload_sha256,receipt_json,receipt_sha256,committed_at) VALUES (?,?,?,?,?,?,?)`).run(actor.organization_id,actor.membership_id,value.request_id,payload,canonicalJson(receipt),canonicalSha256(receipt),received_at);
+      this.current(actor,permission,reauthenticate); return immutable(receipt);
+    });
+  }
+  private currentAssociations(row: Row, permission: Permissions): readonly ProjectIdV1[] {
+    const granted = new Set(permission.grants.map((grant) => grant.project_id));
+    return Object.freeze((this.database.prepare(`SELECT project_id FROM authority_person_document_associations_v1 WHERE document_id=? AND organization_id=? ORDER BY project_id`).all(row.document_id,row.organization_id) as {project_id:ProjectIdV1}[]).map(value => value.project_id).filter((project_id) => granted.has(project_id)));
+  }
+  readV2(actor: PersonAccessAuthorization, request: DocumentReadRequestV1, reauthenticate: () => PersonAccessAuthorization): PersonDocumentStatusV2 | PersonDocumentOriginalV2 | PersonDocumentTextV1 | PersonDocumentSearchResultV2 {
+    if (request.operation === 'text') return this.read(actor,request,reauthenticate) as PersonDocumentTextV1;
+    if (request.operation === 'search') { if (request.request.schema_version !== 2) fail('invalid_request'); return this.searchV2(actor, request.request, reauthenticate); }
+    return this.transaction(() => {
+      const permission=this.permissions(actor); const revision=this.authorizationRevision(actor.organization_id); let row: Row;
+      if (request.operation === 'status') { row=this.database.prepare(`${SELECT} WHERE d.organization_id=? AND d.membership_id=? AND d.request_id=?`).get(actor.organization_id,actor.membership_id,request.request_id) as Row; if(!row)fail(); }
+      else { row=this.row(permission,request.document_id); const selected=request.project_id??null; this.requireProject(permission,selected); if(selected!==null&&!this.database.prepare(`SELECT 1 FROM authority_person_document_associations_v1 WHERE document_id=? AND project_id=? AND organization_id=?`).get(row.document_id,selected,row.organization_id))fail(); }
+      const meta=metadataV2(row,request.operation === 'status' ? projectIds(row.submitted_association_project_ids_json) : this.currentAssociations(row,permission));
+      if (request.operation === 'status' && !this.receiptVisibleV2(permission, { association_project_ids: projectIds(row.submitted_association_project_ids_json), audience: audienceV3(row) })) {
+        return immutable(this.auditRead(actor,permission,revision,reauthenticate,request.operation,savedV2(row)));
+      }
+      const response=request.operation==='original' ? (() => { const original=this.database.prepare(`SELECT original FROM authority_person_document_originals_v1 WHERE document_id=?`).get(row.document_id) as {original:Buffer}|undefined; if(!original||original.original.byteLength!==row.original_size||sha256Digest(original.original)!==row.original_sha256)fail('invalid_output'); return {metadata:meta,bytes:original.original} as PersonDocumentOriginalV2; })() : meta;
+      const audited=this.auditRead(actor,permission,revision,reauthenticate,request.operation,response);
+      return 'bytes' in audited?Object.freeze({metadata:immutable(audited.metadata),bytes:audited.bytes}):immutable(audited);
+    });
+  }
   private acl(permission: Permissions): {sql:string;args:string[]} {
     const projects = permission.grants.map(g => g.project_id);
-    return { sql:`d.organization_id=? AND (d.audience_kind='team' OR (d.audience_kind='only_me' AND d.membership_id=?) OR (d.audience_kind='project' AND d.audience_project_id IN (${projects.map(()=>'?').join(',') || 'NULL'})))`, args:[permission.actor.organization_id,permission.actor.membership_id,...projects] };
+    const membershipProjects = projects.map(() => '?').join(',') || 'NULL';
+    return { sql:`d.organization_id=? AND (d.audience_kind='team' OR (d.audience_kind='only_me' AND d.membership_id=?) OR (d.audience_kind='project' AND d.audience_project_id IN (${membershipProjects})) OR (d.audience_kind='projects' AND EXISTS (SELECT 1 FROM authority_person_document_audience_projects_v1 audience WHERE audience.document_id=d.document_id AND audience.organization_id=d.organization_id AND audience.project_id IN (${membershipProjects}))))`, args:[permission.actor.organization_id,permission.actor.membership_id,...projects,...projects] };
   }
   private row(permission: Permissions, id: string): Row { const acl = this.acl(permission); const row = this.database.prepare(`${SELECT} WHERE ${acl.sql} AND d.document_id=?`).get(...acl.args,id) as Row|undefined; if (!row) fail(); return row; }
   read(actor: PersonAccessAuthorization, request: DocumentReadRequestV1, reauthenticate: () => PersonAccessAuthorization): DocumentReadResultV1 {
@@ -121,18 +203,19 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
       const permission = this.permissions(actor);
       const authorizationRevision = this.authorizationRevision(actor.organization_id);
       let response: DocumentReadResultV1;
-      if (request.operation === 'search') response = this.search(permission,request.request);
+      if (request.operation === 'search') { if (request.request.schema_version !== 1) fail('invalid_request'); response = this.search(permission,request.request); }
       else {
         let row: Row;
         if (request.operation === 'status') {
           const owned = this.database.prepare(`${SELECT} WHERE d.organization_id=? AND d.membership_id=? AND d.request_id=?`).get(actor.organization_id,actor.membership_id,request.request_id) as Row|undefined;
           if (!owned) fail(); row=owned;
         } else row = this.row(permission,request.document_id);
-        if(request.operation!=='status'){const selected=request.project_id??null;this.requireProject(permission,selected);if(selected!==null&&row.current_project_id!==selected)fail();}
+        if (row.request_version !== 1 && request.operation !== 'text') fail();
+        if(request.operation!=='status'){const selected=request.project_id??null;this.requireProject(permission,selected);if(selected!==null&&!this.database.prepare('SELECT 1 FROM authority_person_document_associations_v1 WHERE document_id=? AND project_id=? AND organization_id=?').get(row.document_id,selected,row.organization_id))fail();}
         if (request.operation === 'original') {
           const original = this.database.prepare(`SELECT original FROM authority_person_document_originals_v1 WHERE document_id=?`).get(row.document_id) as {original:Buffer}|undefined;
           if (!original || original.original.byteLength !== row.original_size || sha256Digest(original.original) !== row.original_sha256) fail('invalid_output');
-          response = { metadata: metadata(row,permission),bytes:original.original };
+          response = { metadata: metadata(row,permission,this.database),bytes:original.original };
         } else if (request.operation === 'text') {
           const scope = canonicalSha256({kind:'text',project_id:request.project_id??null,id:row.document_id,sha:row.original_sha256,extractor:row.extractor,membership_id:actor.membership_id,organization_id:actor.organization_id});
           const offset = cursorDecode(request.cursor,scope);
@@ -141,16 +224,10 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
           for (const chunk of candidates) { const size=Buffer.byteLength(chunk.text); if (size > PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES) fail('invalid_output'); if(chunks.length>=8 || total+size>8192 || Buffer.byteLength(canonicalJson([...chunks,chunk]))>20*1024) break; chunks.push(chunk);total+=size; }
           const next = candidates.length > chunks.length ? (chunks.at(-1)!.ordinal + 1) : null;
           response = {schema_version:1,kind:'echo-person-document-text-v1',document_id:row.document_id,original_sha256:row.original_sha256,extractor:row.extractor,extraction_state:row.extraction_state,chunks,next_cursor:next===null?null:cursorEncode({scope,offset:next})};
-        } else response=request.operation==='status'&&!this.receiptVisible(permission,{audience:audience(row),project_id:row.project_id})?saved(row):metadata(row,permission);
+        } else response=request.operation==='status'&&!this.receiptVisible(permission,{audience:audience(row),project_id:row.project_id})?saved(row):metadata(row,permission,this.database);
       }
-      const auditResponse = 'bytes' in response ? {metadata:response.metadata,original_sha256:response.metadata.sha256,original_bytes:response.bytes.byteLength} : response;
-      if (Buffer.byteLength(canonicalJson(auditResponse)) > (request.operation==='text'?24*1024:32*1024)) fail('invalid_output');
-      // Reauthenticate after selection, within this same synchronous SQLite snapshot.
-      this.current(actor,permission,reauthenticate);
-      if(this.authorizationRevision(actor.organization_id)!==authorizationRevision)fail('stale_access_state');
-      const audit = {schema_version:1,kind:'echo-document-read-audit-v1',audit_id:randomUUID(),organization_id:actor.organization_id,principal_id:actor.principal_id,membership_id:actor.membership_id,session_family_id:actor.session_family_id,operation:request.operation,authorization_sha256:canonicalSha256({person:JSON.parse(actorIdentity(actor)),permission:permission.digest}),response_sha256:canonicalSha256(auditResponse),released_count:'documents' in response?response.documents.length:1,checked_at:actor.checked_at};
-      this.database.prepare(`INSERT INTO authority_person_document_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)`).run(canonicalSha256(audit),canonicalJson(audit),actor.checked_at);
-      return 'bytes' in response ? Object.freeze({metadata:immutable(response.metadata),bytes:response.bytes}) : immutable(response);
+      const audited=this.auditRead(actor,permission,authorizationRevision,reauthenticate,request.operation,response);
+      return 'bytes' in audited ? Object.freeze({metadata:immutable(audited.metadata),bytes:audited.bytes}) : immutable(audited);
     });
   }
   private authorizationRevision(organizationId:string):number {
@@ -164,7 +241,7 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
     const position = searchCursorDecode(request.cursor,scope);
     const acl = this.acl(permission);
     const query=request.query.normalize('NFC').toLowerCase(); const fts='\"'+query.replace(/\"/g,'\"\"')+'\"';
-    const sql = `${SELECT} WHERE ${acl.sql} ${request.project_id===null?'':'AND a.project_id=?'} ${query===''?'':`AND (echo_document_title_contains_v1(d.title, ?)=1 OR EXISTS (SELECT 1 FROM authority_person_document_text_v1 t JOIN authority_person_document_text_fts_v1 f ON f.rowid=t.chunk_id WHERE t.document_id=d.document_id AND authority_person_document_text_fts_v1 MATCH ?))`} ${position===null?'':'AND (d.received_at<? OR (d.received_at=? AND d.document_id>?))'} ORDER BY d.received_at DESC,d.document_id LIMIT ?`;
+    const sql = `${SELECT} WHERE d.request_version=1 AND ${acl.sql} ${request.project_id===null?'':'AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 a WHERE a.document_id=d.document_id AND a.organization_id=d.organization_id AND a.project_id=?)'} ${query===''?'':`AND (echo_document_title_contains_v1(d.title, ?)=1 OR EXISTS (SELECT 1 FROM authority_person_document_text_v1 t JOIN authority_person_document_text_fts_v1 f ON f.rowid=t.chunk_id WHERE t.document_id=d.document_id AND authority_person_document_text_fts_v1 MATCH ?))`} ${position===null?'':'AND (d.received_at<? OR (d.received_at=? AND d.document_id>?))'} ORDER BY d.received_at DESC,d.document_id LIMIT ?`;
     const args:(string|number)[]=[...acl.args]; if(request.project_id!==null)args.push(request.project_id); if(query!=='')args.push(query,fts);if(position!==null)args.push(position.received_at,position.received_at,position.document_id);args.push(request.limit+1);
     const rows=this.database.prepare(sql).all(...args) as Row[];
     const documents: PersonDocumentSearchResultV1['documents'][number][]=[];
@@ -172,12 +249,23 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
       const chunk=this.database.prepare(`SELECT anchor_kind,anchor_start,text FROM authority_person_document_text_v1 WHERE document_id=? ${query===''?'':`AND chunk_id IN (SELECT rowid FROM authority_person_document_text_fts_v1 WHERE authority_person_document_text_fts_v1 MATCH ?)`} ORDER BY ordinal LIMIT 1`).get(...(query===''?[row.document_id]:[row.document_id,fts])) as {anchor_kind:'page'|'paragraph';anchor_start:number;text:string}|undefined;
       let excerpt:string|null=null;
       if(chunk) { const match=query===''?0:Math.max(0,chunk.text.toLowerCase().indexOf(query)); const before=Array.from(chunk.text.slice(0,match)).length; excerpt=Array.from(chunk.text).slice(Math.max(0,before-80),Math.max(0,before-80)+240).join(''); }
-      const item={...metadata(row,permission),excerpt,anchor:chunk?{kind:chunk.anchor_kind,start:chunk.anchor_start}:null};
+      const item={...metadata(row,permission,this.database),excerpt,anchor:chunk?{kind:chunk.anchor_kind,start:chunk.anchor_start}:null};
       if(Buffer.byteLength(canonicalJson({documents:[...documents,item]}))>28000)break;
       documents.push(item);
     }
     const last=documents.at(-1);
     return {schema_version:1,kind:'echo-person-document-search-result-v1',documents,next_cursor:rows.length>documents.length&&last?cursorEncode({scope,received_at:last.received_at,document_id:last.document_id}):null};
+  }
+  private searchV2(actor: PersonAccessAuthorization, request: PersonDocumentSearchV2, reauthenticate: () => PersonAccessAuthorization): PersonDocumentSearchResultV2 {
+    return this.transaction(() => {
+      const permission=this.permissions(actor); const revision=this.authorizationRevision(actor.organization_id); this.requireProject(permission,request.project_id);
+      const scope=canonicalSha256({kind:'document-search-v2',membership_id:permission.actor.membership_id,organization_id:permission.actor.organization_id,project_id:request.project_id,query:request.query,limit:request.limit}); const position=searchCursorDecode(request.cursor,scope); const acl=this.acl(permission); const query=request.query.normalize('NFC').toLowerCase(); const fts='"'+query.replace(/"/g,'""')+'"';
+      const sql=`${SELECT} WHERE ${acl.sql} ${request.project_id===null?'':'AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 a WHERE a.document_id=d.document_id AND a.organization_id=d.organization_id AND a.project_id=?)'} ${query===''?'':`AND (echo_document_title_contains_v1(d.title, ?)=1 OR EXISTS (SELECT 1 FROM authority_person_document_text_v1 t JOIN authority_person_document_text_fts_v1 f ON f.rowid=t.chunk_id WHERE t.document_id=d.document_id AND authority_person_document_text_fts_v1 MATCH ?))`} ${position===null?'':'AND (d.received_at<? OR (d.received_at=? AND d.document_id>?))'} ORDER BY d.received_at DESC,d.document_id LIMIT ?`;
+      const args:(string|number)[]=[...acl.args]; if(request.project_id!==null)args.push(request.project_id); if(query!=='')args.push(query,fts);if(position!==null)args.push(position.received_at,position.received_at,position.document_id);args.push(request.limit+1); const rows=this.database.prepare(sql).all(...args) as Row[];
+      const documents: PersonDocumentSearchResultV2['documents'][number][]=[];
+      for(const row of rows.slice(0,request.limit)) { const chunk=this.database.prepare(`SELECT anchor_kind,anchor_start,text FROM authority_person_document_text_v1 WHERE document_id=? ${query===''?'':`AND chunk_id IN (SELECT rowid FROM authority_person_document_text_fts_v1 WHERE authority_person_document_text_fts_v1 MATCH ?)`} ORDER BY ordinal LIMIT 1`).get(...(query===''?[row.document_id]:[row.document_id,fts])) as {anchor_kind:'page'|'paragraph';anchor_start:number;text:string}|undefined; let excerpt:string|null=null; if(chunk){const match=query===''?0:Math.max(0,chunk.text.toLowerCase().indexOf(query));const before=Array.from(chunk.text.slice(0,match)).length;excerpt=Array.from(chunk.text).slice(Math.max(0,before-80),Math.max(0,before-80)+240).join('');} const item={...metadataV2(row,this.currentAssociations(row,permission)),excerpt,anchor:chunk?{kind:chunk.anchor_kind,start:chunk.anchor_start}:null}; if(Buffer.byteLength(canonicalJson({documents:[...documents,item]}))>28000)break;documents.push(item); }
+      const last=documents.at(-1); const response:PersonDocumentSearchResultV2={schema_version:2,kind:'echo-person-document-search-result-v2',documents,next_cursor:rows.length>documents.length&&last?cursorEncode({scope,received_at:last.received_at,document_id:last.document_id}):null}; return immutable(this.auditRead(actor,permission,revision,reauthenticate,'search',response));
+    });
   }
   private workAuthorization(row: Row): string|undefined {
     try {
@@ -185,6 +273,12 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
       if(row.audience_kind==='project'){
         if(!this.database.prepare('SELECT 1 FROM authority_projects_v1 WHERE organization_id=? AND project_id=?').get(row.organization_id,row.audience_project_id))return undefined;
         return canonicalSha256({...source,custody:'project',project_id:row.audience_project_id});
+      }
+      if(row.audience_kind==='projects'){
+        const ids=projectIds(row.audience_project_ids_json);
+        const links=(this.database.prepare('SELECT project_id FROM authority_person_document_audience_projects_v1 WHERE document_id=? AND organization_id=? ORDER BY project_id').pluck().all(row.document_id,row.organization_id) as ProjectIdV1[]);
+        if(canonicalJson(ids)!==canonicalJson(links)||ids.some((project_id)=>!this.database.prepare('SELECT 1 FROM authority_projects_v1 WHERE organization_id=? AND project_id=?').get(row.organization_id,project_id)))return undefined;
+        return canonicalSha256({...source,custody:'projects',project_ids:ids});
       }
       if(row.audience_kind==='team'){
         if(!this.database.prepare('SELECT 1 FROM authority_metadata WHERE organization_id=?').get(row.organization_id))return undefined;

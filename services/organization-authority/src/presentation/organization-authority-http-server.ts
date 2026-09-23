@@ -1,21 +1,23 @@
 import {
-  PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
+  PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
   validateProjectPageRequestV1, validateProjectIdV1, validateProjectSummaryV1,
   validateProjectContextBrowseV1, validateProjectMembersV1,
   validateProjectDirectorySearchV1, validateProjectDirectoryV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
   validateProjectContextAssociateV1, validateProjectContextDissociateV1,
-  validateProjectContextFeedV1, validateProjectContextSearchV1, validateProjectContextSearchResultV1,
-  validateProjectContextReadV1, validatePersonUploadContextId, validatePersonUpdateRequestId,
+  validateProjectContextFeedV1, validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectContextSearchResultV1, validateProjectContextSearchResultV2,
+  validateProjectContextReadV1, validateProjectContextReadV2, validatePersonUploadContextId, validatePersonUpdateRequestId,
   validatePersonUpdateSubmitV2, validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2,
   validatePersonUploadSearchV2, validatePersonUploadSearchResultV2, validatePersonUploadContentV2,
+  validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusV3,
+  validatePersonUploadSearchV3, validatePersonUploadSearchResultV3, validatePersonUploadContentV3,
 } from '@echo-brain/organization-api';
 import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
 import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
 import type { PersonDocumentUploadStagingV1 } from '../application/ports/document-upload-staging-v1.js';
 import { createPersonDocumentsHttpHandlerV1 } from './person-documents-http-route-v1.js';
-import { PERSON_DOCUMENTS_PATH_V1 } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2 } from '@echo-brain/organization-api';
 import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
 import type { PersonUpdatesApplicationV1 } from '../application/person-updates.js';
 import { validatePersonQueryText } from "@echo-brain/organization-api";
@@ -155,7 +157,7 @@ function providerIngressRoutes(
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
-        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_PROJECTS_PATH_V1, PERSON_DOCUMENTS_PATH_V1]
+        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2]
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -534,7 +536,7 @@ function projectResponse(response: ServerResponse, status: number, value: unknow
 }
 
 type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1,
-  'listProjects' | 'readProject' | 'readContext' | 'uploadStatus' | 'readUpload'>;
+  'listProjects' | 'readProject' | 'readContext' | 'readContextV2' | 'uploadStatus' | 'readUpload'>;
 const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   readonly operation: ProjectBodyOperation;
   readonly request: (value: unknown) => unknown;
@@ -551,8 +553,12 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [`${PERSON_PROJECTS_PATH_V1}/context/dissociate`, { operation: 'dissociateContext', request: validateProjectContextDissociateV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/feed`, { operation: 'feed', request: validateProjectContextBrowseV1, response: validateProjectContextFeedV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/context/search`, { operation: 'search', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV1, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V2}/context/feed`, { operation: 'feedV2', request: validateProjectContextBrowseV1, response: validateProjectContextFeedV2, status: 200 }],
+  [`${PERSON_PROJECTS_PATH_V2}/context/search`, { operation: 'searchV2', request: validateProjectContextSearchV1, response: validateProjectContextSearchResultV2, status: 200 }],
   [PERSON_UPDATES_PATH_V2, { operation: 'submitUpload', request: validatePersonUpdateSubmitV2, response: validatePersonUpdateReceiptV2, status: 202 }],
   [`${PERSON_UPDATES_PATH_V2}/search`, { operation: 'searchUploads', request: validatePersonUploadSearchV2, response: validatePersonUploadSearchResultV2, status: 200 }],
+  [PERSON_UPDATES_PATH_V3, { operation: 'submitUploadV3', request: validatePersonUpdateSubmitV3, response: validatePersonUpdateReceiptV3, status: 202 }],
+  [`${PERSON_UPDATES_PATH_V3}/search`, { operation: 'searchUploadsV3', request: validatePersonUploadSearchV3, response: validatePersonUploadSearchResultV3, status: 200 }],
 ]);
 
 /** Route selection returns a synchronous release callback after all input I/O. */
@@ -570,12 +576,14 @@ async function projectRoute(
   if (method !== 'GET') return undefined;
   // Static POST paths cannot be misinterpreted as project/request identifiers.
   if (route !== undefined && url.pathname !== PERSON_PROJECTS_PATH_V1) return undefined;
-  const projectPath = url.pathname.startsWith(`${PERSON_PROJECTS_PATH_V1}/`)
-    ? url.pathname.slice(PERSON_PROJECTS_PATH_V1.length + 1).split('/') : [];
-  const uploadPath = url.pathname.startsWith(`${PERSON_UPDATES_PATH_V2}/`)
-    ? url.pathname.slice(PERSON_UPDATES_PATH_V2.length + 1).split('/') : [];
+  const projectBase = url.pathname.startsWith(`${PERSON_PROJECTS_PATH_V2}/`) ? PERSON_PROJECTS_PATH_V2 : PERSON_PROJECTS_PATH_V1;
+  const projectPath = url.pathname.startsWith(`${projectBase}/`)
+    ? url.pathname.slice(projectBase.length + 1).split('/') : [];
+  const uploadBase = url.pathname.startsWith(`${PERSON_UPDATES_PATH_V3}/`) ? PERSON_UPDATES_PATH_V3 : PERSON_UPDATES_PATH_V2;
+  const uploadPath = url.pathname.startsWith(`${uploadBase}/`)
+    ? url.pathname.slice(uploadBase.length + 1).split('/') : [];
   const list = url.pathname === PERSON_PROJECTS_PATH_V1;
-  const readProject = projectPath.length === 1;
+  const readProject = projectBase === PERSON_PROJECTS_PATH_V1 && projectPath.length === 1;
   const readContext = projectPath.length === 3 && projectPath[1] === 'context';
   const status = uploadPath.length === 1;
   const readUpload = uploadPath.length === 2 && uploadPath[0] === 'content';
@@ -592,16 +600,22 @@ async function projectRoute(
     const project = projectInput(validateProjectIdV1, projectPath[0]);
     if (readContext) {
       const context = projectInput(validatePersonUploadContextId, projectPath[2]);
-      return response => projectResponse(response, 200, application.readContext(token, project, context), validateProjectContextReadV1);
+      return response => projectBase === PERSON_PROJECTS_PATH_V2
+        ? projectResponse(response, 200, application.readContextV2(token, project, context), validateProjectContextReadV2)
+        : projectResponse(response, 200, application.readContext(token, project, context), validateProjectContextReadV1);
     }
     return response => projectResponse(response, 200, application.readProject(token, project), validateProjectSummaryV1);
   }
   if (readUpload) {
     const context = projectInput(validatePersonUploadContextId, uploadPath[1]);
-    return response => projectResponse(response, 200, application.readUpload(token, context), validatePersonUploadContentV2);
+    return response => uploadBase === PERSON_UPDATES_PATH_V3
+      ? projectResponse(response, 200, application.readUploadV3(token, context), validatePersonUploadContentV3)
+      : projectResponse(response, 200, application.readUpload(token, context), validatePersonUploadContentV2);
   }
   const id = projectInput(validatePersonUpdateRequestId, uploadPath[0]);
-  return response => projectResponse(response, 200, application.uploadStatus(token, id), validatePersonUpdateStatusV2);
+  return response => uploadBase === PERSON_UPDATES_PATH_V3
+    ? projectResponse(response, 200, application.uploadStatusV3(token, id), validatePersonUpdateStatusV3)
+    : projectResponse(response, 200, application.uploadStatus(token, id), validatePersonUpdateStatusV2);
 }
 
 /** The Organization Authority Person API surface, with no machine routes. */

@@ -180,6 +180,21 @@ describe('frozen project context CLI contract', () => {
     }
   });
 
+  it('uses the V2 project feed for a projects-audience upload without downcasting its audience', async () => {
+    const { home } = setup(); let stdout = ''; let stderr = '';
+    const contextId = `ctx_${'c'.repeat(64)}`;
+    const response = { schema_version: 2, kind: 'echo-project-context-feed-v2', project_id: projectId, items: [{
+      context_id: contextId, received_at: now, title: 'SCOUT MRD', excerpt: 'Autonomous inspection requirements', audience: { kind: 'projects', project_ids: [projectId, otherProject] },
+    }], next_cursor: null };
+    const code = await runPersonClientCli(['projects', 'feed-v2', '--project-id', projectId], { home_directory: home, now: () => now,
+      fetch: async (url, init) => {
+        expect(String(url)).toBe('https://authority.example/v2/person/projects/context/feed');
+        expect(init?.method).toBe('POST'); expect(JSON.parse(String(init?.body))).toEqual({ project_id: projectId, limit: 10 });
+        return json(response);
+      }, stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } });
+    expect(code, stderr).toBe(0); expect(JSON.parse(stdout)).toEqual(response);
+  });
+
   it('supports the full 8 KiB original under the 32 KiB wire bound', async () => {
     const item = operation('updates-read-v2');
     const response = { ...item.http.response, text: '\t'.repeat(8191) + 'x' };

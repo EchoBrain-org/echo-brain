@@ -5,22 +5,40 @@ import Foundation
 import UniformTypeIdentifiers
 
 enum UploadVisibility: String, Codable {
-    case onlyMe = "only_me", team, project
-    var label: String { switch self { case .onlyMe: return "Only me"; case .team: return "Everyone in my organization"; case .project: return "Project members" } }
+    case onlyMe = "only_me", team, project, projects
+    var label: String { switch self { case .onlyMe: return "Only me"; case .team: return "Everyone in my organization"; case .project, .projects: return "Project members" } }
     var argument: String { self == .onlyMe ? "only-me" : rawValue }
 }
 struct UploadAudience: Codable, Equatable {
     let kind: UploadVisibility
     let project_id: String?
-    init(_ kind: UploadVisibility, projectID: String? = nil) { self.kind = kind; project_id = projectID }
-    var valid: Bool { kind == .project ? ProjectWire.id(project_id ?? "", prefix: "prj_") : project_id == nil }
+    let project_ids: [String]?
+    init(_ kind: UploadVisibility, projectID: String? = nil, projectIDs: [String]? = nil) {
+        self.kind = kind; project_id = projectID
+        project_ids = kind != .projects && projectIDs?.isEmpty == true ? nil : projectIDs
+    }
+    var valid: Bool {
+        switch kind {
+        case .project: return ProjectWire.id(project_id ?? "", prefix: "prj_") && project_ids == nil
+        case .projects: return project_id == nil && project_ids.map { uploadProjectIDs($0, allowEmpty: false) } == true
+        case .onlyMe, .team: return project_id == nil && project_ids == nil
+        }
+    }
     var label: String { kind.label }
     static func validObject(_ object: Any?) -> Bool {
         guard let o = object as? [String: Any], let kind = o["kind"] as? String,
               let visibility = UploadVisibility(rawValue: kind) else { return false }
-        return ProjectWire.keys(o, visibility == .project ? ["kind", "project_id"] : ["kind"]) &&
-            UploadAudience(visibility, projectID: o["project_id"] as? String).valid
+        let fields = visibility == .project ? ["kind", "project_id"] : visibility == .projects ? ["kind", "project_ids"] : ["kind"]
+        return ProjectWire.keys(o, fields) && UploadAudience(visibility, projectID: o["project_id"] as? String, projectIDs: o["project_ids"] as? [String]).valid
     }
+}
+func uploadProjectIDs(_ values: [String], allowEmpty: Bool = true) -> Bool {
+    (allowEmpty || !values.isEmpty) && values.count <= 20 && values == values.sorted()
+        && Set(values).count == values.count && values.allSatisfy { ProjectWire.id($0, prefix: "prj_") }
+}
+private func uploadProjectJSON(_ values: [String]) -> String {
+    // Valid project identifiers are ASCII; this cannot fail for a validated draft.
+    String(data: try! JSONEncoder().encode(values), encoding: .utf8)!
 }
 private func uploadText(_ value: String, maximum: Int, multiline: Bool = false) -> Bool {
     ProjectWire.text(value, max: maximum, multiline: multiline)
@@ -48,6 +66,7 @@ struct UploadReceipt: Decodable {
     let received_at: String
     let audience: UploadAudience
     let project_id: String?
+    var association_project_ids: [String]? = nil
     let state: String?
     let status: String?
     let metadata: String?
@@ -55,11 +74,13 @@ struct UploadReceipt: Decodable {
     var contentUnavailable: Bool? = nil
     var visibility: UploadVisibility { audience.kind }
     var valid: Bool {
-        schema_version == 2 && uploadID(context_id) && ProjectWire.date(received_at) && audience.valid &&
-        (project_id == nil || ProjectWire.id(project_id!, prefix: "prj_")) && ProjectWire.id(request_id, prefix: "")
+        [2, 3].contains(schema_version) && uploadID(context_id) && ProjectWire.date(received_at) && audience.valid &&
+        (schema_version == 3 ? project_id == nil && association_project_ids.map { uploadProjectIDs($0) } == true
+            : association_project_ids == nil && (project_id == nil || ProjectWire.id(project_id!, prefix: "prj_")))
+        && ProjectWire.id(request_id, prefix: "")
     }
     var message: String {
-        if contentUnavailable == true { return "Original saved. Its content is no longer available to this account." }
+        if contentUnavailable == true { return "Original saved. Its details could not be shown here." }
         if let document { return document.stateMessage }
         let enrichment: String
         switch metadata {
@@ -114,6 +135,7 @@ struct UploadRecovery: Codable, Equatable {
     let requestID: String
     let audience: UploadAudience
     let projectID: String?
+    let projectIDs: [String]?
     var carrier: String? = nil
     var documentFilename: String? = nil
     var documentSize: Int? = nil
@@ -121,21 +143,28 @@ struct UploadRecovery: Codable, Equatable {
     var documentTitle: String? = nil
     var visibility: UploadVisibility { audience.kind }
 
-    init?(identity: AccountIdentity, requestID: String, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil) {
-        let audience = UploadAudience(visibility, projectID: audienceProjectID)
-        guard audience.valid, projectID == nil || ProjectWire.id(projectID!, prefix: "prj_") else { return nil }
+    init?(identity: AccountIdentity, requestID: String, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil,
+          audienceProjectIDs: [String]? = nil, projectIDs: [String]? = nil) {
+        let audience = UploadAudience(visibility, projectID: audienceProjectID, projectIDs: audienceProjectIDs)
+        guard audience.valid, projectID == nil || ProjectWire.id(projectID!, prefix: "prj_"),
+              projectIDs == nil || (projectID == nil && uploadProjectIDs(projectIDs!)),
+              visibility != .projects || projectIDs != nil else { return nil }
         guard let member = identity.membershipID, !member.isEmpty else { return nil }
         authority = identity.authority; membershipID = member
-        self.requestID = requestID; self.audience = audience; self.projectID = projectID
+        self.requestID = requestID; self.audience = audience; self.projectID = projectID; self.projectIDs = projectIDs
     }
+    var isDocument: Bool { carrier == "document-v1" || carrier == "document-v2" }
     var validCarrier: Bool {
         if carrier == nil { return documentFilename == nil && documentSize == nil && documentSha256 == nil && documentTitle == nil }
-        return carrier == "document-v1" && documentFilename.map { ProjectWire.text($0, max: 255) } == true
+        return isDocument && (carrier == "document-v2") == (projectIDs != nil)
+            && documentFilename.map { ProjectWire.text($0, max: 255) } == true
             && documentSize.map { (1...DocumentSnapshot.maximumBytes).contains($0) } == true
             && documentSha256.map(DocumentMetadata.hash) == true && documentTitle.map { ProjectWire.text($0, max: 200) } == true
     }
     func matches(_ metadata: DocumentMetadata, initialAssociation: Bool = true) -> Bool {
-        validCarrier && metadata.request_id == requestID && metadata.audience == audience && (!initialAssociation || metadata.project_id == projectID)
+        validCarrier && metadata.request_id == requestID && metadata.audience == audience
+            && (projectIDs == nil ? metadata.schema_version == 1 : metadata.schema_version == 2)
+            && (!initialAssociation || (projectIDs == nil ? metadata.project_id == projectID : metadata.association_project_ids == projectIDs))
             && metadata.filename == documentFilename && metadata.content_length == documentSize
             && metadata.sha256 == documentSha256 && metadata.title == documentTitle
     }
@@ -158,6 +187,8 @@ struct UploadRecovery: Codable, Equatable {
         guard let data = defaults.data(forKey: key(identity)), data.count <= 4096,
               let result = try? JSONDecoder().decode(Self.self, from: data), result.belongs(to: identity), result.audience.valid, result.validCarrier,
               result.projectID == nil || ProjectWire.id(result.projectID!, prefix: "prj_"),
+              result.projectIDs == nil || (result.projectID == nil && uploadProjectIDs(result.projectIDs!)),
+              result.audience.kind != .projects || result.projectIDs != nil,
               result.requestID.range(of: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", options: .regularExpression) != nil
         else { return nil }
         return result
@@ -169,19 +200,23 @@ final class UploadDraft {
     let title: String
     let audience: UploadAudience
     let projectID: String?
+    let projectIDs: [String]?
     var visibility: UploadVisibility { audience.kind }
     let file: URL
     private let directory: URL?
     let document: DocumentSnapshot?
 
-    init(title: String, bytes: Data, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil) throws {
-        let audience = UploadAudience(visibility, projectID: audienceProjectID)
-        guard audience.valid, projectID == nil || ProjectWire.id(projectID!, prefix: "prj_") else { throw CocoaError(.validationMissingMandatoryProperty) }
+    init(title: String, bytes: Data, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil,
+         audienceProjectIDs: [String]? = nil, projectIDs: [String]? = nil) throws {
+        let audience = UploadAudience(visibility, projectID: audienceProjectID, projectIDs: audienceProjectIDs)
+        guard audience.valid, projectID == nil || ProjectWire.id(projectID!, prefix: "prj_"),
+              projectIDs == nil || (projectID == nil && uploadProjectIDs(projectIDs!)),
+              visibility != .projects || projectIDs != nil else { throw CocoaError(.validationMissingMandatoryProperty) }
         guard uploadText(title, maximum: 200), bytes.count <= 8192,
               let text = String(data: bytes, encoding: .utf8), uploadText(text, maximum: 8192, multiline: true)
         else { throw CocoaError(.fileReadCorruptFile) }
         document = nil
-        self.title = title; self.audience = audience; self.projectID = projectID; requestID = UUID().uuidString.lowercased()
+        self.title = title; self.audience = audience; self.projectID = projectID; self.projectIDs = projectIDs; requestID = UUID().uuidString.lowercased()
         var template = Array(FileManager.default.temporaryDirectory.appendingPathComponent("echo-upload-XXXXXXXX").path.utf8CString)
         guard let path = mkdtemp(&template) else { throw CocoaError(.fileWriteUnknown) }
         directory = URL(fileURLWithPath: String(cString: path), isDirectory: true)
@@ -191,10 +226,13 @@ final class UploadDraft {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         } catch { try? FileManager.default.removeItem(at: directory!); throw error }
     }
-    init(title: String, document: DocumentSnapshot, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil) throws {
-        let audience = UploadAudience(visibility, projectID: audienceProjectID)
-        guard uploadText(title, maximum: 200), audience.valid, projectID == nil || ProjectWire.id(projectID!, prefix: "prj_") else { throw CocoaError(.validationMissingMandatoryProperty) }
-        self.title = title; self.document = document; self.audience = audience; self.projectID = projectID
+    init(title: String, document: DocumentSnapshot, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil,
+         audienceProjectIDs: [String]? = nil, projectIDs: [String]? = nil) throws {
+        let audience = UploadAudience(visibility, projectID: audienceProjectID, projectIDs: audienceProjectIDs)
+        guard uploadText(title, maximum: 200), audience.valid, projectID == nil || ProjectWire.id(projectID!, prefix: "prj_"),
+              projectIDs == nil || (projectID == nil && uploadProjectIDs(projectIDs!)),
+              visibility != .projects || projectIDs != nil else { throw CocoaError(.validationMissingMandatoryProperty) }
+        self.title = title; self.document = document; self.audience = audience; self.projectID = projectID; self.projectIDs = projectIDs
         requestID = UUID().uuidString.lowercased(); file = document.file; directory = nil
     }
     deinit { if let directory { try? FileManager.default.removeItem(at: directory) } }
@@ -230,6 +268,13 @@ enum UploadCommand {
         let base = ["person", "updates"]
         switch self {
         case .submit(let draft):
+            if let projectIDs = draft.projectIDs {
+                return ["person", draft.document == nil ? "updates" : "documents", draft.document == nil ? "submit-v3" : "upload-v2",
+                    "--request-id", draft.requestID, "--title", draft.title, "--file", draft.file.path,
+                    "--audience", draft.visibility.argument, "--association-project-ids-json", uploadProjectJSON(projectIDs)]
+                    + (draft.audience.project_ids.map { ["--audience-project-ids-json", uploadProjectJSON($0)] } ?? [])
+                    + (draft.audience.project_id.map { ["--audience-project-id", $0] } ?? [])
+            }
             if draft.document != nil { return ["person", "documents", "upload", "--request-id", draft.requestID, "--title", draft.title,
                 "--file", draft.file.path, "--audience", draft.visibility.argument]
                 + (draft.audience.project_id.map { ["--audience-project-id", $0] } ?? [])
@@ -238,7 +283,9 @@ enum UploadCommand {
                                               "--file", draft.file.path, "--visibility", draft.visibility.argument]
                 + (draft.audience.project_id.map { ["--audience-project-id", $0] } ?? [])
                 + (draft.projectID.map { ["--project-id", $0] } ?? [])
-        case .status(let receipt): return (receipt.carrier == "document-v1" ? ["person", "documents"] : base) + ["status", "--request-id", receipt.requestID]
+        case .status(let receipt):
+            let action = receipt.projectIDs == nil ? "status" : receipt.isDocument ? "status-v2" : "status-v3"
+            return (receipt.isDocument ? ["person", "documents"] : base) + [action, "--request-id", receipt.requestID]
         case .retry(let receipt): return ["person", "documents", "retry", "--request-id", receipt.requestID]
         case .abandon(let receipt): return ["person", "documents", "abandon", "--request-id", receipt.requestID]
         case .search(let query): return base + ["search", "--query", query, "--limit", "10"]
@@ -246,7 +293,18 @@ enum UploadCommand {
         }
     }
     var action: String {
-        switch self { case .submit(let draft): return draft.document == nil ? "updates-submit" : "documents-upload"; case .status(let recovery): return recovery.carrier == nil ? "updates-status" : "documents-status"; case .retry: return "documents-retry"; case .abandon: return "documents-abandon"; case .search: return "updates-search"; case .read: return "updates-read" }
+        switch self {
+        case .submit(let draft):
+            if draft.projectIDs != nil { return draft.document == nil ? "updates-submit-v3" : "documents-upload-v2" }
+            return draft.document == nil ? "updates-submit" : "documents-upload"
+        case .status(let recovery):
+            if recovery.projectIDs != nil { return recovery.isDocument ? "documents-status-v2" : "updates-status-v3" }
+            return recovery.isDocument ? "documents-status" : "updates-status"
+        case .retry: return "documents-retry"
+        case .abandon: return "documents-abandon"
+        case .search: return "updates-search"
+        case .read: return "updates-read"
+        }
     }
     var mutates: Bool { switch self { case .submit, .retry: return true; default: return false } }
     var isDocumentMutation: Bool {
@@ -308,22 +366,23 @@ final class UploadClient: @unchecked Sendable {
 
     static func parse(_ bytes: Data, command: UploadCommand) -> UploadResult {
         if case .submit(let draft) = command, let snapshot = draft.document {
-            if let saved = DocumentSaved.parseEnvelope(bytes, requestID: draft.requestID) { return .saved(saved.receipt(draft.audience, projectID: draft.projectID)) }
+            if let saved = DocumentSaved.parseEnvelope(bytes, requestID: draft.requestID, version: draft.projectIDs == nil ? 1 : 2) { return .saved(saved.receipt(draft.audience, projectID: draft.projectID, projectIDs: draft.projectIDs)) }
             guard let metadata = DocumentMetadata.parseEnvelope(bytes, receipt: true), metadata.request_id == draft.requestID,
-                  metadata.audience == draft.audience, metadata.project_id == draft.projectID,
+                  metadata.audience == draft.audience, metadata.schema_version == (draft.projectIDs == nil ? 1 : 2),
+                  metadata.project_id == draft.projectID, metadata.association_project_ids == draft.projectIDs,
                   metadata.filename == snapshot.filename, metadata.title == draft.title, metadata.content_length == snapshot.size, metadata.sha256 == snapshot.sha256 else { return .failed }
             return .saved(metadata.uploadReceipt)
         }
         let documentRecovery: UploadRecovery?
         let retrying: Bool
         switch command {
-        case .status(let recovery): documentRecovery = recovery.carrier == "document-v1" ? recovery : nil; retrying = false
+        case .status(let recovery): documentRecovery = recovery.isDocument ? recovery : nil; retrying = false
         case .retry(let recovery): documentRecovery = recovery; retrying = true
         default: documentRecovery = nil; retrying = false
         }
         if let recovery = documentRecovery {
-            if let saved = DocumentSaved.parseEnvelope(bytes, requestID: recovery.requestID) { return .saved(saved.receipt(recovery.audience, projectID: recovery.projectID)) }
-            guard let metadata = DocumentMetadata.parseEnvelope(bytes, receipt: retrying), recovery.matches(metadata, initialAssociation: retrying) else { return .failed }
+            if let saved = DocumentSaved.parseEnvelope(bytes, requestID: recovery.requestID, version: recovery.projectIDs == nil ? 1 : 2) { return .saved(saved.receipt(recovery.audience, projectID: recovery.projectID, projectIDs: recovery.projectIDs)) }
+            guard let metadata = DocumentMetadata.parseEnvelope(bytes, receipt: retrying), recovery.matches(metadata, initialAssociation: retrying || recovery.projectIDs != nil) else { return .failed }
             return .saved(metadata.uploadReceipt)
         }
         if case .abandon(let recovery) = command {
@@ -337,18 +396,20 @@ final class UploadClient: @unchecked Sendable {
         let decoder = JSONDecoder()
         guard let object = ProjectWire.object(bytes) else { return .failed }
         func keys(_ expected: [String]) -> Bool { ProjectWire.keys(object, expected) }
-        func receipt(_ request: String, _ audience: UploadAudience, _ projectID: String?, status: Bool) -> UploadResult {
-            guard keys(["schema_version", "kind", "request_id", "context_id", "received_at", "audience", "project_id"] + (status ? ["status", "metadata"] : ["state"])),
-                  ProjectWire.header(object, version: 2, kind: status ? "echo-person-update-status-v2" : "echo-person-update-receipt-v2"),
-                  UploadAudience.validObject(object["audience"]), object["project_id"] is NSNull || object["project_id"] is String,
+        func receipt(_ request: String, _ audience: UploadAudience, _ projectID: String?, _ projectIDs: [String]?, status: Bool) -> UploadResult {
+            let version = projectIDs == nil ? 2 : 3
+            guard keys(["schema_version", "kind", "request_id", "context_id", "received_at", "audience", projectIDs == nil ? "project_id" : "association_project_ids"] + (status ? ["status", "metadata"] : ["state"])),
+                  ProjectWire.header(object, version: version, kind: "echo-person-update-" + (status ? "status" : "receipt") + "-v\(version)"),
+                  UploadAudience.validObject(object["audience"]),
+                  projectIDs != nil || object["project_id"] is NSNull || object["project_id"] is String,
                   let r = try? decoder.decode(UploadReceipt.self, from: bytes), r.valid,
-                  r.request_id == request, r.audience == audience, r.project_id == projectID else { return .failed }
+                  r.request_id == request, r.audience == audience, r.project_id == projectID, r.association_project_ids == projectIDs else { return .failed }
             guard status ? (r.status == "stored" && ["pending", "processing", "ready", "unavailable"].contains(r.metadata ?? "")) : r.state == "received" else { return .failed }
             return .saved(r)
         }
         switch command {
-        case .submit(let draft): return receipt(draft.requestID, draft.audience, draft.projectID, status: false)
-        case .status(let expected): return receipt(expected.requestID, expected.audience, expected.projectID, status: true)
+        case .submit(let draft): return receipt(draft.requestID, draft.audience, draft.projectID, draft.projectIDs, status: false)
+        case .status(let expected): return receipt(expected.requestID, expected.audience, expected.projectID, expected.projectIDs, status: true)
         case .search:
             guard keys(["schema_version", "kind", "results"]),
                   ProjectWire.header(object, version: 2, kind: "echo-person-upload-search-v2"),
@@ -399,7 +460,7 @@ final class UploadSession {
         self.client = client; self.defaults = defaults; self.isForeground = isForeground
     }
     var canCompose: Bool { identity != nil && !busy && recovery == nil && draft == nil }
-    var canRetry: Bool { draft != nil || recovery?.carrier == "document-v1" }
+    var canRetry: Bool { draft != nil || recovery?.isDocument == true }
     func refreshIdentity() {
         concealed = false
         guard !busy else { return }
@@ -415,27 +476,30 @@ final class UploadSession {
             if self.identity != account {
                 self.reset(); self.identity = account
                 self.recovery = UploadRecovery.load(for: account, defaults: self.defaults)
-                if self.recovery?.carrier == "document-v1" { self.documentMutationState = .uncertain }
+                if self.recovery?.isDocument == true { self.documentMutationState = .uncertain }
                 self.status = self.recovery == nil ? "" : "Check the previous save before starting another."
             }
             self.onChange?()
         }
         onChange?()
     }
-    func submit(title: String, text: String, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil) {
+    func submit(title: String, text: String, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil,
+                audienceProjectIDs: [String]? = nil, projectIDs: [String]? = nil) {
         guard canCompose, let identity else { return }
-        do { draft = try UploadDraft(title: title, bytes: Data(text.utf8), visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID) }
+        do { draft = try UploadDraft(title: title, bytes: Data(text.utf8), visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID, audienceProjectIDs: audienceProjectIDs, projectIDs: projectIDs) }
         catch { status = "Use a title up to 200 UTF-8 bytes and nonempty text up to 8 KiB."; onChange?(); return }
-        guard let draft, let recovery = UploadRecovery(identity: identity, requestID: draft.requestID, visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID) else { return }
-        self.recovery = recovery; recovery.save(for: identity, defaults: defaults)
+        guard let draft, let recovery = UploadRecovery(identity: identity, requestID: draft.requestID, visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID, audienceProjectIDs: audienceProjectIDs, projectIDs: projectIDs) else { return }
+        guard recovery.save(for: identity, defaults: defaults) else { self.draft = nil; status = "Could not record this save safely. Try again."; onChange?(); return }
+        self.recovery = recovery
         status = "Saving your original text…"; run(.submit(draft))
     }
-    func submitDocument(title: String, snapshot: DocumentSnapshot, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil) {
+    func submitDocument(title: String, snapshot: DocumentSnapshot, visibility: UploadVisibility, audienceProjectID: String? = nil, projectID: String? = nil,
+                        audienceProjectIDs: [String]? = nil, projectIDs: [String]? = nil) {
         guard canCompose, let identity else { return }
-        do { draft = try UploadDraft(title: title, document: snapshot, visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID) }
+        do { draft = try UploadDraft(title: title, document: snapshot, visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID, audienceProjectIDs: audienceProjectIDs, projectIDs: projectIDs) }
         catch { status = "Choose a supported document up to 25 MiB and a title up to 200 UTF-8 bytes."; onChange?(); return }
-        guard let draft, var recovery = UploadRecovery(identity: identity, requestID: draft.requestID, visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID) else { return }
-        recovery.carrier = "document-v1"; recovery.documentFilename = snapshot.filename; recovery.documentSize = snapshot.size
+        guard let draft, var recovery = UploadRecovery(identity: identity, requestID: draft.requestID, visibility: visibility, audienceProjectID: audienceProjectID, projectID: projectID, audienceProjectIDs: audienceProjectIDs, projectIDs: projectIDs) else { return }
+        recovery.carrier = projectIDs == nil ? "document-v1" : "document-v2"; recovery.documentFilename = snapshot.filename; recovery.documentSize = snapshot.size
         recovery.documentSha256 = snapshot.sha256; recovery.documentTitle = title
         guard recovery.save(for: identity, defaults: defaults) else { self.draft = nil; status = "Could not record this save safely. Try again."; onChange?(); return }
         self.recovery = recovery; documentMutationState = .none
@@ -445,7 +509,7 @@ final class UploadSession {
     // locator or immutable audience/association coordinates.
     func projectAccessChanged() {
         matches = []; content = nil
-        if draft?.projectID != nil || draft?.audience.kind == .project { draft = nil }
+        if draft?.projectID != nil || !(draft?.projectIDs?.isEmpty ?? true) || (draft?.audience.kind == .project || draft?.audience.kind == .projects) { draft = nil }
         if activeContentRead { active?.cancel(); active = nil; generation = UUID(); busy = false; activeContentRead = false }
         onChange?()
     }
@@ -453,7 +517,7 @@ final class UploadSession {
         guard !busy, receipt == nil else { return }
         status = "Retrying the same save…"
         if let draft { run(.submit(draft)) }
-        else if let recovery, recovery.carrier == "document-v1" { run(.retry(recovery)) }
+        else if let recovery, recovery.isDocument { run(.retry(recovery)) }
     }
     /// A first attempt that was definitively not submitted has no Authority
     /// outcome to reconcile. Remove its durable retry snapshot through the
@@ -461,7 +525,7 @@ final class UploadSession {
     /// retained even if a later retry was rejected.
     func settleRejectedFirstDocumentAttempt() -> Bool {
         guard !busy, documentMutationState == .rejectedBeforeAnyUnknownOutcome,
-              let recovery, recovery.carrier == "document-v1" else { return false }
+              let recovery, recovery.isDocument else { return false }
         documentMutationState = .settlingRejectedFirstAttempt
         status = "Removing the local retry copy…"; run(.abandon(recovery))
         return true
@@ -474,7 +538,7 @@ final class UploadSession {
     // delete a saved upload, withdraw its audience, or generate a fresh retry.
     func startAnother() {
         guard !busy, let identity else { return }
-        if receipt == nil, let recovery, recovery.carrier == "document-v1" {
+        if receipt == nil, let recovery, recovery.isDocument {
             status = "Removing the local retry copy. Any saved original stays in ECHO…"; run(.abandon(recovery)); return
         }
         UploadRecovery.clear(for: identity, defaults: defaults)
@@ -618,6 +682,7 @@ struct DocumentMetadata: Decodable {
     let sha256: String
     let audience: UploadAudience
     let project_id: String?
+    var association_project_ids: [String]? = nil
     let detected_media_type: String
     let received_at: String
     let state: String
@@ -639,15 +704,18 @@ struct DocumentMetadata: Decodable {
         guard let object = envelope(bytes) else { return nil }; return parse(object, receipt: receipt)
     }
     static func parse(_ object: [String: Any], receipt: Bool = false, match: Bool = false) -> DocumentMetadata? {
-        let fields = ["schema_version", "kind", "request_id", "document_id", "filename", "title", "content_length", "sha256", "audience", "project_id", "detected_media_type", "received_at", "state", "extraction_state"]
+        let version = object["schema_version"] as? Int ?? 0
+        let fields = ["schema_version", "kind", "request_id", "document_id", "filename", "title", "content_length", "sha256", "audience", version == 2 ? "association_project_ids" : "project_id", "detected_media_type", "received_at", "state", "extraction_state"]
             + (receipt ? [] : ["extraction_detail", "extractor", "extracted_text_bytes"]) + (match ? ["excerpt", "anchor"] : [])
-        guard ProjectWire.keys(object, fields), ProjectWire.header(object, version: 1, kind: receipt ? "echo-person-document-receipt-v1" : "echo-person-document-metadata-v1"),
-              UploadAudience.validObject(object["audience"]), object["project_id"] is NSNull || object["project_id"] is String,
+        guard [1, 2].contains(version), ProjectWire.keys(object, fields),
+              ProjectWire.header(object, version: version, kind: "echo-person-document-" + (receipt ? "receipt" : "metadata") + "-v\(version)"),
+              UploadAudience.validObject(object["audience"]), version == 2 || object["project_id"] is NSNull || object["project_id"] is String,
               let bytes = try? JSONSerialization.data(withJSONObject: object), let value = try? JSONDecoder().decode(Self.self, from: bytes),
               id(value.document_id), ProjectWire.id(value.request_id, prefix: ""), hash(value.sha256),
               ProjectWire.text(value.filename, max: 255), !value.filename.contains("/"), !value.filename.contains("\\"), ProjectWire.text(value.title, max: 200),
               (1...DocumentSnapshot.maximumBytes).contains(value.content_length), value.audience.valid,
-              value.project_id == nil || ProjectWire.id(value.project_id!, prefix: "prj_"),
+              version == 2 ? value.project_id == nil && value.association_project_ids.map({ uploadProjectIDs($0) }) == true
+                  : value.association_project_ids == nil && (value.project_id == nil || ProjectWire.id(value.project_id!, prefix: "prj_")),
               ["text/plain", "text/markdown", "application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].contains(value.detected_media_type),
               ProjectWire.date(value.received_at), value.state == "saved", states.contains(value.extraction_state),
               value.extracted_text_bytes == nil || (0...2 * 1024 * 1024).contains(value.extracted_text_bytes!),
@@ -679,25 +747,25 @@ struct DocumentMetadata: Decodable {
     var renderKey: String { document_id + "|" + extraction_state + "|" + String(extracted_text_bytes ?? 0) }
     var uploadReceipt: UploadReceipt {
         UploadReceipt(schema_version: 1, kind: kind, request_id: request_id, context_id: document_id, received_at: received_at,
-                      audience: audience, project_id: project_id, state: state, status: nil, metadata: nil, document: self)
+                      audience: audience, project_id: project_id, association_project_ids: association_project_ids, state: state, status: nil, metadata: nil, document: self)
     }
 }
 struct DocumentSaved: Decodable {
     let request_id: String
     let document_id: String
     let received_at: String
-    static func parseEnvelope(_ bytes: Data, requestID: String) -> Self? {
+    static func parseEnvelope(_ bytes: Data, requestID: String, version: Int = 1) -> Self? {
         guard let object = DocumentMetadata.envelope(bytes),
               ProjectWire.keys(object, ["schema_version", "kind", "request_id", "document_id", "received_at", "state"]),
-              ProjectWire.header(object, version: 1, kind: "echo-person-document-saved-v1"), object["state"] as? String == "saved",
+              ProjectWire.header(object, version: version, kind: "echo-person-document-saved-v\(version)"), object["state"] as? String == "saved",
               object["request_id"] as? String == requestID, ProjectWire.id(requestID, prefix: ""),
               DocumentMetadata.id(object["document_id"] as? String ?? ""), ProjectWire.date(object["received_at"] as? String ?? ""),
               let data = try? JSONSerialization.data(withJSONObject: object) else { return nil }
         return try? JSONDecoder().decode(Self.self, from: data)
     }
-    func receipt(_ audience: UploadAudience, projectID: String?) -> UploadReceipt {
+    func receipt(_ audience: UploadAudience, projectID: String?, projectIDs: [String]? = nil) -> UploadReceipt {
         UploadReceipt(schema_version: 1, kind: "echo-person-document-saved-v1", request_id: request_id, context_id: document_id,
-            received_at: received_at, audience: audience, project_id: projectID, state: "saved", status: nil, metadata: nil, contentUnavailable: true)
+            received_at: received_at, audience: audience, project_id: projectID, association_project_ids: projectIDs, state: "saved", status: nil, metadata: nil, contentUnavailable: true)
     }
 }
 struct DocumentTextPage: Decodable {
@@ -803,14 +871,14 @@ final class DocumentSession {
         guard query.utf8.count <= 200 else { clear(); status = "Search documents with up to 200 UTF-8 bytes."; onChange?(); return }
         if cursor == nil { clear(); self.query = query; self.projectID = projectID }
         guard !busy else { return }
-        var args = ["person", "documents", "search", "--query", query, "--limit", "10"]
+        var args = ["person", "documents", "search-v2", "--query", query, "--limit", "10"]
         if let projectID { args += ["--project-id", projectID] }; if let cursor { args += ["--cursor", cursor] }
         run(args) { [weak self] result in
-            guard let self, ProjectWire.header(result, version: 1, kind: "echo-person-document-search-result-v1"),
+            guard let self, ProjectWire.header(result, version: 2, kind: "echo-person-document-search-result-v2"),
                   ProjectWire.keys(result, ["schema_version", "kind", "documents", "next_cursor"]),
                   ProjectWire.cursor(result["next_cursor"]), let raw = result["documents"] as? [[String: Any]], raw.count <= 10 else { return false }
             let matches = raw.compactMap { DocumentMetadata.parse($0, match: true) }
-            guard matches.count == raw.count, Set(matches.map(\.document_id)).count == matches.count else { return false }
+            guard matches.count == raw.count, matches.allSatisfy({ $0.schema_version == 2 }), Set(matches.map(\.document_id)).count == matches.count else { return false }
             if cursor == nil { self.matches = matches }
             else {
                 let existing = Set(self.matches.map(\.document_id))
@@ -827,12 +895,12 @@ final class DocumentSession {
         if let explicitProjectID { self.projectID = explicitProjectID }
         let scopedProjectID = explicitProjectID ?? projectID
         metadata = nil; page = nil
-        var args = ["person", "documents", "read", "--document-id", id]
+        var args = ["person", "documents", "read-v2", "--document-id", id]
         if let scopedProjectID { args += ["--project-id", scopedProjectID] }
         if let cursor { args += ["--cursor", cursor] }
         run(args) { [weak self] result in
             guard let self, ProjectWire.keys(result, ["metadata", "text"]), let raw = result["metadata"] as? [String: Any],
-                  let metadata = DocumentMetadata.parse(raw), metadata.document_id == id,
+                  let metadata = DocumentMetadata.parse(raw), metadata.schema_version == 2, metadata.document_id == id,
                   let rawText = result["text"] as? [String: Any], let page = DocumentTextPage.parse(rawText, metadata: metadata) else { return false }
             self.metadata = metadata; self.page = page; return true
         }
@@ -840,7 +908,7 @@ final class DocumentSession {
     func nextTextPage() { if let metadata, let cursor = page?.next_cursor { read(metadata.document_id, cursor: cursor) } }
     func download(_ metadata: DocumentMetadata, to file: URL) {
         guard !busy else { return }
-        run(["person", "documents", "download", "--document-id", metadata.document_id, "--out", file.path]
+        run(["person", "documents", "download-v2", "--document-id", metadata.document_id, "--out", file.path]
             + (projectID.map { ["--project-id", $0] } ?? [])) { [weak self] result in
             // CLI atomically writes only after checking the original size/hash.
             guard result["document_id"] as? String == metadata.document_id,
@@ -909,7 +977,7 @@ final class DocumentSession {
                 guard self.foreground() else { self.clear(); self.onChange?(); return }
                 if case .output(let bytes, true) = output, let object = DocumentMetadata.envelope(bytes), accept(object) { self.onChange?(); return }
                 self.metadata = nil; self.page = nil; self.matches = []; self.nextCursor = nil
-                self.status = arguments.dropFirst(2).first == "download"
+                self.status = ["download", "download-v2"].contains(arguments.dropFirst(2).first ?? "")
                     ? "Could not confirm the download. Check the selected file before trying again."
                     : "Could not load the document. Refresh to check your connection and access."
                 self.onChange?()

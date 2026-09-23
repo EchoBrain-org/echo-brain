@@ -1,18 +1,26 @@
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import type {
   PersonUpdateReceiptV2,
+  PersonUpdateReceiptV3,
   PersonUpdateStatusV2,
+  PersonUpdateStatusV3,
   PersonUpdateSubmitV2,
+  PersonUpdateSubmitV3,
   PersonUploadContentV2,
+  PersonUploadContentV3,
   PersonUploadSearchV2,
   PersonUploadSearchResultV2,
+  PersonUploadSearchResultV3,
   ProjectContextAssociateV1,
   ProjectContextBrowseV1,
   ProjectContextDissociateV1,
   ProjectContextFeedV1,
+  ProjectContextFeedV2,
   ProjectContextReadV1,
+  ProjectContextReadV2,
   ProjectContextSearchV1,
   ProjectContextSearchResultV1,
+  ProjectContextSearchResultV2,
   ProjectCreateReceiptV1,
   ProjectCreateV1,
   ProjectMemberAddV1,
@@ -51,18 +59,26 @@ export interface ProjectContextApplicationV1 {
   associateContext(accessToken: string, request: unknown): ProjectMutationReceiptV1;
   dissociateContext(accessToken: string, request: unknown): ProjectMutationReceiptV1;
   feed(accessToken: string, request: unknown): ProjectContextFeedV1;
+  feedV2(accessToken: string, request: unknown): ProjectContextFeedV2;
   search(accessToken: string, request: unknown): ProjectContextSearchResultV1;
+  searchV2(accessToken: string, request: unknown): ProjectContextSearchResultV2;
   readContext(accessToken: string, projectId: unknown, contextId: unknown): ProjectContextReadV1;
+  readContextV2(accessToken: string, projectId: unknown, contextId: unknown): ProjectContextReadV2;
   submitUpload(accessToken: string, request: unknown): PersonUpdateReceiptV2;
+  submitUploadV3(accessToken: string, request: unknown): PersonUpdateReceiptV3;
   uploadStatus(accessToken: string, requestId: unknown): PersonUpdateStatusV2;
+  uploadStatusV3(accessToken: string, requestId: unknown): PersonUpdateStatusV3;
   readUpload(accessToken: string, contextId: unknown): PersonUploadContentV2;
+  readUploadV3(accessToken: string, contextId: unknown): PersonUploadContentV3;
   searchUploads(accessToken: string, request: unknown): PersonUploadSearchResultV2;
+  searchUploadsV3(accessToken: string, request: unknown): PersonUploadSearchResultV3;
 }
 
 export type ProjectReadOperationV1 =
   | 'project_list' | 'project_read' | 'members' | 'directory'
-  | 'feed' | 'search' | 'context_read'
-  | 'upload_status' | 'upload_read' | 'upload_search';
+  | 'feed' | 'search' | 'context_read' | 'feed_v2' | 'search_v2' | 'context_read_v2'
+  | 'upload_status' | 'upload_read' | 'upload_search'
+  | 'upload_status_v3' | 'upload_read_v3' | 'upload_search_v3';
 
 export type ProjectMutationV1 =
   | { readonly operation: 'create'; readonly request: ProjectCreateV1 }
@@ -70,17 +86,21 @@ export type ProjectMutationV1 =
   | { readonly operation: 'member_remove'; readonly request: ProjectMemberRemoveV1 }
   | { readonly operation: 'associate'; readonly request: ProjectContextAssociateV1 }
   | { readonly operation: 'dissociate'; readonly request: ProjectContextDissociateV1 }
-  | { readonly operation: 'upload_submit'; readonly request: PersonUpdateSubmitV2 };
+  | { readonly operation: 'upload_submit'; readonly request: PersonUpdateSubmitV2 }
+  | { readonly operation: 'upload_submit_v3'; readonly request: PersonUpdateSubmitV3 };
 
 /** Trusted application input. Never decoded from a Person's JSON or session. */
 export type ProjectAuthorizationScopeV1 =
   | { readonly operation: 'project_list' | 'upload_search' }
-  | { readonly operation: 'project_read' | 'members' | 'feed' | 'search'; readonly project_id: ProjectIdV1 }
+  | { readonly operation: 'upload_search_v3' }
+  | { readonly operation: 'project_read' | 'members' | 'feed' | 'search' | 'feed_v2' | 'search_v2'; readonly project_id: ProjectIdV1 }
   /** Directory authorization requires the current project's lead grant. */
   | { readonly operation: 'directory'; readonly project_id: ProjectIdV1 }
-  | { readonly operation: 'context_read'; readonly project_id: ProjectIdV1; readonly context_id: string }
+  | { readonly operation: 'context_read' | 'context_read_v2'; readonly project_id: ProjectIdV1; readonly context_id: string }
   | { readonly operation: 'upload_read'; readonly context_id: string }
+  | { readonly operation: 'upload_read_v3'; readonly context_id: string }
   | { readonly operation: 'upload_status'; readonly request_id: string }
+  | { readonly operation: 'upload_status_v3'; readonly request_id: string }
   | ProjectMutationV1;
 
 export interface ProjectMembershipGrantV1 {
@@ -121,7 +141,9 @@ export interface ProjectReadAuditV1 {
 export type ProjectReadResponseV1 =
   | ProjectListV1 | ProjectSummaryV1 | ProjectMembersV1 | ProjectDirectoryV1
   | ProjectContextFeedV1 | ProjectContextSearchResultV1 | ProjectContextReadV1
-  | PersonUpdateStatusV2 | PersonUploadContentV2 | PersonUploadSearchResultV2;
+  | ProjectContextFeedV2 | ProjectContextSearchResultV2 | ProjectContextReadV2
+  | PersonUpdateStatusV2 | PersonUploadContentV2 | PersonUploadSearchResultV2
+  | PersonUpdateStatusV3 | PersonUploadContentV3 | PersonUploadSearchResultV3;
 
 /**
  * PC-01 implements these operations over a single SQLite snapshot. All reads
@@ -138,11 +160,17 @@ export interface ProjectContextReadTransactionV1 {
   /** Requires a current target-project lead grant before inspecting candidates. */
   searchDirectory(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectDirectorySearchV1): ProjectDirectoryV1;
   feed(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV1;
+  feedV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV2;
   search(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextSearchV1): ProjectContextSearchResultV1;
+  searchV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextSearchV1): ProjectContextSearchResultV2;
   readContext(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1, contextId: string): ProjectContextReadV1;
+  readContextV2(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1, contextId: string): ProjectContextReadV2;
   uploadStatus(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusV2;
+  uploadStatusV3(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusV3;
   readUpload(snapshot: ProjectAuthorizationSnapshotV1, contextId: string): PersonUploadContentV2;
+  readUploadV3(snapshot: ProjectAuthorizationSnapshotV1, contextId: string): PersonUploadContentV3;
   searchUploads(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV2;
+  searchUploadsV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV3;
   /**
    * Compare current session/person and project state, validate the response kind
    * against the admitted operation, and derive the digest/count from this exact
@@ -173,6 +201,7 @@ export interface ProjectContextWriteTransactionV1 extends ProjectContextReadTran
   dissociateContext(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextDissociateV1): ProjectMutationReceiptV1;
   /** Atomically commits exact original, initial coordinates, receipt and work. */
   submitUpload(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUpdateSubmitV2): PersonUpdateReceiptV2;
+  submitUploadV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUpdateSubmitV3): PersonUpdateReceiptV3;
 }
 
 export interface ProjectContextRepositoryV1 {

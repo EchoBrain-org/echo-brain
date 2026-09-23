@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseCanonicalJson } from '@echo-brain/federation-protocol';
 import {
-  PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, PERSON_DOCUMENT_JSON_MAX_BYTES,
+  PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, PERSON_DOCUMENT_JSON_MAX_BYTES,
   PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS,
-  validatePersonDocumentUploadMetadataV1, validatePersonDocumentIdV1, validatePersonUpdateRequestId,
-  validateProjectIdV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1, validatePersonDocumentMetadataV1,
-  validatePersonDocumentTextV1, validatePersonDocumentSearchResultV1,
-  type PersonDocumentUploadMetadataV1,
+  validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentIdV1, validatePersonUpdateRequestId,
+  validateProjectIdV1, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV1, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV1, validatePersonDocumentMetadataV2,
+  validatePersonDocumentTextV1, validatePersonDocumentSearchResultV1, validatePersonDocumentSearchResultV2,
+  type PersonDocumentUploadMetadataV1, type PersonDocumentUploadMetadataV2,
   validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1,
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -39,12 +39,12 @@ function bearer(request: IncomingMessage): string {
   }
   return value.slice(7);
 }
-function metadataHeader(request: IncomingMessage, requestId: string): PersonDocumentUploadMetadataV1 {
+function metadataHeader(request: IncomingMessage, requestId: string, v2: boolean): PersonDocumentUploadMetadataV1 | PersonDocumentUploadMetadataV2 {
   const encoded = header(request, 'x-echo-document-metadata');
   if (encoded === undefined || encoded.length > MAXIMUM_METADATA_HEADER_BYTES || !/^[A-Za-z0-9_-]+$/.test(encoded)) invalid();
   const bytes = Buffer.from(encoded, 'base64url');
   if (bytes.toString('base64url') !== encoded) invalid();
-  const metadata = validate(() => validatePersonDocumentUploadMetadataV1(parseCanonicalJson(
+  const metadata = validate(() => (v2 ? validatePersonDocumentUploadMetadataV2 : validatePersonDocumentUploadMetadataV1)(parseCanonicalJson(
     new TextDecoder('utf-8', { fatal: true }).decode(bytes),
   )));
   if (metadata.request_id !== requestId) invalid();
@@ -107,8 +107,10 @@ export function createPersonDocumentsHttpHandlerV1(
     if (options.isClosing?.()) throw new AuthorityOperationError('unavailable', 'request failed');
   };
   return async (request, response, url) => {
-    if (!url.pathname.startsWith(`${PERSON_DOCUMENTS_PATH_V1}/`)) return false;
-    const path = url.pathname.slice(PERSON_DOCUMENTS_PATH_V1.length + 1).split('/');
+    const base = url.pathname.startsWith(`${PERSON_DOCUMENTS_PATH_V2}/`) ? PERSON_DOCUMENTS_PATH_V2 : url.pathname.startsWith(`${PERSON_DOCUMENTS_PATH_V1}/`) ? PERSON_DOCUMENTS_PATH_V1 : undefined;
+    if (base === undefined) return false;
+    const v2 = base === PERSON_DOCUMENTS_PATH_V2;
+    const path = url.pathname.slice(base.length + 1).split('/');
     const method = request.method ?? 'GET';
     const upload = method === 'PUT' && path.length === 1;
     const search = method === 'POST' && path.length === 1 && path[0] === 'search';
@@ -122,8 +124,8 @@ export function createPersonDocumentsHttpHandlerV1(
     if ((upload || search || association || status) && url.search !== '') invalid();
     if (upload) {
       const requestId = validate(() => validatePersonUpdateRequestId(path[0]));
-      const metadata = metadataHeader(request, requestId);
-      application.preflight(token, metadata);
+      const metadata = metadataHeader(request, requestId, v2);
+      if (v2) application.preflightV2(token, metadata); else application.preflight(token, metadata);
       if (uploading >= MAXIMUM_CONCURRENT_UPLOADS) throw new AuthorityOperationError('rate_limited', 'request failed');
       uploading += 1;
       try {
@@ -135,9 +137,10 @@ export function createPersonDocumentsHttpHandlerV1(
         finally { clearTimeout(deadline); request.setTimeout(0); }
         if (!request.complete) invalid();
         current();
-        const receipt = application.upload(token, metadata, bytes);
-        output(receipt, validatePersonDocumentUploadResultV1, receipt.request_id === metadata.request_id && (receipt.kind === 'echo-person-document-saved-v1' || (receipt.sha256 === metadata.sha256 && receipt.content_length === metadata.content_length && receipt.filename === metadata.filename && receipt.title === metadata.title && receipt.project_id === metadata.project_id && JSON.stringify(receipt.audience) === JSON.stringify(metadata.audience))));
-        json(response, 201, receipt, validatePersonDocumentUploadResultV1);
+        const receipt = v2 ? application.uploadV2(token, metadata, bytes) : application.upload(token, metadata, bytes);
+        const check = v2 ? validatePersonDocumentUploadResultV2 : validatePersonDocumentUploadResultV1;
+        output(receipt, check, receipt.request_id === metadata.request_id);
+        json(response, 201, receipt, check);
       } finally { uploading -= 1; }
       return true;
     }
@@ -160,16 +163,18 @@ export function createPersonDocumentsHttpHandlerV1(
       const bytes = await smallBody(request, 4096);
       const input = validate(() => jsonInput(bytes));
       current();
-      json(response, 200, application.search(token, input), validatePersonDocumentSearchResultV1);
+      const value = v2 ? application.searchV2(token, input) : application.search(token, input);
+      json(response, 200, value, v2 ? validatePersonDocumentSearchResultV2 : validatePersonDocumentSearchResultV1);
       return true;
     }
     if ((await smallBody(request, 0)).length !== 0) invalid();
     current();
     if (status) {
       const id = validate(() => validatePersonUpdateRequestId(path[1]));
-      const value = application.status(token, id);
-      output(value, validatePersonDocumentStatusV1, value.request_id === id);
-      json(response, 200, value, validatePersonDocumentStatusV1);
+      const value = v2 ? application.statusV2(token, id) : application.status(token, id);
+      const check = v2 ? validatePersonDocumentStatusV2 : validatePersonDocumentStatusV1;
+      output(value, check, value.request_id === id);
+      json(response, 200, value, check);
       return true;
     }
     const id = validate(() => validatePersonDocumentIdV1(path[0]));
@@ -197,8 +202,8 @@ export function createPersonDocumentsHttpHandlerV1(
       response.setTimeout(PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS, () => response.destroy(new Error('Document transfer stalled')));
       response.once('finish', release); response.once('close', release);
       try {
-      const result = application.original(token, id, scope);
-      output(result.metadata, validatePersonDocumentMetadataV1, result.metadata.document_id === id);
+      const result = v2 ? application.originalV2(token, id, scope) : application.original(token, id, scope);
+      output(result.metadata, v2 ? validatePersonDocumentMetadataV2 : validatePersonDocumentMetadataV1, result.metadata.document_id === id);
       if (result.bytes.length !== result.metadata.content_length || result.bytes.length > PERSON_DOCUMENT_MAX_ORIGINAL_BYTES || `sha256:${createHash('sha256').update(result.bytes).digest('hex')}` !== result.metadata.sha256) {
         throw new AuthorityOperationError('invalid_output', 'request failed');
       }
@@ -218,9 +223,10 @@ export function createPersonDocumentsHttpHandlerV1(
       output(value, validatePersonDocumentTextV1, value.document_id === id);
       json(response, 200, value, validatePersonDocumentTextV1);
     } else {
-      const value = application.read(token, id, scope);
-      output(value, validatePersonDocumentMetadataV1, value.document_id === id);
-      json(response, 200, value, validatePersonDocumentMetadataV1);
+      const value = v2 ? application.readV2(token, id, scope) : application.read(token, id, scope);
+      const check = v2 ? validatePersonDocumentMetadataV2 : validatePersonDocumentMetadataV1;
+      output(value, check, value.document_id === id);
+      json(response, 200, value, check);
     }
     return true;
   };

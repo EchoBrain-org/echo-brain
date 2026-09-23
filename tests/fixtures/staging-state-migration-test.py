@@ -12,10 +12,11 @@ import unittest
 from unittest.mock import patch
 
 source = pathlib.Path(sys.argv[1]).read_text()
-helper = re.search(r"<<'ECHO_V5_V6_PY'\n(.*?)^ECHO_V5_V6_PY$", source, re.M | re.S).group(1)
+helper = re.search(r"<<'ECHO_STATE_MIGRATION_PY'\n(.*?)^ECHO_STATE_MIGRATION_PY$", source, re.M | re.S).group(1)
 sys.argv = [sys.argv[0]]
 
 class StateMigration(unittest.TestCase):
+    migration = 'v5-to-v6'
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='echo-state-migration-')
         self.root = pathlib.Path(self.temp.name).resolve()
@@ -30,7 +31,7 @@ class StateMigration(unittest.TestCase):
         self.write(self.state / 'keys/identity', b'synthetic identity retained\n')
         self.before = self.snapshot(self.state)
         self.inode = self.state.stat().st_ino
-        self.operation = self.release / 'state-v5-to-v6/clean-v1-new-fixture'
+        self.operation = self.release / ('state-' + self.migration) / 'clean-v1-new-fixture'
         self.next = self.operation / 'next-state'
         self.backup, self.failed = self.operation / 'accepted-state', self.operation / 'failed-state'
 
@@ -44,7 +45,7 @@ class StateMigration(unittest.TestCase):
 
     def run_helper(self, action, fail_move=None, relative=False):
         output, previous = io.StringIO(), os.getcwd()
-        args = ['migration', action, str(self.state), '.' if relative else str(self.release), str(self.accepted), str(self.candidate), f'{os.getuid()}:{os.getgid()}']
+        args = ['migration', action, str(self.state), '.' if relative else str(self.release), str(self.accepted), str(self.candidate), f'{os.getuid()}:{os.getgid()}', self.migration]
         real_rename, moves = os.rename, 0
         def rename(a, b):
             nonlocal moves
@@ -66,7 +67,13 @@ class StateMigration(unittest.TestCase):
 
     def converted(self):
         self.ok('prepare')
-        self.write(self.next / 'authority.sqlite', b'converted V6 database')
+        self.write(self.next / 'authority.sqlite', b'converted candidate database')
+
+    def test_unknown_transition_is_refused_without_changing_state(self):
+        self.migration = 'v7-to-v9'
+        self.assertFalse(self.run_helper('prepare')[0])
+        self.assertFalse(self.operation.exists())
+        self.assertEqual(self.snapshot(self.state), self.before)
 
     def test_copy_retains_all_roles_keys_and_sidecars_without_touching_source(self):
         self.ok('prepare', relative=True)
@@ -115,7 +122,7 @@ class StateMigration(unittest.TestCase):
                 self.assertFalse(self.run_helper('restore', fail_move=move)[0])
                 self.ok('restore'); self.ok('complete')
                 self.assertEqual(self.snapshot(self.state), self.before)
-                self.assertEqual(self.failed.joinpath('authority.sqlite').read_bytes(), b'converted V6 database')
+                self.assertEqual(self.failed.joinpath('authority.sqlite').read_bytes(), b'converted candidate database')
                 shutil.rmtree(self.operation)
 
     def test_unknown_inode_and_changed_original_never_cut_over(self):
@@ -150,5 +157,8 @@ class StateMigration(unittest.TestCase):
         self.ok('check'); self.ok('promote'); self.ok('promote')
         self.assertFalse(self.run_helper('restore')[0])
         self.assertEqual(self.snapshot(self.backup), self.before)
+
+class V8ToV9StateMigration(StateMigration):
+    migration = 'v8-to-v9'
 
 unittest.main()

@@ -1,5 +1,5 @@
 export type StagingReleaseAction =
-  | 'install' | 'inspect-install' | 'diagnose' | 'repair' | 'stage' | 'stage-v5-to-v6'
+  | 'install' | 'inspect-install' | 'diagnose' | 'repair' | 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'
   | 'canary' | 'status' | 'rollback' | 'promote';
 
 export type StagingReleaseCode =
@@ -39,10 +39,10 @@ type RequestAction =
       action: 'promote'; approval: StagingReleaseAuthorization; content_telemetry: null;
     }>
   | Readonly<{
-      action: 'stage' | 'stage-v5-to-v6'; approval: null; content_telemetry: 'true' | 'false' | null;
+      action: 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'; approval: null; content_telemetry: 'true' | 'false' | null;
     }>
   | Readonly<{
-      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'stage-v5-to-v6'>;
+      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'>;
       approval: null; content_telemetry: null;
     }>;
 type RequestFields<Tool extends StagingReleaseTool, Artifact = ReleaseArtifact> = Readonly<{
@@ -66,12 +66,12 @@ type RequestFields<Tool extends StagingReleaseTool, Artifact = ReleaseArtifact> 
 export type StagingReleaseRequest =
   | (RequestFields<LegacyTool> & Readonly<{
       schema_version: 1; kind: 'echo-staging-release-request-v1';
-      action: Exclude<StagingReleaseAction, 'stage-v5-to-v6'>;
+      action: Exclude<StagingReleaseAction, 'stage-v5-to-v6' | 'stage-v8-to-v9'>;
       tooling_migration?: never;
     }>)
   | (RequestFields<StagingReleaseTool> & Readonly<{
       schema_version: 2; kind: 'echo-staging-release-request-v2';
-      action: Exclude<StagingReleaseAction, 'stage-v5-to-v6'>;
+      action: Exclude<StagingReleaseAction, 'stage-v5-to-v6' | 'stage-v8-to-v9'>;
       tooling_migration?: never;
     }>)
   | (RequestFields<StagingReleaseTool> & Readonly<{
@@ -182,14 +182,14 @@ export type StagingReleasePlanOptions = Readonly<{
   previousToolingSource?: string;
 }> & (
   | Readonly<{ action: 'promote'; approval: string; contentTelemetry?: never; toolingMigration?: never }>
-  | Readonly<{ action: 'stage' | 'stage-v5-to-v6'; approval?: never; contentTelemetry?: 'true' | 'false'; toolingMigration?: never }>
+  | Readonly<{ action: 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'; approval?: never; contentTelemetry?: 'true' | 'false'; toolingMigration?: never }>
   | Readonly<{
       action: 'install' | 'inspect-install';
       approval?: never; contentTelemetry?: never;
       toolingMigration?: 'legacy-staging-host-v1';
     }>
   | Readonly<{
-      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'stage-v5-to-v6' | 'install' | 'inspect-install'>;
+      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9' | 'install' | 'inspect-install'>;
       approval?: never; contentTelemetry?: never; toolingMigration?: never;
     }>
 );

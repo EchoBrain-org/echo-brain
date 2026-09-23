@@ -2,7 +2,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
 export interface ProjectCursorScopeV1 {
-  readonly operation: 'project_list' | 'members' | 'directory' | 'feed' | 'search';
+  readonly operation: 'project_list' | 'members' | 'directory' | 'feed' | 'search' | 'feed_v2' | 'search_v2';
   readonly project_id?: string;
   readonly canonical_query?: string;
   readonly limit: number;
@@ -25,7 +25,7 @@ function displayName(value: string): boolean {
     !/[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value);
 }
 function position(fields: readonly string[], scope: ProjectCursorScopeV1): ProjectCursorPositionV1 {
-  if (scope.operation === 'search') {
+  if (scope.operation === 'search' || scope.operation === 'search_v2') {
     if (fields.length !== 3 || !/^(0|[1-9][0-9]*)$/.test(fields[0]!) ||
         !Number.isSafeInteger(Number(fields[0])) || !timestamp(fields[1]!) || !contextId.test(fields[2]!)) invalid();
     return [Number(fields[0]), fields[1]!, fields[2]!];

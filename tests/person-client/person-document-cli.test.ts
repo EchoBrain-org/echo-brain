@@ -78,6 +78,21 @@ describe('document CLI custody and bounded transport', () => {
     expect(outcome.stdout.length).toBeLessThan(2048); expect(outcome.stdout).not.toContain('robot requirements');
   });
 
+  it('submits one V2 document record with independent canonical associations and project-audience union', async () => {
+    const f = setup();
+    const associations = [projectId, 'prj_10000000-0000-4000-8000-000000000002'];
+    const metadata = { schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: requestId, filename: 'SCOUT.md', title: 'SCOUT PRD', content_length: f.bytes.length, sha256: f.upload.sha256,
+      association_project_ids: associations, audience: { kind: 'projects', project_ids: associations } };
+    const receipt = { ...metadata, kind: 'echo-person-document-receipt-v2', document_id: documentId, detected_media_type: 'text/markdown', received_at: NOW, state: 'saved', extraction_state: 'extracting' };
+    const outcome = await run(f.home, ['documents', 'upload-v2', '--file', f.file, '--title', 'SCOUT PRD', '--request-id', requestId,
+      '--association-project-ids-json', JSON.stringify(associations), '--audience', 'projects', '--audience-project-ids-json', JSON.stringify(associations)], async (url, init) => {
+      expect(String(url)).toBe(`https://authority.example/v2/person/documents/${requestId}`);
+      expect(JSON.parse(Buffer.from(new Headers(init?.headers).get('x-echo-document-metadata')!, 'base64url').toString())).toEqual(metadata);
+      await consume(init); return json(receipt, 201);
+    });
+    expect(outcome.code, outcome.stderr).toBe(0); expect(outcome.result).toEqual({ ok: true, result: receipt });
+  });
+
   it('retains the exact snapshot across lost responses and changed/deleted source files', async () => {
     const f = setup(); let calls = 0;
     const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
@@ -229,6 +244,19 @@ describe('document CLI custody and bounded transport', () => {
       expect(new URL(String(url)).searchParams.get('project_id')).toBe(projectId);
       return json(new URL(String(url)).pathname.endsWith('/text') ? page : { ...f.metadata, extractor: 'fixture-v1', extraction_state: 'ready', extracted_text_bytes: 18 });
     }); expect(read.code, read.stderr).toBe(0); expect(read.result).toEqual({ ok: true, result: { metadata: { ...f.metadata, extractor: 'fixture-v1', extraction_state: 'ready', extracted_text_bytes: 18 }, text: page } });
+  });
+
+  it('searches V2 documents through the V2 endpoint and preserves projects audience', async () => {
+    const f = setup();
+    const metadata = { schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: requestId, filename: 'SCOUT.md', title: 'SCOUT PRD', content_length: f.bytes.length, sha256: f.upload.sha256,
+      audience: { kind: 'projects', project_ids: [projectId] }, association_project_ids: [projectId], document_id: documentId, detected_media_type: 'text/markdown', received_at: NOW, state: 'saved', extraction_state: 'ready', extraction_detail: null, extractor: 'fixture-v2', extracted_text_bytes: 18 };
+    const outcome = await run(f.home, ['documents', 'search-v2', '--project-id', projectId, '--query', 'SCOUT'], async (url, init) => {
+      expect(String(url)).toBe('https://authority.example/v2/person/documents/search');
+      expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 2, kind: 'echo-person-document-search-v2', project_id: projectId, query: 'SCOUT', limit: 10, cursor: null });
+      return json({ schema_version: 2, kind: 'echo-person-document-search-result-v2', documents: [{ ...metadata, excerpt: 'Robot requirements', anchor: { kind: 'paragraph', start: 1 } }], next_cursor: null });
+    });
+    expect(outcome.code, outcome.stderr).toBe(0);
+    expect(outcome.result).toMatchObject({ ok: true, result: { documents: [{ audience: { kind: 'projects', project_ids: [projectId] } }] } });
   });
 
   it('reconciles extraction completion between metadata and text reads without losing provenance', async () => {

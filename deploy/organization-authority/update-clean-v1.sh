@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exact-image clean-v1 release staging. Schema changes require the named,
-# stopped-state V5-to-V6 migration; ordinary stage never migrates.
+# stopped-state V5-to-V6 and V8-to-V9 migrations; ordinary stage never migrates.
 set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -1086,15 +1086,37 @@ start_and_check() {
   safe_public_descriptor_check
 }
 
-# Staging-only, stopped-state V5 -> V6 conversion. The journal and both state
+# Staging-only, explicitly named conversions. The journal and both state
 # directories survive failure. Never run an older image against converted data.
+migration_kind() {
+  local requested="${1:-}" found='' kind parent operation release_id
+  case "$requested" in ''|v5-to-v6|v8-to-v9) ;; *) return 1 ;; esac
+  release_id="$(field "$CANDIDATE_RECORD" release-id)" || return 1
+  for kind in v5-to-v6 v8-to-v9; do
+    parent="$RELEASE_STATE_DIR/state-$kind"
+    [[ ! -L "$parent" && ( ! -e "$parent" || -d "$parent" ) ]] || return 1
+    operation="$parent/$release_id"
+    if [[ -e "$operation" || -L "$operation" ]]; then
+      [[ -z "$found" ]] || return 1
+      found="$kind"
+    fi
+  done
+  if [[ -n "$requested" ]]; then
+    [[ -z "$found" || "$found" == "$requested" ]] || return 1
+    printf '%s\n' "$requested"
+  else
+    printf '%s\n' "${found:-none}"
+  fi
+}
+
 migration_state() {
+  local kind
+  kind="$(migration_kind "${2:-}")" || return 1
   case "$1" in
     restore|check|complete|promote)
-      local journal_directory="$RELEASE_STATE_DIR/state-v5-to-v6/$(field "$CANDIDATE_RECORD" release-id)"
-      [[ -e "$journal_directory" || -L "$journal_directory" ]] || return 0 ;;
+      [[ "$kind" != none ]] || return 0 ;;
   esac
-  python3 - "$1" "$STATE_DIR" "$RELEASE_STATE_DIR" "$CURRENT_RECORD" "$CANDIDATE_RECORD" "$(authority_runtime_identity)" <<'ECHO_V5_V6_PY'
+  python3 - "$1" "$STATE_DIR" "$RELEASE_STATE_DIR" "$CURRENT_RECORD" "$CANDIDATE_RECORD" "$(authority_runtime_identity)" "$kind" <<'ECHO_STATE_MIGRATION_PY'
 import hashlib, json, os, pathlib, shutil, stat, sys, uuid
 
 def require(value):
@@ -1159,7 +1181,8 @@ def move(source, target):
     os.rename(source, target); sync(source.parent); sync(target.parent)
 
 try:
-    action, raw_state, raw_release, raw_accepted, raw_candidate, runtime_identity = sys.argv[1:]
+    action, raw_state, raw_release, raw_accepted, raw_candidate, runtime_identity, migration = sys.argv[1:]
+    require(migration in ('v5-to-v6', 'v8-to-v9'))
     uid, gid = map(int, runtime_identity.split(':'))
     state = pathlib.Path(os.path.abspath(raw_state))
     release = pathlib.Path(raw_release)
@@ -1175,7 +1198,7 @@ try:
     release_id = candidate_record['release_id']
     import re
     require(re.fullmatch(r'clean-v1-[a-z0-9][a-z0-9-]{2,63}', release_id) is not None)
-    parent = release / 'state-v5-to-v6'
+    parent = release / ('state-' + migration)
     operation = parent / release_id
     journal_path = operation / 'journal.json'
     next_state, backup, failed = (operation / name for name in ('next-state', 'accepted-state', 'failed-state'))
@@ -1194,7 +1217,7 @@ try:
         require(shutil.disk_usage(state).free >= size * 2 + 64 * 1024 * 1024)
         operation.mkdir(mode=0o700); sync(parent)
         next_state.mkdir(mode=0o700); os.chown(next_state, uid, gid); sync(operation)
-        journal = {'schema_version': 1, 'kind': 'echo-staging-state-v5-to-v6-v1', 'accepted_sha256': digest(accepted), 'candidate_sha256': digest(candidate), 'state': str(state), 'original': original, 'converted': identity(next_state), 'phase': 'copying', 'inventory': entries}
+        journal = {'schema_version': 1, 'kind': 'echo-staging-state-' + migration + '-v1', 'accepted_sha256': digest(accepted), 'candidate_sha256': digest(candidate), 'state': str(state), 'original': original, 'converted': identity(next_state), 'phase': 'copying', 'inventory': entries}
         save()
         # Copy each role, private key, manifest and sidecar. Only the Authority
         # database is rebuilt by the candidate's exact offline copier.
@@ -1216,7 +1239,7 @@ try:
         raise SystemExit(0)
     private(parent, True); private(operation, True); private(journal_path)
     journal = json.loads(journal_path.read_bytes())
-    require(journal['schema_version'] == 1 and journal['kind'] == 'echo-staging-state-v5-to-v6-v1' and journal['state'] == str(state) and journal['candidate_sha256'] == digest(candidate))
+    require(journal['schema_version'] == 1 and journal['kind'] == 'echo-staging-state-' + migration + '-v1' and journal['state'] == str(state) and journal['candidate_sha256'] == digest(candidate))
     promoted = digest(accepted) == digest(candidate)
     require(journal['accepted_sha256'] == digest(accepted) or (promoted and action in ('check', 'promote')))
     original, converted = journal['original'], journal['converted']
@@ -1263,15 +1286,21 @@ try:
 except SystemExit:
     raise
 except Exception:
-    raise SystemExit('V5-to-V6 state operation refused; preserve its journal and state directories')
-ECHO_V5_V6_PY
+    raise SystemExit('state migration refused; preserve its journal and state directories')
+ECHO_STATE_MIGRATION_PY
 }
 
-stage_v5_to_v6_state() {
-  local next_state image source runtime_identity
+stage_migrated_state() {
+  local next_state image source runtime_identity kind copy_function
+  kind="$1"
+  case "$kind" in
+    v5-to-v6) copy_function=copyAuthorityV5ToV6 ;;
+    v8-to-v9) copy_function=copyAuthorityV8ToV9 ;;
+    *) return 1 ;;
+  esac
   compose_clean down || return 1
   candidate_runtime_is_stopped || return 1
-  next_state="$(migration_state prepare)" || return 1
+  next_state="$(migration_state prepare "$kind")" || return 1
   image="$(field "$CANDIDATE_RECORD" authority-image)" || return 1
   source="$(field "$CANDIDATE_RECORD" source-sha)" || return 1
   runtime_identity="$(authority_runtime_identity)" || return 1
@@ -1282,15 +1311,16 @@ stage_v5_to_v6_state() {
     --entrypoint node \
     --mount "type=bind,src=$STATE_DIR,dst=/source,readonly" \
     --mount "type=bind,src=$next_state,dst=/candidate" \
-    "$image" --input-type=module -e 'import Database from "better-sqlite3"; import { chmodSync, existsSync } from "node:fs"; import { copyAuthorityV5ToV6 } from "./packages/organization-authority-kernel/dist/adapters/persistence/sqlite/authority-v5-to-v6.js"; if (existsSync("/candidate/authority.sqlite")) throw new Error("output exists"); const source = new Database("/source/authority.sqlite", { readonly:true, fileMustExist:true }); const target = new Database("/candidate/authority.sqlite"); try { target.pragma("foreign_keys = ON"); target.pragma("synchronous = FULL"); copyAuthorityV5ToV6(source,target); } finally { target.close(); source.close(); } chmodSync("/candidate/authority.sqlite",0o600);' >/dev/null 2>&1 || return 1
+    "$image" --input-type=module -e "import Database from 'better-sqlite3'; import { chmodSync, existsSync } from 'node:fs'; import { $copy_function } from './packages/organization-authority-kernel/dist/adapters/persistence/sqlite/authority-$kind.js'; if (existsSync('/candidate/authority.sqlite')) throw new Error('output exists'); const source = new Database('/source/authority.sqlite', { readonly:true, fileMustExist:true }); const target = new Database('/candidate/authority.sqlite'); try { target.pragma('foreign_keys = ON'); target.pragma('synchronous = FULL'); $copy_function(source,target); } finally { target.close(); source.close(); } chmodSync('/candidate/authority.sqlite',0o600);" >/dev/null 2>&1 || return 1
   (STATE_DIR="$next_state"; verify_candidate_state_lineage "$CANDIDATE_RECORD") >/dev/null 2>&1 || return 1
   migration_state cutover
 }
 
 restore_accepted() {
   local accepted_record="$1"
-  local migration_directory="$RELEASE_STATE_DIR/state-v5-to-v6/$(field "$CANDIDATE_RECORD" release-id)"
-  if [[ -e "$migration_directory" || -L "$migration_directory" ]]; then
+  local kind
+  kind="$(migration_kind)" || return 1
+  if [[ "$kind" != none ]]; then
     compose_clean down || return 1
     candidate_runtime_is_stopped || return 1
     migration_state restore || return 1
@@ -1305,6 +1335,7 @@ usage() {
 usage:
   update-clean-v1.sh stage --release <canonical-release.json> --runtime-profile <canonical-profile.json> [--content-telemetry <true|false>]
   update-clean-v1.sh stage-v5-to-v6 --release <canonical-release.json> --runtime-profile <canonical-profile.json> [--content-telemetry <true|false>]
+  update-clean-v1.sh stage-v8-to-v9 --release <canonical-release.json> --runtime-profile <canonical-profile.json> [--content-telemetry <true|false>]
   update-clean-v1.sh diagnose-environment
   update-clean-v1.sh repair-environment --expected-release-id <accepted-release-id> --restore-accepted
   update-clean-v1.sh canary
@@ -1372,7 +1403,7 @@ case "$command" in
     environment_operation "$CURRENT_RECORD" complete false
     printf '{"ok":true,"stage":"environment_repaired","runtime_verified":true}\n'
     ;;
-  stage|stage-v5-to-v6)
+  stage|stage-v5-to-v6|stage-v8-to-v9)
     [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--runtime-profile' && -n "${5:-}" && ( $# -eq 5 || $# -eq 7 ) ]] || usage
     if [[ $# -eq 7 ]]; then
       [[ "$6" == '--content-telemetry' && ( "$7" == true || "$7" == false ) ]] || usage
@@ -1407,8 +1438,8 @@ case "$command" in
         fail 'first deployment refuses to replace an unrecorded running Authority'
       fi
     fi
-    if [[ "$command" == stage-v5-to-v6 ]]; then
-      [[ "$first_deploy" == false && "$(authority_host)" == authority-staging.echobrain.org ]] || fail 'V5-to-V6 migration requires an accepted staging host'
+    if [[ "$command" != stage ]]; then
+      [[ "$first_deploy" == false && "$(authority_host)" == authority-staging.echobrain.org ]] || fail 'state migration requires an accepted staging host'
       verify_candidate_state_lineage "$CURRENT_RECORD"
     else
       verify_candidate_state_lineage "$candidate"
@@ -1418,9 +1449,9 @@ case "$command" in
       remove_release_tuple "$candidate" || true
       fail 'could not persist the staged candidate release record'
     fi
-    if { [[ "$command" != stage-v5-to-v6 ]] || stage_v5_to_v6_state; } && activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD" && \
+    if { [[ "$command" == stage ]] || stage_migrated_state "${command#stage-}"; } && activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD" && \
         { [[ -z "$CONTENT_TELEMETRY_OVERRIDE" ]] || running_content_telemetry_matches; }; then
-      if [[ "$command" == stage-v5-to-v6 ]]; then
+      if [[ "$command" != stage ]]; then
         migration_state ready || fail 'migration readiness is unconfirmed; retain the candidate and recover through rollback'
       fi
       printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":%s,"next_action":"Run one bounded post-update canary, stop for founder Slack approval and the exact candidate-client record and answer checks, then promote with --canary-passed or run rollback."}\n' "$([[ "$first_deploy" == true ]] && printf false || printf true)"

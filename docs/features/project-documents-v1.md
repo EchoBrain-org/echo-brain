@@ -2,6 +2,12 @@
 
 Status: implementation candidate; exact release acceptance is separate. This feature adds file custody and retrieval without approving document contents as decisions. The accepted extension to the earlier text-only scope is [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md). The subsequent [global/project Ask candidate](global-project-ask-v1.md), authorized by ADR-0015, adds permission-aware answering from usable extracted evidence.
 
+The [upload projects and sharing candidate](upload-projects-and-sharing.md)
+extends admission to several projects with a separate sharing page, V2 document
+reads and a V9 storage baseline. The V1 contract described here remains available
+for legacy originals; its singleton association behavior does not apply to new
+V2 uploads.
+
 ## User behavior
 
 Attach UTF-8 text/Markdown, PDF or Word `.docx` files up to **25 MiB (26,214,400 bytes)**. The app retains an immutable file snapshot for submission and retries. Notes continue to use the existing text editor. Legacy Word `.doc` and OLE-encrypted Word containers are unsupported. File extension and detected container must agree.

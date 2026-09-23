@@ -107,6 +107,25 @@ function addMember(repository: SqliteProjectContextRepositoryV1, projectId: Proj
 }
 
 describe("SQLite project context V1", () => {
+  it("modern association edits affect only the requested project and never rewrite initial receipt coordinates", () => {
+    const { database, repository } = open();
+    const first = createProject(repository, OWNER, 1), second = createProject(repository, OWNER, 2);
+    const ids = [first.project_id, second.project_id].sort();
+    const request = { schema_version: 3 as const, kind: "echo-person-update-submit-v3" as const, request_id: requestId(10),
+      title: "Private cross-team context", text: "One immutable original", audience: { kind: "only_me" as const }, association_project_ids: ids };
+    const saved = repository.withWriteTransaction(transaction => transaction.submitUploadV3(snapshot(transaction, OWNER, { operation: "upload_submit_v3", request }), request));
+    const remove = { schema_version: 1 as const, kind: "echo-project-context-dissociate-v1" as const, request_id: requestId(11), project_id: first.project_id, context_id: saved.context_id };
+    const applyRemove = () => repository.withWriteTransaction(transaction => transaction.dissociateContext(snapshot(transaction, OWNER, { operation: "dissociate", request: remove }), remove));
+    applyRemove();
+    expect(database.prepare("SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id=?").all(saved.context_id)).toEqual([{ project_id: second.project_id }]);
+    const add = { ...remove, kind: "echo-project-context-associate-v1" as const, request_id: requestId(12) };
+    repository.withWriteTransaction(transaction => transaction.associateContext(snapshot(transaction, OWNER, { operation: "associate", request: add }), add));
+    applyRemove();
+    expect(database.prepare("SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id=? ORDER BY project_id").all(saved.context_id)).toEqual(ids.map(project_id => ({ project_id })));
+    expect(repository.withWriteTransaction(transaction => transaction.submitUploadV3(snapshot(transaction, OWNER, { operation: "upload_submit_v3", request }), request))).toEqual(saved);
+    expect(database.prepare("SELECT count(*) n FROM authority_person_updates_v2").get()).toEqual({ n: 1 });
+  });
+
   it("browses every active organization member and an additive retry cannot demote an existing lead", () => {
     const { database, repository } = open();
     const project = createProject(repository);

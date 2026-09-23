@@ -1,21 +1,22 @@
 # Organization Authority release and update procedure
 
 This directory contains the small release boundary used after the first live
-organization release. It selects exact artifacts and provides one explicit, state-preserving
-V5-to-V6 staging transition. It does not manage client fleets.
+organization release. It selects exact artifacts and provides explicit, state-preserving
+V8-to-V9 and historical V5-to-V6 staging transitions. It does not manage client fleets.
 
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current Authority V7, private-approval control-plane V3, record-log V3, and
+current Authority V9, private-approval control-plane V3, record-log V3, and
 six-role V2 root lineage. For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
 mutation. The named [V5-to-V6 staging migration](#state-preserving-v5-to-v6-staging-migration)
 preserves an accepted V5 organization only for a historical V6 candidate. It
-cannot prepare state for V7. The project-context sprint selects fresh V7 state
-and an explicit PC-06 reset/reseed, as described in the
-[PC-01 handoff](../../docs/product/2026-09-21-project-context-pc01-persistence.md).
+cannot prepare state for V9. The explicit [V8-to-V9 staging migration](#state-preserving-v8-to-v9-staging-migration)
+preserves an accepted V8 organization for the multi-project upload release.
+The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
+as described in the [PC-01 handoff](../../docs/product/2026-09-21-project-context-pc01-persistence.md).
 Other incompatible baselines require an
 explicit migration design or an authorized reset. For an authorized reset with no live users,
 run `onboard-clean-v1.sh
@@ -242,15 +243,68 @@ recovery as unconfirmed.
 `./update-clean-v1.sh status` inspects the actual running Authority container
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. A change that needs a schema
-migration requires a separately named operation. The only implemented schema
-transition is the historical V5-to-V6 staging migration below. If persisted state lacks the candidate's exact V7/V3/V3 databases and
+migration requires a separately named operation. The supported transitions
+are the named V8-to-V9 migration and historical V5-to-V6 migration below.
+If persisted state lacks the candidate's exact V9/V3/V3 databases and
 V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
+
+### State-preserving V8-to-V9 staging migration
+
+Use `plan --action stage-v8-to-v9` through the reviewed release CLI after
+installing the merged migration tooling. It requires an already accepted,
+healthy staging host with exact V8 state and a V9 candidate. Supply the same
+accepted release, candidate release and candidate runtime-profile inputs as
+`stage`; `--content-telemetry` remains optional. Ordinary `stage` refuses V8
+before publishing a candidate. No command implicitly changes the database version.
+
+```sh
+npm run authority:staging-release -- plan \
+  --action stage-v8-to-v9 \
+  --accepted-release /absolute/private/releases/accepted-v8.json \
+  --release /absolute/private/releases/candidate-v9.json \
+  --runtime-profile /absolute/private/releases/candidate-profile.json \
+  --output /absolute/private/releases/stage-v8-to-v9-operation.json
+npm run authority:staging-release -- execute \
+  --receipt /absolute/private/releases/stage-v8-to-v9-operation.json
+```
+
+The wrapper verifies the accepted tuple and complete lineage, stops Authority
+and proxy, and copies their stopped state. The exact candidate image invokes
+`copyAuthorityV8ToV9` with a read-only input and an empty output. It rebuilds
+only `authority.sqlite`, preserving existing rows while representing retained
+upload sharing and project associations in V9. The other five roles, root
+manifest, keys and sidecars are copied unchanged. The candidate's complete
+lineage and immutable processor-admission verifiers must accept the copy
+before atomic activation. The migration does not widen an upload's audience.
+
+The existing stopped-copy bounds apply: at most 4,096 entries and 1 GiB of
+source files, with twice the source size plus 64 MiB free. Symlinks, hardlinks,
+special files, unexpected ownership, cross-filesystem copies and files writable
+by others are refused. The private release-bound journal lives at
+`clean-data/release/state-v8-to-v9/<candidate-release-id>/`; its original
+`accepted-state` snapshot is retained through promotion. The V5-to-V6 and
+V8-to-V9 journals are distinct, and conflicting journals for one candidate are
+refused. Interrupted rename recovery uses recorded directory identities.
+
+Continue the normal canary, human Slack approval, exact candidate-client reads,
+human final release decision and promotion gates. A failed conversion, verifier
+or candidate start restores the original V8 directory and accepted tuple, then
+verifies the accepted runtime before claiming recovery. Explicit `rollback`
+does the same. **Rollback restores the pre-migration state:** candidate-period
+writes are retained in `failed-state`, not merged into V8. Keep normal user
+traffic out of this staging qualification window.
+
+An incomplete or unsafe journal blocks status, canary and promotion. Preserve
+the candidate marker and all journals, snapshots and locks; reconcile the
+existing remote command before recovery. Unknown state or unconfirmed runtime
+recovery requires investigation. This lane does not reset data, replace the
+host, authorize a final release, or permit a production transition.
 
 ### State-preserving V5-to-V6 staging migration
 
 This retained operation applies to V5 and V6 release artifacts only. A current
-V7 candidate refuses its V6 output; it is not the project-context rollout path.
+V9 candidate refuses its V6 output; it is not the project-context rollout path.
 
 Use `plan --action stage-v5-to-v6` through the reviewed release CLI after
 installing the merged migration tooling. Supply the same accepted release,
@@ -564,6 +618,7 @@ is installed; the new installed tools must match the executing reviewed source.
 | `repair` | Requires accepted-only eligible telemetry drift or its exact pending repair; restores the saved environment and verifies the accepted runtime. May temporarily disable telemetry. |
 | `status` | Fresh installed-wrapper runtime check, not a cached polling receipt. |
 | `stage` | No staged candidate; uses exact candidate/profile. Optional `--content-telemetry true` or `false`. |
+| `stage-v8-to-v9` | Explicit stopped-state copy and migration on the accepted V8 staging host; retains original state for rollback. Same inputs and telemetry option as `stage`. |
 | `stage-v5-to-v6` | Explicit stopped-state copy and migration on the accepted V5 staging host; retains original state for rollback. Same inputs and telemetry option as `stage`. |
 | `canary` | Requires the exact staged candidate; stops for the human to approve its private Slack card. `delivery_pending` is safe to retry with a new canary operation after the first invocation has definitively completed. |
 | `rollback` | Requires the exact staged candidate and unchanged accepted record; existing wrapper recovery semantics apply. |
@@ -590,7 +645,10 @@ Every installed file still passes owner, mode and old/new hash checks before
 any action. Candidate records and profiles always include their exact bytes. The fixed loader
 checks its digest and size, reconstructs the canonical request and checks its
 digest before invoking the runner. Compression uses the existing operator
-Python 3 standard-library `lzma` module with a fixed preset; decoding is bounded
+Python 3 standard-library `lzma` module with preset 6; only a bundle that otherwise exceeds the command
+cap retries preset 6 with extreme search and zero position bits for unaligned
+text, retaining the same dictionary size.
+Previously valid receipt encodings stay unchanged. Decoding is bounded
 by both output size and memory. No third-party package or manual courier is
 needed. The 60-KiB command cap is unchanged. Old
 version-1, version-2 and version-3 receipts can still be polled with their original transport binding;

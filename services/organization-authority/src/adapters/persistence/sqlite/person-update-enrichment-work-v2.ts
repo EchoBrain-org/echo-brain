@@ -1,20 +1,20 @@
 import type Database from 'better-sqlite3';
-import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonUpdateReceiptV2, validatePersonUpdateSubmitV2, type PersonUpdateSubmitV2 } from '@echo-brain/organization-api';
+import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
+import { validateAssociationProjectIdsV1, validatePersonUpdateReceiptV2, validatePersonUpdateReceiptV3, validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUploadAudienceV3, type PersonUpdateSubmitV2, type PersonUpdateSubmitV3, type ProjectIdV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonUpdateEnrichmentWorkItemV2, PersonUpdateEnrichmentWorkV2 } from '../../../application/ports/person-update-enrichment-work-v2.js';
 import type { ProjectUploadEnrichmentAuthorizationV1, ProjectUploadEnrichmentSnapshotV1 } from '../../../application/ports/project-context-v1.js';
 
 const SELECT = `SELECT submission.organization_id, submission.principal_id, submission.membership_id, submission.membership_type,
-  submission.context_id, submission.request_id, submission.payload_sha256, submission.title, submission.text,
-  submission.audience_kind, submission.audience_project_id, submission.project_id, submission.received_at,
+  submission.context_id, submission.request_id, submission.request_version, submission.payload_sha256, submission.title, submission.text,
+  submission.audience_kind, submission.audience_project_id, submission.audience_project_ids_json, submission.submitted_association_project_ids_json, submission.project_id, submission.received_at,
   work.state, work.search_hints, work.enrichment_sha256, work.attempts
   FROM authority_person_updates_v2 AS submission JOIN authority_person_update_work_v2 AS work USING (context_id)`;
 
 function sourceContextId(item: PersonUpdateEnrichmentWorkItemV2): string {
   return `ctx_${canonicalSha256({
-    schema_version: 2,
-    kind: 'echo-person-update-source-v2',
+    schema_version: item.request_version,
+    kind: `echo-person-update-source-v${item.request_version}`,
     organization_id: item.organization_id,
     membership_id: item.membership_id,
     request_id: item.request_id,
@@ -24,7 +24,21 @@ function sourceContextId(item: PersonUpdateEnrichmentWorkItemV2): string {
 function audience(item: PersonUpdateEnrichmentWorkItemV2) {
   return item.audience_kind === 'project'
     ? { kind: 'project' as const, project_id: item.audience_project_id }
-    : { kind: item.audience_kind };
+    : item.audience_kind === 'only_me' || item.audience_kind === 'team'
+      ? { kind: item.audience_kind }
+      : (() => { throw new Error('V2 Person upload audience integrity failure'); })();
+}
+function projectIds(json: string): readonly ProjectIdV1[] {
+  try {
+    const value: unknown = JSON.parse(json);
+    if (!Array.isArray(value) || canonicalJson(value) !== json) throw new Error();
+    return validateAssociationProjectIdsV1(value);
+  } catch { throw new Error('V3 Person upload project set integrity failure'); }
+}
+function audienceV3(item: PersonUpdateEnrichmentWorkItemV2) {
+  return item.audience_kind === 'projects'
+    ? validatePersonUploadAudienceV3({ kind: 'projects', project_ids: projectIds(item.audience_project_ids_json) })
+    : validatePersonUploadAudienceV3(audience(item));
 }
 function hasEligibilityBinding(item: PersonUpdateEnrichmentWorkItemV2, eligibility: ProjectUploadEnrichmentSnapshotV1): boolean {
   const uploader = eligibility.uploader;
@@ -43,8 +57,8 @@ export class SqlitePersonUpdateEnrichmentWorkV2 implements PersonUpdateEnrichmen
     private readonly authorization: ProjectUploadEnrichmentAuthorizationV1,
     private readonly now: () => string = () => new Date().toISOString(),
   ) {
-    if (![7, 8].includes(database.pragma('user_version', { simple: true }) as number) || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('V2 Person upload enrichment requires fresh Authority V7 state with foreign keys enabled');
+    if (database.pragma('user_version', { simple: true }) !== 9 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+      throw new Error('V2 Person upload enrichment requires Authority V9 state with foreign keys enabled');
     }
   }
 
@@ -59,7 +73,18 @@ export class SqlitePersonUpdateEnrichmentWorkV2 implements PersonUpdateEnrichmen
     }).immediate();
   }
 
-  validate(item: PersonUpdateEnrichmentWorkItemV2): PersonUpdateSubmitV2 {
+  validate(item: PersonUpdateEnrichmentWorkItemV2): PersonUpdateSubmitV2 | PersonUpdateSubmitV3 {
+    if (item.request_version !== 2 && item.request_version !== 3) throw new Error('Person upload version integrity failure');
+    if (item.request_version === 3) {
+      const request = validatePersonUpdateSubmitV3({
+        schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: item.request_id,
+        title: item.title, text: item.text, association_project_ids: projectIds(item.submitted_association_project_ids_json), audience: audienceV3(item),
+      });
+      if (canonicalSha256(request) !== item.payload_sha256 || sourceContextId(item) !== item.context_id) throw new Error('V3 Person upload payload integrity failure');
+      validatePersonUpdateReceiptV3({ schema_version: 3, kind: 'echo-person-update-receipt-v3', request_id: item.request_id,
+        context_id: item.context_id, received_at: item.received_at, association_project_ids: request.association_project_ids, audience: request.audience, state: 'received' });
+      return request;
+    }
     const request = validatePersonUpdateSubmitV2({
       schema_version: 2,
       kind: 'echo-person-update-submit-v2',

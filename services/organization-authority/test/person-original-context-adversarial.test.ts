@@ -9,6 +9,8 @@ import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sq
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonTextSourceInboxV1 } from "../src/adapters/persistence/sqlite/person-text-source-v1.js";
 import { SqliteSourceAdmissionStoreV1 } from "../src/adapters/persistence/sqlite/source-admission-v1.js";
+import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
+import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import type { OriginalContextCitationV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
@@ -30,7 +32,7 @@ function fixture() {
   const database = new Database(":memory:");
   databases.push(database);
   database.pragma("foreign_keys=ON");
-  database.exec(readFileSync(new URL("../../../packages/organization-authority-kernel/baselines/authority-baseline-v8.sql", import.meta.url), "utf8"));
+  database.exec(readFileSync(new URL("../../../packages/organization-authority-kernel/baselines/authority-baseline-v9.sql", import.meta.url), "utf8"));
   database.prepare(`INSERT INTO authority_metadata
     (singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at)
     VALUES (1,'oau_original_context',?,'Original context fixture','{}',?,?)`).run(OWNER.organization_id, PROJECT_CONTEXT_NOW, PROJECT_CONTEXT_NOW);
@@ -108,7 +110,7 @@ function fixture() {
     expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
   };
 
-  return { database, retrieval, upload, uploadChunks, admitLegacyTeamNote };
+  return { database, retrieval, repository, documents, upload, uploadChunks, admitLegacyTeamNote };
 }
 
 function texts(result: ReturnType<SqlitePersonOriginalContextRetrievalV1["retrieve"]>): readonly string[] {
@@ -167,6 +169,44 @@ function meteredReads(database: Database.Database, maximumBytes: number) {
 }
 
 describe("adversarial original-context retrieval", () => {
+  it("retrieves V3 notes and V2 files through union audiences while keeping project scope and private context exact", async () => {
+    const f = fixture();
+    const projects = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
+    const worker = new PersonDocumentProcessingV1(f.repository, undefined, new SqlitePersonTextSourceInboxV1(f.database));
+    for (const [name, audience, associations] of [
+      ["shared-modern-marker", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, [PROJECT_ALPHA]],
+      ["private-modern-marker", { kind: "only_me" }, [PROJECT_ALPHA, PROJECT_BETA]],
+      ["unassociated-modern-marker", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, []],
+    ] as const) {
+      projects.submitUploadV3("owner", { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: name, text: name, audience, association_project_ids: associations });
+      expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
+    }
+    const bytes = Buffer.from("document-modern-marker");
+    f.documents.uploadV2("owner", { schema_version: 2, kind: "echo-person-document-upload-v2", request_id: randomUUID(), filename: "modern.md", title: "Modern", content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, association_project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, bytes);
+    const claim = f.repository.claimExtraction()!;
+    expect(f.repository.completeExtraction(claim, { status: "ready", sourceSha256: claim.source_sha256, extractorVersion: "fixture-1", chunks: [{ anchor_kind: "paragraph", anchor_start: 1, text: bytes.toString() }], message: null })).toBe(true);
+    const retrieve = (marker: string, project?: typeof PROJECT_ALPHA | typeof PROJECT_BETA, access_token = "member") => f.retrieval.retrieve({ access_token, queries: [marker], scope: project ? { kind: "project", project_id: project } : { kind: "global" } });
+    expect(texts(retrieve("shared-modern-marker", PROJECT_ALPHA))).toEqual([expect.stringContaining("shared-modern-marker")]);
+    expect(texts(retrieve("document-modern-marker", PROJECT_ALPHA))).toEqual([expect.stringContaining("document-modern-marker")]);
+    expect(texts(retrieve("private-modern-marker", PROJECT_ALPHA))).toEqual([]);
+    expect(texts(retrieve("private-modern-marker", PROJECT_ALPHA, "owner"))).toEqual([expect.stringContaining("private-modern-marker")]);
+    expect(texts(retrieve("unassociated-modern-marker", PROJECT_ALPHA))).toEqual([]);
+    expect(texts(retrieve("unassociated-modern-marker"))).toEqual([expect.stringContaining("unassociated-modern-marker")]);
+    grant(f.database, PROJECT_BETA, MEMBER, "member");
+    expect(texts(retrieve("shared-modern-marker", PROJECT_BETA))).toEqual([]);
+    expect(texts(retrieve("document-modern-marker", PROJECT_BETA))).toEqual([expect.stringContaining("document-modern-marker")]);
+    const global = retrieve("shared-modern-marker");
+    const scoped = retrieve("shared-modern-marker", PROJECT_ALPHA);
+    const citation = citationOf(global.release.released_atoms[0]!);
+    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+    expect(() => f.retrieval.revalidate({ access_token: "member", release: scoped.release })).toThrow();
+    expect(() => f.retrieval.revalidate({ access_token: "member", release: global.release })).not.toThrow();
+    expect(f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation }).atom.text).toContain("shared-modern-marker");
+    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_BETA, MEMBER.membership_id);
+    expect(() => f.retrieval.revalidate({ access_token: "member", release: global.release })).toThrow();
+    expect(() => f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation })).toThrow();
+  });
+
   it("records repeated identical releases without colliding on a content-free audit identity", () => {
     const f = fixture();
     f.upload("Repeated audit", "repeated-audit-marker");

@@ -3,7 +3,7 @@ import type { SourceAdmissionScopeV1, SourceEnvelopeV1 } from '@echo-brain/organ
 export interface PersonTextSourceContentV1 {
   readonly schema_version:1;
   readonly kind:'person-text';
-  readonly original_api_version:1|2;
+  readonly original_api_version:1|2|3;
   readonly context_id:string;
   readonly title:string;
   readonly text:string;

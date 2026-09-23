@@ -18,7 +18,7 @@ describe.skipIf(process.platform !== "darwin")("native project CLI boundary", ()
       ...["ui-support", "account", "projects", "uploads"].map(name => join(repo, `product/echo-overlay/${name}.swift`)),
       join(repo, "tests/fixtures/echo-projects-proof.swift"), "-o", binary], { stdio: "pipe", timeout: 120_000 });
   }, 120_000);
-  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "restart-recovery", "restart-create", "malformed-recovery", "recovery-store-failure", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-inaccessible", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow", "ui-people", "ui-associate", "ui-recovery", "ui-recovery-pending", "ui-create", "ui-create-skip", "ui-create-read-fail", "ui-create-account", "ui-drop", "ui-search-controls", "ui-documents", "ui-back", "ui-home-back"])("handles %s", mode => {
+  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "restart-recovery", "restart-create", "malformed-recovery", "recovery-store-failure", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow", "ui-people", "ui-associate", "ui-recovery", "ui-recovery-pending", "ui-create", "ui-create-skip", "ui-create-read-fail", "ui-create-account", "ui-drop", "ui-search-controls", "ui-documents", "ui-back", "ui-home-back", "ui-upload-sharing"])("handles %s", mode => {
     const folder = mkdtempSync(join(root, "case-"));
     const script = join(folder, "client.mjs");
     const executable = join(folder, "echo-brain");
@@ -27,7 +27,7 @@ describe.skipIf(process.platform !== "darwin")("native project CLI boundary", ()
 import { createHash } from 'node:crypto';
 const args = process.argv.slice(2), mode = ${JSON.stringify(mode)};
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args)+'\\n');
-const value = name => args[args.indexOf(name) + 1];
+const value = name => { const index = args.indexOf(name); return index < 0 ? undefined : args[index + 1]; };
 const calls = fs.readFileSync(${JSON.stringify(log)},'utf8').trim().split('\\n').map(JSON.parse);
 const state = ${JSON.stringify(join(folder, "saved.json"))};
 const operations = JSON.parse(fs.readFileSync(${JSON.stringify(fixtures)},'utf8')).operations;
@@ -46,34 +46,48 @@ if (args[1] === 'status') {
   if (mode === 'restart-create' && id === 'projects-create' && calls.filter(x => x[1] === 'projects' && x[2] === 'create').length === 1) {
     console.error(JSON.stringify({ok:false,action:id,error:'Outcome unknown',code:'outcome_unknown',mutation_outcome:'unknown',request_id:value('--request-id')})); process.exit(1);
   }
-  if (mode === 'ui-access-loss' && id === 'projects-read-context') {
+  if (mode === 'ui-access-loss' && id === 'projects-read-context-v2') {
     console.error(JSON.stringify({...errors.find(x => x.id === 'individual-project-non-disclosure').cli,action:id})); process.exit(1);
   }
   // The created project's first read fails once, after a valid create receipt.
   if (mode === 'ui-create-read-fail' && id === 'projects-read' && calls.filter(x => x[1] === 'projects' && x[2] === 'read').length === 1) {
     console.error(JSON.stringify({ok:false,action:id,error:'Unavailable',code:'unavailable',status:503})); process.exit(1);
   }
-  const listedDocument={schema_version:1,kind:'echo-person-document-metadata-v1',request_id:'11111111-1111-4111-8111-111111111111',document_id:'doc_'+'d'.repeat(64),filename:'Robot PRD.pdf',title:'Robot PRD',content_length:12000,sha256:'sha256:'+'a'.repeat(64),audience:{kind:'project',project_id:value('--project-id')},project_id:value('--project-id'),detected_media_type:'application/pdf',received_at:'2026-09-21T00:00:00.000Z',state:'saved',extraction_state:'ready',extraction_detail:null,extractor:'fixture-v1',extracted_text_bytes:21};
-  if (id === 'documents-search') { console.log(JSON.stringify({ok:true,result:{schema_version:1,kind:'echo-person-document-search-result-v1',documents:(mode==='ui-documents'||mode==='ui-back')?[{...listedDocument,excerpt:'First page',anchor:{kind:'page',start:1}}]:[],next_cursor:null}})); process.exit(0); }
-  if (id === 'documents-read' && (mode==='ui-documents'||mode==='ui-back')) {
+  const listedDocument={schema_version:2,kind:'echo-person-document-metadata-v2',request_id:'11111111-1111-4111-8111-111111111111',document_id:'doc_'+'d'.repeat(64),filename:'Robot PRD.pdf',title:'Robot PRD',content_length:12000,sha256:'sha256:'+'a'.repeat(64),audience:{kind:'projects',project_ids:[value('--project-id')]},association_project_ids:[value('--project-id')],detected_media_type:'application/pdf',received_at:'2026-09-21T00:00:00.000Z',state:'saved',extraction_state:'ready',extraction_detail:null,extractor:'fixture-v1',extracted_text_bytes:21};
+  if (id === 'documents-search-v2') { console.log(JSON.stringify({ok:true,result:{schema_version:2,kind:'echo-person-document-search-result-v2',documents:(mode==='ui-documents'||mode==='ui-back')?[{...listedDocument,excerpt:'First page',anchor:{kind:'page',start:1}}]:[],next_cursor:null}})); process.exit(0); }
+  if (id === 'documents-read-v2' && (mode==='ui-documents'||mode==='ui-back')) {
     const next=args.includes('--cursor'); console.log(JSON.stringify({ok:true,result:{metadata:listedDocument,text:{schema_version:1,kind:'echo-person-document-text-v1',document_id:listedDocument.document_id,original_sha256:listedDocument.sha256,extractor:listedDocument.extractor,extraction_state:'ready',chunks:[{ordinal:next?1:0,anchor_kind:'page',anchor_start:next?2:1,text:next?'Second page':'First page'}],next_cursor:next?null:'Mg'}}}));process.exit(0);
   }
   if (id === 'documents-abandon') { console.log(JSON.stringify({ok:true,result:{schema_version:1,kind:'echo-person-document-abandoned-v1',request_id:value('--request-id'),local_snapshot_removed:true,authority_outcome:'unchanged'}}));process.exit(0); }
-  if (id === 'documents-upload' || id === 'documents-status') {
+  if (id === 'documents-upload' || id === 'documents-upload-v2' || id === 'documents-status' || id === 'documents-status-v2') {
     let document;
-    if (id === 'documents-upload') {
+    if (id === 'documents-upload' || id === 'documents-upload-v2') {
       const bytes = fs.readFileSync(value('--file'));
-      document = {schema_version:1,kind:'echo-person-document-receipt-v1',request_id:value('--request-id'),document_id:'doc_'+'c'.repeat(64),filename:value('--file').split('/').pop(),title:value('--title'),content_length:bytes.length,sha256:'sha256:'+createHash('sha256').update(bytes).digest('hex'),audience:{kind:'project',project_id:value('--audience-project-id')},project_id:value('--project-id'),detected_media_type:'text/plain',received_at:'2026-09-21T00:00:00.000Z',state:'saved',extraction_state:'extracting'};
+      document = id === 'documents-upload-v2'
+        ? {schema_version:2,kind:'echo-person-document-receipt-v2',request_id:value('--request-id'),document_id:'doc_'+'c'.repeat(64),filename:value('--file').split('/').pop(),title:value('--title'),content_length:bytes.length,sha256:'sha256:'+createHash('sha256').update(bytes).digest('hex'),audience:value('--audience') === 'projects' ? {kind:'projects',project_ids:JSON.parse(value('--audience-project-ids-json'))} : {kind:value('--audience') === 'team' ? 'team' : 'only_me'},association_project_ids:JSON.parse(value('--association-project-ids-json')),detected_media_type:'text/plain',received_at:'2026-09-21T00:00:00.000Z',state:'saved',extraction_state:'extracting'}
+        : {schema_version:1,kind:'echo-person-document-receipt-v1',request_id:value('--request-id'),document_id:'doc_'+'c'.repeat(64),filename:value('--file').split('/').pop(),title:value('--title'),content_length:bytes.length,sha256:'sha256:'+createHash('sha256').update(bytes).digest('hex'),audience:{kind:'project',project_id:value('--audience-project-id')},project_id:value('--project-id'),detected_media_type:'text/plain',received_at:'2026-09-21T00:00:00.000Z',state:'saved',extraction_state:'extracting'};
       fs.writeFileSync(state,JSON.stringify(document));
-      if (['ui-create','ui-create-skip','ui-create-account'].includes(mode) && calls.filter(x=>x[1]==='documents'&&x[2]==='upload').length===1) {
+      if (['ui-create','ui-create-skip','ui-create-account'].includes(mode) && calls.filter(x=>x[1]==='documents'&&['upload','upload-v2'].includes(x[2])).length===1) {
         const unknown=mode!=='ui-create-skip';console.error(JSON.stringify({ok:false,action:id,error:'Request failed',code:unknown?'outcome_unknown':'invalid_request',status:unknown?503:400,mutation_outcome:unknown?'unknown':'not_submitted',request_id:value('--request-id')}));process.exit(1);
       }
-    } else document = {...JSON.parse(fs.readFileSync(state,'utf8')),kind:'echo-person-document-metadata-v1',extraction_state:'ready',extraction_detail:null,extractor:'fixture-v1',extracted_text_bytes:12};
+    } else { const saved = JSON.parse(fs.readFileSync(state,'utf8')); document = {...saved,
+      kind:saved.schema_version === 2 ? 'echo-person-document-metadata-v2' : 'echo-person-document-metadata-v1',
+      extraction_state:'ready',extraction_detail:null,extractor:'fixture-v1',extracted_text_bytes:12}; }
     console.log(JSON.stringify({ok:true,result:document}));process.exit(0);
   }
-  const operation = operations.find(x => x.id === id || x.id === id+'-v2');
+  const legacyId = id === 'updates-submit-v3' ? 'updates-submit-v2'
+    : id === 'updates-status-v3' ? 'updates-status-v2' : id.replace(/-v2$/, '');
+  const operation = operations.find(x => x.id === id || x.id === id+'-v2' || x.id === legacyId);
   if (!operation) process.exit(2);
   let response = structuredClone(operation.http.response);
+  if (id === 'projects-feed-v2' || id === 'projects-search-v2' || id === 'projects-read-context-v2') {
+    response.schema_version = 2;
+    response.kind = id === 'projects-feed-v2' ? 'echo-project-context-feed-v2'
+      : id === 'projects-search-v2' ? 'echo-project-context-search-result-v2' : 'echo-project-context-read-v2';
+    const audience = {kind:'projects',project_ids:[value('--project-id')]};
+    if (Array.isArray(response.items)) response.items.forEach(item => item.audience = audience);
+    else response.audience = audience;
+  }
   const beacon = 'prj_44444444-4444-4444-8444-444444444444';
   if (mode.startsWith('ui-') && id === 'projects-list') {
     response.items.push({...response.items[0],project_id:beacon,name:'Beacon'});
@@ -84,6 +98,13 @@ if (args[1] === 'status') {
     const rows=names.map((name,index)=>({...response.items[0],project_id:index===0?'prj_11111111-1111-4111-8111-111111111111':'prj_'+String(index+1).padStart(8,'0')+'-0000-4000-8000-'+String(index+1).padStart(12,'0'),name}));
     response.items=args.includes('--cursor') ? rows.slice(10) : rows.slice(0,10);
     response.next_cursor=args.includes('--cursor') ? null : 'eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ';
+  }
+  if (mode === 'ui-upload-sharing' && id === 'projects-list') {
+    const cinder = 'prj_33333333-3333-4333-8333-333333333333';
+    response.items = args.includes('--cursor')
+      ? [{...response.items[0], project_id:cinder, name:'Cinder'}]
+      : [response.items[0], {...response.items[0], project_id:beacon, name:'Beacon'}];
+    response.next_cursor = args.includes('--cursor') ? null : 'eyJsYXN0IjoicGlja2VyLTIifQ';
   }
   // UI modes: every scoped reply names the project the command asked for.
   if (mode.startsWith('ui-') && args.includes('--project-id') && 'project_id' in response) {
@@ -100,8 +121,8 @@ if (args[1] === 'status') {
     response.items = [{membership_id:'mem_55555555-5555-4555-8555-555555555555',display_name:'Cleo'}];
   }
   if ((mode === 'ui-member' || (mode === 'demoted' && calls.filter(x => x[2] === 'read').length > 1)) && id === 'projects-read') response.role = 'member';
-  if (mode === 'switch-project' && (id === 'projects-read' || id === 'projects-feed')) response.project_id = value('--project-id');
-  if (mode === 'pagination' && id === 'projects-search') {
+  if (mode === 'switch-project' && (id === 'projects-read' || id === 'projects-feed-v2')) response.project_id = value('--project-id');
+  if (mode === 'pagination' && id === 'projects-search-v2') {
     response.next_cursor = args.includes('--cursor') ? null : 'eyJsYXN0Ijoicm93In0';
     if (args.includes('--cursor')) response.items[0].context_id = 'ctx_' + 'b'.repeat(64);
   }
@@ -113,16 +134,22 @@ if (args[1] === 'status') {
     response.next_cursor = args.includes('--cursor') ? null : 'eyJsYXN0Ijoicm93In0';
     if (args.includes('--cursor')) response.items = [{membership_id:'mem_33333333-3333-4333-8333-333333333333',display_name:'Bea',role:'member'}];
   }
-  if (id === 'updates-submit') {
-    const visibility = value('--visibility');
-    response.project_id = args.includes('--project-id') ? value('--project-id') : null;
-    response.audience = visibility === 'project' ? {kind:'project',project_id:value('--audience-project-id')} : {kind:visibility === 'team' ? 'team' : 'only_me'};
+  if (id === 'updates-submit' || id === 'updates-submit-v3') {
+    const visibility = value('--visibility') ?? value('--audience');
+    if (id === 'updates-submit-v3') {
+      const associations = JSON.parse(value('--association-project-ids-json'));
+      const audienceProjects = args.includes('--audience-project-ids-json') ? JSON.parse(value('--audience-project-ids-json')) : undefined;
+      response = {schema_version:3,kind:'echo-person-update-receipt-v3',request_id:value('--request-id'),context_id:'ctx_'+'c'.repeat(64),received_at:'2026-09-21T00:00:00.000Z',association_project_ids:associations,audience:visibility === 'projects' ? {kind:'projects',project_ids:audienceProjects} : {kind:visibility === 'team' ? 'team' : 'only_me'},state:'received'};
+    } else {
+      response.project_id = args.includes('--project-id') ? value('--project-id') : null;
+      response.audience = visibility === 'project' ? {kind:'project',project_id:value('--audience-project-id')} : {kind:visibility === 'team' ? 'team' : 'only_me'};
+    }
   }
   if (response.request_id) response.request_id = value('--request-id');
-  if (id === 'updates-submit') {
+  if (id === 'updates-submit' || id === 'updates-submit-v3') {
     fs.writeFileSync(state,JSON.stringify(response));
-    const repeated = calls.filter(x => x[1] === 'updates' && x[2] === 'submit').length > 1;
-    const submitted = calls.filter(x => x[1] === 'updates' && x[2] === 'submit').length;
+    const repeated = calls.filter(x => x[1] === 'updates' && ['submit','submit-v3'].includes(x[2])).length > 1;
+    const submitted = calls.filter(x => x[1] === 'updates' && ['submit','submit-v3'].includes(x[2])).length;
     // New project files: the first save's outcome is unknown (ui-create) or
     // canonically rejected (ui-create-skip); later saves succeed.
     if (['ui-create', 'ui-create-skip', 'ui-create-account'].includes(mode) && submitted === 1) {
@@ -134,8 +161,8 @@ if (args[1] === 'status') {
       console.error(JSON.stringify({ok:false,action:id,error:'Request failed',code:unknown ? 'outcome_unknown' : repeated ? 'conflict' : 'not_found',status:unknown ? 503 : repeated ? 409 : 404,mutation_outcome:unknown ? 'unknown' : 'not_submitted',request_id:value('--request-id')})); process.exit(1);
     }
   }
-  if (id === 'updates-status' && fs.existsSync(state)) {
-    response = {...JSON.parse(fs.readFileSync(state,'utf8')),kind:'echo-person-update-status-v2',status:'stored',metadata:'ready'}; delete response.state;
+  if ((id === 'updates-status' || id === 'updates-status-v3') && fs.existsSync(state)) {
+    response = {...JSON.parse(fs.readFileSync(state,'utf8')),schema_version:id === 'updates-status-v3' ? 3 : 2,kind:id === 'updates-status-v3' ? 'echo-person-update-status-v3' : 'echo-person-update-status-v2',status:'stored',metadata:'ready'}; delete response.state;
   }
   console.log(JSON.stringify(response));
 }
@@ -165,40 +192,46 @@ if (args[1] === 'status') {
       const apollo = "prj_11111111-1111-4111-8111-111111111111";
       const context = "ctx_" + "a".repeat(64);
       const op = (name: string) => calls.filter(args => args[1] === "projects" && args[2] === name);
-      const submits = calls.filter(args => (args[1] === "updates" && args[2] === "submit") || (args[1] === "documents" && args[2] === "upload"));
+      const submits = calls.filter(args => (args[1] === "updates" && ["submit", "submit-v3"].includes(args[2])) || (args[1] === "documents" && ["upload", "upload-v2"].includes(args[2])));
+      const contentReads = calls.filter(args => args[1] === "projects" && ["feed", "search", "read-context", "feed-v2", "search-v2", "read-context-v2"].includes(args[2]));
+      // Multi-project originals have a plural audience. Every project-content
+      // read uses V2 so the parser never loses that audience on its way back
+      // to the native reader.
+      expect(contentReads.every(args => ["feed-v2", "search-v2", "read-context-v2"].includes(args[2]))).toBe(true);
       const roundTrip = ["ui-round-trip", "cli-ui-round-trip", "ui-member", "ui-access-loss", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown"].includes(mode);
       if (roundTrip) {
         // The project-page bar is now an Ask callback with explicit scope. It
         // must not revive the old project-search transport behind the UI.
-        expect(calls.some(args => args[1] === "projects" && args[2] === "search" && flag(args, "--query") === "ship")).toBe(false);
+        expect(calls.some(args => args[1] === "projects" && args[2] === "search-v2" && flag(args, "--query") === "ship")).toBe(false);
         expect(submits).toHaveLength(mode === "ui-member" || mode === "ui-access-loss" ? 0 : mode.endsWith("ui-upload-unknown") ? 2 : mode === "ui-round-trip" ? 3 : 1);
-        // Both independent choices are Apollo for the first save, and
-        // the title comes from the first non-empty line.
+        // Project sharing is plural on the wire, even when the current
+        // selection contains just Apollo. The title uses the first line.
         for (const args of mode === "ui-round-trip" ? submits.slice(0, 1) : submits) {
-          expect(flag(args, args[1] === "documents" ? "--audience" : "--visibility")).toBe("project");
-          expect(flag(args, "--audience-project-id")).toBe(apollo);
-          expect(flag(args, "--project-id")).toBe(apollo);
+          expect(flag(args, "--audience")).toBe("projects");
+          expect(JSON.parse(flag(args, "--association-project-ids-json"))).toEqual([apollo]);
+          expect(JSON.parse(flag(args, "--audience-project-ids-json"))).toEqual([apollo]);
           expect(flag(args, "--title")).toBe("We agreed to ship.");
         }
         // Retry same save replays the identical write (same request id).
         if (mode.endsWith("ui-upload-unknown")) expect(submits[0]).toEqual(submits[1]);
       }
       if (mode === "ui-round-trip") {
-        // Only me retains the independent Apollo association; the Organization
-        // save explicitly selects No project without changing its audience.
-        expect(flag(submits[1], "--visibility")).toBe("only-me");
-        expect(flag(submits[2], "--visibility")).toBe("team");
-        expect(flag(submits[1], "--project-id")).toBe(apollo);
-        expect(submits[1]).not.toContain("--audience-project-id");
-        expect(submits[2].some(arg => arg === "--project-id" || arg === "--audience-project-id")).toBe(false);
+        // Only-me and organization retain their explicit association choice
+        // without receiving a project-members audience.
+        expect(flag(submits[1], "--audience")).toBe("only-me");
+        expect(flag(submits[2], "--audience")).toBe("team");
+        expect(JSON.parse(flag(submits[1], "--association-project-ids-json"))).toEqual([]);
+        expect(JSON.parse(flag(submits[2], "--association-project-ids-json"))).toEqual([apollo]);
+        expect(submits[1]).not.toContain("--audience-project-ids-json");
+        expect(submits[2]).not.toContain("--audience-project-ids-json");
         expect(new Set(submits.map(args => flag(args, "--request-id"))).size).toBe(3);
       }
       if (mode === "ui-search-controls") {
         // The project Ask proof owns scope and input-clearing assertions inside
         // the native fixture. Project CLI search remains covered by the direct
         // ProjectSession scenarios, and must not be invoked by Ask.
-        expect(op("search")).toHaveLength(0);
-        expect(op("read-context").length).toBeGreaterThanOrEqual(2);
+        expect(op("search-v2")).toHaveLength(0);
+        expect(op("read-context-v2").length).toBeGreaterThanOrEqual(2);
         expect(submits).toHaveLength(0);
       }
       if (mode === "ui-member" || mode.startsWith("ui-recovery") || mode === "ui-drop") expect(op("member-set").length + op("member-remove").length).toBe(0);
@@ -232,12 +265,12 @@ if (args[1] === 'status') {
         // reconciled, then saved with its own request id to the new project.
         expect(op("create")).toHaveLength(1);
         expect(submits).toHaveLength(2);
-        expect(calls.findIndex(args => args[2] === "status")).toBeLessThan(calls.lastIndexOf(submits[1]));
+        expect(calls.findIndex(args => args[2] === "status-v2")).toBeLessThan(calls.lastIndexOf(submits[1]));
         expect(new Set(submits.map(args => flag(args, "--request-id"))).size).toBe(2);
         for (const args of submits) {
-          expect(flag(args, args[1] === "documents" ? "--audience" : "--visibility")).toBe("project");
-          expect(flag(args, "--audience-project-id")).toBe(apollo);
-          expect(flag(args, "--project-id")).toBe(apollo);
+          expect(flag(args, "--audience")).toBe("projects");
+          expect(JSON.parse(flag(args, "--association-project-ids-json"))).toEqual([apollo]);
+          expect(JSON.parse(flag(args, "--audience-project-ids-json"))).toEqual([apollo]);
         }
         expect(submits.map(args => flag(args, "--title"))).toEqual(["Alpha", "Beta"]);
       }
@@ -246,6 +279,13 @@ if (args[1] === 'status') {
         // single bounded restoration page. A stale cursor must not loop.
         expect(op("list").map(args => args.includes("--cursor") ? flag(args, "--cursor") : undefined))
           .toEqual([undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ", undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ", undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ"]);
+      }
+      if (mode === "ui-upload-sharing") {
+        expect(submits).toHaveLength(1);
+        expect(submits[0]?.slice(1, 3)).toEqual(["documents", "upload-v2"]);
+        expect(JSON.parse(flag(submits[0]!, "--association-project-ids-json"))).toEqual([apollo, "prj_33333333-3333-4333-8333-333333333333", "prj_44444444-4444-4444-8444-444444444444"]);
+        expect(JSON.parse(flag(submits[0]!, "--audience-project-ids-json"))).toEqual([apollo, "prj_33333333-3333-4333-8333-333333333333", "prj_44444444-4444-4444-8444-444444444444"]);
+        expect(flag(submits[0]!, "--audience")).toBe("projects");
       }
       if (mode === "ui-create-skip") {
         expect(op("create")).toHaveLength(1);
@@ -270,9 +310,11 @@ if (args[1] === 'status') {
     }
     if (mode === "cli-ui-round-trip") {
       const calls = readFileSync(join(folder, "http.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { path: string; body?: Record<string, unknown> });
-      const save = calls.find(call => call.path === "/v2/person/updates" && call.body?.text);
-      expect(save?.body).toMatchObject({ text: "We agreed to ship.\n", project_id: "prj_11111111-1111-4111-8111-111111111111", audience: { kind: "project", project_id: "prj_11111111-1111-4111-8111-111111111111" } });
-      expect(calls.some(call => call.path.includes("ask") || call.path === "/v1/person/updates")).toBe(false);
+      const save = calls.find(call => call.path === "/v3/person/updates" && call.body?.text);
+      expect(save?.body).toMatchObject({ schema_version: 3, kind: "echo-person-update-submit-v3", text: "We agreed to ship.\n",
+        association_project_ids: ["prj_11111111-1111-4111-8111-111111111111"],
+        audience: { kind: "projects", project_ids: ["prj_11111111-1111-4111-8111-111111111111"] } });
+      expect(calls.some(call => call.path.includes("ask") || call.path === "/v1/person/updates" || call.path === "/v2/person/updates")).toBe(false);
     }
   }, 120_000);
 });

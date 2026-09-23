@@ -80,12 +80,12 @@ function inventoryOutcome(f: ReturnType<typeof fixture>): any {
 }
 
 describe('bounded staging release operator', () => {
-  it('plans the explicit V5-to-V6 stage with installed-tool hash witnesses and no remote mutation', () => {
+  it.each(['stage-v5-to-v6', 'stage-v8-to-v9'] as const)('plans %s with installed-tool hash witnesses and no remote mutation', action => {
     const f = fixture();
-    const options = { ...f.options, action: 'stage-v5-to-v6' as const };
+    const options = { ...f.options, action, contentTelemetry: 'true' as const };
     expect(planStagingRelease(options, f.dependencies).state).toBe('planned');
     const request = f.request();
-    expect(request).toMatchObject({ schema_version: 4, kind: 'echo-staging-release-request-v4', action: 'stage-v5-to-v6' });
+    expect(request).toMatchObject({ schema_version: 4, kind: 'echo-staging-release-request-v4', action, content_telemetry: 'true' });
     expect(Object.keys(request.files['update-clean-v1.sh'])).toEqual(['sha256']);
     expect(request.files['candidate.json'].base64).toBeDefined();
     expect(f.state.submissions).toBe(0);
@@ -195,10 +195,17 @@ describe('bounded staging release operator', () => {
       'release/clean-v1-runtime-profile.py': '83f5f96b6a330fc30eda56ffe25bfe4a074952e170147dacbe431644873b7072',
     });
     expect(request.old_tool_hashes['backup-authority-maintenance.sh']).toBe(request.files['backup-authority-maintenance.sh'].sha256);
-    expect(Buffer.byteLength(JSON.stringify(releaseSsmParameters(request, f.dependencies.readSource)))).toBeLessThan(60 * 1024);
+    const parameters = releaseSsmParameters(request, f.dependencies.readSource);
+    expect(Buffer.byteLength(JSON.stringify(parameters))).toBeLessThan(60 * 1024);
+    // Execute the actual bounded loader and both digest checks, then inspect
+    // its reconstructed request without invoking the host runner.
+    const inspection = parameters.commands[0].replace(/namespace=\{\}[\s\S]*?\nECHO_RELEASE_PY$/, "print(wire['request']['action'],wire['request']['tooling_migration'])\nECHO_RELEASE_PY");
+    const decoded = spawnSync('sh', ['-c', inspection], { encoding: 'utf8', timeout: 10000 });
+    expect(decoded.status, decoded.stderr).toBe(0);
+    expect(decoded.stdout).toBe('install legacy-staging-host-v1\n');
   });
 
-  it.each(['shell', 'onboard', 'restore', 'down'])('rejects unsupported action %s before AWS', action => {
+  it.each(['shell', 'onboard', 'restore', 'down', 'stage-v7-to-v9', 'stage-v8-to-v10'])('rejects unsupported action %s before AWS', action => {
     const f = fixture();
     // @ts-expect-error Untrusted JS/CLI callers still require runtime rejection.
     expect(() => planStagingRelease({ ...f.options, action }, f.dependencies)).toThrow('action_invalid');
