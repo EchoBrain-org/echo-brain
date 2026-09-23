@@ -1,3 +1,4 @@
+import { assertPersonDocumentCapacityV1 } from './document-quota-v1.js';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
@@ -30,15 +31,12 @@ function normalized(value: string): string { return value.normalize('NFC').toLow
 
 /** Original context and explicit access are authoritative; search hints are replaceable interpretation. */
 export class SqlitePersonUpdateInboxV1 {
-  private readonly corpusQuery: string;
   constructor(readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
     const version = database.pragma('user_version', { simple: true });
     // Fresh V7 retains the V1 custody tables until the V2 server/client cutover.
     // Project-audience rows live separately and can never enter a V1 query.
-    if (version !== 6 && version !== 7) throw new Error('Person uploads require Authority V6 or fresh V7 state');
-    this.corpusQuery = version === 7
-      ? 'SELECT organization_id, membership_id FROM authority_person_updates_v1 UNION ALL SELECT organization_id, membership_id FROM authority_person_updates_v2'
-      : 'SELECT organization_id, membership_id FROM authority_person_updates_v1';
+    if (version !== 6 && version !== 7 && version !== 8) throw new Error('Person uploads require Authority V6 or fresh V7 state');
+
   }
   isActive(actor: AuthorityPersonMembershipBinding): boolean {
     return this.database.prepare(`SELECT 1 FROM authority_memberships WHERE organization_id = ? AND principal_id = ? AND membership_id = ? AND membership_type = ? AND status = 'active'`)
@@ -58,9 +56,7 @@ export class SqlitePersonUpdateInboxV1 {
         if (existing.payload_sha256 !== digest) throw new AuthorityOperationError('conflict', 'request failed');
         return this.receipt(existing);
       }
-      const count = this.database.prepare(`SELECT count(*) AS organization_count, coalesce(sum(membership_id = ?), 0) AS membership_count FROM (${this.corpusQuery}) WHERE organization_id = ?`)
-        .get(actor.membership_id, actor.organization_id) as { organization_count: number; membership_count: number };
-      if (count.organization_count >= PERSON_UPLOAD_ORGANIZATION_CAPACITY || count.membership_count >= PERSON_UPLOAD_MEMBERSHIP_CAPACITY) throw new AuthorityOperationError('rate_limited', 'request failed');
+      assertPersonDocumentCapacityV1(this.database,actor,Buffer.byteLength(request.text));
       const receivedAt = this.now(); const id = contextId(actor, request.request_id); const visibility = request.visibility!;
       const receipt = validatePersonUpdateReceiptV1({ schema_version: 1, kind: 'echo-person-update-receipt-v1', request_id: request.request_id, context_id: id, visibility, received_at: receivedAt, state: 'received' });
       this.database.prepare(`INSERT INTO authority_person_updates_v1 (organization_id, principal_id, membership_id, membership_type, request_id, context_id, payload_sha256, title, text, visibility, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)

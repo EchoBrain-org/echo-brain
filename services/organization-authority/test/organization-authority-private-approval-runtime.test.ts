@@ -1902,7 +1902,7 @@ it('transitions a stopped V5 fixture with sessions, signed records, pending and 
     renameSync(path, preservedCurrentPath);
     try {
       renameSync(nextPath, path); chmodSync(path, 0o600);
-      await expect(openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } })).rejects.toThrow('schema version is not exactly 7');
+      await expect(openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } })).rejects.toThrow('schema version is not exactly 8');
     } finally {
       if (existsSync(path)) renameSync(path, nextPath);
       renameSync(preservedCurrentPath, path); chmodSync(path, 0o600);

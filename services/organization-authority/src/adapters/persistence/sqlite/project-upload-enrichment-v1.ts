@@ -67,7 +67,7 @@ export class SqliteProjectUploadEnrichmentAuthorizationV1
   private readonly issued = new WeakSet<ProjectUploadEnrichmentSnapshotV1>();
 
   constructor(readonly database: Database.Database) {
-    if (database.pragma('user_version', { simple: true }) !== 7 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+    if (![7, 8].includes(database.pragma('user_version', { simple: true }) as number) || database.pragma('foreign_keys', { simple: true }) !== 1) {
       throw new Error('Project upload enrichment authorization requires fresh Authority V7 state with foreign keys enabled');
     }
   }

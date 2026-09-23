@@ -1,6 +1,50 @@
 import AppKit
 import Foundation
 
+/// Finds controls the way the render harness does: by accessibility
+/// identifier or label, across the window frame view (titlebar accessories
+/// included) or an attached sheet's content view. Hidden views are included;
+/// a visible match is preferred over a hidden one.
+@MainActor
+enum ProofUI {
+    static func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
+    static func chrome(_ window: NSWindow) -> NSView {
+        guard let content = window.contentView else { fatalError("window has no content view") }
+        return content.superview ?? content
+    }
+    static func visible(_ view: NSView) -> Bool { !view.isHiddenOrHasHiddenAncestor }
+    static func matches(_ view: NSView, _ keys: [String]) -> Bool {
+        keys.contains { $0 == view.accessibilityIdentifier() || $0 == view.accessibilityLabel() }
+    }
+    static func all<T: NSView>(_ type: T.Type, _ keys: String..., in scope: NSView) -> [T] {
+        views(scope).compactMap { $0 as? T }.filter { matches($0, keys) }
+    }
+    static func find<T: NSView>(_ type: T.Type, _ keys: String..., in scope: NSView) -> T {
+        let found = views(scope).compactMap { $0 as? T }.filter { matches($0, keys) }
+        guard let result = found.first(where: visible) ?? found.first else { fatalError("Missing \(T.self): \(keys.joined(separator: " / "))") }
+        return result
+    }
+    static func showsText(_ text: String, in scope: NSView) -> Bool {
+        views(scope).contains { view in
+            guard visible(view) else { return false }
+            if let field = view as? NSTextField { return field.stringValue == text }
+            if let textView = view as? NSTextView { return textView.string == text }
+            return false
+        }
+    }
+    static func claimsSent(_ scope: NSView) -> Bool {
+        views(scope).contains { view in
+            guard visible(view), let field = view as? NSTextField else { return false }
+            return field.stringValue.hasPrefix("Sent to") || field.stringValue.hasPrefix("Saved for")
+        }
+    }
+    static func offersUndo(_ scope: NSView) -> Bool {
+        views(scope).compactMap { $0 as? NSButton }.contains {
+            $0.title.localizedCaseInsensitiveContains("Undo") || ($0.accessibilityLabel() ?? "").localizedCaseInsensitiveContains("Undo")
+        }
+    }
+}
+
 @main
 enum UploadProof {
     static let contextID = "ctx_" + String(repeating: "b", count: 64)
@@ -114,7 +158,7 @@ enum UploadProof {
             guard case .unavailable = client.execute(.submit(draft()), identity: identity, running: running) else { fatalError("cancelled request") }
             // The fake CLI was never invoked; keep a bounded empty invocation log.
             try! Data().write(to: folder.appendingPathComponent("calls.jsonl"))
-        case "window", "window-account-change", "window-recovery", "window-uncertain": windowProof(client, folder: folder, mode: mode)
+        case "window", "window-account-change", "window-recovery", "window-uncertain", "window-stranded": windowProof(client, folder: folder, mode: mode)
         default: fatalError("unknown mode")
         }
         print("passed \(mode)")
@@ -132,22 +176,38 @@ enum UploadProof {
         var questions: [String] = []
         let controller = ProjectsController(uploads: session, projects: ProjectSession(client: ProjectClient(cli: client.cli), defaults: defaults, foreground: { true }), onAsk: { questions.append($0) })
         let window = controller.window
-        guard let root = window.contentView else { fatalError("home window") }
-        func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
-        func button(_ title: String, in view: NSView) -> NSButton {
-            guard let found = views(view).compactMap({ $0 as? NSButton }).first(where: { $0.title == title }) else { fatalError("button: \(title)") }
-            return found
-        }
+        // The frame view includes the titlebar accessories and the content view.
+        let chrome = ProofUI.chrome(window)
         func wait(_ label: String, _ ready: () -> Bool) {
             let deadline = Date().addingTimeInterval(8)
             while !ready() && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
             require(ready(), "UI operation timed out: \(label)")
         }
         session.refreshIdentity(); wait("identity") { !session.busy && session.identity != nil && !controller.projects.busy }
-        require(!button("New project · Not live yet", in: root).isEnabled)
-        require(!views(root).compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue.contains("Lumen") || $0.stringValue.contains("Harbor") }))
+        // `projects list` 404 is the only Not live yet signal: every New project control says so and is disabled.
+        let newProject = ProofUI.find(NSButton.self, "sidebar-new-project", in: chrome)
+        require(newProject.title == "New project · Not live yet" && !newProject.isEnabled, "sidebar New project must be disabled and not live")
+        let emptyNew = ProofUI.find(NSButton.self, "new-project-empty", in: chrome)
+        require(emptyNew.title == "New project · Not live yet" && !emptyNew.isEnabled, "empty New project must be disabled and not live")
+        require(!ProofUI.views(chrome).compactMap({ $0 as? NSButton }).contains(where: {
+            ["sidebar-new-project", "new-project-empty"].contains($0.accessibilityIdentifier()) && $0.isEnabled
+        }), "an enabled New project control exists while not live")
+        require(!ProofUI.views(chrome).compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue.contains("Lumen") || $0.stringValue.contains("Harbor") }))
         if mode == "window-recovery" {
             require(!session.canCompose && session.recovery != nil)
+            // ⌘⇧E with an unreconciled save opens straight into it: the
+            // outcome, Check status, and no editable body.
+            controller.capture(); wait("capture attention") { window.attachedSheet != nil && !session.busy }
+            let first = window.attachedSheet
+            guard let attention = first?.contentView else { fatalError("capture sheet") }
+            require(ProofUI.showsText("This may not have been saved.", in: attention), "capture did not open in the attention state")
+            let check = ProofUI.find(NSButton.self, "compose-check", in: attention)
+            require(ProofUI.visible(check) && check.isEnabled, "Check status not offered")
+            require(!ProofUI.find(NSTextView.self, "compose-body", in: attention).isEditable, "body editable over an unreconciled save")
+            controller.capture(); require(window.attachedSheet === first && window.sheets.count == 1, "a second capture stacked another sheet")
+            first?.cancelOperation(nil); wait("attention closed") { window.attachedSheet == nil }
+            require(session.recovery != nil, "closing the attention state dropped the recovery")
+            wait("idle") { !session.busy }
             session.checkStatus(); wait("recovered") { !session.busy && session.receipt != nil }
             require(!session.canCompose)
             session.startAnother(); require(session.canCompose && session.recovery == nil)
@@ -164,6 +224,28 @@ enum UploadProof {
             require(UploadRecovery.load(for: identity, defaults: defaults) != nil)
             controller.shutdown(); return
         }
+        if mode == "window-stranded" {
+            // The save's account check comes back as another account: the
+            // sheet stays with the honest outcome, and so does the home.
+            controller.startWrite(); wait("compose") { window.attachedSheet != nil && !session.busy }
+            guard let sheet = window.attachedSheet, let root = sheet.contentView else { fatalError("compose") }
+            let body = ProofUI.find(NSTextView.self, "compose-body", in: root)
+            body.string = original; body.didChangeText()
+            ProofUI.find(NSButton.self, "compose-send", in: root).performClick(nil)
+            wait("stranded save") { !session.busy && !session.hasOutstandingMutation }
+            let status = "The save may have completed. Check its status from the original account."
+            require(session.identity == nil && session.status == status, "expected an unconfirmed-account save")
+            require(window.attachedSheet === sheet, "the sheet closed and hid the unknown outcome")
+            require(ProofUI.showsText("This may not have been saved.", in: root) && ProofUI.showsText(status, in: root), "outcome not shown")
+            require(!ProofUI.claimsSent(root), "claimed saved without a receipt")
+            require(!ProofUI.visible(ProofUI.find(NSButton.self, "compose-check", in: root)), "Check status offered without the original account")
+            let close = ProofUI.find(NSButton.self, "compose-close", in: root)
+            require(ProofUI.visible(close) && close.isEnabled); close.performClick(nil)
+            wait("closed") { window.attachedSheet == nil }
+            require(ProofUI.showsText(status, in: chrome), "home does not say the save may exist")
+            require(UploadRecovery.load(for: identity, defaults: defaults) != nil, "the original account's locator was lost")
+            controller.shutdown(); return
+        }
         if mode == "window-uncertain" {
             session.submit(title: "Client memo", text: original, visibility: .onlyMe)
             wait("uncertain save") { !session.busy }
@@ -177,33 +259,77 @@ enum UploadProof {
             require(session.draft == nil && session.receipt?.request_id == id)
             controller.shutdown(); return
         }
-        button("Find saved context", in: root).performClick(nil)
-        let query = views(root).compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "Ask or find context" })!
-        let submit = views(root).compactMap({ $0 as? NSButton }).first(where: { $0.accessibilityLabel() == "Submit" })!
+        // Saved-context search is reached from the sidebar, then the bar.
+        ProofUI.find(NSButton.self, "sidebar-toggle", in: chrome).performClick(nil)
+        let findSaved = ProofUI.find(NSButton.self, "sidebar-search", "Find saved context", in: chrome)
+        wait("sidebar open") { ProofUI.visible(findSaved) }
+        findSaved.performClick(nil)
+        let query = ProofUI.find(NSTextField.self, "ask-field", "Ask or find context", in: chrome)
+        let submit = ProofUI.find(NSButton.self, "submit-button", "Submit", in: chrome)
         query.stringValue = "café"; submit.performClick(nil)
         wait("search") { !session.busy && session.matches.count == 1 }
-        button("Read original", in: root).performClick(nil)
+        require(questions.isEmpty, "saved-context search reached onAsk")
+        wait("result row") { ProofUI.all(NSButton.self, "item-row", in: chrome).contains(where: ProofUI.visible) }
+        ProofUI.find(NSButton.self, "item-row", in: chrome).performClick(nil)
         wait("original") { !session.busy && session.content?.text == original }
-        require(views(root).compactMap({ $0 as? NSTextView }).contains(where: { $0.string == original }))
-        button("Ask ECHO", in: root).performClick(nil)
+        // The reader shows the full original, read-only.
+        let reader = ProofUI.find(NSTextView.self, "reader-text", "Original text", in: chrome)
+        require(reader.string == original && !reader.isEditable, "reader must show the verbatim original, read-only")
+        // Back to home (Back is hidden on home), then ask from the home bar.
+        let back = ProofUI.find(NSButton.self, "back-button", "Back", in: chrome)
+        func home() -> Bool {
+            !ProofUI.visible(back) || ProofUI.all(NSButton.self, "new-project-empty", in: chrome).contains(where: ProofUI.visible)
+        }
+        var presses = 0
+        while !home() && presses < 3 {
+            back.performClick(nil); presses += 1
+            wait("back") { !session.busy && !controller.projects.busy }
+        }
+        require(presses > 0 && home(), "Back did not return home")
         query.stringValue = "Why did we delay launch?"; submit.performClick(nil)
         require(questions == ["Why did we delay launch?"] && !controller.answerContainer.isHidden)
         // Real compose sheet must retain the full original, including its first
         // line and trailing newline, when it creates a CLI draft.
         window.makeKeyAndOrderFront(nil)
-        wait("account after focus") { !session.busy }
+        wait("account after focus") { !session.busy && !controller.projects.busy }
         controller.startWrite()
         wait("write sheet attached") { window.attachedSheet != nil }
         guard let sheet = window.attachedSheet, let sheetRoot = sheet.contentView else { fatalError("write sheet") }
-        let body = views(sheetRoot).compactMap({ $0 as? NSTextView }).first(where: { $0.accessibilityLabel() == "Original note text" })!
-        body.string = "\t\n\t" + original
-        button("Continue", in: sheetRoot).performClick(nil)
-        button("Save", in: sheetRoot).performClick(nil)
+        let body = ProofUI.find(NSTextView.self, "compose-body", "Original note text", in: sheetRoot)
+        let to = ProofUI.find(ChipMenuButton.self, "compose-to", "Send to", in: sheetRoot)
+        let send = ProofUI.find(NSButton.self, "compose-send", "Send", in: sheetRoot)
+        require(to.title == "Only me" && to.choices.first == "Only me", "compose outside a project must default To to Only me")
+        require(body.string.isEmpty && !send.isEnabled, "Send enabled with an empty body")
+        body.string = "\t\n\t" + original; body.didChangeText()
+        require(send.isEnabled, "Send disabled with text")
+        send.performClick(nil)
         wait("save") { !session.busy && session.receipt != nil }
         require(session.receipt?.visibility == .onlyMe)
-        require(!views(sheetRoot).compactMap({ $0 as? NSButton }).contains(where: { $0.title == "Undo" }))
-        button("Done", in: sheetRoot).performClick(nil)
+        guard let sent = window.attachedSheet?.contentView else { fatalError("sent sheet") }
+        require(!ProofUI.offersUndo(sent) && !ProofUI.offersUndo(chrome), "Undo offered after save")
+        require(ProofUI.showsText("Saved for you", in: sent), "sent state does not say Saved for you")
+        let done = ProofUI.find(NSButton.self, "compose-done", in: sent)
+        require(done.title == "Done"); done.performClick(nil)
+        wait("compose closed") { window.attachedSheet == nil }
+        // Leaving "Saved" with Escape instead of Done, then ⌘⇧E: the next
+        // note can be sent (the settled receipt does not hold it).
+        wait("idle after done") { !session.busy }
+        controller.startWrite(); wait("second compose") { window.attachedSheet != nil }
+        guard let second = window.attachedSheet?.contentView else { fatalError("second compose") }
+        let secondBody = ProofUI.find(NSTextView.self, "compose-body", in: second)
+        secondBody.string = "Second note\n"; secondBody.didChangeText()
+        ProofUI.find(NSButton.self, "compose-send", in: second).performClick(nil)
+        wait("second save") { !session.busy && session.receipt != nil }
+        window.attachedSheet?.cancelOperation(nil); wait("escaped sent") { window.attachedSheet == nil }
+        controller.capture(); wait("capture") { window.attachedSheet != nil && !session.busy }
+        guard let capture = window.attachedSheet?.contentView else { fatalError("capture sheet") }
+        let captureBody = ProofUI.find(NSTextView.self, "compose-body", in: capture)
+        require(captureBody.isEditable && ProofUI.visible(captureBody), "capture did not open a fresh note")
+        captureBody.string = "Pasted text"; captureBody.didChangeText()
+        require(ProofUI.find(NSButton.self, "compose-send", in: capture).isEnabled && session.canCompose, "capture after Escape cannot send")
+        window.attachedSheet?.cancelOperation(nil); wait("capture closed") { window.attachedSheet == nil }
         controller.conceal(); require(session.matches.isEmpty && session.content == nil)
+        query.stringValue = "unsent question"
         controller.accountWillChange(); require(query.stringValue.isEmpty)
         controller.shutdown()
     }

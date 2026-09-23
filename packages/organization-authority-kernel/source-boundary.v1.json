@@ -35,12 +35,14 @@
     "crypto",
     "fs",
     "path",
-    "buffer"
+    "buffer",
+    "util"
   ],
   "runtime_assets": [
     "packages/organization-authority-kernel/baselines/authority-baseline-v5.sql",
     "packages/organization-authority-kernel/baselines/authority-baseline-v6.sql",
-    "packages/organization-authority-kernel/baselines/authority-baseline-v7.sql"
+    "packages/organization-authority-kernel/baselines/authority-baseline-v7.sql",
+    "packages/organization-authority-kernel/baselines/authority-baseline-v8.sql"
   ],
   "layer_rules": [
     {
@@ -149,7 +151,8 @@
       "allowed_node_builtins": [
         "crypto",
         "fs",
-        "path"
+        "path",
+        "util"
       ]
     }
   ],

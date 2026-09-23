@@ -12,6 +12,10 @@ import {
   validatePersonUploadSearchV2, validatePersonUploadSearchResultV2, validatePersonUploadContentV2,
 } from '@echo-brain/organization-api';
 import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
+import type { PersonDocumentApplicationV1 } from '../application/ports/document-v1.js';
+import type { PersonDocumentUploadStagingV1 } from '../application/ports/document-upload-staging-v1.js';
+import { createPersonDocumentsHttpHandlerV1 } from './person-documents-http-route-v1.js';
+import { PERSON_DOCUMENTS_PATH_V1 } from '@echo-brain/organization-api';
 import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
 import type { PersonUpdatesApplicationV1 } from '../application/person-updates.js';
 import { validatePersonQueryText } from "@echo-brain/organization-api";
@@ -115,6 +119,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_updates?: PersonUpdatesApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
   readonly project_context?: ProjectContextApplicationV1;
+  readonly person_documents?: PersonDocumentApplicationV1;
+  readonly document_upload_staging?: PersonDocumentUploadStagingV1;
   /** Optional until an active private-approval surface is fully composed. */
   readonly private_approval_interaction_ingress?:
     ProviderHttpApplicationV1;
@@ -138,7 +144,7 @@ function providerIngressRoutes(
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
-        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_PROJECTS_PATH_V1]
+        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_PROJECTS_PATH_V1, PERSON_DOCUMENTS_PATH_V1]
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -591,6 +597,10 @@ export function createOrganizationAuthorityHttpServer(
   options: OrganizationAuthorityHttpServerOptions,
 ): Server {
   const providerRoutes = providerIngressRoutes(options);
+  if ((options.person_documents === undefined) !== (options.document_upload_staging === undefined)) throw new Error('Document application and transfer staging must be composed together');
+  const documents = options.person_documents === undefined ? undefined : createPersonDocumentsHttpHandlerV1(
+    options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
+  );
   const handoffs = new Map<string, PendingLoopbackHandoff>();
   const oidcBeginWindows = new Map<string, OidcBeginClientWindow>();
   let activeHttp = 0;
@@ -790,6 +800,13 @@ export function createOrganizationAuthorityHttpServer(
         });
         noContent(response);
         return;
+      }
+      if (documents !== undefined) {
+        try { if (await documents(request, response, url)) return; }
+        catch (error) {
+          if (error instanceof AuthorityOperationError) throw error;
+          throw new AuthorityOperationError('unavailable', 'request failed');
+        }
       }
       if (options.project_context !== undefined) {
         try {

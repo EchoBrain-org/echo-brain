@@ -22,7 +22,7 @@ describe.skipIf(process.platform !== "darwin")("native upload CLI boundary", () 
   }, 120_000);
 
   it.each(["round-trip", "snapshot-replay", "file-bounds", "parser-bounds", "recovery", "switch-before", "switch-after",
-    "submit-switch-after", "unknown-submit", "oversized-read", "cancel-before", "window", "window-account-change", "window-recovery", "window-uncertain"])("handles %s", mode => {
+    "submit-switch-after", "unknown-submit", "oversized-read", "cancel-before", "window", "window-account-change", "window-recovery", "window-uncertain", "window-stranded"])("handles %s", mode => {
     const folder = mkdtempSync(join(root, "case-"));
     const script = join(folder, "client.mjs");
     const executable = join(folder, "echo-brain");
@@ -31,7 +31,7 @@ describe.skipIf(process.platform !== "darwin")("native upload CLI boundary", () 
 const args = process.argv.slice(2), mode = ${JSON.stringify(mode)}, log = ${JSON.stringify(log)};
 const prior = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\\n').filter(Boolean).map(JSON.parse) : [];
 const calls = prior.filter(x => x.args[1] === 'status').length;
-const member = mode === 'switch-before' || (mode.includes('switch-after') && calls > 0) ? 'mem_other' : 'mem_original';
+const member = mode === 'switch-before' || (mode.includes('switch-after') && calls > 0) || (mode === 'window-stranded' && prior.some(x => x.args[2] === 'submit')) ? 'mem_other' : 'mem_original';
 const value = name => args[args.indexOf(name) + 1];
 const entry = { args };
 if (args[2] === 'submit') entry.original = fs.readFileSync(value('--file'), 'utf8');
@@ -57,13 +57,29 @@ console.log(JSON.stringify(result));
       const calls = readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as { args: string[] });
       expect(calls.every(call => call.args[1] === "status")).toBe(true);
     }
+    if (mode === "window-stranded") {
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[] });
+      // One save; nothing retried it under the other account.
+      expect(calls.filter(call => call.args[2] === "submit")).toHaveLength(1);
+      expect(calls.some(call => call.args[2] === "status" && call.args[1] === "updates")).toBe(false);
+    }
     if (["snapshot-replay", "window-uncertain", "window"].includes(mode)) {
       const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; original?: string });
       const writes = calls.filter(call => call.args[2] === "submit");
-      expect(writes).toHaveLength(mode === "window" ? 1 : 2);
+      // "window" sends a second note (then leaves "Saved" with Escape).
+      expect(writes).toHaveLength(2);
       if (mode !== "window") expect(writes[0]).toEqual(writes[1]);
       expect(writes[0]?.original).toBe(`${mode === "window" ? "\t\n\t" : ""}Original café note.\nSecond line preserved.\n`);
-      if (mode === "window") expect(writes[0]?.args[writes[0].args.indexOf("--title") + 1]?.normalize("NFC")).toBe("Original café note.");
+      if (mode === "window") {
+        // The compose sheet has no title field: the title is the first non-empty
+        // line, and the default To outside a project is Only me.
+        expect(writes[0]?.args[writes[0].args.indexOf("--title") + 1]?.normalize("NFC")).toBe("Original café note.");
+        expect(writes[0]?.args[writes[0].args.indexOf("--visibility") + 1]).toBe("only-me");
+        expect(writes[0]?.args.some(arg => arg === "--project-id" || arg === "--audience-project-id")).toBe(false);
+        // Saved-context search and read ran through the upload CLI, not a project scope.
+        expect(calls.some(call => call.args[1] === "updates" && call.args[2] === "search")).toBe(true);
+        expect(calls.some(call => call.args[1] === "updates" && call.args[2] === "read")).toBe(true);
+      }
     }
   });
 });

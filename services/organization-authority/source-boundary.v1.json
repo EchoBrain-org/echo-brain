@@ -36,7 +36,10 @@
   ],
   "allowed_external_packages": [
     "better-sqlite3",
-    "openid-client"
+    "openid-client",
+    "mammoth",
+    "pdfjs-dist",
+    "yauzl"
   ],
   "allowed_node_builtins": [
     "buffer",
@@ -49,7 +52,14 @@
     "path",
     "util",
     "async_hooks",
-    "perf_hooks"
+    "perf_hooks",
+    "os",
+    "worker_threads",
+    "module",
+    "https",
+    "tls",
+    "dns",
+    "zlib"
   ],
   "runtime_assets": [],
   "component_index_contract": {
@@ -405,7 +415,8 @@
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-protocol",
-        "@echo-brain/organization-api"
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel"
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": [
@@ -413,7 +424,9 @@
         "events",
         "fs",
         "net",
-        "path"
+        "path",
+        "fs/promises",
+        "os"
       ]
     },
     {
@@ -524,7 +537,8 @@
       "allowed_workspace_packages": [
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel"
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/federation-protocol"
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": [
@@ -606,6 +620,36 @@
       "allowed_node_builtins": [
         "fs",
         "path"
+      ]
+    },
+    {
+      "name": "authority-document-extraction-is-resource-bounded",
+      "from": "services/organization-authority/src/adapters/documents/**",
+      "allowed_imports": [
+        "services/organization-authority/src/application/ports/**",
+        "services/organization-authority/src/adapters/documents/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel"
+      ],
+      "allowed_external_packages": [
+        "mammoth",
+        "pdfjs-dist",
+        "yauzl"
+      ],
+      "allowed_node_builtins": [
+        "buffer",
+        "crypto",
+        "worker_threads",
+        "module",
+        "http",
+        "https",
+        "net",
+        "tls",
+        "dns",
+        "zlib"
       ]
     }
   ]

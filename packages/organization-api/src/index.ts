@@ -96,3 +96,4 @@ export { PersonQueryInputError, validatePersonQueryText } from "./person-query.j
 export * from './person-updates.js';
 export * from './person-updates-v2.js';
 export * from './project-context-v1.js';
+export * from './person-documents-v1.js';

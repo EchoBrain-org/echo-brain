@@ -20,6 +20,7 @@ private let overlayRetirementTimeoutSeconds: TimeInterval = 5
 private let overlayRetirementPollSeconds: TimeInterval = 0.05
 private let hotKeySignature: OSType = 0x4543484F // "ECHO"
 private let hotKeyIdentifier = EventHotKeyID(signature: hotKeySignature, id: 1)
+private let captureHotKeyIdentifier = EventHotKeyID(signature: hotKeySignature, id: 2)
 private let allowedCitationPolicies: Set<String> = [
     "organization-member-readable-person-v2",
     "restricted-reviewer-person-v2",
@@ -1447,9 +1448,27 @@ private func echoHotKeyHandler(
     _ event: EventRef?,
     _ userData: UnsafeMutableRawPointer?
 ) -> OSStatus {
-    guard let userData else { return OSStatus(eventNotHandledErr) }
+    guard let event, let userData else { return OSStatus(eventNotHandledErr) }
+    var pressed = EventHotKeyID()
+    let status = GetEventParameter(
+        event,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &pressed
+    )
+    guard status == noErr, pressed.signature == hotKeySignature else { return OSStatus(eventNotHandledErr) }
     let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-    DispatchQueue.main.async { delegate.showOverlay() }
+    switch pressed.id {
+    case hotKeyIdentifier.id:
+        DispatchQueue.main.async { delegate.showOverlay() }
+    case captureHotKeyIdentifier.id:
+        DispatchQueue.main.async { delegate.showCapture() }
+    default:
+        return OSStatus(eventNotHandledErr)
+    }
     return noErr
 }
 
@@ -1462,6 +1481,8 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
     private var projects: ProjectsController?
     private var peopleMenuItem: NSMenuItem?
     private var hotKey: EventHotKeyRef?
+    private var captureHotKey: EventHotKeyRef?
+    private var captureMenuItem: NSMenuItem?
     private var hotKeyHandler: EventHandlerRef?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1499,6 +1520,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         people?.checkAccess()
         account?.refresh()
         registerHotKey()
+        // Another app may already hold ⌘⇧E: then never advertise it.
+        let captureShortcut = captureHotKey != nil
+        captureMenuItem?.title = captureShortcut ? "Capture  ⌘⇧E" : "Capture"
+        projects?.setCaptureShortcutAvailable(captureShortcut)
         projects?.show()
     }
 
@@ -1513,11 +1538,16 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         account?.shutdown()
         projects?.shutdown()
         if let hotKey { UnregisterEventHotKey(hotKey) }
+        if let captureHotKey { UnregisterEventHotKey(captureHotKey) }
         if let hotKeyHandler { RemoveEventHandler(hotKeyHandler) }
     }
 
     func showOverlay() {
         projects?.summon()
+    }
+
+    @objc func showCapture() {
+        projects?.capture()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -1559,6 +1589,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
         let projectsItem = NSMenuItem(title: "Open ECHO  ⌘E", action: #selector(showProjects), keyEquivalent: "")
         projectsItem.target = self
         menu.addItem(projectsItem)
+        let captureItem = NSMenuItem(title: "Capture  ⌘⇧E", action: #selector(showCapture), keyEquivalent: "")
+        captureItem.target = self
+        captureMenuItem = captureItem
+        menu.addItem(captureItem)
         if let account { menu.addItem(account.menuItem) }
         let organization = NSMenuItem(title: "Organization", action: nil, keyEquivalent: "")
         let organizationMenu = NSMenu()
@@ -1604,6 +1638,15 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate
             OptionBits(kEventHotKeyExclusive),
             &hotKey
         )
+        let captureStatus = RegisterEventHotKey(
+            UInt32(kVK_ANSI_E),
+            UInt32(cmdKey | shiftKey),
+            captureHotKeyIdentifier,
+            GetApplicationEventTarget(),
+            OptionBits(kEventHotKeyExclusive),
+            &captureHotKey
+        )
+        if captureStatus != noErr { captureHotKey = nil }
         if registrationStatus != noErr { showHotKeyError() }
     }
 

@@ -1,3 +1,7 @@
+import { createPersonDocumentApplicationV1 } from '../application/document-v1.js';
+import { SqlitePersonDocumentRepositoryV1 } from '../adapters/persistence/sqlite/document-v1.js';
+import { createPersonDocumentUploadStagingV1 } from '../adapters/files/document-upload-staging-v1.js';
+import { startPersonDocumentProcessingV1 } from './person-document-processing-v1.js';
 import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import { PersonUpdatesApplicationV1 } from '../application/person-updates.js';
@@ -132,6 +136,7 @@ export async function startOrganizationAuthorityApiRuntime(
     join(config.state_directory, "authority.sqlite"),
     { fileMustExist: true },
   );
+  let documentWorker: ReturnType<typeof startPersonDocumentProcessingV1> | undefined;
   let recordDatabase:
     ReturnType<typeof openOrganizationRecordDatabase> | undefined;
   let externalIdentity:
@@ -202,6 +207,7 @@ export async function startOrganizationAuthorityApiRuntime(
       audit: readAudit,
       expand_related_atoms: expandReadableSearchRelatedAtomsV1,
     });
+    const documents = new SqlitePersonDocumentRepositoryV1(database);
     let closing = false;
     const server = createOrganizationAuthorityHttpServer({
       is_closing: () => closing,
@@ -245,6 +251,11 @@ export async function startOrganizationAuthorityApiRuntime(
                 : { on_failure: dependencies.answer_failure }),
             }),
           }),
+      person_documents: createPersonDocumentApplicationV1({
+        authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
+        repository: documents,
+      }),
+      document_upload_staging: createPersonDocumentUploadStagingV1(),
       project_context: createProjectContextApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
         repository: new SqliteProjectContextRepositoryV1(database),
@@ -276,6 +287,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const address = server.address();
     if (address === null || typeof address === "string")
       throw new Error("Organization Authority API did not bind TCP");
+    documentWorker = startPersonDocumentProcessingV1(documents);
     let serverClosed: Promise<unknown> | undefined;
     const stopAcceptingRequests = (): void => {
       closing = true;
@@ -288,13 +300,14 @@ export async function startOrganizationAuthorityApiRuntime(
       stopAcceptingRequests,
       close: async () => {
         stopAcceptingRequests();
-        await serverClosed;
+        await Promise.all([serverClosed, documentWorker?.close()]);
         externalIdentity?.close();
         recordDatabase?.close();
         database.close();
       },
     };
   } catch (error) {
+    await documentWorker?.close();
     externalIdentity?.close();
     recordDatabase?.close();
     database.close();

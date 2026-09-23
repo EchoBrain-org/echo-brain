@@ -59,6 +59,7 @@ COPY --from=build /app/packages/organization-authority-kernel/dist ./packages/or
 COPY --from=build /app/packages/organization-authority-kernel/baselines/authority-baseline-v5.sql ./packages/organization-authority-kernel/baselines/authority-baseline-v5.sql
 COPY --from=build /app/packages/organization-authority-kernel/baselines/authority-baseline-v6.sql ./packages/organization-authority-kernel/baselines/authority-baseline-v6.sql
 COPY --from=build /app/packages/organization-authority-kernel/baselines/authority-baseline-v7.sql ./packages/organization-authority-kernel/baselines/authority-baseline-v7.sql
+COPY --from=build /app/packages/organization-authority-kernel/baselines/authority-baseline-v8.sql ./packages/organization-authority-kernel/baselines/authority-baseline-v8.sql
 COPY --from=build /app/packages/organization-control-plane/package.json ./packages/organization-control-plane/package.json
 COPY --from=build /app/packages/organization-control-plane/dist ./packages/organization-control-plane/dist
 COPY --from=build /app/packages/organization-control-plane/baselines/organization-control-plane-baseline-v3.sql ./packages/organization-control-plane/baselines/organization-control-plane-baseline-v3.sql

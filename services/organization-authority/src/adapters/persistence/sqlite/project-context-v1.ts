@@ -1,3 +1,4 @@
+import { assertPersonDocumentCapacityV1 } from './document-quota-v1.js';
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
@@ -99,7 +100,7 @@ function binary(a: string, b: string): number { return Buffer.compare(Buffer.fro
 export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositoryV1 {
   private readonly issued = new WeakMap<ProjectAuthorizationSnapshotV1, Issued>();
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
-    if (database.pragma('user_version', { simple: true }) !== 7 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+    if (![7, 8].includes(database.pragma('user_version', { simple: true }) as number) || database.pragma('foreign_keys', { simple: true }) !== 1) {
       throw new Error('Project context requires Authority V7 with foreign keys enabled');
     }
   }
@@ -416,9 +417,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       this.require(snapshot,'upload_submit');
       const selectedProjects = [request.project_id, request.audience.kind === 'project' ? request.audience.project_id : null].filter((id): id is ProjectIdV1 => id !== null);
       if (selectedProjects.some(id => !snapshot.grants.some(grant => grant.project_id === id))) denied();
-      const capacity = this.store.database.prepare("SELECT (SELECT count(*) FROM authority_person_updates_v1 WHERE organization_id = ?) + (SELECT count(*) FROM authority_person_updates_v2 WHERE organization_id = ?) AS organization_count, (SELECT count(*) FROM authority_person_updates_v1 WHERE organization_id = ? AND membership_id = ?) + (SELECT count(*) FROM authority_person_updates_v2 WHERE organization_id = ? AND membership_id = ?) AS membership_count")
-        .get(snapshot.person.organization_id, snapshot.person.organization_id, snapshot.person.organization_id, snapshot.person.membership_id, snapshot.person.organization_id, snapshot.person.membership_id) as { organization_count: number; membership_count: number };
-      if (capacity.organization_count >= 1000 || capacity.membership_count >= 100) denied('rate_limited');
+      assertPersonDocumentCapacityV1(this.store.database,snapshot.person,Buffer.byteLength(request.text));
       const received_at=this.store.now(); const context_id=sourceContextId(snapshot.person,request.request_id);
       const audience_project_id=request.audience.kind==='project'?request.audience.project_id:null;
       this.store.database.prepare(`INSERT INTO authority_person_updates_v2 (organization_id, principal_id, membership_id, membership_type, request_id, context_id, payload_sha256, title, text, audience_kind, audience_project_id, project_id, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(snapshot.person.organization_id,snapshot.person.principal_id,snapshot.person.membership_id,snapshot.person.membership_type,request.request_id,context_id,canonicalSha256(request),request.title,request.text,request.audience.kind,audience_project_id,request.project_id,received_at);
