@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 function setup() {
   const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys=ON');
-  db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v8.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v9.sql', import.meta.url), 'utf8'));
   db.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_associations',?,'Associations','{}',?,?)`).run(OWNER.organization_id, PROJECT_CONTEXT_NOW, PROJECT_CONTEXT_NOW);
   db.prepare('INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)').run(OWNER.organization_id, PROJECT_CONTEXT_NOW);
   addMembership(db, OWNER, 'Owner', null); addMembership(db, MEMBER, 'Member', 'member@example.test');
@@ -54,6 +54,45 @@ function search(project_id: typeof PROJECT_ALPHA | typeof PROJECT_BETA) {
 }
 
 describe('document project associations', () => {
+  it('refuses V8 at both current runtime adapters before attempting V9 queries', () => {
+    const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys=ON');
+    db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v8.sql', import.meta.url), 'utf8'));
+    expect(() => new SqlitePersonDocumentRepositoryV1(db)).toThrow('Documents require Authority V9');
+    expect(() => new SqliteProjectContextRepositoryV1(db)).toThrow('Project context requires Authority V9');
+  });
+
+  it('keeps independent modern project links, immutable audience and exact replay while removing only the requested link', () => {
+    const { app, db, bytes } = setup();
+    const input = { schema_version: 2 as const, kind: 'echo-person-document-upload-v2' as const, request_id: randomUUID(),
+      filename: 'SCOUT.md', title: 'SCOUT', content_length: bytes.length, sha256: sha256Digest(bytes),
+      audience: { kind: 'projects' as const, project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, association_project_ids: [PROJECT_ALPHA, PROJECT_BETA] };
+    const saved = app.uploadV2('owner', input, bytes);
+    const initial = db.prepare('SELECT receipt_json FROM authority_person_document_receipts_v1 WHERE request_id=?').get(saved.request_id);
+    const removal = dissociate(associate(saved.document_id));
+    expect(app.dissociate('owner', removal).state).toBe('applied');
+    expect(db.prepare('SELECT project_id FROM authority_person_document_associations_v1 WHERE document_id=?').all(saved.document_id)).toEqual([{ project_id: PROJECT_BETA }]);
+    expect(app.readV2('member', saved.document_id).audience).toEqual(input.audience);
+    expect(app.readV2('member', saved.document_id).association_project_ids).toEqual([]);
+    expect(() => app.readV2('member', saved.document_id, { project_id: PROJECT_ALPHA })).toThrow(expect.objectContaining({ code: 'not_found' }));
+    const addition = associate(saved.document_id);
+    app.associate('owner', addition);
+    expect(app.dissociate('owner', removal).state).toBe('applied'); // Old receipt must not delete a newer association.
+    expect(db.prepare('SELECT project_id FROM authority_person_document_associations_v1 WHERE document_id=? ORDER BY project_id').all(saved.document_id)).toEqual([{ project_id: PROJECT_ALPHA }, { project_id: PROJECT_BETA }]);
+    expect(app.readV2('member', saved.document_id, { project_id: PROJECT_ALPHA }).document_id).toBe(saved.document_id);
+    expect(db.prepare('SELECT receipt_json FROM authority_person_document_receipts_v1 WHERE request_id=?').get(saved.request_id)).toEqual(initial);
+    expect(app.uploadV2('owner', input, bytes)).toEqual(saved);
+  });
+  it('allows the modern uploader to add a second private project link without widening audience', () => {
+    const { app, db, bytes } = setup();
+    const saved = app.uploadV2('owner', { schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: randomUUID(),
+      filename: 'private.md', title: 'Private', content_length: bytes.length, sha256: sha256Digest(bytes),
+      audience: { kind: 'only_me' }, association_project_ids: [PROJECT_ALPHA] }, bytes);
+    app.associate('owner', associate(saved.document_id, PROJECT_BETA));
+    expect(db.prepare('SELECT count(*) n FROM authority_person_document_associations_v1 WHERE document_id=?').get(saved.document_id)).toEqual({ n: 2 });
+    expect(() => app.readV2('member', saved.document_id)).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(() => app.dissociate('member', dissociate(associate(saved.document_id)))).toThrow(expect.objectContaining({ code: 'not_found' }));
+  });
+
   it('exposes bounded HTTP association commands with response identity checks and no audience mutation', async () => {
     const { app, upload } = setup(); const saved = upload();
     const server = createOrganizationAuthorityHttpServer({ descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: 'https://issuer.example', person_documents: app, document_upload_staging: createPersonDocumentUploadStagingV1() });

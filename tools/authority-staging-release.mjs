@@ -19,7 +19,7 @@ const STACK = 'echo-authority-staging-v1';
 const SHA = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-const ACTIONS = ['install', 'inspect-install', 'diagnose', 'repair', 'stage', 'stage-v5-to-v6', 'canary', 'status', 'rollback', 'promote'];
+const ACTIONS = ['install', 'inspect-install', 'diagnose', 'repair', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9', 'canary', 'status', 'rollback', 'promote'];
 const TOOL_FILES = Object.freeze({
   'update-clean-v1.sh': 'deploy/organization-authority/update-clean-v1.sh',
   'onboard-clean-v1.sh': 'deploy/organization-authority/onboard-clean-v1.sh',
@@ -164,7 +164,7 @@ export function validateReleaseRequest(request, readSource = sourceFile) {
   if (migration && (request.tooling_migration !== LEGACY_MIGRATION || !['install', 'inspect-install'].includes(request.action))) fail('tooling_migration_invalid');
   const toolFiles = request.schema_version === 1 ? LEGACY_TOOL_FILES : TOOL_FILES;
   releaseAction(request.action);
-  if (request.action === 'stage-v5-to-v6' && !compact) fail('request_invalid');
+  if (['stage-v5-to-v6', 'stage-v8-to-v9'].includes(request.action) && !compact) fail('request_invalid');
   if (!Number.isSafeInteger(request.created_at) || request.expires_at !== request.created_at + 1800) fail('request_lifetime_invalid');
   exactKeys(request.target, ['account', 'region', 'stack_id', 'instance_id', 'volume_id']);
   if (request.target.account !== ACCOUNT || request.target.region !== REGION || !new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${STACK}/[a-f0-9-]+$`).test(request.target.stack_id) || !/^i-[a-f0-9]{17}$/.test(request.target.instance_id) || !/^vol-[a-f0-9]{17}$/.test(request.target.volume_id)) fail('target_invalid');
@@ -207,7 +207,7 @@ export function validateReleaseRequest(request, readSource = sourceFile) {
   for (const [name, content] of Object.entries(profile.files)) {
     if (!Buffer.from(content).equals(readSource(candidate.source_sha, `deploy/organization-authority/${name}`))) fail('profile_source_mismatch');
   }
-  if (![null, 'true', 'false'].includes(request.content_telemetry) || (!['stage', 'stage-v5-to-v6'].includes(request.action) && request.content_telemetry !== null)) fail('content_option_invalid');
+  if (![null, 'true', 'false'].includes(request.content_telemetry) || (!['stage', 'stage-v5-to-v6', 'stage-v8-to-v9'].includes(request.action) && request.content_telemetry !== null)) fail('content_option_invalid');
   approvalFor(request, request.approval);
   return request;
 }
@@ -232,20 +232,28 @@ export function releaseSsmParameters(request, readSource = sourceFile) {
     }
     const raw = jsonBytes(wire);
     if (raw.length > 768 * 1024) fail('bounded_command_too_large');
-    let compressed;
-    try {
-      // Python is already an operator/host prerequisite. Its standard-library
-      // XZ plus quote-free Base85 fits larger bundles without another transfer
-      // path. Keep the original Base64 wire when it fits so saved receipts replay.
-      // An exact read completes after the parent-advertised byte count even if
-      // the local pipe writer has not closed. Reject EOF-short input before it
-      // can reach the compressor; the emitted wire keeps its existing digest.
-      compressed = JSON.parse(execFileSync('python3', ['-I', '-c', 'import base64,json,lzma,sys; length=int(sys.argv[1]); assert 0<=length<=786432; raw=sys.stdin.buffer.read(length); assert len(raw)==length; compressed=lzma.compress(raw,format=lzma.FORMAT_XZ,preset=6); json.dump([base64.b64encode(compressed).decode(),base64.b85encode(compressed).decode()],sys.stdout)', String(raw.length)], { input: raw, stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000, maxBuffer: 768 * 1024 }).toString('utf8'));
-    } catch { fail('bounded_compression_unavailable'); }
+    const compress = (extreme = false) => {
+      try {
+        // Python is already an operator/host prerequisite. Its standard-library
+        // XZ plus quote-free Base85 fits larger bundles without another transfer
+        // path. Keep the original Base64 wire when it fits so saved receipts replay.
+        // An exact read completes after the parent-advertised byte count even if
+        // the local pipe writer has not closed. Reject EOF-short input before it
+        // can reach the compressor; the emitted wire keeps its existing digest.
+        return JSON.parse(execFileSync('python3', ['-I', '-c', 'import base64,json,lzma,sys; length=int(sys.argv[1]); assert 0<=length<=786432; raw=sys.stdin.buffer.read(length); assert len(raw)==length; compressed=lzma.compress(raw,format=lzma.FORMAT_XZ,**({"filters":[{"id":lzma.FILTER_LZMA2,"preset":6 | lzma.PRESET_EXTREME,"pb":0}]} if sys.argv[2] == "1" else {"preset":6})); json.dump([base64.b64encode(compressed).decode(),base64.b85encode(compressed).decode()],sys.stdout)', String(raw.length), extreme ? '1' : '0'], { input: raw, stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000, maxBuffer: 768 * 1024 }).toString('utf8'));
+      } catch { fail('bounded_compression_unavailable'); }
+    };
+    const compressed = compress();
     const scriptFor = decode => `import base64,gzip,hashlib,json,lzma\ndecoder=lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=134217728)\nraw=decoder.decompress(${decode},max_length=786433)\nif not decoder.eof or decoder.unused_data or len(raw)>786432 or hashlib.sha256(raw).hexdigest()!='${digest(raw)}': raise SystemExit(1)\nwire=json.loads(raw)\nfor entry in wire['request']['files'].values():\n${request.schema_version === 4 ? " if 'utf8' not in entry: continue\n" : ''} entry['base64']=base64.b64encode(entry.pop('utf8').encode()).decode()\nbody=(json.dumps(wire['request'],sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\\n').encode()\nif hashlib.sha256(body).hexdigest()!='${digest(body)}': raise SystemExit(1)\nnamespace={}\nexec(compile(wire['runner'],'<reviewed-staging-runner>','exec'),namespace)\nnamespace['main'](base64.b64encode(gzip.compress(body)).decode(),'${digest(body)}')`;
     script = scriptFor(`base64.b64decode('${compressed[0]}',validate=True)`);
     if (Buffer.byteLength(JSON.stringify(parametersFor(script))) > MAX_COMMAND_BYTES) {
       script = scriptFor(`base64.b85decode('${compressed[1]}')`);
+    }
+    if (Buffer.byteLength(JSON.stringify(parametersFor(script))) > MAX_COMMAND_BYTES) {
+      // Existing valid receipt encodings stay byte-identical. Only a bundle
+      // that previously refused tries stronger unaligned-text compression with the same XZ
+      // dictionary and unchanged output, decoder-memory and command bounds.
+      script = scriptFor(`base64.b85decode('${compress(true)[1]}')`);
     }
   }
   const parameters = parametersFor(script);

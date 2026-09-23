@@ -77,6 +77,32 @@ enum UploadProof {
             require(status.metadata == "ready" && hits.count == 1 && read.text == original)
             guard case .saved(let team) = execute(.submit(draft(.team))) else { fatalError("team submit") }
             require(team.visibility == .team)
+        case "multi-project":
+            let ids = ["prj_11111111-1111-4111-8111-111111111111", "prj_22222222-2222-4222-8222-222222222222"]
+            let attempt = try! UploadDraft(title: "Client memo", bytes: Data(original.utf8), visibility: .projects,
+                audienceProjectIDs: ids, projectIDs: ids)
+            require(UploadCommand.submit(attempt).arguments.contains("submit-v3"))
+            guard case .saved(let receipt) = execute(.submit(attempt)) else { fatalError("multi submit") }
+            require(receipt.association_project_ids == ids && receipt.audience.project_ids == ids)
+            let recovery = UploadRecovery(identity: identity, requestID: attempt.requestID, visibility: .projects,
+                audienceProjectIDs: ids, projectIDs: ids)!
+            guard case .saved(let status) = execute(.status(recovery)) else { fatalError("multi status") }
+            require(status.association_project_ids == ids)
+            let suite = "org.echobrain.test.multi." + UUID().uuidString
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            require(recovery.save(for: identity, defaults: defaults))
+            require(UploadRecovery.load(for: identity, defaults: defaults) == recovery)
+            var response: [String: Any] = ["schema_version": 3, "kind": "echo-person-update-status-v3", "request_id": attempt.requestID,
+                "context_id": contextID, "received_at": "2026-09-21T00:00:00.000Z", "audience": ["kind": "projects", "project_ids": ids],
+                "association_project_ids": ids, "status": "stored", "metadata": "ready"]
+            for changed in [["prj_11111111-1111-4111-8111-111111111111"], ["prj_22222222-2222-4222-8222-222222222222", "prj_11111111-1111-4111-8111-111111111111"], ["prj_11111111-1111-4111-8111-111111111111", "prj_11111111-1111-4111-8111-111111111111"]] {
+                response["association_project_ids"] = changed
+                guard case .failed = UploadClient.parse(data(response), command: .status(recovery)) else { fatalError("association drift accepted") }
+            }
+            require((try? UploadDraft(title: "Private", bytes: Data(original.utf8), visibility: .onlyMe, projectIDs: ids)) != nil)
+            require((try? UploadDraft(title: "Invalid", bytes: Data(original.utf8), visibility: .projects, audienceProjectIDs: [], projectIDs: ids)) == nil)
+            require((try? UploadDraft(title: "Invalid", bytes: Data(original.utf8), visibility: .onlyMe, projectIDs: ["prj_22222222-2222-4222-8222-222222222222", "prj_11111111-1111-4111-8111-111111111111"])) == nil)
         case "snapshot-replay":
             let source = folder.appendingPathComponent("input.txt")
             try! Data(original.utf8).write(to: source)
@@ -233,7 +259,8 @@ enum UploadProof {
             guard let sheet = window.attachedSheet, let root = sheet.contentView else { fatalError("compose") }
             let body = ProofUI.find(NSTextView.self, "compose-body", in: root)
             body.string = original; body.didChangeText()
-            ProofUI.find(NSButton.self, "compose-send", in: root).performClick(nil)
+            ProofUI.find(NSButton.self, "compose-next-sharing", in: root).performClick(nil)
+            ProofUI.find(NSButton.self, "compose-upload", in: root).performClick(nil)
             wait("stranded save") { !session.busy && !session.hasOutstandingMutation }
             let status = "The save may have completed. Check its status from the original account."
             require(session.identity == nil && session.status == status, "expected an unconfirmed-account save")
@@ -283,13 +310,18 @@ enum UploadProof {
         wait("write sheet attached") { window.attachedSheet != nil }
         guard let sheet = window.attachedSheet, let sheetRoot = sheet.contentView else { fatalError("write sheet") }
         let body = ProofUI.find(NSTextView.self, "compose-body", "Original note text", in: sheetRoot)
-        let to = ProofUI.find(ChipMenuButton.self, "compose-to", "Send to", in: sheetRoot)
-        let send = ProofUI.find(NSButton.self, "compose-send", "Send", in: sheetRoot)
-        require(to.title == "Only me" && to.choices.first == "Only me", "compose outside a project must default To to Only me")
-        require(body.string.isEmpty && !send.isEnabled, "Send enabled with an empty body")
+        let next = ProofUI.find(NSButton.self, "compose-next-sharing", in: sheetRoot)
+        let upload = ProofUI.find(NSButton.self, "compose-upload", in: sheetRoot)
+        require(!ProofUI.visible(upload), "Upload must wait until the sharing page")
+        require(body.string.isEmpty && !next.isEnabled, "Next enabled with an empty body")
         body.string = "\t\n\t" + original; body.didChangeText()
-        require(send.isEnabled, "Send disabled with text")
-        send.performClick(nil)
+        require(next.isEnabled, "Next disabled with text")
+        next.performClick(nil)
+        require(session.recovery == nil && !session.hasOutstandingMutation, "Next mutated the server")
+        require(ProofUI.find(NSButton.self, "compose-sharing-only-me", in: sheetRoot).state == .on, "sharing must default to Only me")
+        ProofUI.find(NSButton.self, "compose-sharing-back", in: sheetRoot).performClick(nil)
+        require(body.string == "\t\n\t" + original, "Back lost the draft")
+        next.performClick(nil); upload.performClick(nil)
         wait("save") { !session.busy && session.receipt != nil }
         require(session.receipt?.visibility == .onlyMe)
         guard let sent = window.attachedSheet?.contentView else { fatalError("sent sheet") }
@@ -305,7 +337,8 @@ enum UploadProof {
         guard let second = window.attachedSheet?.contentView else { fatalError("second compose") }
         let secondBody = ProofUI.find(NSTextView.self, "compose-body", in: second)
         secondBody.string = "Second note\n"; secondBody.didChangeText()
-        ProofUI.find(NSButton.self, "compose-send", in: second).performClick(nil)
+        ProofUI.find(NSButton.self, "compose-next-sharing", in: second).performClick(nil)
+        ProofUI.find(NSButton.self, "compose-upload", in: second).performClick(nil)
         wait("second save") { !session.busy && session.receipt != nil }
         window.attachedSheet?.cancelOperation(nil); wait("escaped sent") { window.attachedSheet == nil }
         controller.capture(); wait("capture") { window.attachedSheet != nil && !session.busy }
@@ -313,7 +346,7 @@ enum UploadProof {
         let captureBody = ProofUI.find(NSTextView.self, "compose-body", in: capture)
         require(captureBody.isEditable && ProofUI.visible(captureBody), "capture did not open a fresh note")
         captureBody.string = "Pasted text"; captureBody.didChangeText()
-        require(ProofUI.find(NSButton.self, "compose-send", in: capture).isEnabled && session.canCompose, "capture after Escape cannot send")
+        require(ProofUI.find(NSButton.self, "compose-next-sharing", in: capture).isEnabled && session.canCompose, "capture after Escape cannot send")
         window.attachedSheet?.cancelOperation(nil)
         wait("capture discard confirmation") { window.attachedSheet?.attachedSheet != nil }
         guard let discardPrompt = window.attachedSheet?.attachedSheet?.contentView,

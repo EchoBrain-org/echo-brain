@@ -6,15 +6,19 @@ import {
   validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2, validatePersonUpdateSubmitV2,
   validatePersonUploadContentV2, validatePersonUploadContextId, validatePersonUploadSearchResultV2,
   validatePersonUploadSearchV2, validatePersonUpdateRequestId,
-  validateProjectContextFeedV1, validateProjectContextReadV1, validateProjectContextSearchResultV1,
+  validatePersonUpdateReceiptV3, validatePersonUpdateStatusV3, validatePersonUpdateSubmitV3,
+  validatePersonUploadContentV3, validatePersonUploadSearchResultV3,
+  validateProjectContextFeedV1, validateProjectContextFeedV2, validateProjectContextReadV1, validateProjectContextReadV2, validateProjectContextSearchResultV1, validateProjectContextSearchResultV2,
   validateProjectCreateReceiptV1, validateProjectListV1, validateProjectMembersV1,
   validateProjectContextBrowseV1, validateProjectContextSearchV1, validateProjectDirectorySearchV1,
   validateProjectDirectoryV1, validateProjectIdV1, validateProjectMutationReceiptV1,
   validateProjectPageRequestV1, validateProjectSummaryV1,
   type PersonUpdateReceiptV2, type PersonUpdateStatusV2, type PersonUpdateSubmitV2,
   type PersonUploadContentV2, type PersonUploadSearchV2, type PersonUploadSearchResultV2,
+  type PersonUpdateReceiptV3, type PersonUpdateStatusV3, type PersonUpdateSubmitV3,
+  type PersonUploadContentV3, type PersonUploadSearchResultV3, type PersonUploadAudienceV3,
   type ProjectContextAssociateV1, type ProjectContextBrowseV1, type ProjectContextDissociateV1,
-  type ProjectContextFeedV1, type ProjectContextReadV1, type ProjectContextSearchResultV1,
+  type ProjectContextFeedV1, type ProjectContextFeedV2, type ProjectContextReadV1, type ProjectContextReadV2, type ProjectContextSearchResultV1, type ProjectContextSearchResultV2,
   type ProjectContextSearchV1, type ProjectCreateReceiptV1, type ProjectCreateV1,
   type ProjectDirectorySearchV1, type ProjectDirectoryV1, type ProjectIdV1, type ProjectListV1,
   type ProjectMembersV1, type ProjectMemberAddV1, type ProjectMemberRemoveV1, type ProjectMemberSetV1,
@@ -41,7 +45,9 @@ type ProjectRow = {
 };
 type SourceRow = AuthorityPersonMembershipBinding & {
   request_id: string; context_id: string; payload_sha256: Sha256Digest; title: string; text: string;
-  audience_kind: 'only_me' | 'team' | 'project'; audience_project_id: ProjectIdV1 | null;
+  request_version: 2 | 3;
+  audience_kind: 'only_me' | 'team' | 'project' | 'projects'; audience_project_id: ProjectIdV1 | null;
+  submitted_association_project_ids_json: string; audience_project_ids_json: string;
   project_id: ProjectIdV1 | null; received_at: string; state: 'pending' | 'processing' | 'ready' | 'unavailable';
   search_hints: string; enrichment_sha256: Sha256Digest | null; attempts: number;
 };
@@ -58,8 +64,8 @@ type InternalProjectStoreV1 = {
   readonly readable: (actor: AuthorityPersonMembershipBinding, grants: readonly ProjectMembershipGrantV1[], row: SourceRow) => boolean;
   readonly source: (id: string) => SourceRow | undefined;
   readonly sourceOwned: (actor: AuthorityPersonMembershipBinding, requestId: string) => SourceRow | undefined;
-  readonly replay: <T extends ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2>(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1) => T | undefined;
-  readonly record: (actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1, value: ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2) => void;
+  readonly replay: <T extends ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3>(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1) => T | undefined;
+  readonly record: (actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1, value: ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3) => void;
   readonly validateSource: (row: SourceRow) => void;
 };
 let transactionActive = false;
@@ -82,13 +88,25 @@ function withoutCheckedAt(actor: PersonAccessAuthorization): string {
   const { checked_at: _checked, ...rest } = actor;
   return canonicalJson(rest);
 }
-function audience(row: SourceRow) {
-  return row.audience_kind === 'project'
-    ? { kind: 'project' as const, project_id: row.audience_project_id! }
-    : { kind: row.audience_kind };
+function audience(row: SourceRow): { readonly kind: 'only_me' } | { readonly kind: 'team' } | { readonly kind: 'project'; readonly project_id: ProjectIdV1 } {
+  if (row.audience_kind === 'project') return { kind: 'project', project_id: row.audience_project_id! };
+  if (row.audience_kind === 'only_me' || row.audience_kind === 'team') return { kind: row.audience_kind };
+  throw new Error('stored audience is invalid');
 }
-function sourceContextId(actor: AuthorityPersonMembershipBinding, requestId: string): string {
-  return `ctx_${canonicalSha256({ schema_version: 2, kind: 'echo-person-update-source-v2', organization_id: actor.organization_id, membership_id: actor.membership_id, request_id: requestId }).slice(7)}`;
+function projectIds(json: string): readonly ProjectIdV1[] {
+  try {
+    const value: unknown = JSON.parse(json);
+    if (!Array.isArray(value) || value.some((id) => typeof id !== 'string') || canonicalJson(value) !== json) throw new Error();
+    return Object.freeze(value as ProjectIdV1[]);
+  } catch { throw new Error('stored project set is invalid'); }
+}
+function audienceV3(row: SourceRow): PersonUploadAudienceV3 {
+  return row.audience_kind === 'projects'
+    ? Object.freeze({ kind: 'projects' as const, project_ids: projectIds(row.audience_project_ids_json) })
+    : audience(row);
+}
+function sourceContextId(actor: AuthorityPersonMembershipBinding, requestId: string, version: 2 | 3 = 2): string {
+  return `ctx_${canonicalSha256({ schema_version: version, kind: `echo-person-update-source-v${version}`, organization_id: actor.organization_id, membership_id: actor.membership_id, request_id: requestId }).slice(7)}`;
 }
 function score(row: SourceRow, terms: readonly string[]): number | undefined {
   const original = normalizeProjectSearchQueryV1(`${row.title}\n${row.text}`);
@@ -101,8 +119,8 @@ function binary(a: string, b: string): number { return Buffer.compare(Buffer.fro
 export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositoryV1 {
   private readonly issued = new WeakMap<ProjectAuthorizationSnapshotV1, Issued>();
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
-    if (![7, 8].includes(database.pragma('user_version', { simple: true }) as number) || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('Project context requires Authority V7 with foreign keys enabled');
+    if (database.pragma('user_version', { simple: true }) !== 9 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+      throw new Error('Project context requires Authority V9 with foreign keys enabled');
     }
   }
 
@@ -197,7 +215,8 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
     if (row.organization_id !== actor.organization_id) return false;
     if (row.audience_kind === 'only_me') return row.membership_id === actor.membership_id;
     if (row.audience_kind === 'team') return true;
-    return grants.some(grant => grant.project_id === row.audience_project_id);
+    if (row.audience_kind === 'project') return grants.some(grant => grant.project_id === row.audience_project_id);
+    return grants.some((grant) => this.database.prepare(`SELECT 1 FROM authority_person_update_audience_projects_v1 WHERE context_id=? AND project_id=? AND organization_id=?`).get(row.context_id, grant.project_id, row.organization_id) !== undefined);
   }
   private source(id: string): SourceRow | undefined {
     return this.database.prepare(`${SELECT_SOURCE} WHERE submission.context_id = ?`).get(id) as SourceRow | undefined;
@@ -211,7 +230,7 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
     return this.database.prepare(`SELECT operation, command_sha256, receipt_json, receipt_sha256 FROM authority_project_command_receipts_v1
       WHERE organization_id = ? AND membership_id = ? AND request_id = ?`).get(actor.organization_id, actor.membership_id, requestId) as { operation: ProjectMutationV1['operation']; command_sha256: Sha256Digest; receipt_json: string; receipt_sha256: Sha256Digest } | undefined;
   }
-  private replay<T extends ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2>(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1): T | undefined {
+  private replay<T extends ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3>(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1): T | undefined {
     const identity = projectCommandIdentityV1(actor, mutation);
     assertPersonRequestNamespaceV1(this.database, actor, identity.request_id, 'project');
     const stored = this.receipts(actor, identity.request_id);
@@ -219,17 +238,30 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
     if (stored.operation !== mutation.operation || stored.command_sha256 !== identity.command_sha256 || canonicalSha256(JSON.parse(stored.receipt_json)) !== stored.receipt_sha256) denied('conflict');
     return receipt(stored.operation, JSON.parse(stored.receipt_json)) as T;
   }
-  private record(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1, value: ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2): void {
+  private record(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1, value: ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3): void {
     const identity = projectCommandIdentityV1(actor, mutation);
     const body = immutable(value);
     this.database.prepare(`INSERT INTO authority_project_command_receipts_v1
       (organization_id, principal_id, membership_id, membership_type, request_id, operation, command_sha256, receipt_json, receipt_sha256, committed_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type, identity.request_id, mutation.operation, identity.command_sha256, canonicalJson(body), canonicalSha256(body), this.now());
   }
+  private assertImmutableAudienceProjects(row: SourceRow): void {
+    const expected = row.audience_kind === 'projects' ? projectIds(row.audience_project_ids_json) : row.audience_kind === 'project' && row.audience_project_id !== null ? [row.audience_project_id] : [];
+    if (canonicalJson(projectIds(row.audience_project_ids_json)) !== canonicalJson(expected)) throw new Error('project upload audience custody failure');
+    const actual = (this.database.prepare(`SELECT project_id FROM authority_person_update_audience_projects_v1 WHERE context_id=? AND organization_id=? ORDER BY project_id`).all(row.context_id, row.organization_id) as { project_id: ProjectIdV1 }[]).map((item) => item.project_id);
+    if (canonicalJson(actual) !== canonicalJson(expected)) throw new Error('project upload audience integrity failure');
+  }
   private validateSource(row: SourceRow): void {
-    const request = validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: row.request_id, title: row.title, text: row.text, project_id: row.project_id, audience: audience(row) });
-    if (canonicalSha256(request) !== row.payload_sha256 || sourceContextId(row, row.request_id) !== row.context_id) throw new Error('project upload payload integrity failure');
-    validatePersonUpdateReceiptV2({ schema_version: 2, kind: 'echo-person-update-receipt-v2', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, project_id: row.project_id, audience: audience(row), state: 'received' });
+    this.assertImmutableAudienceProjects(row);
+    if (row.request_version === 2) {
+      const request = validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: row.request_id, title: row.title, text: row.text, project_id: row.project_id, audience: audience(row) });
+      if (canonicalSha256(request) !== row.payload_sha256 || sourceContextId(row, row.request_id) !== row.context_id) throw new Error('project upload payload integrity failure');
+      validatePersonUpdateReceiptV2({ schema_version: 2, kind: 'echo-person-update-receipt-v2', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, project_id: row.project_id, audience: audience(row), state: 'received' });
+      return;
+    }
+    const request = validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: row.request_id, title: row.title, text: row.text, association_project_ids: projectIds(row.submitted_association_project_ids_json), audience: audienceV3(row) });
+    if (canonicalSha256(request) !== row.payload_sha256 || sourceContextId(row, row.request_id, 3) !== row.context_id) throw new Error('project upload payload integrity failure');
+    validatePersonUpdateReceiptV3({ schema_version: 3, kind: 'echo-person-update-receipt-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, association_project_ids: request.association_project_ids, audience: request.audience, state: 'received' });
   }
 }
 
@@ -312,6 +344,11 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
     const page = remaining.slice(0, limit);
     return this.store.issue(snapshot, 'directory', validateProjectDirectoryV1({ schema_version: 1, kind: 'echo-project-directory-v1', project_id: input.project_id, items: page, next_cursor: next(remaining, page, limit) ? encodeProjectCursorV1(scope, [page.at(-1)!.display_name, page.at(-1)!.membership_id]) : null }));
   }
+  feedV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV2 {
+    this.open(); const input = this.input(() => validateProjectContextBrowseV1(request)); this.require(snapshot, 'feed_v2', input.project_id);
+    const limit=input.limit??10; const scope=cursorScope(snapshot,limit); const pos=decodeProjectCursorV1(input.cursor,scope); const rows=this.projectSourcesV3(snapshot,input.project_id).sort((a,b)=>b.received_at.localeCompare(a.received_at)||a.context_id.localeCompare(b.context_id)); const remaining=after(rows,pos,row=>[row.received_at,row.context_id]); const page=remaining.slice(0,limit);
+    return this.store.issue(snapshot,'feed_v2',validateProjectContextFeedV2({schema_version:2,kind:'echo-project-context-feed-v2',project_id:input.project_id,items:page.map((row)=>({context_id:row.context_id,received_at:row.received_at,title:row.title,excerpt:[...row.text.trim()].slice(0,300).join(''),audience:audienceV3(row)})),next_cursor:next(remaining,page,limit)?encodeProjectCursorV1(scope,[page.at(-1)!.received_at,page.at(-1)!.context_id]):null}));
+  }
   feed(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV1 {
     this.open(); const input = this.input(() => validateProjectContextBrowseV1(request)); this.require(snapshot, 'feed', input.project_id);
     const limit = input.limit ?? 10; const scope = cursorScope(snapshot, limit); const pos = decodeProjectCursorV1(input.cursor, scope);
@@ -319,6 +356,10 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
     const remaining = after(rows, pos, row => [row.received_at, row.context_id]);
     const page = remaining.slice(0, limit);
     return this.store.issue(snapshot, 'feed', validateProjectContextFeedV1({ schema_version: 1, kind: 'echo-project-context-feed-v1', project_id: input.project_id, items: page.map(item), next_cursor: next(remaining, page, limit) ? encodeProjectCursorV1(scope, [page.at(-1)!.received_at, page.at(-1)!.context_id]) : null }));
+  }
+  searchV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextSearchV1): ProjectContextSearchResultV2 {
+    this.open(); const input=this.input(()=>validateProjectContextSearchV1(request)); this.require(snapshot,'search_v2',input.project_id); const limit=input.limit??10; const scope=cursorScope(snapshot,limit,input.query); const pos=decodeProjectCursorV1(input.cursor,scope); const terms=projectSearchTermsV1(input.query); const rows=this.projectSourcesV3(snapshot,input.project_id).flatMap((row)=>{const n=score(row,terms);return n===undefined?[]:[{row,score:n}];}).sort((a,b)=>b.score-a.score||b.row.received_at.localeCompare(a.row.received_at)||a.row.context_id.localeCompare(b.row.context_id));const remaining=after(rows,pos,value=>[value.score,value.row.received_at,value.row.context_id]);const page=remaining.slice(0,limit);
+    return this.store.issue(snapshot,'search_v2',validateProjectContextSearchResultV2({schema_version:2,kind:'echo-project-context-search-result-v2',project_id:input.project_id,items:page.map(({row})=>({context_id:row.context_id,received_at:row.received_at,title:row.title,excerpt:[...row.text.trim()].slice(0,300).join(''),audience:audienceV3(row)})),next_cursor:next(remaining,page,limit)?encodeProjectCursorV1(scope,[page.at(-1)!.score,page.at(-1)!.row.received_at,page.at(-1)!.row.context_id]):null}));
   }
   search(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextSearchV1): ProjectContextSearchResultV1 {
     this.open(); const input = this.input(() => validateProjectContextSearchV1(request)); this.require(snapshot, 'search', input.project_id);
@@ -330,26 +371,46 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
     const page = remaining.slice(0, limit);
     return this.store.issue(snapshot, 'search', validateProjectContextSearchResultV1({ schema_version: 1, kind: 'echo-project-context-search-result-v1', project_id: input.project_id, items: page.map(value => item(value.row)), next_cursor: next(remaining, page, limit) ? encodeProjectCursorV1(scope, [page.at(-1)!.score, page.at(-1)!.row.received_at, page.at(-1)!.row.context_id]) : null }));
   }
+  readContextV2(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1, contextId: string): ProjectContextReadV2 {
+    this.open(); const input=this.input(()=>({project_id:validateProjectIdV1(projectId),context_id:validatePersonUploadContextId(contextId)})); this.require(snapshot,'context_read_v2',input.project_id); if(snapshot.scope.operation!=='context_read_v2'||snapshot.scope.context_id!==input.context_id)throw new Error('project context scope mismatch'); const row=this.projectSourcesV3(snapshot,input.project_id).find((value)=>value.context_id===input.context_id);if(row===undefined)denied();
+    return this.store.issue(snapshot,'context_read_v2',validateProjectContextReadV2({schema_version:2,kind:'echo-project-context-read-v2',project_id:input.project_id,context_id:row.context_id,received_at:row.received_at,title:row.title,text:row.text,audience:audienceV3(row)}));
+  }
   readContext(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1, contextId: string): ProjectContextReadV1 {
     this.open(); const input = this.input(() => ({ project_id: validateProjectIdV1(projectId), context_id: validatePersonUploadContextId(contextId) })); this.require(snapshot, 'context_read', input.project_id); if (snapshot.scope.operation !== 'context_read' || snapshot.scope.context_id !== input.context_id) throw new Error('project context scope mismatch');
     const row = this.projectSources(snapshot, input.project_id).find(value => value.context_id === input.context_id); if (row === undefined) denied();
     return this.store.issue(snapshot, 'context_read', validateProjectContextReadV1({ schema_version: 1, kind: 'echo-project-context-read-v1', project_id: input.project_id, context_id: row.context_id, received_at: row.received_at, title: row.title, text: row.text, audience: audience(row) }));
   }
   uploadStatus(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusV2 {
-    this.open(); const input = this.input(() => validatePersonUpdateRequestId(requestId)); this.require(snapshot, 'upload_status'); if (snapshot.scope.operation !== 'upload_status' || snapshot.scope.request_id !== input) throw new Error('project context scope mismatch'); const row = this.store.sourceOwned(snapshot.person, input); if (row === undefined) denied();
+    this.open(); const input = this.input(() => validatePersonUpdateRequestId(requestId)); this.require(snapshot, 'upload_status'); if (snapshot.scope.operation !== 'upload_status' || snapshot.scope.request_id !== input) throw new Error('project context scope mismatch'); const row = this.store.sourceOwned(snapshot.person, input); if (row === undefined || row.request_version !== 2) denied();
     return this.store.issue(snapshot, 'upload_status', validatePersonUpdateStatusV2({ schema_version: 2, kind: 'echo-person-update-status-v2', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, project_id: row.project_id, audience: audience(row), status: 'stored', metadata: row.state }));
   }
   readUpload(snapshot: ProjectAuthorizationSnapshotV1, contextId: string): PersonUploadContentV2 {
-    this.open(); const input = this.input(() => validatePersonUploadContextId(contextId)); this.require(snapshot, 'upload_read'); if (snapshot.scope.operation !== 'upload_read' || snapshot.scope.context_id !== input) throw new Error('project context scope mismatch'); const row = this.store.source(input); if (row === undefined || !this.store.readable(snapshot.person, snapshot.grants, row)) denied(); this.store.validateSource(row);
+    this.open(); const input = this.input(() => validatePersonUploadContextId(contextId)); this.require(snapshot, 'upload_read'); if (snapshot.scope.operation !== 'upload_read' || snapshot.scope.context_id !== input) throw new Error('project context scope mismatch'); const row = this.store.source(input); if (row === undefined || row.request_version !== 2 || !this.store.readable(snapshot.person, snapshot.grants, row)) denied(); this.store.validateSource(row);
     return this.store.issue(snapshot, 'upload_read', validatePersonUploadContentV2({ schema_version: 2, kind: 'echo-person-upload-content-v2', context_id: row.context_id, received_at: row.received_at, audience: audience(row), title: row.title, text: row.text }));
   }
   searchUploads(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV2 {
     this.open(); const input = this.input(() => validatePersonUploadSearchV2(request)); this.require(snapshot, 'upload_search'); const terms = projectSearchTermsV1(input.query);
-    const rows = (this.store.database.prepare(`${SELECT_SOURCE} WHERE submission.organization_id = ? ORDER BY submission.received_at DESC, submission.context_id ASC LIMIT 1000`).all(snapshot.person.organization_id) as SourceRow[])
+    const rows = (this.store.database.prepare(`${SELECT_SOURCE} WHERE submission.organization_id = ? AND submission.request_version=2 ORDER BY submission.received_at DESC, submission.context_id ASC LIMIT 1000`).all(snapshot.person.organization_id) as SourceRow[])
       .filter(row => { if (!this.store.readable(snapshot.person, snapshot.grants, row)) return false; this.store.validateSource(row); return true; })
       .flatMap(row => { const n = score(row, terms); return n === undefined ? [] : [{ row, score: n }]; })
       .sort((a,b) => b.score-a.score || b.row.received_at.localeCompare(a.row.received_at) || a.row.context_id.localeCompare(b.row.context_id)).slice(0, input.limit ?? 10);
     return this.store.issue(snapshot, 'upload_search', validatePersonUploadSearchResultV2({ schema_version: 2, kind: 'echo-person-upload-search-v2', results: rows.map(({row}) => ({ context_id: row.context_id, received_at: row.received_at, audience: audience(row), title: row.title, excerpt: [...row.text.trim()].slice(0, 300).join('') })) }));
+  }
+  uploadStatusV3(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusV3 {
+    this.open(); const input = this.input(() => validatePersonUpdateRequestId(requestId)); this.require(snapshot, 'upload_status_v3'); if (snapshot.scope.operation !== 'upload_status_v3' || snapshot.scope.request_id !== input) throw new Error('project context scope mismatch'); const row = this.store.sourceOwned(snapshot.person, input); if (row === undefined || row.request_version !== 3) denied();
+    return this.store.issue(snapshot, 'upload_status_v3', validatePersonUpdateStatusV3({ schema_version: 3, kind: 'echo-person-update-status-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, association_project_ids: projectIds(row.submitted_association_project_ids_json), audience: audienceV3(row), status: 'stored', metadata: row.state }));
+  }
+  readUploadV3(snapshot: ProjectAuthorizationSnapshotV1, contextId: string): PersonUploadContentV3 {
+    this.open(); const input = this.input(() => validatePersonUploadContextId(contextId)); this.require(snapshot, 'upload_read_v3'); if (snapshot.scope.operation !== 'upload_read_v3' || snapshot.scope.context_id !== input) throw new Error('project context scope mismatch'); const row = this.store.source(input); if (row === undefined || row.request_version !== 3 || !this.store.readable(snapshot.person, snapshot.grants, row)) denied(); this.store.validateSource(row);
+    return this.store.issue(snapshot, 'upload_read_v3', validatePersonUploadContentV3({ schema_version: 3, kind: 'echo-person-upload-content-v3', context_id: row.context_id, received_at: row.received_at, audience: audienceV3(row), title: row.title, text: row.text }));
+  }
+  searchUploadsV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV3 {
+    this.open(); const input = this.input(() => validatePersonUploadSearchV2(request)); this.require(snapshot, 'upload_search_v3'); const terms = projectSearchTermsV1(input.query);
+    const rows = (this.store.database.prepare(`${SELECT_SOURCE} WHERE submission.organization_id=? AND submission.request_version=3 ORDER BY submission.received_at DESC,submission.context_id ASC LIMIT 1000`).all(snapshot.person.organization_id) as SourceRow[])
+      .filter((row) => { if (!this.store.readable(snapshot.person, snapshot.grants, row)) return false; this.store.validateSource(row); return true; })
+      .flatMap((row) => { const n = score(row, terms); return n === undefined ? [] : [{ row, score: n }]; })
+      .sort((a,b) => b.score-a.score || b.row.received_at.localeCompare(a.row.received_at) || a.row.context_id.localeCompare(b.row.context_id)).slice(0, input.limit ?? 10);
+    return this.store.issue(snapshot, 'upload_search_v3', validatePersonUploadSearchResultV3({ schema_version: 3, kind: 'echo-person-upload-search-v3', results: rows.map(({row}) => ({ context_id: row.context_id, received_at: row.received_at, audience: audienceV3(row), title: row.title, excerpt: [...row.text.trim()].slice(0, 300).join('') })) }));
   }
   revalidateAndAuditRelease<Response extends ProjectReadResponseV1>(snapshot: ProjectAuthorizationSnapshotV1, currentActor: PersonAccessAuthorization, response: Response): Response { this.open(); this.known(snapshot); return this.store.release(snapshot, currentActor, response); }
 
@@ -404,9 +465,10 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       this.writable(); const mutation={operation:'associate' as const,request}; this.store.assertActive(snapshot.person);
       const replay=this.replay(snapshot,mutation) as ProjectMutationReceiptV1 | undefined; if(replay)return replay;
       this.require(snapshot,'associate',request.project_id); if (!snapshot.grants.some(grant => grant.project_id === request.project_id)) denied(); const row=this.store.source(request.context_id); if(!row || row.membership_id!==snapshot.person.membership_id || !this.store.readable(snapshot.person,snapshot.grants,row)) denied(); this.store.validateSource(row);
-      const existing=this.store.database.prepare('SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id = ?').get(row.context_id) as {project_id:ProjectIdV1}|undefined;
-      if(existing && existing.project_id!==request.project_id) denied('conflict');
-      if(!existing)this.store.database.prepare(`INSERT INTO authority_project_context_associations_v1 (context_id, project_id, organization_id, associator_principal_id, associator_membership_id, associator_membership_type, associated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(row.context_id,request.project_id,snapshot.person.organization_id,snapshot.person.principal_id,snapshot.person.membership_id,snapshot.person.membership_type,this.store.now());
+      const existing=(this.store.database.prepare('SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id = ? ORDER BY project_id').all(row.context_id) as {project_id:ProjectIdV1}[]).map(link=>link.project_id);
+      if(row.request_version===2 && existing.some(id=>id!==request.project_id)) denied('conflict');
+      if(!existing.includes(request.project_id) && existing.length>=20) denied('conflict');
+      if(!existing.includes(request.project_id))this.store.database.prepare(`INSERT INTO authority_project_context_associations_v1 (context_id, project_id, organization_id, associator_principal_id, associator_membership_id, associator_membership_type, associated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(row.context_id,request.project_id,snapshot.person.organization_id,snapshot.person.principal_id,snapshot.person.membership_id,snapshot.person.membership_type,this.store.now());
       const result=mutationReceipt(request,this.store.now());this.store.record(snapshot.person,mutation,result);return result;
     });
   }
@@ -415,10 +477,10 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       this.writable(); this.require(snapshot, 'dissociate', request.project_id); const mutation={operation:'dissociate' as const,request}; this.store.assertActive(snapshot.person);
       const replay=this.replay(snapshot,mutation) as ProjectMutationReceiptV1 | undefined;if(replay)return replay;
       const row=this.store.source(request.context_id);if(!row || !this.store.readable(snapshot.person,snapshot.grants,row))denied();this.store.validateSource(row);
-      const existing=this.store.database.prepare('SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id = ?').get(row.context_id) as {project_id:ProjectIdV1}|undefined;
-      if(existing && existing.project_id!==request.project_id)denied();
+      const existing=(this.store.database.prepare('SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id = ? ORDER BY project_id').all(row.context_id) as {project_id:ProjectIdV1}[]).map(link=>link.project_id);
+      if(row.request_version===2 && existing.some(id=>id!==request.project_id))denied();
       const uploader=row.membership_id===snapshot.person.membership_id;const lead=snapshot.grants.some(g=>g.project_id===request.project_id&&g.role==='lead');if(!uploader&&!lead)denied();
-      if(existing)this.store.database.prepare('DELETE FROM authority_project_context_associations_v1 WHERE context_id = ?').run(row.context_id);
+      if(existing.includes(request.project_id))this.store.database.prepare('DELETE FROM authority_project_context_associations_v1 WHERE context_id = ? AND project_id = ?').run(row.context_id,request.project_id);
       const result=mutationReceipt(request,this.store.now());this.store.record(snapshot.person,mutation,result);return result;
     });
   }
@@ -432,15 +494,43 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       assertPersonDocumentCapacityV1(this.store.database,snapshot.person,Buffer.byteLength(request.text),'legacy_text');
       const received_at=this.store.now(); const context_id=sourceContextId(snapshot.person,request.request_id);
       const audience_project_id=request.audience.kind==='project'?request.audience.project_id:null;
-      this.store.database.prepare(`INSERT INTO authority_person_updates_v2 (organization_id, principal_id, membership_id, membership_type, request_id, context_id, payload_sha256, title, text, audience_kind, audience_project_id, project_id, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(snapshot.person.organization_id,snapshot.person.principal_id,snapshot.person.membership_id,snapshot.person.membership_type,request.request_id,context_id,canonicalSha256(request),request.title,request.text,request.audience.kind,audience_project_id,request.project_id,received_at);
+      this.store.database.prepare(`INSERT INTO authority_person_updates_v2 (organization_id,principal_id,membership_id,membership_type,request_id,request_version,context_id,payload_sha256,title,text,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(snapshot.person.organization_id,snapshot.person.principal_id,snapshot.person.membership_id,snapshot.person.membership_type,request.request_id,2,context_id,canonicalSha256(request),request.title,request.text,request.audience.kind,audience_project_id,canonicalJson(request.project_id===null?[]:[request.project_id]),canonicalJson(audience_project_id===null?[]:[audience_project_id]),request.project_id,received_at);
       this.store.database.prepare(`INSERT INTO authority_person_update_work_v2 (context_id, state, retry_at) VALUES (?, 'pending', ?)`).run(context_id,received_at);
       if(request.project_id!==null)this.store.database.prepare(`INSERT INTO authority_project_context_associations_v1 (context_id, project_id, organization_id, associator_principal_id, associator_membership_id, associator_membership_type, associated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(context_id,request.project_id,snapshot.person.organization_id,snapshot.person.principal_id,snapshot.person.membership_id,snapshot.person.membership_type,received_at);
+      if(audience_project_id!==null)this.store.database.prepare(`INSERT INTO authority_person_update_audience_projects_v1 (context_id,project_id,organization_id) VALUES (?,?,?)`).run(context_id,audience_project_id,snapshot.person.organization_id);
       const result=validatePersonUpdateReceiptV2({schema_version:2,kind:'echo-person-update-receipt-v2',request_id:request.request_id,context_id,received_at,project_id:request.project_id,audience:request.audience,state:'received'});
       this.store.record(snapshot.person,mutation,result);return result;
     });
   }
+  submitUploadV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUpdateSubmitV3): PersonUpdateReceiptV3 {
+    return this.mutate(() => {
+      this.writable(); const mutation = { operation: 'upload_submit_v3' as const, request }; this.store.assertActive(snapshot.person);
+      const replay = this.replay(snapshot, mutation) as PersonUpdateReceiptV3 | undefined; if (replay) return replay;
+      this.require(snapshot, 'upload_submit_v3');
+      const audienceProjectIds = request.audience.kind === 'projects' ? request.audience.project_ids : request.audience.kind === 'project' ? [request.audience.project_id] : [];
+      const audienceProjectId = request.audience.kind === 'project' ? request.audience.project_id : null;
+      const selected = [...request.association_project_ids, ...audienceProjectIds];
+      if (selected.some((id) => !snapshot.grants.some((grant) => grant.project_id === id))) denied();
+      assertPersonDocumentCapacityV1(this.store.database, snapshot.person, Buffer.byteLength(request.text), 'legacy_text');
+      const received_at = this.store.now(); const context_id = sourceContextId(snapshot.person, request.request_id, 3);
+      this.store.database.prepare(`INSERT INTO authority_person_updates_v2
+        (organization_id,principal_id,membership_id,membership_type,request_id,request_version,context_id,payload_sha256,title,text,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        snapshot.person.organization_id, snapshot.person.principal_id, snapshot.person.membership_id, snapshot.person.membership_type,
+        request.request_id, 3, context_id, canonicalSha256(request), request.title, request.text, request.audience.kind, audienceProjectId,
+        canonicalJson(request.association_project_ids), canonicalJson(audienceProjectIds), null, received_at,
+      );
+      this.store.database.prepare(`INSERT INTO authority_person_update_work_v2 (context_id,state,retry_at) VALUES (?,'pending',?)`).run(context_id, received_at);
+      const associate = this.store.database.prepare(`INSERT INTO authority_project_context_associations_v1 (context_id,project_id,organization_id,associator_principal_id,associator_membership_id,associator_membership_type,associated_at) VALUES (?,?,?,?,?,?,?)`);
+      for (const project_id of request.association_project_ids) associate.run(context_id, project_id, snapshot.person.organization_id, snapshot.person.principal_id, snapshot.person.membership_id, snapshot.person.membership_type, received_at);
+      const share = this.store.database.prepare(`INSERT INTO authority_person_update_audience_projects_v1 (context_id,project_id,organization_id) VALUES (?,?,?)`);
+      for (const project_id of audienceProjectIds) share.run(context_id, project_id, snapshot.person.organization_id);
+      const result = validatePersonUpdateReceiptV3({ schema_version: 3, kind: 'echo-person-update-receipt-v3', request_id: request.request_id, context_id, received_at, association_project_ids: request.association_project_ids, audience: request.audience, state: 'received' });
+      this.store.record(snapshot.person, mutation, result); return result;
+    });
+  }
   private known(snapshot: ProjectAuthorizationSnapshotV1): void { if (!this.snapshots.has(snapshot)) throw new Error('project context snapshot escaped or was forged'); }
-  private replay(snapshot: ProjectAuthorizationSnapshotV1, mutation: ProjectMutationV1): ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | undefined {
+  private replay(snapshot: ProjectAuthorizationSnapshotV1, mutation: ProjectMutationV1): ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3 | undefined {
     this.known(snapshot);
     if (!('request' in snapshot.scope) || snapshot.scope.operation !== mutation.operation || canonicalJson(snapshot.scope.request) !== canonicalJson(mutation.request)) throw new Error('project context mutation scope mismatch');
     this.store.assertActive(snapshot.person);
@@ -454,11 +544,12 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
   private requireLead(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1): void { if(!snapshot.grants.some(g=>g.project_id===projectId&&g.role==='lead'))denied(); }
   private project(actor: AuthorityPersonMembershipBinding, projectId: ProjectIdV1): Omit<ProjectRow,'organization_id'>|undefined { return this.store.database.prepare(`SELECT project.project_id,project.name,project.created_at,grant.role FROM authority_projects_v1 project JOIN authority_project_memberships_v1 grant ON grant.project_id=project.project_id AND grant.organization_id=project.organization_id JOIN authority_memberships membership ON membership.membership_id=grant.membership_id AND membership.status='active' WHERE project.project_id=? AND project.organization_id=? AND grant.membership_id=? AND grant.status='active'`).get(projectId,actor.organization_id,actor.membership_id) as Omit<ProjectRow,'organization_id'>|undefined; }
   private members(projectId:ProjectIdV1): {membership_id:string;display_name:string;role:ProjectRoleV1}[]{return this.store.database.prepare(`SELECT grant.membership_id,principal.display_name,grant.role FROM authority_project_memberships_v1 grant JOIN authority_memberships membership ON membership.membership_id=grant.membership_id AND membership.status='active' JOIN authority_principals principal ON principal.principal_id=grant.principal_id WHERE grant.project_id=? AND grant.status='active' ORDER BY principal.display_name ASC,grant.membership_id ASC`).all(projectId) as {membership_id:string;display_name:string;role:ProjectRoleV1}[];}
-  private projectSources(snapshot:ProjectAuthorizationSnapshotV1,projectId:ProjectIdV1):SourceRow[]{return(this.store.database.prepare(`${SELECT_SOURCE} JOIN authority_project_context_associations_v1 association ON association.context_id=submission.context_id WHERE association.project_id=? AND association.organization_id=?`).all(projectId,snapshot.person.organization_id) as SourceRow[]).filter(row=>{if(!this.store.readable(snapshot.person,snapshot.grants,row))return false;this.store.validateSource(row);return true;});}
+  private projectSourcesV3(snapshot:ProjectAuthorizationSnapshotV1,projectId:ProjectIdV1):SourceRow[]{return(this.store.database.prepare(`${SELECT_SOURCE} JOIN authority_project_context_associations_v1 association ON association.context_id=submission.context_id WHERE association.project_id=? AND association.organization_id=? AND submission.request_version IN (2,3)`).all(projectId,snapshot.person.organization_id) as SourceRow[]).filter(row=>{if(!this.store.readable(snapshot.person,snapshot.grants,row))return false;this.store.validateSource(row);return true;});}
+  private projectSources(snapshot:ProjectAuthorizationSnapshotV1,projectId:ProjectIdV1):SourceRow[]{return(this.store.database.prepare(`${SELECT_SOURCE} JOIN authority_project_context_associations_v1 association ON association.context_id=submission.context_id WHERE association.project_id=? AND association.organization_id=? AND submission.request_version=2`).all(projectId,snapshot.person.organization_id) as SourceRow[]).filter(row=>{if(!this.store.readable(snapshot.person,snapshot.grants,row))return false;this.store.validateSource(row);return true;});}
   private lastLead(projectId:ProjectIdV1,_membershipId:string):void{const n=(this.store.database.prepare(`SELECT count(*) AS n FROM authority_project_memberships_v1 grant JOIN authority_memberships membership ON membership.membership_id=grant.membership_id AND membership.status='active' WHERE grant.project_id=? AND grant.status='active' AND grant.role='lead'`).get(projectId) as {n:number}).n;if(n<=1)denied('conflict');}
 }
 function readOperation(scope: ProjectAuthorizationScopeV1): ProjectReadOperationV1 {
-  const reads = ['project_list', 'project_read', 'members', 'directory', 'feed', 'search', 'context_read', 'upload_status', 'upload_read', 'upload_search'];
+  const reads = ['project_list', 'project_read', 'members', 'directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'];
   if (reads.includes(scope.operation)) return scope.operation as ProjectReadOperationV1;
   throw new Error('mutation cannot release');
 }
@@ -467,7 +558,7 @@ function projectOf(scope:ProjectAuthorizationScopeV1):ProjectIdV1|undefined {
   return 'request' in scope && 'project_id' in scope.request ? scope.request.project_id ?? undefined : undefined;
 }
 function isReadScope(scope: ProjectAuthorizationScopeV1): boolean {
-  return ['project_list', 'project_read', 'members', 'directory', 'feed', 'search', 'context_read', 'upload_status', 'upload_read', 'upload_search'].includes(scope.operation);
+  return ['project_list', 'project_read', 'members', 'directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'].includes(scope.operation);
 }
 function count(response: ProjectReadResponseV1): number {
   if ('items' in response) return response.items.length;
@@ -480,6 +571,7 @@ function item(row: SourceRow) {
 function receipt(operation: ProjectMutationV1['operation'], body: unknown) {
   if (operation === 'create') return validateProjectCreateReceiptV1(body);
   if (operation === 'upload_submit') return validatePersonUpdateReceiptV2(body);
+  if (operation === 'upload_submit_v3') return validatePersonUpdateReceiptV3(body);
   return validateProjectMutationReceiptV1(body);
 }
 function mutationReceipt(request: ProjectMemberAddV1 | ProjectMemberSetV1 | ProjectMemberRemoveV1 | ProjectContextAssociateV1 | ProjectContextDissociateV1, received_at: string): ProjectMutationReceiptV1 {

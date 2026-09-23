@@ -178,7 +178,7 @@ test -f "$DEPLOY_DIR/.staging-release-guard/owner-pid"
 # Migration copy/cutover/rollback under actual root and service ownership.
 # The fixture contains synthetic bytes only; the copier itself is covered by
 # the full-updater SQLite test. This proof owns the filesystem privilege edge.
-migration_helper = re.search(r"<<'ECHO_V5_V6_PY'\n(.*?)^ECHO_V5_V6_PY$", updater_source, re.M | re.S).group(1)
+migration_helper = re.search(r"<<'ECHO_STATE_MIGRATION_PY'\n(.*?)^ECHO_STATE_MIGRATION_PY$", updater_source, re.M | re.S).group(1)
 with tempfile.TemporaryDirectory(prefix='echo-migration-posix-') as temporary:
     root = pathlib.Path(temporary)
     root.chmod(0o755)
@@ -193,13 +193,13 @@ with tempfile.TemporaryDirectory(prefix='echo-migration-posix-') as temporary:
         os.chown(state / name, 999, 988)
     inode = state.stat().st_ino
     def migration(action):
-        result = subprocess.run(['python3', '-c', migration_helper, action, str(state), '.', str(accepted_path), str(candidate_path), '999:988'], cwd=release, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(['python3', '-c', migration_helper, action, str(state), '.', str(accepted_path), str(candidate_path), '999:988', 'v8-to-v9'], cwd=release, capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, result.stderr
         return result.stdout.strip()
     next_state = pathlib.Path(migration('prepare'))
     assert next_state.stat().st_uid == 999 and next_state.stat().st_gid == 988
     assert (next_state / 'records.sqlite').stat().st_uid == 999
-    write(next_state / 'authority.sqlite', b'synthetic V6 state\n'); os.chown(next_state / 'authority.sqlite', 999, 988)
+    write(next_state / 'authority.sqlite', b'synthetic V9 state\n'); os.chown(next_state / 'authority.sqlite', 999, 988)
     migration('cutover'); migration('ready'); migration('check')
     backup = next_state.parent / 'accepted-state'
     denied = subprocess.run(['python3', '-c', 'import pathlib,sys; pathlib.Path(sys.argv[1]).read_bytes()', str(backup / 'identity.key')], cwd='/tmp', user=999, group=988, extra_groups=[], capture_output=True, timeout=10)
@@ -207,5 +207,5 @@ with tempfile.TemporaryDirectory(prefix='echo-migration-posix-') as temporary:
     migration('restore'); migration('complete')
     assert state.stat().st_ino == inode and state.stat().st_uid == 999
     assert (state / 'authority.sqlite').read_bytes() == b'synthetic original state\n'
-    assert (next_state.parent / 'failed-state/authority.sqlite').read_bytes() == b'synthetic V6 state\n'
+    assert (next_state.parent / 'failed-state/authority.sqlite').read_bytes() == b'synthetic V9 state\n'
     print('PASS: migration retains service ownership, isolates the accepted snapshot from UID 999, and restores the original inode')

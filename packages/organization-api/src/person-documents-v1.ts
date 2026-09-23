@@ -1,8 +1,10 @@
 import { sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonUpdateRequestId } from './person-updates.js';
 import { validateProjectContextAudienceV1, validateProjectIdV1, type ProjectContextAudienceV1, type ProjectIdV1 } from './project-context-v1.js';
+import { validateAssociationProjectIdsV1, validatePersonUploadAudienceV3, type PersonUploadAudienceV3 } from './person-upload-audience-v3.js';
 
 export const PERSON_DOCUMENTS_PATH_V1 = '/v1/person/documents';
+export const PERSON_DOCUMENTS_PATH_V2 = '/v2/person/documents';
 export const PERSON_DOCUMENT_MAX_ORIGINAL_BYTES = 25 * 1024 * 1024;
 /** Wall-clock bound for an original document upload or download. */
 export const PERSON_DOCUMENT_TRANSFER_DEADLINE_MS = 10 * 60 * 1000;
@@ -33,6 +35,26 @@ export interface PersonDocumentSavedV1 {
 export type PersonDocumentUploadResultV1 = PersonDocumentReceiptV1 | PersonDocumentSavedV1;
 export type PersonDocumentStatusV1 = PersonDocumentMetadataV1 | PersonDocumentSavedV1;
 
+/** V2 records an immutable initial multi-project association set. */
+export interface PersonDocumentUploadMetadataV2 {
+  readonly schema_version: 2; readonly kind: 'echo-person-document-upload-v2'; readonly request_id: string;
+  readonly filename: string; readonly title: string; readonly content_length: number; readonly sha256: `sha256:${string}`;
+  readonly audience: PersonUploadAudienceV3; readonly association_project_ids: readonly ProjectIdV1[];
+}
+export interface PersonDocumentReceiptV2 extends Omit<PersonDocumentUploadMetadataV2, 'kind'> {
+  readonly kind: 'echo-person-document-receipt-v2'; readonly document_id: `doc_${string}`;
+  readonly detected_media_type: PersonDocumentMediaTypeV1; readonly received_at: string;
+  readonly state: 'saved'; readonly extraction_state: PersonDocumentExtractionStateV1;
+}
+/** Account-scoped V2 admission proof intentionally omits immutable custody coordinates. */
+export interface PersonDocumentSavedV2 { readonly schema_version: 2; readonly kind: 'echo-person-document-saved-v2'; readonly request_id: string; readonly document_id: `doc_${string}`; readonly received_at: string; readonly state: 'saved'; }
+export type PersonDocumentUploadResultV2 = PersonDocumentReceiptV2 | PersonDocumentSavedV2;
+export interface PersonDocumentMetadataV2 extends Omit<PersonDocumentReceiptV2, 'kind' | 'association_project_ids'> {
+  readonly kind: 'echo-person-document-metadata-v2'; readonly association_project_ids: readonly ProjectIdV1[];
+  readonly extraction_detail: string | null; readonly extractor: string | null; readonly extracted_text_bytes: number;
+}
+export type PersonDocumentStatusV2 = PersonDocumentMetadataV2 | PersonDocumentSavedV2;
+
 function plainObject(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new Error('Document metadata must be an object');
   return value as Record<string, unknown>;
@@ -52,6 +74,15 @@ export function validatePersonDocumentUploadMetadataV1(value: unknown): PersonDo
   const audience = validateProjectContextAudienceV1(input.audience);
   const project_id = input.project_id === null ? null : validateProjectIdV1(input.project_id, 'Document associated project_id');
   return { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: input.request_id as string, filename: input.filename, title: input.title, content_length: input.content_length as number, sha256: input.sha256 as `sha256:${string}`, audience, project_id };
+}
+export function validatePersonDocumentUploadMetadataV2(value: unknown): PersonDocumentUploadMetadataV2 {
+  const input = plainObject(value); const keys = ['association_project_ids','audience','content_length','filename','kind','request_id','schema_version','sha256','title'];
+  if (Object.keys(input).sort().join() !== keys.join() || input.schema_version !== 2 || input.kind !== 'echo-person-document-upload-v2') throw new Error('Document metadata shape is invalid');
+  validatePersonUpdateRequestId(input.request_id); boundedText(input.filename, 'Document filename', 255); boundedText(input.title, 'Document title', 200);
+  if (/[\\/]/u.test(input.filename) || input.filename === '.' || input.filename === '..') throw new Error('Document filename must be a basename');
+  if (!Number.isSafeInteger(input.content_length) || (input.content_length as number) < 1 || (input.content_length as number) > PERSON_DOCUMENT_MAX_ORIGINAL_BYTES) throw new Error('Document content length is invalid');
+  if (typeof input.sha256 !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(input.sha256)) throw new Error('Document SHA-256 is invalid');
+  return Object.freeze({ schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: input.request_id as string, filename: input.filename, title: input.title, content_length: input.content_length as number, sha256: input.sha256 as `sha256:${string}`, audience: validatePersonUploadAudienceV3(input.audience), association_project_ids: validateAssociationProjectIdsV1(input.association_project_ids) });
 }
 
 /** Detects supported content from bytes; caller-supplied filename/MIME is never authoritative. */
@@ -164,6 +195,17 @@ export interface PersonDocumentSearchResultV1 {
   readonly documents: readonly (PersonDocumentMetadataV1 & { readonly excerpt: string | null; readonly anchor: { readonly kind: 'page' | 'paragraph'; readonly start: number } | null })[];
   readonly next_cursor: string | null;
 }
+/** V2 preserves the same bounded query and project-view selector, but returns
+ * multi-project audience and current association coordinates. */
+export interface PersonDocumentSearchV2 {
+  readonly schema_version: 2; readonly kind: 'echo-person-document-search-v2';
+  readonly project_id: ProjectIdV1 | null; readonly query: string; readonly limit: number; readonly cursor: string | null;
+}
+export interface PersonDocumentSearchResultV2 {
+  readonly schema_version: 2; readonly kind: 'echo-person-document-search-result-v2';
+  readonly documents: readonly (PersonDocumentMetadataV2 & { readonly excerpt: string | null; readonly anchor: { readonly kind: 'page' | 'paragraph'; readonly start: number } | null })[];
+  readonly next_cursor: string | null;
+}
 export function validatePersonDocumentIdV1(value: unknown): `doc_${string}` {
   if (typeof value !== 'string' || !/^doc_[a-f0-9]{64}$/.test(value)) throw new Error('Document ID is invalid');
   return value as `doc_${string}`;
@@ -175,6 +217,14 @@ export function validatePersonDocumentSearchV1(value: unknown): PersonDocumentSe
   if (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > 20) throw new Error('Document search limit is invalid');
   if (input.cursor !== null && (typeof input.cursor !== 'string' || input.cursor.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))) throw new Error('Document cursor is invalid');
   return { schema_version: 1, kind: 'echo-person-document-search-v1', project_id: input.project_id === null ? null : validateProjectIdV1(input.project_id, 'project_id'), query: input.query.normalize('NFC').trim(), limit: input.limit as number, cursor: input.cursor as string | null };
+}
+export function validatePersonDocumentSearchV2(value: unknown): PersonDocumentSearchV2 {
+  const input = plainObject(value);
+  if (Object.keys(input).sort().join() !== ['cursor','kind','limit','project_id','query','schema_version'].join() || input.schema_version !== 2 || input.kind !== 'echo-person-document-search-v2') throw new Error('Document search shape is invalid');
+  if (typeof input.query !== 'string' || utf8Bytes(input.query) > 200 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.query)) throw new Error('Document query is invalid');
+  if (!Number.isInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > 20) throw new Error('Document search limit is invalid');
+  if (input.cursor !== null && (typeof input.cursor !== 'string' || input.cursor.length > 1024 || !/^[A-Za-z0-9_-]+$/.test(input.cursor))) throw new Error('Document cursor is invalid');
+  return { schema_version: 2, kind: 'echo-person-document-search-v2', project_id: input.project_id === null ? null : validateProjectIdV1(input.project_id, 'project_id'), query: input.query.normalize('NFC').trim(), limit: input.limit as number, cursor: input.cursor as string | null };
 }
 
 const documentReceiptKeys = ['schema_version','kind','request_id','filename','title','content_length','sha256','audience','project_id','document_id','detected_media_type','received_at','state','extraction_state'];
@@ -201,6 +251,29 @@ export function validatePersonDocumentUploadResultV1(value: unknown): PersonDocu
 export function validatePersonDocumentStatusV1(value: unknown): PersonDocumentStatusV1 {
   return plainObject(value).kind==='echo-person-document-saved-v1'?validatePersonDocumentSavedV1(value):validatePersonDocumentMetadataV1(value);
 }
+function documentBaseV2(value: Record<string, unknown>): void {
+  validatePersonDocumentUploadMetadataV2({ schema_version: value.schema_version, kind: 'echo-person-document-upload-v2', request_id: value.request_id, filename: value.filename, title: value.title, content_length: value.content_length, sha256: value.sha256, audience: value.audience, association_project_ids: value.association_project_ids });
+  validatePersonDocumentIdV1(value.document_id);
+  if (!documentMedia.includes(value.detected_media_type as string) || !documentStates.includes(value.extraction_state as string) || value.state !== 'saved' || typeof value.received_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.received_at) || !Number.isFinite(Date.parse(value.received_at))) throw new Error('Document receipt fields are invalid');
+}
+export function validatePersonDocumentReceiptV2(value: unknown): PersonDocumentReceiptV2 {
+  const input = plainObject(value); exactDocumentKeys(input, ['schema_version','kind','request_id','filename','title','content_length','sha256','audience','association_project_ids','document_id','detected_media_type','received_at','state','extraction_state']);
+  if (input.kind !== 'echo-person-document-receipt-v2') throw new Error('Document receipt kind is invalid'); documentBaseV2(input); documentJsonBound(input); return input as unknown as PersonDocumentReceiptV2;
+}
+export function validatePersonDocumentSavedV2(value: unknown): PersonDocumentSavedV2 {
+  const input = plainObject(value); exactDocumentKeys(input, ['schema_version','kind','request_id','document_id','received_at','state']);
+  if (input.schema_version !== 2 || input.kind !== 'echo-person-document-saved-v2' || input.state !== 'saved' || typeof input.received_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input.received_at) || !Number.isFinite(Date.parse(input.received_at))) throw new Error('Document saved receipt is invalid');
+  validatePersonUpdateRequestId(input.request_id); validatePersonDocumentIdV1(input.document_id); documentJsonBound(input); return input as unknown as PersonDocumentSavedV2;
+}
+export function validatePersonDocumentUploadResultV2(value: unknown): PersonDocumentUploadResultV2 { return plainObject(value).kind === 'echo-person-document-saved-v2' ? validatePersonDocumentSavedV2(value) : validatePersonDocumentReceiptV2(value); }
+export function validatePersonDocumentMetadataV2(value: unknown): PersonDocumentMetadataV2 {
+  const input = plainObject(value); exactDocumentKeys(input, ['schema_version','kind','request_id','filename','title','content_length','sha256','audience','association_project_ids','document_id','detected_media_type','received_at','state','extraction_state','extraction_detail','extractor','extracted_text_bytes']);
+  if (input.kind !== 'echo-person-document-metadata-v2') throw new Error('Document metadata kind is invalid'); documentBaseV2(input);
+  if (input.extraction_detail !== null && (typeof input.extraction_detail !== 'string' || utf8Bytes(input.extraction_detail) > 512 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.extraction_detail))) throw new Error('Document extraction detail is invalid');
+  if (input.extractor !== null && (typeof input.extractor !== 'string' || utf8Bytes(input.extractor) < 1 || utf8Bytes(input.extractor) > 512)) throw new Error('Document extractor is invalid');
+  if (!Number.isSafeInteger(input.extracted_text_bytes) || (input.extracted_text_bytes as number) < 0 || (input.extracted_text_bytes as number) > PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES) throw new Error('Document extraction byte count is invalid'); documentJsonBound(input); return input as unknown as PersonDocumentMetadataV2;
+}
+export function validatePersonDocumentStatusV2(value: unknown): PersonDocumentStatusV2 { return plainObject(value).kind === 'echo-person-document-saved-v2' ? validatePersonDocumentSavedV2(value) : validatePersonDocumentMetadataV2(value); }
 export function validatePersonDocumentMetadataV1(value: unknown): PersonDocumentMetadataV1 {
   const input=plainObject(value);exactDocumentKeys(input,[...documentReceiptKeys,'extraction_detail','extractor','extracted_text_bytes']);if(input.kind!=='echo-person-document-metadata-v1')throw new Error('Document metadata kind is invalid');documentBase(input);
   if(input.extraction_detail!==null&&(typeof input.extraction_detail!=='string'||utf8Bytes(input.extraction_detail)>512||/[\u0000-\u001f\u007f-\u009f]/u.test(input.extraction_detail)))throw new Error('Document extraction detail is invalid');
@@ -220,4 +293,9 @@ export function validatePersonDocumentSearchResultV1(value: unknown): PersonDocu
   const input=plainObject(value);exactDocumentKeys(input,['schema_version','kind','documents','next_cursor']);if(input.schema_version!==1||input.kind!=='echo-person-document-search-result-v1'||!Array.isArray(input.documents)||input.documents.length>20)throw new Error('Document search result is invalid');
   for(const value of input.documents){const item=plainObject(value);const {excerpt,anchor,...metadata}=item;validatePersonDocumentMetadataV1(metadata);if(excerpt!==null&&(typeof excerpt!=='string'||Array.from(excerpt).length>240))throw new Error('Document excerpt is invalid');if(anchor!==null){const a=plainObject(anchor);exactDocumentKeys(a,['kind','start']);if(!['page','paragraph'].includes(a.kind as string)||!Number.isSafeInteger(a.start)||(a.start as number)<1)throw new Error('Document search anchor is invalid');}}
   documentNextCursor(input.next_cursor);documentJsonBound(input);return input as unknown as PersonDocumentSearchResultV1;
+}
+export function validatePersonDocumentSearchResultV2(value: unknown): PersonDocumentSearchResultV2 {
+  const input = plainObject(value); exactDocumentKeys(input,['schema_version','kind','documents','next_cursor']); if(input.schema_version!==2||input.kind!=='echo-person-document-search-result-v2'||!Array.isArray(input.documents)||input.documents.length>20)throw new Error('Document search result is invalid');
+  for(const value of input.documents){const item=plainObject(value);const {excerpt,anchor,...metadata}=item;validatePersonDocumentMetadataV2(metadata);if(excerpt!==null&&(typeof excerpt!=='string'||Array.from(excerpt).length>240))throw new Error('Document excerpt is invalid');if(anchor!==null){const a=plainObject(anchor);exactDocumentKeys(a,['kind','start']);if(!['page','paragraph'].includes(a.kind as string)||!Number.isSafeInteger(a.start)||(a.start as number)<1)throw new Error('Document search anchor is invalid');}}
+  documentNextCursor(input.next_cursor);documentJsonBound(input);return input as unknown as PersonDocumentSearchResultV2;
 }

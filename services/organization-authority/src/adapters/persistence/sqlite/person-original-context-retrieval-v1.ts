@@ -265,8 +265,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const projects = this.database.prepare("SELECT project_id FROM authority_project_memberships_v1 WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active'").all(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type) as readonly { readonly project_id: string }[];
     const ids = projects.map((row) => row.project_id);
     return Object.freeze({
-      sql: `(${prefix}.audience_kind='team' OR (${prefix}.audience_kind='only_me' AND ${prefix}.membership_id=?) OR (${prefix}.audience_kind='project' AND ${prefix}.audience_project_id IN (${ids.map(() => "?").join(",") || "NULL"})))`,
-      args: [actor.membership_id, ...ids],
+      sql: `(${prefix}.audience_kind='team' OR (${prefix}.audience_kind='only_me' AND ${prefix}.membership_id=?) OR (${prefix}.audience_kind='project' AND ${prefix}.audience_project_id IN (${ids.map(() => "?").join(",") || "NULL"})) OR (${prefix}.audience_kind='projects' AND EXISTS (SELECT 1 FROM ${prefix === 'u' ? 'authority_person_update_audience_projects_v1' : 'authority_person_document_audience_projects_v1'} audience_project WHERE audience_project.${prefix === 'u' ? 'context_id' : 'document_id'}=${prefix}.${prefix === 'u' ? 'context_id' : 'document_id'} AND audience_project.organization_id=${prefix}.organization_id AND audience_project.project_id IN (${ids.map(() => "?").join(",") || "NULL"}))))`,
+      args: [actor.membership_id, ...ids, ...ids],
     });
   }
 
@@ -274,13 +274,12 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const acl = this.acl(actor, "u");
     const conditions = terms.map(() => "echo_original_context_contains_v1(u.title,u.text,?)=1");
     const scopeSql = scope.kind === "project"
-      ? "AND association.project_id=? AND association.organization_id=u.organization_id"
+      ? "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)"
       : "";
-    const updates = `(SELECT 2 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
+    const updates = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
       UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
     const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at
       FROM ${updates} u
-      LEFT JOIN authority_project_context_associations_v1 association ON association.context_id=u.context_id
       JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
@@ -294,7 +293,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   private documentRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[]): readonly DocumentRow[] {
     const acl = this.acl(actor, "d");
     const scopeSql = scope.kind === "project"
-      ? "AND association.project_id=? AND association.organization_id=d.organization_id"
+      ? "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)"
       : "";
     // The admitted source binds filename, but not the document's display title.
     // Use the verified filename for both matching and the packet's title field.
@@ -303,7 +302,6 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_text_v1 t ON t.document_id=d.document_id
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial') AND work.extractor=t.extractor
-      LEFT JOIN authority_person_document_associations_v1 association ON association.document_id=d.document_id
       JOIN authority_sources_v1 s ON s.organization_id=d.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=d.document_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=d.original_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
@@ -417,12 +415,11 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private textBySource(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string): SourceRow | undefined {
     const acl = this.acl(actor, "u");
-    const scopeSql = scope.kind === "project" ? "AND association.project_id=? AND association.organization_id=u.organization_id" : "";
-    const updates = `(SELECT 2 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
+    const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)" : "";
+    const updates = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
       UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
     return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at
-      FROM ${updates} u LEFT JOIN authority_project_context_associations_v1 association ON association.context_id=u.context_id
-      JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
+      FROM ${updates} u JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       WHERE u.organization_id=? AND ${acl.sql} ${scopeSql} AND s.source_id=? AND r.revision_id=?`).get(actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), sourceId, revisionId) as SourceRow | undefined;
@@ -448,11 +445,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private documentSourceMeta(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string, documentId: string, representationSha256: Sha256Digest): Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text"> | undefined {
     const acl = this.acl(actor, "d");
-    const scopeSql = scope.kind === "project" ? "AND association.project_id=? AND association.organization_id=d.organization_id" : "";
+    const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)" : "";
     return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,work.extractor,representation.content_json AS representation_json,d.received_at
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial')
-      LEFT JOIN authority_person_document_associations_v1 association ON association.document_id=d.document_id
       JOIN authority_sources_v1 s ON s.organization_id=d.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=d.document_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=d.original_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id

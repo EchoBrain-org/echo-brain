@@ -15,7 +15,7 @@ import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-
 const databases: Database.Database[]=[];
 afterEach(()=>databases.splice(0).forEach(d=>d.close()));
 function setup(){
- const db=new Database(':memory:');databases.push(db);db.pragma('foreign_keys=ON');db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v8.sql',import.meta.url),'utf8'));
+ const db=new Database(':memory:');databases.push(db);db.pragma('foreign_keys=ON');db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v9.sql',import.meta.url),'utf8'));
  db.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_documents',?,'Document fixture','{}',?,?)`).run(OWNER.organization_id,PROJECT_CONTEXT_NOW,PROJECT_CONTEXT_NOW);
  db.prepare(`INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)`).run(OWNER.organization_id,PROJECT_CONTEXT_NOW);
  addMembership(db,OWNER,'Owner',null);addMembership(db,MEMBER,'Member','member@example.test');

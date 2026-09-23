@@ -65,6 +65,32 @@ enum DocumentProof {
                 "chunks": [["ordinal": 0, "anchor_kind": "page", "anchor_start": 1, "text": "First page"]], "next_cursor": "Mg"]
             require(DocumentTextPage.parse(page, metadata: parsed)?.display == "Page 1\nFirst page")
             page["original_sha256"] = "sha256:" + String(repeating: "0", count: 64); require(DocumentTextPage.parse(page, metadata: parsed) == nil)
+        case "modern-recovery":
+            let ids = ["prj_11111111-1111-4111-8111-111111111111", "prj_22222222-2222-4222-8222-222222222222"]
+            let draft = try! UploadDraft(title: "Robot PRD", document: snapshot, visibility: .projects,
+                audienceProjectIDs: ids, projectIDs: ids)
+            require(UploadCommand.submit(draft).arguments.prefix(3) == ["person", "documents", "upload-v2"])
+            var recovery = UploadRecovery(identity: identity, requestID: requestID, visibility: .projects,
+                audienceProjectIDs: ids, projectIDs: ids)!
+            recovery.carrier = "document-v2"; recovery.documentFilename = snapshot.filename; recovery.documentSize = snapshot.size
+            recovery.documentSha256 = snapshot.sha256; recovery.documentTitle = "Robot PRD"
+            let suite = "echo-document-proof-" + UUID().uuidString
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            require(recovery.save(for: identity, defaults: defaults))
+            require(UploadRecovery.load(for: identity, defaults: defaults) == recovery)
+            var object = metadata(snapshot)
+            object.removeValue(forKey: "project_id"); object["schema_version"] = 2; object["kind"] = "echo-person-document-metadata-v2"
+            object["association_project_ids"] = ids; object["audience"] = ["kind": "projects", "project_ids": ids]
+            guard case .saved(let receipt) = UploadClient.parse(data(["ok": true, "result": object]), command: .status(recovery)) else { fatalError("V2 initial coordinates") }
+            require(receipt.association_project_ids == ids)
+            object["association_project_ids"] = ["prj_11111111-1111-4111-8111-111111111111"]
+            require(DocumentMetadata.parse(object) != nil, "metadata can contain current associations")
+            guard case .failed = UploadClient.parse(data(["ok": true, "result": object]), command: .status(recovery)) else { fatalError("status drift") }
+            let minimal: [String: Any] = ["schema_version": 2, "kind": "echo-person-document-saved-v2", "request_id": requestID,
+                "document_id": documentID, "received_at": "2026-09-23T00:00:00.000Z", "state": "saved"]
+            guard case .saved(let saved) = UploadClient.parse(data(["ok": true, "result": minimal]), command: .status(recovery)) else { fatalError("V2 saved proof") }
+            require(saved.contentUnavailable == true && saved.association_project_ids == ids)
         case "failures":
             for code in ["invalid_file", "snapshot_conflict", "snapshot_limit", "snapshot_not_found", "stale_access_state"] {
                 let failure: [String: Any] = ["ok": false, "action": "documents-upload", "error": "Rejected", "code": code,
@@ -102,7 +128,7 @@ enum DocumentProof {
                 let saved: [String: Any] = ["schema_version": 1, "kind": "echo-person-document-saved-v1", "request_id": requestID,
                     "document_id": documentID, "received_at": "2026-09-23T00:00:00.000Z", "state": "saved"]
                 guard case .saved(let receipt) = UploadClient.parse(data(["ok": true, "result": saved]), command: .status(recovery)) else { fatalError("minimal saved") }
-                require(receipt.contentUnavailable == true && receipt.document == nil && receipt.message.contains("no longer available"))
+                require(receipt.contentUnavailable == true && receipt.document == nil && receipt.message.contains("details could not be shown"))
                 var metadata = metadata(snapshot); metadata["project_id"] = "prj_11111111-1111-4111-8111-111111111111"
                 guard case .saved = UploadClient.parse(data(["ok": true, "result": metadata]), command: .status(recovery)) else { fatalError("current association is not original receipt association") }
             } else {

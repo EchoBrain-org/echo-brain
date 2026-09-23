@@ -1,6 +1,7 @@
 import {
   validatePersonUpdateRequestId,
   validatePersonUpdateSubmitV2,
+  validatePersonUpdateSubmitV3,
   validatePersonUploadContextId,
   validatePersonUploadSearchV2,
   validateProjectContextAssociateV1,
@@ -15,12 +16,19 @@ import {
   validateProjectMemberSetV1,
   validateProjectPageRequestV1,
   type PersonUpdateReceiptV2,
+  type PersonUpdateReceiptV3,
   type PersonUpdateStatusV2,
+  type PersonUpdateStatusV3,
   type PersonUploadContentV2,
+  type PersonUploadContentV3,
   type PersonUploadSearchResultV2,
+  type PersonUploadSearchResultV3,
   type ProjectContextFeedV1,
+  type ProjectContextFeedV2,
   type ProjectContextReadV1,
+  type ProjectContextReadV2,
   type ProjectContextSearchResultV1,
+  type ProjectContextSearchResultV2,
   type ProjectCreateReceiptV1,
   type ProjectDirectoryV1,
   type ProjectListV1,
@@ -91,13 +99,25 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextDissociateV1(value));
     return this.write(actor, { operation: 'dissociate', request }, (transaction, snapshot) => transaction.dissociateContext(snapshot, request));
   }
+  feedV2(accessToken: string, value: unknown): ProjectContextFeedV2 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextBrowseV1(value));
+    return this.read(accessToken, actor, { operation: 'feed_v2', project_id: request.project_id }, (transaction, snapshot) => transaction.feedV2(snapshot, request));
+  }
   feed(accessToken: string, value: unknown): ProjectContextFeedV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextBrowseV1(value));
     return this.read(accessToken, actor, { operation: 'feed', project_id: request.project_id }, (transaction, snapshot) => transaction.feed(snapshot, request));
   }
+  searchV2(accessToken: string, value: unknown): ProjectContextSearchResultV2 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextSearchV1(value));
+    return this.read(accessToken, actor, { operation: 'search_v2', project_id: request.project_id }, (transaction, snapshot) => transaction.searchV2(snapshot, request));
+  }
   search(accessToken: string, value: unknown): ProjectContextSearchResultV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextSearchV1(value));
     return this.read(accessToken, actor, { operation: 'search', project_id: request.project_id }, (transaction, snapshot) => transaction.search(snapshot, request));
+  }
+  readContextV2(accessToken: string, project: unknown, context: unknown): ProjectContextReadV2 {
+    const actor = this.authenticate(accessToken); const projectId = this.input(() => validateProjectIdV1(project)); const contextId = this.input(() => validatePersonUploadContextId(context));
+    return this.read(accessToken, actor, { operation: 'context_read_v2', project_id: projectId, context_id: contextId }, (transaction, snapshot) => transaction.readContextV2(snapshot, projectId, contextId));
   }
   readContext(accessToken: string, project: unknown, context: unknown): ProjectContextReadV1 {
     const actor = this.authenticate(accessToken); const projectId = this.input(() => validateProjectIdV1(project)); const contextId = this.input(() => validatePersonUploadContextId(context));
@@ -107,17 +127,33 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validatePersonUpdateSubmitV2(value));
     return this.write(actor, { operation: 'upload_submit', request }, (transaction, snapshot) => transaction.submitUpload(snapshot, request));
   }
+  submitUploadV3(accessToken: string, value: unknown): PersonUpdateReceiptV3 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validatePersonUpdateSubmitV3(value));
+    return this.write(actor, { operation: 'upload_submit_v3', request }, (transaction, snapshot) => transaction.submitUploadV3(snapshot, request));
+  }
   uploadStatus(accessToken: string, value: unknown): PersonUpdateStatusV2 {
     const actor = this.authenticate(accessToken); const requestId = this.input(() => validatePersonUpdateRequestId(value));
     return this.read(accessToken, actor, { operation: 'upload_status', request_id: requestId }, (transaction, snapshot) => transaction.uploadStatus(snapshot, requestId));
+  }
+  uploadStatusV3(accessToken: string, value: unknown): PersonUpdateStatusV3 {
+    const actor = this.authenticate(accessToken); const requestId = this.input(() => validatePersonUpdateRequestId(value));
+    return this.read(accessToken, actor, { operation: 'upload_status_v3', request_id: requestId }, (transaction, snapshot) => transaction.uploadStatusV3(snapshot, requestId));
   }
   readUpload(accessToken: string, value: unknown): PersonUploadContentV2 {
     const actor = this.authenticate(accessToken); const contextId = this.input(() => validatePersonUploadContextId(value));
     return this.read(accessToken, actor, { operation: 'upload_read', context_id: contextId }, (transaction, snapshot) => transaction.readUpload(snapshot, contextId));
   }
+  readUploadV3(accessToken: string, value: unknown): PersonUploadContentV3 {
+    const actor = this.authenticate(accessToken); const contextId = this.input(() => validatePersonUploadContextId(value));
+    return this.read(accessToken, actor, { operation: 'upload_read_v3', context_id: contextId }, (transaction, snapshot) => transaction.readUploadV3(snapshot, contextId));
+  }
   searchUploads(accessToken: string, value: unknown): PersonUploadSearchResultV2 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validatePersonUploadSearchV2(value));
     return this.read(accessToken, actor, { operation: 'upload_search' }, (transaction, snapshot) => transaction.searchUploads(snapshot, request));
+  }
+  searchUploadsV3(accessToken: string, value: unknown): PersonUploadSearchResultV3 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validatePersonUploadSearchV2(value));
+    return this.read(accessToken, actor, { operation: 'upload_search_v3' }, (transaction, snapshot) => transaction.searchUploadsV3(snapshot, request));
   }
 
   private authenticate(accessToken: string): PersonAccessAuthorization { return this.dependencies.authenticate(accessToken); }

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { applyAuthorityBaselineV8 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
+import { applyAuthorityBaselineV8, applyAuthorityBaselineV9 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1, sourceContentSha256V1, type MeetingDocument } from '@echo-brain/organization-processing/core';
 import { SqliteSourceAdmissionStoreV1 } from '../src/adapters/persistence/sqlite/source-admission-v1.js';
 import { PersonSourceAdapterV1 } from '../src/adapters/sources/person-source-v1.js';
@@ -28,6 +28,28 @@ function meeting(): MeetingDocument {
 }
 
 describe('durable common source admission',()=>{
+  it('admits a departed contributor V3 projects note with a project-set custody commitment', async () => {
+    const db = new Database(':memory:'); dbs.push(db); db.pragma('foreign_keys=ON'); applyAuthorityBaselineV9(db);
+    const actor={organization_id:'org_fixture',principal_id:'prn_pm',membership_id:'mem_11111111-1111-4111-8111-111111111111',membership_type:'owner'} as const;
+    const first='prj_11111111-1111-4111-8111-111111111111'; const second='prj_22222222-2222-4222-8222-222222222222';
+    db.prepare("INSERT INTO authority_metadata VALUES (1,'oau_fixture','org_fixture','Fixture','{}',?,?)").run(at,at);
+    db.prepare("INSERT INTO authority_project_authorization_state_v1 VALUES ('org_fixture',0,?)").run(at);
+    db.prepare("INSERT INTO authority_principals VALUES (?,?,'PM',?)").run(actor.principal_id,actor.organization_id,at);
+    db.prepare("INSERT INTO authority_memberships(membership_id,organization_id,principal_id,membership_type,status,provisioned_at) VALUES (?,?,?,?,'active',?)").run(actor.membership_id,actor.organization_id,actor.principal_id,actor.membership_type,at);
+    for (const project of [first,second]) db.prepare('INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)').run(project,actor.organization_id,project,at,actor.principal_id,actor.membership_id,actor.membership_type);
+    const request={schema_version:3 as const,kind:'echo-person-update-submit-v3' as const,request_id:'33333333-3333-4333-8333-333333333333',title:'Cross-project note',text:'shared systems evidence',association_project_ids:[first],audience:{kind:'projects' as const,project_ids:[first,second]}};
+    const context=`ctx_${canonicalSha256({schema_version:3,kind:'echo-person-update-source-v3',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:request.request_id}).slice(7)}`;
+    db.prepare(`INSERT INTO authority_person_updates_v2(organization_id,principal_id,membership_id,membership_type,request_id,request_version,context_id,payload_sha256,title,text,audience_kind,audience_project_id,submitted_association_project_ids_json,audience_project_ids_json,project_id,received_at) VALUES (?,?,?,?,?,?,?,? ,? ,? ,'projects',NULL,?,?,NULL,?)`).run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,request.request_id,3,context,canonicalSha256(request),request.title,request.text,JSON.stringify(request.association_project_ids),JSON.stringify(request.audience.project_ids),at);
+    db.prepare("INSERT INTO authority_person_update_work_v2(context_id,state,retry_at) VALUES (?,'pending',?)").run(context,at);
+    db.prepare('INSERT INTO authority_person_update_audience_projects_v1 VALUES (?,?,?)').run(context,first,actor.organization_id);
+    db.prepare('INSERT INTO authority_person_update_audience_projects_v1 VALUES (?,?,?)').run(context,second,actor.organization_id);
+    db.prepare("UPDATE authority_memberships SET status='revoked',revoked_at=?,revocation_reason='fixture' WHERE membership_id=?").run(at,actor.membership_id);
+    const pulled=new SqlitePersonTextSourceInboxV1(db).next()!;
+    expect(pulled.scope.custody_ref).toBe(`projects:${canonicalSha256([first,second])}`);
+    const store=new SqliteSourceAdmissionStoreV1(db,(source,scope)=>assertPersonSourceAdmissionV1(db,source,scope));
+    expect(await store.admitSourceRevision(pulled)).toBe('admitted');
+    expect(db.prepare('SELECT custody_ref,content_json FROM authority_sources_v1 JOIN authority_source_contents_v1 USING(source_id)').get()).toEqual({custody_ref:`projects:${canonicalSha256([first,second])}`,content_json:canonicalJson(pulled.source.content)});
+  });
   it('pulls editor notes through the same Person identity without a model or decoder, including departed shared contributors',async()=>{
     const {db}=fixture();
     const store=new SqliteSourceAdmissionStoreV1(db,(source,scope)=>assertPersonSourceAdmissionV1(db,source,scope));

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalJson, sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonDocumentReceiptV1, MAX_ORGANIZATION_API_BODY_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, type PersonDocumentUploadMetadataV1 } from '@echo-brain/organization-api';
+import { validatePersonDocumentReceiptV1, validatePersonDocumentReceiptV2, validatePersonDocumentMetadataV2, validatePersonDocumentSearchResultV2, MAX_ORGANIZATION_API_BODY_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, type PersonDocumentUploadMetadataV1, type PersonDocumentUploadMetadataV2 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { runPersonClientCli } from '../../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../../src/product/person-client/session-store.js';
@@ -17,7 +17,7 @@ import { createPersonDocumentUploadStagingV1 } from '../src/adapters/files/docum
 import type { PersonDocumentApplicationV1 } from '../src/application/ports/document-v1.js';
 import type { PersonDocumentUploadStagingV1 } from '../src/application/ports/document-upload-staging-v1.js';
 import { createOrganizationAuthorityHttpServer, type OrganizationAuthorityHttpServerOptions } from '../src/presentation/organization-authority-http-server.js';
-import { addMembership, authorization, PROJECT_CONTEXT_NOW, PROJECT_ALPHA } from './fixtures/project-context-sqlite.js';
+import { addMembership, authorization, PROJECT_CONTEXT_NOW, PROJECT_ALPHA, PROJECT_BETA } from './fixtures/project-context-sqlite.js';
 import { PersonDocumentProcessingV1 } from '../src/composition/person-document-processing-v1.js';
 import { pdf, zip, entries } from './document-extraction-fixtures.js';
 import { PEOPLE } from '../../../tests/fixtures/project-context-integration/scenario.js';
@@ -26,9 +26,9 @@ const closers:(()=>Promise<void>)[]=[];
 afterEach(async()=>{for(const close of closers.splice(0).reverse())await close();});
 const options=():OrganizationAuthorityHttpServerOptions=>({descriptor:{} as never,sessions:{} as never,oidc_provider:{} as never,expected_issuer:'https://issuer.example'});
 function input(bytes:Uint8Array,overrides:Partial<PersonDocumentUploadMetadataV1>={}):PersonDocumentUploadMetadataV1{return {schema_version:1,kind:'echo-person-document-upload-v1',request_id:randomUUID(),filename:'机器人-PRD.md',title:'SCOUT requirements',content_length:bytes.byteLength,sha256:sha256Digest(bytes),audience:{kind:'team'},project_id:PROJECT_ALPHA,...overrides};}
-function headers(value:PersonDocumentUploadMetadataV1,bearer=token){return {authorization:`Bearer ${bearer}`,'content-type':'application/octet-stream','content-length':String(value.content_length),'x-echo-document-metadata':Buffer.from(canonicalJson(value)).toString('base64url')};}
+function headers(value:PersonDocumentUploadMetadataV1 | PersonDocumentUploadMetadataV2,bearer=token){return {authorization:`Bearer ${bearer}`,'content-type':'application/octet-stream','content-length':String(value.content_length),'x-echo-document-metadata':Buffer.from(canonicalJson(value)).toString('base64url')};}
 async function fixture(extra:{decorate?:(app:PersonDocumentApplicationV1)=>PersonDocumentApplicationV1;closing?:()=>boolean;staging?:PersonDocumentUploadStagingV1;server?:Partial<OrganizationAuthorityHttpServerOptions>}={}){
- const directory=realpathSync(mkdtempSync(join(tmpdir(),'echo-document-http-test-')));const db=new Database(':memory:');db.pragma('foreign_keys=ON');db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v8.sql',import.meta.url),'utf8'));
+ const directory=realpathSync(mkdtempSync(join(tmpdir(),'echo-document-http-test-')));const db=new Database(':memory:');db.pragma('foreign_keys=ON');db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v9.sql',import.meta.url),'utf8'));
  db.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_00000000-0000-4000-8000-000000000006',?,'Document HTTP fixture','{}',?,?)`).run(PEOPLE.alice.organization_id,PROJECT_CONTEXT_NOW,PROJECT_CONTEXT_NOW);
  db.prepare(`INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)`).run(PEOPLE.alice.organization_id,PROJECT_CONTEXT_NOW);
  for(const actor of [PEOPLE.alice,PEOPLE.bob])addMembership(db,actor,actor.principal_id,`${actor.principal_id}@example.test`);
@@ -48,6 +48,35 @@ async function waitFor(check:()=>boolean){for(let n=0;n<100;n++){if(check())retu
 async function upload(origin:string,bytes:Buffer,value=input(bytes)){const response=await fetch(`${origin}/v1/person/documents/${value.request_id}`,{method:'PUT',headers:headers(value),body:new Uint8Array(bytes)});expect(response.status).toBe(201);return validatePersonDocumentReceiptV1(await response.json());}
 
 describe('document binary HTTP boundary and real service integration',()=>{
+ it('serves one modern original through both project scopes and the union of current members without widening private uploads',async()=>{
+  const h=await fixture(), bytes=Buffer.from('Shared hardware software interface');
+  h.db.prepare(`INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,?,?,?,?,?)`).run(PROJECT_BETA,PEOPLE.alice.organization_id,'Hardware',PROJECT_CONTEXT_NOW,PEOPLE.alice.principal_id,PEOPLE.alice.membership_id,PEOPLE.alice.membership_type);
+  const grantBeta=(actor:typeof PEOPLE.alice)=>h.db.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at) VALUES (?,?,?,?,?,?,?,'active',?)`).run(`pgm_${randomUUID()}`,PROJECT_BETA,actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,'member',PROJECT_CONTEXT_NOW);
+  grantBeta(PEOPLE.alice);
+  const value:PersonDocumentUploadMetadataV2={schema_version:2,kind:'echo-person-document-upload-v2',request_id:randomUUID(),filename:'interface.md',title:'Interface',content_length:bytes.length,sha256:sha256Digest(bytes),association_project_ids:[PROJECT_ALPHA,PROJECT_BETA],audience:{kind:'projects',project_ids:[PROJECT_ALPHA,PROJECT_BETA]}};
+  const put=async(metadata=value)=>fetch(`${h.origin}/v2/person/documents/${metadata.request_id}`,{method:'PUT',headers:headers(metadata),body:new Uint8Array(bytes)});
+  const uploaded=await put();expect(uploaded.status).toBe(201);const saved=validatePersonDocumentReceiptV2(await uploaded.json());
+  const replay=await put();expect(replay.status).toBe(201);expect(await replay.json()).toEqual(saved);
+  expect(h.db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:1});
+  expect(h.db.prepare('SELECT count(*) n FROM authority_person_document_originals_v1').get()).toEqual({n:1});
+  const get=(path:string,bearer=memberToken)=>fetch(`${h.origin}/v2/person/documents/${path}`,{headers:{authorization:`Bearer ${bearer}`}});
+  const meta=await get(saved.document_id);expect(meta.status).toBe(200);expect(await meta.json()).toMatchObject({schema_version:2,association_project_ids:[PROJECT_ALPHA],audience:value.audience});
+  await failure(await get(`${saved.document_id}?project_id=${PROJECT_BETA}`),404,'not_found');
+  grantBeta(PEOPLE.bob);
+  for(const project of [PROJECT_ALPHA,PROJECT_BETA]){
+   const original=await get(`${saved.document_id}/original?project_id=${project}`);expect(original.status).toBe(200);expect(Buffer.from(await original.arrayBuffer())).toEqual(bytes);
+  }
+  const claim=h.repository.claimExtraction()!;h.repository.completeExtraction(claim,{status:'ready',sourceSha256:claim.source_sha256,extractorVersion:'fixture-v2',message:null,chunks:[{anchor_kind:'paragraph',anchor_start:1,text:bytes.toString()}]});
+  const text=await get(`${saved.document_id}/text?project_id=${PROJECT_BETA}`);expect(text.status).toBe(200);expect(await text.json()).toMatchObject({chunks:[{text:bytes.toString()}]});
+  const search=await fetch(`${h.origin}/v2/person/documents/search`,{method:'POST',headers:{authorization:`Bearer ${memberToken}`,'content-type':'application/json'},body:JSON.stringify({schema_version:2,kind:'echo-person-document-search-v2',project_id:PROJECT_BETA,query:'interface',limit:20,cursor:null})});expect(search.status).toBe(200);expect(await search.json()).toMatchObject({schema_version:2,documents:[{document_id:saved.document_id}]});
+  const privateResponse=await put({...value,request_id:randomUUID(),audience:{kind:'only_me'}});expect(privateResponse.status).toBe(201);const privateSaved=validatePersonDocumentReceiptV2(await privateResponse.json());
+  await failure(await get(`${privateSaved.document_id}?project_id=${PROJECT_BETA}`),404,'not_found');
+  h.db.prepare(`UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE membership_id=? AND project_id=?`).run(PROJECT_CONTEXT_NOW,PEOPLE.bob.membership_id,PROJECT_ALPHA);
+  expect((await get(saved.document_id)).status).toBe(200);
+  h.db.prepare(`UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE membership_id=? AND project_id=?`).run(PROJECT_CONTEXT_NOW,PEOPLE.bob.membership_id,PROJECT_BETA);
+  await failure(await get(saved.document_id),404,'not_found');
+ });
+
  it('raises Node request timeout to the document transfer deadline',async()=>{
   const h=await fixture();
   expect(h.server.requestTimeout).toBe(PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
@@ -66,6 +95,18 @@ describe('document binary HTTP boundary and real service integration',()=>{
   const search=await fetch(`${h.origin}/v1/person/documents/search`,{method:'POST',headers:{authorization:`Bearer ${memberToken}`,'content-type':'application/json'},body:JSON.stringify({schema_version:1,kind:'echo-person-document-search-v1',project_id:PROJECT_ALPHA,query:'end-needle',limit:20,cursor:null})});expect(search.status).toBe(200);expect(await search.json()).toMatchObject({documents:[{document_id:receipt.document_id}]});
   const original=await fetch(`${h.origin}/v1/person/documents/${receipt.document_id}/original?project_id=${PROJECT_ALPHA}`,{headers:{authorization:`Bearer ${memberToken}`}});expect(original.status).toBe(200);expect(original.headers.get('x-echo-document-sha256')).toBe(value.sha256);expect(original.headers.get('content-disposition')).toContain(encodeURIComponent(value.filename));expect(Buffer.from(await original.arrayBuffer())).toEqual(bytes);
   expect(readdirSync(h.directory)).toEqual([]);
+ });
+ it('admits, searches, reads and downloads a projects-audience V2 document through HTTP',async()=>{
+  const h=await fixture(); const bytes=Buffer.from('V2 project-union document proof'); const value:PersonDocumentUploadMetadataV2={schema_version:2,kind:'echo-person-document-upload-v2',request_id:randomUUID(),filename:'union.md',title:'Union proof',content_length:bytes.byteLength,sha256:sha256Digest(bytes),association_project_ids:[PROJECT_ALPHA],audience:{kind:'projects',project_ids:[PROJECT_ALPHA]}};
+  const uploadHeaders={authorization:`Bearer ${token}`,'content-type':'application/octet-stream','content-length':String(bytes.byteLength),'x-echo-document-metadata':Buffer.from(canonicalJson(value)).toString('base64url')};
+  const uploaded=await fetch(`${h.origin}/v2/person/documents/${value.request_id}`,{method:'PUT',headers:uploadHeaders,body:new Uint8Array(bytes)}); expect(uploaded.status).toBe(201); const receipt=validatePersonDocumentReceiptV2(await uploaded.json());
+  const claim=h.repository.claimExtraction()!; h.repository.completeExtraction(claim,{status:'ready',sourceSha256:claim.source_sha256,extractorVersion:'v2-http',message:null,chunks:[{anchor_kind:'paragraph',anchor_start:1,text:bytes.toString()}]});
+  const auth={authorization:`Bearer ${memberToken}`}; const read=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}?project_id=${PROJECT_ALPHA}`,{headers:auth}); expect(read.status).toBe(200); expect(validatePersonDocumentMetadataV2(await read.json())).toMatchObject({document_id:receipt.document_id,audience:value.audience,association_project_ids:[PROJECT_ALPHA]});
+  const text=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}/text?project_id=${PROJECT_ALPHA}`,{headers:auth});expect(text.status).toBe(200);expect((await text.json() as {chunks:{text:string}[]}).chunks[0]?.text).toContain('union document');
+  const found=await fetch(`${h.origin}/v2/person/documents/search`,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify({schema_version:2,kind:'echo-person-document-search-v2',project_id:PROJECT_ALPHA,query:'union document',limit:20,cursor:null})});expect(found.status).toBe(200);expect(validatePersonDocumentSearchResultV2(await found.json()).documents).toHaveLength(1);
+  const original=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}/original?project_id=${PROJECT_ALPHA}`,{headers:auth});expect(original.status).toBe(200);expect(Buffer.from(await original.arrayBuffer())).toEqual(bytes);
+  h.db.exec(`CREATE TRIGGER document_v2_audit_failure BEFORE INSERT ON authority_person_document_read_audit_v1 BEGIN SELECT RAISE(ABORT,'audit unavailable'); END`);
+  const withheld=await fetch(`${h.origin}/v2/person/documents/${receipt.document_id}?project_id=${PROJECT_ALPHA}`,{headers:auth});expect(withheld.status).not.toBe(200);
  });
  it('returns only the saved request proof after project removal on status and exact HTTP replay',async()=>{
   const h=await fixture();const bytes=Buffer.from('project secret');const value=input(bytes,{audience:{kind:'project',project_id:PROJECT_ALPHA}});

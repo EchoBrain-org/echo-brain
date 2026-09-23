@@ -23,7 +23,7 @@ import urllib.request
 
 DEPLOY = pathlib.Path('/srv/echo-authority-clean-v1')
 TOOLS = ('update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh', 'release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py')
-ACTIONS = ('install', 'inspect-install', 'diagnose', 'repair', 'stage', 'stage-v5-to-v6', 'canary', 'status', 'rollback', 'promote')
+ACTIONS = ('install', 'inspect-install', 'diagnose', 'repair', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9', 'canary', 'status', 'rollback', 'promote')
 SAFE_CODES = ('installed', 'installation_failed', 'inspection_verified', 'inspection_refused', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed')
 INSPECTION_CATEGORIES = ('ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'repair_pending', 'inspection_failed', 'control_path_changed')
 TOOL_CATEGORIES = ('tool_missing', 'tool_file_invalid', 'tool_hash_unknown')
@@ -131,7 +131,7 @@ def validate_request(request):
         require(request['tooling_migration'] == 'legacy-staging-host-v1' and request['action'] in ('install', 'inspect-install'))
     require(re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', request['operation_id']) is not None)
     require(request['action'] in ACTIONS)
-    require(request['action'] != 'stage-v5-to-v6' or compact)
+    require(request['action'] not in ('stage-v5-to-v6', 'stage-v8-to-v9') or compact)
     require(type(request['created_at']) is int and request['expires_at'] == request['created_at'] + 1800)
     target = request['target']
     require(set(target) == {'account', 'region', 'stack_id', 'instance_id', 'volume_id'})
@@ -157,7 +157,7 @@ def validate_request(request):
     for name in TOOLS:
         require(re.fullmatch(r'[a-f0-9]{64}', request['old_tool_hashes'][name]) is not None)
     require(request['content_telemetry'] in (None, 'true', 'false'))
-    require(request['action'] in ('stage', 'stage-v5-to-v6') or request['content_telemetry'] is None)
+    require(request['action'] in ('stage', 'stage-v5-to-v6', 'stage-v8-to-v9') or request['content_telemetry'] is None)
     for binding in ('accepted', 'candidate'):
         require(re.fullmatch(r'clean-v1-[a-z0-9][a-z0-9-]{2,63}', request[binding]['release_id']) is not None)
         require(re.fullmatch(r'[a-f0-9]{64}', request[binding]['sha256']) is not None)
@@ -502,7 +502,7 @@ def installer_preconditions(request, root):
             require(sha(regular(candidate_path, True, 16384)) == request['candidate']['sha256'], 'candidate_present')
         except Exception:
             raise Refused('candidate_present')
-    if request['action'] in ('install', 'inspect-install', 'repair', 'stage', 'stage-v5-to-v6'):
+    if request['action'] in ('install', 'inspect-install', 'repair', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9'):
         require(not candidate_present, 'candidate_present')
     if request['action'] in ('canary', 'promote', 'rollback'):
         require(candidate_present)
@@ -696,11 +696,11 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
                 immutable(root / '.staging-release-guard' / name, files[name])
             inputs = root / '.staging-release-guard'
             action = request['action']
-            args = {'diagnose': ['diagnose-environment'], 'status': ['status'], 'repair': ['repair-environment', '--expected-release-id', request['accepted']['release_id'], '--restore-accepted'], 'stage': ['stage', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v5-to-v6': ['stage-v5-to-v6', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'canary': ['canary'], 'rollback': ['rollback'], 'promote': ['promote', '--release', str(inputs / 'candidate.json'), '--canary-passed']}[action]
+            args = {'diagnose': ['diagnose-environment'], 'status': ['status'], 'repair': ['repair-environment', '--expected-release-id', request['accepted']['release_id'], '--restore-accepted'], 'stage': ['stage', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v5-to-v6': ['stage-v5-to-v6', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v8-to-v9': ['stage-v8-to-v9', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'canary': ['canary'], 'rollback': ['rollback'], 'promote': ['promote', '--release', str(inputs / 'candidate.json'), '--canary-passed']}[action]
             if action == 'repair':
                 ok, code, diagnostic = invoke(root, operation, ['diagnose-environment'])
                 require(ok and diagnostic['release_id'] == request['accepted']['release_id'] and not diagnostic['candidate_staged'] and (diagnostic['repair_eligible'] or diagnostic['repair_pending']))
-            if action in ('stage', 'stage-v5-to-v6') and request['content_telemetry'] is not None:
+            if action in ('stage', 'stage-v5-to-v6', 'stage-v8-to-v9') and request['content_telemetry'] is not None:
                 args += ['--content-telemetry', request['content_telemetry']]
             ok, code, diagnostic = invoke(root, operation, args)
             if diagnostic is not None:

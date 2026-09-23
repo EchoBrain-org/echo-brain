@@ -46,6 +46,22 @@ function setupProject(f: ReturnType<typeof fixture>) {
 }
 
 describe('V2 project upload enrichment in the serialized Person worker', () => {
+  it('validates and enriches a V3 projects-audience upload through the same requested-only worker', async () => {
+    const f = fixture();
+    const first = f.application.createProject('owner', { schema_version: 1, kind: 'echo-project-create-v1', request_id: requestId(70), name: 'Sensors' });
+    const second = f.application.createProject('owner', { schema_version: 1, kind: 'echo-project-create-v1', request_id: requestId(71), name: 'Software' });
+    const projectIds = [first.project_id, second.project_id].sort();
+    const receipt = f.application.submitUploadV3('owner', {
+      schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(72), title: 'Shared plan',
+      text: 'The sensor and software teams need one verified integration plan.', association_project_ids: projectIds,
+      audience: { kind: 'projects', project_ids: projectIds },
+    });
+    await f.worker().runOnce(new AbortController().signal);
+    expect(f.database.prepare('SELECT state, search_hints FROM authority_person_update_work_v2 WHERE context_id = ?').get(receipt.context_id))
+      .toEqual({ state: 'ready', search_hints: 'customer telephone preference' });
+    expect(f.generation.structured_output.generate).toHaveBeenCalledTimes(1);
+  });
+
   it('serves due V2 work on the next run despite a continuing V1 backlog', async () => {
     const f = fixture(); const projectId = setupProject(f); const worker = f.worker();
     f.inbox.submit(OWNER, {

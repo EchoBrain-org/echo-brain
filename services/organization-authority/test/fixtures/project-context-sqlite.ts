@@ -1,5 +1,5 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { applyAuthorityBaselineV7 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV9 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import Database from "better-sqlite3";
@@ -51,7 +51,7 @@ export function authorization(
 }
 
 /**
- * Creates the active V7 schema and a small single-organization tenancy.
+ * Creates the active V9 schema and a small single-organization tenancy.
  * A separate Authority database owns each organization, so cross-organization
  * regressions use absent foreign organization coordinates rather than inventing
  * an impossible second `authority_metadata` row.
@@ -59,7 +59,7 @@ export function authorization(
 export function projectContextDatabase(path = ":memory:"): Database.Database {
   const database = new Database(path);
   database.pragma("foreign_keys = ON");
-  applyAuthorityBaselineV7(database);
+  applyAuthorityBaselineV9(database);
   database.prepare(
     `INSERT INTO authority_metadata
        (singleton, authority_id, organization_id, organization_display_name, descriptor_json, created_at, last_observed_at)

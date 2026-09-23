@@ -246,7 +246,7 @@ final class ProjectCLI: @unchecked Sendable {
         }
         let timeout = DispatchWorkItem { running.timeOut() }
         let documentTransfer = arguments.prefix(2) == ["person", "documents"]
-            && ["upload", "retry", "download"].contains(arguments.dropFirst(2).first ?? "")
+            && ["upload", "upload-v2", "retry", "download", "download-v2"].contains(arguments.dropFirst(2).first ?? "")
         // The Authority transfer budget is 600 seconds. Keep 120 seconds for
         // local snapshot/session startup and final account reconciliation.
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + (documentTransfer ? 720 : 45), execute: timeout)
@@ -262,7 +262,7 @@ final class ProjectCLI: @unchecked Sendable {
 enum ProjectCommand {
     case list(String?), create(String, String), read(String), members(String, String?)
     case directory(String, String?, String?), memberAdd(String, String, String), setMember(String, String, String, String), removeMember(String, String, String)
-    case associate(String, String, String, Bool), feed(String, String?), search(String, String, String?), readContext(String, String)
+    case associate(String, String, String, Bool), feedV2(String, String?), searchV2(String, String, String?), readContextV2(String, String)
     var operation: String {
         switch self {
         case .list: return "list"
@@ -274,16 +274,16 @@ enum ProjectCommand {
         case .setMember: return "member-set"
         case .removeMember: return "member-remove"
         case .associate(_, _, _, let add): return add ? "associate" : "dissociate"
-        case .feed: return "feed"
-        case .search: return "search"
-        case .readContext: return "read-context"
+        case .feedV2: return "feed-v2"
+        case .searchV2: return "search-v2"
+        case .readContextV2: return "read-context-v2"
         }
     }
     var projectID: String? {
         switch self {
         case .list, .create: return nil
         case .read(let id), .members(let id, _), .directory(let id, _, _), .memberAdd(let id, _, _), .setMember(let id, _, _, _),
-             .removeMember(let id, _, _), .associate(let id, _, _, _), .feed(let id, _), .search(let id, _, _), .readContext(let id, _): return id
+             .removeMember(let id, _, _), .associate(let id, _, _, _), .feedV2(let id, _), .searchV2(let id, _, _), .readContextV2(let id, _): return id
         }
     }
     var requestID: String? {
@@ -298,16 +298,16 @@ enum ProjectCommand {
         if let requestID { args += ["--request-id", requestID] }
         func page(_ cursor: String?) { args += ["--limit", "10"]; if let cursor { args += ["--cursor", cursor] } }
         switch self {
-        case .list(let cursor), .members(_, let cursor), .feed(_, let cursor): page(cursor)
+        case .list(let cursor), .members(_, let cursor), .feedV2(_, let cursor): page(cursor)
         case .create(let name, _): args += ["--name", name]
         case .directory(_, let query, let cursor):
             if let query { args += ["--query", query] }
             page(cursor)
-        case .search(_, let query, let cursor): args += ["--query", query]; page(cursor)
+        case .searchV2(_, let query, let cursor): args += ["--query", query]; page(cursor)
         case .memberAdd(_, let member, _): args += ["--membership-id", member]
         case .setMember(_, let member, let role, _): args += ["--membership-id", member, "--role", role]
         case .removeMember(_, let member, _): args += ["--membership-id", member]
-        case .associate(_, let context, _, _), .readContext(_, let context): args += ["--context-id", context]
+        case .associate(_, let context, _, _), .readContextV2(_, let context): args += ["--context-id", context]
         case .read: break
         }
         return args
@@ -509,8 +509,9 @@ final class ProjectClient: @unchecked Sendable {
         func header(_ kind: String, _ fields: [String]) -> Bool {
             ProjectWire.header(o, version: 1, kind: kind) && ProjectWire.keys(o, ["schema_version", "kind"] + fields)
         }
-        func page(_ kind: String, scoped: Bool = true) -> [[String: Any]]? {
-            guard header(kind, (scoped ? ["project_id"] : []) + ["items", "next_cursor"]),
+        func page(_ kind: String, scoped: Bool = true, version: Int = 1) -> [[String: Any]]? {
+            guard ProjectWire.header(o, version: version, kind: kind),
+                  ProjectWire.keys(o, ["schema_version", "kind"] + (scoped ? ["project_id"] : []) + ["items", "next_cursor"]),
                   !scoped || o["project_id"] as? String == command.projectID,
                   ProjectWire.cursor(o["next_cursor"]), let items = o["items"] as? [[String: Any]], items.count <= 10 else { return nil }
             return items
@@ -538,13 +539,14 @@ final class ProjectClient: @unchecked Sendable {
                 (directory || ["member", "lead"].contains(item["role"] as? String ?? ""))
             }), let members = decode([ProjectMember].self, items), Set(members.map(\.membership_id)).count == members.count else { return failure }
             return .members(members, o["next_cursor"] as? String)
-        case .feed, .search:
-            guard let items = page(command.operation == "feed" ? "echo-project-context-feed-v1" : "echo-project-context-search-result-v1"),
+        case .feedV2, .searchV2:
+            guard let items = page(command.operation == "feed-v2" ? "echo-project-context-feed-v2" : "echo-project-context-search-result-v2", version: 2),
                   items.allSatisfy(UploadMatch.validObject), let matches = decode([UploadMatch].self, items),
                   Set(matches.map(\.context_id)).count == matches.count else { return failure }
             return .items(matches, o["next_cursor"] as? String)
-        case .readContext(_, let context):
-            guard header("echo-project-context-read-v1", ["project_id", "context_id", "received_at", "audience", "title", "text"]),
+        case .readContextV2(_, let context):
+            guard ProjectWire.header(o, version: 2, kind: "echo-project-context-read-v2"),
+                  ProjectWire.keys(o, ["schema_version", "kind", "project_id", "context_id", "received_at", "audience", "title", "text"]),
                   o["project_id"] as? String == command.projectID, o["context_id"] as? String == context,
                   UploadContent.validFields(o), let content = decode(UploadContent.self, o) else { return failure }
             return .content(content)
@@ -649,16 +651,16 @@ final class ProjectSession {
     }
     func feed() {
         guard !busy, let selected else { return }
-        clearContent(); status = "Loading project context…"; run(.feed(selected.project_id, nil))
+        clearContent(); status = "Loading project context…"; run(.feedV2(selected.project_id, nil))
     }
     func search(_ source: String) {
         guard !busy, let selected else { return }
         guard let query = uploadQuery(source) else { status = "Search with up to 240 characters and 32 distinct words."; notice = status; onChange?(); return }
-        clearContent(); status = "Searching this project…"; run(.search(selected.project_id, query, nil))
+        clearContent(); status = "Searching this project…"; run(.searchV2(selected.project_id, query, nil))
     }
     func read(_ context: String) {
         guard !busy, let selected else { return }
-        clearContent(); status = "Loading original text…"; run(.readContext(selected.project_id, context))
+        clearContent(); status = "Loading original text…"; run(.readContextV2(selected.project_id, context))
     }
     func roster() {
         guard !busy, let selected else { return }
@@ -685,8 +687,8 @@ final class ProjectSession {
         guard !busy, let page, let cursor = pageCursor else { return }
         content = nil
         switch page {
-        case .feed(let project, _): status = "Loading project context…"; run(.feed(project, cursor))
-        case .search(let project, let query, _): status = "Searching this project…"; run(.search(project, query, cursor))
+        case .feedV2(let project, _): status = "Loading project context…"; run(.feedV2(project, cursor))
+        case .searchV2(let project, let query, _): status = "Searching this project…"; run(.searchV2(project, query, cursor))
         default: break
         }
     }
@@ -819,9 +821,9 @@ final class ProjectSession {
                 }
                 self.status = members.isEmpty ? "No members on this page." : "Current project members. Leads manage membership."
             case .items(let items, let cursor):
-                if case .feed(_, let from) = command, from != nil {
+                if case .feedV2(_, let from) = command, from != nil {
                     self.items += items.filter { next in !self.items.contains { $0.context_id == next.context_id } }
-                } else if case .search(_, _, let from) = command, from != nil {
+                } else if case .searchV2(_, _, let from) = command, from != nil {
                     self.items += items.filter { next in !self.items.contains { $0.context_id == next.context_id } }
                 } else { self.items = items }
                 self.pageCursor = cursor; self.page = command
@@ -1277,7 +1279,7 @@ final class ItemRowButton: HoverButton {
         switch visibility {
         case .onlyMe: glyph = GlyphView(symbol: "lock.fill", label: "Only you")
         case .team: glyph = GlyphView(symbol: "globe", label: "Everyone in your organization")
-        case .project: glyph = nil
+        case .project, .projects: glyph = nil
         }
         super.init()
         mark(self, "item-row", label: title)
@@ -1910,7 +1912,8 @@ private func boxedField(_ field: NSTextField, in box: FieldBox, placeholder: Str
 
 // MARK: - Compose sheet
 
-/// Who can read a note or document. Project association is selected separately.
+/// A compose entrypoint can seed a project association, but it never seeds an
+/// audience. Sharing stays an explicit second-step decision.
 enum ComposeTarget: Equatable {
     case onlyMe, team, project(String, String)
     var title: String {
@@ -1923,19 +1926,34 @@ enum ComposeTarget: Equatable {
     var projectID: String? { if case .project(let id, _) = self { return id }; return nil }
 }
 
-/// Write something, choose who it is for, send. The sent state appears only
-/// with a receipt; an unknown outcome stays visible and actionable.
+private enum ComposeSharing: Equatable {
+    case onlyMe, projectMembers, organization
+}
+
+/// Write an original, optionally associate it with one or more projects, then
+/// explicitly choose its audience. The sent state appears only with a receipt;
+/// an unknown outcome stays visible and actionable.
 @MainActor
 final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
-    private let sheet = sheetWindow(width: 560, height: 460)
-    private let toChip = ChipMenuButton()
-    private let associationChip = ChipMenuButton()
-    private let associationLabel = label("Project", size: 13, color: EchoTheme.mutedText)
+    private enum Page { case content, sharing }
+
+    private let sheet = sheetWindow(width: 560, height: 510)
+    private let contentPage = NSView()
+    private let sharingPage = NSView()
+    private let projectButton = pill("None", .quiet, height: 30, target: nil, action: nil)
+    private let projectHint = label("Projects are optional", size: 13, color: EchoTheme.mutedText)
+    private let next = pill("Next: Sharing", .primary, height: 34, target: nil, action: nil)
+    private let sharingHeading = label("Who can read this?", size: 18, weight: .semibold)
+    private let sharingDetail = NSTextField(wrappingLabelWithString: "Choose who can read this upload.")
+    private let onlyMe = NSButton(radioButtonWithTitle: "Only me", target: nil, action: nil)
+    private let projectMembers = NSButton(radioButtonWithTitle: "Members of selected projects", target: nil, action: nil)
+    private let organization = NSButton(radioButtonWithTitle: "Everyone in organization", target: nil, action: nil)
+    private let sharingBack = pill("Back", .quiet, height: 34, target: nil, action: nil)
+    private let upload = pill("Upload", .primary, height: 34, target: nil, action: nil)
     private let body = ComposeTextView(frame: NSRect(x: 0, y: 0, width: 524, height: 240))
     private let bodyScroll = NSScrollView()
     private let placeholder = PassthroughLabel(labelWithString: "What happened?")
     private let attach = CircleButton(symbol: "paperclip", label: "Attach a document", style: .attach)
-    private let send = CircleButton(symbol: "arrow.up", label: "Send", style: .gold)
     private let problem = label("", size: 12.5, color: EchoTheme.ember)
     private let composeGroup = NSView()
     private let outcome = NSStackView()
@@ -1948,10 +1966,20 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     private let another = pill("Write new…", .quiet, height: 30, target: nil, action: nil)
     private let closeButton = pill("Close", .quiet, height: 30, target: nil, action: nil)
     private let sheetClose = CircleButton(symbol: "xmark", label: "Close", style: .close)
-    private var targets: [ComposeTarget] = []
     private(set) var target = ComposeTarget.onlyMe
-    private var associationTargets: [ComposeTarget] = []
-    private(set) var associationProjectID: String?
+    private var page: Page = .content
+    private var sharing = ComposeSharing.onlyMe
+    /// Sorted stable identifiers make the request, its receipt matching, and a
+    /// later exact retry independent from popover/page arrival order.
+    private var selectedProjectIDs: [String] = []
+    private var selectedProjectNames: [String: String] = [:]
+    // The picker is a separate read session. Pagination must not replace the
+    // Home list or the project reader behind this sheet.
+    private var pickerProjects: ProjectSession?
+    private let pickerPopover = NSPopover()
+    private let pickerRows = NSStackView()
+    private let pickerMore = pill("More projects", .quiet, height: 28, target: nil, action: nil)
+    private let pickerStatus = label("", size: 12.5, color: EchoTheme.mutedText)
     private var loadedFile: DocumentSnapshot?
     private var preparingFile = false
     private var snapshotGeneration = UUID()
@@ -1979,10 +2007,22 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         guard !isPresented else { return }
         snapshotGeneration = UUID(); preparingFile = false
         self.session = session; self.projects = projects; admittedIdentity = session.identity
-        self.target = target; associationProjectID = target.projectID; loadedFile = nil; setBody("")
+        self.target = target; loadedFile = nil; setBody("")
+        page = .content; sharing = .onlyMe; selectedProjectIDs = []; selectedProjectNames = [:]
+        if case .project(let id, let name) = target {
+            selectedProjectIDs = [id]; selectedProjectNames[id] = name
+        }
         placeholder.stringValue = text; problem.stringValue = ""; sentBody = false; didSave = false; strandedStatus = nil
         if session.receipt != nil { session.startAnother() }
         owns = session.recovery != nil && session.receipt == nil
+        // Use the same authenticated CLI adapter as the visible controller;
+        // a default ProjectSession would point at a different local client.
+        let picker = ProjectSession(client: projects.client, foreground: {
+            NSApp.isActive || NSApp.windows.contains { $0.attachedSheet != nil }
+        })
+        picker.onChange = { [weak self] in self?.refresh() }
+        pickerProjects = picker
+        picker.bind(session.identity)
         refresh()
         parent.beginSheet(sheet)
         sheet.makeFirstResponder(body)
@@ -1992,7 +2032,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     func focusBody() { if isPresented { sheet.makeFirstResponder(body) } }
 
     func refresh() {
-        guard let session, let projects else { return }
+        guard let session else { return }
         // This sheet's own save ended after its account went away (a switch
         // mid-save, or an account check that failed after the save ran).
         if (owns || sentBody), session.identity == nil, session.receipt == nil, !session.hasOutstandingMutation,
@@ -2008,29 +2048,22 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         // closed without Done) must not hold the next note: clear it once the
         // session is idle (it can be busy with an identity probe at present).
         if isPresented, !owns, strandedStatus == nil, session.receipt != nil, !session.busy { session.startAnother(); return }
-        // Live projects, the current project target even if the list moved,
-        // then Organization. A project choice never silently falls back.
-        var projectTargets = projects.availability == .live
-            ? projects.projects.map { ComposeTarget.project($0.project_id, $0.name) } : []
-        if let selected = projects.selected, !projectTargets.contains(where: { $0.projectID == selected.project_id }) {
-            projectTargets.append(.project(selected.project_id, selected.name))
+        if let picker = pickerProjects {
+            for project in picker.projects { selectedProjectNames[project.project_id] = project.name }
         }
-        if let id = target.projectID, !projectTargets.contains(where: { $0.projectID == id }) {
-            // A remembered project that the full, live list no longer has is
-            // gone for this account: fall back to Only me, never Organization.
-            if projects.listLoaded, !session.hasOutstandingMutation, !owns { target = .onlyMe } else { projectTargets.append(target) }
-        }
-        targets = [.onlyMe] + projectTargets + [.team]
-        toChip.choices = targets.map(\.title)
-        toChip.selectedIndex = targets.firstIndex(of: target) ?? 0
-        toChip.title = target.title
-        associationTargets = [.onlyMe] + projectTargets
-        if let associated = associationProjectID, !projectTargets.contains(where: { $0.projectID == associated }), projects.listLoaded {
-            associationProjectID = nil
-        }
-        associationChip.choices = ["No project"] + projectTargets.map(\.title)
-        associationChip.selectedIndex = associationTargets.firstIndex(where: { $0.projectID == associationProjectID }) ?? 0
-        associationChip.title = associationChip.choices[associationChip.selectedIndex]
+        selectedProjectIDs.sort()
+        projectButton.title = projectSelectionTitle
+        projectButton.setAccessibilityLabel("Selected projects: \(projectSelectionAccessibility)")
+        projectMembers.title = selectedProjectIDs.count == 1
+            ? "Members of \(selectedProjectNames[selectedProjectIDs[0]] ?? "selected project")"
+            : "Members of \(selectedProjectIDs.count) selected projects"
+        sharingDetail.stringValue = sharingScopeSummary
+        projectMembers.isHidden = selectedProjectIDs.isEmpty
+        if selectedProjectIDs.isEmpty && sharing == .projectMembers { sharing = .onlyMe }
+        onlyMe.state = sharing == .onlyMe ? .on : .off
+        projectMembers.state = sharing == .projectMembers ? .on : .off
+        organization.state = sharing == .organization ? .on : .off
+        rebuildProjectPicker()
 
         let sending = session.hasOutstandingMutation
         sheetClose.isEnabled = !sending
@@ -2043,12 +2076,15 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         outcome.isHidden = !(sent || attention)
         let preparing = preparingFile
         body.isEditable = !preparing && !sending && !sent && !attention
-        send.showsSpinner = sending
         let hasText = !body.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        send.isEnabled = !preparing && !sending && (hasText || loadedFile != nil) && session.canCompose
         attach.isEnabled = !preparing && !sending && body.isEditable
-        toChip.isEnabled = !sending
-        associationChip.isEnabled = !sending
+        projectButton.isEnabled = !sending && !preparing && session.canCompose
+        next.isEnabled = !preparing && !sending && (hasText || loadedFile != nil) && session.canCompose
+        sharingBack.isEnabled = !sending
+        upload.isEnabled = !sending && session.canCompose && (sharing != .projectMembers || !selectedProjectIDs.isEmpty)
+        onlyMe.isEnabled = !sending; projectMembers.isEnabled = !sending && !selectedProjectIDs.isEmpty; organization.isEnabled = !sending
+        contentPage.isHidden = page != .content
+        sharingPage.isHidden = page != .sharing
         placeholder.isHidden = !body.string.isEmpty || loadedFile != nil
         bodyScroll.isHidden = loadedFile != nil
         attachmentLabel.isHidden = loadedFile == nil && !preparing; removeFile.isHidden = loadedFile == nil && !preparing
@@ -2067,7 +2103,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         } else if attention {
             showMark("exclamationmark.circle", gold: false)
             // Say "saved" for a note kept for yourself, "sent" when others get it.
-            let kind = session.recovery?.audience.kind ?? (target == .onlyMe ? .onlyMe : .project)
+            let kind = session.recovery?.audience.kind ?? (sharing == .onlyMe ? .onlyMe : .projects)
             outcomeTitle.stringValue = kind == .onlyMe ? "This may not have been saved." : "This may not have been sent."
             var detail = strandedStatus ?? session.status
             if let name = session.recovery?.documentFilename, let size = session.recovery?.documentSize {
@@ -2108,20 +2144,22 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
                 : (projects?.projects.first(where: { $0.project_id == id })?.name
                     ?? (projects?.selected?.project_id == id ? projects?.selected?.name : nil))
             return name.map { "Sent to \($0)" } ?? "Sent to project members"
+        case .projects:
+            return "Shared with selected project members"
         }
     }
 
     func projectAccessChanged() {
-        guard target.projectID != nil || associationProjectID != nil else { return }
+        guard !selectedProjectIDs.isEmpty else { return }
         snapshotGeneration = UUID(); preparingFile = false; setBody(""); loadedFile = nil
         if session?.hasOutstandingMutation != true {
-            target = .onlyMe
             if isPresented { closeNow() }
         }
     }
 
     func accountWillChange() {
         snapshotGeneration = UUID(); preparingFile = false; setBody(""); loadedFile = nil
+        pickerProjects?.bind(nil)
         if session?.hasOutstandingMutation != true, isPresented { closeNow() }
         refresh()
     }
@@ -2168,37 +2206,105 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         snapshotGeneration = UUID(); preparingFile = false; loadedFile = nil; refresh()
     }
 
-    @objc private func chooseTarget(_ index: Int) {
-        guard targets.indices.contains(index), session?.hasOutstandingMutation != true else { return }
-        target = targets[index]; refresh()
+    private var projectSelectionTitle: String {
+        switch selectedProjectIDs.count {
+        case 0: return "None"
+        case 1: return selectedProjectNames[selectedProjectIDs[0]] ?? "1 project"
+        default:
+            let first = selectedProjectNames[selectedProjectIDs[0]] ?? "1 project"
+            return "\(first) + \(selectedProjectIDs.count - 1)"
+        }
+    }
+    private var projectSelectionAccessibility: String {
+        selectedProjectIDs.isEmpty ? "None" : selectedProjectIDs.map { selectedProjectNames[$0] ?? "Selected project" }.joined(separator: ", ")
+    }
+    private var sharingScopeSummary: String {
+        switch selectedProjectIDs.count {
+        case 0:
+            return "No projects selected. Choose who can read this upload."
+        case 1:
+            return "Selected project: \(selectedProjectNames[selectedProjectIDs[0]] ?? "Selected project")."
+        default:
+            let first = selectedProjectNames[selectedProjectIDs[0]] ?? "Selected project"
+            return "Selected projects: \(first) + \(selectedProjectIDs.count - 1) more."
+        }
     }
 
-    private func chooseAssociation(_ index: Int) {
-        guard associationTargets.indices.contains(index), session?.hasOutstandingMutation != true else { return }
-        associationProjectID = associationTargets[index].projectID; refresh()
+    @objc private func showProjectPicker() {
+        guard !pickerPopover.isShown, session?.hasOutstandingMutation != true else { return }
+        pickerPopover.show(relativeTo: projectButton.bounds, of: projectButton, preferredEdge: .maxY)
+    }
+    @objc private func chooseNoProjects() {
+        guard session?.hasOutstandingMutation != true else { return }
+        selectedProjectIDs = []; refresh()
+    }
+    @objc private func toggleProject(_ sender: NSButton) {
+        guard let picker = pickerProjects, picker.projects.indices.contains(sender.tag), session?.hasOutstandingMutation != true else { return }
+        let project = picker.projects[sender.tag]
+        selectedProjectNames[project.project_id] = project.name
+        if let index = selectedProjectIDs.firstIndex(of: project.project_id) { selectedProjectIDs.remove(at: index) }
+        else {
+            guard selectedProjectIDs.count < 20 else {
+                problem.stringValue = "Choose up to 20 projects."; return
+            }
+            selectedProjectIDs.append(project.project_id); selectedProjectIDs.sort()
+        }
+        refresh()
+    }
+    @objc private func morePickerProjects() { pickerProjects?.nextProjects() }
+    @objc private func nextSharing() {
+        guard next.isEnabled else { return }
+        if loadedFile == nil, !ProjectWire.text(body.string, max: 8192, multiline: true) {
+            // This is the visible content page. Do not leave an invalid note
+            // behind a sharing page where its validation message is hidden.
+            problem.stringValue = "Up to 8 KiB of text."
+            page = .content; refresh(); return
+        }
+        pickerPopover.close(); page = .sharing; refresh()
+    }
+    @objc private func returnToContent() {
+        guard session?.hasOutstandingMutation != true else { return }
+        page = .content; refresh(); sheet.makeFirstResponder(body)
+    }
+    @objc private func chooseSharing(_ sender: NSButton) {
+        guard session?.hasOutstandingMutation != true else { return }
+        switch sender.tag {
+        case 0: sharing = .onlyMe
+        case 1 where !selectedProjectIDs.isEmpty: sharing = .projectMembers
+        case 2: sharing = .organization
+        default: return
+        }
+        refresh()
     }
 
     @objc private func sendNote() {
-        guard let session, session.canCompose, admittedIdentity == session.identity else { return }
+        guard page == .sharing, upload.isEnabled, let session, session.canCompose,
+              admittedIdentity == session.identity else { return }
+        let projectIDs = selectedProjectIDs
+        let audienceProjectIDs = sharing == .projectMembers ? projectIDs : []
+        let visibility: UploadVisibility
+        switch sharing {
+        case .onlyMe: visibility = .onlyMe
+        case .projectMembers:
+            guard !audienceProjectIDs.isEmpty else { page = .content; refresh(); return }
+            visibility = .projects
+        case .organization: visibility = .team
+        }
         if let snapshot = loadedFile {
             let title = suggestedNoteTitle(snapshot.file.deletingPathExtension().lastPathComponent)
-            switch target {
-            case .onlyMe: session.submitDocument(title: title, snapshot: snapshot, visibility: .onlyMe, projectID: associationProjectID)
-            case .team: session.submitDocument(title: title, snapshot: snapshot, visibility: .team, projectID: associationProjectID)
-            case .project(let id, _): session.submitDocument(title: title, snapshot: snapshot, visibility: .project, audienceProjectID: id, projectID: associationProjectID)
-            }
+            session.submitDocument(title: title, snapshot: snapshot, visibility: visibility,
+                                   audienceProjectIDs: audienceProjectIDs, projectIDs: projectIDs)
         } else {
             let text = body.string
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            guard ProjectWire.text(text, max: 8192, multiline: true) else { problem.stringValue = "Up to 8 KiB of text."; return }
-            let title = suggestedNoteTitle(text)
-            switch target {
-            case .onlyMe: session.submit(title: title, text: text, visibility: .onlyMe, projectID: associationProjectID)
-            case .team: session.submit(title: title, text: text, visibility: .team, projectID: associationProjectID)
-            case .project(let id, _): session.submit(title: title, text: text, visibility: .project, audienceProjectID: id, projectID: associationProjectID)
+            guard ProjectWire.text(text, max: 8192, multiline: true) else {
+                problem.stringValue = "Up to 8 KiB of text."; page = .content; refresh(); return
             }
+            let title = suggestedNoteTitle(text)
+            session.submit(title: title, text: text, visibility: visibility,
+                           audienceProjectIDs: audienceProjectIDs, projectIDs: projectIDs)
         }
-        guard session.busy else { problem.stringValue = session.status; refresh(); return }
+        guard session.busy else { problem.stringValue = session.status; page = .content; refresh(); return }
         owns = true; sentBody = true
         onSent?(target)
         refresh()
@@ -2230,7 +2336,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
             guard let self, self.isPresented, let session = self.session, !session.busy, session.identity == identity else { return }
             session.startAnother()
             if self.sentBody { self.setBody(""); self.loadedFile = nil; self.sentBody = false }
-            self.owns = false; self.refresh()
+            self.page = .content; self.sharing = .onlyMe; self.owns = false; self.refresh()
             self.sheet.makeFirstResponder(self.body)
         }
     }
@@ -2249,6 +2355,8 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         guard session?.hasOutstandingMutation != true, let parent = sheet.sheetParent else { return }
         // A confirm alert or file panel never outlives the sheet it belongs to.
         if let child = sheet.attachedSheet { sheet.endSheet(child, returnCode: .cancel) }
+        pickerPopover.close()
+        pickerProjects?.conceal()
         // Leaving a confirmed "Sent" any way (Escape, app switch) is Done:
         // the receipt is settled, so the next note starts clean.
         if owns, let session, session.receipt != nil, !session.busy { session.startAnother() }
@@ -2261,11 +2369,19 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     private func build() {
         guard let root = sheet.contentView else { return }
         sheet.onCancel = { [weak self] in self?.requestClose() }
-        let to = label("To", size: 13, color: EchoTheme.faintText)
-        mark(toChip, "compose-to", label: "Send to")
-        toChip.onChoose = { [weak self] index in self?.chooseTarget(index) }
-        mark(associationChip, "compose-association", label: "Associated project; does not change audience")
-        associationChip.onChoose = { [weak self] index in self?.chooseAssociation(index) }
+        let projectsLabel = label("Projects", size: 13, color: EchoTheme.faintText)
+        mark(projectButton, "compose-projects", label: "Selected projects")
+        projectButton.target = self; projectButton.action = #selector(showProjectPicker)
+        mark(next, "compose-next-sharing", label: "Next: Sharing"); next.target = self; next.action = #selector(nextSharing)
+        mark(sharingBack, "compose-sharing-back", label: "Back to content"); sharingBack.target = self; sharingBack.action = #selector(returnToContent)
+        mark(upload, "compose-upload", label: "Upload"); upload.target = self; upload.action = #selector(sendNote)
+        for (index, control) in [onlyMe, projectMembers, organization].enumerated() {
+            control.tag = index; control.target = self; control.action = #selector(chooseSharing(_:))
+        }
+        mark(onlyMe, "compose-sharing-only-me", label: "Only me")
+        mark(projectMembers, "compose-sharing-projects", label: "Members of selected projects")
+        mark(organization, "compose-sharing-organization", label: "Everyone in organization")
+        sharingDetail.font = .systemFont(ofSize: 13); sharingDetail.textColor = EchoTheme.mutedText; sharingDetail.maximumNumberOfLines = 2
 
         body.isRichText = false; body.importsGraphics = false; body.allowsUndo = true
         body.isAutomaticQuoteSubstitutionEnabled = false; body.isAutomaticDashSubstitutionEnabled = false
@@ -2290,17 +2406,16 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
 
         mark(attach, "compose-attach", label: "Attach a document")
         attach.target = self; attach.action = #selector(chooseFile)
-        mark(send, "compose-send", label: "Send")
-        send.target = self; send.action = #selector(sendNote)
-        send.keyEquivalent = "\r"; send.keyEquivalentModifierMask = .command
-        let hint = label("⌘↩", size: 12, color: EchoTheme.faintText)
         problem.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         mark(attachmentLabel, "compose-document", label: "Attached original document")
         attachmentLabel.font = .systemFont(ofSize: 15); attachmentLabel.textColor = EchoTheme.text
         removeFile.target = self; removeFile.action = #selector(removeAttachment); mark(removeFile, "compose-remove-file")
-        for view in [to, toChip, associationLabel, associationChip, bodyScroll, placeholder, attach, problem, hint, send, attachmentLabel, removeFile] {
-            view.translatesAutoresizingMaskIntoConstraints = false; composeGroup.addSubview(view)
+        for view in [projectsLabel, projectButton, projectHint, bodyScroll, placeholder, attach, problem, attachmentLabel, removeFile, next] {
+            view.translatesAutoresizingMaskIntoConstraints = false; contentPage.addSubview(view)
+        }
+        for view in [sharingHeading, sharingDetail, onlyMe, projectMembers, organization, sharingBack, upload] {
+            view.translatesAutoresizingMaskIntoConstraints = false; sharingPage.addSubview(view)
         }
 
         mark(done, "compose-done"); done.target = self; done.action = #selector(finish)
@@ -2323,8 +2438,10 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
 
         composeGroup.translatesAutoresizingMaskIntoConstraints = false
         outcome.translatesAutoresizingMaskIntoConstraints = false
+        composeGroup.addSubview(contentPage); composeGroup.addSubview(sharingPage)
         root.addSubview(composeGroup); root.addSubview(outcome); root.addSubview(sheetClose)
         sheetClose.translatesAutoresizingMaskIntoConstraints = false
+        contentPage.translatesAutoresizingMaskIntoConstraints = false; sharingPage.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             composeGroup.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 18),
             composeGroup.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -18),
@@ -2337,43 +2454,89 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
             sheetClose.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
             sheetClose.widthAnchor.constraint(equalToConstant: 28), sheetClose.heightAnchor.constraint(equalToConstant: 28),
 
-            to.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor),
-            to.centerYAnchor.constraint(equalTo: toChip.centerYAnchor),
-            toChip.leadingAnchor.constraint(equalTo: to.trailingAnchor, constant: 10),
-            toChip.topAnchor.constraint(equalTo: composeGroup.topAnchor),
-            toChip.heightAnchor.constraint(equalToConstant: 30),
-            toChip.trailingAnchor.constraint(lessThanOrEqualTo: composeGroup.trailingAnchor),
+            contentPage.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor), contentPage.trailingAnchor.constraint(equalTo: composeGroup.trailingAnchor),
+            contentPage.topAnchor.constraint(equalTo: composeGroup.topAnchor), contentPage.bottomAnchor.constraint(equalTo: composeGroup.bottomAnchor),
+            sharingPage.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor), sharingPage.trailingAnchor.constraint(equalTo: composeGroup.trailingAnchor),
+            sharingPage.topAnchor.constraint(equalTo: composeGroup.topAnchor), sharingPage.bottomAnchor.constraint(equalTo: composeGroup.bottomAnchor),
 
-            associationLabel.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor),
-            associationLabel.centerYAnchor.constraint(equalTo: associationChip.centerYAnchor),
-            associationChip.leadingAnchor.constraint(equalTo: associationLabel.trailingAnchor, constant: 10),
-            associationChip.topAnchor.constraint(equalTo: toChip.bottomAnchor, constant: 8),
-            associationChip.heightAnchor.constraint(equalToConstant: 30),
-            associationChip.trailingAnchor.constraint(lessThanOrEqualTo: composeGroup.trailingAnchor),
-            attachmentLabel.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor),
-            attachmentLabel.trailingAnchor.constraint(equalTo: composeGroup.trailingAnchor),
-            attachmentLabel.topAnchor.constraint(equalTo: associationChip.bottomAnchor, constant: 24),
+            projectsLabel.leadingAnchor.constraint(equalTo: contentPage.leadingAnchor),
+            projectsLabel.centerYAnchor.constraint(equalTo: projectButton.centerYAnchor),
+            projectButton.leadingAnchor.constraint(equalTo: projectsLabel.trailingAnchor, constant: 10),
+            projectButton.topAnchor.constraint(equalTo: contentPage.topAnchor),
+            projectHint.leadingAnchor.constraint(equalTo: projectButton.trailingAnchor, constant: 10),
+            projectHint.centerYAnchor.constraint(equalTo: projectButton.centerYAnchor),
+            projectHint.trailingAnchor.constraint(lessThanOrEqualTo: contentPage.trailingAnchor),
+            attachmentLabel.leadingAnchor.constraint(equalTo: contentPage.leadingAnchor),
+            attachmentLabel.trailingAnchor.constraint(equalTo: contentPage.trailingAnchor),
+            attachmentLabel.topAnchor.constraint(equalTo: projectButton.bottomAnchor, constant: 24),
             removeFile.leadingAnchor.constraint(equalTo: attachmentLabel.leadingAnchor),
             removeFile.topAnchor.constraint(equalTo: attachmentLabel.bottomAnchor, constant: 16),
-            bodyScroll.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor),
-            bodyScroll.trailingAnchor.constraint(equalTo: composeGroup.trailingAnchor),
-            bodyScroll.topAnchor.constraint(equalTo: associationChip.bottomAnchor, constant: 14),
-            bodyScroll.bottomAnchor.constraint(equalTo: send.topAnchor, constant: -12),
+            bodyScroll.leadingAnchor.constraint(equalTo: contentPage.leadingAnchor),
+            bodyScroll.trailingAnchor.constraint(equalTo: contentPage.trailingAnchor),
+            bodyScroll.topAnchor.constraint(equalTo: projectButton.bottomAnchor, constant: 14),
+            bodyScroll.bottomAnchor.constraint(equalTo: next.topAnchor, constant: -14),
             placeholder.leadingAnchor.constraint(equalTo: bodyScroll.leadingAnchor),
             placeholder.topAnchor.constraint(equalTo: bodyScroll.topAnchor),
 
-            attach.leadingAnchor.constraint(equalTo: composeGroup.leadingAnchor),
-            attach.bottomAnchor.constraint(equalTo: composeGroup.bottomAnchor),
+            attach.leadingAnchor.constraint(equalTo: contentPage.leadingAnchor),
+            attach.bottomAnchor.constraint(equalTo: contentPage.bottomAnchor),
             attach.widthAnchor.constraint(equalToConstant: 34), attach.heightAnchor.constraint(equalToConstant: 34),
             problem.leadingAnchor.constraint(equalTo: attach.trailingAnchor, constant: 10),
             problem.centerYAnchor.constraint(equalTo: attach.centerYAnchor),
-            problem.trailingAnchor.constraint(lessThanOrEqualTo: hint.leadingAnchor, constant: -10),
-            send.trailingAnchor.constraint(equalTo: composeGroup.trailingAnchor),
-            send.centerYAnchor.constraint(equalTo: attach.centerYAnchor),
-            send.widthAnchor.constraint(equalToConstant: 34), send.heightAnchor.constraint(equalToConstant: 34),
-            hint.trailingAnchor.constraint(equalTo: send.leadingAnchor, constant: -10),
-            hint.centerYAnchor.constraint(equalTo: send.centerYAnchor),
+            problem.trailingAnchor.constraint(lessThanOrEqualTo: next.leadingAnchor, constant: -10),
+            next.trailingAnchor.constraint(equalTo: contentPage.trailingAnchor), next.bottomAnchor.constraint(equalTo: contentPage.bottomAnchor),
+            next.widthAnchor.constraint(equalToConstant: 124),
+
+            sharingHeading.leadingAnchor.constraint(equalTo: sharingPage.leadingAnchor),
+            sharingHeading.topAnchor.constraint(equalTo: sharingPage.topAnchor, constant: 8),
+            sharingDetail.leadingAnchor.constraint(equalTo: sharingPage.leadingAnchor), sharingDetail.trailingAnchor.constraint(equalTo: sharingPage.trailingAnchor),
+            sharingDetail.topAnchor.constraint(equalTo: sharingHeading.bottomAnchor, constant: 8),
+            onlyMe.leadingAnchor.constraint(equalTo: sharingPage.leadingAnchor), onlyMe.topAnchor.constraint(equalTo: sharingDetail.bottomAnchor, constant: 26),
+            projectMembers.leadingAnchor.constraint(equalTo: sharingPage.leadingAnchor), projectMembers.topAnchor.constraint(equalTo: onlyMe.bottomAnchor, constant: 14),
+            organization.leadingAnchor.constraint(equalTo: sharingPage.leadingAnchor), organization.topAnchor.constraint(equalTo: projectMembers.bottomAnchor, constant: 14),
+            sharingBack.leadingAnchor.constraint(equalTo: sharingPage.leadingAnchor), sharingBack.bottomAnchor.constraint(equalTo: sharingPage.bottomAnchor),
+            upload.trailingAnchor.constraint(equalTo: sharingPage.trailingAnchor), upload.bottomAnchor.constraint(equalTo: sharingPage.bottomAnchor), upload.widthAnchor.constraint(equalToConstant: 96),
         ])
+        buildProjectPicker()
+    }
+
+    private func buildProjectPicker() {
+        pickerPopover.behavior = .transient
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 340))
+        let heading = label("Add to projects", size: 15, weight: .semibold)
+        let none = pill("None", .quiet, height: 28, target: self, action: #selector(chooseNoProjects))
+        mark(none, "compose-project-none", label: "No projects")
+        pickerRows.orientation = .vertical; pickerRows.alignment = .leading; pickerRows.spacing = 3
+        let scroll = NSScrollView(); scroll.documentView = pickerRows; scroll.drawsBackground = false; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
+        for view in [heading, none, scroll, pickerStatus, pickerMore] { view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view) }
+        mark(pickerMore, "compose-more-projects", label: "More projects"); pickerMore.target = self; pickerMore.action = #selector(morePickerProjects)
+        NSLayoutConstraint.activate([
+            heading.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14), heading.topAnchor.constraint(equalTo: root.topAnchor, constant: 14),
+            none.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14), none.centerYAnchor.constraint(equalTo: heading.centerYAnchor),
+            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10), scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10),
+            scroll.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 12), scroll.bottomAnchor.constraint(equalTo: pickerStatus.topAnchor, constant: -8),
+            pickerStatus.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14), pickerStatus.trailingAnchor.constraint(equalTo: pickerMore.leadingAnchor, constant: -8), pickerStatus.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
+            pickerMore.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14), pickerMore.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -10),
+        ])
+        pickerPopover.contentViewController = NSViewController(); pickerPopover.contentViewController?.view = root
+    }
+
+    private func rebuildProjectPicker() {
+        guard pickerPopover.contentViewController != nil else { return }
+        for row in pickerRows.arrangedSubviews { pickerRows.removeArrangedSubview(row); row.removeFromSuperview() }
+        guard let picker = pickerProjects else { return }
+        for (index, project) in picker.projects.enumerated() {
+            let row = NSButton(checkboxWithTitle: project.name, target: self, action: #selector(toggleProject(_:)))
+            row.tag = index; row.state = selectedProjectIDs.contains(project.project_id) ? .on : .off
+            row.translatesAutoresizingMaskIntoConstraints = false; row.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            mark(row, "compose-project-\(project.project_id)", label: "Project \(project.name)")
+            pickerRows.addArrangedSubview(row)
+        }
+        pickerRows.frame = NSRect(x: 0, y: 0, width: 330, height: max(28, pickerRows.fittingSize.height))
+        pickerMore.isHidden = picker.listCursor == nil
+        pickerMore.isEnabled = !picker.busy
+        pickerStatus.stringValue = picker.busy ? "Loading projects…"
+            : (picker.projects.isEmpty ? (picker.status.isEmpty ? "No available projects." : picker.status) : "")
     }
 }
 
@@ -2946,8 +3109,8 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
             guard uploads.canCompose else { halt(); return }
             guard let snapshot = files[index].snapshot else { files[index].state = .failed; continue }
             files[index].state = .saving
-            uploads.submitDocument(title: files[index].title, snapshot: snapshot, visibility: .project,
-                           audienceProjectID: project.project_id, projectID: project.project_id)
+            uploads.submitDocument(title: files[index].title, snapshot: snapshot, visibility: .projects,
+                           audienceProjectIDs: [project.project_id], projectIDs: [project.project_id])
         }
     }
     private func halt() { for index in files.indices where files[index].state == .queued { files[index].state = .notStarted } }
@@ -3307,9 +3470,6 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     private var restoreDocumentID: String?
     private var createdInSheet = false
     private var localNotice = ""
-    // The session's last To, never Organization (Team is always an explicit
-    // choice), cleared when the account changes.
-    private var lastTarget = ComposeTarget.onlyMe
     private var quietStatus = false
     // Closing our own sheet returns key to the window inside endSheet; that
     // is not a reason to re-probe the account.
@@ -3345,8 +3505,6 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             self.askScope = .global; self.askReturnProject = false; self.askField.stringValue = ""
             self.onInvalidateAnswer?(); self.clearPresentationRestore()
         }
-        // Organization is never carried forward: Team is an explicit choice.
-        composeSheet.onSent = { [weak self] target in self?.lastTarget = target == .team ? .onlyMe : target }
         composeSheet.onWillClose = { [weak self] in self?.closingSheet = true }
         peopleSheet.onWillClose = { [weak self] in self?.closingSheet = true }
         createSheet.onWillClose = { [weak self] in self?.closingSheet = true }
@@ -3437,7 +3595,6 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         onConceal?()
     }
     func accountWillChange() {
-        lastTarget = .onlyMe
         documents.bind(nil); documentScope = nil
         uploads.accountWillChange(); projects.bind(nil); composeSheet.accountWillChange()
         peopleSheet.close(); createSheet.closeWhenIdle()
@@ -3465,15 +3622,11 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
 
     private func defaultTarget() -> ComposeTarget {
         if mode == .project, let selected = projects.selected { return .project(selected.project_id, selected.name) }
-        // A remembered project the full, live list no longer has is gone.
-        if let id = lastTarget.projectID, projects.listLoaded, !projects.projects.contains(where: { $0.project_id == id }) {
-            lastTarget = .onlyMe
-        }
-        return lastTarget
+        return .onlyMe
     }
 
     /// Compose from outside the window's own buttons (⌘⇧E, a drop). A list
-    /// cleared by concealment is reloaded, so To offers every live project.
+    /// cleared by concealment is reloaded for the optional project picker.
     private func presentCompose(target: ComposeTarget, placeholder: String, file: URL? = nil) {
         guard window.attachedSheet == nil else { return }
         if mode == .home, projects.projects.isEmpty, projects.identity != nil, projects.availability != .notLive,
@@ -3527,7 +3680,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             documents.bind(uploads.identity); documentScope = nil
             askField.stringValue = ""; mode = .home; projectSearchShown = false; showSearchReader = false
             clearPresentationRestore(); askScope = .global; askReturnProject = false
-            onInvalidateAnswer?(); clearPendingIntents(); lastTarget = .onlyMe; onIdentityChanged?()
+            onInvalidateAnswer?(); clearPendingIntents(); onIdentityChanged?()
             // A save that may exist under the account that just went away
             // stays said on the page until the person moves on.
             if uploads.identity == nil, uploads.status.hasPrefix("The save may have completed") { localNotice = uploads.status }
@@ -3975,18 +4128,34 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             let retry = NSMenuItem(title: "Retry project-link change", action: #selector(retryDocumentAssociation), keyEquivalent: "")
             retry.target = self; retry.isEnabled = !documents.busy; menu.addItem(retry)
         } else if let document = documents.metadata {
-            if document.project_id != nil {
-                let remove = NSMenuItem(title: "Remove project link (keep audience)", action: #selector(dissociateDocument), keyEquivalent: "")
-                remove.target = self; remove.isEnabled = !documents.busy; menu.addItem(remove)
-            } else {
-                let add = NSMenuItem(title: "Link to project (keep audience)", action: nil, keyEquivalent: "")
+            // V2 keeps every project association, independently of the
+            // plural audience. A V1 original has at most one legacy link.
+            let linked = document.association_project_ids ?? document.project_id.map { [$0] } ?? []
+            let available = projects.availability == .live ? projects.projects : []
+            let currentProject = mode == .project ? projects.selected?.project_id : nil
+            if let currentProject, linked.contains(currentProject) {
+                // Inside a project reader, only remove the current project's
+                // link. Other associations are never silently changed.
+                let remove = NSMenuItem(title: "Remove this project link (keep audience)", action: #selector(dissociateDocument(_:)), keyEquivalent: "")
+                remove.target = self; remove.representedObject = currentProject; remove.isEnabled = !documents.busy; menu.addItem(remove)
+            } else if mode != .project, !linked.isEmpty {
+                // Outside a project, expose only links whose projects are in
+                // the caller's current authorized project list.
+                let remove = NSMenuItem(title: "Remove project link (keep audience)", action: nil, keyEquivalent: "")
                 let choices = NSMenu(); choices.autoenablesItems = false
-                for project in projects.projects where projects.availability == .live {
-                    let item = NSMenuItem(title: project.name, action: #selector(associateDocument(_:)), keyEquivalent: "")
+                for project in available where linked.contains(project.project_id) {
+                    let item = NSMenuItem(title: project.name, action: #selector(dissociateDocument(_:)), keyEquivalent: "")
                     item.target = self; item.representedObject = project.project_id; item.isEnabled = !documents.busy; choices.addItem(item)
                 }
-                add.submenu = choices; add.isEnabled = !documents.busy && !choices.items.isEmpty; menu.addItem(add)
+                remove.submenu = choices; remove.isEnabled = !documents.busy && !choices.items.isEmpty; menu.addItem(remove)
             }
+            let add = NSMenuItem(title: "Link to project (keep audience)", action: nil, keyEquivalent: "")
+            let choices = NSMenu(); choices.autoenablesItems = false
+            for project in available where !linked.contains(project.project_id) {
+                let item = NSMenuItem(title: project.name, action: #selector(associateDocument(_:)), keyEquivalent: "")
+                item.target = self; item.representedObject = project.project_id; item.isEnabled = !documents.busy; choices.addItem(item)
+            }
+            add.submenu = choices; add.isEnabled = !documents.busy && !choices.items.isEmpty; menu.addItem(add)
         }
         return menu
     }
@@ -3994,8 +4163,8 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         guard let document = documents.metadata, let projectID = sender.representedObject as? String else { return }
         documents.associate(document.document_id, projectID: projectID, add: true)
     }
-    @objc private func dissociateDocument() {
-        guard let document = documents.metadata, let projectID = document.project_id else { return }
+    @objc private func dissociateDocument(_ sender: NSMenuItem) {
+        guard let document = documents.metadata, let projectID = sender.representedObject as? String else { return }
         documents.associate(document.document_id, projectID: projectID, add: false)
     }
     @objc private func retryDocumentAssociation() { documents.retryAssociation() }
@@ -4026,6 +4195,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             let name = projects.projects.first(where: { $0.project_id == id })?.name
                 ?? (projects.selected?.project_id == id ? projects.selected?.name : nil)
             return name.map { "Members of \($0)" } ?? "Project members"
+        case .projects: return "Members of selected projects"
         }
     }
 
@@ -4244,8 +4414,8 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
         openDropped(file, target: .project(project.project_id, project.name))
     }
 
-    /// A text file dropped anywhere on the content: To is the open project,
-    /// else the last choice (initially Only me). Never sends by itself.
+    /// A file dropped on a project preselects that association. Else there is
+    /// no association. Either path still starts with private sharing.
     private func dropOnWindow(_ file: URL) {
         openDropped(file, target: defaultTarget())
     }

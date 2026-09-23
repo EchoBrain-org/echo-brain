@@ -12,7 +12,7 @@ afterEach(() => h.close());
 const ids = (items: readonly { context_id: string }[]) => items.map(item => item.context_id).sort();
 const denied = (run: () => unknown, code = 'not_found') => expect(run).toThrow(expect.objectContaining({ code }));
 
-describe('PC-06 synthetic seams with real V7 custody (not cross-layer qualification)', () => {
+describe('PC-06 synthetic seams with real V9 custody (not cross-layer qualification)', () => {
   it('keeps two-project discovery and overlapping/disjoint memberships separate from audiences', () => {
     const s = h.seed();
     const discover = (person: typeof PEOPLE.alice) => h.read(person, { operation: 'project_list' }, (tx, scope) => tx.listProjects(scope, { limit: 10 })).items.map(item => item.project_id).sort();
@@ -181,7 +181,7 @@ describe('PC-06 synthetic seams with real V7 custody (not cross-layer qualificat
     }).toThrow('synthetic response timeout');
     expect(delivered).toEqual([]);
     h.restart();
-    expect(h.database.pragma('user_version', { simple: true })).toBe(7);
+    expect(h.database.pragma('user_version', { simple: true })).toBe(9);
     expect(h.status(draft.request_id)).toMatchObject({ context_id: committed!.context_id, metadata: 'pending', audience: draft.audience, project_id: s.beta });
     expect(h.submit(draft)).toEqual(committed);
     for (const changed of [{ audience: { kind: 'team' } }, { project_id: s.alpha }, { text: 'Changed source' }]) {
@@ -234,6 +234,7 @@ describe('PC-06 synthetic seams with real V7 custody (not cross-layer qualificat
     const changed = Object.keys(after).filter(name => after[name] !== before[name]);
     expect(changed.sort()).toEqual([
       'authority_person_updates_v2', 'authority_person_update_work_v2',
+      'authority_person_update_audience_projects_v1',
       'authority_project_command_receipts_v1', 'authority_project_context_associations_v1',
       'authority_project_read_audit_v1',
     ].sort());

@@ -59,11 +59,20 @@ function addUpload(
 ): void {
   database.prepare(`
     INSERT INTO authority_person_updates_v2
-      (organization_id, principal_id, membership_id, membership_type, request_id, context_id, payload_sha256,
-       title, text, audience_kind, audience_project_id, project_id, received_at)
-    VALUES (?, ?, ?, ?, '00000000-0000-4000-8000-000000000001', ?, 'sha256:${'a'.repeat(64)}',
-            'Original', 'The original body is immutable.', ?, ?, NULL, ?)
-  `).run(OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, CONTEXT, audience, audienceProjectId, PROJECT_CONTEXT_NOW);
+      (organization_id, principal_id, membership_id, membership_type, request_id, request_version, context_id, payload_sha256,
+       title, text, audience_kind, audience_project_id, audience_project_ids_json, submitted_association_project_ids_json, project_id, received_at)
+    VALUES (?, ?, ?, ?, '00000000-0000-4000-8000-000000000001', 2, ?, 'sha256:${'a'.repeat(64)}',
+            'Original', 'The original body is immutable.', ?, ?, ?, '[]', NULL, ?)
+  `).run(OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, CONTEXT, audience, audienceProjectId, audienceProjectId === null ? '[]' : JSON.stringify([audienceProjectId]), PROJECT_CONTEXT_NOW);
+}
+function addProjectsAudienceUpload(database: Database.Database, projectIds: readonly string[]): void {
+  database.prepare(`
+    INSERT INTO authority_person_updates_v2
+      (organization_id, principal_id, membership_id, membership_type, request_id, request_version, context_id, payload_sha256,
+       title, text, audience_kind, audience_project_id, audience_project_ids_json, submitted_association_project_ids_json, project_id, received_at)
+    VALUES (?, ?, ?, ?, '00000000-0000-4000-8000-000000000001', 3, ?, 'sha256:${'a'.repeat(64)}',
+            'Original', 'The original body is immutable.', 'projects', NULL, ?, '[]', NULL, ?)
+  `).run(OWNER.organization_id, OWNER.principal_id, OWNER.membership_id, OWNER.membership_type, CONTEXT, JSON.stringify(projectIds), PROJECT_CONTEXT_NOW);
 }
 
 function expectDenied(action: () => void): void {
@@ -71,6 +80,19 @@ function expectDenied(action: () => void): void {
 }
 
 describe('SQLite project upload enrichment authorization V1', () => {
+  it('pins every immutable projects-audience grant and fails closed if any one is revoked', () => {
+    const database = open();
+    addProject(database, PROJECT_ALPHA); addProject(database, PROJECT_BETA);
+    grantProjectMembership(database, PROJECT_ALPHA, OWNER, 'pgm_11111111-1111-4111-8111-111111111111');
+    grantProjectMembership(database, PROJECT_BETA, OWNER, 'pgm_22222222-2222-4222-8222-222222222222');
+    addProjectsAudienceUpload(database, [PROJECT_ALPHA, PROJECT_BETA]);
+    const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
+    const snapshot = authorization.capture(CONTEXT)!;
+    expect(snapshot).toMatchObject({ context_id: CONTEXT, uploader: OWNER });
+    database.prepare("UPDATE authority_project_memberships_v1 SET status = 'revoked', revoked_at = ? WHERE project_id = ? AND membership_id = ?")
+      .run(PROJECT_CONTEXT_NOW, PROJECT_BETA, OWNER.membership_id);
+    expectDenied(() => authorization.assertCurrent(snapshot));
+  });
   it('captures the active uploader tenure and exact project-audience grant', () => {
     const database = open();
     addProject(database); grantProjectMembership(database, PROJECT_ALPHA); addUpload(database, 'project', PROJECT_ALPHA);
@@ -186,8 +208,8 @@ describe('SQLite project upload enrichment authorization V1', () => {
     const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
     expect(authorization.capture(CONTEXT)).toBeUndefined();
     database.pragma('user_version = 6');
-    expect(() => new SqliteProjectUploadEnrichmentAuthorizationV1(database)).toThrow('V7');
-    database.pragma('user_version = 7');
+    expect(() => new SqliteProjectUploadEnrichmentAuthorizationV1(database)).toThrow('V9');
+    database.pragma('user_version = 9');
     database.pragma('foreign_keys = OFF');
     expect(() => new SqliteProjectUploadEnrichmentAuthorizationV1(database)).toThrow('foreign keys');
   });

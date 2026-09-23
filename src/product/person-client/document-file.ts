@@ -3,7 +3,7 @@ import { Buffer } from 'node:buffer';
 import { closeSync, constants, createReadStream, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { canonicalJson } from '@echo-brain/federation-protocol';
-import { PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonUpdateRequestId, type PersonDocumentUploadMetadataV1, type PersonDocumentStatusV1, type ProjectContextAudienceV1 } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonUpdateRequestId, type PersonDocumentUploadMetadataV1, type PersonDocumentUploadMetadataV2, type PersonDocumentStatusV1, type PersonDocumentStatusV2, type ProjectContextAudienceV1, type PersonUploadAudienceV3, type ProjectIdV1 } from '@echo-brain/organization-api';
 import { personSessionStorePaths } from './session-store.js';
 
 export interface DocumentFileUpload {
@@ -14,6 +14,11 @@ export interface DocumentFileUpload {
   readonly project_id: PersonDocumentUploadMetadataV1['project_id'];
   readonly expected_membership_id?: string;
   readonly expected_authority?: string;
+}
+export interface DocumentFileUploadV2 {
+  readonly file: string; readonly request_id: string; readonly title: string;
+  readonly audience: PersonUploadAudienceV3; readonly association_project_ids: readonly ProjectIdV1[];
+  readonly expected_membership_id?: string; readonly expected_authority?: string;
 }
 
 export class DocumentFileError extends Error {
@@ -65,7 +70,7 @@ function copyAndHash(source: number, destination?: number): { content_length: nu
 }
 
 export interface DocumentSnapshot {
-  readonly metadata: PersonDocumentUploadMetadataV1;
+  readonly metadata: PersonDocumentUploadMetadataV1 | PersonDocumentUploadMetadataV2;
   readonly reused: boolean;
   open(): ReturnType<typeof createReadStream>;
   remove(): void;
@@ -79,14 +84,16 @@ function snapshotAccount(homeDirectory: string, accountBinding: string): string 
   privateDirectory(account);
   return account;
 }
-function snapshotManifest(directory: string, requestId: string): PersonDocumentUploadMetadataV1 {
+function snapshotManifest(directory: string, requestId: string): PersonDocumentUploadMetadataV1 | PersonDocumentUploadMetadataV2 {
   privateDirectory(directory);
   const path = join(directory, 'metadata.json');
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 || (stat.mode & 0o077) !== 0 ||
       (process.getuid !== undefined && stat.uid !== process.getuid())) throw new DocumentFileError('invalid_file', 'Document snapshot metadata is invalid.');
   const saved = JSON.parse(readFileSync(path, 'utf8')) as { metadata: unknown };
-  const metadata = validatePersonDocumentUploadMetadataV1(saved.metadata);
+  const metadata = (saved.metadata as { schema_version?: unknown })?.schema_version === 2
+    ? validatePersonDocumentUploadMetadataV2(saved.metadata)
+    : validatePersonDocumentUploadMetadataV1(saved.metadata);
   if (metadata.request_id !== requestId) throw new DocumentFileError('invalid_file', 'Document snapshot metadata is inconsistent.');
   return metadata;
 }
@@ -117,13 +124,16 @@ function cleanPreparationDirectories(account: string): void {
 }
 
 /** Uncertain submissions retain a private byte snapshot, scoped to the exact membership tenure. */
-export function prepareDocumentSnapshot(homeDirectory: string, accountBinding: string, input: DocumentFileUpload): DocumentSnapshot {
+export function prepareDocumentSnapshot(homeDirectory: string, accountBinding: string, input: DocumentFileUpload | DocumentFileUploadV2): DocumentSnapshot {
   validatePersonUpdateRequestId(input.request_id);
   const sourcePath = resolve(input.file);
   const filename = basename(sourcePath);
   if (!/\.(?:txt|md|markdown|pdf|docx)$/i.test(filename)) throw new DocumentFileError('invalid_file', 'Choose a .txt, .md, .pdf, or .docx document. Legacy .doc is unsupported.');
-  validatePersonDocumentUploadMetadataV1({ schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: input.request_id,
-    filename, title: input.title, audience: input.audience, project_id: input.project_id, content_length: 1, sha256: `sha256:${'0'.repeat(64)}` });
+  const metadataFor = (proof: { content_length: number; sha256: `sha256:${string}` }) => {
+    if ('association_project_ids' in input) return validatePersonDocumentUploadMetadataV2({ schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: input.request_id, filename, title: input.title, audience: input.audience, association_project_ids: input.association_project_ids, ...proof });
+    return validatePersonDocumentUploadMetadataV1({ schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: input.request_id, filename, title: input.title, audience: input.audience, project_id: input.project_id, ...proof });
+  };
+  metadataFor({ content_length: 1, sha256: `sha256:${'0'.repeat(64)}` });
   const account = snapshotAccount(homeDirectory, accountBinding);
   const directory = join(account, input.request_id);
   const reused = existsSync(directory);
@@ -140,8 +150,7 @@ export function prepareDocumentSnapshot(homeDirectory: string, accountBinding: s
       const proof = copyAndHash(source, destination);
       fsyncSync(destination);
       closeSync(destination); destination = undefined;
-      const metadata = validatePersonDocumentUploadMetadataV1({ schema_version: 1, kind: 'echo-person-document-upload-v1',
-        request_id: input.request_id, filename, title: input.title, audience: input.audience, project_id: input.project_id, ...proof });
+      const metadata = metadataFor(proof);
       writeFileSync(join(temporary, 'metadata.json'), canonicalJson({ metadata }), { mode: 0o600, flag: 'wx' });
       try { renameSync(temporary, directory); temporary = undefined; }
       catch (error) { if (!existsSync(directory)) throw error; }
@@ -155,8 +164,10 @@ export function prepareDocumentSnapshot(homeDirectory: string, accountBinding: s
     }
   }
   const result = snapshot(directory, input.request_id, reused);
-  if (result.metadata.filename !== filename || result.metadata.title !== input.title ||
-      canonicalJson(result.metadata.audience) !== canonicalJson(input.audience) || result.metadata.project_id !== input.project_id) {
+  const coordinatesChanged = 'association_project_ids' in input
+    ? result.metadata.schema_version !== 2 || canonicalJson(result.metadata.association_project_ids) !== canonicalJson(input.association_project_ids)
+    : result.metadata.schema_version !== 1 || canonicalJson(result.metadata.project_id) !== canonicalJson(input.project_id);
+  if (result.metadata.filename !== filename || result.metadata.title !== input.title || canonicalJson(result.metadata.audience) !== canonicalJson(input.audience) || coordinatesChanged) {
     throw new DocumentFileError('snapshot_conflict', 'This request ID has different retained upload coordinates. Use documents retry with its request ID to resend the exact original.');
   }
   return result;
@@ -236,16 +247,16 @@ export async function saveDocumentDownload(response: Response, outputPath: strin
 }
 
 /** A current, exact server status settles a retained uncertain upload without rereading its source. */
-export function reconcileDocumentSnapshot(homeDirectory: string, accountBinding: string, receipt: PersonDocumentStatusV1): void {
+export function reconcileDocumentSnapshot(homeDirectory: string, accountBinding: string, receipt: PersonDocumentStatusV1 | PersonDocumentStatusV2): void {
   validatePersonUpdateRequestId(receipt.request_id);
   // The authenticated status reader validates the exact account and request. A minimal
   // saved receipt deliberately exposes no original metadata after content access loss.
-  if (receipt.kind !== 'echo-person-document-saved-v1') {
+  if (receipt.kind !== 'echo-person-document-saved-v1' && receipt.kind !== 'echo-person-document-saved-v2') {
     const directory = join(snapshotAccount(homeDirectory, accountBinding), receipt.request_id);
     if (!existsSync(directory)) return;
     const metadata = snapshotManifest(directory, receipt.request_id);
     for (const key of ['request_id', 'sha256', 'content_length', 'filename', 'title'] as const) if (metadata[key] !== receipt[key]) return;
-    if (canonicalJson(metadata.audience) !== canonicalJson(receipt.audience)) return;
+    if (metadata.schema_version !== receipt.schema_version || canonicalJson(metadata.audience) !== canonicalJson(receipt.audience)) return;
   }
   abandonDocumentSnapshot(homeDirectory, accountBinding, receipt.request_id);
 }

@@ -36,7 +36,7 @@ export class SqlitePersonUpdateInboxV1 {
     const version = database.pragma('user_version', { simple: true });
     // Fresh V7 retains the V1 custody tables until the V2 server/client cutover.
     // Project-audience rows live separately and can never enter a V1 query.
-    if (version !== 6 && version !== 7 && version !== 8) throw new Error('Person uploads require Authority V6 or fresh V7 state');
+    if (version !== 6 && version !== 7 && version !== 8 && version !== 9) throw new Error('Person uploads require Authority V6 through V9 state');
 
   }
   isActive(actor: AuthorityPersonMembershipBinding): boolean {

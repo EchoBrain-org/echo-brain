@@ -35,12 +35,14 @@ pages and scroll position through fresh authorized reads. Sheets use a
 consistent close control, and closing an unsent note or attached-file draft asks before
 discarding it. Saves and membership changes in flight cannot be dismissed.
 
-Global Write, Capture, and file drop use the same upload composer as a
-project. Its **To** selector can choose Only me, an accessible project, or
-Organization. Its separate **Project** selector associates context without
-granting audience access. The initial global target is Only me; subsequent
-compositions remember the last non-Organization target for the current
-account. Opening Write inside a project defaults to that project.
+Global Write, Capture, and file drop use the same two-step composer as a
+project. The first page holds the content and one optional **Projects** selector.
+It accepts no project, one project, or several projects. Opening inside a project
+preselects that project. **Next: Sharing** opens a second page, with **Only me**
+selected initially. The person may instead choose **Members of selected projects**
+or **Everyone in organization**. **Upload** commits the original and selected
+links once. Back preserves the draft, attachment and choices. See
+[Upload projects and sharing](upload-projects-and-sharing.md) for the full contract.
 
 ## Evidence and permission boundaries
 
@@ -83,10 +85,8 @@ readers lose access, while newly authorized project members can access history.
   requested-only analysis policy remains unchanged.
 - Professional role/title/team metadata and Undo of completed uploads or
   approvals are outside this round.
-- The upload composer's project selectors use the project pages already
-  loaded on Home (10 projects per page). They do not yet have independent
-  search/pagination. Use **More projects** on Home to make later projects
-  available; the first list load must finish before its projects appear.
+- The upload project picker pages independently of Home and accepts at most
+  20 selected projects per original.
 - The next search and answer refinement must define whether personal context
   can be related without an explicit project association, how that relationship
   is established, and how to explain it. Keyword similarity alone does not widen

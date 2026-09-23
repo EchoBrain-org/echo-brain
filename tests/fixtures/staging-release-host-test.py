@@ -133,6 +133,22 @@ class HostProtocol(unittest.TestCase):
             self.assertFalse(result['ok'])
         self.assertEqual(len(self.calls), 1)
 
+    def test_v8_to_v9_dispatch_keeps_the_bounded_stage_arguments(self):
+        self.install()
+        request = self.request('stage-v8-to-v9')
+        request['content_telemetry'] = 'true'
+        for name in host.TOOLS:
+            del request['files'][name]['base64']
+        result = self.execute(request)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(self.calls[-1][0], 'stage-v8-to-v9')
+        self.assertEqual(self.calls[-1][-2:], ['--content-telemetry', 'true'])
+        legacy = self.request('stage-v8-to-v9')
+        legacy['schema_version'] = 2
+        legacy['kind'] = 'echo-staging-release-request-v2'
+        with self.assertRaises(host.Refused):
+            host.validate_request(legacy)
+
     def test_v4_install_cannot_omit_changed_or_candidate_bytes(self):
         for name in ('update-clean-v1.sh', 'candidate.json', 'runtime-profile.json'):
             request = self.request('install')
