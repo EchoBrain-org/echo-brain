@@ -4089,14 +4089,17 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
                 askField.stringValue = ""; requestFeed()
             } else if createOrigin != nil {
                 returnToCreateOrigin()
-            } else { goHome() }
+            } else { goHome(preservingHomePlace: true) }
         }
     }
 
-    private func goHome() {
+    /// Return from a project to the paged Home list it was opened from. Account,
+    /// access, concealment, and unrelated routes still clear all restore state.
+    private func goHome(preservingHomePlace: Bool = false) {
+        let place = preservingHomePlace ? homePlace : nil
         documents.clear(); documentScope = nil
         mode = .home; askField.stringValue = ""; projectSearchShown = false; showSearchReader = false
-        clearPresentationRestore(); askScope = .global; askReturnProject = false
+        clearPresentationRestore(); homePlace = place; askScope = .global; askReturnProject = false
         clearPendingIntents()
         projects.discover(); onConceal?(); refresh()
         window.makeFirstResponder(askField)
@@ -4159,6 +4162,9 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
     @objc private func openProject(_ sender: NSButton) {
         guard projects.projects.indices.contains(sender.tag), !projects.hasOutstandingMutation, uploads.identity != nil else { return }
         let project = projects.projects[sender.tag]
+        // Preserve the visible Home page count and position before opening a
+        // project; Back reloads pages through the normal authorized list port.
+        homePlace = shownHome()
         createOrigin = nil; restoreDocumentID = nil; listPlace = nil
         mode = .project; openProjectName = project.name; lastOpenedProjectID = project.project_id
         projectSearchShown = false; restorePending = nil; clearPendingIntents()

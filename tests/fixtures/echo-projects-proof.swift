@@ -213,7 +213,8 @@ enum ProjectProof {
         func textFile(_ name: String, _ text: String) -> URL {
             let url = folder.appendingPathComponent(name); try! Data(text.utf8).write(to: url); return url
         }
-        controller.show(); wait("home") { !uploads.busy && uploads.identity != nil && !projects.busy && projects.projects.count == 2 }
+        let initialHomeRows = mode == "ui-home-back" ? 10 : 2
+        controller.show(); wait("home") { !uploads.busy && uploads.identity != nil && !projects.busy && projects.projects.count == initialHomeRows }
         let query = ProofUI.find(NSTextField.self, "ask-field", "Ask or find context", in: chrome)
         let submit = ProofUI.find(NSButton.self, "submit-button", "Submit", in: chrome)
         let back = ProofUI.find(NSButton.self, "back-button", "Back", in: chrome)
@@ -222,6 +223,45 @@ enum ProjectProof {
             ProofUI.find(NSButton.self, "Apollo · \(role)", in: chrome).performClick(nil)
             wait("project") { !projects.busy && projects.selected?.project_id == project && projects.items.count == 1 && !projects.members.isEmpty }
             settle("project settle")
+        }
+
+        if mode == "ui-home-back" {
+            let expected = ["Apollo", "Beacon", "Cinder", "Delta", "Ember", "Fjord", "Grove", "Harbor", "Ion", "Juniper", "Kite", "Lumen", "Mica", "Nova", "Orbit"]
+            require(projects.projects.map(\.name) == Array(expected.prefix(10)), "first home page order")
+            ProofUI.find(NSButton.self, "more-projects", in: chrome).performClick(nil)
+            wait("second home page") { !projects.busy && projects.projects.map(\.name) == expected && projects.listCursor == nil }
+            guard let homeScroll = ProofUI.views(chrome).compactMap({ $0 as? NSScrollView }).first(where: ProofUI.visible) else {
+                fatalError("missing visible home scroll")
+            }
+            window.contentView?.layoutSubtreeIfNeeded()
+            homeScroll.contentView.scroll(to: NSPoint(x: 0, y: 210)); homeScroll.reflectScrolledClipView(homeScroll.contentView)
+            let homeOffset = homeScroll.contentView.bounds.origin.y
+            require(homeOffset > 0, "home list did not scroll")
+            ProofUI.find(NSButton.self, "Apollo · Lead", in: chrome).performClick(nil)
+            wait("opened from page two") { !projects.busy && projects.selected?.project_id == project }
+            back.performClick(nil)
+            wait("restored paged home") {
+                !projects.busy && projects.selected == nil && projects.projects.map(\.name) == expected && projects.listCursor == nil
+                    && abs(homeScroll.contentView.bounds.origin.y - homeOffset) < 1
+            }
+            // The New project sheet originates on this same paged home list.
+            // Completing it and returning must restore that origin too.
+            ProofUI.find(NSButton.self, "sidebar-toggle", in: chrome).performClick(nil)
+            ProofUI.find(NSButton.self, "sidebar-new-project", in: chrome).performClick(nil)
+            wait("new project from paged home") { window.attachedSheet != nil }
+            let sheet = sheetRoot("new project from paged home")
+            let name = ProofUI.find(NSTextField.self, "create-name", in: sheet)
+            name.stringValue = "Home return"; NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: name)
+            ProofUI.find(NSButton.self, "create-submit", in: sheet).performClick(nil)
+            wait("new project opened") { !projects.busy && projects.selected?.project_id == project && ProofUI.visible(ProofUI.find(NSButton.self, "create-done", in: sheet)) }
+            ProofUI.find(NSButton.self, "create-done", in: sheet).performClick(nil)
+            wait("new project sheet closed") { window.attachedSheet == nil }
+            back.performClick(nil)
+            wait("restored after new project") {
+                !projects.busy && projects.selected == nil && projects.projects.map(\.name) == expected && projects.listCursor == nil
+                    && abs(homeScroll.contentView.bounds.origin.y - homeOffset) < 1
+            }
+            return
         }
 
         if mode.hasPrefix("ui-recovery") {
