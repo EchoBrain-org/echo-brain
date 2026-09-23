@@ -498,6 +498,49 @@ function liveCycle(
 }
 
 describe("admitted meeting-processing cycle", () => {
+  it("durably admits meeting context before analysis and does not lose it when analysis fails", async () => {
+    const events: string[] = [];
+    const state = new FakeState(admission());
+    const observed = meeting();
+    const cycle = liveCycle({
+      source: source({ meetings: [observed], next_cursor: fixtureCursor("2026-08-22T02:05:00.000Z") }),
+      source_ingestion: {
+        scope: { organization_id: "org-1", custody_ref: "organization:org-1", access_policy_ref: "meeting-source:fixture", analysis_policy: "automatic" },
+        store: { admitSourceRevision: async ({ source: captured }) => {
+          expect(captured.item.external_id).toBe(observed.provenance.external_id);
+          expect(captured.revision.captured_at).toBe(observed.provenance.observed_at);
+          events.push("admitted");
+          return "admitted";
+        } },
+      },
+      processor: processor(() => { events.push("analysis"); throw new Error("analysis unavailable"); }),
+      state,
+      stager: stager({ kind: "staged", stage_id: "never" }),
+    });
+    await expect(cycle.runOnce()).rejects.toThrow("analysis unavailable");
+    expect(events).toEqual(["admitted", "analysis"]);
+    expect(state.advances).toHaveLength(0);
+    expect(state.candidates).toHaveLength(0);
+  });
+
+  it("does not analyze or advance after common source admission fails", async () => {
+    let extracted = false;
+    const state = new FakeState(admission());
+    const cycle = liveCycle({
+      source: source({ meetings: [meeting()], next_cursor: fixtureCursor("2026-08-22T02:05:00.000Z") }),
+      source_ingestion: {
+        scope: { organization_id: "org-1", custody_ref: "organization:org-1", access_policy_ref: "meeting-source:fixture", analysis_policy: "automatic" },
+        store: { admitSourceRevision: async () => { throw new Error("source custody unavailable"); } },
+      },
+      processor: processor((value) => { extracted = true; return decisions(value); }),
+      state,
+      stager: stager({ kind: "staged", stage_id: "never" }),
+    });
+    await expect(cycle.runOnce()).rejects.toThrow("source custody unavailable");
+    expect(extracted).toBe(false);
+    expect(state.advances).toHaveLength(0);
+  });
+
   it("correlates the actionable source, extraction, and durable candidate stages", async () => {
     const telemetry = new FakeJourneyTelemetry();
     const observed = meeting();
@@ -1507,7 +1550,7 @@ describe("admitted meeting-processing cycle", () => {
       state: new FakeState(admission()),
       stager: stager({ kind: "staged", stage_id: "never" }),
     });
-    await expect(pageCycle.runOnce()).rejects.toThrow("at most one meeting");
+    await expect(pageCycle.runOnce()).rejects.toThrow("source batch exceeds the requested pull limit");
   });
 
   it("accepts a non-fixture source source through its injected boundary", async () => {

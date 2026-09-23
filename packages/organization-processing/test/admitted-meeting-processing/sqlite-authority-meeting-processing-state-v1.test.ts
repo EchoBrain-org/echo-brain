@@ -14,6 +14,20 @@ import { ADMITTED_AT, ADVANCED_AT, assertActionable, database, databases, decisi
 afterEach(() => { for (const value of databases.splice(0)) value.close(); });
 
 describe("SQLite admitted meeting-processing state", () => {
+  it("fences source custody with current identity and owner membership inside the retaining transaction", async () => {
+    const value = database();
+    const state = new SqliteAuthorityMeetingProcessingStateV1(value, fixtureCursorPolicy, "llm");
+    await state.readAdmission();
+    const identity = meeting.provenance.source;
+    expect(() => state.assertCurrentSourceAdmission(identity)).toThrow("custody transaction");
+    expect(() => value.transaction(() => state.assertCurrentSourceAdmission(identity))()).not.toThrow();
+    expect(() => value.transaction(() => state.assertCurrentSourceAdmission({ ...identity, instance_id: "different" }))()).toThrow("current admitted source identity");
+    expect(() => value.transaction(() => state.assertCurrentSourceAdmission({ ...identity, version: "future" }))()).toThrow("current admitted source identity");
+    value.prepare("UPDATE authority_memberships SET status='revoked',revoked_at=?,revocation_reason='founder-reset' WHERE membership_id='mem_test'").run(ADVANCED_AT);
+    expect(() => value.transaction(() => state.assertCurrentSourceAdmission(identity))()).toThrow(AuthorityMeetingProcessingRevokedError);
+    expect(value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2").pluck().get()).toBe(0);
+  });
+
   it("rejects an admitted source whose persisted adapter differs from the configured boundary", async () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(value, {

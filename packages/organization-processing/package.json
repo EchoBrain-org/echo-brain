@@ -5,6 +5,18 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./core/contracts/source": {
+      "types": "./dist/core/contracts/source.d.ts",
+      "import": "./dist/core/contracts/source.js"
+    },
+    "./core/ports/source": {
+      "types": "./dist/core/ports/source.d.ts",
+      "import": "./dist/core/ports/source.js"
+    },
+    "./core/processing/source-admission": {
+      "types": "./dist/core/processing/source-admission.d.ts",
+      "import": "./dist/core/processing/source-admission.js"
+    },
     "./core/ports/adapters": {
       "types": "./dist/core/ports/adapters.d.ts",
       "import": "./dist/core/ports/adapters.js"

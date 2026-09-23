@@ -1,6 +1,7 @@
 import type { JsonObject } from "./json.js";
 
 export type AdapterKind =
+  | 'source'
   | 'meeting-source'
   | 'decision-processor'
   | 'delivery-surface'

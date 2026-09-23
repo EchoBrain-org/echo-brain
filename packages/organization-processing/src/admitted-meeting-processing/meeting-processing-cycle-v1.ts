@@ -2,12 +2,16 @@ import { coreRuntimeIdentityV1, annotateCoreRuntimeV1, observeCoreRuntimeV1 } fr
 import {
   AdapterError,
   assertCanonicalDecisionSet,
-  assertCanonicalMeetingBatch,
   assertCanonicalMeetingDocument,
+  MeetingSourceBridgeV1,
+  meetingFromSourceEnvelopeV1,
+  pullAndAdmitSourceBatchV1,
   type DecisionProcessorAdapter,
   type DecisionSet,
   type MeetingDocument,
   type MeetingSourceAdapter,
+  type MeetingSourceContentV1,
+  type SourceAdmissionBindingV1,
 } from "../core/index.js";
 import type {
   MeetingProcessingWorkerPhaseRunnerV1,
@@ -249,6 +253,8 @@ export type AdmittedMeetingProcessingCycleResultV1 =
 
 export interface AdmittedMeetingProcessingCycleV1Options {
   readonly source: MeetingSourceAdapter;
+  /** Production binds the common durable source store before decision work. */
+  readonly source_ingestion?: SourceAdmissionBindingV1<MeetingSourceContentV1>;
   readonly processor: DecisionProcessorAdapter;
   readonly state: AuthorityMeetingProcessingStateV1;
   readonly stager: ApprovalWorkflowStagerV1;
@@ -456,16 +462,13 @@ export class AdmittedMeetingProcessingCycleV1 {
         this.options.source_cursor_policy,
       );
       annotateCoreRuntimeV1({ cursor: coreRuntimeIdentityV1("source_cursor", admission.source.cursor) });
-      const batch = await observeCoreRuntimeV1("source_poll", () => this.options.source.pull(
-        { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
-        signal === undefined ? undefined : { signal },
-      ));
-      assertCanonicalMeetingBatch(batch);
-      if (batch.meetings.length > MAXIMUM_PULL_LIMIT) {
-        throw new Error(
-          "admitted meeting-processing cycle accepts at most one meeting per poll",
-        );
-      }
+      const sourceBatch = await observeCoreRuntimeV1("source_poll", () => pullAndAdmitSourceBatchV1({
+        source: new MeetingSourceBridgeV1(this.options.source),
+        request: { cursor: admission.source.cursor, limit: MAXIMUM_PULL_LIMIT },
+        admission: this.options.source_ingestion,
+        context: signal === undefined ? undefined : { signal },
+      }));
+      const batch = { meetings: sourceBatch.sources.map(meetingFromSourceEnvelopeV1), next_cursor: sourceBatch.next_cursor };
       const meeting = batch.meetings[0];
       if (meeting === undefined) {
         if (
