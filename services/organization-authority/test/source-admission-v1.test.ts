@@ -54,6 +54,30 @@ describe('durable common source admission',()=>{
     ]);
     expect(db.prepare('SELECT content_json FROM authority_source_contents_v1').pluck().all().join(' ')).toContain('software interface');
   });
+  it('durably skips a malformed retained text row and admits the next shared note without retaining corrupt content',async()=>{
+    const {db}=fixture();
+    const store=new SqliteSourceAdmissionStoreV1(db,(source,scope)=>assertPersonSourceAdmissionV1(db,source,scope));
+    const actor={organization_id:'org_fixture',principal_id:'prn_pm',membership_id:'mem_11111111-1111-4111-8111-111111111111',membership_type:'owner'};
+    db.prepare("INSERT INTO authority_principals VALUES (?,?,'PM',?)").run(actor.principal_id,actor.organization_id,at);
+    db.prepare("INSERT INTO authority_memberships(membership_id,organization_id,principal_id,membership_type,status,provisioned_at) VALUES (?,?,?,?,'active',?)").run(actor.membership_id,actor.organization_id,actor.principal_id,actor.membership_type,at);
+    const poison={schema_version:1,kind:'echo-person-update-submit-v1',request_id:'11111111-1111-4111-8111-111111111111',title:'Poison title',text:'poison body',visibility:'team'};
+    const valid={schema_version:1,kind:'echo-person-update-submit-v1',request_id:'22222222-2222-4222-8222-222222222222',title:'Valid title',text:'valid shared body',visibility:'team'};
+    const context=(request_id:string)=>`ctx_${canonicalSha256({organization_id:actor.organization_id,membership_id:actor.membership_id,request_id}).slice(7)}`;
+    const poisonId=context(poison.request_id); const validId=context(valid.request_id);
+    db.prepare('INSERT INTO authority_person_updates_v1 VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,poison.request_id,poisonId,`sha256:${'0'.repeat(64)}`,poison.title,poison.text,poison.visibility,at);
+    db.prepare('INSERT INTO authority_person_updates_v1 VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,valid.request_id,validId,canonicalSha256(valid),valid.title,valid.text,valid.visibility,'2026-09-23T00:00:01.000Z');
+    const observed:unknown[]=[];
+    const worker=new PersonDocumentProcessingV1({sourceAdmission:store,claimExtraction:()=>undefined,completeExtraction:()=>{throw new Error('text must not use file completion');}},async()=>{throw new Error('text must not use decoder');},new SqlitePersonTextSourceInboxV1(db,()=>at),{on_failure:event=>observed.push(event)});
+    expect(await worker.runOnce(new AbortController().signal)).toBe('admitted');
+    expect(observed).toEqual([{stage:'text_source_admission',error_code:'invalid_retained_text'}]);
+    expect(db.prepare('SELECT api_version,context_id,disposition,recorded_at FROM authority_person_text_source_failures_v1').all()).toEqual([{api_version:1,context_id:poisonId,disposition:'invalid_retained_text',recorded_at:at}]);
+    expect(db.prepare('SELECT content_json FROM authority_source_contents_v1').pluck().all().join(' ')).toContain('valid shared body');
+    expect(db.prepare('SELECT content_json FROM authority_source_contents_v1').pluck().all().join(' ')).not.toContain('poison body');
+    expect(()=>db.prepare("INSERT INTO authority_person_text_source_failures_v1 VALUES ('org_fixture',1,'ctx_missing','invalid_retained_text',?)").run(at)).toThrow('must bind');
+    expect(()=>db.prepare("INSERT INTO authority_person_text_source_failures_v1 VALUES ('org_fixture',2,?,'invalid_retained_text',?)").run(poisonId,at)).toThrow('must bind');
+    expect(()=>db.prepare("UPDATE authority_person_text_source_failures_v1 SET disposition='invalid_retained_text'").run()).toThrow('immutable');
+    expect(()=>db.prepare('DELETE FROM authority_person_text_source_failures_v1').run()).toThrow('denied');
+  });
   it('rechecks private note eligibility atomically after pull and rejects forged policy bindings',async()=>{
     const {db}=fixture();
     const member='mem_11111111-1111-4111-8111-111111111111';

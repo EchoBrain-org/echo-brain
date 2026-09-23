@@ -1596,6 +1596,35 @@ BEGIN SELECT RAISE(ABORT, 'Person upload V2 is immutable'); END;
 CREATE TRIGGER authority_person_updates_v2_delete_denied
 BEFORE DELETE ON authority_person_updates_v2
 BEGIN SELECT RAISE(ABORT, 'Person upload V2 deletion is denied'); END;
+-- A malformed legacy retained note must not pin the source-admission worker.
+-- The disposition carries no title, body, request ID or exception text.
+CREATE TABLE authority_person_text_source_failures_v1 (
+  organization_id TEXT NOT NULL REFERENCES authority_metadata(organization_id),
+  api_version INTEGER NOT NULL CHECK(api_version IN (1,2)),
+  context_id TEXT NOT NULL,
+  disposition TEXT NOT NULL CHECK(disposition = 'invalid_retained_text'),
+  recorded_at TEXT NOT NULL CHECK(unixepoch(recorded_at) IS NOT NULL),
+  PRIMARY KEY(organization_id, api_version, context_id)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER authority_person_text_source_failures_v1_source_fence
+BEFORE INSERT ON authority_person_text_source_failures_v1
+WHEN NOT (
+  (NEW.api_version = 1 AND EXISTS (
+    SELECT 1 FROM authority_person_updates_v1 u
+    WHERE u.organization_id = NEW.organization_id AND u.context_id = NEW.context_id
+  )) OR
+  (NEW.api_version = 2 AND EXISTS (
+    SELECT 1 FROM authority_person_updates_v2 u
+    WHERE u.organization_id = NEW.organization_id AND u.context_id = NEW.context_id
+  ))
+)
+BEGIN SELECT RAISE(ABORT, 'person text source failure must bind to retained text'); END;
+CREATE TRIGGER authority_person_text_source_failures_v1_immutable
+BEFORE UPDATE ON authority_person_text_source_failures_v1
+BEGIN SELECT RAISE(ABORT, 'person text source failure disposition is immutable'); END;
+CREATE TRIGGER authority_person_text_source_failures_v1_delete_denied
+BEFORE DELETE ON authority_person_text_source_failures_v1
+BEGIN SELECT RAISE(ABORT, 'person text source failure disposition deletion is denied'); END;
 CREATE TRIGGER authority_person_update_work_v2_identity_immutable
 BEFORE UPDATE ON authority_person_update_work_v2
 WHEN NEW.context_id != OLD.context_id

@@ -13,7 +13,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 it("pins the current baseline bytes", () => {
-  expect(authorityBaselineSha256V8()).toBe("sha256:ebaf6c46c93a1f1437ebff7f851989c1dcf5528e3c7e4a407ab247278a15840f");
+  expect(authorityBaselineSha256V8()).toBe("sha256:2194bab074e7cac4acbf1ce4fc7493d1a840d5fd011a993b69b01caa324258cd");
   expect(organizationControlBaselineSha256V3()).toBe("sha256:9aa161419d77355058151d2dd41283594802fe6da62f62f4aa92dbce01029c69");
   expect(organizationRecordLogBaselineSha256V3()).toBe("sha256:af089bff08b84aef53d4323084264d06d4620e9e0dc28a505f30ca4d7324221b");
 });
@@ -30,7 +30,7 @@ it("initializes only the active storage roles and tables", () => {
   expect(verification.root.schema_version).toBe(2);
   expect(verification.root.databases).toHaveLength(6);
   expect(existsSync(join(state, "record-derived.sqlite"))).toBe(false);
-  for (const [file, count, version] of [["authority.sqlite", 46, 8], ["integrations.sqlite", 11, 3], ["record-log.sqlite", 5, 3]] as const) {
+  for (const [file, count, version] of [["authority.sqlite", 47, 8], ["integrations.sqlite", 11, 3], ["record-log.sqlite", 5, 3]] as const) {
     const db = new Database(join(state, file), { readonly: true, fileMustExist: true });
     try {
       expect(db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'echo_state_lineage_manifest'").get()).toEqual({ n: count });

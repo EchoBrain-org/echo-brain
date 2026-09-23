@@ -53,7 +53,9 @@ class TextCollector {
     let cursor = 0;
     while (cursor < encoded.length) {
       const last = this.chunks.at(-1);
-      const previous = last?.anchor_kind === anchor_kind && last.anchor_start === anchor_start ? last : undefined;
+      // Text and Word paragraph anchors identify the first source paragraph in
+      // a packed chunk. PDF pages remain independent source spans.
+      const previous = last?.anchor_kind === anchor_kind && (anchor_kind === 'paragraph' || last.anchor_start === anchor_start) ? last : undefined;
       const room = previous ? limits.chunkBytes - Buffer.byteLength(previous.text) : 0;
       let merge = room >= Math.min(4, encoded.length - cursor);
       if (this.bytes >= limits.textBytes) {
@@ -147,6 +149,12 @@ async function preflightDocx(): Promise<void> {
       const header = await zip.readLocalFileHeaderPromise(entry);
       if (!header.fileName.equals(entry.fileNameRaw) || header.compressionMethod !== entry.compressionMethod
         || header.generalPurposeBitFlag !== entry.generalPurposeBitFlag) malformed();
+      // Bit 3 means a trailing data descriptor owns these values. For ordinary
+      // local headers, require the central and local records to agree exactly.
+      const localOffset = entry.relativeOffsetOfLocalHeader;
+      if ((entry.generalPurposeBitFlag & 0x08) === 0 && (bytes.readUInt32LE(localOffset + 14) !== entry.crc32
+        || bytes.readUInt32LE(localOffset + 18) !== entry.compressedSize
+        || bytes.readUInt32LE(localOffset + 22) !== entry.uncompressedSize)) malformed();
       const end = header.fileDataStart + entry.compressedSize;
       if (end > centralOffset || entry.relativeOffsetOfLocalHeader < 0 || end < header.fileDataStart) malformed();
       ranges.push({ start: entry.relativeOffsetOfLocalHeader, end });
@@ -227,6 +235,8 @@ async function extract(): Promise<DocumentExtractionResult> {
     }
     if (extracted.messages.some((message) => message.type === 'error')) {
       collector.markPartial('Some Word text was omitted because the document parser reported an error.');
+    } else if (extracted.messages.some((message) => message.type === 'warning' && /^An unrecognised element was ignored:/u.test(message.message))) {
+      collector.markPartial('Some Word text was omitted because the document parser ignored unsupported content.');
     }
     return collector.finish();
   }

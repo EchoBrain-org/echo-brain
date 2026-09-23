@@ -140,6 +140,21 @@ enum DocumentProof {
             } else { guard case .saved(let receipt) = first, receipt.document?.extraction_state == "extracting" else { fatalError("saved custody") } }
             guard case .saved(let receipt) = client.execute(.submit(draft), identity: identity, running: AccountRunning()) else { fatalError("same snapshot retry") }
             require(receipt.document?.sha256 == snapshot.sha256 && receipt.document?.filename == snapshot.filename)
+        case "retry-rejected-after-unknown":
+            let suite = "echo-document-proof-" + UUID().uuidString
+            let defaults = UserDefaults(suiteName: suite)!
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let first = UploadSession(client: UploadClient(cli: cli), defaults: defaults, isForeground: { true })
+            first.refreshIdentity(); wait("identity") { !first.busy }
+            first.submitDocument(title: "Robot PRD", snapshot: snapshot, visibility: .onlyMe)
+            wait("unknown first attempt") { !first.busy }
+            require(first.documentMutationState == .uncertain && first.recovery != nil)
+            let restored = UploadSession(client: UploadClient(cli: cli), defaults: defaults, isForeground: { true })
+            restored.refreshIdentity(); wait("restored recovery") { !restored.busy }
+            require(restored.documentMutationState == .uncertain && restored.recovery != nil)
+            restored.retry(); wait("known rejection after unknown") { !restored.busy }
+            require(restored.documentMutationState == .uncertain && restored.recovery != nil,
+                    "a later known rejection cannot rule out the prior unknown attempt")
         case "download":
             let session = DocumentSession(cli: cli, foreground: { true }); session.bind(identity)
             session.search("", projectID: "prj_11111111-1111-4111-8111-111111111111")
@@ -165,6 +180,21 @@ enum DocumentProof {
             func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
             require(descendants(reader).compactMap { $0 as? NSTextView }.contains { $0.string == "Second page" }, "same document page cache")
             session.bind(nil); require(session.metadata == nil && session.page == nil && session.matches.isEmpty)
+        case "document-search-pages":
+            let session = DocumentSession(cli: cli, foreground: { true }); session.bind(identity)
+            let projectID = "prj_11111111-1111-4111-8111-111111111111"
+            session.search("", projectID: projectID); wait("first search page") { !session.busy }
+            require(session.matches.count == 10 && session.nextCursor != nil)
+            session.more(); wait("second search page") { !session.busy }
+            require(session.matches.count == 11 && session.matches.last?.document_id == "doc_" + String(repeating: "b", count: 64) && session.nextCursor == nil)
+        case "dissociation-project-scope":
+            let session = DocumentSession(cli: cli, foreground: { true }); session.bind(identity)
+            let projectID = "prj_11111111-1111-4111-8111-111111111111"
+            session.search("", projectID: projectID); wait("project search") { !session.busy }
+            guard let document = session.matches.first else { fatalError("scoped document") }
+            session.associate(document.document_id, projectID: projectID, add: false)
+            wait("dissociation refresh") { !session.busy }
+            require(session.matches.isEmpty, "dissociation refresh remains in the selected project")
         default: fatalError("unknown mode")
         }
         print("passed \(mode)")

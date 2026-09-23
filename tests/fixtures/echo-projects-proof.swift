@@ -345,6 +345,20 @@ enum ProjectProof {
                 done.performClick(nil); wait("closed") { window.attachedSheet == nil }; return
             }
             controller.createSheet.queueFiles([textFile("Alpha.txt", "Alpha notes\n"), textFile("Beta.txt", "Beta notes\n")])
+            if mode == "ui-create-skip" {
+                // A canonical not-submitted rejection has no earlier unknown
+                // outcome to reconcile, so the queue marks it failed and
+                // moves directly to the next bounded snapshot.
+                wait("rejection advanced") { !uploads.busy && controller.createSheet.fileStates == ["Alpha.txt:failed", "Beta.txt:saved"] }
+                settle("known rejection advanced")
+                require(done.isEnabled, "known rejection left the queue busy")
+                window.attachedSheet?.cancelOperation(nil)
+                wait("create closed") { window.attachedSheet == nil }
+                settle("after create")
+                require(window.title == "Apollo", "create did not land on the new project")
+                require(ProofUI.showsText("Some files may not have been saved.", in: chrome), "failed file not reported")
+                return
+            }
             wait("first save settled") { !uploads.busy && controller.createSheet.fileStates.first?.hasSuffix(":uncertain") == true }
             settle("halted")
             // The queue stops on the unconfirmed file; nothing runs for the
@@ -376,9 +390,6 @@ enum ProjectProof {
             wait("create closed") { window.attachedSheet == nil }
             settle("after create")
             require(window.title == "Apollo", "create did not land on the new project")
-            if mode == "ui-create-skip" {
-                require(ProofUI.showsText("Some files may not have been saved.", in: chrome), "skipped file not reported")
-            }
             return
         }
 

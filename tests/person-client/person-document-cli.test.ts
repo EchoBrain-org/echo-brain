@@ -50,6 +50,15 @@ function original(bytes: Uint8Array, sha256 = digest(bytes)): Response {
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
 describe('document CLI custody and bounded transport', () => {
+  it('classifies a storage quota rejection as not submitted without exposing diagnostics', async () => {
+    const f = setup();
+    const outcome = await run(f.home, uploadArgs(f.file), async (_url, init) => {
+      await consume(init);
+      return json({ error: { code: 'quota_exceeded', message: 'private capacity diagnostic' } }, 409);
+    });
+    expect(outcome.failure).toMatchObject({ code: 'quota_exceeded', status: 409, mutation_outcome: 'not_submitted', request_id: requestId });
+    expect(outcome.stderr).not.toContain('private capacity');
+  });
   it('streams an ordinary PRD larger than 8 KiB with exact metadata, bytes, and bounded receipt', async () => {
     const f = setup();
     expect(f.bytes.length).toBeGreaterThan(8192);

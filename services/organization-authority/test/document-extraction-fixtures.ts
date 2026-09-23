@@ -48,19 +48,21 @@ export function styledWordPdf(): Buffer {
   return Buffer.from(value);
 }
 
-export function zip(entries: Array<{ name: string; value: string; claimedSize?: number; flags?: number; crc?: number }>): Buffer {
+export function zip(entries: Array<{ name: string; value: string; claimedSize?: number; flags?: number; crc?: number; dataDescriptor?: boolean }>): Buffer {
   const local: Buffer[] = []; const central: Buffer[] = []; let offset = 0;
   for (const entry of entries) {
     const name = Buffer.from(entry.name); const value = Buffer.from(entry.value); const compressed = deflateRawSync(value);
     const checksum = entry.crc ?? crc32(value); const size = entry.claimedSize ?? value.length;
+    const flags = (entry.flags ?? 0) | (entry.dataDescriptor ? 0x08 : 0);
     const header = Buffer.alloc(30); header.writeUInt32LE(0x04034b50); header.writeUInt16LE(20, 4);
-    header.writeUInt16LE(entry.flags ?? 0, 6); header.writeUInt16LE(8, 8); header.writeUInt32LE(checksum, 14);
-    header.writeUInt32LE(compressed.length, 18); header.writeUInt32LE(size, 22); header.writeUInt16LE(name.length, 26);
-    local.push(header, name, compressed);
+    header.writeUInt16LE(flags, 6); header.writeUInt16LE(8, 8); header.writeUInt32LE(entry.dataDescriptor ? 0 : checksum, 14);
+    header.writeUInt32LE(entry.dataDescriptor ? 0 : compressed.length, 18); header.writeUInt32LE(entry.dataDescriptor ? 0 : size, 22); header.writeUInt16LE(name.length, 26);
+    const descriptor = entry.dataDescriptor ? Buffer.from([0x50, 0x4b, 0x07, 0x08, checksum & 0xff, (checksum >>> 8) & 0xff, (checksum >>> 16) & 0xff, (checksum >>> 24) & 0xff, compressed.length & 0xff, (compressed.length >>> 8) & 0xff, (compressed.length >>> 16) & 0xff, (compressed.length >>> 24) & 0xff, size & 0xff, (size >>> 8) & 0xff, (size >>> 16) & 0xff, (size >>> 24) & 0xff]) : Buffer.alloc(0);
+    local.push(header, name, compressed, descriptor);
     const record = Buffer.alloc(46); record.writeUInt32LE(0x02014b50); record.writeUInt16LE(20, 4); record.writeUInt16LE(20, 6);
-    record.writeUInt16LE(entry.flags ?? 0, 8); record.writeUInt16LE(8, 10); record.writeUInt32LE(checksum, 16);
+    record.writeUInt16LE(flags, 8); record.writeUInt16LE(8, 10); record.writeUInt32LE(checksum, 16);
     record.writeUInt32LE(compressed.length, 20); record.writeUInt32LE(size, 24); record.writeUInt16LE(name.length, 28);
-    record.writeUInt32LE(offset, 42); central.push(record, name); offset += header.length + name.length + compressed.length;
+    record.writeUInt32LE(offset, 42); central.push(record, name); offset += header.length + name.length + compressed.length + descriptor.length;
   }
   const directory = Buffer.concat(central); const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50);
   end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(directory.length, 12);
@@ -75,4 +77,16 @@ export function entries(paragraphs: string[]) {
     { name: '_rels/.rels', value: '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
     { name: 'word/document.xml', value: `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs.map((text) => `<w:p><w:r><w:t>${escape(text)}</w:t></w:r></w:p>`).join('')}</w:body></w:document>` },
   ];
+}
+
+/** Valid OOXML alternate content that Word imports from an internal HTML part. */
+export function altChunkDocx(): Buffer {
+  const contentTypesWithHtml = contentTypes.replace('<Default Extension="xml" ContentType="application/xml"/>', '<Default Extension="xml" ContentType="application/xml"/><Default Extension="html" ContentType="text/html"/>');
+  return zip([
+    { name: '[Content_Types].xml', value: contentTypesWithHtml },
+    { name: '_rels/.rels', value: '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
+    { name: 'word/document.xml', value: '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:altChunk r:id="rId2"/><w:p><w:r><w:t>RETAINED EVIDENCE</w:t></w:r></w:p></w:body></w:document>' },
+    { name: 'word/_rels/document.xml.rels', value: '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="afchunk.html"/></Relationships>' },
+    { name: 'word/afchunk.html', value: '<html><body>OMITTED ALTCHUNK EVIDENCE</body></html>' },
+  ]);
 }

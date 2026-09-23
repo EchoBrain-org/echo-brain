@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, assertPersonDocumentOriginalV1,
-  detectPersonDocumentMediaTypeV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentSavedV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1,
+  PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS, assertPersonDocumentOriginalV1,
+  detectPersonDocumentMediaTypeV1, validatePersonDocumentTextV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentSavedV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1,
 } from '../src/person-documents-v1.js';
 
 const bytes = new TextEncoder().encode(`# SCOUT PRD\n${'robot requirement\n'.repeat(700)}`);
@@ -25,6 +25,21 @@ describe('person document V1', () => {
     expect(detectPersonDocumentMediaTypeV1(new TextEncoder().encode('%PDF-1.7\n'), 'correct.pdf')).toBe('application/pdf');
     expect(() => detectPersonDocumentMediaTypeV1(new TextEncoder().encode('%PDF-1.7\n'), 'wrong.txt')).toThrow(/filename/);
     expect(() => detectPersonDocumentMediaTypeV1(Uint8Array.from([0x50,0x4b,3,4,0,0]), 'wrong.docx')).toThrow(/Word document container/);
+  });
+  it('accepts UTF-8 text beginning with PK when it is not a ZIP local-file signature', () => {
+    expect(detectPersonDocumentMediaTypeV1(new TextEncoder().encode('PKCE flow notes'), 'pkce-notes.md')).toBe('text/markdown');
+    expect(detectPersonDocumentMediaTypeV1(new TextEncoder().encode('PKI rollout plan'), 'pki.txt')).toBe('text/plain');
+  });
+  it('publishes and enforces the shared extracted-text chunk bound', () => {
+    const text = { schema_version: 1, kind: 'echo-person-document-text-v1', document_id: `doc_${'a'.repeat(64)}`, original_sha256: `sha256:${'b'.repeat(64)}`, extractor: 'fixture', extraction_state: 'ready', chunks: [{ ordinal: 0, anchor_kind: 'paragraph', anchor_start: 1, text: 'a'.repeat(PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES) }], next_cursor: null };
+    expect(PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES).toBe(3072);
+    expect(validatePersonDocumentTextV1(text)).toEqual(text);
+    expect(() => validatePersonDocumentTextV1({ ...text, chunks: [{ ...text.chunks[0], text: 'a'.repeat(PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES + 1) }] })).toThrow(/chunk/);
+  });
+  it('publishes bounded document-transfer timing policy', () => {
+    expect(PERSON_DOCUMENT_TRANSFER_DEADLINE_MS).toBe(10 * 60 * 1000);
+    expect(PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS).toBe(60 * 1000);
+    expect(PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS).toBeLessThan(PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
   });
   it('rejects legacy doc, invalid UTF-8, mismatch, and changed bytes', () => {
     expect(() => detectPersonDocumentMediaTypeV1(new TextEncoder().encode('legacy'), 'legacy.doc')).toThrow(/unsupported/);

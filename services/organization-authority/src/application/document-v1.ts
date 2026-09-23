@@ -3,7 +3,7 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { PersonDocumentApplicationV1, PersonDocumentRepositoryV1, DocumentReadRequestV1, DocumentReadResultV1, PersonDocumentOriginalV1 } from './ports/document-v1.js';
 import { createPersonDocumentAssociationApplicationV1 } from './document-associations-v1.js';
-export interface PersonDocumentApplicationDependenciesV1 { readonly authenticate: (accessToken: string) => PersonAccessAuthorization; readonly repository: PersonDocumentRepositoryV1 }
+export interface PersonDocumentApplicationDependenciesV1 { readonly authenticate: (accessToken: string) => PersonAccessAuthorization; readonly repository: PersonDocumentRepositoryV1; readonly on_original_saved?: () => void }
 function valid<T>(fn: () => T): T { try { return fn(); } catch { throw new AuthorityOperationError('invalid_request', 'Document request is invalid'); } }
 function projectScope(value: unknown): string | null { return value == null ? null : valid(() => validateProjectIdV1(value, 'project_id')); }
 export function createPersonDocumentApplicationV1(dependencies: PersonDocumentApplicationDependenciesV1): PersonDocumentApplicationV1 {
@@ -11,7 +11,7 @@ export function createPersonDocumentApplicationV1(dependencies: PersonDocumentAp
   return {
     ...createPersonDocumentAssociationApplicationV1(dependencies),
     preflight(token, input) { const actor = dependencies.authenticate(token); dependencies.repository.preflight(actor, input === undefined ? undefined : valid(() => validatePersonDocumentUploadMetadataV1(input))); },
-    upload(token, input, bytes): PersonDocumentUploadResultV1 { const actor = dependencies.authenticate(token); const metadata = valid(() => validatePersonDocumentUploadMetadataV1(input)); return dependencies.repository.upload(actor, metadata, bytes, () => dependencies.authenticate(token)); },
+    upload(token, input, bytes): PersonDocumentUploadResultV1 { const actor = dependencies.authenticate(token); const metadata = valid(() => validatePersonDocumentUploadMetadataV1(input)); const saved=dependencies.repository.upload(actor, metadata, bytes, () => dependencies.authenticate(token)); try { dependencies.on_original_saved?.(); } catch {} return saved; },
     status(token, input) { const request_id = valid(() => validatePersonUpdateRequestId(input)); return read(token, { operation: 'status', request_id }) as PersonDocumentStatusV1; },
     read(token, input, scope = {}) { return read(token, { operation: 'metadata', document_id: valid(() => validatePersonDocumentIdV1(input)), project_id: projectScope(scope.project_id) }) as PersonDocumentMetadataV1; },
     original(token, input, scope = {}) { return read(token, { operation: 'original', document_id: valid(() => validatePersonDocumentIdV1(input)), project_id: projectScope(scope.project_id) }) as PersonDocumentOriginalV1; },

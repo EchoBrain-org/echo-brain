@@ -249,6 +249,13 @@ enum UploadCommand {
         switch self { case .submit(let draft): return draft.document == nil ? "updates-submit" : "documents-upload"; case .status(let recovery): return recovery.carrier == nil ? "updates-status" : "documents-status"; case .retry: return "documents-retry"; case .abandon: return "documents-abandon"; case .search: return "updates-search"; case .read: return "updates-read" }
     }
     var mutates: Bool { switch self { case .submit, .retry: return true; default: return false } }
+    var isDocumentMutation: Bool {
+        switch self {
+        case .submit(let draft): return draft.document != nil
+        case .retry: return true
+        default: return false
+        }
+    }
 }
 
 enum UploadResult {
@@ -363,6 +370,7 @@ final class UploadClient: @unchecked Sendable {
 // only the account-scoped receipt locator survives a restart.
 @MainActor
 final class UploadSession {
+    enum DocumentMutationState: Equatable { case none, uncertain, rejectedBeforeAnyUnknownOutcome, settlingRejectedFirstAttempt }
     let client: UploadClient
     private let defaults: UserDefaults
     private let isForeground: @MainActor () -> Bool
@@ -377,6 +385,10 @@ final class UploadSession {
     private(set) var status = ""
     private(set) var busy = false
     private(set) var hasOutstandingMutation = false
+    // A known rejection after a prior ambiguous attempt cannot prove that the
+    // earlier attempt did not commit. New-project batching uses this to advance
+    // only past a rejection whose request has never had an unknown outcome.
+    private(set) var documentMutationState = DocumentMutationState.none
     private var active: AccountRunning?
     private var generation = UUID()
     private var concealed = false
@@ -403,6 +415,7 @@ final class UploadSession {
             if self.identity != account {
                 self.reset(); self.identity = account
                 self.recovery = UploadRecovery.load(for: account, defaults: self.defaults)
+                if self.recovery?.carrier == "document-v1" { self.documentMutationState = .uncertain }
                 self.status = self.recovery == nil ? "" : "Check the previous save before starting another."
             }
             self.onChange?()
@@ -425,7 +438,7 @@ final class UploadSession {
         recovery.carrier = "document-v1"; recovery.documentFilename = snapshot.filename; recovery.documentSize = snapshot.size
         recovery.documentSha256 = snapshot.sha256; recovery.documentTitle = title
         guard recovery.save(for: identity, defaults: defaults) else { self.draft = nil; status = "Could not record this save safely. Try again."; onChange?(); return }
-        self.recovery = recovery
+        self.recovery = recovery; documentMutationState = .none
         status = "Saving your original document…"; run(.submit(draft))
     }
     // Losing project authorization clears the draft bytes, never its receipt
@@ -442,6 +455,17 @@ final class UploadSession {
         if let draft { run(.submit(draft)) }
         else if let recovery, recovery.carrier == "document-v1" { run(.retry(recovery)) }
     }
+    /// A first attempt that was definitively not submitted has no Authority
+    /// outcome to reconcile. Remove its durable retry snapshot through the
+    /// client before the queue advances; an earlier ambiguous attempt remains
+    /// retained even if a later retry was rejected.
+    func settleRejectedFirstDocumentAttempt() -> Bool {
+        guard !busy, documentMutationState == .rejectedBeforeAnyUnknownOutcome,
+              let recovery, recovery.carrier == "document-v1" else { return false }
+        documentMutationState = .settlingRejectedFirstAttempt
+        status = "Removing the local retry copy…"; run(.abandon(recovery))
+        return true
+    }
     func checkStatus() {
         guard !busy, let recovery else { return }
         status = "Checking the saved context…"; run(.status(recovery))
@@ -454,7 +478,7 @@ final class UploadSession {
             status = "Removing the local retry copy. Any saved original stays in ECHO…"; run(.abandon(recovery)); return
         }
         UploadRecovery.clear(for: identity, defaults: defaults)
-        draft = nil; receipt = nil; recovery = nil; status = ""; onChange?()
+        draft = nil; receipt = nil; recovery = nil; documentMutationState = .none; status = ""; onChange?()
     }
     func search(_ source: String) {
         guard !busy, identity != nil else { return }
@@ -478,7 +502,7 @@ final class UploadSession {
     }
     func shutdown() { active?.cancel(); generation = UUID(); draft = nil }
     private func reset() {
-        identity = nil; matches = []; content = nil; receipt = nil; recovery = nil; draft = nil; status = ""
+        identity = nil; matches = []; content = nil; receipt = nil; recovery = nil; draft = nil; documentMutationState = .none; status = ""
     }
     private func run(_ command: UploadCommand) {
         guard !busy, let identity else { return }
@@ -496,9 +520,9 @@ final class UploadSession {
             switch result {
             case .abandoned:
                 UploadRecovery.clear(for: identity, defaults: self.defaults)
-                self.draft = nil; self.receipt = nil; self.recovery = nil; self.status = ""
+                self.draft = nil; self.receipt = nil; self.recovery = nil; self.documentMutationState = .none; self.status = ""
             case .saved(let receipt):
-                self.receipt = receipt; self.draft = nil; self.status = receipt.message
+                self.receipt = receipt; self.draft = nil; self.documentMutationState = .none; self.status = receipt.message
             case .matches(let matches):
                 if !self.concealed && self.isForeground() { self.matches = matches }
                 self.status = matches.isEmpty ? "No matching context you can read." : "Select a result to read the original."
@@ -507,17 +531,23 @@ final class UploadSession {
                 self.status = ""
             case .unconfirmed:
                 self.matches = []; self.content = nil
+                if command.isDocumentMutation { self.documentMutationState = .uncertain }
                 self.status = "The save may have completed. Check its status before retrying."
             case .unconfirmedAccount:
+                if command.isDocumentMutation { self.documentMutationState = .uncertain }
                 self.reset(); self.status = "The save may have completed. Check its status from the original account."
             case .unavailable:
                 self.reset(); self.status = "Sign in from Account to continue."
             case .rejected(let failure):
                 self.matches = []; self.content = nil
+                if command.isDocumentMutation, self.documentMutationState != .uncertain {
+                    self.documentMutationState = .rejectedBeforeAnyUnknownOutcome
+                }
                 if failure.losesAccess { self.draft = nil; self.onProjectAccessChanged?() }
                 self.status = self.recovery == nil ? failure.message : "The current attempt was rejected. An earlier save may exist; keep checking its original status."
             case .failed:
                 self.matches = []; self.content = nil
+                if command.isDocumentMutation { self.documentMutationState = .uncertain }
                 self.status = "Could not confirm the result. Check your connection and sign-in, then try again."
             }
             self.onChange?()
@@ -781,7 +811,12 @@ final class DocumentSession {
                   ProjectWire.cursor(result["next_cursor"]), let raw = result["documents"] as? [[String: Any]], raw.count <= 10 else { return false }
             let matches = raw.compactMap { DocumentMetadata.parse($0, match: true) }
             guard matches.count == raw.count, Set(matches.map(\.document_id)).count == matches.count else { return false }
-            self.matches = matches; self.nextCursor = result["next_cursor"] as? String; return true
+            if cursor == nil { self.matches = matches }
+            else {
+                let existing = Set(self.matches.map(\.document_id))
+                self.matches += matches.filter { !existing.contains($0.document_id) }
+            }
+            self.nextCursor = result["next_cursor"] as? String; return true
         }
     }
     func more() { if let nextCursor { search(query, projectID: projectID, cursor: nextCursor) } }
@@ -842,7 +877,6 @@ final class DocumentSession {
                     }
                     self.pendingAssociation = nil
                     self.matches = []; self.metadata = nil; self.page = nil; self.nextCursor = nil
-                    if recovery.operation == "dissociate", self.projectID == recovery.projectID { self.projectID = nil }
                     self.status = "Project link updated. Audience is unchanged."
                     if self.foreground() { self.search(self.query, projectID: self.projectID) }
                 } else if case .output(let bytes, false) = output,

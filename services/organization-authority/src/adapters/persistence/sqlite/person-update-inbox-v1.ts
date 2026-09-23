@@ -58,7 +58,7 @@ export class SqlitePersonUpdateInboxV1 {
         if (existing.payload_sha256 !== digest) throw new AuthorityOperationError('conflict', 'request failed');
         return this.receipt(existing);
       }
-      assertPersonDocumentCapacityV1(this.database,actor,Buffer.byteLength(request.text));
+      assertPersonDocumentCapacityV1(this.database,actor,Buffer.byteLength(request.text),'legacy_text');
       const receivedAt = this.now(); const id = contextId(actor, request.request_id); const visibility = request.visibility!;
       const receipt = validatePersonUpdateReceiptV1({ schema_version: 1, kind: 'echo-person-update-receipt-v1', request_id: request.request_id, context_id: id, visibility, received_at: receivedAt, state: 'received' });
       this.database.prepare(`INSERT INTO authority_person_updates_v1 (organization_id, principal_id, membership_id, membership_type, request_id, context_id, payload_sha256, title, text, visibility, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)

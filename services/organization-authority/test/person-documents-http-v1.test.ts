@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalJson, sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonDocumentReceiptV1, MAX_ORGANIZATION_API_BODY_BYTES, type PersonDocumentUploadMetadataV1 } from '@echo-brain/organization-api';
+import { validatePersonDocumentReceiptV1, MAX_ORGANIZATION_API_BODY_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, type PersonDocumentUploadMetadataV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { runPersonClientCli } from '../../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../../src/product/person-client/session-store.js';
@@ -48,6 +48,16 @@ async function waitFor(check:()=>boolean){for(let n=0;n<100;n++){if(check())retu
 async function upload(origin:string,bytes:Buffer,value=input(bytes)){const response=await fetch(`${origin}/v1/person/documents/${value.request_id}`,{method:'PUT',headers:headers(value),body:new Uint8Array(bytes)});expect(response.status).toBe(201);return validatePersonDocumentReceiptV1(await response.json());}
 
 describe('document binary HTTP boundary and real service integration',()=>{
+ it('raises Node request timeout to the document transfer deadline',async()=>{
+  const h=await fixture();
+  expect(h.server.requestTimeout).toBe(PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
+ });
+ it('reports retained storage exhaustion as a definitive quota rejection',async()=>{
+  const h=await fixture({decorate:app=>({...app,upload(){throw new AuthorityOperationError('quota_exceeded','private capacity diagnostic');}})});
+  const bytes=Buffer.from('bounded upload');const value=input(bytes);
+  await failure(await fetch(`${h.origin}/v1/person/documents/${value.request_id}`,{method:'PUT',headers:headers(value),body:new Uint8Array(bytes)}),409,'quota_exceeded');
+  expect(h.db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:0});
+ });
  it('uploads a Unicode-named >8KiB original and reads status, bounded text, indexed project search and exact bytes',async()=>{
   const h=await fixture();const bytes=Buffer.from('SCOUT requirement\n'.repeat(900)+'end-needle');const value=input(bytes);const receipt=await upload(h.origin,bytes,value);
   const status=await fetch(`${h.origin}/v1/person/documents/requests/${value.request_id}`,{headers:{authorization:`Bearer ${token}`}});expect(status.status).toBe(200);expect(await status.json()).toMatchObject({document_id:receipt.document_id,extraction_state:'extracting',filename:value.filename});

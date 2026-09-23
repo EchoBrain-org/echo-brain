@@ -419,7 +419,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       this.require(snapshot,'upload_submit');
       const selectedProjects = [request.project_id, request.audience.kind === 'project' ? request.audience.project_id : null].filter((id): id is ProjectIdV1 => id !== null);
       if (selectedProjects.some(id => !snapshot.grants.some(grant => grant.project_id === id))) denied();
-      assertPersonDocumentCapacityV1(this.store.database,snapshot.person,Buffer.byteLength(request.text));
+      assertPersonDocumentCapacityV1(this.store.database,snapshot.person,Buffer.byteLength(request.text),'legacy_text');
       const received_at=this.store.now(); const context_id=sourceContextId(snapshot.person,request.request_id);
       const audience_project_id=request.audience.kind==='project'?request.audience.project_id:null;
       this.store.database.prepare(`INSERT INTO authority_person_updates_v2 (organization_id, principal_id, membership_id, membership_type, request_id, context_id, payload_sha256, title, text, audience_kind, audience_project_id, project_id, received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(snapshot.person.organization_id,snapshot.person.principal_id,snapshot.person.membership_id,snapshot.person.membership_type,request.request_id,context_id,canonicalSha256(request),request.title,request.text,request.audience.kind,audience_project_id,request.project_id,received_at);

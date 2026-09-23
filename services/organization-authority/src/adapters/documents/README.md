@@ -3,8 +3,9 @@
 The immutable original is stored independently of extraction. `extractDocument`
 accepts original bytes, the filename and its SHA-256 provenance, then returns
 bounded text chunks and an honest extraction status. It never invokes a model.
-The caller persists the result only after checking its lease and current uploader
-membership/audience authorization.
+The caller persists the result only after checking its lease and custody policy.
+Accepted shared documents continue processing after their contributor leaves;
+private documents retain the exact contributor-tenure eligibility check.
 
 Supported inputs are UTF-8 text/Markdown, PDF text layers, and ordinary Word
 `.docx` files. Scanned or blank documents report `no_text`; OCR is not included.
@@ -34,8 +35,11 @@ cannot proceed.
 Extracted text is capped at 2 MiB, 4,096 chunks, 3,072 UTF-8 bytes per chunk and
 500 PDF pages. Truncation reports `partial` and retains source anchors. PDF
 anchors are one-based page numbers; text/Word anchors are one-based extracted
-paragraph ordinals, which are not document-layout page numbers. Chunk boundaries
-preserve Unicode and ordinary words. A single token longer than a whole chunk
+paragraph ordinals, which are not document-layout page numbers. Consecutive text
+lines and Word paragraphs share bounded chunks; each anchor identifies the first
+paragraph included. PDF pages stay separate. Chunk boundaries preserve Unicode
+and ordinary words. Word warnings about ignored elements produce `partial` with
+the omission reason; cosmetic warnings alone do not. A single token longer than a whole chunk
 necessarily spans chunks; chunk-local full-text search does not match phrases
 across chunk boundaries.
 

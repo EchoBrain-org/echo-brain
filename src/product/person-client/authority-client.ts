@@ -4,7 +4,7 @@ import { PERSON_UPDATES_PATH_V1, validatePersonUpdateSubmitV1, validatePersonUpd
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
-import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENT_JSON_MAX_BYTES, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1, validatePersonDocumentMetadataV1, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchResultV1, type PersonDocumentSearchV1 } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1, validatePersonDocumentMetadataV1, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchResultV1, type PersonDocumentSearchV1 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
 import {
   PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
@@ -828,7 +828,7 @@ export class PersonAuthorityClient {
         const error = validateSuccess(value, status, validateOrganizationApiError);
         // The generic API envelope permits extension codes; this frozen
         // project/V2 family is closed and cannot infer rejection from one.
-        if (!['invalid_request', 'conflict', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'unavailable'].includes(error.error.code)) {
+        if (!['invalid_request', 'conflict', 'invalid_output', 'not_found', 'stale_access_state', 'unauthorized', 'rate_limited', 'quota_exceeded', 'unavailable'].includes(error.error.code)) {
           throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned a noncanonical error');
         }
         if (input.request_id !== undefined && status >= 400 && status < 500) {
@@ -879,7 +879,7 @@ export class PersonAuthorityClient {
         headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/octet-stream',
           'content-length': String(metadata.content_length), 'x-echo-document-metadata': Buffer.from(canonicalJson(metadata)).toString('base64url') },
       };
-      const response = await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${metadata.request_id}`, init, 120_000);
+      const response = await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${metadata.request_id}`, init, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
       status = response.status;
       const receipt = await this.documentResponse(response, validatePersonDocumentUploadResultV1, 201);
       if (receipt.request_id !== metadata.request_id) throw new Error('Document receipt request changed');
@@ -955,7 +955,7 @@ export class PersonAuthorityClient {
     validatePersonDocumentIdV1(documentId);
     const response = await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${documentId}/original${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/octet-stream' },
-    }, 120_000);
+    }, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
     if (!response.ok) await this.documentResponse(response, () => { throw new Error('Unexpected document response'); });
     if (response.status !== 200) { await response.body?.cancel(); throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response status was unexpected.'); }
     return response;

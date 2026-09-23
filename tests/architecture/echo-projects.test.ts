@@ -239,6 +239,7 @@ if (args[1] === 'status') {
         expect(op("create")).toHaveLength(1);
         expect(submits.map(args => flag(args, "--title"))).toEqual(["Alpha", "Beta"]);
         expect(new Set(submits.map(args => flag(args, "--request-id"))).size).toBe(2);
+        expect(calls.filter(args => args[1] === "documents" && args[2] === "abandon")).toHaveLength(1);
       }
       if (mode === "ui-create-account") {
         // The queue stopped on the unconfirmed first file; the account change

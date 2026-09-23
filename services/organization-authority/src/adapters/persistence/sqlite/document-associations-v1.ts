@@ -69,7 +69,6 @@ export class SqlitePersonDocumentAssociationRepositoryV1 implements PersonDocume
           if (result.request_id !== request.request_id || result.document_id !== request.document_id || result.project_id !== request.project_id || result.operation !== operation) fail('invalid_output');
         } catch { return fail('invalid_output'); }
       } else {
-        if (!grants.some(grant => grant.project_id === request.project_id)) fail();
         const document = this.database.prepare('SELECT document_id,principal_id,membership_id,membership_type,audience_kind,audience_project_id FROM authority_person_documents_v1 WHERE organization_id=? AND document_id=?').get(actor.organization_id, request.document_id) as Document | undefined;
         if (!document) fail();
         const uploader = document.principal_id === actor.principal_id && document.membership_id === actor.membership_id && document.membership_type === actor.membership_type;
@@ -77,6 +76,7 @@ export class SqlitePersonDocumentAssociationRepositoryV1 implements PersonDocume
         if (!readable) fail();
         const existing = this.relationship(request.document_id);
         if (operation === 'associate') {
+          if (!grants.some(grant => grant.project_id === request.project_id)) fail();
           if (!uploader) fail();
           if (existing !== null && existing !== request.project_id) fail('conflict');
           if (existing === null) this.database.prepare('INSERT INTO authority_person_document_associations_v1(document_id,project_id,organization_id,associated_at) VALUES (?,?,?,?)').run(request.document_id, request.project_id, actor.organization_id, this.now());

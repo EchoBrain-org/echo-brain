@@ -1,7 +1,9 @@
+import { PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES, PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES } from '@echo-brain/organization-api';
+
 export const DOCUMENT_EXTRACTION_LIMITS = Object.freeze({
-  originalBytes: 25 * 1024 * 1024,
-  textBytes: 2 * 1024 * 1024,
-  chunkBytes: 3072,
+  originalBytes: PERSON_DOCUMENT_MAX_ORIGINAL_BYTES,
+  textBytes: PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES,
+  chunkBytes: PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES,
   chunks: 4096,
   pdfPages: 500,
   zipExpandedBytes: 128 * 1024 * 1024,

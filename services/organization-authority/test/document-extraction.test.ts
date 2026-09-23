@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { pdf, styledWordPdf, zip, entries } from './document-extraction-fixtures.js';
+import { altChunkDocx, pdf, styledWordPdf, zip, entries } from './document-extraction-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { createDocumentExtractor, extractDocument, DOCUMENT_EXTRACTION_LIMITS } from '../src/adapters/documents/document-extraction.js';
 
@@ -13,7 +13,7 @@ describe('bounded isolated document extraction', () => {
     const text = `MRD\n${'SCOUT courier robot. '.repeat(700)}\nPRD-END-ROBOT`;
     const result = await extractDocument(input(Buffer.from(text), 'SCOUT.md'));
     expect(result.status).toBe('ready'); expect(result.chunks.map((c) => c.text).join('')).toBe(text);
-    expect(result.chunks.at(-1)?.anchor_start).toBe(3); expect(result.sourceSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.chunks[0]).toMatchObject({ anchor_kind: 'paragraph', anchor_start: 1 }); expect(result.chunks.at(-1)?.text).toContain('PRD-END-ROBOT'); expect(result.sourceSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(result.extractorVersion).toContain('pdfjs-6.3.289');
   });
   it('extracts a real PDF with page anchors through PDF.js', async () => {
@@ -27,7 +27,7 @@ describe('bounded isolated document extraction', () => {
     const plain = await extractDocument(input(Buffer.from(text), 'acceptance.txt'));
     expect(plain.status).toBe('ready');
     expect(plain.chunks.map((chunk) => chunk.text).join('')).toBe(text);
-    expect(plain.chunks.map((chunk) => chunk.anchor_start)).toEqual([1, 2, 3]);
+    expect(plain.chunks.map((chunk) => chunk.anchor_start)).toEqual([1]);
   });
   it('preserves contiguous PDF style runs as one word', async () => {
     const styled = await extractDocument(input(styledWordPdf(), 'styled.pdf'));
@@ -37,7 +37,7 @@ describe('bounded isolated document extraction', () => {
   it('extracts a real zipped Word document with paragraph anchors through Mammoth', async () => {
     const result = await extractDocument(input(zip(entries(['SCOUT kickoff', 'Hardware & software requirements', 'PRD-END-ROBOT'])), 'SCOUT.docx'));
     expect(result.status).toBe('ready'); expect(result.chunks.map((c) => c.text).join('')).toContain('Hardware & software requirements');
-    expect(result.chunks.at(-1)).toMatchObject({ anchor_kind: 'paragraph', anchor_start: 3 });
+    expect(result.chunks).toMatchObject([{ anchor_kind: 'paragraph', anchor_start: 1 }]);
   });
   it('reports image-only/blank PDF text as no_text and a blank Word document likewise', async () => {
     expect((await extractDocument(input(pdf(''), 'blank.pdf'))).status).toBe('no_text');
@@ -57,11 +57,28 @@ describe('bounded isolated document extraction', () => {
     expect(result.chunks.some((chunk) => chunk.text.includes('hardware'))).toBe(true);
     expect(result.chunks.every((chunk) => Buffer.byteLength(chunk.text) <= 3072)).toBe(true);
   });
+  it('packs consecutive text lines so large hard-wrapped Markdown remains complete and searchable within a chunk', async () => {
+    const text = Array.from({ length: 5000 }, (_, index) => index === 4999 ? 'tail-marker' : 'hardware\nrequirements').join('\n');
+    const result = await extractDocument(input(Buffer.from(text), 'wrapped.md'));
+    expect(result.status).toBe('ready');
+    expect(result.chunks.map((chunk) => chunk.text).join('')).toBe(text);
+    expect(result.chunks.length).toBeLessThan(4096);
+    expect(result.chunks.some((chunk) => chunk.text.includes('hardware\nrequirements'))).toBe(true);
+    expect(result.chunks.at(-1)?.text).toContain('tail-marker');
+  });
+  it('packs consecutive Word paragraphs while retaining the first paragraph anchor and the final paragraph', async () => {
+    const paragraphs = Array.from({ length: 5000 }, (_, index) => `paragraph-${index + 1}`);
+    const result = await extractDocument(input(zip(entries(paragraphs)), 'many-paragraphs.docx'));
+    expect(result.status).toBe('ready');
+    expect(result.chunks.length).toBeLessThan(4096);
+    expect(result.chunks[0]).toMatchObject({ anchor_kind: 'paragraph', anchor_start: 1 });
+    expect(result.chunks.at(-1)?.text).toContain('paragraph-5000');
+  });
   it('marks PDF page and extracted chunk limits partial with retained anchored text', async () => {
     const pages = await createDocumentExtractor({ pdfPages: 1 })(input(pdf('Robot', 2), 'pages.pdf'));
     expect(pages.status).toBe('partial'); expect(pages.chunks.every((c) => c.anchor_start === 1)).toBe(true);
     expect(pages.message).toContain('PDF page limit');
-    const chunks = await createDocumentExtractor({ chunks: 2 })(input(Buffer.from('one\ntwo\nthree'), 'many.txt'));
+    const chunks = await createDocumentExtractor({ chunks: 2, chunkBytes: 4 })(input(Buffer.from('one\ntwo\nthree'), 'many.txt'));
     expect(chunks.status).toBe('partial'); expect(chunks.chunks).toHaveLength(2);
     expect(chunks.message).toContain('extracted-text chunk limit');
   });
@@ -90,6 +107,22 @@ describe('bounded isolated document extraction', () => {
       [...entries(['hi']), { name: 'word/evil.xml', value: '<!DOCTYPE x [<!ENTITY xx SYSTEM "file:///etc/passwd">]><x>&xx;</x>' }],
     ];
     for (const entry of cases) expect((await extractDocument(input(zip(entry), 'x.docx'))).status).toBe('malformed');
+  });
+  it('rejects non-data-descriptor local ZIP headers that disagree with their central directory', async () => {
+    const bytes = zip(entries(['local header mismatch']));
+    bytes.writeUInt32LE(0, 14); bytes.writeUInt32LE(1, 22);
+    expect((await extractDocument(input(bytes, 'mismatch.docx'))).status).toBe('malformed');
+  });
+  it('accepts ZIP data descriptors whose local CRC and sizes are intentionally deferred', async () => {
+    const bytes = zip(entries(['data descriptor']).map((entry) => ({ ...entry, dataDescriptor: true })));
+    expect((await extractDocument(input(bytes, 'descriptor.docx'))).status).toBe('ready');
+  });
+  it('marks Word content as partial when Mammoth warns that it ignored a content-bearing element', async () => {
+    const result = await extractDocument(input(altChunkDocx(), 'alternate-content.docx'));
+    expect(result.status).toBe('partial');
+    expect(result.message).toContain('ignored unsupported content');
+    expect(result.chunks.map((chunk) => chunk.text).join('')).toContain('RETAINED EVIDENCE');
+    expect(result.chunks.map((chunk) => chunk.text).join('')).not.toContain('OMITTED ALTCHUNK EVIDENCE');
   });
   it('reports password-encrypted real PDF explicitly', async () => {
     // Synthetic one-page PDF encrypted with a test-only password using pypdf.

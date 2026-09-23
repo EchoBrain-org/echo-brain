@@ -4,8 +4,13 @@ import { validateProjectContextAudienceV1, validateProjectIdV1, type ProjectCont
 
 export const PERSON_DOCUMENTS_PATH_V1 = '/v1/person/documents';
 export const PERSON_DOCUMENT_MAX_ORIGINAL_BYTES = 25 * 1024 * 1024;
+/** Wall-clock bound for an original document upload or download. */
+export const PERSON_DOCUMENT_TRANSFER_DEADLINE_MS = 10 * 60 * 1000;
+/** Maximum interval without request or response socket progress during transfer. */
+export const PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS = 60 * 1000;
 export const PERSON_DOCUMENT_TEXT_PAGE_MAX_BYTES = 8 * 1024;
 export const PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES = 2 * 1024 * 1024;
+export const PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES = 3 * 1024;
 export type PersonDocumentMediaTypeV1 = 'text/plain' | 'text/markdown' | 'application/pdf' | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 export type PersonDocumentExtractionStateV1 = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out' | 'unsupported' | 'unavailable';
 
@@ -55,7 +60,7 @@ export function detectPersonDocumentMediaTypeV1(bytes: Uint8Array, filename: str
   const extension = filename.toLocaleLowerCase('en-US').split('.').at(-1);
   if (extension === 'doc') throw new Error('Legacy .doc is unsupported');
   if (bytes.length >= 5 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d) { if (extension !== 'pdf') throw new Error('PDF content requires a .pdf filename'); return 'application/pdf'; }
-  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b) {
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
     if (extension !== 'docx') throw new Error('Word ZIP content requires a .docx filename');
     if (!isWordDocumentContainer(bytes)) throw new Error('ZIP original is not a supported Word document container');
     return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -86,7 +91,11 @@ function isWordDocumentContainer(bytes: Uint8Array): boolean {
     if (nameSize === 0 || nameSize > 4096 || next > end || local + 30 > centralOffset || u32(local) !== 0x04034b50) return false;
     const localNameSize = u16(local + 26), localExtraSize = u16(local + 28);
     const data = local + 30 + localNameSize + localExtraSize;
-    if (localNameSize !== nameSize || data + compressedSize > centralOffset || u16(local + 6) !== u16(at + 8) || u16(local + 8) !== u16(at + 10)) return false;
+    const flags = u16(at + 8);
+    if (localNameSize !== nameSize || data + compressedSize > centralOffset || u16(local + 6) !== flags || u16(local + 8) !== u16(at + 10)) return false;
+    // Bit 3 moves sizes and CRC to a trailing data descriptor. Otherwise both
+    // directory records must describe exactly the same member.
+    if ((flags & 0x08) === 0 && (u32(local + 14) !== u32(at + 16) || u32(local + 18) !== compressedSize || u32(local + 22) !== u32(at + 24))) return false;
     let asciiName = ''; let isAscii = true;
     for (let n = 0; n < nameSize; n++) {
       const point = bytes[at + 46 + n]!;
@@ -203,7 +212,7 @@ export function validatePersonDocumentTextV1(value: unknown): PersonDocumentText
   if(input.schema_version!==1||input.kind!=='echo-person-document-text-v1'||typeof input.original_sha256!=='string'||!/^sha256:[0-9a-f]{64}$/.test(input.original_sha256)||!documentStates.includes(input.extraction_state as string))throw new Error('Document text envelope is invalid');validatePersonDocumentIdV1(input.document_id);
   if(input.extractor!==null&&(typeof input.extractor!=='string'||utf8Bytes(input.extractor)<1||utf8Bytes(input.extractor)>512))throw new Error('Document extractor is invalid');
   if(!Array.isArray(input.chunks)||input.chunks.length>8)throw new Error('Document text chunks are invalid');let prior=-1;
-  for(const value of input.chunks){const chunk=plainObject(value);exactDocumentKeys(chunk,['ordinal','anchor_kind','anchor_start','text']);if(!Number.isSafeInteger(chunk.ordinal)||(chunk.ordinal as number)<=prior||!['page','paragraph'].includes(chunk.anchor_kind as string)||!Number.isSafeInteger(chunk.anchor_start)||(chunk.anchor_start as number)<1||typeof chunk.text!=='string'||utf8Bytes(chunk.text)<1||utf8Bytes(chunk.text)>8192)throw new Error('Document text chunk is invalid');prior=chunk.ordinal as number;}
+  for(const value of input.chunks){const chunk=plainObject(value);exactDocumentKeys(chunk,['ordinal','anchor_kind','anchor_start','text']);if(!Number.isSafeInteger(chunk.ordinal)||(chunk.ordinal as number)<=prior||!['page','paragraph'].includes(chunk.anchor_kind as string)||!Number.isSafeInteger(chunk.anchor_start)||(chunk.anchor_start as number)<1||typeof chunk.text!=='string'||utf8Bytes(chunk.text)<1||utf8Bytes(chunk.text)>PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES)throw new Error('Document text chunk is invalid');prior=chunk.ordinal as number;}
   documentNextCursor(input.next_cursor);documentJsonBound(input,24*1024);return input as unknown as PersonDocumentTextV1;
 }
 function documentNextCursor(value: unknown): void { if(value!==null&&(typeof value!=='string'||value.length>1024||!/^[A-Za-z0-9_-]+$/.test(value)))throw new Error('Document next cursor is invalid'); }

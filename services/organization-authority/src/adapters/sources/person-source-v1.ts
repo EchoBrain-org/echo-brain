@@ -1,7 +1,7 @@
 import type { AdapterConfig, AdapterOperationContext, SourceAdapterV1, SourcePullRequestV1, SourceAdmissionScopeV1, SourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
 import type { DocumentExtractionClaimV1, PersonDocumentRepositoryV1 } from '../../application/ports/document-v1.js';
 import { PERSON_SOURCE_IDENTITY_V1, personDocumentSourceEnvelopeV1, type PersonDocumentSourceContentV1 } from '../../application/person-document-source-v1.js';
-import type { PersonTextSourceContentV1, PersonTextSourceInboxV1 } from '../../application/ports/person-text-source-v1.js';
+import type { PersonTextSourceContentV1, PersonTextSourceInboxV1, PersonTextSourceFailureObservationV1 } from '../../application/ports/person-text-source-v1.js';
 
 export type PersonSourceContentV1 = PersonDocumentSourceContentV1 | PersonTextSourceContentV1;
 
@@ -10,6 +10,7 @@ export class PersonSourceAdapterV1 implements SourceAdapterV1<PersonSourceConten
   readonly identity = PERSON_SOURCE_IDENTITY_V1;
   private claim: DocumentExtractionClaimV1 | undefined;
   private textClaim: ReturnType<PersonTextSourceInboxV1['next']>;
+  private readonly textFailures: PersonTextSourceFailureObservationV1[] = [];
   private preferText = false;
   constructor(private readonly inbox: Pick<PersonDocumentRepositoryV1,'claimExtraction'>, private readonly texts?:PersonTextSourceInboxV1) {}
   validateConfig(config: AdapterConfig) {
@@ -28,11 +29,19 @@ export class PersonSourceAdapterV1 implements SourceAdapterV1<PersonSourceConten
     this.textClaim = undefined;
     // Reserve the other lane before touching an inbox. A failed claim must not
     // permanently pin subsequent cycles to the same unavailable or corrupt row.
-    if (preferText) { this.preferText = false; this.textClaim = this.texts?.next(); }
+    if (preferText) { this.preferText = false; this.textClaim = this.nextText(); }
     if (!this.textClaim) { this.preferText = true; this.claim = this.inbox.claimExtraction(); }
-    if (!this.textClaim && !this.claim) { this.preferText = false; this.textClaim = this.texts?.next(); }
+    if (!this.textClaim && !this.claim) { this.preferText = false; this.textClaim = this.nextText(); }
     const sources:SourceEnvelopeV1<PersonSourceContentV1>[] = this.claim ? [personDocumentSourceEnvelopeV1(this.claim)] : this.textClaim ? [this.textClaim.source] : [];
     return {sources};
+  }
+  takeFailureObservations(): readonly PersonTextSourceFailureObservationV1[] {
+    return this.textFailures.splice(0);
+  }
+  private nextText(): ReturnType<PersonTextSourceInboxV1['next']> {
+    const next = this.texts?.next();
+    this.textFailures.push(...(this.texts?.takeFailureObservations?.() ?? []));
+    return next;
   }
   claimFor(source: SourceEnvelopeV1<PersonSourceContentV1>): DocumentExtractionClaimV1 {
     const claim = this.claim;

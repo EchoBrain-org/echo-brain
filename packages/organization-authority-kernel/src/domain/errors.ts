@@ -6,6 +6,7 @@ export type AuthorityErrorCode =
   | 'stale_access_state'
   | 'unauthorized'
   | 'rate_limited'
+  | 'quota_exceeded'
   | 'unavailable';
 
 export class AuthorityOperationError extends Error {

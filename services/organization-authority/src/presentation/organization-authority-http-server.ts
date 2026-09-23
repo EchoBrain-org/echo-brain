@@ -1,5 +1,5 @@
 import {
-  PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
+  PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
   validateProjectPageRequestV1, validateProjectIdV1, validateProjectSummaryV1,
   validateProjectContextBrowseV1, validateProjectMembersV1,
@@ -604,7 +604,7 @@ export function createOrganizationAuthorityHttpServer(
   const handoffs = new Map<string, PendingLoopbackHandoff>();
   const oidcBeginWindows = new Map<string, OidcBeginClientWindow>();
   let activeHttp = 0;
-  return createServer((request, response) => observeCoreRuntimeV1("http_request", async () => {
+  const server = createServer((request, response) => observeCoreRuntimeV1("http_request", async () => {
     const responseFinished = options.core_runtime_observation?.observer === undefined ? undefined :
       new Promise<void>((resolve) => { response.once("finish", resolve); response.once("close", resolve); });
     activeHttp += 1;
@@ -961,7 +961,7 @@ export function createOrganizationAuthorityHttpServer(
             ? 401
             : error.code === "not_found"
               ? 404
-              : error.code === "conflict"
+              : error.code === "conflict" || error.code === "quota_exceeded"
                 ? 409
                 : error.code === "invalid_output"
                   ? 502
@@ -980,4 +980,6 @@ export function createOrganizationAuthorityHttpServer(
       annotateCoreRuntimeV1({ counts: { http_status: response.statusCode, active_http: activeHttp } });
     }
   }, options.core_runtime_observation));
+  server.requestTimeout = PERSON_DOCUMENT_TRANSFER_DEADLINE_MS;
+  return server;
 }

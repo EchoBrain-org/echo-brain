@@ -220,7 +220,11 @@ final class ProjectCLI: @unchecked Sendable {
             try? pipe.fileHandleForWriting.close()
         }
         let timeout = DispatchWorkItem { running.timeOut() }
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + (arguments.prefix(2) == ["person", "documents"] && ["upload", "download"].contains(arguments.dropFirst(2).first ?? "") ? 120 : 45), execute: timeout)
+        let documentTransfer = arguments.prefix(2) == ["person", "documents"]
+            && ["upload", "retry", "download"].contains(arguments.dropFirst(2).first ?? "")
+        // The Authority transfer budget is 600 seconds. Keep 120 seconds for
+        // local snapshot/session startup and final account reconciliation.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + (documentTransfer ? 720 : 45), execute: timeout)
         process.waitUntilExit(); timeout.cancel(); readers.wait(); running.detach(process)
         let state = running.state()
         guard !state.cancelled, !state.timedOut, !out.overflow, !err.overflow else { return .failed }
@@ -1839,6 +1843,8 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     private var associationTargets: [ComposeTarget] = []
     private(set) var associationProjectID: String?
     private var loadedFile: DocumentSnapshot?
+    private var preparingFile = false
+    private var snapshotGeneration = UUID()
     private let attachmentLabel = NSTextField(wrappingLabelWithString: "")
     private let removeFile = pill("Remove file", .quiet, height: 28, target: nil, action: nil)
     private var owns = false
@@ -1859,16 +1865,18 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     override init() { super.init(); build() }
 
     func present(over parent: NSWindow, session: UploadSession, projects: ProjectSession, target: ComposeTarget,
-                 placeholder text: String, file: DocumentSnapshot? = nil) {
+                 placeholder text: String, file: URL? = nil) {
         guard !isPresented else { return }
+        snapshotGeneration = UUID(); preparingFile = false
         self.session = session; self.projects = projects; admittedIdentity = session.identity
-        self.target = target; associationProjectID = target.projectID; loadedFile = file; setBody("")
+        self.target = target; associationProjectID = target.projectID; loadedFile = nil; setBody("")
         placeholder.stringValue = text; problem.stringValue = ""; sentBody = false; didSave = false; strandedStatus = nil
         if session.receipt != nil { session.startAnother() }
         owns = session.recovery != nil && session.receipt == nil
         refresh()
         parent.beginSheet(sheet)
         sheet.makeFirstResponder(body)
+        if let file { load(file) }
     }
 
     func focusBody() { if isPresented { sheet.makeFirstResponder(body) } }
@@ -1921,18 +1929,20 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         if attention { owns = true }
         composeGroup.isHidden = sent || attention
         outcome.isHidden = !(sent || attention)
-        body.isEditable = !sending && !sent && !attention
+        let preparing = preparingFile
+        body.isEditable = !preparing && !sending && !sent && !attention
         send.showsSpinner = sending
         let hasText = !body.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        send.isEnabled = !sending && (hasText || loadedFile != nil) && session.canCompose
-        attach.isEnabled = !sending && body.isEditable
+        send.isEnabled = !preparing && !sending && (hasText || loadedFile != nil) && session.canCompose
+        attach.isEnabled = !preparing && !sending && body.isEditable
         toChip.isEnabled = !sending
         associationChip.isEnabled = !sending
         placeholder.isHidden = !body.string.isEmpty || loadedFile != nil
         bodyScroll.isHidden = loadedFile != nil
-        attachmentLabel.isHidden = loadedFile == nil; removeFile.isHidden = loadedFile == nil
-        removeFile.isEnabled = !sending
-        attachmentLabel.stringValue = loadedFile.map { $0.display + "\nOriginal file will be saved unchanged." } ?? ""
+        attachmentLabel.isHidden = loadedFile == nil && !preparing; removeFile.isHidden = loadedFile == nil && !preparing
+        removeFile.isEnabled = !preparing && !sending
+        attachmentLabel.stringValue = loadedFile.map { $0.display + "\nOriginal file will be saved unchanged." }
+            ?? (preparing ? "Preparing private copy…" : "")
 
         if sent, let receipt = session.receipt {
             showMark("checkmark.circle.fill", gold: true)
@@ -1990,8 +2000,8 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     }
 
     func projectAccessChanged() {
-        guard target.projectID != nil else { return }
-        setBody(""); loadedFile = nil
+        guard target.projectID != nil || associationProjectID != nil else { return }
+        snapshotGeneration = UUID(); preparingFile = false; setBody(""); loadedFile = nil
         if session?.hasOutstandingMutation != true {
             target = .onlyMe
             if isPresented { close() }
@@ -1999,7 +2009,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     }
 
     func accountWillChange() {
-        setBody(""); loadedFile = nil
+        snapshotGeneration = UUID(); preparingFile = false; setBody(""); loadedFile = nil
         if session?.hasOutstandingMutation != true, isPresented { close() }
         refresh()
     }
@@ -2021,16 +2031,30 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
     }
 
     private func load(_ file: URL) {
-        guard body.isEditable else { return }
+        guard body.isEditable, !preparingFile else { return }
         // Attaching never converts or appends bytes to the note editor.
         guard body.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             problem.stringValue = "Send this note before attaching a document."; return
         }
-        do { loadedFile = try DocumentSnapshot(file); problem.stringValue = "" }
-        catch { problem.stringValue = "Choose TXT, Markdown, PDF, or DOCX up to 25 MiB." }
-        refresh()
+        let generation = UUID(); snapshotGeneration = generation; preparingFile = true
+        let identity = admittedIdentity
+        problem.stringValue = "Preparing private copy…"; refresh()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let snapshot = try? DocumentSnapshot(file)
+            DispatchQueue.main.async {
+                guard let self, self.snapshotGeneration == generation, self.isPresented,
+                      self.admittedIdentity == identity, self.session?.identity == identity else { return }
+                self.preparingFile = false
+                self.loadedFile = snapshot
+                self.problem.stringValue = snapshot == nil ? "Choose TXT, Markdown, PDF, or DOCX up to 25 MiB." : ""
+                self.refresh()
+            }
+        }
     }
-    @objc private func removeAttachment() { guard session?.busy != true else { return }; loadedFile = nil; refresh() }
+    @objc private func removeAttachment() {
+        guard session?.busy != true else { return }
+        snapshotGeneration = UUID(); preparingFile = false; loadedFile = nil; refresh()
+    }
 
     @objc private func chooseTarget(_ index: Int) {
         guard targets.indices.contains(index), session?.hasOutstandingMutation != true else { return }
@@ -2106,7 +2130,7 @@ final class ProjectComposeSheet: NSObject, NSTextViewDelegate {
         // Leaving a confirmed "Sent" any way (Escape, app switch) is Done:
         // the receipt is settled, so the next note starts clean.
         if owns, let session, session.receipt != nil, !session.busy { session.startAnother() }
-        strandedStatus = nil; loadedFile = nil
+        snapshotGeneration = UUID(); preparingFile = false; strandedStatus = nil; loadedFile = nil
         onWillClose?()
         parent.endSheet(sheet)
         onClose?()
@@ -2441,7 +2465,7 @@ final class ProjectPeopleSheet: NSObject {
 /// directory is project-scoped. Files save one at a time, each with a receipt.
 @MainActor
 final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
-    private enum FileState: String { case queued, saving, saved, uncertain, failed, notStarted, skipped }
+    private enum FileState: String { case preparing, queued, saving, saved, uncertain, failed, notStarted, skipped }
     private struct QueuedFile { let name: String; let title: String; var snapshot: DocumentSnapshot?; var state: FileState; var detail: String }
 
     private let sheet = sheetWindow(width: 560, height: 540)
@@ -2481,6 +2505,8 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
     private var focusAdd = false
     private var files: [QueuedFile] = []
     private var pumping = false
+    private let snapshotQueue = DispatchQueue(label: "org.echobrain.echo.project-document-snapshots", qos: .userInitiated)
+    private var snapshotGeneration = UUID()
     private var peopleSignature = ""
     private var fileSignature = ""
     private var fileProblem = ""
@@ -2519,21 +2545,34 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
     /// meanwhile (concealment and account changes).
     func closeWhenIdle() {
         guard isPresented else { return }
-        closeRequested = true
+        closeRequested = true; snapshotGeneration = UUID()
         if inFlight { refresh() } else { close() }
     }
     func clearQuery() { addField.stringValue = "" }
 
-    /// Queues bounded private disk snapshots for sequential saves (the "Add files…" panel).
+    /// Queues background private disk snapshots for sequential saves. Each
+    /// completion is fenced to this sheet, account, project and selection.
     func queueFiles(_ urls: [URL]) {
         guard isPresented, project != nil, !closeRequested else { return }
         guard urls.count <= 20 - files.count else { fileProblem = "Add up to 20 documents in this project setup."; refresh(); return }
         fileProblem = ""
+        let generation = snapshotGeneration, identity = admittedIdentity, projectID = project?.project_id
         for url in urls {
-            let snapshot = try? DocumentSnapshot(url)
+            let index = files.count
             files.append(QueuedFile(name: url.lastPathComponent, title: suggestedNoteTitle(url.deletingPathExtension().lastPathComponent),
-                                    snapshot: snapshot, state: snapshot == nil ? .failed : .queued,
-                                    detail: snapshot?.display ?? "Unsupported file or over 25 MiB"))
+                                    snapshot: nil, state: .preparing, detail: "Preparing private copy…"))
+            snapshotQueue.async { [weak self] in
+                let snapshot = try? DocumentSnapshot(url)
+                DispatchQueue.main.async {
+                    guard let self, self.snapshotGeneration == generation, self.isPresented, !self.closeRequested,
+                          self.admittedIdentity == identity, self.project?.project_id == projectID,
+                          self.files.indices.contains(index), self.files[index].state == .preparing else { return }
+                    self.files[index].snapshot = snapshot
+                    self.files[index].state = snapshot == nil ? .failed : .queued
+                    self.files[index].detail = snapshot?.display ?? "Unsupported file or over 25 MiB"
+                    self.refresh()
+                }
+            }
         }
         refresh()
     }
@@ -2543,7 +2582,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
         // Another account, or none: the old account's names go, nothing more
         // starts, and the sheet closes once nothing is running.
         if let admitted = admittedIdentity, admitted != uploads.identity {
-            admittedIdentity = nil; closeRequested = true; nameLabel.stringValue = ""
+            admittedIdentity = nil; closeRequested = true; snapshotGeneration = UUID(); nameLabel.stringValue = ""
         }
         if awaitingCreate, let selected = projects.selected, selected.project_id != createdFrom {
             awaitingCreate = false; createdNotOpened = nil; project = selected
@@ -2587,7 +2626,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
         let unreconciled = uploads.recovery != nil && uploads.receipt == nil
         let blocked = unreconciled && files.isEmpty
         addFiles.isHidden = blocked; finishFirst.isHidden = !blocked
-        addFiles.isEnabled = !files.contains { [.queued, .saving, .uncertain].contains($0.state) } && uploads.identity != nil
+        addFiles.isEnabled = !files.contains { [.preparing, .queued, .saving, .uncertain].contains($0.state) } && uploads.identity != nil
             && !projects.busy && !closeRequested
         done.isEnabled = !inFlight
         renderPeople(lead: lead, manage: projects.canManage && !saving)
@@ -2659,7 +2698,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
         row.layer?.cornerRadius = 6
         let state: NSView
         switch file.state {
-        case .saving: state = spinner()
+        case .preparing, .saving: state = spinner()
         case .queued, .notStarted:
             // Waiting its turn, or stopped behind an unconfirmed file: nothing
             // is running for it, so no spinner.
@@ -2716,6 +2755,8 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
                     files[index].state = .saved; files[index].detail = files[index].name + " · " + (receipt.document?.stateLabel ?? "Saved")
                     files[index].snapshot = nil; uploads.startAnother(); resume(); continue
                 }
+                if uploads.documentMutationState == .rejectedBeforeAnyUnknownOutcome,
+                   uploads.settleRejectedFirstDocumentAttempt() { return }
                 if uploads.recovery != nil { files[index].state = .uncertain; halt(); return }
                 // No receipt and no locator: the session was reset. Only a
                 // save that provably never ran is "not saved".
@@ -2820,7 +2861,7 @@ final class ProjectCreateSheet: NSObject, NSTextFieldDelegate {
         guard isPresented else { return }
         // A confirm alert or file panel never outlives the sheet it belongs to.
         if let child = sheet.attachedSheet { sheet.endSheet(child, returnCode: .cancel) }
-        isPresented = false; awaitingCreate = false; closeRequested = false
+        snapshotGeneration = UUID(); isPresented = false; awaitingCreate = false; closeRequested = false
         for index in files.indices { files[index].snapshot = nil }
         onWillClose?()
         if let parent = sheet.sheetParent { parent.endSheet(sheet) }
@@ -3190,7 +3231,7 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
 
     /// Compose from outside the window's own buttons (⌘⇧E, a drop). A list
     /// cleared by concealment is reloaded, so To offers every live project.
-    private func presentCompose(target: ComposeTarget, placeholder: String, file: DocumentSnapshot? = nil) {
+    private func presentCompose(target: ComposeTarget, placeholder: String, file: URL? = nil) {
         guard window.attachedSheet == nil else { return }
         if mode == .home, projects.projects.isEmpty, projects.identity != nil, projects.availability != .notLive,
            !projects.busy, !projects.hasOutstandingMutation {
@@ -3832,14 +3873,12 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
 
     private func openDropped(_ file: URL, target: ComposeTarget) {
         guard window.attachedSheet == nil else { return }
-        do {
-            let snapshot = try DocumentSnapshot(file)
-            localNotice = ""
-            if !NSApp.isActive { NSApp.activate(); window.makeKeyAndOrderFront(nil) }
-            presentCompose(target: target, placeholder: "What happened?", file: snapshot)
-        } catch {
-            localNotice = "Choose TXT, Markdown, PDF, or DOCX up to 25 MiB."
+        guard DocumentSnapshot.supports(file) else {
+            localNotice = "Choose TXT, Markdown, PDF, or DOCX up to 25 MiB."; refresh(); return
         }
+        localNotice = ""
+        if !NSApp.isActive { NSApp.activate(); window.makeKeyAndOrderFront(nil) }
+        presentCompose(target: target, placeholder: "What happened?", file: file)
         refresh()
     }
 

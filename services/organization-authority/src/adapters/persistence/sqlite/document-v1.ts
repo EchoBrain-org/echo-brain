@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { assertPersonDocumentOriginalV1, PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonDocumentIdV1, type PersonDocumentSavedV1, type PersonDocumentUploadResultV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1, type PersonDocumentAssociationReceiptV1, type PersonDocumentUploadMetadataV1, type PersonDocumentReceiptV1, type PersonDocumentMetadataV1, type PersonDocumentMediaTypeV1, type PersonDocumentExtractionStateV1, type PersonDocumentTextChunkV1, type PersonDocumentSearchV1, type PersonDocumentSearchResultV1, type ProjectIdV1 } from '@echo-brain/organization-api';
+import { assertPersonDocumentOriginalV1, PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, validatePersonDocumentUploadMetadataV1, validatePersonDocumentIdV1, type PersonDocumentSavedV1, type PersonDocumentUploadResultV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1, type PersonDocumentAssociationReceiptV1, type PersonDocumentUploadMetadataV1, type PersonDocumentReceiptV1, type PersonDocumentMetadataV1, type PersonDocumentMediaTypeV1, type PersonDocumentExtractionStateV1, type PersonDocumentTextChunkV1, type PersonDocumentSearchV1, type PersonDocumentSearchResultV1, type ProjectIdV1 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -119,7 +119,7 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
   read(actor: PersonAccessAuthorization, request: DocumentReadRequestV1, reauthenticate: () => PersonAccessAuthorization): DocumentReadResultV1 {
     return this.transaction(() => {
       const permission = this.permissions(actor);
-      const authorizationState = this.readAuthorizationState(permission);
+      const authorizationRevision = this.authorizationRevision(actor.organization_id);
       let response: DocumentReadResultV1;
       if (request.operation === 'search') response = this.search(permission,request.request);
       else {
@@ -138,7 +138,7 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
           const offset = cursorDecode(request.cursor,scope);
           const candidates = this.database.prepare(`SELECT ordinal,anchor_kind,anchor_start,text FROM authority_person_document_text_v1 WHERE document_id=? AND ordinal>=? ORDER BY ordinal LIMIT 9`).all(row.document_id,offset) as PersonDocumentTextChunkV1[];
           const chunks: PersonDocumentTextChunkV1[] = []; let total=0;
-          for (const chunk of candidates) { const size=Buffer.byteLength(chunk.text); if (size > 8192) fail('invalid_output'); if(chunks.length>=8 || total+size>8192 || Buffer.byteLength(canonicalJson([...chunks,chunk]))>20*1024) break; chunks.push(chunk);total+=size; }
+          for (const chunk of candidates) { const size=Buffer.byteLength(chunk.text); if (size > PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES) fail('invalid_output'); if(chunks.length>=8 || total+size>8192 || Buffer.byteLength(canonicalJson([...chunks,chunk]))>20*1024) break; chunks.push(chunk);total+=size; }
           const next = candidates.length > chunks.length ? (chunks.at(-1)!.ordinal + 1) : null;
           response = {schema_version:1,kind:'echo-person-document-text-v1',document_id:row.document_id,original_sha256:row.original_sha256,extractor:row.extractor,extraction_state:row.extraction_state,chunks,next_cursor:next===null?null:cursorEncode({scope,offset:next})};
         } else response=request.operation==='status'&&!this.receiptVisible(permission,{audience:audience(row),project_id:row.project_id})?saved(row):metadata(row,permission);
@@ -147,16 +147,16 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
       if (Buffer.byteLength(canonicalJson(auditResponse)) > (request.operation==='text'?24*1024:32*1024)) fail('invalid_output');
       // Reauthenticate after selection, within this same synchronous SQLite snapshot.
       this.current(actor,permission,reauthenticate);
-      if(this.readAuthorizationState(permission)!==authorizationState)fail('stale_access_state');
+      if(this.authorizationRevision(actor.organization_id)!==authorizationRevision)fail('stale_access_state');
       const audit = {schema_version:1,kind:'echo-document-read-audit-v1',audit_id:randomUUID(),organization_id:actor.organization_id,principal_id:actor.principal_id,membership_id:actor.membership_id,session_family_id:actor.session_family_id,operation:request.operation,authorization_sha256:canonicalSha256({person:JSON.parse(actorIdentity(actor)),permission:permission.digest}),response_sha256:canonicalSha256(auditResponse),released_count:'documents' in response?response.documents.length:1,checked_at:actor.checked_at};
       this.database.prepare(`INSERT INTO authority_person_document_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)`).run(canonicalSha256(audit),canonicalJson(audit),actor.checked_at);
       return 'bytes' in response ? Object.freeze({metadata:immutable(response.metadata),bytes:response.bytes}) : immutable(response);
     });
   }
-  private readAuthorizationState(permission:Permissions):string {
-    const acl=this.acl(permission);
-    const visible=this.database.prepare(`SELECT d.document_id,a.project_id FROM authority_person_documents_v1 d LEFT JOIN authority_person_document_associations_v1 a USING(document_id) WHERE ${acl.sql} ORDER BY d.document_id`).all(...acl.args);
-    return canonicalSha256({permission:permission.digest,visible});
+  private authorizationRevision(organizationId:string):number {
+    const state=this.database.prepare('SELECT revision FROM authority_project_authorization_state_v1 WHERE organization_id=?').get(organizationId) as {revision:number}|undefined;
+    if(!state)fail('stale_access_state');
+    return state.revision;
   }
   private search(permission: Permissions, request: PersonDocumentSearchV1): PersonDocumentSearchResultV1 {
     this.requireProject(permission,request.project_id);
@@ -226,10 +226,9 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
       }
       const terminalMessage=result.status==='timed_out'?'Extraction timed out after 3 attempts':result.status==='unavailable'?'Extraction unavailable after 3 attempts':result.message;
       let total=0;
-      for(const chunk of result.chunks){if(!['page','paragraph'].includes(chunk.anchor_kind)||!Number.isSafeInteger(chunk.anchor_start)||chunk.anchor_start<1||typeof chunk.text!=='string'||Buffer.from(chunk.text).toString('utf8')!==chunk.text||Buffer.byteLength(chunk.text)<1||Buffer.byteLength(chunk.text)>8192)fail('invalid_output');total+=Buffer.byteLength(chunk.text);}
+      for(const chunk of result.chunks){if(!['page','paragraph'].includes(chunk.anchor_kind)||!Number.isSafeInteger(chunk.anchor_start)||chunk.anchor_start<1||typeof chunk.text!=='string'||Buffer.from(chunk.text).toString('utf8')!==chunk.text||Buffer.byteLength(chunk.text)<1||Buffer.byteLength(chunk.text)>PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES)fail('invalid_output');total+=Buffer.byteLength(chunk.text);}
       if(total>PERSON_DOCUMENT_EXTRACTED_TEXT_MAX_BYTES||(result.status==='ready'&&total===0))fail('invalid_output');
-      const storedChunks: {anchor_kind:'page'|'paragraph';anchor_start:number;text:string}[]=[];
-      for(const chunk of result.chunks){let part='';let bytes=0;for(const point of chunk.text){const size=Buffer.byteLength(point);if(bytes+size>3072){let cut=0;for(const delimiter of part.matchAll(/\s/gu))cut=delimiter.index!+delimiter[0].length;if(cut===0)cut=part.length;storedChunks.push({...chunk,text:part.slice(0,cut)});part=part.slice(cut);bytes=Buffer.byteLength(part);if(bytes+size>3072){storedChunks.push({...chunk,text:part});part='';bytes=0;}}part+=point;bytes+=size;}if(part)storedChunks.push({...chunk,text:part});}
+      const storedChunks=result.chunks;
       if(storedChunks.length>4096)fail('invalid_output');
       const insert=this.database.prepare(`INSERT INTO authority_person_document_text_v1(document_id,ordinal,anchor_kind,anchor_start,text,extractor) VALUES (?,?,?,?,?,?)`);
       storedChunks.forEach((chunk,ordinal)=>insert.run(row.document_id,ordinal,chunk.anchor_kind,chunk.anchor_start,chunk.text,result.extractorVersion));

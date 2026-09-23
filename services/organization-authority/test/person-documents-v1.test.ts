@@ -7,6 +7,7 @@ import { validatePersonDocumentMetadataV1, validatePersonDocumentTextV1, validat
 import { SqlitePersonUpdateInboxV1 } from '../src/adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
+import { extractDocument } from '../src/adapters/documents/document-extraction.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, revokeMembership } from './fixtures/project-context-sqlite.js';
@@ -31,11 +32,11 @@ function search(project_id:typeof PROJECT_ALPHA|null=null,query=''){return {sche
 function result(claim:{source_sha256:string},text:string){return {status:'ready' as const,sourceSha256:claim.source_sha256,extractorVersion:'fixture-1',chunks:[{anchor_kind:'paragraph' as const,anchor_start:1,text}],message:null};}
 describe('Document custody and retrieval V1',()=>{
  it('retains an ordinary >8KiB PRD, exact download, immutable receipt replay and paged end-of-document search',()=>{
-  const {app,repository,db}=setup();const bytes=Buffer.from('SCOUT requirement '.repeat(800)+'terminal-needle');const request=input(bytes);const receipt=app.upload('owner',request,bytes);
+  const {app,repository,db}=setup();const bytes=Buffer.from('SCOUT requirement '.repeat(1600)+'terminal-needle');const request=input(bytes);const receipt=app.upload('owner',request,bytes);
   expect(app.upload('owner',request,bytes)).toEqual(receipt);expect(app.original('member',receipt.document_id).bytes).toEqual(bytes);
-  const claim=repository.claimExtraction()!;expect(claim.bytes).toEqual(bytes);expect(repository.completeExtraction(claim,{...result(claim,'x'),chunks:[{anchor_kind:'paragraph',anchor_start:1,text:bytes.toString().slice(0,7000)},{anchor_kind:'paragraph',anchor_start:2,text:bytes.toString().slice(7000)}]})).toBe(true);
-  const page=validatePersonDocumentTextV1(app.text('member',receipt.document_id));expect(page.next_cursor).not.toBeNull();const second=app.text('member',receipt.document_id,{cursor:page.next_cursor});expect(second.chunks.map(c=>c.text).join('')).toContain('terminal-needle');
-  const found=validatePersonDocumentSearchResultV1(app.search('member',search(PROJECT_ALPHA,'terminal-needle')));expect(found.documents[0]?.document_id).toBe(receipt.document_id);expect(found.documents[0]?.anchor).toEqual({kind:'paragraph',start:2});expect(app.upload('owner',request,bytes)).toEqual(receipt);
+  const claim=repository.claimExtraction()!;expect(claim.bytes).toEqual(bytes);const text=bytes.toString(),chunks=Array.from({length:Math.ceil(text.length/3072)},(_,index)=>({anchor_kind:'paragraph' as const,anchor_start:index+1,text:text.slice(index*3072,(index+1)*3072)}));expect(repository.completeExtraction(claim,{...result(claim,'x'),chunks})).toBe(true);
+  const page=validatePersonDocumentTextV1(app.text('member',receipt.document_id));expect(page.next_cursor).not.toBeNull();let cursor=page.next_cursor,remaining='';while(cursor!==null){const next=app.text('member',receipt.document_id,{cursor});remaining+=next.chunks.map(c=>c.text).join('');cursor=next.next_cursor;}expect(remaining).toContain('terminal-needle');
+  const found=validatePersonDocumentSearchResultV1(app.search('member',search(PROJECT_ALPHA,'terminal-needle')));expect(found.documents[0]?.document_id).toBe(receipt.document_id);expect(found.documents[0]?.anchor).toEqual({kind:'paragraph',start:chunks.length});expect(app.upload('owner',request,bytes)).toEqual(receipt);
   expect(()=>app.upload('owner',{...request,title:'changed'},bytes)).toThrow(expect.objectContaining({code:'conflict'}));
   const audit=db.prepare(`SELECT body_json FROM authority_person_document_read_audit_v1`).all() as {body_json:string}[];expect(audit.length).toBeGreaterThan(3);expect(audit.every(x=>!x.body_json.includes('terminal-needle')&&!x.body_json.includes('SCOUT requirement'))).toBe(true);
  });
@@ -59,6 +60,15 @@ describe('Document custody and retrieval V1',()=>{
   expect(()=>repository.read(authorization(MEMBER),{operation:'original',document_id:doc.document_id},()=>authorization(MEMBER,{person_state_sha256:canonicalSha256('changed')}))).toThrow(expect.objectContaining({code:'stale_access_state'}));
   expect(db.prepare('SELECT count(*) n FROM authority_person_document_read_audit_v1').get()).toEqual({n:0});
   db.exec(`CREATE TRIGGER fail_document_audit BEFORE INSERT ON authority_person_document_read_audit_v1 BEGIN SELECT RAISE(ABORT,'audit unavailable'); END;`);expect(()=>app.read('member',doc.document_id)).toThrow('audit unavailable');
+ });
+ it('uses the monotonic authorization revision to reject an association change during release',()=>{
+  const {app,repository,db}=setup();const bytes=Buffer.from('revision fence');const doc=app.upload('owner',input(bytes,{project_id:null}),bytes);
+  expect(()=>repository.read(authorization(MEMBER),{operation:'original',document_id:doc.document_id},()=>{
+   db.prepare(`INSERT INTO authority_person_document_associations_v1(document_id,project_id,organization_id,associated_at) VALUES (?,?,?,?)`).run(doc.document_id,PROJECT_ALPHA,OWNER.organization_id,PROJECT_CONTEXT_NOW);
+   return authorization(MEMBER);
+  })).toThrow(expect.objectContaining({code:'stale_access_state'}));
+  expect(db.prepare('SELECT count(*) n FROM authority_person_document_associations_v1 WHERE document_id=?').get(doc.document_id)).toEqual({n:0});
+  expect(db.prepare('SELECT count(*) n FROM authority_person_document_read_audit_v1').get()).toEqual({n:0});
  });
  it('keeps originals for explicit extraction failures and only permits the current lease to finish',()=>{
   const {app,repository,setTime}=setup();const bytes=Buffer.from('%PDF-not-valid');const doc=app.upload('owner',input(bytes,{filename:'scan.pdf'}),bytes);const old=repository.claimExtraction()!;expect(repository.claimExtraction()).toBeUndefined();
@@ -155,24 +165,31 @@ describe('Document custody and retrieval V1',()=>{
   for(const table of ['authority_person_documents_v1','authority_person_document_originals_v1','authority_person_document_work_v1','authority_person_document_associations_v1'])expect(db.prepare(`SELECT count(*) n FROM ${table}`).get()).toEqual({n:0});
  });
  it('enforces count quota while replay remains permitted',()=>{
-  const {app}=setup();const bytes=Buffer.from('count');const request=input(bytes);const first=app.upload('owner',request,bytes);for(let n=1;n<100;n++)app.upload('owner',input(bytes),bytes);expect(()=>app.upload('owner',input(bytes),bytes)).toThrow(expect.objectContaining({code:'rate_limited'}));expect(app.upload('owner',request,bytes)).toEqual(first);
+  const {app}=setup();const bytes=Buffer.from('count');const request=input(bytes);const first=app.upload('owner',request,bytes);for(let n=1;n<100;n++)app.upload('owner',input(bytes),bytes);expect(()=>app.upload('owner',input(bytes),bytes)).toThrow(expect.objectContaining({code:'quota_exceeded'}));expect(app.upload('owner',request,bytes)).toEqual(first);
  });
- it('enforces shared byte quota at exactly 250MiB and prevents legacy admission bypass',()=>{
+ it('enforces document-only byte quota while retaining the shared note/document count cap',()=>{
   const {app,db}=setup();const bytes=Buffer.alloc(25*1024*1024,0x61);for(let n=0;n<10;n++)app.upload('owner',input(bytes),bytes);
-  expect(()=>app.upload('owner',input(Buffer.from('x')),Buffer.from('x'))).toThrow(expect.objectContaining({code:'rate_limited'}));
-  const legacy=new SqlitePersonUpdateInboxV1(db,()=>PROJECT_CONTEXT_NOW);expect(()=>legacy.submit(OWNER,{schema_version:1,kind:'echo-person-update-submit-v1',request_id:randomUUID(),title:'Legacy',text:'x',visibility:'team'})).toThrow(expect.objectContaining({code:'rate_limited'}));
+  expect(()=>app.upload('owner',input(Buffer.from('x')),Buffer.from('x'))).toThrow(expect.objectContaining({code:'quota_exceeded'}));
+  const legacy=new SqlitePersonUpdateInboxV1(db,()=>PROJECT_CONTEXT_NOW);expect(legacy.submit(OWNER,{schema_version:1,kind:'echo-person-update-submit-v1',request_id:randomUUID(),title:'Legacy',text:'x',visibility:'team'})).toMatchObject({state:'received'});
+  const projects=createProjectContextApplicationV1({authenticate:()=>authorization(OWNER),repository:new SqliteProjectContextRepositoryV1(db,()=>PROJECT_CONTEXT_NOW)});expect(projects.submitUpload('owner',{schema_version:2,kind:'echo-person-update-submit-v2',request_id:randomUUID(),title:'Project note',text:'x',audience:{kind:'team'},project_id:null})).toMatchObject({state:'received'});
   expect(db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:10});
  });
  it('preserves ordinary words across defensive text chunk boundaries',()=>{
-  const {app,repository}=setup();const bytes=Buffer.from('word boundary source');const doc=app.upload('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;const text='a '.repeat(1534)+'hardware';repository.completeExtraction(claim,result(claim,text));
+  const {app,repository}=setup();const bytes=Buffer.from('word boundary source');const doc=app.upload('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;const first='a '.repeat(1532),second='a '.repeat(2)+'hardware',text=first+second;repository.completeExtraction(claim,{...result(claim,first),chunks:[{anchor_kind:'paragraph',anchor_start:1,text:first},{anchor_kind:'paragraph',anchor_start:2,text:second}]});
   const found=app.search('member',search(PROJECT_ALPHA,'hardware'));expect(found.documents[0]?.document_id).toBe(doc.document_id);expect(app.text('member',doc.document_id).chunks.map(c=>c.text).join('')).toBe(text);
+ });
+ it('indexes the tail of 5,000 packed hard-wrapped lines and keeps the phrase in one searchable chunk',async()=>{
+  const {app,repository}=setup();const bytes=Buffer.from(Array.from({length:5000},(_,index)=>index===4999?'tail-marker':'hardware\nrequirements').join('\n'));const doc=app.upload('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;
+  const extracted=await extractDocument({bytes,filename:'wrapped.md',sourceSha256:claim.source_sha256});expect(extracted.status).toBe('ready');expect(repository.completeExtraction(claim,extracted)).toBe(true);
+  expect(app.search('member',search(PROJECT_ALPHA,'hardware requirements')).documents.map(value=>value.document_id)).toContain(doc.document_id);
+  expect(app.search('member',search(PROJECT_ALPHA,'tail-marker')).documents.map(value=>value.document_id)).toContain(doc.document_id);
  });
  it('forms search excerpts at Unicode scalar boundaries',()=>{
   const {app,repository}=setup();const bytes=Buffer.from('unicode source');const doc=app.upload('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;const text='😀'+'x'.repeat(78)+' needle';repository.completeExtraction(claim,result(claim,text));
   const found=validatePersonDocumentSearchResultV1(app.search('member',search(PROJECT_ALPHA,'needle')));expect(found.documents[0]?.document_id).toBe(doc.document_id);expect(found.documents[0]?.excerpt).toBe(text);
  });
  it('paginates escaped/control text within serialized wire bounds without dropping content',()=>{
-  const {app,repository}=setup();const bytes=Buffer.from('bounded text');const receipt=app.upload('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;const text='\u0001'.repeat(8000)+'😀ending';repository.completeExtraction(claim,result(claim,text));
+  const {app,repository}=setup();const bytes=Buffer.from('bounded text');const receipt=app.upload('owner',input(bytes),bytes);const claim=repository.claimExtraction()!;const text='\u0001'.repeat(8000)+'😀ending';repository.completeExtraction(claim,{...result(claim,text.slice(0,3072)),chunks:[{anchor_kind:'paragraph',anchor_start:1,text:text.slice(0,3072)},{anchor_kind:'paragraph',anchor_start:2,text:text.slice(3072,6144)},{anchor_kind:'paragraph',anchor_start:3,text:text.slice(6144)}]});
   let cursor:string|null=null;let all='';do{const page=validatePersonDocumentTextV1(app.text('owner',receipt.document_id,{cursor}));expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(24*1024);all+=page.chunks.map(c=>c.text).join('');cursor=page.next_cursor;}while(cursor);expect(all).toBe(text);
  });
 });

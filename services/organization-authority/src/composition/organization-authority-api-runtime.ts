@@ -49,6 +49,7 @@ import type {
   OpenedPersonExternalIdentityRuntimeV1,
 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import type { AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
+import type { PersonDocumentProcessingFailureObservationV1 } from './person-document-processing-v1.js';
 
 export interface OrganizationAuthorityApiRuntimeConfig {
   readonly state_directory: string;
@@ -79,6 +80,8 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
   /** Metadata-only answer-composition failure observer for the API server log. */
   readonly answer_failure?: (event: AnswerCompositionFailureEventV1) => void;
+  /** Content-free document and retained-text worker failure observer. */
+  readonly person_source_failure?: (event: PersonDocumentProcessingFailureObservationV1) => void;
   /** Staging-only request-local Ask journey factory. */
   readonly ask_journey_telemetry?: AskJourneyTelemetryFactoryV1;
   /** Present only when the signed private-approval surface is active. */
@@ -209,6 +212,9 @@ export async function startOrganizationAuthorityApiRuntime(
       expand_related_atoms: expandReadableSearchRelatedAtomsV1,
     });
     const documents = new SqlitePersonDocumentRepositoryV1(database);
+    documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
+      on_failure: dependencies.person_source_failure ?? (event => console.error(JSON.stringify(event))),
+    });
     let closing = false;
     const server = createOrganizationAuthorityHttpServer({
       is_closing: () => closing,
@@ -255,6 +261,7 @@ export async function startOrganizationAuthorityApiRuntime(
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
         repository: documents,
+        on_original_saved: () => documentWorker?.wake(),
       }),
       document_upload_staging: createPersonDocumentUploadStagingV1(),
       project_context: createProjectContextApplicationV1({
@@ -288,7 +295,6 @@ export async function startOrganizationAuthorityApiRuntime(
     const address = server.address();
     if (address === null || typeof address === "string")
       throw new Error("Organization Authority API did not bind TCP");
-    documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database));
     let serverClosed: Promise<unknown> | undefined;
     const stopAcceptingRequests = (): void => {
       closing = true;

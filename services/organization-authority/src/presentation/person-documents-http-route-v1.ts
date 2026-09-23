@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseCanonicalJson } from '@echo-brain/federation-protocol';
 import {
   PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, PERSON_DOCUMENT_JSON_MAX_BYTES,
+  PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS,
   validatePersonDocumentUploadMetadataV1, validatePersonDocumentIdV1, validatePersonUpdateRequestId,
   validateProjectIdV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1, validatePersonDocumentMetadataV1,
   validatePersonDocumentTextV1, validatePersonDocumentSearchResultV1,
@@ -16,7 +17,6 @@ import type { PersonDocumentUploadStagingV1 } from '../application/ports/documen
 const MAXIMUM_METADATA_HEADER_BYTES = 8192;
 const MAXIMUM_CONCURRENT_UPLOADS = 2;
 const MAXIMUM_CONCURRENT_DOWNLOADS = 2;
-const TRANSFER_DEADLINE_MS = 120_000;
 
 function invalid(): never { throw new AuthorityOperationError('invalid_request', 'request failed'); }
 function validate<T>(operation: () => T): T {
@@ -127,11 +127,12 @@ export function createPersonDocumentsHttpHandlerV1(
       if (uploading >= MAXIMUM_CONCURRENT_UPLOADS) throw new AuthorityOperationError('rate_limited', 'request failed');
       uploading += 1;
       try {
-        const deadline = setTimeout(() => request.destroy(new Error('Document transfer deadline exceeded')), TRANSFER_DEADLINE_MS);
+        const deadline = setTimeout(() => request.destroy(new Error('Document transfer deadline exceeded')), PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
         deadline.unref();
+        request.setTimeout(PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS, () => request.destroy(new Error('Document transfer stalled')));
         let bytes: Uint8Array;
         try { bytes = await staging.stage(request, metadata); }
-        finally { clearTimeout(deadline); }
+        finally { clearTimeout(deadline); request.setTimeout(0); }
         if (!request.complete) invalid();
         current();
         const receipt = application.upload(token, metadata, bytes);
@@ -187,11 +188,13 @@ export function createPersonDocumentsHttpHandlerV1(
         if (released) return;
         released = true;
         clearTimeout(deadline);
+        response.setTimeout(0);
         downloading -= 1;
         response.off('finish', release); response.off('close', release);
       };
-      const deadline = setTimeout(() => response.destroy(), TRANSFER_DEADLINE_MS);
+      const deadline = setTimeout(() => response.destroy(), PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
       deadline.unref();
+      response.setTimeout(PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS, () => response.destroy(new Error('Document transfer stalled')));
       response.once('finish', release); response.once('close', release);
       try {
       const result = application.original(token, id, scope);

@@ -2,23 +2,43 @@ import type Database from 'better-sqlite3';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonUpdateSubmitV1, validatePersonUpdateSubmitV2 } from '@echo-brain/organization-api';
 import { sourceContentSha256V1, sourceItemIdV1 } from '@echo-brain/organization-processing/core';
-import type { PersonTextSourceInboxV1, PersonTextSourceContentV1 } from '../../../application/ports/person-text-source-v1.js';
+import type { PersonTextSourceInboxV1, PersonTextSourceContentV1, PersonTextSourceFailureObservationV1 } from '../../../application/ports/person-text-source-v1.js';
 import { PERSON_SOURCE_IDENTITY_V1 } from '../../../application/person-document-source-v1.js';
 
 type TextRow = { api_version:1|2; organization_id:string;principal_id:string;membership_id:string;request_id:string;context_id:string;title:string;text:string;payload_sha256:string;audience_kind:'only_me'|'team'|'project';audience_project_id:string|null;project_id:string|null;received_at:string };
 
 /** Pull accepted editor notes into the same Person source; their read indexes already exist. */
 export class SqlitePersonTextSourceInboxV1 implements PersonTextSourceInboxV1 {
-  constructor(private readonly database:Database.Database) {}
+  private readonly failures: PersonTextSourceFailureObservationV1[] = [];
+  constructor(private readonly database:Database.Database, private readonly now:()=>string=()=>new Date().toISOString()) {}
   next(): ReturnType<PersonTextSourceInboxV1['next']> {
-    const row=this.database.prepare(`SELECT * FROM (
+    const result=this.database.transaction(() => {
+      const failures: PersonTextSourceFailureObservationV1[]=[];
+      for (let inspected=0; inspected<16; inspected+=1) {
+        const row=this.database.prepare(`SELECT * FROM (
       SELECT 1 AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,NULL AS project_id,received_at FROM authority_person_updates_v1
       UNION ALL
       SELECT 2 AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,received_at FROM authority_person_updates_v2
     ) u WHERE NOT EXISTS (SELECT 1 FROM authority_sources_v1 s WHERE s.organization_id=u.organization_id AND s.adapter_id=? AND s.instance_id=? AND s.external_id=u.context_id)
+    AND NOT EXISTS (SELECT 1 FROM authority_person_text_source_failures_v1 f WHERE f.organization_id=u.organization_id AND f.api_version=u.api_version AND f.context_id=u.context_id)
     AND (u.audience_kind!='only_me' OR EXISTS(SELECT 1 FROM authority_memberships m WHERE m.organization_id=u.organization_id AND m.principal_id=u.principal_id AND m.membership_id=u.membership_id AND m.status='active'))
     ORDER BY received_at,context_id LIMIT 1`).get(PERSON_SOURCE_IDENTITY_V1.adapter_id,PERSON_SOURCE_IDENTITY_V1.instance_id) as TextRow|undefined;
-    if (!row) return undefined;
+        if (!row) return {source:undefined,failures};
+        try { return {source:this.sourceFrom(row),failures}; }
+        catch {
+          this.database.prepare(`INSERT INTO authority_person_text_source_failures_v1(organization_id,api_version,context_id,disposition,recorded_at) VALUES (?,?,?,'invalid_retained_text',?) ON CONFLICT(organization_id,api_version,context_id) DO NOTHING`).run(row.organization_id,row.api_version,row.context_id,this.now());
+          failures.push({stage:'text_source_admission',error_code:'invalid_retained_text'});
+        }
+      }
+      return {source:undefined,failures};
+    }).immediate();
+    this.failures.push(...result.failures);
+    return result.source;
+  }
+  takeFailureObservations(): readonly PersonTextSourceFailureObservationV1[] {
+    return this.failures.splice(0);
+  }
+  private sourceFrom(row:TextRow): Exclude<ReturnType<PersonTextSourceInboxV1['next']>,undefined> {
     const audience=row.audience_kind==='project'?{kind:'project',project_id:row.audience_project_id}:{kind:row.audience_kind};
     const request=row.api_version===1
       ?validatePersonUpdateSubmitV1({schema_version:1,kind:'echo-person-update-submit-v1',request_id:row.request_id,title:row.title,text:row.text,visibility:row.audience_kind})

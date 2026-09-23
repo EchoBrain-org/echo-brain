@@ -109,6 +109,13 @@ describe('document project associations', () => {
     app.associate('member', associate(owned.document_id));
     expect(app.dissociate('owner', dissociate(associate(owned.document_id))).state).toBe('applied');
   });
+  it('lets an uploader unlink a team document after leaving the associated project', () => {
+    const { app, db, upload } = setup(); const saved = upload('member'); const attached = associate(saved.document_id);
+    app.associate('member', attached);
+    db.prepare(`UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE membership_id=? AND project_id=?`).run(PROJECT_CONTEXT_NOW, MEMBER.membership_id, PROJECT_ALPHA);
+    expect(app.dissociate('member', dissociate(attached))).toMatchObject({ operation: 'dissociate', state: 'applied' });
+    expect(app.search('owner', search(PROJECT_ALPHA)).documents).toEqual([]);
+  });
   it('replays only the same actor tenure minimal receipt after project removal, never a changed command', () => {
     const { app, db, upload } = setup(); const saved = upload('member', { audience: { kind: 'project', project_id: PROJECT_ALPHA } }); const request = associate(saved.document_id);
     const receipt = app.associate('member', request);
