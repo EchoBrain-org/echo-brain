@@ -156,7 +156,7 @@ if (args[1] === 'status') {
       // The UI proofs drive the window; the CLI log shows what actually ran.
       const calls = readFileSync(log, "utf8").trim().split("\n").map(line => (mode.startsWith("cli-") ? JSON.parse(line).args : JSON.parse(line)) as string[]);
       const flag = (args: string[], name: string) => args[args.indexOf(name) + 1];
-      const apollo = "prj_11111111-1111-4111-8111-111111111111", beacon = "prj_44444444-4444-4444-8444-444444444444";
+      const apollo = "prj_11111111-1111-4111-8111-111111111111";
       const context = "ctx_" + "a".repeat(64);
       const op = (name: string) => calls.filter(args => args[1] === "projects" && args[2] === name);
       const submits = calls.filter(args => (args[1] === "updates" && args[2] === "submit") || (args[1] === "documents" && args[2] === "upload"));
