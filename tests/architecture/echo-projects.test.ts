@@ -18,7 +18,7 @@ describe.skipIf(process.platform !== "darwin")("native project CLI boundary", ()
       ...["ui-support", "account", "projects", "uploads"].map(name => join(repo, `product/echo-overlay/${name}.swift`)),
       join(repo, "tests/fixtures/echo-projects-proof.swift"), "-o", binary], { stdio: "pipe", timeout: 120_000 });
   }, 120_000);
-  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "restart-recovery", "restart-create", "malformed-recovery", "recovery-store-failure", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow", "ui-people", "ui-associate", "ui-recovery", "ui-recovery-pending", "ui-create", "ui-create-skip", "ui-create-read-fail", "ui-create-account", "ui-drop", "ui-search-controls", "ui-documents", "ui-back", "ui-home-back", "ui-upload-sharing", "ui-refresh", "ui-refresh-queued", "ui-refresh-revoked", "ui-refresh-empty"])("handles %s", mode => {
+  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "restart-recovery", "restart-create", "malformed-recovery", "recovery-store-failure", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow", "ui-people", "ui-associate", "ui-recovery", "ui-recovery-pending", "ui-create", "ui-create-skip", "ui-create-read-fail", "ui-create-account", "ui-drop", "ui-search-controls", "ui-documents", "ui-back", "ui-home-back", "ui-upload-sharing", "ui-refresh", "ui-refresh-queued", "ui-refresh-revoked", "ui-refresh-empty", "ui-home-empty-return"])("handles %s", mode => {
     const folder = mkdtempSync(join(root, "case-"));
     const script = join(folder, "client.mjs");
     const executable = join(folder, "echo-brain");
@@ -98,11 +98,15 @@ if (args[1] === 'status') {
     if (mode === 'ui-member') response.items.forEach(x => x.role = 'member');
   }
   if (mode === 'ui-refresh-empty' && id === 'projects-list' && calls.filter(x => x[1] === 'projects' && x[2] === 'list').length > 1) response.items = [];
-  if (mode === 'ui-home-back' && id === 'projects-list') {
+  if (['ui-home-back','ui-home-empty-return'].includes(mode) && id === 'projects-list') {
     const names=['Apollo','Beacon','Cinder','Delta','Ember','Fjord','Grove','Harbor','Ion','Juniper','Kite','Lumen','Mica','Nova','Orbit'];
     const rows=names.map((name,index)=>({...response.items[0],project_id:index===0?'prj_11111111-1111-4111-8111-111111111111':'prj_'+String(index+1).padStart(8,'0')+'-0000-4000-8000-'+String(index+1).padStart(12,'0'),name}));
     response.items=args.includes('--cursor') ? rows.slice(10) : rows.slice(0,10);
     response.next_cursor=args.includes('--cursor') ? null : 'eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ';
+    if (mode === 'ui-home-empty-return') {
+      const count = calls.filter(x => x[1] === 'projects' && x[2] === 'list').length;
+      if (count >= 3) { response.items = count === 3 ? [] : rows.slice(0,10); response.next_cursor = null; }
+    }
   }
   if (mode === 'ui-upload-sharing' && id === 'projects-list') {
     const cinder = 'prj_33333333-3333-4333-8333-333333333333';

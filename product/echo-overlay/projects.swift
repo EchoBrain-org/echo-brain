@@ -3719,7 +3719,9 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             }
         }
         if mode == .home, let place = homePlace, window.attachedSheet == nil, !projects.busy, projects.listFetched {
-            if projects.projects.count < place.rows, projects.listCursor != nil { projects.nextProjects() }
+            if projects.projects.isEmpty, projects.listCursor == nil {
+                homePlace = nil; scrollTarget = nil
+            } else if projects.projects.count < place.rows, projects.listCursor != nil { projects.nextProjects() }
             else { homePlace = nil; scrollTarget = place.offset }
         }
         if mode == .project, !projects.busy, let selected = projects.selected {

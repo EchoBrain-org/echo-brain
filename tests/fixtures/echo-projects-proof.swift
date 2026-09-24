@@ -249,7 +249,7 @@ enum ProjectProof {
         func textFile(_ name: String, _ text: String) -> URL {
             let url = folder.appendingPathComponent(name); try! Data(text.utf8).write(to: url); return url
         }
-        let initialHomeRows = mode == "ui-home-back" ? 10 : 2
+        let initialHomeRows = ["ui-home-back", "ui-home-empty-return"].contains(mode) ? 10 : 2
         controller.show(); wait("home") { !uploads.busy && uploads.identity != nil && !projects.busy && projects.projects.count == initialHomeRows }
         let query = ProofUI.find(NSTextField.self, "ask-field", "Ask or find context", in: chrome)
         let submit = ProofUI.find(NSButton.self, "submit-button", "Submit", in: chrome)
@@ -307,6 +307,24 @@ enum ProjectProof {
             require(projects.projects.count == 2 && query.stringValue == draft, "sheet-close refresh erased Home state")
             controller.accountWillChange()
             require(projects.projects.isEmpty && query.stringValue.isEmpty, "account change retained protected Home state")
+            return
+        }
+
+        if mode == "ui-home-empty-return" {
+            window.setContentSize(NSSize(width: 900, height: 580))
+            ProofUI.find(NSButton.self, "more-projects", in: chrome).performClick(nil)
+            wait("paged Home before empty refresh") { !projects.busy && projects.projects.count == 15 }
+            guard let homeScroll = ProofUI.views(chrome).compactMap({ $0 as? NSScrollView }).first(where: ProofUI.visible) else {
+                fatalError("missing visible home scroll")
+            }
+            window.contentView?.layoutSubtreeIfNeeded()
+            homeScroll.contentView.scroll(to: NSPoint(x: 0, y: 210)); homeScroll.reflectScrolledClipView(homeScroll.contentView)
+            require(homeScroll.contentView.bounds.origin.y > 0, "Home did not scroll before empty refresh")
+            controller.refreshIdentity(); settle("empty Home refresh")
+            require(projects.projects.isEmpty && projects.listFetched, "expected authoritative empty Home")
+            controller.refreshIdentity(); settle("projects return after empty Home")
+            require(projects.projects.count == 10, "expected projects to return")
+            require(abs(homeScroll.contentView.bounds.origin.y) < 1, "empty refresh retained an obsolete scroll target")
             return
         }
 
