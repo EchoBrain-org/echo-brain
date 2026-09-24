@@ -206,7 +206,10 @@ export function abandonDocumentSnapshot(homeDirectory: string, accountBinding: s
 
 /** Publishes a new file only after exact byte/hash verification and the current-account fence. */
 export async function saveDocumentDownload(response: Response, outputPath: string, expected: { content_length: number; sha256: string; detected_media_type: string }, beforePublish: () => void): Promise<string> {
-  if (response.headers.get('content-length') !== String(expected.content_length) || response.headers.get('x-echo-document-sha256') !== expected.sha256 ||
+  // Fetch decodes HTTP content encodings, but Content-Length describes the wire
+  // representation (and may be absent). Verify the decoded original's size and
+  // hash while streaming below, against the authenticated document metadata.
+  if (response.headers.get('x-echo-document-sha256') !== expected.sha256 ||
       response.headers.get('content-type') !== expected.detected_media_type || response.body === null || expected.content_length > PERSON_DOCUMENT_MAX_ORIGINAL_BYTES) {
     await response.body?.cancel();
     throw new DocumentFileError('invalid_download', 'Document download proof did not match its metadata.');
