@@ -17,7 +17,7 @@ if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add(
 /** Escape steps back one level: compose, source, answer, reader, project. */
 function back(): void {
   const state = getState();
-  if (state.compose) return closeCompose();
+  if (state.compose && !state.compose.hidden) return closeCompose();
   if (state.evidence) return closeSource();
   if (state.ask) return closeAsk();
   if (state.reader) return closeReader();
@@ -37,12 +37,12 @@ function App() {
       on('signin.phase', payload => signinPhase(payload.browser_opened)),
       on('host.restarted', () => { void refreshStatus(); }),
     ];
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !getState().compose) back(); };
+    // One Escape handler for the whole window: it steps back exactly one level.
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); back(); } };
     window.addEventListener('keydown', onKey);
     return () => { stops.forEach(stop => stop()); window.removeEventListener('keydown', onKey); };
   }, []);
 
-  if (state.concealed) return <div class="concealed" data-testid="concealed">ECHO</div>;
   if (state.booting) return <div class="app"><div class="titlebar"><div class="side" /><div class="title brand">ECHO</div><div class="side" /></div></div>;
   if (!state.status?.signed_in) {
     return (
@@ -54,8 +54,11 @@ function App() {
   }
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
-  const title = state.ask ? '' : inProject ? inProject.name : 'ECHO';
-  const backLabel = state.evidence || state.ask ? 'Back' : state.reader ? inProject?.name : inProject ? 'Projects' : null;
+  // Another app is in front: cover what a project or an answer shows. Home's
+  // rows stay, so a file dragged from Finder can still land on one.
+  const covered = state.concealed && (state.ask !== null || inProject !== null);
+  const title = covered ? 'ECHO' : state.ask ? '' : inProject ? inProject.name : 'ECHO';
+  const backLabel = covered ? null : state.evidence || state.ask ? 'Back' : state.reader ? inProject?.name : inProject ? 'Projects' : null;
   return (
     <div
       class="app"
@@ -63,7 +66,7 @@ function App() {
       onDrop={event => {
         event.preventDefault();
         const file = event.dataTransfer?.files[0];
-        if (file && !state.compose) void acceptDrop(file);
+        if (file && (!state.compose || state.compose.hidden)) void acceptDrop(file);
       }}
     >
       <header class="titlebar">
@@ -74,10 +77,11 @@ function App() {
         <div class="side" />
       </header>
       <main class="page">
-        {state.ask ? <AskView state={state} /> : inProject ? <Project state={state} project={inProject} /> : <Home state={state} />}
+        {covered ? <div class="cover" data-testid="concealed">ECHO</div>
+          : state.ask ? <AskView state={state} /> : inProject ? <Project state={state} project={inProject} /> : <Home state={state} />}
       </main>
       <Bar state={state} />
-      {state.compose && <Compose state={state} />}
+      {state.compose && !state.compose.hidden && <Compose state={state} />}
     </div>
   );
 }

@@ -39,6 +39,8 @@ export async function launch(mode = ''): Promise<Launched> {
       return readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
     },
     async close() {
+      // Answer the quit guard's native dialog (an unresolved save) with Quit Anyway.
+      await app.evaluate(({ dialog }) => { dialog.showMessageBoxSync = () => 0; }).catch(() => undefined);
       await app.close();
       rmSync(home, { recursive: true, force: true });
       rmSync(userData, { recursive: true, force: true });

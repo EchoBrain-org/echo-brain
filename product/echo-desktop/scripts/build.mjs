@@ -2,6 +2,7 @@
 // Builds main, preload, the person host and the renderer into build/.
 // `--release` compiles the test hook out of every bundle.
 import { build } from 'esbuild';
+import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
@@ -27,6 +28,12 @@ await Promise.all([
   }),
 ]);
 for (const file of ['index.html', 'styles.css']) copyFileSync(join(root, 'src/renderer', file), join(out, 'renderer', file));
+
+// The commit this was built from, shown in the tray.
+const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+writeFileSync(join(out, 'build-info.json'), JSON.stringify({
+  source_sha: git(['rev-parse', 'HEAD']), dirty: git(['status', '--porcelain', '--', '.']) !== '',
+}));
 
 // Tray icons: a ring drawn here, so no binary asset lives in the repository.
 // macOS uses a black template image; other systems a light one.

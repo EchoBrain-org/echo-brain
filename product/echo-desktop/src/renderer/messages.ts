@@ -17,9 +17,10 @@ const MESSAGES: Record<string, string> = {
   host_restarted: 'ECHO restarted. Try again.',
   signin_failed: 'Sign-in did not finish. Try again.',
   conflict: 'That changed meanwhile. Refresh and try again.',
+  not_saved: 'It was not saved. Send it again.',
 };
 
 export function message(failure: Failure): string {
-  if (failure.mutation_outcome === 'unknown') return 'Not confirmed yet. Retrying is safe.';
+  if (failure.mutation_outcome === 'unknown') return 'This may not have been sent.';
   return MESSAGES[failure.code] ?? 'Something went wrong. Try again.';
 }

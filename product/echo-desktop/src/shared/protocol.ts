@@ -33,6 +33,8 @@ export interface FeedItem {
   readonly title: string;
   readonly excerpt: string;
   readonly received_at: string;
+  /** Who can read it; project rows carry no mark. */
+  readonly audience: 'only-me' | 'project' | 'team';
 }
 
 export interface FeedPage {
@@ -85,6 +87,11 @@ export interface Receipt {
   readonly audience: Audience;
 }
 
+/** What a status check says about a save whose outcome was unknown. */
+export interface WriteStatus {
+  readonly state: 'saved' | 'not_saved' | 'unknown';
+}
+
 export interface FileHandle {
   readonly handle: string;
   readonly name: string;
@@ -119,6 +126,7 @@ export interface HostMethods {
   'documents.upload': { params: { expect: Expect; request_id: string; file_handle: string; title: string; audience: Audience; project_id?: string }; result: Receipt };
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope }; result: Answer };
   'ask.source': { params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
+  'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
 }
 
 export interface MainMethods {
@@ -127,6 +135,8 @@ export interface MainMethods {
   'clipboard.writeText': { params: { text: string }; result: null };
   'window.hide': { params: Record<string, never>; result: null };
   'app.quit': { params: Record<string, never>; result: null };
+  /** A save's outcome is unknown: quitting asks first. */
+  'app.setUnresolved': { params: { unresolved: boolean }; result: null };
 }
 
 export type Methods = HostMethods & MainMethods;
@@ -135,10 +145,10 @@ export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'account.logout', 'projects.list', 'projects.feed', 'projects.readContext',
-  'notes.submit', 'documents.upload', 'ask.run', 'ask.source',
+  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'drop.accept', 'clipboard.writeText', 'window.hide', 'app.quit',
+  'dialog.openDocument', 'drop.accept', 'clipboard.writeText', 'window.hide', 'app.quit', 'app.setUnresolved',
 ];
 
 /** Events main pushes to the renderer. */

@@ -23,6 +23,12 @@ export const Check = () => (
 export const Note = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 3.5h10M2 7h10M2 10.5h6" stroke="rgba(240,236,230,0.8)" stroke-width="1.5" stroke-linecap="round" /></svg>
 );
+export const Lock = () => (
+  <svg width="11" height="12" viewBox="0 0 11 12" aria-hidden="true"><rect x="1" y="5" width="9" height="6.5" rx="1.5" stroke="rgba(240,236,230,0.55)" stroke-width="1.3" fill="none" /><path d="M3 5V3.5a2.5 2.5 0 0 1 5 0V5" stroke="rgba(240,236,230,0.55)" stroke-width="1.3" fill="none" /></svg>
+);
+export const Globe = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" stroke="rgba(240,236,230,0.55)" stroke-width="1.2" fill="none" /><path d="M1 6h10M6 1c1.6 1.4 2.4 3.1 2.4 5S7.6 9.6 6 11M6 1C4.4 2.4 3.6 4.1 3.6 6S4.4 9.6 6 11" stroke="rgba(240,236,230,0.55)" stroke-width="1.1" fill="none" /></svg>
+);
 export const FileIcon = () => (
   <svg width="13" height="16" viewBox="0 0 18 22" aria-hidden="true"><path d="M2 1h9l5 5v15H2z" stroke="rgba(240,236,230,0.8)" stroke-width="1.6" stroke-linejoin="round" fill="none" /><path d="M11 1v5h5" stroke="rgba(240,236,230,0.8)" stroke-width="1.6" stroke-linejoin="round" fill="none" /></svg>
 );

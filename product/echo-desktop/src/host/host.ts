@@ -1,7 +1,7 @@
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
 // token; what it posts back is a token-free view model or a failure code.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,7 +11,7 @@ import type {
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
   answerView, contextView, evidenceView, failureView, feedView, noteTitle, projectPageView, receiptView, statusView, unwrap,
-  ViewError,
+  ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -25,9 +25,11 @@ const home = process.env.ECHO_HOME;
 if (!entry || !home) throw new Error('The person host needs ECHO_PERSON_CLIENT_ENTRY and ECHO_HOME');
 
 interface SessionStore { read(): { session: { access_expires_at: string } } }
+interface SessionPaths { refresh_claim: string; refreshing: string }
 interface ClientModules {
   cli: PersonCli;
   store: SessionStore;
+  paths: SessionPaths;
   dependencies: Record<string, unknown>;
   now: () => number;
 }
@@ -36,6 +38,7 @@ async function load(): Promise<ClientModules> {
   const client = await import(pathToFileURL(entry!).href) as { runPersonClientCli: PersonCli };
   const sessions = await import(pathToFileURL(join(entry!, '..', 'session-store.js')).href) as {
     PersonSessionStore: new (home: string) => SessionStore;
+    personSessionStorePaths: (home: string) => SessionPaths;
   };
   const dependencies: Record<string, unknown> = {
     home_directory: home,
@@ -52,7 +55,10 @@ async function load(): Promise<ClientModules> {
     Object.assign(dependencies, hook.dependencies);
     now = hook.now;
   }
-  return { cli: client.runPersonClientCli, store: new sessions.PersonSessionStore(home!), dependencies, now };
+  return {
+    cli: client.runPersonClientCli, store: new sessions.PersonSessionStore(home!), paths: sessions.personSessionStorePaths(home!),
+    dependencies, now,
+  };
 }
 const modules = load();
 modules.catch(error => { console.error('person host failed to load the client:', error); });
@@ -61,7 +67,7 @@ modules.catch(error => { console.error('person host failed to load the client:',
 const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'account.logout': 45_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  'ask.run': 145_000, 'ask.source': 15_000,
+  'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000,
 };
 const WRITES = new Set<HostMethodName>(['notes.submit', 'documents.upload']);
 
@@ -114,10 +120,35 @@ function code(value: string, write = false, requestId?: string): Result<never> {
   return fail(failureView({ code: value }, value, write, requestId));
 }
 
-async function status(): Promise<AppStatus | null> {
+async function readStatus(): Promise<AppStatus | null> {
   const run = await cli(['status']);
   if (run.exit !== 0 || run.overflow) return null;
   try { return statusView(lastJson(run.stdout)); } catch { return null; }
+}
+
+/**
+ * While another process (the terminal CLI) refreshes, the session file is set
+ * aside and the client reads as signed out. A claim whose session is past its
+ * weekly deadline is left over from expiry: that one is signed out at once.
+ */
+async function refreshRunningElsewhere(): Promise<boolean> {
+  const { paths, now } = await modules;
+  if (!existsSync(paths.refresh_claim) || !existsSync(paths.refreshing)) return false;
+  try {
+    const stored = JSON.parse(readFileSync(paths.refreshing, 'utf8')) as { session?: { hard_reauthentication_at?: unknown } };
+    const deadline = Date.parse(String(stored.session?.hard_reauthentication_at));
+    return Number.isFinite(deadline) && now() < deadline;
+  } catch {
+    return false;
+  }
+}
+
+async function status(): Promise<AppStatus | null> {
+  for (let attempt = 0; ; attempt += 1) {
+    const current = await readStatus();
+    if (current === null || current.signed_in || attempt >= 10 || !(await refreshRunningElsewhere())) return current;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
 }
 
 function sameAccount(current: AppStatus | null, expect: Expect): boolean {
@@ -251,6 +282,14 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
         '--representation-sha256', ref.representation_sha256, '--anchor-sha256', ref.anchor_sha256,
         ...(ref.document_id ? ['--document-id', ref.document_id] : []), ...scopeArgs(scope),
       ], stdout => evidenceView(lastJson(stdout)));
+    }
+    case 'writes.status': {
+      const { expect, request_id, kind } = params as Params<'writes.status'>;
+      const argv = kind === 'note' ? ['updates', 'status-v3', '--request-id', request_id] : ['documents', 'status-v2', '--request-id', request_id];
+      const result = await forAccount(method, expect, argv, stdout => writeStatusView(lastJson(stdout), kind));
+      // Nothing stored under this request: it never arrived, so resending is safe.
+      if (!result.ok && result.failure.code === 'not_found') return ok({ state: 'not_saved' as const });
+      return result;
     }
   }
 }

@@ -5,7 +5,7 @@ import {
   Tray, utilityProcess, type IpcMainInvokeEvent, type UtilityProcess,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { lstatSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -24,6 +24,8 @@ const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const test = __ECHO_TEST_HOOK__ ? process.env : {} as NodeJS.ProcessEnv;
 
 if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_USER_DATA) app.setPath('userData', test.ECHO_DESKTOP_USER_DATA);
+// Chromium's own data sits beside ECHO's, never among the kit's releases.
+else if (app.isPackaged) app.setPath('userData', join(app.getPath('appData'), 'ECHO', 'chromium'));
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true } }]);
 
 if (!app.requestSingleInstanceLock()) {
@@ -33,6 +35,27 @@ if (!app.requestSingleInstanceLock()) {
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
+/** A save whose outcome is unknown: quitting asks first. */
+let unresolved = false;
+const shortcutProblems: string[] = [];
+
+// ---- diagnostic log: codes only, never content, tokens or paths ------------
+
+function log(line: string): void {
+  try {
+    const folder = join(app.getPath('userData'), 'logs');
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const file = join(folder, 'desktop.log');
+    if (existsSync(file) && statSync(file).size > 1024 * 1024) renameSync(file, `${file}.1`);
+    appendFileSync(file, `${new Date().toISOString()} ${line}\n`, { mode: 0o600 });
+    chmodSync(file, 0o600);
+  } catch { /* logging never breaks the app */ }
+}
+
+interface BuildInfo { source_sha: string; dirty: boolean }
+function buildInfo(): BuildInfo | null {
+  try { return JSON.parse(readFileSync(join(BUILD, 'build-info.json'), 'utf8')) as BuildInfo; } catch { return null; }
+}
 
 // ---- person host -----------------------------------------------------------
 
@@ -65,8 +88,9 @@ function startHost(): void {
     pending.delete(message.id);
     resolveReply?.(message.result);
   });
-  child.on('exit', () => {
+  child.on('exit', code => {
     host = null;
+    log(`host exit ${code}`);
     for (const [id, resolveReply] of pending) {
       pending.delete(id);
       resolveReply({ ok: false, failure: { code: 'host_restarted', retryable: true } });
@@ -163,11 +187,24 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
     case 'app.quit':
       app.quit();
       return { ok: true, value: null };
+    case 'app.setUnresolved':
+      unresolved = (params as MainMethods['app.setUnresolved']['params']).unresolved === true;
+      return { ok: true, value: null };
   }
   return refused();
 }
 
 ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> => {
+  const started = Date.now();
+  const result = await broker(event, request);
+  const method = typeof (request as { method?: unknown })?.method === 'string' ? (request as { method: string }).method : '?';
+  const requestId = (request as { params?: { request_id?: unknown } })?.params?.request_id;
+  log(`${method.replace(/[^a-zA-Z.]/g, '').slice(0, 40)} ${result.ok ? 'ok' : result.failure.code}` +
+    `${typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId) ? ` ${requestId}` : ''} ${Date.now() - started}ms`);
+  return result;
+});
+
+async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Result<unknown>> {
   if (!trustedSender(event)) return refused('forbidden');
   if (request === null || typeof request !== 'object') return refused();
   const { method, params } = request as { method?: unknown; params?: unknown };
@@ -183,7 +220,7 @@ ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> 
     return callHost(method, { ...rest, file });
   }
   return callHost(method as HostMethodName, value);
-});
+}
 
 function send<N extends EventName>(name: N, payload: Events[N]): void {
   window?.webContents.send('event', { name, payload });
@@ -241,20 +278,35 @@ function trayImage(): Electron.NativeImage {
 }
 
 function createTray(): void {
-  tray = new Tray(trayImage());
+  tray ??= new Tray(trayImage());
   tray.setToolTip('ECHO');
+  const info = buildInfo();
   const menu = Menu.buildFromTemplate([
     { label: 'Open ECHO', accelerator: 'CommandOrControl+E', click: show },
     { label: 'Capture', accelerator: 'CommandOrControl+Shift+E', click: capture },
+    ...shortcutProblems.map(problem => ({ label: problem, enabled: false })),
     { type: 'separator' },
-    { label: 'Quit ECHO', role: 'quit' },
+    ...(info ? [{ label: `Build ${info.source_sha.slice(0, 7)}${info.dirty ? ' (modified)' : ''}`, enabled: false }] : []),
+    { label: 'Quit ECHO', click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
 }
 
 function registerShortcuts(): void {
-  globalShortcut.register('CommandOrControl+E', toggle);
-  globalShortcut.register('CommandOrControl+Shift+E', capture);
+  for (const [accelerator, label, run] of [
+    ['CommandOrControl+E', process.platform === 'darwin' ? '⌘E' : 'Ctrl+E', toggle],
+    ['CommandOrControl+Shift+E', process.platform === 'darwin' ? '⌘⇧E' : 'Ctrl+Shift+E', capture],
+  ] as const) {
+    if (!globalShortcut.register(accelerator, run) || !globalShortcut.isRegistered(accelerator)) {
+      shortcutProblems.push(`${label} is used by another app`);
+    }
+  }
+}
+
+/** macOS needs an Edit menu for copy, paste and undo, even with no menu bar. */
+function applicationMenu(): void {
+  if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return; }
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
 }
 
 app.on('second-instance', (_event, argv) => {
@@ -263,7 +315,16 @@ app.on('second-instance', (_event, argv) => {
 
 app.on('did-resign-active', () => send('lifecycle.conceal', {}));
 app.on('did-become-active', () => send('lifecycle.resume', {}));
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', event => {
+  if (unresolved && !quitting) {
+    const choice = dialog.showMessageBoxSync({
+      type: 'warning', message: 'A note may not have been sent.',
+      detail: 'Check or retry it before quitting, or quit anyway.', buttons: ['Quit Anyway', 'Cancel'], defaultId: 1, cancelId: 1,
+    });
+    if (choice !== 0) { event.preventDefault(); show(); return; }
+  }
+  quitting = true;
+});
 app.on('will-quit', () => { globalShortcut.unregisterAll(); host?.kill(); });
 app.on('window-all-closed', () => { /* stays in the tray */ });
 
@@ -290,9 +351,11 @@ void app.whenReady().then(() => {
     headers.set('content-security-policy', CSP);
     return new Response(file.body, { status: file.status, headers });
   });
+  applicationMenu();
   startHost();
   window = createWindow();
   window.once('ready-to-show', () => { if (!test.ECHO_DESKTOP_HIDDEN) show(); });
-  createTray();
   registerShortcuts();
+  createTray();
+  log('started');
 });

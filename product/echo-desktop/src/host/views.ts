@@ -2,8 +2,8 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerSource, AppStatus, AskScope, Audience, ContextContent, Failure, FeedPage, ProjectPage,
-  ProjectSummary, Receipt, SourceEvidence, SourceRef,
+  Account, Answer, AnswerSource, AppStatus, AskScope, Audience, ContextContent, Failure, FeedItem, FeedPage, ProjectPage,
+  ProjectSummary, Receipt, SourceEvidence, SourceRef, WriteStatus,
 } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
@@ -72,9 +72,11 @@ export function feedView(raw: unknown): FeedPage {
     project_id: text(value.project_id),
     items: list(value.items).map(entry => {
       const item = object(entry);
+      const kind = object(item.audience).kind;
+      const audience: FeedItem['audience'] = kind === 'only_me' ? 'only-me' : kind === 'team' ? 'team' : 'project';
       return {
         context_id: text(item.context_id), title: text(item.title), excerpt: optionalText(item.excerpt) ?? '',
-        received_at: text(item.received_at),
+        received_at: text(item.received_at), audience,
       };
     }),
     next_cursor: optionalText(value.next_cursor) ?? null,
@@ -121,6 +123,13 @@ export function receiptView(raw: unknown, requestId: string, audience: Audience)
   const value = object(raw);
   if (value.request_id !== requestId) throw new ViewError();
   return { request_id: requestId, audience };
+}
+
+/** A note's V3 status, or a document's V2 status: stored means saved. */
+export function writeStatusView(raw: unknown, kind: 'note' | 'document'): WriteStatus {
+  const value = object(kind === 'document' ? unwrap(raw) : raw);
+  if (kind === 'note') return { state: value.kind === 'echo-person-update-status-v3' && value.status === 'stored' ? 'saved' : 'unknown' };
+  return { state: value.state === 'saved' ? 'saved' : 'unknown' };
 }
 
 const RETRYABLE = new Set(['unavailable', 'rate_limited', 'timeout', 'outcome_unknown', 'invalid_output', 'busy']);

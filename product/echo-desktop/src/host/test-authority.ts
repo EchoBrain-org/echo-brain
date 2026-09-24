@@ -2,7 +2,7 @@
 // fixture Authority behind the real person client, the same pattern as
 // tests/fixtures/echo-projects-cli-bridge.mjs. Every request is logged to
 // <home>/calls.jsonl so tests can assert what the app actually sent.
-import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const AUTHORITY = 'https://authority.example';
@@ -17,7 +17,7 @@ interface DesktopFixtures {
 }
 
 interface Store {
-  paths: { live: string };
+  paths: { live: string; refreshing: string; refresh_claim: string };
   install(authority: string, authorityId: string, session: Record<string, string>): unknown;
 }
 
@@ -42,6 +42,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
 
   const store = new SessionStore(realpathSync(home)) as Store;
+  const expired = mode === 'expired-claim';
   if (!existsSync(store.paths.live) && mode !== 'signed-out') {
     store.install(AUTHORITY, 'oau_00000000-0000-4000-8000-000000000001', {
       organization_id: 'org_00000000-0000-4000-8000-000000000001',
@@ -51,9 +52,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
       access_token: 'A'.repeat(43), refresh_token: 'R'.repeat(43),
       access_expires_at: '2026-09-21T22:11:00.000Z', refresh_expires_at: '2026-09-28T22:00:00.000Z',
-      hard_reauthentication_at: '2026-09-28T22:00:00.000Z',
+      hard_reauthentication_at: expired ? '2026-09-21T00:00:00.000Z' : '2026-09-28T22:00:00.000Z',
     });
+    if (expired) {
+      // What a weekly expiry leaves behind: the session set aside under a claim.
+      renameSync(store.paths.live, store.paths.refreshing);
+      writeFileSync(store.paths.refresh_claim, '00000000-0000-4000-8000-000000000099\n', { mode: 0o600 });
+    }
   }
+  let writeAttempts = 0;
 
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input instanceof Request ? input.url : input));
@@ -65,8 +72,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
     if (method === 'GET' && path === '/v1/person/projects') {
       const response = fixture('projects-list');
-      response.items = desktop.projects.map(project => ({ ...(fixture('projects-read')), ...project }));
-      response.next_cursor = null;
+      const all = mode === 'many-projects'
+        ? Array.from({ length: 13 }, (_, index) => ({
+          project_id: `prj_${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`, name: `Project ${index + 1}`, role: 'member',
+        }))
+        : desktop.projects;
+      const second = url.searchParams.get('cursor') === 'cGFnZTI';
+      const page = mode === 'many-projects' ? (second ? all.slice(10) : all.slice(0, 10)) : all;
+      response.items = page.map(project => ({ ...(fixture('projects-read')), ...project }));
+      response.next_cursor = mode === 'many-projects' && !second ? 'cGFnZTI' : null;
       return json(response);
     }
     const read = /^\/v1\/person\/projects\/(prj_[0-9a-f-]+)$/.exec(path);
@@ -90,12 +104,23 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return json(response);
     }
     if (method === 'POST' && path === '/v3/person/updates') {
-      if (mode === 'write-unavailable') return failure('unavailable', 503);
-      return json({
+      writeAttempts += 1;
+      if (mode === 'write-unavailable' || (mode === 'write-unavailable-once' && writeAttempts === 1)) return failure('unavailable', 503);
+      const receipt = {
         schema_version: 3, kind: 'echo-person-update-receipt-v3', request_id: body?.request_id,
         context_id: 'ctx_' + 'c'.repeat(64), received_at: NOW, audience: body?.audience,
         association_project_ids: body?.association_project_ids, state: 'received',
-      }, 202);
+      };
+      writeFileSync(join(home, `saved-${String(body?.request_id)}.json`), JSON.stringify(receipt));
+      return json(receipt, 202);
+    }
+    const noteStatus = /^\/v3\/person\/updates\/([0-9a-f-]+)$/.exec(path);
+    if (method === 'GET' && noteStatus) {
+      const saved = join(home, `saved-${noteStatus[1]}.json`);
+      if (!existsSync(saved)) return failure('not_found', 404);
+      const receipt = JSON.parse(readFileSync(saved, 'utf8')) as Record<string, unknown>;
+      delete receipt.state;
+      return json({ ...receipt, kind: 'echo-person-update-status-v3', status: 'stored', metadata: 'ready' });
     }
     if (method === 'POST' && path === '/v2/person/ask') {
       if (mode === 'ask-unavailable') return failure('unavailable', 503);

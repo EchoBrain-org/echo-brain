@@ -41,6 +41,12 @@ export function Home({ state }: { state: State }) {
   return (
     <div class="column" data-testid="project-list" aria-busy={loading}>
       {items.map(project => <ProjectRow key={project.project_id} project={project} />)}
+      {state.projects.next && (
+        <button type="button" class="link-button more" data-testid="more-projects" disabled={loading} onClick={() => void loadProjects(true)}>
+          More projects
+        </button>
+      )}
+      {failure && <div class="error more">{message(failure)}</div>}
     </div>
   );
 }
