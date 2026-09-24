@@ -5,6 +5,7 @@ import type {
   Answer, AppStatus, AskScope, Audience, ContextContent, Expect, Failure, FeedItem, FileHandle, ProjectSummary, Result,
 } from '../shared/protocol.js';
 import { dropFile, rpc } from './api.js';
+import { message } from './messages.js';
 
 export type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary };
 
@@ -36,6 +37,8 @@ export interface ComposeState {
   hidden: boolean;
   /** Asking once before starting over on an unconfirmed save. */
   confirmNew: boolean;
+  /** A fixed line about the last gesture, such as a file that was not attached. */
+  notice?: string;
 }
 
 export interface State {
@@ -95,18 +98,28 @@ function accountLost(failure: Failure): boolean {
 
 // ---- status and sign-in ------------------------------------------------------
 
+/** The last account signed in here. Signing out and back in as it keeps the drafts. */
+let lastAccount: Expect | null = null;
+
 export async function refreshStatus(): Promise<void> {
   const result = await rpc('app.status', {});
   // Keep what is on screen; with nothing on screen yet, say ECHO could not start.
   if (!result.ok) { set({ booting: false, startFailed: state.status === null || result.failure.code === 'host_failed' }); return; }
-  const previous = state.status?.account;
+  const wasSignedIn = state.status?.signed_in === true;
   const next = result.value.account;
-  const changed = previous?.membership_id !== next?.membership_id || previous?.authority !== next?.authority;
   set({ status: result.value, booting: false, startFailed: false });
-  if (changed) {
-    set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null, compose: null,
+  // Signed out: the sign-in page covers everything until someone signs in.
+  if (!next) return;
+  const same = lastAccount?.authority === next.authority && lastAccount.membership_id === next.membership_id;
+  lastAccount = { authority: next.authority, membership_id: next.membership_id };
+  if (!same) {
+    // Someone else: nothing of the last account's survives, not even a draft.
+    set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null,
       barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false } });
-    if (next) void loadProjects();
+    setCompose(null);
+    void loadProjects();
+  } else if (!wasSignedIn) {
+    void loadProjects();
   }
 }
 
@@ -176,6 +189,15 @@ export async function openProject(project: ProjectSummary): Promise<void> {
     return;
   }
   set({ feed: { projectId: project.project_id, items: [...result.value.items], loading: false } });
+}
+
+/** A save landed in the project on screen: new rows, nothing else moves. */
+async function refreshFeed(projectId: string): Promise<void> {
+  const account = expect();
+  if (!account || state.feed?.projectId !== projectId) return;
+  const result = await rpc('projects.feed', { expect: account, project_id: projectId });
+  if (!result.ok || state.feed?.projectId !== projectId) return;
+  set({ feed: { ...state.feed, items: [...result.value.items], loading: false, failure: undefined } });
 }
 
 export async function openItem(item: FeedItem): Promise<void> {
@@ -249,8 +271,12 @@ export async function copyAnswer(): Promise<void> {
 
 // ---- write and capture -------------------------------------------------------
 
+const NOTE_OR_FILE = 'Send this note before attaching a document.';
+
+/** Main's quit guard: a save on its way or not yet confirmed either way. */
 function unresolvedChanged(): void {
-  void rpc('app.setUnresolved', { unresolved: state.compose?.status === 'unknown' || state.compose?.status === 'checking' });
+  const status = state.compose?.status;
+  void rpc('app.setUnresolved', { unresolved: status === 'sending' || status === 'unknown' || status === 'checking' });
 }
 
 function setCompose(compose: ComposeState | null): void {
@@ -259,24 +285,37 @@ function setCompose(compose: ComposeState | null): void {
   if (before !== compose?.status) unresolvedChanged();
 }
 
-/**
- * Opens the sheet. A hidden draft (or an unresolved save) always comes back
- * as it was; otherwise a new note starts, for the project on screen or Only
- * me. The audience never widens unless the person picks it.
- */
-export function openCompose(file: FileHandle | null = null, project?: ProjectSummary): void {
-  const current = state.compose;
-  if (current && current.status !== 'sent') {
-    const attach = file && !current.file && (current.status === 'editing' || current.status === 'error');
-    setCompose({ ...current, hidden: false, ...(attach ? { file, requestId: crypto.randomUUID(), status: 'editing' as const, failure: undefined } : {}) });
-    return;
-  }
-  const route = state.route;
-  const inProject = project ?? (route.page === 'project' ? route.project : undefined);
-  setCompose({
+function fresh(file: FileHandle | null, target: ComposeTarget, notice?: string): ComposeState {
+  return {
     seq: ++seq, text: '', file, picking: false, status: 'editing', requestId: crypto.randomUUID(), hidden: false, confirmNew: false,
-    target: inProject ? { kind: 'project', project: inProject } : { kind: 'only-me' },
-  });
+    target, ...(notice === undefined ? {} : { notice }),
+  };
+}
+
+/** The project on screen, or Only me. */
+function onScreen(): ComposeTarget {
+  return state.route.page === 'project' ? { kind: 'project', project: state.route.project } : { kind: 'only-me' };
+}
+
+/** A draft that is not sent yet: hidden, being written, or unresolved. */
+function draft(): ComposeState | null {
+  const current = state.compose;
+  return current && current.status !== 'sent' ? current : null;
+}
+
+/** ⊕: the draft comes back as it was, or a new note for the project on screen. */
+export function openCompose(): void {
+  const current = draft();
+  setCompose(current ? { ...current, hidden: false } : fresh(null, onScreen()));
+}
+
+/**
+ * ⌘⇧E, from any app: the draft comes back as it was, or a new note starts
+ * private. Whatever page was left open never picks the audience.
+ */
+export function openCapture(): void {
+  const current = draft();
+  setCompose(current ? { ...current, hidden: false } : fresh(null, { kind: 'only-me' }));
 }
 
 /** Escape or Close hides the sheet and keeps the draft; only a sent note is gone. */
@@ -284,7 +323,7 @@ export function closeCompose(): void {
   const compose = state.compose;
   if (!compose || compose.status === 'sending' || compose.status === 'checking') return;
   if (compose.status === 'sent') { setCompose(null); return; }
-  setCompose({ ...compose, hidden: true, picking: false, confirmNew: false });
+  setCompose({ ...compose, hidden: true, picking: false, confirmNew: false, notice: undefined });
 }
 
 function locked(compose: ComposeState): boolean {
@@ -296,7 +335,8 @@ function editCompose(patch: Partial<ComposeState>): void {
   if (!compose || locked(compose)) return;
   // Any change to what would be sent makes it a new request.
   const changesContent = 'text' in patch || 'target' in patch || 'file' in patch;
-  setCompose({ ...compose, ...patch, ...(changesContent ? { requestId: crypto.randomUUID(), status: 'editing' as const, failure: undefined } : {}) });
+  setCompose({ ...compose, notice: undefined, ...patch,
+    ...(changesContent ? { requestId: crypto.randomUUID(), status: 'editing' as const, failure: undefined } : {}) });
 }
 
 export function setComposeText(text: string): void { editCompose({ text }); }
@@ -307,19 +347,35 @@ export function toggleTargets(): void {
 export function chooseTarget(target: ComposeTarget): void { editCompose({ target, picking: false }); }
 export function removeFile(): void { editCompose({ file: null }); }
 
+/** The paperclip. A note and a file are never sent together. */
 export async function attachFile(): Promise<void> {
+  const compose = state.compose;
+  if (!compose || locked(compose)) return;
+  if (compose.text.trim() !== '') { setCompose({ ...compose, notice: NOTE_OR_FILE }); return; }
   const result = await rpc('dialog.openDocument', {});
   if (result.ok && result.value) editCompose({ file: result.value });
-  else if (!result.ok && state.compose && !locked(state.compose)) setCompose({ ...state.compose, status: 'error', failure: result.failure });
+  else if (!result.ok && state.compose && !locked(state.compose)) setCompose({ ...state.compose, notice: message(result.failure) });
 }
 
+/**
+ * A dropped file. On a Home row it is for that project; elsewhere for the
+ * project on screen or Only me. A draft with words in it, or a save still
+ * unresolved, is never changed: it comes back and says the file was left out.
+ */
 export async function acceptDrop(file: File, project?: ProjectSummary): Promise<void> {
   const result = await dropFile(file);
-  if (!result.ok) {
-    if (state.compose && !locked(state.compose)) setCompose({ ...state.compose, status: 'error', failure: result.failure, hidden: false });
+  const target: ComposeTarget = project ? { kind: 'project', project } : onScreen();
+  const current = draft();
+  if (current && (locked(current) || current.text.trim() !== '')) {
+    setCompose({ ...current, hidden: false, notice: locked(current) ? 'The file was not attached.' : NOTE_OR_FILE });
     return;
   }
-  openCompose(result.value, project);
+  if (!result.ok) {
+    setCompose(current ? { ...current, hidden: false, notice: message(result.failure) } : fresh(null, target, message(result.failure)));
+    return;
+  }
+  // Nothing written yet: the drop starts over, addressed as the gesture says.
+  setCompose(fresh(result.value, target));
 }
 
 function audienceOf(target: ComposeTarget): Audience {
@@ -339,33 +395,34 @@ export async function sendCompose(): Promise<void> {
   const account = expect();
   const compose = state.compose;
   if (!account || !compose || ['sending', 'checking', 'sent'].includes(compose.status)) return;
-  const text = compose.text.trim() === '' ? '' : compose.text;
-  if (text === '' && !compose.file) return;
-  setCompose({ ...compose, status: 'sending', failure: undefined, picking: false, confirmNew: false });
+  if (!compose.file && compose.text.trim() === '') return;
+  const retrying = compose.status === 'unknown';
+  setCompose({ ...compose, status: 'sending', failure: undefined, picking: false, confirmNew: false, notice: undefined });
   const audience = audienceOf(compose.target);
   const projectId = compose.target.kind === 'project' ? compose.target.project.project_id : undefined;
+  const project = projectId === undefined ? {} : { project_id: projectId };
   let result: Result<unknown>;
-  if (compose.file) {
-    const title = text.split('\n').map(line => line.trim()).find(line => line !== '') ?? compose.file.name;
+  if (compose.file && retrying) {
+    // The client kept the original: resend it, not whatever the path holds now.
+    result = await rpc('documents.retry', { expect: account, request_id: compose.requestId, audience });
+  } else if (compose.file) {
     result = await rpc('documents.upload', {
-      expect: account, request_id: compose.requestId, file_handle: compose.file.handle, title,
-      audience, ...(projectId === undefined ? {} : { project_id: projectId }),
+      expect: account, request_id: compose.requestId, file_handle: compose.file.handle, title: compose.file.name, audience, ...project,
     });
   } else {
-    result = await rpc('notes.submit', {
-      expect: account, request_id: compose.requestId, text, audience, ...(projectId === undefined ? {} : { project_id: projectId }),
-    });
+    result = await rpc('notes.submit', { expect: account, request_id: compose.requestId, text: compose.text, audience, ...project });
   }
   const current = state.compose;
   if (current?.seq !== compose.seq) return;
   if (!result.ok) {
-    const unknown = result.failure.mutation_outcome === 'unknown';
+    // Only the Authority's answer settles an unknown save: a failed retry leaves it unknown.
+    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
     setCompose({ ...current, status: unknown ? 'unknown' : 'error', failure: result.failure, hidden: false });
     accountLost(result.failure);
     return;
   }
   setCompose({ ...current, status: 'sent', hidden: false });
-  if (state.route.page === 'project' && projectId === state.route.project.project_id) void openProject(state.route.project);
+  if (state.route.page === 'project' && projectId === state.route.project.project_id) void refreshFeed(projectId);
 }
 
 /** After an unconfirmed outcome: ask the Authority whether it arrived. */
@@ -391,8 +448,7 @@ export function newCompose(): void {
   const compose = state.compose;
   if (!compose) return;
   if (compose.status === 'unknown' && !compose.confirmNew) { setCompose({ ...compose, confirmNew: true }); return; }
-  setCompose(null);
-  openCompose();
+  setCompose(fresh(null, onScreen()));
 }
 
 export function keepUnresolved(): void {

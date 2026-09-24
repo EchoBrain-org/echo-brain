@@ -120,13 +120,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     if (method === 'POST' && path === '/v3/person/updates') {
       writeAttempts += 1;
-      if (mode === 'write-unavailable' || (mode === 'write-unavailable-once' && writeAttempts === 1)) return failure('unavailable', 503);
+      if (mode === 'write-unavailable' || (mode.startsWith('write-unavailable-') && writeAttempts === 1)) return failure('unavailable', 503);
+      if (mode === 'write-unavailable-then-refused') return failure('invalid_request', 400);
       const receipt = {
         schema_version: 3, kind: 'echo-person-update-receipt-v3', request_id: body?.request_id,
         context_id: 'ctx_' + 'c'.repeat(64), received_at: NOW, audience: body?.audience,
         association_project_ids: body?.association_project_ids, state: 'received',
       };
       writeFileSync(join(home, `saved-${String(body?.request_id)}.json`), JSON.stringify(receipt));
+      // Stored, but the reply never comes: the host dies or the app quits first.
+      if (mode === 'write-hangs') return new Promise<Response>(() => undefined);
       return json(receipt, 202);
     }
     const noteStatus = /^\/v3\/person\/updates\/([0-9a-f-]+)$/.exec(path);

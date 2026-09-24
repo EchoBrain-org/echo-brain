@@ -6,26 +6,41 @@ import {
 } from '../store.js';
 import { Check, Chevron, Clip, Close, Up } from './icons.js';
 
-/** Write and Capture: To, the text, send. First line is the title. */
+/** Tab and Shift-Tab stay inside the sheet. */
+function trapTab(event: KeyboardEvent, sheet: HTMLElement | null): void {
+  if (event.key !== 'Tab' || !sheet) return;
+  const focusable = [...sheet.querySelectorAll<HTMLElement>('button:not([disabled]), textarea, [tabindex="0"]')];
+  if (focusable.length === 0) return;
+  const first = focusable[0]!;
+  const last = focusable[focusable.length - 1]!;
+  const inside = sheet.contains(document.activeElement);
+  if (event.shiftKey && (document.activeElement === first || !inside)) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && (document.activeElement === last || !inside)) { event.preventDefault(); first.focus(); }
+}
+
+/** Write and Capture: To, then a note or a file, then send. A note's first line is its title. */
 export function Compose({ state }: { state: State }) {
   const compose = state.compose!;
   const body = useRef<HTMLTextAreaElement>(null);
   const sheet = useRef<HTMLDivElement>(null);
+  const done = useRef<HTMLButtonElement>(null);
   const [over, setOver] = useState(false);
-  useEffect(() => { if (!compose.hidden) body.current?.focus(); }, [compose.seq, compose.hidden]);
+  useEffect(() => { if (!compose.hidden) (body.current ?? sheet.current)?.focus(); }, [compose.seq, compose.hidden, compose.file]);
   // When the footer changes under the focused control, keep focus in the sheet.
   useEffect(() => {
+    if (compose.status === 'sent') { done.current?.focus(); return; }
     if (sheet.current && !sheet.current.contains(document.activeElement)) sheet.current.focus();
   }, [compose.status, compose.confirmNew]);
 
   if (compose.status === 'sent') {
     return (
       <div class="overlay" onClick={closeCompose}>
-        <div class="sheet" role="dialog" aria-label="Sent" onClick={event => event.stopPropagation()}>
+        <div class="sheet" role="dialog" aria-label="Sent" ref={sheet} onClick={event => event.stopPropagation()}
+          onKeyDown={event => trapTab(event, sheet.current)}>
           <div class="sent" data-testid="sent">
             <div class="check"><Check /></div>
             <div class="what">{sentLabel(compose.target)}</div>
-            <button type="button" class="plain-button" data-testid="compose-done" autoFocus onClick={closeCompose}>Done</button>
+            <button type="button" class="plain-button" data-testid="compose-done" ref={done} onClick={closeCompose}>Done</button>
           </div>
         </div>
       </div>
@@ -52,6 +67,7 @@ export function Compose({ state }: { state: State }) {
         onKeyDown={event => {
           // Escape is handled once, at the window: it hides the sheet and keeps the draft.
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !unresolved) { event.preventDefault(); void sendCompose(); }
+          trapTab(event, sheet.current);
         }}
         onDragOver={event => { event.preventDefault(); setOver(true); }}
         onDragLeave={() => setOver(false)}
@@ -79,17 +95,27 @@ export function Compose({ state }: { state: State }) {
             ))}
           </div>
         )}
-        <label for="compose-body" class="sr-only">What happened?</label>
-        <textarea
-          id="compose-body" ref={body} data-testid="compose-body" placeholder="What happened?" readOnly={locked}
-          value={compose.text} onInput={event => setComposeText((event.target as HTMLTextAreaElement).value)}
-        />
-        {compose.file && (
-          <div class="file-chip" data-testid="compose-file">
-            <span>{compose.file.name}</span>
-            <button type="button" aria-label="Remove file" onClick={removeFile} disabled={locked}><Close /></button>
-          </div>
+        {compose.target.kind === 'team' && (
+          <div class="warning" data-testid="compose-warning">Everyone in your organization will be able to read this.</div>
         )}
+        {compose.file ? (
+          // A file goes on its own: its name is the title, and there is no note to lose.
+          <div class="file-only">
+            <div class="file-chip" data-testid="compose-file">
+              <span>{compose.file.name}</span>
+              <button type="button" aria-label="Remove file" data-testid="compose-remove-file" onClick={removeFile} disabled={locked}><Close /></button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <label for="compose-body" class="sr-only">What happened?</label>
+            <textarea
+              id="compose-body" ref={body} data-testid="compose-body" placeholder="What happened?" readOnly={locked}
+              value={compose.text} onInput={event => setComposeText((event.target as HTMLTextAreaElement).value)}
+            />
+          </>
+        )}
+        {compose.notice && <div class="notice-line" data-testid="compose-notice" aria-live="polite">{compose.notice}</div>}
         {unresolved ? (
           <div class="unresolved" data-testid="compose-unresolved" aria-live="polite">
             {compose.confirmNew ? (
@@ -115,7 +141,9 @@ export function Compose({ state }: { state: State }) {
           </div>
         ) : (
           <div class="sheet-foot">
-            <button type="button" class="circle" aria-label="Attach a file" data-testid="compose-attach" onClick={() => void attachFile()} disabled={locked}><Clip /></button>
+            {!compose.file && (
+              <button type="button" class="circle" aria-label="Attach a file" data-testid="compose-attach" onClick={() => void attachFile()} disabled={locked}><Clip /></button>
+            )}
             <div class="status" aria-live="polite">
               {compose.status === 'sending' && <span class="notice">Sending</span>}
               {compose.status === 'error' && compose.failure && <span class="error" data-testid="compose-error">{message(compose.failure)}</span>}

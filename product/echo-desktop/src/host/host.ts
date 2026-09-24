@@ -1,7 +1,7 @@
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
 // token; what it posts back is a token-free view model or a failure code.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -63,6 +63,10 @@ async function load(): Promise<ClientModules> {
     dependencies, now,
   };
 }
+// A note's text left behind by a host that was stopped mid-send.
+try {
+  for (const name of readdirSync(tmpdir())) if (name.startsWith('echo-note-')) rmSync(join(tmpdir(), name), { recursive: true, force: true });
+} catch { /* best effort */ }
 const modules = load();
 modules.catch(error => { console.error('person host failed to load the client:', error); });
 

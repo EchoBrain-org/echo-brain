@@ -8,7 +8,7 @@ import { Back } from './screens/icons.js';
 import { Project } from './screens/project.js';
 import { SignIn } from './screens/signin.js';
 import {
-  acceptDrop, closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, hostFailed, openCompose, refreshStatus,
+  acceptDrop, closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, hostFailed, openCapture, refreshStatus,
   resume, retryStart, signinPhase, useStore,
 } from './store.js';
 
@@ -30,7 +30,7 @@ function App() {
   useEffect(() => {
     void refreshStatus();
     const stops = [
-      on('capture.open', () => { if (getState().status?.signed_in) openCompose(); }),
+      on('capture.open', () => { if (getState().status?.signed_in) openCapture(); }),
       on('lifecycle.conceal', conceal),
       on('lifecycle.resume', resume),
       on('window.shown', () => { if (!getState().concealed) void refreshStatus(); }),
