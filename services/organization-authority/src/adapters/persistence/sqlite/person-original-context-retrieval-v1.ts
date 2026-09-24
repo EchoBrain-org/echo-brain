@@ -31,6 +31,7 @@ type SourceRow = {
   readonly title: string;
   readonly text: string;
   readonly received_at: string;
+  readonly lexical_score: number;
 };
 type DocumentRow = {
   readonly source_id: string;
@@ -53,6 +54,7 @@ type DocumentRow = {
   readonly original_size: number;
   readonly detected_media_type: string;
   readonly received_at: string;
+  readonly lexical_score: number;
 };
 
 interface Sessions {
@@ -67,12 +69,34 @@ function unavailable(): never {
   throw new AuthorityOperationError("unavailable", "person source retrieval is unavailable");
 }
 
+// Closed English function words only. No domain synonyms, stemming, or semantic
+// expansion: project IDs, negation, numbers and subject words remain intact.
+const QUERY_FUNCTION_WORDS = new Set([
+  "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+  "do", "does", "did", "can", "could", "should", "would", "will",
+  "what", "which", "who", "whom", "whose", "where", "when", "why", "how",
+  "i", "me", "my", "we", "our", "you", "your", "it", "its", "they", "their",
+  "this", "that", "these", "those", "of", "to", "for", "from", "in", "on",
+  "at", "with", "by", "and", "or", "as", "about",
+]);
+
+function lexicalScore(title: string, text: string, terms: readonly string[]): number {
+  const value = `${title}\n${text}`.normalize("NFC").toLocaleLowerCase("en-US");
+  // Preserve the original substring matching contract, but rank by distinct
+  // matched terms. Repetition cannot boost a source's score.
+  return terms.reduce((score, term) => score + (value.includes(term) ? 1 : 0), 0);
+}
+
 function queryTerms(query: string): readonly string[] {
-  const terms = [...new Set((query.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) => term.toLowerCase().normalize("NFC")))];
+  const runs = query.normalize("NFC").match(/[\p{L}\p{N}]+/gu) ?? [];
+  // CAN and IT are meaningful engineering/team names, even though their
+  // lowercase forms are common function words in a natural question.
+  const acronyms = new Set(runs.filter(term => /^[A-Z]{2,}$/.test(term)).map(term => term.toLowerCase()));
+  const terms = [...new Set(runs.map(term => term.toLowerCase().normalize("NFC")))];
   if (terms.length === 0 || terms.length > 32) {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
-  return terms;
+  return terms.filter(term => !QUERY_FUNCTION_WORDS.has(term) || acronyms.has(term));
 }
 
 function packets(title: string, body: string): readonly string[] {
@@ -107,10 +131,12 @@ function packets(title: string, body: string): readonly string[] {
 
 function matchingPacket(title: string, body: string, terms: readonly string[]): { readonly index: number; readonly text: string } {
   const values = packets(title, body);
-  const lowered = values.map((value) => value.toLocaleLowerCase("en-US"));
-  const index = lowered.findIndex((value) => terms.every((term) => value.includes(term))) >= 0
-    ? lowered.findIndex((value) => terms.every((term) => value.includes(term)))
-    : lowered.findIndex((value) => terms.some((term) => value.includes(term)));
+  let index = -1;
+  let bestScore = 0;
+  for (let candidate = 0; candidate < values.length; candidate += 1) {
+    const score = lexicalScore("", values[candidate]!, terms);
+    if (score > bestScore) { bestScore = score; index = candidate; }
+  }
   if (index < 0) unavailable();
   return Object.freeze({ index, text: values[index]! });
 }
@@ -138,9 +164,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     private readonly sessions: Sessions,
     private readonly organizationId: string,
   ) {
-    database.function("echo_original_context_contains_v1", { deterministic: true }, (title, text, term) =>
-      typeof title === "string" && typeof text === "string" && typeof term === "string" &&
-      `${title}\n${text}`.normalize("NFC").toLocaleLowerCase("en-US").includes(term.normalize("NFC").toLocaleLowerCase("en-US")) ? 1 : 0);
+    // The query parameter is a bound, adapter-created JSON array of validated terms.
+    database.function("echo_original_context_score_v1", { deterministic: true }, (title, text, query) =>
+      typeof title === "string" && typeof text === "string" && typeof query === "string"
+        ? lexicalScore(title, text, JSON.parse(query) as readonly string[]) : 0);
   }
 
   retrieve(input: {
@@ -161,10 +188,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const counts: number[] = [];
     for (const query of input.queries) {
       const terms = queryTerms(query);
+      if (terms.length === 0) { counts.push(0); continue; }
       const rows = [
         ...this.textRows(actor, input.scope, terms),
         ...this.documentRows(actor, input.scope, terms),
-      ].sort((left, right) => right.received_at.localeCompare(left.received_at)).slice(0, MAXIMUM_RESULTS_PER_QUERY);
+      ].sort((left, right) => right.lexical_score - left.lexical_score
+        || right.received_at.localeCompare(left.received_at)
+        || left.source_id.localeCompare(right.source_id)
+        || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0)).slice(0, MAXIMUM_RESULTS_PER_QUERY);
       counts.push(rows.length);
       for (const row of rows) {
         const atom = "document_id" in row
@@ -272,21 +303,20 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private textRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[]): readonly SourceRow[] {
     const acl = this.acl(actor, "u");
-    const conditions = terms.map(() => "echo_original_context_contains_v1(u.title,u.text,?)=1");
     const scopeSql = scope.kind === "project"
       ? "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)"
       : "";
     const updates = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
       UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
-    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at
+    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,echo_original_context_score_v1(u.title,u.text,?) AS lexical_score
       FROM ${updates} u
       JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       WHERE u.organization_id=? AND ${acl.sql} ${scopeSql}
-        AND ${conditions.join(" AND ")}
-      ORDER BY u.received_at DESC,u.context_id LIMIT ?`;
-    const args = [actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), ...terms, MAXIMUM_RESULTS_PER_QUERY];
+        AND lexical_score > 0
+      ORDER BY lexical_score DESC,u.received_at DESC,s.source_id LIMIT ?`;
+    const args = [JSON.stringify(terms), actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), MAXIMUM_RESULTS_PER_QUERY];
     return this.database.prepare(sql).all(...args) as readonly SourceRow[];
   }
 
@@ -297,8 +327,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       : "";
     // The admitted source binds filename, but not the document's display title.
     // Use the verified filename for both matching and the packet's title field.
-    const conditions = terms.map(() => "echo_original_context_contains_v1(d.filename,t.text,?)=1");
-    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at
+    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at,echo_original_context_score_v1(d.filename,t.text,?) AS lexical_score
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_text_v1 t ON t.document_id=d.document_id
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial') AND work.extractor=t.extractor
@@ -307,9 +336,9 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       JOIN authority_source_representations_v1 representation ON representation.organization_id=r.organization_id AND representation.source_id=r.source_id AND representation.revision_id=r.revision_id AND representation.processor_version=t.extractor
       WHERE d.organization_id=? AND ${acl.sql} ${scopeSql}
-        AND ${conditions.join(" AND ")}
-      ORDER BY d.received_at DESC,d.document_id,t.ordinal LIMIT ?`;
-    const args = [actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), ...terms, MAXIMUM_RESULTS_PER_QUERY];
+        AND lexical_score > 0
+      ORDER BY lexical_score DESC,d.received_at DESC,s.source_id,t.ordinal LIMIT ?`;
+    const args = [JSON.stringify(terms), actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), MAXIMUM_RESULTS_PER_QUERY];
     return this.database.prepare(sql).all(...args) as readonly DocumentRow[];
   }
 
