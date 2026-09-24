@@ -1,0 +1,25 @@
+{
+  "projects": [
+    { "project_id": "prj_11111111-1111-4111-8111-111111111111", "name": "Apollo", "role": "lead" },
+    { "project_id": "prj_44444444-4444-4444-8444-444444444444", "name": "Beacon", "role": "member" }
+  ],
+  "answer": {
+    "schema_version": 3,
+    "kind": "echo-clean-person-answer-v3",
+    "answer": "We agreed to ship Apollo with annual plans first.",
+    "citations": [
+      {
+        "kind": "source_revision",
+        "source_id": "source:1111111111111111111111111111111111111111111111111111111111111111",
+        "revision_id": "rev-1",
+        "source_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "representation_sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "anchor_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "label": "Apollo update"
+      }
+    ],
+    "scope": { "kind": "global" }
+  },
+  "evidence_label": "Apollo update",
+  "evidence_text": "We agreed to ship."
+}
