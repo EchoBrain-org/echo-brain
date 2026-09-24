@@ -8,11 +8,18 @@ import { Back } from './screens/icons.js';
 import { Project } from './screens/project.js';
 import { SignIn } from './screens/signin.js';
 import {
-  acceptDrop, closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, hostFailed, openCapture, refreshStatus,
+  acceptDrop, closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, hostFailed, openCapture, refreshHome, refreshStatus,
   resume, retryStart, signinPhase, useStore,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
+
+/** The caret waits in the ask bar whenever the window comes forward, unless a sheet is up. */
+function focusBar(): void {
+  const compose = getState().compose;
+  if (compose && !compose.hidden) return;
+  requestAnimationFrame(() => document.getElementById('ask-field')?.focus());
+}
 
 /** Escape steps back one level: compose, source, answer, reader, project. */
 function back(): void {
@@ -28,12 +35,16 @@ function App() {
   const state = useStore();
 
   useEffect(() => {
-    void refreshStatus();
+    void refreshStatus().then(focusBar);
     const stops = [
       on('capture.open', () => { if (getState().status?.signed_in) openCapture(); }),
       on('lifecycle.conceal', conceal),
       on('lifecycle.resume', resume),
-      on('window.shown', () => { if (!getState().concealed) void refreshStatus(); }),
+      on('window.shown', () => {
+        if (getState().concealed) return;
+        void refreshStatus().then(refreshHome);
+        focusBar();
+      }),
       on('signin.phase', payload => signinPhase(payload.browser_opened)),
       on('host.restarted', () => { void refreshStatus(); }),
       on('host.failed', hostFailed),

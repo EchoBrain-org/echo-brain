@@ -103,6 +103,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const project = desktop.projects.find(entry => entry.project_id === read[1]);
       return project ? json({ ...fixture('projects-read'), ...project }) : failure('not_found', 404);
     }
+    if (method === 'POST' && path === '/v2/person/projects/context/feed' && mode === 'feed-unauthorized') {
+      return failure('unauthorized', 401);
+    }
     if (method === 'POST' && path === '/v2/person/projects/context/feed') {
       const response = fixture('projects-feed');
       response.schema_version = 2; response.kind = 'echo-project-context-feed-v2';
@@ -142,13 +145,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     if (method === 'POST' && path === '/v2/person/ask') {
       if (mode === 'ask-unavailable') return failure('unavailable', 503);
+      if (mode === 'ask-hangs') return new Promise<Response>(() => undefined);
       const scope = typeof body?.project_id === 'string' ? { kind: 'project', project_id: body.project_id } : { kind: 'global' };
       return json({ ...desktop.answer, scope });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       return json({
         schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: body?.scope,
-        citation: { ...(body?.citation as Record<string, unknown>), label: desktop.evidence_label }, text: desktop.evidence_text,
+        citation: { ...(body?.citation as Record<string, unknown>), label: desktop.evidence_label },
+        text: mode === 'long-evidence' ? 'x'.repeat(3_000) : desktop.evidence_text,
       });
     }
     return failure('not_found', 404);

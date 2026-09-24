@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
 import { message } from '../messages.js';
@@ -24,9 +24,18 @@ function ProjectRow({ project }: { project: ProjectSummary }) {
   );
 }
 
+/** Where the list was scrolled when a project opened; Back returns there. */
+let savedScroll = 0;
+
 /** Your projects, one line each, in the middle of an otherwise blank page. */
 export function Home({ state }: { state: State }) {
   const { items, loading, failure } = state.projects;
+  const list = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = list.current;
+    if (element) element.scrollTop = savedScroll;
+    return () => { if (element) savedScroll = element.scrollTop; };
+  }, [list.current]);
   if (failure && items.length === 0) {
     return (
       <div class="column center" data-testid="home-error">
@@ -39,7 +48,7 @@ export function Home({ state }: { state: State }) {
     return <div class="column center" data-testid="home-empty"><div>No projects yet</div></div>;
   }
   return (
-    <div class="column" data-testid="project-list" aria-busy={loading}>
+    <div class="column" data-testid="project-list" aria-busy={loading} ref={list}>
       {items.map(project => <ProjectRow key={project.project_id} project={project} />)}
       {state.projects.next && (
         <button type="button" class="link-button more" data-testid="more-projects" disabled={loading} onClick={() => void loadProjects(true)}>

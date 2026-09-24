@@ -399,6 +399,8 @@ if (__ECHO_TEST_HOOK__) {
   (app as unknown as NodeJS.EventEmitter).on('echo-test:conceal', () => send('lifecycle.conceal', {}));
   (app as unknown as NodeJS.EventEmitter).on('echo-test:resume', () => send('lifecycle.resume', {}));
   (app as unknown as NodeJS.EventEmitter).on('echo-test:kill-host', () => { host?.kill(); });
+  // What show() tells the page, without putting a window on the test machine's screen.
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:shown', () => send('window.shown', {}));
 }
 
 /**

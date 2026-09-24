@@ -8,7 +8,7 @@ const MESSAGES: Record<string, string> = {
   unavailable: 'ECHO is unavailable right now. Try again.',
   timeout: 'That took too long. Try again.',
   rate_limited: 'Too many requests. Try again in a moment.',
-  not_found: 'This is not available to you.',
+  not_found: 'This is no longer available to you.',
   unauthorized: 'Your access changed. Sign in again.',
   stale_access_state: 'Your access changed. Sign in again.',
   sign_in_required: 'Sign in again to continue.',

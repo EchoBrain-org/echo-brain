@@ -50,6 +50,6 @@ export async function launch(mode = ''): Promise<Launched> {
   };
 }
 
-export function emit(app: ElectronApplication, event: 'echo-test:capture' | 'echo-test:conceal' | 'echo-test:resume' | 'echo-test:kill-host') {
+export function emit(app: ElectronApplication, event: 'echo-test:capture' | 'echo-test:conceal' | 'echo-test:resume' | 'echo-test:kill-host' | 'echo-test:shown') {
   return app.evaluate(({ app: electronApp }, name) => { electronApp.emit(name); }, event);
 }

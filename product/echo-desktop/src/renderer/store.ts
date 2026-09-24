@@ -50,7 +50,7 @@ export interface State {
   reader: { contextId: string; loading: boolean; content?: ContextContent; failure?: Failure } | null;
   barScope: AskScope;
   ask: AskState | null;
-  evidence: { label: string; loading: boolean; text?: string; failure?: Failure } | null;
+  evidence: { seq: number; label: string; loading: boolean; text?: string; failure?: Failure } | null;
   compose: ComposeState | null;
   concealed: boolean;
   signin: { phase: 'idle' | 'waiting' | 'failed'; failure?: Failure; browserOpened?: boolean };
@@ -87,13 +87,15 @@ function expect(): Expect | null {
   return account ? { authority: account.authority, membership_id: account.membership_id } : null;
 }
 
-/** Signed out or switched under us: go back to a fresh status. */
-function accountLost(failure: Failure): boolean {
+/**
+ * Signed out or switched under us: re-read the account. The page that failed
+ * still shows its failure, so nothing is left loading when the account is the
+ * same one after all.
+ */
+function accountLost(failure: Failure): void {
   if (['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'].includes(failure.code)) {
     void refreshStatus();
-    return true;
   }
-  return false;
 }
 
 // ---- status and sign-in ------------------------------------------------------
@@ -101,8 +103,12 @@ function accountLost(failure: Failure): boolean {
 /** The last account signed in here. Signing out and back in as it keeps the drafts. */
 let lastAccount: Expect | null = null;
 
+let statusSeq = 0;
+
 export async function refreshStatus(): Promise<void> {
+  const mine = ++statusSeq;
   const result = await rpc('app.status', {});
+  if (mine !== statusSeq) return; // a newer read is on its way
   // Keep what is on screen; with nothing on screen yet, say ECHO could not start.
   if (!result.ok) { set({ booting: false, startFailed: state.status === null || result.failure.code === 'host_failed' }); return; }
   const wasSignedIn = state.status?.signed_in === true;
@@ -161,7 +167,8 @@ export async function loadProjects(more = false): Promise<void> {
   set({ projects: { ...state.projects, loading: true, failure: undefined } });
   const result = await rpc('projects.list', { expect: account, ...(cursor ? { cursor } : {}) });
   if (!result.ok) {
-    if (!accountLost(result.failure)) set({ projects: { ...state.projects, loading: false, failure: result.failure } });
+    accountLost(result.failure);
+    set({ projects: { ...state.projects, loading: false, failure: result.failure } });
     return;
   }
   const seen = new Set(more ? state.projects.items.map(project => project.project_id) : []);
@@ -169,9 +176,26 @@ export async function loadProjects(more = false): Promise<void> {
   set({ projects: { items, next: result.value.next_cursor, loading: false } });
 }
 
+/** Back to Home as it was left: the same pages, the same scroll. */
 export function goHome(): void {
   set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null, barScope: { kind: 'global' } });
-  void loadProjects();
+}
+
+/**
+ * The window came forward on Home: re-read the first page and keep the pages
+ * loaded after it, so More projects is not lost.
+ */
+export async function refreshHome(): Promise<void> {
+  const account = expect();
+  if (!account || state.route.page !== 'home' || state.projects.loading) return;
+  const result = await rpc('projects.list', { expect: account });
+  if (!result.ok) { accountLost(result.failure); return; }
+  if (state.route.page !== 'home') return;
+  const first = result.value.items;
+  const seen = new Set(first.map(project => project.project_id));
+  const loadedMore = state.projects.items.length > first.length;
+  const later = loadedMore ? state.projects.items.slice(first.length).filter(project => !seen.has(project.project_id)) : [];
+  set({ projects: { items: [...first, ...later], next: loadedMore ? state.projects.next : result.value.next_cursor, loading: false } });
 }
 
 export async function openProject(project: ProjectSummary): Promise<void> {
@@ -185,7 +209,8 @@ export async function openProject(project: ProjectSummary): Promise<void> {
   const result = await rpc('projects.feed', { expect: account, project_id: project.project_id });
   if (state.feed?.projectId !== project.project_id) return; // moved on
   if (!result.ok) {
-    if (!accountLost(result.failure)) set({ feed: { projectId: project.project_id, items: [], loading: false, failure: result.failure } });
+    accountLost(result.failure);
+    set({ feed: { projectId: project.project_id, items: [], loading: false, failure: result.failure } });
     return;
   }
   set({ feed: { projectId: project.project_id, items: [...result.value.items], loading: false } });
@@ -208,7 +233,8 @@ export async function openItem(item: FeedItem): Promise<void> {
   const result = await rpc('projects.readContext', { expect: account, project_id: route.project.project_id, context_id: item.context_id });
   if (state.reader?.contextId !== item.context_id) return;
   if (!result.ok) {
-    if (!accountLost(result.failure)) set({ reader: { contextId: item.context_id, loading: false, failure: result.failure } });
+    accountLost(result.failure);
+    set({ reader: { contextId: item.context_id, loading: false, failure: result.failure } });
     return;
   }
   set({ reader: { contextId: item.context_id, loading: false, content: result.value } });
@@ -237,29 +263,34 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
   const result = await rpc('ask.run', { expect: account, question: text, scope });
   if (state.ask?.seq !== mine) return;
   if (!result.ok) {
-    if (!accountLost(result.failure)) set({ ask: { ...state.ask, status: 'error', failure: result.failure } });
+    accountLost(result.failure);
+    set({ ask: { ...state.ask, status: 'error', failure: result.failure } });
     return;
   }
   set({ ask: { ...state.ask, status: 'answer', answer: result.value } });
 }
 
 export function closeAsk(): void { set({ ask: null, evidence: null }); }
+/** Stop waiting: a late answer is dropped. */
+export const cancelAsk = closeAsk;
 
 export async function openSource(index: number): Promise<void> {
   const account = expect();
   const current = state.ask;
   const source = current?.answer?.sources[index];
   if (!account || !current || !source?.ref) return;
-  set({ evidence: { label: source.label, loading: true } });
+  const mine = ++seq;
+  set({ evidence: { seq: mine, label: source.label, loading: true } });
   const result = await rpc('ask.source', { expect: account, scope: current.scope, ref: source.ref });
   // Replies that land while another app is in front are dropped, not shown later.
-  if (state.ask?.seq !== current.seq || state.evidence?.label !== source.label) return;
+  if (state.ask?.seq !== current.seq || state.evidence?.seq !== mine) return;
   if (state.concealed) { set({ evidence: null }); return; }
   if (!result.ok) {
-    if (!accountLost(result.failure)) set({ evidence: { label: source.label, loading: false, failure: result.failure } });
+    accountLost(result.failure);
+    set({ evidence: { seq: mine, label: source.label, loading: false, failure: result.failure } });
     return;
   }
-  set({ evidence: { label: result.value.label, loading: false, text: result.value.text } });
+  set({ evidence: { seq: mine, label: result.value.label, loading: false, text: result.value.text } });
 }
 
 export function closeSource(): void { set({ evidence: null }); }
