@@ -18,7 +18,7 @@ describe.skipIf(process.platform !== "darwin")("native project CLI boundary", ()
       ...["ui-support", "account", "projects", "uploads"].map(name => join(repo, `product/echo-overlay/${name}.swift`)),
       join(repo, "tests/fixtures/echo-projects-proof.swift"), "-o", binary], { stdio: "pipe", timeout: 120_000 });
   }, 120_000);
-  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "restart-recovery", "restart-create", "malformed-recovery", "recovery-store-failure", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow", "ui-people", "ui-associate", "ui-recovery", "ui-recovery-pending", "ui-create", "ui-create-skip", "ui-create-read-fail", "ui-create-account", "ui-drop", "ui-search-controls", "ui-documents", "ui-back", "ui-home-back", "ui-upload-sharing"])("handles %s", mode => {
+  it.each(["frozen-fixtures", "strict-replies", "independent-recovery", "round-trip", "unsupported", "inaccessible", "account-clear", "uncertain-mutation", "restart-recovery", "restart-create", "malformed-recovery", "recovery-store-failure", "ui-round-trip", "ui-member", "ui-access-loss", "cli-round-trip", "cli-unsupported", "cli-uncertain-mutation", "cli-ui-round-trip", "switch-project", "switch-account", "pagination", "demoted", "ui-upload-rejected", "ui-upload-unknown", "cli-ui-upload-unknown", "uncertain-overflow", "ui-people", "ui-associate", "ui-recovery", "ui-recovery-pending", "ui-create", "ui-create-skip", "ui-create-read-fail", "ui-create-account", "ui-drop", "ui-search-controls", "ui-documents", "ui-back", "ui-home-back", "ui-upload-sharing", "ui-refresh", "ui-refresh-queued", "ui-refresh-revoked", "ui-refresh-empty"])("handles %s", mode => {
     const folder = mkdtempSync(join(root, "case-"));
     const script = join(folder, "client.mjs");
     const executable = join(folder, "echo-brain");
@@ -36,6 +36,10 @@ if (args[1] === 'status') {
   console.log(JSON.stringify({schema_version:1,kind:'echo-person-client-status-v1',signed_in:true,display_name:'Ari',membership_type:'employee',connected_authority:'https://authority.example',installed_version:'1',membership_id:mode === 'switch-account' && calls.some(x => x[2] === 'read') ? 'mem_33333333-3333-4333-8333-333333333333' : 'mem_22222222-2222-4222-8222-222222222222',client_build:{source_sha:'a'.repeat(40),source_kind:'materialized-commit'}}));
 } else {
   const id = args[1]+'-'+args[2];
+  if (mode.startsWith('ui-refresh') && id === 'projects-list') await new Promise(resolve => setTimeout(resolve, 500));
+  if (mode === 'ui-refresh-revoked' && id === 'projects-list' && calls.filter(x => x[1] === 'projects' && x[2] === 'list').length > 1) {
+    console.error(JSON.stringify({ok:false,action:id,error:'Access revoked',code:'forbidden',status:403})); process.exit(1);
+  }
   if ((mode === 'unsupported' && id === 'projects-list') || (mode === 'inaccessible' && id === 'projects-read')) {
     console.error(JSON.stringify(errors.find(x => x.id === (mode === 'unsupported' ? 'unavailable-project-capability' : 'individual-project-non-disclosure')).cli)); process.exit(1);
   }
@@ -93,6 +97,7 @@ if (args[1] === 'status') {
     response.items.push({...response.items[0],project_id:beacon,name:'Beacon'});
     if (mode === 'ui-member') response.items.forEach(x => x.role = 'member');
   }
+  if (mode === 'ui-refresh-empty' && id === 'projects-list' && calls.filter(x => x[1] === 'projects' && x[2] === 'list').length > 1) response.items = [];
   if (mode === 'ui-home-back' && id === 'projects-list') {
     const names=['Apollo','Beacon','Cinder','Delta','Ember','Fjord','Grove','Harbor','Ion','Juniper','Kite','Lumen','Mica','Nova','Orbit'];
     const rows=names.map((name,index)=>({...response.items[0],project_id:index===0?'prj_11111111-1111-4111-8111-111111111111':'prj_'+String(index+1).padStart(8,'0')+'-0000-4000-8000-'+String(index+1).padStart(12,'0'),name}));
@@ -175,6 +180,10 @@ if (args[1] === 'status') {
     }
     const result = spawnSync(binary, [mode, fixtures, executable], { encoding: "utf8", timeout: 90_000 });
     expect(result.status, result.stderr + result.stdout).toBe(0);
+    if (mode === "ui-refresh-queued") {
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+      expect(calls.filter(args => args[1] === "projects" && args[2] === "list")).toHaveLength(3);
+    }
     if (mode === "uncertain-mutation" || mode === "cli-uncertain-mutation" || mode === "uncertain-overflow") {
       const calls = readFileSync(log, "utf8").trim().split("\n").map(line => (mode.startsWith("cli-") ? JSON.parse(line).args : JSON.parse(line)) as string[]);
       const writes = calls.filter(args => args[2] === "member-set");
@@ -275,10 +284,10 @@ if (args[1] === 'status') {
         expect(submits.map(args => flag(args, "--title"))).toEqual(["Alpha", "Beta"]);
       }
       if (mode === "ui-home-back") {
-        // Initial page, explicit More projects, then fresh home page and its
-        // single bounded restoration page. A stale cursor must not loop.
+        // Initial page + More, same-account refresh, and two navigation
+        // returns each fetch exactly two pages. A stale cursor must not loop.
         expect(op("list").map(args => args.includes("--cursor") ? flag(args, "--cursor") : undefined))
-          .toEqual([undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ", undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ", undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ"]);
+          .toEqual(Array.from({ length: 4 }, () => [undefined, "eyJsYXN0IjoiaG9tZS1wYWdlLTIifQ"]).flat());
       }
       if (mode === "ui-upload-sharing") {
         expect(submits).toHaveLength(1);
