@@ -298,6 +298,8 @@ export interface AnswerCompositionFailureDiagnosticV1 {
 }
 
 export interface RetrievalGroundedAnswerCompositionOptions {
+  /** V2 Person Ask uses the validated question directly; legacy callers retain model planning. */
+  readonly planning?: "model" | "question";
   readonly planner: StructuredGenerationPort;
   readonly answerer: StructuredGenerationPort;
   readonly released_retrieval: ReleasedRetrievalPort;
@@ -981,7 +983,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
       let plannerRequest: AuditedStructuredGenerationInput | null = null;
       input.signal?.throwIfAborted();
       let plan: readonly string[];
-      if (authorshipUnsupported) {
+      if (authorshipUnsupported || options.planning === "question") {
         plan = Object.freeze([question]);
         reportStage(options, {
           stage: "planner",
@@ -1421,6 +1423,7 @@ export function createRetrievalGroundedAnswerComposition(options: RetrievalGroun
           ),
           prompt_sha256: digest({
             generation_adapter_id: generationAdapterId,
+            ...(options.planning === "question" ? { planning: "question", queries: plan } : {}),
             planner: plannerRequest,
             answer: answerRequest,
           }),

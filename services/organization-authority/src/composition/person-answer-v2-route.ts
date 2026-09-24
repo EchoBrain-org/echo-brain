@@ -232,6 +232,7 @@ export function createPersonAnswerV2Route(
       });
       try {
       const result = await createRetrievalGroundedAnswerComposition({
+        planning: "question",
         planner: options.model,
         answerer: options.model,
         released_retrieval: released,
