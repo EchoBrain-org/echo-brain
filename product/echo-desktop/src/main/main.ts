@@ -5,8 +5,10 @@ import {
   Tray, utilityProcess, type IpcMainInvokeEvent, type UtilityProcess,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import {
+  appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -22,8 +24,12 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 's
 const DOCUMENT_EXTENSIONS = new Set(['.txt', '.md', '.markdown', '.pdf', '.docx']);
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const test = __ECHO_TEST_HOOK__ ? process.env : {} as NodeJS.ProcessEnv;
+const smoke = process.argv.includes('--smoke');
+/** `--smoke` never touches the person's session or data: it gets its own. */
+const smokeRoot = smoke ? realpathSync(mkdtempSync(join(tmpdir(), 'echo-smoke-'))) : null;
 
-if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_USER_DATA) app.setPath('userData', test.ECHO_DESKTOP_USER_DATA);
+if (smokeRoot) app.setPath('userData', join(smokeRoot, 'data'));
+else if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_USER_DATA) app.setPath('userData', test.ECHO_DESKTOP_USER_DATA);
 // Chromium's own data sits beside ECHO's, never among the kit's releases.
 else if (app.isPackaged) app.setPath('userData', join(app.getPath('appData'), 'ECHO', 'chromium'));
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true } }]);
@@ -32,7 +38,11 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: t
 if (!__ECHO_TEST_HOOK__ && process.argv.some(argument => /^--remote-(debugging|allow-origins)/.test(argument))) {
   app.exit(1);
 }
-const smoke = process.argv.includes('--smoke');
+// Dev builds never run on the person's real session: they need a named home.
+if (__ECHO_TEST_HOOK__ && !smoke && !test.ECHO_HOME) {
+  process.stderr.write('Dev builds need ECHO_HOME. Use `npm start` for fixture data, or set ECHO_HOME to a private folder.\n');
+  app.exit(1);
+}
 if (!smoke && !app.requestSingleInstanceLock()) {
   app.exit(0);
 }
@@ -72,10 +82,16 @@ const clientEntry = (__ECHO_TEST_HOOK__ && process.env.ECHO_PERSON_CLIENT_ENTRY)
   : resolve(BUILD, '..', '..', '..', 'src', 'product', 'person-client', 'dist', 'composition.js'));
 let host: UtilityProcess | null = null;
 let nextId = 1;
-const pending = new Map<number, (result: Result<unknown>) => void>();
+const WRITE_METHODS = new Set<string>(['notes.submit', 'documents.upload', 'documents.retry']);
+const pending = new Map<number, { method: string; requestId?: string; resolve: (result: Result<unknown>) => void }>();
+/** Exits in the last minute. Three and the supervisor stops. */
+let exits: number[] = [];
+let hostGaveUp = false;
 
-function startHost(): void {
-  const env: Record<string, string> = { ECHO_PERSON_CLIENT_ENTRY: clientEntry, ECHO_HOME: homedir() };
+function startHost(restarted = false): void {
+  const home = smokeRoot ? join(smokeRoot, 'home') : homedir();
+  if (smokeRoot) mkdirSync(home, { recursive: true, mode: 0o700 });
+  const env: Record<string, string> = { ECHO_PERSON_CLIENT_ENTRY: clientEntry, ECHO_HOME: home };
   for (const name of ['HOME', 'USERPROFILE', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'LOCALAPPDATA', 'XDG_DATA_HOME',
     'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', 'LANG']) {
     const value = process.env[name];
@@ -83,10 +99,12 @@ function startHost(): void {
   }
   // The fixture Authority writes a synthetic session: only ever into a home
   // the test named, never the person's own.
-  if (__ECHO_TEST_HOOK__ && test.ECHO_HOME && resolve(test.ECHO_HOME) !== resolve(homedir())) {
+  if (__ECHO_TEST_HOOK__ && !smokeRoot && test.ECHO_HOME && resolve(test.ECHO_HOME) !== resolve(homedir())) {
     env.ECHO_HOME = test.ECHO_HOME;
     for (const name of ['ECHO_DESKTOP_TEST_FIXTURES', 'ECHO_DESKTOP_TEST_MODE']) if (test[name]) env[name] = test[name]!;
   }
+  // Dev builds reach the local Authority, whose certificate is the kit's own.
+  if (__ECHO_TEST_HOOK__ && test.NODE_EXTRA_CA_CERTS) env.NODE_EXTRA_CA_CERTS = test.NODE_EXTRA_CA_CERTS;
   const child = utilityProcess.fork(HOST_PATH, [], { serviceName: 'ECHO person host', env, stdio: 'pipe' });
   if (__ECHO_TEST_HOOK__) {
     // Dev and test builds only: the host's own diagnostics, never shown in the UI.
@@ -95,30 +113,42 @@ function startHost(): void {
   }
   child.on('message', (message: HostReply | HostNotice) => {
     if ('notice' in message) return onHostNotice(message);
-    const resolveReply = pending.get(message.id);
+    const call = pending.get(message.id);
     pending.delete(message.id);
-    resolveReply?.(message.result);
+    call?.resolve(message.result);
   });
   child.on('exit', code => {
-    host = null;
+    if (host === child) host = null;
     log(`host exit ${code}`);
-    for (const [id, resolveReply] of pending) {
+    for (const [id, call] of pending) {
       pending.delete(id);
-      resolveReply({ ok: false, failure: { code: 'host_restarted', retryable: true } });
+      // A write the host was holding may already have reached the Authority.
+      call.resolve({ ok: false, failure: { code: 'host_restarted', retryable: true,
+        ...(WRITE_METHODS.has(call.method) ? { mutation_outcome: 'unknown' as const } : {}),
+        ...(call.requestId === undefined ? {} : { request_id: call.requestId }) } });
     }
-    if (!quitting) {
-      setTimeout(startHost, 500);
-      send('host.restarted', {});
+    if (quitting) return;
+    const now = Date.now();
+    exits = [...exits.filter(at => now - at < 60_000), now];
+    if (exits.length >= 3) {
+      hostGaveUp = true;
+      log('host gave-up');
+      send('host.failed', {});
+      return;
     }
+    setTimeout(() => startHost(true), 500 * 2 ** (exits.length - 1));
   });
   host = child;
+  // Tell the page once the new host can answer, so its re-check is not refused.
+  if (restarted) send('host.restarted', {});
 }
 
-function callHost(method: HostMethodName, params: unknown): Promise<Result<unknown>> {
-  if (!host) return Promise.resolve({ ok: false, failure: { code: 'host_restarted', retryable: true } });
+function callHost(method: HostMethodName | 'host.drain', params: unknown): Promise<Result<unknown>> {
+  if (!host) return Promise.resolve({ ok: false, failure: { code: hostGaveUp ? 'host_failed' : 'host_restarted', retryable: true } });
   const id = nextId++;
+  const requestId = (params as { request_id?: unknown } | null)?.request_id;
   return new Promise(resolveReply => {
-    pending.set(id, resolveReply);
+    pending.set(id, { method, resolve: resolveReply, ...(typeof requestId === 'string' ? { requestId } : {}) });
     host!.postMessage({ id, method, params });
   });
 }
@@ -197,6 +227,9 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
     case 'app.setUnresolved':
       unresolved = (params as MainMethods['app.setUnresolved']['params']).unresolved === true;
       return { ok: true, value: null };
+    case 'app.retryHost':
+      if (hostGaveUp && !host) { hostGaveUp = false; exits = []; startHost(true); }
+      return { ok: true, value: null };
   }
   return refused();
 }
@@ -257,6 +290,11 @@ function createWindow(): BrowserWindow {
     },
   });
   created.webContents.on('will-navigate', event => event.preventDefault());
+  // A crashed page comes back; mounting it re-reads status.
+  created.webContents.on('render-process-gone', (_event, details) => {
+    log(`renderer gone ${details.reason}`);
+    if (!quitting && !created.isDestroyed()) void created.loadURL(`${ORIGIN}/index.html`);
+  });
   created.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   created.on('close', event => {
     if (!quitting) { event.preventDefault(); created.hide(); }
@@ -343,7 +381,16 @@ app.on('before-quit', event => {
   }
   quitting = true;
 });
-app.on('will-quit', () => { globalShortcut.unregisterAll(); host?.kill(); });
+let drained = false;
+app.on('will-quit', event => {
+  globalShortcut.unregisterAll();
+  if (!host || drained) { host?.kill(); return; }
+  // Never kill the host mid-refresh: that leaves the shared session claimed.
+  event.preventDefault();
+  drained = true;
+  const cap = new Promise(resolveCap => setTimeout(resolveCap, 5_000));
+  void Promise.race([callHost('host.drain', {}), cap]).then(() => { host?.kill(); app.quit(); });
+});
 app.on('window-all-closed', () => { /* stays in the tray */ });
 
 if (__ECHO_TEST_HOOK__) {
@@ -351,6 +398,7 @@ if (__ECHO_TEST_HOOK__) {
   (app as unknown as NodeJS.EventEmitter).on('echo-test:capture', capture);
   (app as unknown as NodeJS.EventEmitter).on('echo-test:conceal', () => send('lifecycle.conceal', {}));
   (app as unknown as NodeJS.EventEmitter).on('echo-test:resume', () => send('lifecycle.resume', {}));
+  (app as unknown as NodeJS.EventEmitter).on('echo-test:kill-host', () => { host?.kill(); });
 }
 
 /**
@@ -379,6 +427,7 @@ async function runSmoke(): Promise<void> {
   process.stdout.write(`${JSON.stringify({ smoke: passed ? 'passed' : 'failed', checks, build: buildInfo() })}\n`);
   quitting = true;
   host?.kill();
+  try { rmSync(smokeRoot!, { recursive: true, force: true }); } catch { /* temporary */ }
   app.exit(passed ? 0 : 1);
 }
 
@@ -403,7 +452,8 @@ void app.whenReady().then(() => {
   startHost();
   window = createWindow();
   window.once('ready-to-show', () => { if (!test.ECHO_DESKTOP_HIDDEN) show(); });
-  registerShortcuts();
+  // Tests never take the person's own keys.
+  if (!test.ECHO_DESKTOP_HIDDEN) registerShortcuts();
   createTray();
   log('started');
 });

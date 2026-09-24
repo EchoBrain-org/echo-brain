@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "start": "npm run build && electron .",
+    "start": "npm run build && node scripts/start.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && vitest run && playwright test",
     "package": "node scripts/package.mjs",

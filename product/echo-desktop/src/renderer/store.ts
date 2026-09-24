@@ -51,11 +51,14 @@ export interface State {
   compose: ComposeState | null;
   concealed: boolean;
   signin: { phase: 'idle' | 'waiting' | 'failed'; failure?: Failure; browserOpened?: boolean };
+  /** No status could be read (the host is down): not the same as signed out. */
+  startFailed: boolean;
 }
 
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false }, feed: null, reader: null,
   barScope: { kind: 'global' }, ask: null, evidence: null, compose: null, concealed: false, signin: { phase: 'idle' },
+  startFailed: false,
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -94,11 +97,12 @@ function accountLost(failure: Failure): boolean {
 
 export async function refreshStatus(): Promise<void> {
   const result = await rpc('app.status', {});
-  if (!result.ok) { set({ booting: false }); return; }
+  // Keep what is on screen; with nothing on screen yet, say ECHO could not start.
+  if (!result.ok) { set({ booting: false, startFailed: state.status === null || result.failure.code === 'host_failed' }); return; }
   const previous = state.status?.account;
   const next = result.value.account;
   const changed = previous?.membership_id !== next?.membership_id || previous?.authority !== next?.authority;
-  set({ status: result.value, booting: false });
+  set({ status: result.value, booting: false, startFailed: false });
   if (changed) {
     set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null, compose: null,
       barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false } });
@@ -111,6 +115,15 @@ export async function signIn(authorityUrl: string): Promise<void> {
   const result = await rpc('signin.begin', { authority_url: authorityUrl });
   if (!result.ok) { set({ signin: { phase: 'failed', failure: result.failure } }); return; }
   set({ signin: { phase: 'idle' } });
+  await refreshStatus();
+}
+
+/** The host gave up after repeated exits. */
+export function hostFailed(): void { set({ startFailed: true, booting: false }); }
+
+export async function retryStart(): Promise<void> {
+  set({ booting: true });
+  await rpc('app.retryHost', {});
   await refreshStatus();
 }
 

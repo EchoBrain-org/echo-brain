@@ -138,6 +138,8 @@ export interface MainMethods {
   'app.quit': { params: Record<string, never>; result: null };
   /** A save's outcome is unknown: quitting asks first. */
   'app.setUnresolved': { params: { unresolved: boolean }; result: null };
+  /** After the host gave up: start it again. */
+  'app.retryHost': { params: Record<string, never>; result: null };
 }
 
 export type Methods = HostMethods & MainMethods;
@@ -149,7 +151,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'clipboard.writeText', 'window.hide', 'app.quit', 'app.setUnresolved',
+  'dialog.openDocument', 'clipboard.writeText', 'window.hide', 'app.quit', 'app.setUnresolved', 'app.retryHost',
 ];
 
 /** Events main pushes to the renderer. */
@@ -160,6 +162,8 @@ export interface Events {
   'lifecycle.resume': Record<string, never>;
   'signin.phase': { phase: 'open-browser' | 'installed'; expires_at?: string; browser_opened?: boolean };
   'host.restarted': Record<string, never>;
+  /** The host kept exiting and main stopped restarting it. */
+  'host.failed': Record<string, never>;
 }
 export type EventName = keyof Events;
 

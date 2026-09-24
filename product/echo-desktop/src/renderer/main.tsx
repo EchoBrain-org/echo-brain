@@ -8,8 +8,8 @@ import { Back } from './screens/icons.js';
 import { Project } from './screens/project.js';
 import { SignIn } from './screens/signin.js';
 import {
-  acceptDrop, closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, openCompose, refreshStatus, resume,
-  signinPhase, useStore,
+  acceptDrop, closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, hostFailed, openCompose, refreshStatus,
+  resume, retryStart, signinPhase, useStore,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -36,6 +36,7 @@ function App() {
       on('window.shown', () => { if (!getState().concealed) void refreshStatus(); }),
       on('signin.phase', payload => signinPhase(payload.browser_opened)),
       on('host.restarted', () => { void refreshStatus(); }),
+      on('host.failed', hostFailed),
     ];
     // One Escape handler for the whole window: it steps back exactly one level.
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); back(); } };
@@ -44,6 +45,17 @@ function App() {
   }, []);
 
   if (state.booting) return <div class="app"><div class="titlebar"><div class="side" /><div class="title brand">ECHO</div><div class="side" /></div></div>;
+  if (state.startFailed) {
+    return (
+      <div class="app">
+        <div class="titlebar"><div class="side" /><div class="title brand">ECHO</div><div class="side" /></div>
+        <div class="page"><div class="signin" data-testid="start-failed">
+          <h1>ECHO could not start</h1>
+          <button type="button" class="primary-button" data-testid="start-retry" onClick={() => void retryStart()}>Try again</button>
+        </div></div>
+      </div>
+    );
+  }
   if (!state.status?.signed_in) {
     return (
       <div class="app">

@@ -19,6 +19,7 @@ interface ParentPort {
   postMessage(message: unknown): void;
 }
 const port = (process as unknown as { parentPort: ParentPort }).parentPort;
+if (__ECHO_TEST_HOOK__ && process.env.ECHO_DESKTOP_TEST_MODE === 'host-crash') process.exit(3);
 
 const entry = process.env.ECHO_PERSON_CLIENT_ENTRY;
 const home = process.env.ECHO_HOME;
@@ -72,6 +73,8 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000,
 };
 const WRITES = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry']);
+/** Writes this host has handed to the client and not yet heard back on. */
+const inFlight = new Set<string>();
 
 /** Values the page supplied go in `--name=value` form: a leading '-' stays text. */
 function option(name: string, value: string): string { return `--${name}=${value}`; }
@@ -80,12 +83,23 @@ function expected(expect: Expect): string[] {
   return [option('expected-membership-id', expect.membership_id), option('expected-authority', expect.authority)];
 }
 
-// Refresh gate. Calls normally run side by side. When the access token is
-// within a minute of expiring, one explicit refresh runs alone first, so a
-// concurrent call never reads the session while it is being replaced.
+// Refresh gate. Calls normally run side by side. Before a call that needs the
+// network, when the access token is within a minute of expiring, one explicit
+// refresh runs alone first, so a concurrent call never reads the session while
+// it is being replaced. Status is local: it waits out a refresh, never starts one.
 let active = 0;
 let exclusive: Promise<void> | null = null;
 const idle: Array<() => void> = [];
+/**
+ * The claim this host's own failed refresh left behind. The client does not
+ * release it, so it reads as a refresh in progress; it is not one, and the
+ * person must sign in again.
+ */
+let ownFailedClaim: string | null = null;
+
+function readClaim(path: string): string | null {
+  try { return readFileSync(path, 'utf8'); } catch { return null; }
+}
 
 function refreshDue(store: SessionStore, now: number): boolean {
   try {
@@ -95,15 +109,18 @@ function refreshDue(store: SessionStore, now: number): boolean {
   }
 }
 
-async function gated<T>(run: () => Promise<T>): Promise<T> {
-  const { store, now } = await modules;
+async function gated<T>(run: () => Promise<T>, network: boolean): Promise<T> {
+  const { store, now, paths } = await modules;
   while (exclusive) await exclusive;
-  if (refreshDue(store, now())) {
+  if (network && refreshDue(store, now())) {
     let release!: () => void;
     exclusive = new Promise(resolve => { release = resolve; });
     try {
       while (active > 0) await new Promise<void>(resolve => idle.push(resolve));
-      if (refreshDue(store, now())) await cli(['session-refresh']);
+      if (refreshDue(store, now())) {
+        const refreshed = await cli(['session-refresh']);
+        if (refreshed.exit !== 0) ownFailedClaim = readClaim(paths.refresh_claim);
+      }
     } finally {
       exclusive = null;
       release();
@@ -143,6 +160,7 @@ async function readStatus(): Promise<AppStatus | null> {
 async function refreshRunningElsewhere(): Promise<boolean> {
   const { paths, now } = await modules;
   if (!existsSync(paths.refresh_claim) || !existsSync(paths.refreshing)) return false;
+  if (ownFailedClaim !== null && readClaim(paths.refresh_claim) === ownFailedClaim) return false;
   try {
     const stored = JSON.parse(readFileSync(paths.refreshing, 'utf8')) as { session?: { hard_reauthentication_at?: unknown } };
     const deadline = Date.parse(String(stored.session?.hard_reauthentication_at));
@@ -152,10 +170,11 @@ async function refreshRunningElsewhere(): Promise<boolean> {
   }
 }
 
+/** Waits at most 3 s on another process's refresh: well inside app.status's 5 s. */
 async function status(): Promise<AppStatus | null> {
   for (let attempt = 0; ; attempt += 1) {
     const current = await readStatus();
-    if (current === null || current.signed_in || attempt >= 10 || !(await refreshRunningElsewhere())) return current;
+    if (current === null || current.signed_in || attempt >= 6 || !(await refreshRunningElsewhere())) return current;
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 }
@@ -170,7 +189,13 @@ async function forAccount<T>(
 ): Promise<Result<T>> {
   const write = WRITES.has(method);
   if (!sameAccount(await status(), expect)) return code('account_changed', write, requestId);
-  const run = await cli(argv);
+  if (write && requestId !== undefined) inFlight.add(requestId);
+  let run: CliRun;
+  try {
+    run = await cli(argv);
+  } finally {
+    if (write && requestId !== undefined) inFlight.delete(requestId);
+  }
   const after = await status();
   if (!sameAccount(after, expect)) {
     // A write may have gone out before the switch; never call it saved or not.
@@ -307,6 +332,8 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
     }
     case 'writes.status': {
       const { expect, request_id, kind } = params as Params<'writes.status'>;
+      // Still in the client's hands (it outlived its timeout): not known yet.
+      if (inFlight.has(request_id)) return ok({ state: 'unknown' as const });
       const argv = kind === 'note' ? ['updates', 'status-v3', option('request-id', request_id)] : ['documents', 'status-v2', option('request-id', request_id)];
       const result = await forAccount(method, expect, argv, stdout => writeStatusView(lastJson(stdout), kind));
       // Nothing stored under this request: it never arrived, so resending is safe.
@@ -316,25 +343,30 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
   }
 }
 
-async function withTimeout(method: HostMethodName, run: Promise<Result<unknown>>, requestId?: string): Promise<Result<unknown>> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<Result<unknown>>(resolve => {
-    timer = setTimeout(() => resolve(code('timeout', WRITES.has(method), requestId)), TIMEOUT_MS[method]);
-  });
-  try {
-    return await Promise.race([run, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 port.on('message', ({ data }) => {
-  const request = data as HostRequest;
+  const request = data as HostRequest | { id: number; method: 'host.drain' };
+  if (request.method === 'host.drain') {
+    // Main is quitting: let a refresh in progress finish, so the session is not left claimed.
+    void (async () => { while (exclusive) await exclusive; })().then(() => port.postMessage({ id: request.id, result: ok(null) }));
+    return;
+  }
   const requestId = typeof (request.params as { request_id?: unknown })?.request_id === 'string'
     ? (request.params as { request_id: string }).request_id : undefined;
+  const write = WRITES.has(request.method);
+  // A call still queued behind a refresh when its time runs out never starts.
+  let expired = false;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<Result<unknown>>(resolve => {
+    timer = setTimeout(() => { expired = true; resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[request.method]);
+  });
   // Status goes through the gate too: mid-refresh the client reports signed out.
-  const work = gated(() => handle(request.method, request.params));
-  void withTimeout(request.method, work, requestId)
-    .catch(() => code('failed', WRITES.has(request.method), requestId))
-    .then(result => port.postMessage({ id: request.id, result }));
+  const work = gated(() => expired ? timeout : handle(request.method, request.params), request.method !== 'app.status')
+    // A write that threw after reaching the client may have landed.
+    .catch((error: unknown) => {
+      if (__ECHO_TEST_HOOK__) console.error(`[client] ${request.method} threw:`, error);
+      return write ? fail({ code: 'failed', retryable: true, mutation_outcome: 'unknown',
+      ...(requestId === undefined ? {} : { request_id: requestId }) }) : code('failed');
+    });
+  void Promise.race([work, timeout])
+    .then(result => { clearTimeout(timer); port.postMessage({ id: request.id, result }); });
 });

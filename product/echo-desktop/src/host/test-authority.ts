@@ -7,6 +7,8 @@ import { join } from 'node:path';
 
 const AUTHORITY = 'https://authority.example';
 const NOW = '2026-09-21T22:01:00.000Z';
+/** Past the access token's expiry, still inside the week. */
+const LATER = '2026-09-21T22:30:00.000Z';
 
 interface Operation { id: string; http: { method: string; status: number; response: Record<string, unknown> } }
 interface DesktopFixtures {
@@ -43,16 +45,24 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
   const store = new SessionStore(realpathSync(home)) as Store;
   const expired = mode === 'expired-claim';
+  const clock = mode.startsWith('refresh-') ? LATER : NOW;
+  const session = {
+    organization_id: 'org_00000000-0000-4000-8000-000000000001',
+    principal_id: 'prn_00000000-0000-4000-8000-000000000001',
+    membership_id: 'mem_22222222-2222-4222-8222-222222222222', display_name: 'Ari', membership_type: 'employee',
+    identity_binding_id: 'oib_00000000-0000-4000-8000-000000000001',
+    session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
+    access_token: 'A'.repeat(43), refresh_token: 'R'.repeat(43),
+    access_expires_at: '2026-09-21T22:11:00.000Z', refresh_expires_at: '2026-09-28T22:00:00.000Z',
+    hard_reauthentication_at: '2026-09-28T22:00:00.000Z',
+  };
   if (!existsSync(store.paths.live) && mode !== 'signed-out') {
     store.install(AUTHORITY, 'oau_00000000-0000-4000-8000-000000000001', {
-      organization_id: 'org_00000000-0000-4000-8000-000000000001',
-      principal_id: 'prn_00000000-0000-4000-8000-000000000001',
-      membership_id: 'mem_22222222-2222-4222-8222-222222222222', display_name: 'Ari', membership_type: 'employee',
-      identity_binding_id: 'oib_00000000-0000-4000-8000-000000000001',
-      session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
-      access_token: 'A'.repeat(43), refresh_token: 'R'.repeat(43),
-      access_expires_at: '2026-09-21T22:11:00.000Z', refresh_expires_at: '2026-09-28T22:00:00.000Z',
-      hard_reauthentication_at: expired ? '2026-09-21T00:00:00.000Z' : '2026-09-28T22:00:00.000Z',
+      // A week-old session: every deadline already passed, consistently.
+      ...session, ...(expired ? {
+        access_expires_at: '2026-09-20T12:00:00.000Z', refresh_expires_at: '2026-09-21T00:00:00.000Z',
+        hard_reauthentication_at: '2026-09-21T00:00:00.000Z',
+      } : {}),
     });
     if (expired) {
       // What a weekly expiry leaves behind: the session set aside under a claim.
@@ -69,6 +79,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body })}\n`);
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
+
+    if (method === 'POST' && path === '/v2/session/refresh') {
+      if (mode === 'refresh-fails') return failure('unavailable', 503);
+      return json({ ...session, access_token: 'B'.repeat(43), refresh_token: 'S'.repeat(43), access_expires_at: '2026-09-22T10:30:00.000Z' });
+    }
 
     if (method === 'GET' && path === '/v1/person/projects') {
       const response = fixture('projects-list');
@@ -137,7 +152,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
 
   return {
-    dependencies: { fetch, now: () => NOW },
-    now: () => Date.parse(NOW),
+    dependencies: { fetch, now: () => clock },
+    now: () => Date.parse(clock),
   };
 }
