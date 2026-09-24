@@ -717,8 +717,11 @@ npm run kit:person-onboarding -- \
 Transfer that exact archive through the authenticated private cohort channel.
 Each employee receives their own invitation separately. The shared app contains
 no invitation or session; it embeds the verified offline kit and needs no
-package manager. There is one explicit approved download, with manual updates;
-no channel service or background updater is introduced.
+package manager. Initial delivery is an explicit approved download. The opt-in
+[client update V1](../../docs/features/client-updates-v1.md) adds a signed feed
+and Linux activation before command dispatch; desktop update activation remains
+part of the future Electron packaging integration. No background updater is
+introduced.
 
 Owners use the same installed `ECHO.app`: open the menu bar icon, then
 **Organization → People**. Enter the employee's name and sign-in email, choose

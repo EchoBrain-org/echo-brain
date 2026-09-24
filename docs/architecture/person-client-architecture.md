@@ -22,6 +22,12 @@ The client has no background runtime, adapter registry, local processor,
 approval store, delivery outbox, database, installation key, access lease, or
 service manager.
 
+The opt-in [client updater](../features/client-updates-v1.md) runs a bounded
+release check before command dispatch. Its public publisher trust and local
+release checkpoint are separate from Person authorization state. Linux kit
+activation reuses the installer; desktop activation belongs to its packaging
+adapter. This adds no background runtime or automatic Person-request replay.
+
 ## Local state authority
 
 The machine's authorization state is the signed-in Person session below

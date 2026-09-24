@@ -36,7 +36,9 @@ qualification_ids:
 client plus its private rotating session store. It dispatches Person commands
 and sends Authority HTTP requests. It has no daemon, local processing core,
 provider adapter, product database, installation key, access lease, or
-internal update runner. Other machine-installed surfaces may wrap this client
+background update runner. The opt-in foreground
+[client updater](../features/client-updates-v1.md) owns bounded release discovery
+and platform installation before Person command dispatch. Other machine-installed surfaces may wrap this client
 without becoming part of its responsibility.
 
 ## Data authority

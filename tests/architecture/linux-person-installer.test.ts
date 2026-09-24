@@ -3,6 +3,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { generateKeyPairSync, sign } from 'node:crypto';
+import { configureClientUpdates, runClientUpdate } from '../../src/product/person-client/client-update.js';
+import { installLinuxClientUpdate } from '../../src/product/person-client/client-update-linux.js';
+import { parseUpdateConfig, updateDigest } from '../../src/product/person-client/client-update-contract.js';
 
 const REPO = resolve(import.meta.dirname, "..", "..");
 const INSTALLER = join(REPO, "deploy/release/start-person-onboarding-kit-linux.sh");
@@ -12,7 +16,7 @@ function fixture() {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "echo-linux-installer-"));
   roots.push(root);
   const home = join(root, "home");
-  const kit = join(root, "kit");
+  const kit = join(root, "echo-person-onboarding-kit");
   const tools = join(root, "tools");
   for (const path of [home, kit, tools]) mkdirSync(path, { mode: 0o700 });
   const tool = (name: string, body: string) => writeFileSync(join(tools, name), `#!/usr/bin/env bash\nset -eu\n${body}\n`, { mode: 0o755 });
@@ -21,6 +25,7 @@ function fixture() {
   tool("od", 'if [[ "${WRONG_ELF:-}" == yes ]]; then printf " 127 69 76 70 2 1 1 0 0 0 0 0 0 0 0 0 0 0 3 0\\n"; else printf " 127 69 76 70 2 1 1 0 0 0 0 0 0 0 0 0 0 0 62 0\\n"; fi');
   if (process.platform === "darwin") {
     tool("stat", 'if [[ "$2" == %u ]]; then /usr/bin/stat -f %u "$3"; else /usr/bin/stat -f %Lp "$3"; fi');
+    tool("sha256sum", 'exec /usr/bin/shasum -a 256 "$@"');
   }
   const installer = readFileSync(INSTALLER, "utf8");
   writeFileSync(join(kit, "Start-ECHO.sh"), installer, { mode: 0o755 });
@@ -37,9 +42,10 @@ else if(process.argv[2] !== 'validate') process.exit(1);
     const version = "0.1.1";
     const sourceSha = String(release).repeat(40);
     const releaseId = `clean-v1-linux-${release}`;
-    writeFileSync(join(kit, "release.json"), JSON.stringify({ "release-id": releaseId, "client-version": version }));
+    writeFileSync(join(kit, "release.json"), JSON.stringify({ "release-id": releaseId, "client-version": version, release_id: releaseId, source_sha: sourceSha, person_client: { version } }));
     const packageRoot = join(root, "package");
     mkdirSync(join(packageRoot, "dist"), { recursive: true });
+    writeFileSync(join(packageRoot, "dist/client-update-cli.js"), '/* synthetic updater capability */\n');
     writeFileSync(join(packageRoot, "dist", "main.js"), `const args=process.argv.slice(2); if(args[0] === '--version') console.log('${version}'); else if(args[0] === 'person' && args[1] === 'status') console.log(JSON.stringify({kind:'echo-person-client-status-v1',client_build:{source_sha:'${sourceSha}',source_kind:'materialized-commit'},signed_in:process.env.SIGNED_IN === 'yes'})); else if(args[0] === 'person' && args[1] === 'login') console.log(JSON.stringify(args));\n`);
     execFileSync("tar", ["-czf", join(kit, "person-client.tgz"), "package"], { cwd: root });
   }
@@ -51,12 +57,54 @@ else if(process.argv[2] !== 'validate') process.exit(1);
     }
     return spawnSync("bash", [join(kit, "Start-ECHO.sh"), argument], { encoding: "utf8", env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, ".local", "share"), PATH: `${tools}:${process.env.PATH}`, ...env } });
   }
-  return { root, home, kit, run, prepare };
+  return { root, home, kit, tools, run, prepare };
 }
 
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("Linux x64 Person onboarding installer", () => {
+  it('updates from a signed feed through the real installer without changing session files', async () => {
+    const subject = fixture();
+    expect(subject.run(1).status).toBe(0);
+    const root = join(subject.home, '.local/share/echo/person');
+    const sessionRoot = join(subject.home, '.local/share/echo-brain/person');
+    mkdirSync(sessionRoot, { recursive: true, mode: 0o700 });
+    const session = join(sessionRoot, 'session.json');
+    writeFileSync(session, 'synthetic existing session bytes', { mode: 0o600 });
+    subject.prepare(2);
+    const zip = join(subject.root, 'release-b.zip');
+    execFileSync('zip', ['-qr', zip, 'echo-person-onboarding-kit'], { cwd: subject.root });
+    const bytes = readFileSync(zip);
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const config = parseUpdateConfig({ schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://fixture.invalid/feed.json', public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' });
+    configureClientUpdates(root, config);
+    const manifest = { schema_version: 1, kind: 'echo-client-update-manifest-v1', channel: 'fixture', sequence: 1, issued_at: '2026-09-24T00:00:00.000Z', expires_at: '2026-10-01T00:00:00.000Z', release_id: 'clean-v1-linux-2', source_sha: '2'.repeat(40), product_version: '0.1.1', release_sha256: updateDigest(readFileSync(join(subject.kit, 'release.json'))), artifacts: [{ platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit', url: 'https://fixture.invalid/b.zip', bytes: bytes.length, sha256: updateDigest(bytes) }] };
+    const payload = Buffer.from(JSON.stringify(manifest));
+    const envelope = JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') });
+    const result = await runClientUpdate('apply', { root, platform: { platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit' }, now: () => Date.parse('2026-09-24T01:00:00.000Z'), fetch: (async (url) => new Response(String(url) === config.feed_url ? envelope : new Uint8Array(bytes))) as typeof fetch,
+      install: input => installLinuxClientUpdate(input, { ...process.env, HOME: subject.home, PATH: `${subject.tools}:${process.env.PATH}` }),
+    });
+    expect(result.status).toBe('updated');
+    const status = JSON.parse(execFileSync('bash', [join(root, 'bin/echo-brain'), 'person', 'status'], { encoding: 'utf8' }));
+    expect(status.client_build.source_sha).toBe('2'.repeat(40));
+    expect(readFileSync(session, 'utf8')).toBe('synthetic existing session bytes');
+    expect(existsSync(join(root, 'releases/clean-v1-linux-1'))).toBe(true);
+  });
+
+  it('refuses updater activation after a concurrent manual install changed the stable command', () => {
+    const subject = fixture();
+    expect(subject.run(1).status).toBe(0);
+    const wrapper = join(subject.home, '.local/share/echo/person/bin/echo-brain');
+    const expected = updateDigest(readFileSync(wrapper));
+    expect(subject.run(2).status).toBe(0);
+    subject.prepare(3);
+    const result = spawnSync('bash', [join(subject.kit, 'Start-ECHO.sh'), '--install-only', '--expected-wrapper-sha256', expected], { encoding: 'utf8', env: { ...process.env, HOME: subject.home, XDG_DATA_HOME: join(subject.home, '.local/share'), PATH: `${subject.tools}:${process.env.PATH}` } });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('changed during download');
+    expect(readFileSync(wrapper, 'utf8')).toContain('clean-v1-linux-2');
+    expect(existsSync(join(subject.home, '.local/share/echo/person/releases/clean-v1-linux-3'))).toBe(false);
+  });
+
   it("installs with its bundled runtime, reuses a matching release, and retains an earlier release", () => {
     const subject = fixture();
     const first = subject.run(1);
