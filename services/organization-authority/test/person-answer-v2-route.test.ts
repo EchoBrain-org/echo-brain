@@ -116,11 +116,32 @@ function telemetryStages() {
 const request = { schema_version: 2 as const, question: 'What is ready?' };
 
 describe('V2 global/project Ask composition', () => {
+  it('retrieves before the only model call, eliminating planner-shape failures', async () => {
+    const events: string[] = [];
+    const app = route({
+      originals: originals([source(0)], { retrieve: () => { events.push('retrieve'); } }),
+      generate: (_call, prompt) => {
+        events.push('answer');
+        expect(prompt).toContain('source evidence 0');
+        return { answer: { text: 'Grounded answer.', citations: ['a1'] } };
+      },
+    });
+    await expect(app.ask({ access_token: 'token', request })).resolves.toMatchObject({ answer: 'Grounded answer.' });
+    expect(events).toEqual(['retrieve', 'answer']);
+  });
+
+  it('makes no model call for an empty authorized evidence release', async () => {
+    let calls = 0;
+    const app = route({ originals: originals([]), records: records([]), generate: () => { calls += 1; throw new Error('No evidence'); } });
+    await expect(app.ask({ access_token: 'token', request })).resolves.toMatchObject({ citations: [], answer: 'Insufficient accessible evidence to answer this question.' });
+    expect(calls).toBe(0);
+  });
+
   it('records validation, authorization, and combined retrieval stages for source evidence', async () => {
     const journey = telemetryStages();
     const app = route({
       telemetry: journey.telemetry,
-      generate: call => call === 1 ? { queries: [] } : { answer: { text: 'The source is ready.', citations: ['a1'] } },
+      generate: () => ({ answer: { text: 'The source is ready.', citations: ['a1'] } }),
     });
     await expect(app.ask({ access_token: 'token', request })).resolves.toBeDefined();
     expect(journey.events).toEqual(expect.arrayContaining([
@@ -136,14 +157,14 @@ describe('V2 global/project Ask composition', () => {
     const app = route({
       telemetry: journey.telemetry,
       originals: { ...port, retrieve: () => { throw new AuthorityOperationError('unauthorized', 'scope denied'); } },
-      generate: call => call === 1 ? { queries: [] } : { answer: { text: 'unreachable', citations: [] } },
+      generate: () => ({ answer: { text: 'unreachable', citations: [] } }),
     });
     await expect(app.ask({ access_token: 'token', request })).rejects.toMatchObject({ code: 'unauthorized' });
     expect(journey.events).toContainEqual(['ask_authorization', 'failed']);
   });
 
   it('answers from originals when the approved-record generation is valid but empty', async () => {
-    const app = route({ generate: call => call === 1 ? { queries: [] } : { answer: { text: 'The source is ready.', citations: ['a1'] } } });
+    const app = route({ generate: () => ({ answer: { text: 'The source is ready.', citations: ['a1'] } }) });
     const result = await app.ask({ access_token: 'token', request });
     expect(result.scope).toEqual({ kind: 'global' });
     expect(result.citations).toEqual([expect.objectContaining({ kind: 'source_revision', label: 'Source 0' })]);
@@ -153,7 +174,7 @@ describe('V2 global/project Ask composition', () => {
   it('audits the exact validated V3 response, including its scope and source citation kind', async () => {
     let entry: { readonly response_sha256: string } | undefined;
     const app = route({
-      generate: call => call === 1 ? { queries: [] } : { answer: { text: 'The source is ready.', citations: ['a1'] } },
+      generate: () => ({ answer: { text: 'The source is ready.', citations: ['a1'] } }),
       append: value => { entry = value as { readonly response_sha256: string }; },
     });
     const response = await app.ask({ access_token: 'token', request });
@@ -164,7 +185,7 @@ describe('V2 global/project Ask composition', () => {
     let audited = 0;
     const app = route({
       originals: originals([source(0), source(1)], { revalidate: () => { throw new AuthorityOperationError('unauthorized', 'revoked after model'); } }),
-      generate: call => call === 1 ? { queries: [] } : { answer: { text: 'Only the first source.', citations: ['a1'] } },
+      generate: () => ({ answer: { text: 'Only the first source.', citations: ['a1'] } }),
       append: () => { audited += 1; },
     });
     await expect(app.ask({ access_token: 'token', request })).rejects.toMatchObject({ code: 'unauthorized' });
@@ -175,39 +196,38 @@ describe('V2 global/project Ask composition', () => {
     let generates = 0;
     const app = route({
       originals: originals([source(0)], { retrieve: () => { throw new AuthorityOperationError('unavailable', 'source audit failed'); } }),
-      generate: call => { generates += 1; return call === 1 ? { queries: [] } : { answer: { text: 'must not run', citations: ['a1'] } }; },
+      generate: () => { generates += 1; return { answer: { text: 'must not run', citations: ['a1'] } }; },
     });
     await expect(app.ask({ access_token: 'token', request })).rejects.toMatchObject({ code: 'unavailable' });
-    expect(generates).toBe(1); // Planner runs before Layer-3 release; answerer does not.
+    expect(generates).toBe(0); // Authorization and retrieval precede every model call.
   });
 
   it('port ordering: does not erase the original-read event when answer generation fails', async () => {
     const auditEvents: string[] = [];
     const app = route({
       originals: originals([source(0)], { retrieve: () => { auditEvents.push('original-read'); } }),
-      generate: call => call === 1 ? { queries: [] } : (() => { throw new Error('provider failed'); })(),
+      generate: () => { throw new Error('provider failed'); },
       append: () => { auditEvents.push('answer-audit'); },
     });
     await expect(app.ask({ access_token: 'token', request })).rejects.toMatchObject({ code: 'unavailable' });
     expect(auditEvents).toEqual(['original-read']);
   });
 
-  it('interleaves approved records and originals before the core 16-atom prompt bound', async () => {
+  it('interleaves the five approved records and five originals in a single-query release', async () => {
     let answerPrompt = '';
     const app = route({
-      originals: originals(Array.from({ length: 16 }, (_, index) => source(index)), {}, [4, 4, 4, 4]),
-      records: records(Array.from({ length: 16 }, (_, index) => record(index)), [4, 4, 4, 4]),
-      generate: (call, prompt) => {
-        if (call === 1) return { queries: ['q1', 'q2', 'q3'] };
+      originals: originals(Array.from({ length: 5 }, (_, index) => source(index)), {}, [5]),
+      records: records(Array.from({ length: 5 }, (_, index) => record(index)), [5]),
+      generate: (_call, prompt) => {
         answerPrompt = prompt;
         return { answer: { text: 'Mixed evidence.', citations: ['a1', 'a2'] } };
       },
     });
     await expect(app.ask({ access_token: 'token', request })).resolves.toMatchObject({ citations: [{ kind: 'approved_record' }, { kind: 'source_revision' }] });
-    expect(answerPrompt).toContain('approved record 7');
-    expect(answerPrompt).toContain('source evidence 7');
-    expect(answerPrompt).not.toContain('approved record 8');
-    expect(answerPrompt).not.toContain('source evidence 8');
+    expect(answerPrompt).toContain('approved record 4');
+    expect(answerPrompt).toContain('source evidence 4');
+    expect(answerPrompt).not.toContain('approved record 5');
+    expect(answerPrompt).not.toContain('source evidence 5');
   });
 
   it('keeps selected project scope and never searches unassociated approved records', async () => {
@@ -235,7 +255,7 @@ describe('V2 global/project Ask composition', () => {
           return recordPort.searchBatch();
         },
       } as never,
-      generate: call => call === 1 ? { queries: [] } : { answer: { text: 'Project source is ready.', citations: ['a1'] } },
+      generate: () => ({ answer: { text: 'Project source is ready.', citations: ['a1'] } }),
     });
 
     await expect(app.ask({
@@ -254,18 +274,16 @@ describe('V2 global/project Ask composition', () => {
     } as never;
     const app = route({
       records: unavailableRecords,
-      generate: call => { generates += 1; return call === 1 ? { queries: [] } : { answer: { text: 'must not run', citations: ['a1'] } }; },
+      generate: () => { generates += 1; return { answer: { text: 'must not run', citations: ['a1'] } }; },
     });
 
     await expect(app.ask({ access_token: 'token', request })).rejects.toMatchObject({ code: 'unavailable' });
-    expect(generates).toBe(1); // The planner precedes the released retrieval; answerer never runs.
+    expect(generates).toBe(0); // A failed release cannot reach the model.
   });
 
   it('maps an answerer citation outside the released evidence to invalid_output', async () => {
     const app = route({
-      generate: call => call === 1
-        ? { queries: [] }
-        : { answer: { text: 'Unverifiable answer.', citations: ['a2'] } },
+      generate: () => ({ answer: { text: 'Unverifiable answer.', citations: ['a2'] } }),
     });
 
     await expect(app.ask({ access_token: 'token', request })).rejects.toMatchObject({ code: 'invalid_output' });

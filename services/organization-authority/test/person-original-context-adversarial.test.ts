@@ -12,6 +12,8 @@ import { SqliteSourceAdmissionStoreV1 } from "../src/adapters/persistence/sqlite
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
+import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
+import { createPersonAnswerV2Route } from "../src/composition/person-answer-v2-route.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import type { OriginalContextCitationV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization } from "./fixtures/project-context-sqlite.js";
@@ -169,45 +171,132 @@ function meteredReads(database: Database.Database, maximumBytes: number) {
 }
 
 describe("adversarial original-context retrieval", () => {
+  it("supplies SCOUT evidence for all seven recorded questions using real upload, extraction and scoped Ask", async () => {
+    const f = fixture();
+    const worker = new PersonDocumentProcessingV1(f.repository);
+    for (const filename of ["SCOUT-MRD-v0.1.md", "SCOUT-PRD-v0.2.md"]) {
+      const bytes = readFileSync(new URL(`../../../docs/simulations/scout/${filename}`, import.meta.url));
+      f.documents.upload("owner", {
+        schema_version: 1, kind: "echo-person-document-upload-v1", request_id: randomUUID(),
+        filename, title: filename, content_length: bytes.length, sha256: sha256Digest(bytes),
+        audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA,
+      }, bytes);
+      expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
+    }
+    const questions = [
+      ["What problem does SCOUT solve, and what is outside its first product scope?", ["handoffs", "outside this first scope"]],
+      ["What are the proposed payload, route length and travel time targets?", ["1 kg", "20 m", "120 seconds"]],
+      ["What are the battery requirements?", ["PRD-14", "battery reserve"]],
+      ["What does PRD-14 require for battery reserve before and during a mission?", ["PRD-14", "no unconditional return HOME"]],
+      ["When can SCOUT resume after an obstacle clears or emergency stop is released?", ["PRD-08", "Release never auto-restarts motion"]],
+      ["What must Hardware, Software and QA deliver in Phase 1, and what requires PM authorization?", ["After PM authorization", "Acceptance and Verification Plan"]],
+      ["Do the uploaded MRD and PRD reference matching versions? Identify any mismatch?", ["Version: 0.1", "Parent: SCOUT-MRD v0.2"]],
+    ] as const;
+    for (const [question, required] of questions) {
+      let calls = 0;
+      const app = createPersonAnswerV2Route({
+        authority_id: "oau_original_context", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
+        originals: f.retrieval,
+        records: { searchBatch: () => { throw new Error("Project Ask must not retrieve global records"); } } as never,
+        model: { async generate(input) {
+          calls += 1;
+          const prompt = JSON.parse(input.user_prompt) as { sources: { citation_id: string; text: string }[] };
+          const evidence = prompt.sources.map(source => source.text).join("\n");
+          for (const value of required) expect(evidence, question).toContain(value);
+          // A deterministic answer proves the route/citation boundary, not model answer quality.
+          return { answer: { text: "Evidence is available for review.", citations: [prompt.sources[0]!.citation_id] } };
+        } },
+        generation: { generation_adapter_id: "fixture", planner_model: "unused", answer_model: "fixture", timeout_ms: 1000 },
+        audit: new SqlitePersonAnswerCompositionAuditV1(f.database),
+      });
+      const result = await app.ask({ access_token: "member", request: { schema_version: 2, question, project_id: PROJECT_ALPHA } });
+      expect(calls).toBe(1);
+      expect(result.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
+      expect(result.citations).toHaveLength(1);
+      const citation = result.citations[0]!;
+      expect(citation.kind).toBe("source_revision");
+      if (citation.kind === "source_revision") {
+        expect(f.retrieval.read({ access_token: "member", scope: result.scope, citation }).atom.anchor_sha256).toBe(citation.anchor_sha256);
+      }
+    }
+  });
+
+  it("does not turn function words or an unmatched subject into arbitrary document evidence", () => {
+    const f = fixture();
+    f.upload("An ordinary plan", "This is the plan and it is ready for review.");
+    for (const question of ["What is it?", "What is the zeppelin budget?"]) {
+      const result = f.retrieval.retrieve({ access_token: "member", queries: [question], scope: { kind: "global" } });
+      expect(result.query_hit_counts).toEqual([0]);
+      expect(result.release.released_atoms).toEqual([]);
+    }
+  });
+
+  it("preserves uppercase technical acronyms that overlap English function words", () => {
+    const f = fixture();
+    f.upload("Interface", "CAN bus connects the controller.");
+    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["What is CAN?"], scope: { kind: "global" } })).join(" ")).toContain("CAN bus");
+  });
+
+  it("retrieves the battery requirement from a natural question ahead of newer incidental matches", () => {
+    const f = fixture();
+    const documentId = f.upload("SCOUT PRD", "PRD-14: Check battery reserve before starting. Hardware and Software propose thresholds and recovery.", { project_id: PROJECT_ALPHA });
+    for (let index = 0; index < 7; index += 1) {
+      f.upload(`Other ${index}`, "The requirements are proposed for review.", { project_id: PROJECT_ALPHA });
+    }
+    const result = f.retrieval.retrieve({ access_token: "member", queries: ["What are the battery reserve requirements?"], scope: { kind: "project", project_id: PROJECT_ALPHA } });
+    expect(result.release.released_atoms[0]).toMatchObject({ document_id: documentId });
+    expect(texts(result)[0]).toContain("PRD-14");
+  });
+
+  it("does not release private or other-project evidence when only some question terms match", () => {
+    const f = fixture();
+    const allowed = f.upload("Visible", "battery reserve review", { project_id: PROJECT_ALPHA });
+    f.upload("Private", "battery reserve requirements", { audience: { kind: "only_me" }, project_id: PROJECT_ALPHA });
+    f.upload("Other project", "battery reserve requirements", { project_id: PROJECT_BETA });
+    f.upload("Other audience", "battery reserve requirements", { audience: { kind: "project", project_id: PROJECT_BETA }, project_id: PROJECT_ALPHA });
+    const result = f.retrieval.retrieve({ access_token: "member", queries: ["What are the battery requirements?"], scope: { kind: "project", project_id: PROJECT_ALPHA } });
+    expect(result.release.released_atoms.map(atom => atom.document_id)).toEqual([allowed]);
+  });
+
   it("retrieves V3 notes and V2 files through union audiences while keeping project scope and private context exact", async () => {
     const f = fixture();
     const projects = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
     const worker = new PersonDocumentProcessingV1(f.repository, undefined, new SqlitePersonTextSourceInboxV1(f.database));
     for (const [name, audience, associations] of [
-      ["shared-modern-marker", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, [PROJECT_ALPHA]],
-      ["private-modern-marker", { kind: "only_me" }, [PROJECT_ALPHA, PROJECT_BETA]],
-      ["home-personal-note-marker", { kind: "only_me" }, []],
-      ["unassociated-modern-marker", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, []],
+      ["sharedmodernmarker", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, [PROJECT_ALPHA]],
+      ["privatemodernmarker", { kind: "only_me" }, [PROJECT_ALPHA, PROJECT_BETA]],
+      ["homepersonalnotemarker", { kind: "only_me" }, []],
+      ["unassociatedmodernmarker", { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, []],
     ] as const) {
       projects.submitUploadV3("owner", { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: name, text: name, audience, association_project_ids: associations });
       expect(await worker.runOnce(new AbortController().signal)).toBe("admitted");
     }
-    const bytes = Buffer.from("document-modern-marker");
+    const bytes = Buffer.from("documentmodernmarker");
     f.documents.uploadV2("owner", { schema_version: 2, kind: "echo-person-document-upload-v2", request_id: randomUUID(), filename: "modern.md", title: "Modern", content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, association_project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, bytes);
     const claim = f.repository.claimExtraction()!;
     expect(f.repository.completeExtraction(claim, { status: "ready", sourceSha256: claim.source_sha256, extractorVersion: "fixture-1", chunks: [{ anchor_kind: "paragraph", anchor_start: 1, text: bytes.toString() }], message: null })).toBe(true);
     const retrieve = (marker: string, project?: typeof PROJECT_ALPHA | typeof PROJECT_BETA, access_token = "member") => f.retrieval.retrieve({ access_token, queries: [marker], scope: project ? { kind: "project", project_id: project } : { kind: "global" } });
-    expect(texts(retrieve("shared-modern-marker", PROJECT_ALPHA))).toEqual([expect.stringContaining("shared-modern-marker")]);
-    expect(texts(retrieve("document-modern-marker", PROJECT_ALPHA))).toEqual([expect.stringContaining("document-modern-marker")]);
-    expect(texts(retrieve("private-modern-marker", PROJECT_ALPHA))).toEqual([]);
-    expect(texts(retrieve("private-modern-marker", PROJECT_ALPHA, "owner"))).toEqual([expect.stringContaining("private-modern-marker")]);
-    expect(texts(retrieve("unassociated-modern-marker", PROJECT_ALPHA))).toEqual([]);
-    expect(texts(retrieve("unassociated-modern-marker"))).toEqual([expect.stringContaining("unassociated-modern-marker")]);
-    const home = retrieve("home-personal-note-marker", undefined, "owner");
-    expect(texts(home)).toEqual([expect.stringContaining("home-personal-note-marker")]);
-    expect(texts(retrieve("home-personal-note-marker"))).toEqual([]);
-    expect(texts(retrieve("home-personal-note-marker", PROJECT_ALPHA, "owner"))).toEqual([]);
-    expect(f.retrieval.read({ access_token: "owner", scope: { kind: "global" }, citation: citationOf(home.release.released_atoms[0]!) }).atom.text).toContain("home-personal-note-marker");
+    expect(texts(retrieve("sharedmodernmarker", PROJECT_ALPHA))).toEqual([expect.stringContaining("sharedmodernmarker")]);
+    expect(texts(retrieve("documentmodernmarker", PROJECT_ALPHA))).toEqual([expect.stringContaining("documentmodernmarker")]);
+    expect(texts(retrieve("privatemodernmarker", PROJECT_ALPHA))).toEqual([]);
+    expect(texts(retrieve("privatemodernmarker", PROJECT_ALPHA, "owner"))).toEqual([expect.stringContaining("privatemodernmarker")]);
+    expect(texts(retrieve("unassociatedmodernmarker", PROJECT_ALPHA))).toEqual([]);
+    expect(texts(retrieve("unassociatedmodernmarker"))).toEqual([expect.stringContaining("unassociatedmodernmarker")]);
+    const home = retrieve("homepersonalnotemarker", undefined, "owner");
+    expect(texts(home)).toEqual([expect.stringContaining("homepersonalnotemarker")]);
+    expect(texts(retrieve("homepersonalnotemarker"))).toEqual([]);
+    expect(texts(retrieve("homepersonalnotemarker", PROJECT_ALPHA, "owner"))).toEqual([]);
+    expect(f.retrieval.read({ access_token: "owner", scope: { kind: "global" }, citation: citationOf(home.release.released_atoms[0]!) }).atom.text).toContain("homepersonalnotemarker");
     grant(f.database, PROJECT_BETA, MEMBER, "member");
-    expect(texts(retrieve("shared-modern-marker", PROJECT_BETA))).toEqual([]);
-    expect(texts(retrieve("document-modern-marker", PROJECT_BETA))).toEqual([expect.stringContaining("document-modern-marker")]);
-    const global = retrieve("shared-modern-marker");
-    const scoped = retrieve("shared-modern-marker", PROJECT_ALPHA);
+    expect(texts(retrieve("sharedmodernmarker", PROJECT_BETA))).toEqual([]);
+    expect(texts(retrieve("documentmodernmarker", PROJECT_BETA))).toEqual([expect.stringContaining("documentmodernmarker")]);
+    const global = retrieve("sharedmodernmarker");
+    const scoped = retrieve("sharedmodernmarker", PROJECT_ALPHA);
     const citation = citationOf(global.release.released_atoms[0]!);
     f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
     expect(() => f.retrieval.revalidate({ access_token: "member", release: scoped.release })).toThrow();
     expect(() => f.retrieval.revalidate({ access_token: "member", release: global.release })).not.toThrow();
-    expect(f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation }).atom.text).toContain("shared-modern-marker");
+    expect(f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation }).atom.text).toContain("sharedmodernmarker");
     f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_BETA, MEMBER.membership_id);
     expect(() => f.retrieval.revalidate({ access_token: "member", release: global.release })).toThrow();
     expect(() => f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation })).toThrow();
@@ -226,15 +315,15 @@ describe("adversarial original-context retrieval", () => {
 
   it("uses actual V8 source admission for legacy notes and excludes a raw meeting source", async () => {
     const f = fixture();
-    await f.admitLegacyTeamNote("Legacy handoff", "legacy-context-marker is retained through the common Person source adapter");
-    const legacy = f.retrieval.retrieve({ access_token: "member", queries: ["legacy-context-marker"], scope: { kind: "global" } });
-    expect(texts(legacy).join(" ")).toContain("legacy-context-marker");
+    await f.admitLegacyTeamNote("Legacy handoff", "legacycontextmarker is retained through the common Person source adapter");
+    const legacy = f.retrieval.retrieve({ access_token: "member", queries: ["legacycontextmarker"], scope: { kind: "global" } });
+    expect(texts(legacy).join(" ")).toContain("legacycontextmarker");
 
     const meeting = {
       schema_version: 1 as const, id: "meeting-adversarial-1",
       provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-adversarial-1", canonical_revision: "revision-1", observed_at: PROJECT_CONTEXT_NOW, normalizer_version: "1" },
       capture: { state: "complete" as const, components: [] }, participants: [], artifacts: [],
-      content: [{ id: "note-1", kind: "note" as const, text: "raw-meeting-secret-marker must never enter Ask originals" }],
+      content: [{ id: "note-1", kind: "note" as const, text: "rawmeetingsecretmarker must never enter Ask originals" }],
     };
     const bridge = new MeetingSourceBridgeV1({
       identity: meeting.provenance.source,
@@ -246,23 +335,23 @@ describe("adversarial original-context retrieval", () => {
       source: bridge, request: { limit: 1 },
       admission: { store: new SqliteSourceAdmissionStoreV1(f.database), scope: { organization_id: OWNER.organization_id, custody_ref: `organization:${OWNER.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
     });
-    const raw = f.retrieval.retrieve({ access_token: "member", queries: ["raw-meeting-secret-marker"], scope: { kind: "global" } });
+    const raw = f.retrieval.retrieve({ access_token: "member", queries: ["rawmeetingsecretmarker"], scope: { kind: "global" } });
     expect(raw.query_hit_counts).toEqual([0]);
-    expect(texts(raw).join(" ")).not.toContain("raw-meeting-secret-marker");
+    expect(texts(raw).join(" ")).not.toContain("rawmeetingsecretmarker");
   });
 
   it("enforces audience separately from project association in global and project-scoped reads", () => {
     const f = fixture();
-    f.upload("Shared Alpha", "shared-alpha-marker", { project_id: PROJECT_ALPHA });
-    f.upload("Private Alpha", "private-alpha-marker", { audience: { kind: "only_me" }, project_id: PROJECT_ALPHA });
-    f.upload("Beta audience Alpha association", "beta-audience-alpha-association-marker", { audience: { kind: "project", project_id: PROJECT_BETA }, project_id: PROJECT_ALPHA });
-    f.upload("Alpha audience Beta association", "alpha-audience-beta-association-marker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_BETA });
+    f.upload("Shared Alpha", "sharedalphamarker", { project_id: PROJECT_ALPHA });
+    f.upload("Private Alpha", "privatealphamarker", { audience: { kind: "only_me" }, project_id: PROJECT_ALPHA });
+    f.upload("Beta audience Alpha association", "betaaudiencealphaassociationmarker", { audience: { kind: "project", project_id: PROJECT_BETA }, project_id: PROJECT_ALPHA });
+    f.upload("Alpha audience Beta association", "alphaaudiencebetaassociationmarker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_BETA });
 
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["shared-alpha-marker"], scope: { kind: "global" } })).join(" ")).toContain("shared-alpha-marker");
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["private-alpha-marker"], scope: { kind: "global" } }))).toEqual([]);
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["beta-audience-alpha-association-marker"], scope: { kind: "project", project_id: PROJECT_ALPHA } }))).toEqual([]);
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["alpha-audience-beta-association-marker"], scope: { kind: "global" } })).join(" ")).toContain("alpha-audience-beta-association-marker");
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["alpha-audience-beta-association-marker"], scope: { kind: "project", project_id: PROJECT_ALPHA } }))).toEqual([]);
+    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["sharedalphamarker"], scope: { kind: "global" } })).join(" ")).toContain("sharedalphamarker");
+    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["privatealphamarker"], scope: { kind: "global" } }))).toEqual([]);
+    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["betaaudiencealphaassociationmarker"], scope: { kind: "project", project_id: PROJECT_ALPHA } }))).toEqual([]);
+    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["alphaaudiencebetaassociationmarker"], scope: { kind: "global" } })).join(" ")).toContain("alphaaudiencebetaassociationmarker");
+    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["alphaaudiencebetaassociationmarker"], scope: { kind: "project", project_id: PROJECT_ALPHA } }))).toEqual([]);
   });
 
   it("limits a broad single planned query to five newer originals, leaving later competing originals unreleased", () => {

@@ -59,13 +59,23 @@ the user navigates while the request runs.
 
 ## Released evidence and composition
 
-ADR-0007's bounded workflow remains: original question plus at most three planned
-queries, one request-local released batch, and at most one answer call. Layer 3
+The V2 global/project route uses the validated question directly as one
+retrieval query, one request-local released batch, and at most one answer call.
+The 2026-09-23 Answer Lab adoption removes its model planner after staging
+showed valid questions failing on planner JSON before retrieval. The legacy
+V1 approved-record route retains ADR-0007's model-planned query contract. Layer 3
 combines authorized record retrieval with an original-context retrieval port.
 Adapters own storage access; the answer core receives released contracts only,
 without database, source repository, or provider handles. There is no agent
 loop, cross-request memory, query-triggered indexing, or automatic semantic
 ingestion.
+
+Original retrieval ranks authorized rows by the number of distinct matching
+subject terms, excluding a closed list of English function words. A row need
+not contain every question word. Audience and project association still filter
+the eligible rows before the bounded result selection; keyword similarity is
+never an authorization rule. This is a lexical recall improvement, not semantic
+search or the Answer Lab's full BM25/claims pipeline.
 
 Authorization precedes model-context release. Before returning an answer,
 revalidate the current Person, selected project, and every source supplied to

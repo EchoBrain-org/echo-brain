@@ -77,10 +77,22 @@ readers lose access, while newly authorized project members can access history.
   project name appearing in an approved record is not sufficient to include it.
 - Raw meeting snapshots and pending/rejected approvals are not exposed merely
   because they exist in the shared source tables.
-- Retrieval remains bounded and lexical, with up to three planned queries in
-  addition to the question, at most 16 context atoms and 49,152 UTF-8 context
-  bytes, and at most one answer model call. This is not a promise to inspect
-  every accessible document exhaustively.
+- V2 Ask sends the validated question directly to retrieval, without a model
+  planner. It selects at most five original evidence packets and, globally,
+  five approved records. The core retains its 16-atom / 49,152-byte ceiling and
+  at most one answer model call. Empty evidence makes no model call. The
+  legacy V1 approved-record route retains model planning.
+- Original retrieval uses distinct-term substring coverage, omitting a closed
+  English function-word list, then recency and stable source/ordinal tie-breaks.
+  It ranks matches before the five-result limit, across notes and documents,
+  and chooses the strongest matching immutable packet within a selected chunk.
+  This is not BM25, semantic matching, or exhaustive document inspection.
+  Single-word ties can favor newer incidental matches; broad questions and
+  synonyms can still miss evidence. Scoring scans eligible retained rows;
+  large-corpus latency still needs measurement. No index or migration is added.
+- The Answer Lab's 24-atom budget, claims/quote validation, recomposition,
+  verifier and fixture-specific synonym expansions are not enabled by this
+  adoption. Live model answer quality and latency remain separate checks.
 - Ask does not request decision/action extraction or publish approvals. The
   requested-only analysis policy remains unchanged.
 - Professional role/title/team metadata and Undo of completed uploads or
