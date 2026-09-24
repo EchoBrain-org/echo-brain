@@ -249,7 +249,7 @@ enum ProjectProof {
         func textFile(_ name: String, _ text: String) -> URL {
             let url = folder.appendingPathComponent(name); try! Data(text.utf8).write(to: url); return url
         }
-        let initialHomeRows = mode == "ui-home-back" ? 10 : 2
+        let initialHomeRows = ["ui-home-back", "ui-home-empty-return"].contains(mode) ? 10 : 2
         controller.show(); wait("home") { !uploads.busy && uploads.identity != nil && !projects.busy && projects.projects.count == initialHomeRows }
         let query = ProofUI.find(NSTextField.self, "ask-field", "Ask or find context", in: chrome)
         let submit = ProofUI.find(NSButton.self, "submit-button", "Submit", in: chrome)
@@ -259,6 +259,73 @@ enum ProjectProof {
             ProofUI.find(NSButton.self, "Apollo · \(role)", in: chrome).performClick(nil)
             wait("project") { !projects.busy && projects.selected?.project_id == project && projects.items.count == 1 && !projects.members.isEmpty }
             settle("project settle")
+        }
+
+        if mode == "ui-refresh-revoked" || mode == "ui-refresh-empty" {
+            settle("initial refreshes")
+            query.stringValue = "An unfinished question"
+            controller.refreshIdentity()
+            settle("authoritative refresh result")
+            require(projects.projects.isEmpty, "refresh retained projects absent from the authorized response")
+            if mode == "ui-refresh-revoked" {
+                require(query.stringValue.isEmpty && !projects.listFetched, "access rejection retained protected state")
+                require(ProofUI.visible(ProofUI.find(NSButton.self, "retry-projects", in: chrome)), "access rejection has no recovery control")
+            } else {
+                require(projects.listFetched && !query.stringValue.isEmpty, "valid empty list treated as access loss")
+                require(ProofUI.visible(ProofUI.find(NSButton.self, "new-project-empty", in: chrome)), "valid empty list has no create control")
+            }
+            return
+        }
+
+        if mode == "ui-refresh-queued" {
+            settle("initial refreshes")
+            projects.discover()
+            controller.refreshIdentity()
+            settle("queued refresh after list finishes")
+            require(projects.projects.count == 2, "queued refresh lost the list")
+            return
+        }
+
+        if mode == "ui-refresh" {
+            settle("initial refreshes")
+            let draft = "What should we build next?"
+            query.stringValue = draft
+            controller.refreshIdentity()
+            wait("same-account list refresh") { !uploads.busy && projects.busy }
+            require(projects.projects.count == 2, "same-account refresh erased visible projects")
+            require(ProofUI.visible(ProofUI.find(NSButton.self, "Apollo · Lead", in: chrome)), "project row disappeared during refresh")
+            require(query.stringValue == draft, "same-account refresh erased the unfinished question")
+            settle("same-account refresh complete")
+            require(query.stringValue == draft, "refresh completion erased the unfinished question")
+            // A deferred account check also runs after a sheet closes, without
+            // switching apps. It must not wipe the Home behind the sheet.
+            controller.startWrite(); wait("compose during home refresh") { window.attachedSheet != nil }
+            controller.refreshIdentity()
+            window.attachedSheet?.cancelOperation(nil)
+            wait("compose closed") { window.attachedSheet == nil }
+            settle("refresh after sheet close")
+            require(projects.projects.count == 2 && query.stringValue == draft, "sheet-close refresh erased Home state")
+            controller.accountWillChange()
+            require(projects.projects.isEmpty && query.stringValue.isEmpty, "account change retained protected Home state")
+            return
+        }
+
+        if mode == "ui-home-empty-return" {
+            window.setContentSize(NSSize(width: 900, height: 580))
+            ProofUI.find(NSButton.self, "more-projects", in: chrome).performClick(nil)
+            wait("paged Home before empty refresh") { !projects.busy && projects.projects.count == 15 }
+            guard let homeScroll = ProofUI.views(chrome).compactMap({ $0 as? NSScrollView }).first(where: ProofUI.visible) else {
+                fatalError("missing visible home scroll")
+            }
+            window.contentView?.layoutSubtreeIfNeeded()
+            homeScroll.contentView.scroll(to: NSPoint(x: 0, y: 210)); homeScroll.reflectScrolledClipView(homeScroll.contentView)
+            require(homeScroll.contentView.bounds.origin.y > 0, "Home did not scroll before empty refresh")
+            controller.refreshIdentity(); settle("empty Home refresh")
+            require(projects.projects.isEmpty && projects.listFetched, "expected authoritative empty Home")
+            controller.refreshIdentity(); settle("projects return after empty Home")
+            require(projects.projects.count == 10, "expected projects to return")
+            require(abs(homeScroll.contentView.bounds.origin.y) < 1, "empty refresh retained an obsolete scroll target")
+            return
         }
 
         if mode == "ui-home-back" {
@@ -273,6 +340,11 @@ enum ProjectProof {
             homeScroll.contentView.scroll(to: NSPoint(x: 0, y: 210)); homeScroll.reflectScrolledClipView(homeScroll.contentView)
             let homeOffset = homeScroll.contentView.bounds.origin.y
             require(homeOffset > 0, "home list did not scroll")
+            query.stringValue = "Keep this unfinished question"
+            controller.refreshIdentity(); settle("refresh paged Home")
+            require(projects.projects.map(\.name) == expected && projects.listCursor == nil, "refresh lost later project pages")
+            require(abs(homeScroll.contentView.bounds.origin.y - homeOffset) < 1, "refresh lost Home scroll position")
+            require(query.stringValue == "Keep this unfinished question", "refresh lost Home question")
             ProofUI.find(NSButton.self, "Apollo · Lead", in: chrome).performClick(nil)
             wait("opened from page two") { !projects.busy && projects.selected?.project_id == project }
             back.performClick(nil)

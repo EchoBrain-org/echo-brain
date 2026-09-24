@@ -644,6 +644,13 @@ final class ProjectSession {
         cancel(); clearScoped(); projects = []; listCursor = nil; listFetched = false; concealed = false
         invalidateDrafts(); status = "Loading your projects…"; run(.list(cursor))
     }
+    /// Revalidate Home without treating a same-account check as navigation or
+    /// access loss. Keep verified rows and the global Ask draft while loading;
+    /// the normal failure/account/concealment paths still clear protected state.
+    func refreshList() {
+        guard identity != nil, selected == nil, !busy, !hasOutstandingMutation else { return }
+        concealed = false; status = "Loading your projects…"; run(.list(nil))
+    }
     func open(_ project: String) {
         guard !hasOutstandingMutation, identity != nil else { return }
         cancel(); clearScoped(); readForRoster = false; concealed = false; invalidateDrafts()
@@ -3684,12 +3691,17 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             // A save that may exist under the account that just went away
             // stays said on the page until the person moves on.
             if uploads.identity == nil, uploads.status.hasPrefix("The save may have completed") { localNotice = uploads.status }
+            // Binding starts its own fresh list; it satisfies this refresh.
+            refreshingProjects = false
             projects.bind(uploads.identity)
         }
-        if refreshingProjects && !uploads.busy && window.attachedSheet == nil {
+        if refreshingProjects && !uploads.busy && window.attachedSheet == nil && !projects.busy {
             refreshingProjects = false
             if projects.identity != uploads.identity { projects.bind(uploads.identity) }
-            else if mode == .home && !projects.busy { projects.discover() }
+            else if mode == .home {
+                homePlace = homePlace ?? shownHome()
+                projects.refreshList()
+            }
         }
         composeSheet.refresh(); peopleSheet.refresh(); createSheet.refresh()
         if mode == .project, let selected = projects.selected, uploads.identity != nil, !uploads.hasOutstandingMutation {
@@ -3707,7 +3719,9 @@ final class ProjectsController: NSObject, NSWindowDelegate, NSTextFieldDelegate 
             }
         }
         if mode == .home, let place = homePlace, window.attachedSheet == nil, !projects.busy, projects.listFetched {
-            if projects.projects.count < place.rows, projects.listCursor != nil { projects.nextProjects() }
+            if projects.projects.isEmpty, projects.listCursor == nil {
+                homePlace = nil; scrollTarget = nil
+            } else if projects.projects.count < place.rows, projects.listCursor != nil { projects.nextProjects() }
             else { homePlace = nil; scrollTarget = place.offset }
         }
         if mode == .project, !projects.busy, let selected = projects.selected {
