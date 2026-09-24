@@ -16,13 +16,15 @@ const define = { __ECHO_TEST_HOOK__: release ? 'false' : 'true' };
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, 'renderer'), { recursive: true });
 
-const node = { bundle: true, platform: 'node', target: 'node24', external: ['electron'], define, logLevel: 'warning', sourcemap: !release };
+// Release builds fold the define and drop the dead branches it leaves, so the
+// test hook's code is not merely unreachable but absent.
+const node = { bundle: true, platform: 'node', target: 'node24', external: ['electron'], define, logLevel: 'warning', sourcemap: !release, minifySyntax: release };
 await Promise.all([
   build({ ...node, entryPoints: [join(root, 'src/main/main.ts')], outfile: join(out, 'main.cjs'), format: 'cjs' }),
   build({ ...node, entryPoints: [join(root, 'src/preload/preload.ts')], outfile: join(out, 'preload.cjs'), format: 'cjs' }),
   build({ ...node, entryPoints: [join(root, 'src/host/host.ts')], outfile: join(out, 'host.mjs'), format: 'esm' }),
   build({
-    bundle: true, platform: 'browser', target: 'chrome140', format: 'esm', define, logLevel: 'warning', sourcemap: !release,
+    bundle: true, platform: 'browser', target: 'chrome140', format: 'esm', define, logLevel: 'warning', sourcemap: !release, minifySyntax: release,
     entryPoints: [join(root, 'src/renderer/main.tsx')], outfile: join(out, 'renderer/app.js'),
     jsx: 'automatic', jsxImportSource: 'preact',
   }),
@@ -39,6 +41,16 @@ writeFileSync(join(out, 'build-info.json'), JSON.stringify({
 // macOS uses a black template image; other systems a light one.
 writeFileSync(join(out, 'trayTemplate.png'), ring(32, [0, 0, 0]));
 writeFileSync(join(out, 'tray.png'), ring(32, [240, 236, 230]));
+if (release) {
+  // Fail rather than ship a release bundle that still carries test code.
+  const { readFileSync } = await import('node:fs');
+  const markers = ['ECHO_DESKTOP_TEST', 'echo-test:', 'installTestAuthority', '[client]', '[host]'];
+  for (const file of ['main.cjs', 'preload.cjs', 'host.mjs', 'renderer/app.js']) {
+    const text = readFileSync(join(out, file), 'utf8');
+    const found = markers.filter(marker => text.includes(marker));
+    if (found.length > 0) throw new Error(`release bundle ${file} still contains test code: ${found.join(', ')}`);
+  }
+}
 console.log(`built ${release ? 'release' : 'dev'} bundles into build/`);
 
 function ring(size, [r, g, b]) {
