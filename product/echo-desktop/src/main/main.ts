@@ -28,8 +28,8 @@ if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_USER_DATA) app.setPath('userData', t
 else if (app.isPackaged) app.setPath('userData', join(app.getPath('appData'), 'ECHO', 'chromium'));
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true } }]);
 
-// Release builds: no fuse covers remote debugging, so refuse it outright.
-if (!__ECHO_TEST_HOOK__ && process.argv.some(argument => argument.startsWith('--remote-debugging-port'))) {
+// Release builds: no fuse covers remote debugging, so refuse every form of it.
+if (!__ECHO_TEST_HOOK__ && process.argv.some(argument => /^--remote-(debugging|allow-origins)/.test(argument))) {
   app.exit(1);
 }
 const smoke = process.argv.includes('--smoke');
@@ -81,9 +81,11 @@ function startHost(): void {
     const value = process.env[name];
     if (value !== undefined) env[name] = value;
   }
-  if (__ECHO_TEST_HOOK__) {
+  // The fixture Authority writes a synthetic session: only ever into a home
+  // the test named, never the person's own.
+  if (__ECHO_TEST_HOOK__ && test.ECHO_HOME && resolve(test.ECHO_HOME) !== resolve(homedir())) {
+    env.ECHO_HOME = test.ECHO_HOME;
     for (const name of ['ECHO_DESKTOP_TEST_FIXTURES', 'ECHO_DESKTOP_TEST_MODE']) if (test[name]) env[name] = test[name]!;
-    if (test.ECHO_HOME) env.ECHO_HOME = test.ECHO_HOME;
   }
   const child = utilityProcess.fork(HOST_PATH, [], { serviceName: 'ECHO person host', env, stdio: 'pipe' });
   if (__ECHO_TEST_HOOK__) {
@@ -180,10 +182,6 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       const vetted = vetDocument(chosen.filePaths[0]!);
       return vetted ? { ok: true, value: vetted } : refused('unsupported_file');
     }
-    case 'drop.accept': {
-      const vetted = vetDocument((params as MainMethods['drop.accept']['params']).path);
-      return vetted ? { ok: true, value: vetted } : refused('unsupported_file');
-    }
     case 'clipboard.writeText': {
       const text = (params as MainMethods['clipboard.writeText']['params']).text;
       if (typeof text !== 'string' || text.length > 12_000) return refused();
@@ -206,11 +204,22 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
 ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> => {
   const started = Date.now();
   const result = await broker(event, request);
-  const method = typeof (request as { method?: unknown })?.method === 'string' ? (request as { method: string }).method : '?';
+  // Only names from the allowlists reach the log; anything else the page sent is '?'.
+  const named = (request as { method?: unknown })?.method;
+  const method = typeof named === 'string' && (hostMethods.has(named) || mainMethods.has(named)) ? named : '?';
   const requestId = (request as { params?: { request_id?: unknown } })?.params?.request_id;
-  log(`${method.replace(/[^a-zA-Z.]/g, '').slice(0, 40)} ${result.ok ? 'ok' : result.failure.code}` +
+  log(`${method} ${result.ok ? 'ok' : result.failure.code}` +
     `${typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId) ? ` ${requestId}` : ''} ${Date.now() - started}ms`);
   return result;
+});
+
+// A dropped file's path comes only from the preload, which reads it off a real
+// File the person dropped; the page's rpc can never name a path.
+ipcMain.handle('drop', (event, path: unknown): Result<FileHandle> => {
+  if (!trustedSender(event)) return refused('forbidden');
+  const vetted = typeof path === 'string' ? vetDocument(path) : null;
+  log(`drop ${vetted ? 'ok' : 'unsupported_file'}`);
+  return vetted ? { ok: true, value: vetted } : refused('unsupported_file');
 });
 
 async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Result<unknown>> {
@@ -244,7 +253,7 @@ function createWindow(): BrowserWindow {
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
       preload: join(BUILD, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false,
-      webSecurity: true, spellcheck: true, backgroundThrottling: false,
+      webSecurity: true, spellcheck: true, backgroundThrottling: false, devTools: __ECHO_TEST_HOOK__,
     },
   });
   created.webContents.on('will-navigate', event => event.preventDefault());

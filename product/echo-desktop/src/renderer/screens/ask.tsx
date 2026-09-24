@@ -26,7 +26,7 @@ export function Bar({ state }: { state: State }) {
         )}
         <label for="ask-field" class="sr-only">Ask ECHO</label>
         <input
-          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck
+          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck maxLength={240}
           placeholder={projectName ? `Ask about ${projectName}` : 'Ask ECHO'}
           value={text} onInput={event => setText((event.target as HTMLInputElement).value)}
         />

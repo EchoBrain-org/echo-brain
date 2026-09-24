@@ -11,5 +11,6 @@ contextBridge.exposeInMainWorld('echo', {
     ipcRenderer.on('event', handler);
     return () => { ipcRenderer.removeListener('event', handler); };
   },
-  dropFile: (file: File) => ipcRenderer.invoke('rpc', { method: 'drop.accept', params: { path: webUtils.getPathForFile(file) } }),
+  // A path only ever comes from a real dropped File, on its own channel.
+  dropFile: (file: File) => ipcRenderer.invoke('drop', webUtils.getPathForFile(file)),
 });

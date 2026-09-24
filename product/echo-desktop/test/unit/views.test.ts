@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  answerView, failureView, feedView, noteTitle, projectPageView, receiptView, statusView, ViewError, writeStatusView,
+  answerView, askText, failureView, feedView, noteTitle, projectPageView, receiptView, statusView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -76,10 +76,18 @@ describe('failures carry a code, never text', () => {
   });
 });
 
-describe('note titles', () => {
-  it('uses the first non-empty line, at most 120 characters', () => {
+describe('text the API accepts', () => {
+  it('titles are the first non-empty line, tabs and controls made spaces, at most 200 bytes', () => {
     expect(noteTitle('\n\n  Northwind call  \nsecond')).toBe('Northwind call');
-    expect([...noteTitle('é'.repeat(200))].length).toBe(120);
+    expect(noteTitle('a\tb\u0007c\r\nnext')).toBe('a b c');
+    expect(Buffer.byteLength(noteTitle('é'.repeat(200)))).toBe(200);
+    expect(noteTitle('x' + '😀'.repeat(60))).toBe('x' + '😀'.repeat(49)); // never half a character
     expect(noteTitle('   \n  ')).toBe('');
+  });
+
+  it('questions are one NFC line of at most 240 code points', () => {
+    expect(askText('  what\nchanged?\u2028 ')).toBe('what changed?');
+    expect(askText('e\u0301')).toBe('é');
+    expect([...askText('😀'.repeat(300))].length).toBe(240);
   });
 });

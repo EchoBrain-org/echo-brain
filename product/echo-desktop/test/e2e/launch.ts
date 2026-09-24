@@ -9,6 +9,8 @@ export interface Launched {
   app: ElectronApplication;
   page: Page;
   home: string;
+  /** Chromium's data and ECHO's diagnostic log. */
+  userData: string;
   /** Requests the real person client sent to the fixture Authority. */
   calls(): { method: string; path: string; body?: Record<string, unknown> }[];
   close(): Promise<void>;
@@ -32,7 +34,7 @@ export async function launch(mode = ''): Promise<Launched> {
   });
   const page = await app.firstWindow();
   return {
-    app, page, home,
+    app, page, home, userData,
     calls() {
       const file = join(home, 'calls.jsonl');
       if (!existsSync(file)) return [];

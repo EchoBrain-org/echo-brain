@@ -335,7 +335,7 @@ export async function sendCompose(): Promise<void> {
   if (compose.file) {
     const title = text.split('\n').map(line => line.trim()).find(line => line !== '') ?? compose.file.name;
     result = await rpc('documents.upload', {
-      expect: account, request_id: compose.requestId, file_handle: compose.file.handle, title: [...title].slice(0, 120).join(''),
+      expect: account, request_id: compose.requestId, file_handle: compose.file.handle, title,
       audience, ...(projectId === undefined ? {} : { project_id: projectId }),
     });
   } else {

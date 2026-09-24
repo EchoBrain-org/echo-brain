@@ -127,11 +127,12 @@ export interface HostMethods {
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope }; result: Answer };
   'ask.source': { params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
   'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
+  /** Resends a document's retained original under the same request. */
+  'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };
 }
 
 export interface MainMethods {
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
-  'drop.accept': { params: { path: string }; result: FileHandle };
   'clipboard.writeText': { params: { text: string }; result: null };
   'window.hide': { params: Record<string, never>; result: null };
   'app.quit': { params: Record<string, never>; result: null };
@@ -145,10 +146,10 @@ export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'account.logout', 'projects.list', 'projects.feed', 'projects.readContext',
-  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status',
+  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'drop.accept', 'clipboard.writeText', 'window.hide', 'app.quit', 'app.setUnresolved',
+  'dialog.openDocument', 'clipboard.writeText', 'window.hide', 'app.quit', 'app.setUnresolved',
 ];
 
 /** Events main pushes to the renderer. */

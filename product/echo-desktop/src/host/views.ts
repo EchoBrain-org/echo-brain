@@ -149,8 +149,26 @@ export function failureView(raw: unknown, fallback: string, write: boolean, requ
   };
 }
 
-/** The first non-empty line, at most 120 characters, is a note's title. */
+/**
+ * A title the API accepts: the first non-empty line, controls and tabs made
+ * spaces, at most 200 UTF-8 bytes, cut only between whole characters.
+ */
 export function noteTitle(body: string): string {
-  const line = body.split('\n').map(part => part.trim()).find(part => part.length > 0) ?? '';
-  return [...line].slice(0, 120).join('');
+  const line = body.split(/\r?\n/).map(part => part.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim()).find(part => part.length > 0) ?? '';
+  let bytes = 0;
+  let title = '';
+  for (const character of line) {
+    if (/[\uD800-\uDFFF]/.test(character) && character.length === 1) continue; // lone surrogate
+    const size = Buffer.byteLength(character);
+    if (bytes + size > 200) break;
+    bytes += size;
+    title += character;
+  }
+  return title.trim();
+}
+
+/** A question the API accepts: NFC, one line, trimmed, at most 240 code points. */
+export function askText(question: string): string {
+  const line = question.normalize('NFC').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ').trim();
+  return [...line].slice(0, 240).join('').trim();
 }
