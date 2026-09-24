@@ -28,7 +28,12 @@ if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_USER_DATA) app.setPath('userData', t
 else if (app.isPackaged) app.setPath('userData', join(app.getPath('appData'), 'ECHO', 'chromium'));
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true } }]);
 
-if (!app.requestSingleInstanceLock()) {
+// Release builds: no fuse covers remote debugging, so refuse it outright.
+if (!__ECHO_TEST_HOOK__ && process.argv.some(argument => argument.startsWith('--remote-debugging-port'))) {
+  app.exit(1);
+}
+const smoke = process.argv.includes('--smoke');
+if (!smoke && !app.requestSingleInstanceLock()) {
   app.exit(0);
 }
 
@@ -59,8 +64,12 @@ function buildInfo(): BuildInfo | null {
 
 // ---- person host -----------------------------------------------------------
 
-const clientEntry = process.env.ECHO_PERSON_CLIENT_ENTRY
-  ?? resolve(BUILD, '..', '..', '..', 'src', 'product', 'person-client', 'dist', 'composition.js');
+// A packaged app ships the person client exactly as packed, beside the host,
+// and never takes a code path from the environment.
+const HOST_PATH = app.isPackaged ? join(process.resourcesPath, 'host.mjs') : join(BUILD, 'host.mjs');
+const clientEntry = (__ECHO_TEST_HOOK__ && process.env.ECHO_PERSON_CLIENT_ENTRY) || (app.isPackaged
+  ? join(process.resourcesPath, 'person-client', 'package', 'dist', 'composition.js')
+  : resolve(BUILD, '..', '..', '..', 'src', 'product', 'person-client', 'dist', 'composition.js'));
 let host: UtilityProcess | null = null;
 let nextId = 1;
 const pending = new Map<number, (result: Result<unknown>) => void>();
@@ -76,7 +85,7 @@ function startHost(): void {
     for (const name of ['ECHO_DESKTOP_TEST_FIXTURES', 'ECHO_DESKTOP_TEST_MODE']) if (test[name]) env[name] = test[name]!;
     if (test.ECHO_HOME) env.ECHO_HOME = test.ECHO_HOME;
   }
-  const child = utilityProcess.fork(join(BUILD, 'host.mjs'), [], { serviceName: 'ECHO person host', env, stdio: 'pipe' });
+  const child = utilityProcess.fork(HOST_PATH, [], { serviceName: 'ECHO person host', env, stdio: 'pipe' });
   if (__ECHO_TEST_HOOK__) {
     // Dev and test builds only: the host's own diagnostics, never shown in the UI.
     child.stdout?.on('data', (chunk: Buffer) => process.stdout.write(`[host] ${chunk}`));
@@ -335,6 +344,35 @@ if (__ECHO_TEST_HOOK__) {
   (app as unknown as NodeJS.EventEmitter).on('echo-test:resume', () => send('lifecycle.resume', {}));
 }
 
+/**
+ * `--smoke`: prove a packaged build is sound without showing anything. The
+ * renderer is locked down, the test hook is absent, the host starts and the
+ * person client reports its build identity.
+ */
+async function runSmoke(): Promise<void> {
+  const checks: Record<string, boolean> = {};
+  // Load the real page hidden and look from inside it: no Node, only the bridge.
+  const probe = createWindow();
+  await new Promise<void>(resolveLoad => probe.webContents.once('did-finish-load', () => resolveLoad()));
+  const inside = await probe.webContents.executeJavaScript(
+    '({ node: typeof require !== "undefined" || typeof process !== "undefined", bridge: typeof window.echo === "object" })',
+  ) as { node: boolean; bridge: boolean };
+  checks.renderer_has_no_node = !inside.node;
+  checks.bridge_present = inside.bridge;
+  checks.test_hook_absent = !__ECHO_TEST_HOOK__;
+  quitting = true;
+  probe.destroy();
+  startHost();
+  const status = await callHost('app.status', {});
+  checks.host_started = status.ok || status.failure.code !== 'host_restarted';
+  checks.client_identity = status.ok && typeof (status.value as { client_version?: unknown }).client_version === 'string';
+  const passed = Object.values(checks).every(Boolean);
+  process.stdout.write(`${JSON.stringify({ smoke: passed ? 'passed' : 'failed', checks, build: buildInfo() })}\n`);
+  quitting = true;
+  host?.kill();
+  app.exit(passed ? 0 : 1);
+}
+
 void app.whenReady().then(() => {
   if (process.platform === 'darwin') app.dock?.hide();
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -352,6 +390,7 @@ void app.whenReady().then(() => {
     return new Response(file.body, { status: file.status, headers });
   });
   applicationMenu();
+  if (smoke) return void runSmoke();
   startHost();
   window = createWindow();
   window.once('ready-to-show', () => { if (!test.ECHO_DESKTOP_HIDDEN) show(); });
