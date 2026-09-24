@@ -6,7 +6,7 @@ import {
 } from 'electron';
 import { randomUUID } from 'node:crypto';
 import {
-  appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync,
+  appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
@@ -26,6 +26,12 @@ const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 const test = __ECHO_TEST_HOOK__ ? process.env : {} as NodeJS.ProcessEnv;
 const smoke = process.argv.includes('--smoke');
 /** `--smoke` never touches the person's session or data: it gets its own. */
+if (smoke) {
+  // Chromium writes its preferences while exiting, after smoke cleans up; sweep earlier runs.
+  try {
+    for (const name of readdirSync(tmpdir())) if (name.startsWith('echo-smoke-')) rmSync(join(tmpdir(), name), { recursive: true, force: true });
+  } catch { /* best effort */ }
+}
 const smokeRoot = smoke ? realpathSync(mkdtempSync(join(tmpdir(), 'echo-smoke-'))) : null;
 
 if (smokeRoot) app.setPath('userData', join(smokeRoot, 'data'));
