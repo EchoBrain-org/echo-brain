@@ -93,7 +93,8 @@ jobs:
           cli="$prefix/node_modules/.bin/echo-brain"
 
           test "$("$cli" --version)" = "$package_version"
-          test "$("$cli" --help)" = 'usage: echo-brain person <command> [options]'
+          test "$("$cli" --help)" = $'usage: echo-brain person <command> [options]\n       echo-brain update [--help]'
+          test "$("$cli" update --help)" = 'usage: echo-brain update [--check | --status | --if-due | configure --file <trusted-config.json>]'
           set +e
           HOME="$person_home" "$cli" person records \
             > "$stdout_file" 2> "$stderr_file"
