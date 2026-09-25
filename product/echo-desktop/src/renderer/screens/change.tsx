@@ -1,5 +1,5 @@
 import { message } from '../messages.js';
-import { dismissChange, keepChange, retryChange, type ChangeState, type State } from '../store.js';
+import { dismissChange, findingSheet, keepChange, retryChange, type ChangeState, type State } from '../store.js';
 
 /** What a refused change says: a member change that would leave no lead says that. */
 function refusal(change: ChangeState): string {
@@ -45,7 +45,7 @@ export function ChangeLine({ change }: { change: ChangeState }) {
 export function changeShownInPlace(state: State): boolean {
   const change = state.change;
   if (!change || state.concealed) return false;
-  if (change.origin === 'people') return state.sheet?.kind === 'people' && state.sheet.project.project_id === change.project.project_id;
+  if (change.origin === 'people') return findingSheet(state)?.project.project_id === change.project.project_id;
   const target = 'context_id' in change.change ? change.change.context_id : 'document_id' in change.change ? change.change.document_id : null;
   return state.reader?.id === target && !state.ask;
 }

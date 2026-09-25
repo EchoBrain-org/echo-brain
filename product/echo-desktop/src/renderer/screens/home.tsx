@@ -2,8 +2,9 @@ import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
 import { message } from '../messages.js';
-import { loadProjects, openProject, type State } from '../store.js';
+import { loadProjects, openNewProject, openProject, type State } from '../store.js';
 import { useDropTarget } from './drop.js';
+import { Plus } from './icons.js';
 
 /** One project. A file dropped on it is captured into it. */
 function ProjectRow({ project }: { project: ProjectSummary }) {
@@ -39,7 +40,14 @@ export function Home({ state }: { state: State }) {
     );
   }
   if (!loading && items.length === 0) {
-    return <div class="column center" data-testid="home-empty"><div>No projects yet</div></div>;
+    return (
+      <div class="column center" data-testid="home-empty">
+        <button type="button" class="empty-capture" data-testid="empty-new-project" onClick={openNewProject}>
+          <span class="ring" aria-hidden="true"><Plus /></span>
+          <span>New project</span>
+        </button>
+      </div>
+    );
   }
   return (
     <div class="column" data-testid="project-list" aria-busy={loading} ref={list}>

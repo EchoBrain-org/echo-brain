@@ -111,3 +111,9 @@ export function meetingTime(iso: string, timeZone?: string, allDay = false): str
     return new Intl.DateTimeFormat(undefined, options).format(date); // a time zone this computer does not know
   }
 }
+
+/** A date and time, "Sep 28, 3:00 PM": when an invitation stops working. */
+export function dateTime(iso: string): string {
+  const time = Date.parse(iso);
+  return Number.isNaN(time) ? '' : new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}

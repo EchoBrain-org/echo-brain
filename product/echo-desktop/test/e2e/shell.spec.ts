@@ -55,6 +55,8 @@ test('Capture in the sidebar opens capture where you are, and the account row na
   await expect(page.getByTestId('sidebar-capture')).toContainText('⌘⇧E');
   await expect(page.getByTestId('account-row')).toContainText('Ari');
   await expect(page.getByTestId('account-row')).toContainText('employee');
+  // People & invites is for owners.
+  await expect(page.getByTestId('sidebar-organization')).toHaveCount(0);
 
   await page.getByTestId('sidebar-capture').click();
   await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');

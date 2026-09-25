@@ -47,3 +47,9 @@ export const Ellipsis = () => (
 export const Chevron = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" stroke="rgba(240,236,230,0.66)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
 );
+export const Warning = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 2.8 19.5h18.4z" stroke="#e8a39a" stroke-width="1.8" stroke-linejoin="round" fill="none" /><path d="M12 10v4.5M12 17.2v.3" stroke="#e8a39a" stroke-width="1.8" stroke-linecap="round" /></svg>
+);
+export const FolderPlus = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v9.3a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linejoin="round" fill="none" /><path d="M12 10.5v5M9.5 13h5" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" /></svg>
+);

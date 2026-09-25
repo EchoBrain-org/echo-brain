@@ -3,15 +3,15 @@
 import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentSummary,
-  DocumentText, Expect, Extraction, Failure, FeedItem, FileHandle, Match, Member, ProjectChange, ProjectSummary, Receipt, RecordRef, Result,
-  SourceEvidence,
+  DocumentText, Employee, Expect, Extraction, Failure, FeedItem, FileHandle, Match, Member, ProjectChange, ProjectSummary, Receipt, RecordRef,
+  Result, SourceEvidence,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { dropFile, rpc } from './api.js';
 import { moreSources } from './feed.js';
 import { message } from './messages.js';
 
-type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary };
+type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' };
 
 /** A question, in the scope it was asked in. */
 export interface AskQuestion {
@@ -118,17 +118,11 @@ export interface ToolsSheet {
 }
 
 /**
- * People: a project's members and, for a lead, the organization's people to
- * add. Adding is instant, with an Undo; making a lead or removing someone is
- * asked first.
+ * Finding people for a project and adding one, which People and New project
+ * share. Adding is instant, with an Undo; making a lead or removing someone
+ * is asked first.
  */
-export interface PeopleSheet {
-  kind: 'people';
-  seq: number;
-  /** The project, with your role in it as last read. */
-  project: ProjectSummary;
-  /** The project could not be read again. */
-  failure?: Failure;
+export interface Finding {
   /** The name typed to find someone. */
   query: string;
   /** People the directory found for the name, or its first people. */
@@ -144,7 +138,85 @@ export interface PeopleSheet {
   added: { requestId: string; person: Member; created: boolean } | null;
 }
 
-export type Sheet = SignOutSheet | ToolsSheet | PeopleSheet;
+/** People: a project's members and, for a lead, the organization's people to add. */
+export interface PeopleSheet extends Finding {
+  kind: 'people';
+  seq: number;
+  /** The project, with your role in it as last read. */
+  project: ProjectSummary;
+  /** The project could not be read again. */
+  failure?: Failure;
+}
+
+/** One file in New project. They save one at a time, each under its own request. */
+export interface ProjectFile {
+  id: number;
+  name: string;
+  /** Absent for a file main refused. */
+  handle?: FileHandle;
+  requestId: string;
+  /** unknown: it may or may not have arrived; nothing after it starts until that is settled. */
+  status: 'waiting' | 'saving' | 'saved' | 'unknown' | 'checking' | 'failed' | 'skipped';
+  extraction?: Extraction;
+  failure?: Failure;
+  /** The client kept a private copy to resend it. */
+  kept: boolean;
+}
+
+/**
+ * New project: a name and files, then Create. Once the project exists it
+ * opens behind the sheet, people can be added to it, and the files save into
+ * it one by one.
+ */
+export interface NewProjectSheet extends Finding {
+  kind: 'new-project';
+  seq: number;
+  name: string;
+  /**
+   * The create: its request, the name it sends, and where it stands. An
+   * unknown one is resent as it was, and closing is asked first.
+   */
+  create: { requestId: string; name: string; status: 'editing' | 'sending' | 'unknown' | 'failed' | 'created'; failure?: Failure; confirmClose: boolean };
+  /** The project Create made, once read. */
+  project: ProjectSummary | null;
+  /** Made, but not read yet: Open reads it again, and Create is never offered twice. */
+  createdId: string | null;
+  opening: boolean;
+  openFailure?: Failure;
+  files: ProjectFile[];
+  /** The file whose Skip… is being asked. */
+  skip: number | null;
+  /** A fixed line about the last gesture, such as too many files. */
+  notice?: string;
+}
+
+export type Sheet = SignOutSheet | ToolsSheet | PeopleSheet | NewProjectSheet;
+
+/**
+ * People & invites, for owners: the organization's employees, and inviting,
+ * reissuing and revoking. There are no request ids here: only reading the
+ * list again settles a change whose outcome is unknown.
+ */
+export interface OrganizationState {
+  seq: number;
+  loading: boolean;
+  /** Null until read, and again once a change's outcome is unknown. */
+  items: readonly Employee[] | null;
+  failure?: Failure;
+  /** Typed to invite someone; they also narrow the list. */
+  name: string;
+  email: string;
+  /** The email whose ⋯ is open. */
+  menu: string | null;
+  /** Revoke access…, asked first. */
+  confirm: Employee | null;
+  /** A change on its way, or one whose outcome only a new read of the list can settle. */
+  write: { action: 'invite' | 'reissue' | 'revoke'; status: 'sending' | 'unknown' } | null;
+  /** What the last change did, or why it did not. */
+  notice: string | null;
+  /** The invitation just saved: Show invitation in Finder, and an invite's Undo. */
+  saved: { handle: string; action: 'invite' | 'reissue'; name: string; email: string; expires_at: string } | null;
+}
 
 /** Where an original was opened: a project's item, a saved note found in all context, or a document. */
 export type ReaderFrom =
@@ -251,6 +323,8 @@ export interface State {
   startFailed: boolean;
   /** On by default; the toggle only hides it, and this computer remembers. */
   sidebarOpen: boolean;
+  /** People & invites, while it is the page. */
+  organization: OrganizationState | null;
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
@@ -263,7 +337,7 @@ let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false }, feed: null, roster: null,
   reader: null, change: null,
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, concealed: false,
-  signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(),
+  signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null,
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -290,7 +364,7 @@ function expect(): Expect | null {
 }
 
 /** Access that was lost or refused. A timeout, an outage or a bad reply says nothing about it. */
-const ACCESS_LOST = ['signed_out', 'unauthorized', 'stale_access_state', 'sign_in_required', 'not_found', 'forbidden'];
+const ACCESS_LOST = ['signed_out', 'unauthorized', 'stale_access_state', 'sign_in_required', 'not_found', 'forbidden', 'owner_access_required'];
 
 /**
  * Signed out or switched under us: re-read the account. The page that failed
@@ -299,7 +373,7 @@ const ACCESS_LOST = ['signed_out', 'unauthorized', 'stale_access_state', 'sign_i
  */
 function accountLost(failure: Failure): void {
   if (ACCESS_LOST.includes(failure.code)) emptyBar();
-  if (['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'].includes(failure.code)) {
+  if (['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required', 'owner_access_required'].includes(failure.code)) {
     void refreshStatus();
   }
 }
@@ -327,12 +401,15 @@ function applyStatus(status: AppStatus): void {
   const next = status.account;
   set({ status, booting: false, startFailed: false });
   // Signed out: the sign-in page covers everything until someone signs in.
-  if (!next) { emptyBar(); set({ sheet: null }); return; }
+  if (!next) { emptyBar(); set({ sheet: null }); unresolvedChanged(); return; }
   const same = lastAccount?.authority === next.authority && lastAccount.membership_id === next.membership_id;
   // Someone else: nothing of the last account's survives, not even a draft.
   if (!same) forgetAccount();
-  // A new role is a change of access: the bar's text goes.
-  else if (before && before.role !== next.role) emptyBar();
+  // A new role is a change of access: the bar's text goes, and People & invites is for owners.
+  else if (before && before.role !== next.role) {
+    emptyBar();
+    if (state.route.page === 'organization' && next.role !== 'owner') goHome();
+  }
   lastAccount = { authority: next.authority, membership_id: next.membership_id };
   if (!same || !wasSignedIn) void loadProjects();
 }
@@ -342,7 +419,7 @@ function forgetAccount(): void {
   lastAccount = null;
   emptyBar();
   set({ route: { page: 'home' }, feed: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
-    barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false } });
+    barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, organization: null });
   setCompose(null);
   setChange(null);
 }
@@ -392,8 +469,9 @@ export function accountCommand(command: AccountCommand): void {
     else void openInvitation();
     return;
   }
-  // A sign-out already under way is not interrupted, nor People while a change in it is on its way.
-  if (!signedIn || signingOut() || (state.sheet?.kind === 'people' && memberChangeSending())) return;
+  // A sign-out already under way is not interrupted, nor a sheet with work on its way.
+  if (!signedIn || signingOut() || sheetHeld()) return;
+  if (state.sheet?.kind === 'new-project') finishNewProject(state.sheet);
   if (command === 'tools') void loadTools();
   else set({ sheet: { kind: command, busy: false } });
 }
@@ -403,8 +481,19 @@ function signingOut(): boolean {
   return (sheet?.kind === 'signout' || sheet?.kind === 'switch') && sheet.busy;
 }
 
+/** A sheet that must stay up: a change in it is on its way, or New project has work it would lose. */
+function sheetHeld(): boolean {
+  const sheet = state.sheet;
+  if (sheet?.kind === 'people') return memberChangeSending();
+  if (sheet?.kind === 'new-project') return newProjectBusy(sheet) || sheet.create.status === 'unknown';
+  return false;
+}
+
 export function closeSheet(): void {
-  if (!state.sheet || signingOut() || (state.sheet.kind === 'people' && memberChangeSending())) return;
+  const sheet = state.sheet;
+  if (!sheet || signingOut()) return;
+  if (sheet.kind === 'new-project') { closeNewProject(); return; }
+  if (sheet.kind === 'people' && memberChangeSending()) return;
   set({ sheet: null });
 }
 
@@ -427,7 +516,9 @@ export async function loadTools(): Promise<void> {
 /** A save or a project change on its way: signing out now would lose whether it arrived. */
 export function saveInFlight(): boolean {
   const status = state.compose?.status;
-  return status === 'sending' || status === 'checking' || state.change?.status === 'sending';
+  const sheet = state.sheet;
+  return status === 'sending' || status === 'checking' || state.change?.status === 'sending' ||
+    (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.organization?.write?.status === 'sending';
 }
 
 /** Sign out, or Switch account, after the person confirmed it. */
@@ -491,7 +582,8 @@ function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
 /** Back to Home as it was left: the same pages, the same scroll. The bar searches all context. */
 export function goHome(): void {
   readSeq += 1;
-  set({ route: { page: 'home' }, feed: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null });
+  set({ route: { page: 'home' }, feed: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
+    organization: null });
   syncSearch();
 }
 
@@ -518,7 +610,7 @@ export async function openProject(project: ProjectSummary): Promise<void> {
   if (!expect()) return;
   readSeq += 1;
   set({
-    route: { page: 'project', project }, reader: null, ask: null, sources: null, toast: null,
+    route: { page: 'project', project }, reader: null, ask: null, sources: null, toast: null, organization: null,
     barScope: { kind: 'project', project_id: project.project_id },
     feed: { projectId: project.project_id, notes: [], notesNext: null, documents: [], documentsNext: null, loading: true },
   });
@@ -767,9 +859,8 @@ export function addToProject(project: ProjectSummary): void {
 // ---- project changes -----------------------------------------------------------
 
 function setChange(change: ChangeState | null): void {
-  const before = state.change?.status;
   set({ change });
-  if (before !== change?.status) unresolvedChanged();
+  unresolvedChanged();
 }
 
 /** A change on its way, or one whose outcome is unknown: no other starts until it is settled. */
@@ -837,9 +928,9 @@ function changed(done: ChangeState): void {
     case 'member-add':
     case 'member-set':
     case 'member-remove': {
-      const sheet = state.sheet?.kind === 'people' && state.sheet.project.project_id === project.project_id ? state.sheet : null;
+      const sheet = peopleSheet();
       // Only this add is offered back; any other change ends the last one's Undo.
-      if (sheet) {
+      if (sheet && sheet.project.project_id === project.project_id) {
         const added = change.kind === 'member-add' && done.person
           ? { requestId: done.requestId, person: done.person, created: done.created === true } : null;
         set({ sheet: { ...sheet, added } });
@@ -869,20 +960,28 @@ function changed(done: ChangeState): void {
 
 // ---- people ----------------------------------------------------------------------
 
-function peopleSheet(mine?: number): PeopleSheet | null {
-  const sheet = state.sheet;
-  return sheet?.kind === 'people' && (mine === undefined || sheet.seq === mine) ? sheet : null;
+/** A sheet that finds people for a project: People, or New project once its project exists. */
+export type FindingSheet = PeopleSheet | (NewProjectSheet & { project: ProjectSummary });
+
+export function findingSheet(current: State = state): FindingSheet | null {
+  const sheet = current.sheet;
+  return sheet?.kind === 'people' || (sheet?.kind === 'new-project' && sheet.project) ? sheet as FindingSheet : null;
 }
 
-function setPeople(patch: Partial<PeopleSheet>, mine?: number): void {
+function peopleSheet(mine?: number): FindingSheet | null {
+  const sheet = findingSheet();
+  return sheet && (mine === undefined || sheet.seq === mine) ? sheet : null;
+}
+
+function setPeople(patch: Partial<Finding> & Partial<Pick<PeopleSheet, 'project' | 'failure'>>, mine?: number): void {
   const sheet = peopleSheet(mine);
-  if (sheet) set({ sheet: { ...sheet, ...patch } });
+  if (sheet) set({ sheet: { ...sheet, ...patch } as Sheet });
 }
 
 /** A lead can change who is in the project, while no other change is unsettled. */
 export function canManage(current: State = state): boolean {
-  const sheet = current.sheet;
-  return sheet?.kind === 'people' && sheet.project.role === 'lead' && !changeBlocked(current);
+  const sheet = findingSheet(current);
+  return sheet !== null && sheet.project.role === 'lead' && !changeBlocked(current);
 }
 
 /**
@@ -960,8 +1059,8 @@ export async function findPeople(more = false): Promise<void> {
 
 /** The people found who are not members already: adding one can never change a member's role. */
 export function candidates(current: State = state): readonly Member[] {
-  const sheet = current.sheet;
-  if (sheet?.kind !== 'people' || !sheet.directory) return [];
+  const sheet = findingSheet(current);
+  if (!sheet?.directory) return [];
   const members = new Set(current.roster?.projectId === sheet.project.project_id ? current.roster.items.map(person => person.membership_id) : []);
   return sheet.directory.items.filter(person => !members.has(person.membership_id));
 }
@@ -1017,6 +1116,471 @@ export function confirmMemberChange(): void {
     ? { kind: 'member-remove', project_id, membership_id: person.membership_id }
     : { kind: 'member-set', project_id, membership_id: person.membership_id, role: confirm.action },
   { project: sheet.project, origin: 'people', person });
+}
+
+// ---- new project -----------------------------------------------------------------
+
+/** New project takes up to 20 files, as the Swift app did. */
+export const MAX_PROJECT_FILES = 20;
+const TOO_MANY_FILES = 'Add up to 20 files.';
+/** Said when New project closes with files that may not have been saved. */
+export const UNSAVED_FILES = 'Some files may not have been saved.';
+
+let fileIds = 0;
+
+function newProjectSheet(mine?: number): NewProjectSheet | null {
+  const sheet = state.sheet;
+  return sheet?.kind === 'new-project' && (mine === undefined || sheet.seq === mine) ? sheet : null;
+}
+
+function setNewProject(patch: Partial<NewProjectSheet>, mine?: number): void {
+  const sheet = newProjectSheet(mine);
+  if (!sheet) return;
+  set({ sheet: { ...sheet, ...patch } });
+  unresolvedChanged();
+}
+
+/** Something in New project is on its way: the create, the read of what it made, a file, or an add. */
+export function newProjectBusy(sheet: NewProjectSheet): boolean {
+  return sheet.create.status === 'sending' || sheet.opening || memberChangeSending() ||
+    sheet.files.some(file => file.status === 'saving' || file.status === 'checking');
+}
+
+/** A project's name as the API takes it: one line, trimmed, NFC, at most 200 UTF-8 bytes. */
+export function projectName(text: string): string | null {
+  const name = text.normalize('NFC').trim();
+  return name === '' || new TextEncoder().encode(name).length > 200 || /[\u0000-\u001f\u007f-\u009f]/.test(name) ? null : name;
+}
+
+/** The sidebar's New project, and Home's when there are no projects. */
+export function openNewProject(): void {
+  if (!expect() || state.sheet || state.concealed || (state.compose && !state.compose.hidden)) return;
+  set({
+    toast: null,
+    sheet: {
+      kind: 'new-project', seq: ++seq, name: '', create: { requestId: crypto.randomUUID(), name: '', status: 'editing', confirmClose: false },
+      project: null, createdId: null, opening: false, files: [], skip: null, query: '', directory: null, menu: null, confirm: null, added: null,
+    },
+  });
+}
+
+/** Typing the name. A different name is a different request; while a create is on its way or unknown it cannot change. */
+export function setNewProjectName(name: string): void {
+  const sheet = newProjectSheet();
+  if (!sheet || sheet.project || sheet.createdId || sheet.create.status === 'sending' || sheet.create.status === 'unknown') return;
+  setNewProject({ name, notice: undefined,
+    create: { requestId: crypto.randomUUID(), name: '', status: 'editing', confirmClose: false } });
+}
+
+/**
+ * Create, or Try again on one whose outcome is unknown: the same request,
+ * with the same name. Only the Authority's receipt says it was made; then
+ * the project is read and opens behind the sheet. Made but not read, the
+ * button reads it again (Open): it never creates twice.
+ */
+export async function createProject(): Promise<void> {
+  const account = expect();
+  const sheet = newProjectSheet();
+  if (!account || !sheet || sheet.project) return;
+  if (sheet.createdId) { await openCreated(); return; }
+  const { create } = sheet;
+  if (create.status === 'sending' || create.status === 'created') return;
+  const retrying = create.status === 'unknown';
+  const name = retrying ? create.name : projectName(sheet.name);
+  if (!name) return;
+  const mine = sheet.seq;
+  setNewProject({ create: { ...create, name, status: 'sending', failure: undefined, confirmClose: false }, notice: undefined }, mine);
+  const result = await rpc('projects.create', { expect: account, request_id: create.requestId, name });
+  const current = newProjectSheet(mine);
+  if (!current) return;
+  if (!result.ok) {
+    // Only the Authority's answer settles an unknown create: a failed resend leaves it unknown.
+    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    setNewProject({ create: { ...current.create, status: unknown ? 'unknown' : 'failed', failure: result.failure } }, mine);
+    accountLost(result.failure);
+    return;
+  }
+  setNewProject({ create: { ...current.create, status: 'created' }, createdId: result.value.project_id }, mine);
+  await openCreated();
+}
+
+/** The project Create made, read: it joins your projects, opens behind the sheet, and takes people and files. */
+async function openCreated(): Promise<void> {
+  const account = expect();
+  const sheet = newProjectSheet();
+  if (!account || !sheet?.createdId || sheet.project || sheet.opening) return;
+  const mine = sheet.seq;
+  setNewProject({ opening: true, openFailure: undefined }, mine);
+  const result = await rpc('projects.read', { expect: account, project_id: sheet.createdId });
+  if (!newProjectSheet(mine)) return;
+  if (!result.ok) {
+    setNewProject({ opening: false, openFailure: result.failure }, mine);
+    accountLost(result.failure);
+    return;
+  }
+  const project = result.value;
+  if (!state.projects.items.some(item => item.project_id === project.project_id)) {
+    set({ projects: { ...state.projects, items: [project, ...state.projects.items] } });
+  }
+  setNewProject({ opening: false, project }, mine);
+  void openProject(project);
+  if (project.role === 'lead') void findPeople();
+  pumpFiles();
+}
+
+/** Close, Cancel or Done. A create whose outcome is unknown is asked about once; nothing on its way is cut off. */
+function closeNewProject(): void {
+  const sheet = newProjectSheet();
+  if (!sheet || newProjectBusy(sheet)) return;
+  if (!sheet.project && !sheet.createdId && sheet.create.status === 'unknown' && !sheet.create.confirmClose) {
+    setNewProject({ create: { ...sheet.create, confirmClose: true } });
+    return;
+  }
+  finishNewProject(sheet);
+}
+
+/** Keep it: back to the unknown create. */
+export function keepCreate(): void {
+  const sheet = newProjectSheet();
+  if (sheet) setNewProject({ create: { ...sheet.create, confirmClose: false } });
+}
+
+/**
+ * New project goes. Copies kept to resend a file go too, as nothing can
+ * resend them now; if some files may not have been saved, the toast says so.
+ */
+function finishNewProject(sheet: NewProjectSheet): void {
+  for (const file of sheet.files) if (file.kept) releaseCopy(file.requestId);
+  const unsaved = sheet.project !== null && sheet.files.some(file => file.status !== 'saved');
+  set({ sheet: null, ...(unsaved ? { toast: UNSAVED_FILES } : {}) });
+  unresolvedChanged();
+  if (sheet.project) void refreshFeed(sheet.project.project_id);
+}
+
+function releaseCopy(requestId: string): void {
+  const account = expect();
+  if (account) void rpc('documents.abandon', { expect: account, request_id: requestId });
+}
+
+/** Add files…: main's dialog, several at once. */
+export async function chooseFiles(): Promise<void> {
+  const sheet = newProjectSheet();
+  if (!sheet) return;
+  const result = await rpc('dialog.openDocuments', {});
+  if (!newProjectSheet(sheet.seq)) return;
+  if (!result.ok) { setNewProject({ notice: result.failure.code === 'too_many_files' ? TOO_MANY_FILES : message(result.failure) }, sheet.seq); return; }
+  const refused: Failure = { code: 'unsupported_file', retryable: false };
+  addFiles(sheet.seq, [...result.value.files.map(handle => ({ name: handle.name, handle })), ...result.value.refused.map(name => ({ name, failure: refused }))]);
+}
+
+/** Files dropped on New project. Each is handed to main on its own, which answers with a handle. */
+export async function dropFiles(files: readonly File[]): Promise<void> {
+  const sheet = newProjectSheet();
+  if (!sheet || files.length === 0) return;
+  if (sheet.files.length + files.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, sheet.seq); return; }
+  const chosen: { name: string; handle?: FileHandle; failure?: Failure }[] = [];
+  for (const file of files) {
+    const result = await dropFile(file);
+    chosen.push(result.ok ? { name: result.value.name, handle: result.value } : { name: file.name, failure: result.failure });
+  }
+  addFiles(sheet.seq, chosen);
+}
+
+/** Files join the list and wait their turn; one main refused says why. */
+function addFiles(mine: number, chosen: readonly { name: string; handle?: FileHandle; failure?: Failure }[]): void {
+  const sheet = newProjectSheet(mine);
+  if (!sheet || chosen.length === 0) return;
+  if (sheet.files.length + chosen.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, mine); return; }
+  const added: ProjectFile[] = chosen.map(file => ({
+    id: ++fileIds, name: file.name, requestId: crypto.randomUUID(), kept: false,
+    ...(file.handle ? { handle: file.handle, status: 'waiting' as const } : { status: 'failed' as const, failure: file.failure }),
+  }));
+  setNewProject({ files: [...sheet.files, ...added], notice: undefined }, mine);
+  pumpFiles();
+}
+
+function patchFile(mine: number, id: number, patch: Partial<ProjectFile>): void {
+  const sheet = newProjectSheet(mine);
+  if (sheet) setNewProject({ files: sheet.files.map(file => file.id === id ? { ...file, ...patch } : file) }, mine);
+}
+
+/** One save at a time, into the new project. A file whose outcome is unknown stops the ones after it. */
+function pumpFiles(): void {
+  const sheet = newProjectSheet();
+  if (!sheet?.project || sheet.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown')) return;
+  const next = sheet.files.find(file => file.status === 'waiting');
+  if (next) void saveFile(sheet.seq, next.id, false);
+}
+
+/** Saves a file for the project's members, or resends the copy the client kept of one (Try again). */
+async function saveFile(mine: number, id: number, retrying: boolean): Promise<void> {
+  const account = expect();
+  const sheet = newProjectSheet(mine);
+  const file = sheet?.files.find(entry => entry.id === id);
+  if (!account || !sheet?.project || !file || (!retrying && !file.handle)) return;
+  const project_id = sheet.project.project_id;
+  const audience: Audience = { kind: 'project', project_id };
+  patchFile(mine, id, { status: 'saving', failure: undefined });
+  const result = retrying
+    ? await rpc('documents.retry', { expect: account, request_id: file.requestId, audience })
+    : await rpc('documents.upload', { expect: account, request_id: file.requestId, file_handle: file.handle!.handle, title: file.name, audience, project_id });
+  const current = newProjectSheet(mine)?.files.find(entry => entry.id === id);
+  if (!current) return;
+  if (!result.ok) {
+    // Only the Authority's answer settles an unknown save: a failed resend leaves it unknown.
+    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    patchFile(mine, id, { status: unknown ? 'unknown' : 'failed', failure: result.failure, kept: current.kept || unknown });
+    accountLost(result.failure);
+    if (!unknown) pumpFiles();
+    return;
+  }
+  patchFile(mine, id, { status: 'saved', kept: false, ...(result.value.extraction ? { extraction: result.value.extraction } : {}) });
+  pumpFiles();
+}
+
+/** Try again: the same request, from the copy the client kept. */
+export function retryFile(id: number): void {
+  const sheet = newProjectSheet();
+  const file = sheet?.files.find(entry => entry.id === id);
+  if (!sheet || !file?.kept || (file.status !== 'unknown' && file.status !== 'failed') || newProjectBusy(sheet)) return;
+  void saveFile(sheet.seq, id, true);
+}
+
+/** Check status: saved carries on with the rest; never arrived can be sent again. */
+export async function checkFile(id: number): Promise<void> {
+  const account = expect();
+  const sheet = newProjectSheet();
+  const file = sheet?.files.find(entry => entry.id === id);
+  if (!account || !sheet || file?.status !== 'unknown') return;
+  const mine = sheet.seq;
+  patchFile(mine, id, { status: 'checking' });
+  const result = await rpc('writes.status', { expect: account, request_id: file.requestId, kind: 'document' });
+  if (!newProjectSheet(mine)?.files.some(entry => entry.id === id)) return;
+  if (result.ok && result.value.state === 'saved') {
+    patchFile(mine, id, { status: 'saved', kept: false, failure: undefined, ...(result.value.extraction ? { extraction: result.value.extraction } : {}) });
+    pumpFiles();
+    return;
+  }
+  if (result.ok && result.value.state === 'not_saved') {
+    // It never arrived: Try again resends it, and the rest carry on meanwhile.
+    patchFile(mine, id, { status: 'failed', failure: { code: 'not_saved', retryable: true } });
+    pumpFiles();
+    return;
+  }
+  patchFile(mine, id, { status: 'unknown' });
+  if (!result.ok) accountLost(result.failure);
+}
+
+/** Skip…: asked first, since it may have been saved. */
+export function askSkip(id: number): void {
+  const sheet = newProjectSheet();
+  if (sheet?.files.some(file => file.id === id && file.status === 'unknown')) setNewProject({ skip: id });
+}
+
+export function cancelSkip(): void { setNewProject({ skip: null }); }
+
+/** Skip: the file is left as it is, its kept copy goes, and the rest carry on. */
+export function confirmSkip(): void {
+  const sheet = newProjectSheet();
+  const file = sheet?.files.find(entry => entry.id === sheet.skip);
+  if (!sheet || !file || file.status !== 'unknown') { cancelSkip(); return; }
+  if (file.kept) releaseCopy(file.requestId);
+  setNewProject({ skip: null, files: sheet.files.map(entry => entry.id === file.id ? { ...entry, status: 'skipped', kept: false } : entry) });
+  pumpFiles();
+}
+
+/** Files can be dropped on New project: one or more, while it is up. */
+export function canDropFiles(event: DragEvent): boolean {
+  const items = event.dataTransfer?.items;
+  return state.status?.signed_in === true && state.sheet?.kind === 'new-project' && items !== undefined && items.length > 0 &&
+    [...items].every(item => item.kind === 'file');
+}
+
+// ---- people & invites (owners) ---------------------------------------------------
+
+/**
+ * What an unknown change may have done, and that only reading the list again
+ * settles it. There is no request id to resend it under.
+ */
+const MAY_HAVE: Record<'invite' | 'reissue' | 'revoke', string> = {
+  invite: 'The invitation may already have been issued. Refresh before trying again.',
+  reissue: 'A new invitation may already have been issued, and the previous one stopped working. Refresh before trying again.',
+  revoke: 'Access may already have been revoked. Refresh before trying again.',
+};
+const ENTER_BOTH = 'Enter the employee’s name and email address.';
+
+function organization(mine?: number): OrganizationState | null {
+  const page = state.organization;
+  return page && state.route.page === 'organization' && (mine === undefined || page.seq === mine) ? page : null;
+}
+
+function setOrganization(patch: Partial<OrganizationState>, mine?: number): void {
+  const page = organization(mine);
+  if (page) set({ organization: { ...page, ...patch } });
+}
+
+/** The sidebar's People & invites: owners only. The page moves, the bar searches all context. */
+export function openOrganization(): void {
+  if (state.status?.account?.role !== 'owner' || state.concealed) return;
+  readSeq += 1;
+  set({
+    route: { page: 'organization' }, feed: null, roster: null, reader: null, ask: null, sources: null, toast: null, barScope: { kind: 'global' },
+    organization: { seq: ++seq, loading: false, items: null, name: '', email: '', menu: null, confirm: null, write: null, notice: null, saved: null },
+  });
+  syncSearch();
+  void loadEmployees();
+}
+
+/** The list, read (again): Refresh, coming back to ECHO, and after each change. It settles an unknown change. */
+export async function loadEmployees(): Promise<void> {
+  const account = expect();
+  const page = organization();
+  if (!account || !page || page.write?.status === 'sending') return;
+  const mine = page.seq;
+  setOrganization({ loading: true, failure: undefined }, mine);
+  const result = await rpc('employees.list', { expect: account });
+  const current = organization(mine);
+  if (!current || current.write?.status === 'sending') return;
+  if (!result.ok) {
+    // A list that could not be read is never left showing.
+    setOrganization({ loading: false, items: null, failure: result.failure }, mine);
+    accountLost(result.failure);
+    return;
+  }
+  const settled = current.write?.status === 'unknown';
+  setOrganization({ loading: false, items: result.value.items, write: null, ...(settled ? { notice: null } : {}) }, mine);
+}
+
+export function setOrganizationField(field: 'name' | 'email', value: string): void {
+  setOrganization({ ...(field === 'name' ? { name: value } : { email: value }), notice: null });
+}
+
+/** The employees the typed name or email narrow the list to: search, then Invite. */
+export function shownEmployees(page: OrganizationState): readonly Employee[] {
+  const name = page.name.trim().toLowerCase();
+  const email = page.email.trim().toLowerCase();
+  return (page.items ?? []).filter(employee => (name === '' || employee.display_name.toLowerCase().includes(name)) &&
+    (email === '' || employee.email.includes(email)));
+}
+
+/** A new employee's email as the Authority takes it, the Swift app's rule. */
+function invitationEmail(value: string): string | null {
+  const email = value.trim().toLowerCase();
+  const [local, domain, ...rest] = email.split('@');
+  return email.length >= 3 && email.length <= 254 && rest.length === 0 && local !== undefined && domain !== undefined &&
+    local.length <= 64 && domain.length <= 253 && domain.split('.').every(label => label.length <= 63) &&
+    /^[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_+%-]*[a-z0-9])?)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/.test(email)
+    ? email : null;
+}
+
+/** Someone already here under that email: what to do instead. */
+function alreadyHere(email: string, page: OrganizationState): string | null {
+  const existing = page.items?.find(employee => employee.membership === 'active' && employee.email === email);
+  if (!existing) return null;
+  if (existing.invitation === 'pending' || existing.invitation === 'expired') return 'This employee already has an invitation. Reissue it from their ⋯ menu.';
+  return 'This employee is already a member. Ask them to sign in.';
+}
+
+/**
+ * Invite employee…: main asks where, makes a private folder there, and the
+ * client saves the invitation in it. The page never holds the path.
+ */
+export async function inviteEmployee(): Promise<void> {
+  const page = organization();
+  if (!page || !page.items || page.write) return;
+  const name = page.name.normalize('NFC').trim();
+  const email = invitationEmail(page.email);
+  if (name === '' || name.length > 200 || /[\u0000-\u001f\u007f]/.test(name) || !email) { setOrganization({ notice: ENTER_BOTH }); return; }
+  const conflict = alreadyHere(email, page);
+  if (conflict) { setOrganization({ notice: conflict }); return; }
+  const chosen = await rpc('dialog.saveInvitation', { name });
+  if (!organization(page.seq)) return;
+  if (!chosen.ok) { setOrganization({ notice: message(chosen.failure) }, page.seq); return; }
+  if (!chosen.value) return;
+  await employeeChange('invite', email, chosen.value.handle, name);
+}
+
+/** Reissue invitation…: a new one, saved the same way; the previous one stops working. */
+export async function reissueInvitation(employee: Employee): Promise<void> {
+  const page = organization();
+  if (!page || page.write) return;
+  setOrganization({ menu: null });
+  const chosen = await rpc('dialog.saveInvitation', { name: employee.display_name, reissue: true });
+  if (!organization(page.seq)) return;
+  if (!chosen.ok) { setOrganization({ notice: message(chosen.failure) }, page.seq); return; }
+  if (!chosen.value) return;
+  await employeeChange('reissue', employee.email, chosen.value.handle, employee.display_name);
+}
+
+/** Revoke access…: asked first, since it cannot be undone. */
+export function askRevoke(employee: Employee): void {
+  if (organization()?.write) return;
+  setOrganization({ confirm: employee, menu: null });
+}
+
+export function cancelRevoke(): void { setOrganization({ confirm: null }); }
+
+export function confirmRevoke(): void {
+  const employee = organization()?.confirm;
+  if (!employee) return;
+  setOrganization({ confirm: null });
+  void employeeChange('revoke', employee.email);
+}
+
+/** Undo, after an invite: revokes only the employee that invite added, at once. */
+export function undoInvite(): void {
+  const saved = organization()?.saved;
+  if (saved?.action === 'invite') void employeeChange('revoke', saved.email);
+}
+
+/** An invite, a reissue or a revoke. Only the list, read again, says what an unknown one did. */
+async function employeeChange(action: 'invite' | 'reissue' | 'revoke', email: string, handle?: string, name?: string): Promise<void> {
+  const account = expect();
+  const page = organization();
+  if (!account || !page || page.write) return;
+  const mine = page.seq;
+  // Only the last change is offered back: any other ends its Undo.
+  const undoing = action === 'revoke' && page.saved?.action === 'invite' && page.saved.email === email;
+  setOrganization({ write: { action, status: 'sending' }, notice: null, confirm: null, menu: null, saved: null }, mine);
+  const result = action === 'invite'
+    ? await rpc('employees.invite', { expect: account, name: name!, email, invitation_handle: handle! })
+    : action === 'reissue'
+      ? await rpc('employees.reissue', { expect: account, email, invitation_handle: handle! })
+      : await rpc('employees.revoke', { expect: account, email });
+  if (!organization(mine)) return;
+  if (!result.ok) {
+    const unknown = result.failure.mutation_outcome === 'unknown';
+    // An unknown change, or an invitation made whose file could not be saved: the list shown may be wrong now.
+    const stale = unknown || result.failure.code === 'invitation_save_failed';
+    setOrganization({
+      write: unknown ? { action, status: 'unknown' } : null, notice: unknown ? MAY_HAVE[action] : message(result.failure),
+      ...(stale ? { items: null } : {}),
+    }, mine);
+    accountLost(result.failure);
+    return;
+  }
+  if (action === 'revoke') {
+    // Undo says nothing more: the list shows it.
+    setOrganization({ write: null, notice: undoing ? null : 'Access revoked.' }, mine);
+  } else {
+    const expires = (result.value as { expires_at: string }).expires_at;
+    setOrganization({
+      write: null, notice: null, saved: { handle: handle!, action, name: name ?? email, email, expires_at: expires },
+      ...(action === 'invite' ? { name: '', email: '' } : {}),
+    }, mine);
+  }
+  await loadEmployees();
+}
+
+/** Show invitation in Finder: main shows the file it saved; the page never learns where. */
+export function showInvitation(): void {
+  const saved = organization()?.saved;
+  if (saved) void rpc('invitation.show', { invitation_handle: saved.handle });
+}
+
+export function toggleEmployeeMenu(email: string): void {
+  const page = organization();
+  if (page) setOrganization({ menu: page.menu === email ? null : email });
 }
 
 // ---- ask ---------------------------------------------------------------------
@@ -1286,20 +1850,32 @@ export function chipProject(current: State = state): ProjectSummary | null {
 
 const NOTE_OR_FILE = 'Save this note before attaching a file.';
 
-/** Main's quit guard: a note, a file or a project change on its way, or not yet confirmed either way. */
+/** What main's quit guard was last told. */
+let unresolvedTold = '';
+
+/**
+ * Main's quit guard: a note, a file or a project change (a create included)
+ * on its way, or not yet confirmed either way.
+ */
 function unresolvedChanged(): void {
   const compose = state.compose;
   const saving = compose?.status === 'sending' || compose?.status === 'unknown' || compose?.status === 'checking';
-  const changing = changeBlocked();
-  void rpc('app.setUnresolved', {
-    unresolved: saving || changing, ...(saving && compose.file ? { file: true } : {}), ...(!saving && changing ? { change: true } : {}),
-  });
+  const sheet = state.sheet?.kind === 'new-project' ? state.sheet : null;
+  const uploading = sheet?.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown') === true;
+  const changing = changeBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown';
+  const told = {
+    unresolved: saving || uploading || changing,
+    ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : {}),
+  };
+  const key = JSON.stringify(told);
+  if (key === unresolvedTold) return;
+  unresolvedTold = key;
+  void rpc('app.setUnresolved', told);
 }
 
 function setCompose(compose: ComposeState | null): void {
-  const before = state.compose?.status;
   set({ compose });
-  if (before !== compose?.status) unresolvedChanged();
+  unresolvedChanged();
 }
 
 /** A new capture: filed in this project and readable by its members, or only yours. */
@@ -1342,6 +1918,8 @@ export function openCompose(): void {
  */
 export function openCapture(): void {
   const current = state.compose;
+  // New project stays in front: its files are dropped on it.
+  if (state.sheet?.kind === 'new-project') return;
   set({ toast: null });
   setCompose(current ? { ...current, hidden: false } : fresh(null));
 }
@@ -1553,9 +2131,11 @@ export function conceal(): void {
   const reading = state.sources !== null;
   // People closes, as Home's and the sidebar's rows must take a drop; unless a change in it is on its way.
   const people = state.sheet?.kind === 'people' && !memberChangeSending();
+  // New project stays: files are dropped on it from other apps.
   set({
     concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, records: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
+    ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null } } : {}),
   });
   syncSearch();
 }
@@ -1565,6 +2145,8 @@ export function resume(): void {
   void refreshStatus().then(() => {
     searchAgain();
     if (state.sources && !state.concealed) startSources();
+    // People & invites is read again for whoever is signed in now.
+    if (state.route.page === 'organization' && !state.concealed) void loadEmployees();
   });
 }
 

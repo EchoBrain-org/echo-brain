@@ -6,16 +6,18 @@ import { AskView, Bar, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
 import { ChangeLine, changeShownInPlace } from './screens/change.js';
-import { Back, Saved, SidebarIcon } from './screens/icons.js';
+import { Back, Saved, SidebarIcon, Warning } from './screens/icons.js';
+import { NewProject } from './screens/new-project.js';
+import { Organization } from './screens/organization.js';
 import { People } from './screens/people.js';
 import { MembersButton, Project } from './screens/project.js';
 import { Reader } from './screens/reader.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import {
-  acceptDrop, accountCommand, canDrop, cancelMemberChange, clearBar, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, conceal,
-  getState, goHome, hostFailed, matchesShown, openCapture, refreshStatus, resume, retryStart, signinPhase, toggleMemberMenu, toggleMore,
-  toggleReaderMenu, toggleSidebar, useStore, windowShown, type State,
+  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeReader, closeSheet,
+  closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepCreate, matchesShown, openCapture, refreshStatus, resume, retryStart,
+  signinPhase, toggleEmployeeMenu, toggleMemberMenu, toggleMore, toggleReaderMenu, toggleSidebar, UNSAVED_FILES, useStore, windowShown, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -43,18 +45,26 @@ function escape(): void {
   back();
 }
 
-/** Back steps back one level: a sheet (or what is open in it), compose, the answer (and the source beside it), reader, project. */
+/**
+ * Back steps back one level: a sheet (or what is open in it), compose, the
+ * answer (and the source beside it), reader, then a project or People & invites.
+ */
 function back(): void {
   const state = getState();
-  if (state.sheet?.kind === 'people' && state.sheet.confirm) return cancelMemberChange();
-  if (state.sheet?.kind === 'people' && state.sheet.menu) return toggleMemberMenu(state.sheet.menu);
+  const finding = findingSheet(state);
+  if (finding?.confirm) return cancelMemberChange();
+  if (finding?.menu) return toggleMemberMenu(finding.menu);
+  if (state.sheet?.kind === 'new-project' && state.sheet.skip !== null) return cancelSkip();
+  if (state.sheet?.kind === 'new-project' && state.sheet.create.confirmClose) return keepCreate();
   if (state.sheet) return closeSheet();
   if (!state.status?.signed_in) return closeSigninForm();
   if (state.compose && !state.compose.hidden) return state.compose.picking ? toggleMore() : closeCompose();
   if (state.ask) return closeAsk();
   if (state.reader?.menu !== undefined && state.reader.menu !== 'closed') return toggleReaderMenu();
   if (state.reader) return closeReader();
-  if (state.route.page === 'project') return goHome();
+  if (state.organization?.confirm) return cancelRevoke();
+  if (state.organization?.menu) return toggleEmployeeMenu(state.organization.menu);
+  if (state.route.page !== 'home') return goHome();
 }
 
 function App() {
@@ -103,13 +113,15 @@ function App() {
   }
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
-  // Another app is in front: cover what a project, an answer or an original
-  // shows until ECHO is back. Project rows stay (Home's and the sidebar's), so
-  // a file dragged from Finder can still be dropped on one.
-  const covered = state.concealed && (state.ask !== null || inProject !== null || state.reader !== null);
-  const title = covered ? 'ECHO' : state.ask ? 'Ask' : inProject ? inProject.name : 'ECHO';
+  const organization = state.route.page === 'organization' ? state.organization : null;
+  // Another app is in front: cover what a project, People & invites, an answer
+  // or an original shows until ECHO is back. Project rows stay (Home's and the
+  // sidebar's), so a file dragged from Finder can still be dropped on one.
+  const covered = state.concealed && (state.ask !== null || inProject !== null || state.reader !== null || organization !== null);
+  const pageName = inProject ? inProject.name : organization ? 'People & invites' : null;
+  const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
   // Back leaves Ask for the page it was asked from.
-  const backLabel = covered ? null : state.ask || state.reader ? inProject?.name ?? 'Home' : inProject ? 'Home' : null;
+  const backLabel = covered ? null : state.ask || state.reader ? pageName ?? 'Home' : pageName ? 'Home' : null;
   const pane = !covered && state.ask !== null && state.sources?.open != null;
   // A project change not shown where it was asked for shows at the top of the page.
   const banner = state.change && !state.concealed && !changeShownInPlace(state) ? state.change : null;
@@ -121,15 +133,19 @@ function App() {
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
           : state.reader ? <Reader state={state} reader={state.reader} backTo={inProject?.name ?? 'Home'} />
-          : inProject ? <Project state={state} project={inProject} /> : <Home state={state} />}
+          : inProject ? <Project state={state} project={inProject} />
+          : organization ? <Organization state={state} page={organization} /> : <Home state={state} />}
       </main>
-      {state.toast && !state.concealed && <div class="toast" role="status" data-testid="toast"><Saved /><span>{state.toast}</span></div>}
+      {state.toast && !state.concealed && (
+        <div class="toast" role="status" data-testid="toast">{state.toast === UNSAVED_FILES ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
+      )}
       {banner && !state.toast && <div class="banner" data-testid="change-banner"><ChangeLine change={banner} /></div>}
       <Bar state={state} />
       {pane && <SourcePane state={state} />}
       {state.compose && !state.compose.hidden && <Compose state={state} />}
       {sheet?.kind === 'tools' ? <ConnectedTools state={state} sheet={sheet} />
         : sheet?.kind === 'people' ? !state.concealed && <People state={state} sheet={sheet} />
+        : sheet?.kind === 'new-project' ? <NewProject state={state} sheet={sheet} />
         : sheet && <ConfirmSignOut state={state} sheet={sheet} />}
     </Shell>
   );

@@ -301,3 +301,37 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .pill.center { align-self: center; margin-top: 6px; flex-shrink: 0; }
 .pill:disabled { opacity: 0.5; cursor: default; }
 .added { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
+
+/* New project: drops from the title bar, like People. Files wait in a dashed well. */
+.sheet.new-project { width: 520px; }
+.sheet.new-project .sheet-head { gap: 12px; }
+.name-field { flex-grow: 1; min-width: 0; height: 44px; font-size: 20px; font-weight: 600; }
+.sheet.new-project .project-name { min-width: 0; font-size: 20px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet.new-project .people-list { max-height: 200px; }
+.files-well { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px dashed rgba(240, 236, 230, 0.25); border-radius: 10px; }
+.file-list { align-self: stretch; max-height: 142px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.file-row { flex-shrink: 0; display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 13px; }
+.file-row svg { flex-shrink: 0; }
+.file-row .label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-row .pill { flex-shrink: 0; height: 24px; padding: 0 10px; font-size: 12.5px; }
+.new-project-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.new-project-foot > span { flex-grow: 1; font-size: 13px; }
+
+/* People & invites: the organization's employees, for owners. */
+.column.organization { height: 100%; max-height: 460px; overflow: hidden; gap: 10px; padding-top: 8px; }
+.org-context { flex-shrink: 0; font-size: 12.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.invite-row { flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
+.invite-row .field { flex: 1 1 0; min-width: 0; }
+.invite-row .pill { flex-shrink: 0; }
+.org-status { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; font-size: 13px; }
+.org-status:empty { display: none; }
+.org-actions { display: flex; gap: 8px; }
+.people-list.employees { flex-grow: 1; }
+.person.employee { height: 48px; }
+.person .lines { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; }
+.person .lines .name { flex-grow: 0; }
+.person .detail { font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person .standing { flex-shrink: 0; font-size: 12px; color: var(--muted); }
+.org-foot { flex-shrink: 0; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--faint); }
+.side-row.current { font-weight: 600; background: rgba(240, 236, 230, 0.10); }
+.organization-rows { flex-shrink: 0; padding-bottom: 8px; }

@@ -1,8 +1,8 @@
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
-import { loadProjects, openCompose, openProject, showAccountMenu, type State } from '../store.js';
+import { loadProjects, openCompose, openNewProject, openOrganization, openProject, showAccountMenu, type State } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Capture, Person } from './icons.js';
+import { Capture, FolderPlus, People, Person } from './icons.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
 
@@ -21,9 +21,10 @@ function SidebarProject({ project, current }: { project: ProjectSummary; current
 }
 
 /**
- * Always beside the page: Capture, your projects (one click switches), and who
- * is signed in. It shares the list Home loads. While another app is in front
- * the page is covered, but the project rows stay, so a dropped file lands.
+ * Always beside the page: Capture, New project, your projects (one click
+ * switches), People & invites for owners, and who is signed in. It shares the
+ * list Home loads. While another app is in front the page is covered, but the
+ * project rows stay, so a dropped file lands.
  */
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
@@ -36,6 +37,9 @@ export function Sidebar({ state }: { state: State }) {
         <div class="sidebar-rows">
           <button type="button" class="side-row" data-testid="sidebar-capture" onClick={() => openCompose()}>
             <Capture /><span class="label">Capture</span><span class="hint">{CAPTURE_HINT}</span>
+          </button>
+          <button type="button" class="side-row" data-testid="sidebar-new-project" onClick={openNewProject}>
+            <FolderPlus /><span class="label">New project</span>
           </button>
         </div>
       )}
@@ -52,6 +56,16 @@ export function Sidebar({ state }: { state: State }) {
           </>
         )}
       </nav>
+      {account?.role === 'owner' && (
+        <div class="sidebar-rows organization-rows">
+          <div class="side-header">ORGANIZATION</div>
+          <button type="button" data-testid="sidebar-organization" onClick={openOrganization}
+            class={`side-row${!state.concealed && state.route.page === 'organization' ? ' current' : ''}`}
+            aria-current={!state.concealed && state.route.page === 'organization' ? 'page' : undefined}>
+            <People /><span class="label">People &amp; invites</span>
+          </button>
+        </div>
+      )}
       <button type="button" class="account-row" data-testid="account-row" aria-label="Account" aria-haspopup="menu"
         onClick={event => showAccountMenu(event.currentTarget, 'row')}>
         {account ? (
