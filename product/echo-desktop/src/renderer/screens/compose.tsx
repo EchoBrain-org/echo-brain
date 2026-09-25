@@ -148,8 +148,9 @@ function ProjectList({ state, compose, projects, anchor }: {
             onClick={() => void loadProjects(true)}>More projects</button>
         )}
       </div>
-      {full && <div class="project-note" data-testid="projects-limit">Up to {MAX_CAPTURE_PROJECTS} projects.</div>}
       <div class="project-list-foot">
+        {/* Always there, so ticking the last one a screen reader hears says why the rest are off. */}
+        <div aria-live="polite">{full && <span class="project-note" data-testid="projects-limit">Up to {MAX_CAPTURE_PROJECTS} projects.</span>}</div>
         <button type="button" class="plain-button small" data-testid="projects-done" onClick={closeProjects}>Done</button>
       </div>
     </div>

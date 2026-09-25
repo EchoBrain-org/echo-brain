@@ -276,9 +276,13 @@ test('at most twenty projects: past eight a field finds one, More projects reads
   await expect(tick(page, 'Project 7')).toBeChecked();
   await find.fill('');
   await expect(rows).toHaveCount(22);
+  // The line about the limit shows in a live region that is already there, so a screen reader says it.
+  const live = list(page).locator('[aria-live="polite"]');
+  await expect(live).toHaveCount(1);
+  await expect(live).toHaveText('');
   for (let number = 1; number <= 20; number += 1) if (number !== 7) await tick(page, `Project ${number}`).click();
   await expect(list(page).getByRole('checkbox', { checked: true })).toHaveCount(20);
-  await expect(list(page).getByTestId('projects-limit')).toHaveText('Up to 20 projects.');
+  await expect(live.getByTestId('projects-limit')).toHaveText('Up to 20 projects.');
   await expect(tick(page, 'Project 21')).toBeDisabled();
   await expect(tick(page, 'Project 22')).toBeDisabled();
   await expect(tick(page, 'Project 20')).toBeEnabled();
