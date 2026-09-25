@@ -186,10 +186,12 @@ describe('project-context-v1 contract fixtures', () => {
     expect(operations).toMatchObject({ schema_version: 1, kind: 'echo-project-context-command-fixtures-v1' });
     expect(operations.operations.map(({ id }) => id)).toEqual([
       'projects-list', 'projects-create', 'projects-read', 'projects-members',
-      'projects-directory', 'person-directory', 'projects-member-add', 'projects-member-set', 'projects-member-remove',
+      'projects-directory', 'projects-member-add', 'projects-member-set', 'projects-member-remove',
       'projects-associate', 'projects-dissociate', 'projects-feed', 'projects-search',
       'projects-read-context', 'updates-submit-v2', 'updates-status-v2',
       'updates-search-v2', 'updates-read-v2',
+      // Appended: the native proof reads earlier fixtures by position.
+      'person-directory',
     ]);
     for (const operation of operations.operations) {
       expect(operation.argv.length, operation.id).toBeGreaterThanOrEqual(2);
