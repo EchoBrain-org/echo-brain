@@ -31,6 +31,11 @@ export class ViewError extends Error {
   constructor() { super('invalid_output'); }
 }
 
+/** Nothing where something was asked for: the Authority no longer shows it to this person. */
+export class NotReadable extends Error {
+  constructor() { super('not_found'); }
+}
+
 /** `{ ok: true, result }` wrapper used by ask, ask-source and documents. */
 export function unwrap(raw: unknown): unknown {
   const value = object(raw);
@@ -400,6 +405,8 @@ export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
   const value = object(root.result);
   if (value.schema_version !== 1 || value.kind !== 'echo-clean-person-record-list-v1') throw new ViewError();
   const records = list(value.records);
+  // A record the person can no longer read comes back as an empty list.
+  if (records.length === 0) throw new NotReadable();
   if (records.length !== 1) throw new ViewError();
   const record = object(records[0]);
   const envelope = object(record.envelope);

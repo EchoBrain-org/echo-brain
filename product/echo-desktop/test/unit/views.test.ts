@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   abandonView, answerView, changeView, createdView, documentPageView, documentTextView, employeesView, failureView, feedView, invitationView,
   membersView, noteMatchesView, noteTitle, noteView, revokedView,
-  projectMatchesView, projectPageView, projectView, receiptView, recordView, savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
+  NotReadable, projectMatchesView, projectPageView, projectView, receiptView, recordView, savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
 
@@ -242,6 +242,12 @@ describe('an approved record shows only what the source pane needs', () => {
     }), { ...asked, policy_id: 'restricted-reviewer-person-v2' });
     expect(restricted.visibility).toBe('approver');
     expect(restricted.approved_by).toBeUndefined();
+  });
+
+  it('takes an empty list as a record the person can no longer read, not as a bad reply', () => {
+    const none = { ok: true, result: { schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [] } };
+    expect(() => recordView(none, asked)).toThrow(NotReadable);
+    expect(() => recordView(none, asked)).not.toThrow(ViewError);
   });
 });
 

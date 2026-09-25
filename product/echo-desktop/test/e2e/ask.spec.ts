@@ -163,6 +163,21 @@ test('an approved record opens beside the answer: who approved it, who was there
   await expect(page.getByTestId('project-row')).toHaveCount(2);
 });
 
+test('a cited record the person can no longer read says so, with no Try again that cannot work', async () => {
+  run = await launch('record-gone');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  // The Authority answers with an empty list; the chip keeps its own name.
+  const chips = page.getByTestId('source-chip');
+  await expect.poll(() => recordReads().length).toBe(1);
+  await expect(chips.nth(0)).toHaveText(/^1\s*Approved record 1$/);
+  await chips.nth(0).click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane.getByTestId('source-error')).toHaveText('This is no longer available to you.');
+  await expect(pane.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+  expect(recordReads()).toHaveLength(2);
+});
+
 test('evidence that could not be read says so, and Retry evidence reads it again', async () => {
   run = await launch('evidence-fails-once');
   const { page } = run;

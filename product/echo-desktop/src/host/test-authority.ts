@@ -542,10 +542,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         text: mode === 'long-evidence' ? 'x'.repeat(3_000) : desktop.evidence_text,
       });
     }
-    // One approved record, by the digest an answer cited.
+    // One approved record, by the digest an answer cited. A record the person
+    // cannot read comes back as an empty list, as the Authority's does.
     if (method === 'GET' && path === '/v1/person/records' && url.searchParams.has('record_sha256')) {
       const { record_sha256: digest, approved_by: approver, brief } = desktop.record;
-      if (url.searchParams.get('record_sha256') !== digest || [...url.searchParams.keys()].length !== 1) return failure('not_found', 404);
+      if ([...url.searchParams.keys()].length !== 1) return failure('invalid_request', 400);
+      if (url.searchParams.get('record_sha256') !== digest || mode === 'record-gone') {
+        return json({ schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [] });
+      }
       const event = { kind: 'approved', policy_id: 'organization-member-readable-person-v2', approved_snapshot: { approved_payload: { brief } } };
       return json({
         schema_version: 1, kind: 'echo-clean-person-record-list-v1',

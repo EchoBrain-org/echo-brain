@@ -14,7 +14,7 @@ import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.
 import {
   abandonView, answerView, changeView, contextView, createdView, documentPageView, documentTextView, employeesView, evidenceView, failureView,
   feedView, invitationView, isRecordRef, membersView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, projectView,
-  receiptView, recordView, revokedView, savedOriginalView, statusView, toolsView, unwrap, ViewError, writeStatusView,
+  NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -241,6 +241,7 @@ async function forAccount<T>(
   try {
     return ok(view(run.stdout));
   } catch (error) {
+    if (error instanceof NotReadable) return code('not_found', write, requestId);
     // A write that succeeded with a reply we cannot read may well have landed.
     if (error instanceof ViewError) {
       return fail({ code: 'invalid_output', retryable: true, ...(write ? { mutation_outcome: 'unknown' as const } : {}),

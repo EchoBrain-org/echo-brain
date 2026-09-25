@@ -272,7 +272,7 @@ export function SourcePane({ state }: { state: State }) {
       : 'failure' in read ? (
         <div class="source-failure">
           <div class="error" data-testid="source-error">{message(read.failure)}</div>
-          <button type="button" class="link-button" onClick={retryRecord}>Try again</button>
+          {read.failure.retryable && <button type="button" class="link-button" onClick={retryRecord}>Try again</button>}
         </div>
       ) : <RecordDetail record={read.value} />;
   } else {
