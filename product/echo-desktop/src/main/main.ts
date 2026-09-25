@@ -12,7 +12,7 @@ import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, type EventName, type Events, type FileHandle, type HostMethodName,
+  externalUrl, HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, type EventName, type Events, type FileHandle, type HostMethodName,
   type HostNotice, type HostReply, type MainMethods, type Result,
 } from '../shared/protocol.js';
 
@@ -163,11 +163,8 @@ function onHostNotice(message: HostNotice): void {
   if (message.notice === 'signin.phase') {
     send('signin.phase', message.payload as Events['signin.phase']);
   } else if (message.notice === 'open-external') {
-    const raw = (message.payload as { url?: unknown }).url;
-    try {
-      const url = new URL(String(raw));
-      if (url.protocol === 'https:' && url.username === '' && url.password === '') void shell.openExternal(url.href);
-    } catch { /* not a URL: ignored */ }
+    const url = externalUrl((message.payload as { url?: unknown }).url);
+    if (url) void shell.openExternal(url);
   }
 }
 

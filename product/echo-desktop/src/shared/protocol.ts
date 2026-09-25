@@ -182,5 +182,15 @@ export interface HostNotice {
   readonly payload: unknown;
 }
 
+/** The only address an 'open-external' notice opens: https, with no credentials in it. */
+export function externalUrl(raw: unknown): string | null {
+  try {
+    const url = new URL(String(raw));
+    return url.protocol === 'https:' && url.username === '' && url.password === '' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Parameters larger than this are refused at the broker. */
 export const MAX_PARAMS_BYTES = 64 * 1024;

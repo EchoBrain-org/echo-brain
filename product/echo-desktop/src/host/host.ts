@@ -5,8 +5,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type {
-  AppStatus, AskScope, Audience, Expect, Failure, HostMethods, HostMethodName, HostRequest, Result,
+import {
+  externalUrl, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods, type HostMethodName,
+  type HostRequest, type Result,
 } from '../shared/protocol.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
@@ -44,7 +45,9 @@ async function load(): Promise<ClientModules> {
   const dependencies: Record<string, unknown> = {
     home_directory: home,
     open_authorization_url: (url: string) => {
-      // Main re-checks the URL before opening it; the renderer never sees it.
+      // Main opens only what externalUrl allows: anything else never opened,
+      // so the client must not wait on it. The renderer never sees the URL.
+      if (externalUrl(url) === null) return false;
       port.postMessage({ notice: 'open-external', payload: { url } });
       return true;
     },
