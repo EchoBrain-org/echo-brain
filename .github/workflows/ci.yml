@@ -71,11 +71,6 @@ jobs:
           package_version="$(node -p 'require("./src/product/person-client/package.json").version')"
           test "$(node -p 'process.platform')" = darwin
           test "$(node -p 'process.arch')" = arm64
-          app_archive="$pack_dir/ECHO.app.zip"
-          npm run build:echo-overlay -- \
-            --source-sha "$GITHUB_SHA" \
-            --version "$package_version" \
-            --output "$app_archive"
 
           archive_list="$RUNNER_TEMP/echo-person-client-archive-files.txt"
           tar -tzf "$archive" > "$archive_list"
@@ -148,46 +143,22 @@ jobs:
           ' "$release_draft" "$package_version" "$artifact_sha" "$runtime_profile_sha"
           node tools/clean-v1-release.mjs create "$release_draft" "$release_record"
           node tools/clean-v1-release.mjs validate "$release_record" >/dev/null
-          kit="$pack_dir/echo-person-onboarding-kit.tar.gz"
+          kit="$pack_dir/ECHO-cli-macos-arm64.zip"
           npm run kit:person-onboarding -- \
+            --target darwin-arm64 \
+            --installation cli-kit \
             --release "$release_record" \
             --artifact "$archive" \
-            --app "$app_archive" \
             --runtime-node "$(node -p 'process.execPath')" \
             --output "$kit"
-          kit_extract="$RUNNER_TEMP/echo-person-onboarding-kit"
+          kit_extract="$RUNNER_TEMP/echo-person-cli-kit"
           mkdir -p "$kit_extract"
-          tar -xzf "$kit" -C "$kit_extract"
-          kit_root="$(find "$kit_extract" -mindepth 1 -maxdepth 1 -type d -print -quit)"
-          test -x "$kit_root/Start ECHO.command"
+          unzip -q "$kit" -d "$kit_extract"
+          kit_root="$kit_extract/echo-person-onboarding-kit"
+          test -x "$kit_root/Start-ECHO.sh"
           test -x "$kit_root/node"
           "$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"
-          graphical_kit="$pack_dir/ECHO-macOS-arm64.zip"
-          npm run kit:person-onboarding -- \
-            --release "$release_record" \
-            --artifact "$archive" \
-            --app "$app_archive" \
-            --output "$graphical_kit"
-          graphical_extract="$RUNNER_TEMP/echo-person-graphical-kit"
-          mkdir -p "$graphical_extract"
-          ditto -x -k "$graphical_kit" "$graphical_extract"
-          codesign --verify --deep --strict "$graphical_extract/ECHO Setup.app"
-          graphical_resources="$graphical_extract/ECHO Setup.app/Contents/Resources/kit"
-          "$graphical_resources/node" "$graphical_resources/verify-person-onboarding-kit.mjs" "$graphical_resources"
-          # The CI runner has Xcode, but employee installation must not need it.
-          DEVELOPER_DIR="$RUNNER_TEMP/echo-unavailable-developer-tools" \
-          HOME="$person_home" "$graphical_resources/node" \
-            "$graphical_resources/person-onboarding-ui.mjs" prepare > "$stdout_file"
-          node -e '
-            const fs = require("node:fs");
-            const result = JSON.parse(fs.readFileSync(process.argv[1], "utf8").trim().split("\n").at(-1));
-            if (result.ok !== true || result.phase !== "needs-invitation") {
-              throw new Error("graphical kit did not install into a fresh home");
-            }
-          ' "$stdout_file"
-          node tests/fixtures/person-onboarding-smoke.mjs --kit-root "$graphical_resources"
-          test -x "$person_home/Applications/ECHO.app/Contents/MacOS/ECHO"
-          test -x "$person_home/Library/Application Support/ECHO/bin/echo-brain"
+          node tests/fixtures/person-onboarding-smoke.mjs --kit-root "$kit_root"
       - name: Exercise native Account, People, Projects, Uploads, and Sources with offline fixtures
         run: >-
           npx vitest run --config vitest.config.ts

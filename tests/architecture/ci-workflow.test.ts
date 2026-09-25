@@ -178,4 +178,29 @@ describe("CI workflow", () => {
       "tests/architecture/echo-projects.test.ts",
     );
   });
+
+  it("builds, verifies, and installs only the macOS command-line kit in the macOS Person-client job", () => {
+    const source = workflow();
+    const personClientJob = source.slice(
+      source.indexOf("  person-client-package:"),
+      source.indexOf("  authority-container:"),
+    );
+    const build = personClientJob.indexOf("npm run kit:person-onboarding --");
+    const verify = personClientJob.indexOf(
+      '"$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"',
+    );
+    const smoke = personClientJob.indexOf(
+      'node tests/fixtures/person-onboarding-smoke.mjs --kit-root "$kit_root"',
+    );
+
+    expect(personClientJob).toContain("--target darwin-arm64");
+    expect(personClientJob).toContain("--installation cli-kit");
+    expect(personClientJob).toContain('test -x "$kit_root/Start-ECHO.sh"');
+    expect(build).toBeGreaterThan(0);
+    expect(verify).toBeGreaterThan(build);
+    expect(smoke).toBeGreaterThan(verify);
+    expect(personClientJob).not.toMatch(
+      /--app\b|build:echo-overlay|person-onboarding-ui|ECHO Setup|Start ECHO\.command/,
+    );
+  });
 });
