@@ -1679,9 +1679,9 @@ export function answerSources(current: State = state): readonly AnswerSource[] {
 const ACCOUNT_GONE = ['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'];
 
 /**
- * An answer came on screen, or ECHO came back to one: its sources start
- * unread, the pane closed, and its approved records are read one after
- * another, so each chip can name its meeting.
+ * An answer came on screen: its sources start unread, the pane closed, and
+ * its approved records are read one after another, so each chip can name its
+ * meeting.
  */
 function startSources(): void {
   const gen = ++seq;
@@ -2175,7 +2175,8 @@ export function resume(): void {
   set({ concealed: false });
   void refreshStatus().then(() => {
     searchAgain();
-    if (state.sources && !state.concealed) startSources();
+    // The answer's records are read again. A chip chosen meanwhile keeps its pane open.
+    if (state.sources && !state.concealed) void readRecords(state.sources.gen);
     // People & invites is read again for whoever is signed in now.
     if (state.route.page === 'organization' && !state.concealed) void loadEmployees();
   });
