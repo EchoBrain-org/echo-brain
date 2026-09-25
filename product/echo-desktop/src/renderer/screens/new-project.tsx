@@ -121,10 +121,11 @@ function Foot({ sheet }: { sheet: NewProjectSheet }) {
 }
 
 /**
- * New project: a name and files, then Create, which opens the project behind
- * the sheet. Then people can be added (at once, with Undo) and the files save
- * into it one by one. Files can be added or dropped on it at any time, up to
- * 20. While another app is in front its people are hidden; files still drop.
+ * New project, one page: a name, then Create, which opens the project behind
+ * the sheet. People and Files show from the start and turn on once the
+ * project exists: people are added at once, with Undo, and files, which are
+ * optional, start saving as they are added or dropped on the sheet, up to 20.
+ * While another app is in front its people are hidden; files still drop.
  */
 export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSheet }) {
   const box = useRef<HTMLDivElement>(null);
@@ -145,6 +146,8 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
           if (!canDropFiles(event)) return;
           event.preventDefault();
           event.stopPropagation();
+          // Before Create a drop is taken only to say so: the sheet does not light up.
+          if (!made) return;
           if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
           setOver(true);
         }}
@@ -169,14 +172,25 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
           )}
           <button type="button" class="circle small" aria-label="Close" data-testid="new-project-close" disabled={busy} onClick={closeSheet}><Close /></button>
         </div>
-        {made && !state.concealed && <Finder state={state} sheet={sheet as FindingSheet} menus={false} field={find} />}
+        {!made && !sheet.createdId && (
+          <div class="notice-line" data-testid="new-project-first">Create the project first to add people and files.</div>
+        )}
+        {!state.concealed && (
+          <>
+            <div class="section-label">People</div>
+            {made ? <Finder state={state} sheet={sheet as FindingSheet} menus={false} field={find} /> : (
+              <input class="field small" data-testid="people-find" type="text" disabled placeholder="Add someone by name" aria-label="Add someone by name" />
+            )}
+          </>
+        )}
+        <div class="section-label">Files · optional</div>
         <div class="files-well" data-testid="new-project-files">
           {sheet.files.length > 0 && (
             <div class="file-list">
               {sheet.files.map(file => <FileRow key={file.id} file={file} halted={halted} busy={busy} />)}
             </div>
           )}
-          <button type="button" class="pill" data-testid="new-project-add-files" disabled={sheet.files.length >= MAX_PROJECT_FILES}
+          <button type="button" class="pill" data-testid="new-project-add-files" disabled={!made || sheet.files.length >= MAX_PROJECT_FILES}
             onClick={() => void chooseFiles()}>Add files…</button>
         </div>
         {sheet.notice && <div class="notice-line" data-testid="new-project-notice" aria-live="polite">{sheet.notice}</div>}

@@ -164,9 +164,9 @@ export interface ProjectFile {
 }
 
 /**
- * New project: a name and files, then Create. Once the project exists it
- * opens behind the sheet, people can be added to it, and the files save into
- * it one by one.
+ * New project, one page: a name, then Create. Once the project exists it
+ * opens behind the sheet, and the same sheet takes people, then files if
+ * any, which save into it one by one as they are added.
  */
 export interface NewProjectSheet extends Finding {
   kind: 'new-project';
@@ -1172,6 +1172,9 @@ export function confirmMemberChange(): void {
 /** New project takes up to 20 files, as the Swift app did. */
 export const MAX_PROJECT_FILES = 20;
 const TOO_MANY_FILES = 'Add up to 20 files.';
+/** Said when a file is dropped on New project before it has a project to save into. */
+const CREATE_FIRST = 'Create the project first.';
+const OPEN_FIRST = 'Open the project first.';
 /** Said when New project closes with files that may not have been saved. */
 export const UNSAVED_FILES = 'Some files may not have been saved.';
 
@@ -1252,7 +1255,7 @@ export async function createProject(): Promise<void> {
   await openCreated();
 }
 
-/** The project Create made, read: it joins your projects, opens behind the sheet, and takes people and files. */
+/** The project Create made, read: it joins your projects, opens behind the sheet, and takes people, then files. */
 async function openCreated(): Promise<void> {
   const account = expect();
   const sheet = newProjectSheet();
@@ -1270,10 +1273,9 @@ async function openCreated(): Promise<void> {
   if (!state.projects.items.some(item => item.project_id === project.project_id)) {
     set({ projects: { ...state.projects, items: [project, ...state.projects.items] } });
   }
-  setNewProject({ opening: false, project }, mine);
+  setNewProject({ opening: false, project, notice: undefined }, mine);
   void openProject(project);
   if (project.role === 'lead') void findPeople();
-  pumpFiles();
 }
 
 /** The create, or a file, may have arrived and nothing says yet whether it did. */
@@ -1302,13 +1304,12 @@ export function keepNewProject(): void {
 
 /**
  * New project goes. Copies kept to resend a file go too, as nothing can
- * resend them now. If the project was made and some files were not saved
- * into it, or may not have been, the toast says so.
+ * resend them now. If some files added to the project were not saved into
+ * it, or may not have been, the toast says so.
  */
 function finishNewProject(sheet: NewProjectSheet): void {
   for (const file of sheet.files) if (file.kept) releaseCopy(file.requestId);
-  const made = sheet.create.status === 'created' || sheet.create.status === 'unknown';
-  const unsaved = made && sheet.files.some(file => file.status !== 'saved');
+  const unsaved = sheet.files.some(file => file.status !== 'saved');
   set({ sheet: null, ...(unsaved ? { toast: UNSAVED_FILES } : {}) });
   unresolvedChanged();
   if (sheet.project) void refreshFeed(sheet.project.project_id);
@@ -1319,10 +1320,10 @@ function releaseCopy(requestId: string): void {
   if (account) void rpc('documents.abandon', { expect: account, request_id: requestId });
 }
 
-/** Add files…: main's dialog, several at once. */
+/** Add files…, once the project exists: main's dialog, several at once. */
 export async function chooseFiles(): Promise<void> {
   const sheet = newProjectSheet();
-  if (!sheet) return;
+  if (!sheet?.project) return;
   const result = await rpc('dialog.openDocuments', {});
   if (!newProjectSheet(sheet.seq)) return;
   if (!result.ok) { setNewProject({ notice: result.failure.code === 'too_many_files' ? TOO_MANY_FILES : message(result.failure) }, sheet.seq); return; }
@@ -1330,10 +1331,14 @@ export async function chooseFiles(): Promise<void> {
   addFiles(sheet.seq, [...result.value.files.map(handle => ({ name: handle.name, handle })), ...result.value.refused.map(name => ({ name, failure: refused }))]);
 }
 
-/** Files dropped on New project. Each is handed to main on its own, which answers with a handle. */
+/**
+ * Files dropped on New project. Before its project exists they are refused;
+ * after, each is handed to main on its own, which answers with a handle.
+ */
 export async function dropFiles(files: readonly File[]): Promise<void> {
   const sheet = newProjectSheet();
   if (!sheet || files.length === 0) return;
+  if (!sheet.project) { setNewProject({ notice: sheet.createdId ? OPEN_FIRST : CREATE_FIRST }, sheet.seq); return; }
   if (sheet.files.length + files.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, sheet.seq); return; }
   const chosen: { name: string; handle?: FileHandle; failure?: Failure }[] = [];
   for (const file of files) {
@@ -1343,10 +1348,10 @@ export async function dropFiles(files: readonly File[]): Promise<void> {
   addFiles(sheet.seq, chosen);
 }
 
-/** Files join the list and wait their turn; one main refused says why. */
+/** Files join the project's list and start saving in turn; one main refused says why. */
 function addFiles(mine: number, chosen: readonly { name: string; handle?: FileHandle; failure?: Failure }[]): void {
   const sheet = newProjectSheet(mine);
-  if (!sheet || chosen.length === 0) return;
+  if (!sheet?.project || chosen.length === 0) return;
   if (sheet.files.length + chosen.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, mine); return; }
   const added: ProjectFile[] = chosen.map(file => ({
     id: ++fileIds, name: file.name, requestId: crypto.randomUUID(), kept: false,
@@ -1448,7 +1453,7 @@ export function confirmSkip(): void {
   pumpFiles();
 }
 
-/** Files can be dropped on New project: one or more, while it is up. */
+/** Files can be dropped on New project, one or more, while it is up: before Create, only to be told to create it first. */
 export function canDropFiles(event: DragEvent): boolean {
   const items = event.dataTransfer?.items;
   return state.status?.signed_in === true && state.sheet?.kind === 'new-project' && items !== undefined && items.length > 0 &&
