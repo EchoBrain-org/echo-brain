@@ -1212,7 +1212,7 @@ describe("workspace source boundaries", () => {
     rmSync(entry);
     const orphan = join(fixture, "product/unregistered.swift");
     writeFileSync(orphan, "struct Unregistered {}\n");
-    expect(runBoundary(fixture).stdout).toContain("Swift source has no assembly owner");
+    expect(runBoundary(fixture).stdout).toContain("Swift source is retired and has no builder");
     rmSync(orphan);
     const assemblyPath = "deploy/organization-authority/journey-explorer-assembly.v1.json";
     const assembly = readFixtureJson<{ provider_assets: string[] }>(fixture, assemblyPath);
