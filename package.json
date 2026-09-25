@@ -39,6 +39,8 @@
     "authority:staging": "node tools/authority-staging.mjs",
     "authority:staging-release": "node tools/authority-staging-release.mjs",
     "client-update:staging": "node tools/client-update-staging.mjs",
+    "client-update:sign": "node tools/client-update-sign.mjs",
+    "client-update:publish": "node tools/client-update-publish.mjs",
     "authority:staging-onboarding-transfer": "node tools/authority-staging-onboarding-transfer.mjs",
     "profile:authority-deployment": "node tools/clean-v1-runtime-profile.mjs create",
     "profile:clean-v1-runtime": "npm run profile:authority-deployment --",
