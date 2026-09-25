@@ -167,7 +167,7 @@ and legacy paired command remain outside this CLI update channel.
 ```
 
 When the installed client already matches the first published release,
-`up_to_date` proves feed retrieval, signature verification and release matching.
+`current` proves feed retrieval, signature verification and release matching.
 It does not prove installation of a different release. Preserve the existing
 Person session and verify authenticated reads after enrollment.
 
