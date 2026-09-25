@@ -268,7 +268,7 @@ function send<N extends EventName>(name: N, payload: Events[N]): void {
 
 function createWindow(): BrowserWindow {
   const created = new BrowserWindow({
-    width: 900, height: 680, minWidth: 720, minHeight: 560, show: false,
+    width: 900, height: 680, minWidth: 800, minHeight: 560, show: false,
     title: 'ECHO', backgroundColor: '#242222',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {

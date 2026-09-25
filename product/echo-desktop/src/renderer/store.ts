@@ -56,12 +56,20 @@ export interface State {
   signin: { phase: 'idle' | 'waiting' | 'failed'; failure?: Failure; browserOpened?: boolean };
   /** No status could be read (the host is down): not the same as signed out. */
   startFailed: boolean;
+  /** On by default; the toggle only hides it, and this computer remembers. */
+  sidebarOpen: boolean;
+}
+
+const SIDEBAR_OPEN = 'echo.sidebarOpen';
+
+function rememberedSidebar(): boolean {
+  try { return localStorage.getItem(SIDEBAR_OPEN) !== 'false'; } catch { return true; }
 }
 
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false }, feed: null, reader: null,
   barScope: { kind: 'global' }, ask: null, evidence: null, compose: null, concealed: false, signin: { phase: 'idle' },
-  startFailed: false,
+  startFailed: false, sidebarOpen: rememberedSidebar(),
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -450,6 +458,14 @@ export function newCompose(): void {
 
 export function keepUnresolved(): void {
   if (state.compose) setCompose({ ...state.compose, confirmNew: false });
+}
+
+// ---- window ------------------------------------------------------------------------
+
+export function toggleSidebar(): void {
+  const open = !state.sidebarOpen;
+  set({ sidebarOpen: open });
+  try { localStorage.setItem(SIDEBAR_OPEN, String(open)); } catch { /* optional convenience */ }
 }
 
 // ---- concealment ---------------------------------------------------------------

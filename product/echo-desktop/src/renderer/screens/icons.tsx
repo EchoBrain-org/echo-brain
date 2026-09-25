@@ -29,3 +29,9 @@ export const Lock = () => (
 export const Globe = () => (
   <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" stroke="rgba(240,236,230,0.55)" stroke-width="1.2" fill="none" /><path d="M1 6h10M6 1c1.6 1.4 2.4 3.1 2.4 5S7.6 9.6 6 11M6 1C4.4 2.4 3.6 4.1 3.6 6S4.4 9.6 6 11" stroke="rgba(240,236,230,0.55)" stroke-width="1.1" fill="none" /></svg>
 );
+export const Capture = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" fill="none" /><path d="M12 8v8M8 12h8" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" fill="none" /></svg>
+);
+export const SidebarIcon = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" fill="none" /><path d="M9 4v16" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" fill="none" /></svg>
+);

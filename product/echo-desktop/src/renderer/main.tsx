@@ -1,15 +1,16 @@
-import { render } from 'preact';
+import { render, type ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { on } from './api.js';
 import { AskView, Bar } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
-import { Back } from './screens/icons.js';
+import { Back, SidebarIcon } from './screens/icons.js';
 import { Project } from './screens/project.js';
+import { Sidebar } from './screens/sidebar.js';
 import { SignIn } from './screens/signin.js';
 import {
   closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, hostFailed, openCapture, refreshHome, refreshStatus,
-  resume, retryStart, signinPhase, useStore,
+  resume, retryStart, signinPhase, toggleSidebar, useStore, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -77,25 +78,41 @@ function App() {
   }
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
-  // Another app is in front: cover the window until ECHO is back.
+  // Another app is in front: cover the page until ECHO is back. The sidebar's
+  // project rows stay, so a file can still be dropped on one.
   const covered = state.concealed;
   const title = covered ? 'ECHO' : state.ask ? '' : inProject ? inProject.name : 'ECHO';
-  const backLabel = covered ? null : state.evidence || state.ask ? 'Back' : state.reader ? inProject?.name : inProject ? 'Projects' : null;
+  const backLabel = covered ? null : state.evidence || state.ask ? 'Back' : state.reader ? inProject?.name : inProject ? 'Home' : null;
   return (
-    <div class="app">
-      <header class="titlebar">
-        <div class="side">
-          {backLabel && <button type="button" class="back" data-testid="back" onClick={back}><Back /><span>{backLabel}</span></button>}
-        </div>
-        <div class={`title${title === 'ECHO' ? ' brand' : ''}`} data-testid="title">{title}</div>
-        <div class="side" />
-      </header>
+    <Shell state={state} title={title} backLabel={backLabel ?? null}>
       <main class="page">
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} /> : inProject ? <Project state={state} project={inProject} /> : <Home state={state} />}
       </main>
       <Bar state={state} />
       {state.compose && !state.compose.hidden && <Compose state={state} />}
+    </Shell>
+  );
+}
+
+/** One window: the sidebar (unless hidden), then the title bar and the page. */
+function Shell({ state, title, backLabel, children }: { state: State; title: string; backLabel: string | null; children: ComponentChildren }) {
+  const open = state.sidebarOpen;
+  return (
+    <div class={`app shell${open ? ' with-sidebar' : ''}`}>
+      {open && <Sidebar state={state} />}
+      <div class="main">
+        <header class="titlebar">
+          <div class="side">
+            <button type="button" class="icon-button" data-testid="sidebar-toggle" aria-label={open ? 'Hide sidebar' : 'Show sidebar'}
+              aria-pressed={open} onClick={toggleSidebar}><SidebarIcon /></button>
+            {backLabel && <button type="button" class="back" data-testid="back" onClick={back}><Back /><span>{backLabel}</span></button>}
+          </div>
+          <div class={`title${title === 'ECHO' ? ' brand' : ''}`} data-testid="title">{title}</div>
+          <div class="side" />
+        </header>
+        {children}
+      </div>
     </div>
   );
 }
