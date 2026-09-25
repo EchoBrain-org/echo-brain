@@ -339,3 +339,21 @@ test('focus stays in New project when what had it goes: an Add, a ×, and Create
   await expect(page.getByTestId('people-find')).toBeFocused();
   await expect(page.getByTestId('people-find')).toHaveValue('ma');
 });
+
+test('the organization’s people come ten at a time: More people asks for the next page with the Authority’s cursor, and adds to the list', async () => {
+  run = await launch('many-people');
+  const { page } = run;
+  await page.getByTestId('sidebar-new-project').click();
+  const found = page.getByTestId('candidate-row');
+  // Ten on the first page, less you: you lead it.
+  await expect(found).toHaveCount(9);
+  await page.getByTestId('people-more').click();
+  await expect(found).toHaveCount(12);
+  await expect(found.last()).toContainText('Colleague 9');
+  await expect(page.getByTestId('people-more')).toHaveCount(0);
+  expect(directory()).toEqual([{ limit: 10 }, { limit: 10, cursor: 'cGFnZTI' }]);
+  // Someone from the second page is picked like anyone else.
+  await page.getByRole('button', { name: 'Add Colleague 9' }).click();
+  await expect(page.getByTestId('pick-row')).toContainText(['Colleague 9']);
+  await expect(found).toHaveCount(11);
+});

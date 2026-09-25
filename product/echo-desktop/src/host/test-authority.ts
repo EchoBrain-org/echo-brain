@@ -90,6 +90,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
   const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<DirectoryContract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
+  // Thirteen people: the organization's directory comes in two pages.
+  if (mode === 'many-people') {
+    desktop.people.push(...Array.from({ length: 9 }, (_, index) => ({
+      membership_id: `mem_0000000${index + 1}-6666-4666-8666-666666666666`, display_name: `Colleague ${index + 1}`,
+    })));
+  }
   const fixture = (id: string) => {
     const found = operations.find(entry => entry.id === id);
     if (!found) throw new Error(`missing fixture ${id}`);
