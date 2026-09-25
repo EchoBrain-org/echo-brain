@@ -26,6 +26,7 @@ import {
   EmployeeMutationError,
   PersonClient,
   PersonSessionStore,
+  type PersonClientCliDependencies,
 } from "../../src/product/person-client/index.js";
 
 function fixtureId(prefix: string, suffix: number): string {
@@ -99,6 +100,20 @@ async function withHome(run: (home: string) => Promise<void>): Promise<void> {
   }
 }
 
+async function runCli(
+  argv: readonly string[],
+  dependencies: Omit<PersonClientCliDependencies, "stdout" | "stderr"> = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  let stdout = "";
+  let stderr = "";
+  const code = await runPersonClientCli(argv, {
+    ...dependencies,
+    stdout: { write: (value) => ((stdout += String(value)), true) },
+    stderr: { write: (value) => ((stderr += String(value)), true) },
+  });
+  return { code, stdout, stderr };
+}
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("Person client", () => {
@@ -117,11 +132,9 @@ describe("Person client", () => {
         }));
         const identity = readIdentity(pathToFileURL(join(packageRoot, "dist/package-identity.js")).href);
         vi.spyOn(packageIdentity, "readPackagedPersonClientBuildIdentity").mockReturnValue(identity);
-        let stdout = "";
         const fetch = vi.fn();
-        expect(await runPersonClientCli(["status"], { home_directory: home, fetch,
-          stdout: { write: value => ((stdout += String(value)), true) }, stderr: { write: () => true },
-        })).toBe(0);
+        const { code, stdout } = await runCli(["status"], { home_directory: home, fetch });
+        expect(code).toBe(0);
         const status = JSON.parse(stdout);
         expect(status).toMatchObject({ signed_in: signedIn, installed_version: "0.1.0-internal.6", client_build: { source_sha, source_kind } });
         expect(status).not.toHaveProperty("authority_build");
@@ -133,17 +146,14 @@ describe("Person client", () => {
   it("reports disconnected status without a network call or private paths", async () => {
     await withHome(async (home) => {
       let networkCalled = false;
-      let stdout = "";
-      const status = await runPersonClientCli(["status"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: () => true },
+      const { code, stdout } = await runCli(["status"], {
         home_directory: home,
         fetch: async () => {
           networkCalled = true;
           throw new Error("status must not contact the Authority");
         },
       });
-      expect(status).toBe(0);
+      expect(code).toBe(0);
       expect(networkCalled).toBe(false);
       expect(JSON.parse(stdout)).toMatchObject({
         schema_version: 1,
@@ -166,17 +176,14 @@ describe("Person client", () => {
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
 
-      let stdout = "";
-      const status = await runPersonClientCli(["status"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: () => true },
+      const { code, stdout } = await runCli(["status"], {
         home_directory: home,
         fetch: async () => {
           throw new Error("status must not contact the Authority");
         },
       });
 
-      expect(status).toBe(0);
+      expect(code).toBe(0);
       expect(JSON.parse(stdout)).toMatchObject({
         signed_in: true,
         display_name: "Example Person",
@@ -195,11 +202,7 @@ describe("Person client", () => {
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
 
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(["logout"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: (value) => ((stderr += String(value)), true) },
+      const { code, stdout, stderr } = await runCli(["logout"], {
         home_directory: home,
         fetch: async (input, init) => {
           expect(new URL(String(input)).pathname).toBe("/v2/session/revocations");
@@ -214,7 +217,7 @@ describe("Person client", () => {
         },
       });
 
-      expect(status).toBe(0);
+      expect(code).toBe(0);
       expect(JSON.parse(stdout)).toEqual({ ok: true });
       expect(stderr).toBe("");
       expect(() => new PersonClient({ home_directory: home }).sessionSummary()).toThrow(
@@ -230,17 +233,13 @@ describe("Person client", () => {
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
 
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(["logout"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: (value) => ((stderr += String(value)), true) },
+      const { code, stdout, stderr } = await runCli(["logout"], {
         home_directory: home,
         fetch: async () =>
           json({ error: { code: "unavailable", message: "request failed" } }, 503),
       });
 
-      expect(status).toBe(1);
+      expect(code).toBe(1);
       expect(stdout).toBe("");
       expect(JSON.parse(stderr)).toMatchObject({
         ok: false,
@@ -484,9 +483,7 @@ describe("Person client", () => {
       ["records", "--record-sha256", `sha256:${"a".repeat(64)}`, "--query", "x"],
     ]) {
       let called = false;
-      const status = await runPersonClientCli(argv, {
-        stdout: { write: () => true },
-        stderr: { write: () => true },
+      const { code: status } = await runCli(argv, {
         fetch: async () => { called = true; throw new Error("unexpected network"); },
       });
       expect(status).toBe(2);
@@ -532,21 +529,17 @@ describe("Person client", () => {
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
 
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(
+      const first = await runCli(
         ["records", "--query", "pricing", "--limit", "5"],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           fetch: fetchImpl,
         },
       );
-      expect(status).toBe(0);
-      expect(stderr).toBe("");
-      expect(JSON.parse(stdout)).toMatchObject({
+      expect(first.code).toBe(0);
+      expect(first.stderr).toBe("");
+      expect(JSON.parse(first.stdout)).toMatchObject({
         ok: true,
         result: {
           kind: "echo-clean-person-record-search-v2",
@@ -555,20 +548,16 @@ describe("Person client", () => {
       });
       expect(searchCalls).toBe(1);
 
-      stdout = "";
-      stderr = "";
-      const removed = await runPersonClientCli(
+      const removed = await runCli(
         ["readable-search", "--query", "pricing"],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           fetch: fetchImpl,
         },
       );
-      expect(removed).toBe(2);
-      expect(stdout).toBe("");
-      expect(stderr).toContain("usage:");
+      expect(removed.code).toBe(2);
+      expect(removed.stdout).toBe("");
+      expect(removed.stderr).toContain("usage:");
     });
   });
 
@@ -582,14 +571,10 @@ describe("Person client", () => {
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
 
-      let stdout = "";
-      let stderr = "";
       const timeout = vi.spyOn(AbortSignal, "timeout");
-      const status = await runPersonClientCli(
+      const result = await runCli(
         ["ask", "--question", "What is our pricing decision?"],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           fetch: async (input, init) => {
@@ -620,11 +605,11 @@ describe("Person client", () => {
         },
       );
 
-      expect(status).toBe(0);
+      expect(result.code).toBe(0);
       expect(timeout).toHaveBeenCalledOnce();
       expect(timeout).toHaveBeenCalledWith(135_000);
-      expect(stderr).toBe("");
-      expect(JSON.parse(stdout)).toEqual({
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toEqual({
         ok: true,
         result: {
           schema_version: 3,
@@ -691,15 +676,13 @@ describe("Person client", () => {
       const anchorSha = `sha256:${"e".repeat(64)}`;
       await new PersonClient({ home_directory: home, now: () => NOW, fetch: async () => json({ authority_descriptor: authorityDescriptor() }) })
         .installSession("https://authority.example", ROTATED_SESSION);
-      let stdout = "";
-      const status = await runPersonClientCli([
+      const { code: status, stdout } = await runCli([
         "ask-source", "--source-id", sourceId, "--revision-id", revisionId,
         "--source-sha256", sourceSha, "--representation-sha256", representationSha,
         "--anchor-sha256", anchorSha,
       ], {
         home_directory: home,
         now: () => NOW,
-        stdout: { write: value => ((stdout += String(value)), true) },
         fetch: async (input, init) => {
           expect(new URL(String(input)).pathname).toBe("/v2/person/ask/source");
           expect(JSON.parse(String(init?.body))).toEqual({
@@ -939,19 +922,16 @@ describe("Person client", () => {
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
       for (const [code, httpStatus] of [["invalid_output", 502], ["unavailable", 503], ["unauthorized", 401], ["invalid_request", 400]] as const) {
-        let stdout = "", stderr = "";
-        const status = await runPersonClientCli(argv, {
+        const result = await runCli(argv, {
           home_directory: home, now: () => NOW,
-          stdout: { write: value => ((stdout += String(value)), true) },
-          stderr: { write: value => ((stderr += String(value)), true) },
           fetch: async () => json({ error: { code, message: "private provider body" } }, httpStatus),
         });
-        expect(status).toBe(1);
-        expect(stdout).toBe("");
-        expect(JSON.parse(stderr)).toMatchObject({ ok: false, code, status: httpStatus });
-        expect(stderr).not.toMatch(/private provider body|catching up/);
+        expect(result.code).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, code, status: httpStatus });
+        expect(result.stderr).not.toMatch(/private provider body|catching up/);
         if (argv[0] === "ask" && code === "invalid_output") {
-          expect(JSON.parse(stderr).error).toBe("Answer generation returned an invalid response.");
+          expect(JSON.parse(result.stderr).error).toBe("Answer generation returned an invalid response.");
         }
       }
     });
@@ -1002,11 +982,10 @@ describe("Person client", () => {
       }
     }
     for (const limit of ["-1", "0", "101"]) {
-      let stderr = "";
-      expect(await runPersonClientCli(["records", "--limit", limit], {
+      const { code: status, stderr } = await runCli(["records", "--limit", limit], {
         home_directory: home,
-        stderr: { write: value => ((stderr += String(value)), true) },
-      })).toBe(1);
+      });
+      expect(status).toBe(1);
       expect(JSON.parse(stderr)).toMatchObject({ code: "invalid_limit" });
       expect(stderr).toContain("1 to 100");
     }
@@ -1044,16 +1023,12 @@ describe("Person client", () => {
         code: "invalid_response",
       });
 
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(["records", "--limit", "101"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: (value) => ((stderr += String(value)), true) },
+      const result = await runCli(["records", "--limit", "101"], {
         home_directory: home,
       });
-      expect(status).toBe(1);
-      expect(stdout).toBe("");
-      expect(JSON.parse(stderr)).toMatchObject({
+      expect(result.code).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(JSON.parse(result.stderr)).toMatchObject({
         ok: false,
         action: "records",
         error: "--limit must be an integer from 1 to 100",
@@ -1113,11 +1088,8 @@ describe("Person client", () => {
         now: () => NOW,
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
-      let stdout = "";
       let opened = "";
-      const status = await runPersonClientCli(["slack-connect-begin"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: () => true },
+      const { code: status, stdout } = await runCli(["slack-connect-begin"], {
         home_directory: home,
         now: () => NOW,
         random_uuid: () => "00000000-0000-4000-8000-000000000007",
@@ -1227,12 +1199,9 @@ describe("Person client", () => {
         now: () => NOW,
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
-      let stdout = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout } = await runCli(
         ["slack-connect-cancel", "--attempt-id", attempt],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: () => true },
           home_directory: home,
           now: () => NOW,
           fetch: async (input, init) => {
@@ -1264,11 +1233,8 @@ describe("Person client", () => {
         now: () => NOW,
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
-      let stdout = "";
       let requests = 0;
-      const status = await runPersonClientCli(["slack-disconnect"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: () => true },
+      const { code: status, stdout } = await runCli(["slack-disconnect"], {
         home_directory: home,
         now: () => NOW,
         fetch: async (input, init) => {
@@ -1464,7 +1430,6 @@ describe("Person client", () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       const outputPath = join(home, "employee-onboarding.json");
-      let stdout = "";
       const loginGrant = "G".repeat(43);
       await new PersonClient({
         home_directory: home,
@@ -1474,7 +1439,7 @@ describe("Person client", () => {
         ...SESSION,
         membership_type: "owner",
       });
-      const status = await runPersonClientCli(
+      const { code: status, stdout } = await runCli(
         [
           "employee",
           "invite",
@@ -1486,8 +1451,6 @@ describe("Person client", () => {
           outputPath,
         ],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: () => true },
           home_directory: home,
           now: () => "2026-08-18T00:00:00.000Z",
           fetch: async (input, init) => {
@@ -1656,7 +1619,6 @@ describe("Person client", () => {
   it("renders the owner employee roster without local database access or lifecycle identifiers", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
-      let stdout = "";
       const client = new PersonClient({
         home_directory: home,
         now: () => "2026-08-18T00:00:00.000Z",
@@ -1666,9 +1628,7 @@ describe("Person client", () => {
         ...SESSION,
         membership_type: "owner",
       });
-      const status = await runPersonClientCli(["employee", "list"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: () => true },
+      const { code: status, stdout } = await runCli(["employee", "list"], {
         home_directory: home,
         now: () => "2026-08-18T00:00:00.000Z",
         fetch: async (input, init) => {
@@ -2033,12 +1993,9 @@ describe("Person client", () => {
       );
       chmodSync(invitationPath, 0o600);
       const authority = authorityDescriptor();
-      let stdout = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout } = await runCli(
         ["login", "--invitation", invitationPath],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: () => true },
           home_directory: home,
           now: () => NOW,
           fetch: async (input, init) => {
@@ -2120,12 +2077,9 @@ describe("Person client", () => {
       chmodSync(invitationPath, 0o600);
       const authority = authorityDescriptor();
       const opened: string[] = [];
-      let stdout = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout } = await runCli(
         ["start", "--invitation", invitationPath],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: () => true },
           home_directory: home,
           now: () => NOW,
           open_authorization_url: (url) => {
@@ -2222,13 +2176,9 @@ describe("Person client", () => {
       );
       chmodSync(invitationPath, 0o600);
       const opened: string[] = [];
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout, stderr } = await runCli(
         ["start", "--invitation", invitationPath],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           open_authorization_url: (url) => {
@@ -2306,14 +2256,10 @@ describe("Person client", () => {
         ["login", "--invitation", invitationPath],
         ["start", "--invitation", invitationPath],
       ]) {
-        let stdout = "";
-        let stderr = "";
         let browserOpened = false;
         let authorityRequests = 0;
         const begins: Record<string, unknown>[] = [];
-        const status = await runPersonClientCli(argv, {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
+        const { code: status, stdout, stderr } = await runCli(argv, {
           home_directory: home,
           now: () => NOW,
           open_authorization_url: () => {
@@ -2368,13 +2314,9 @@ describe("Person client", () => {
       const authority = authorityDescriptor();
       const opened: string[] = [];
       const paths: string[] = [];
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout, stderr } = await runCli(
         ["start", "--invitation", invitationPath],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           open_authorization_url: (url) => {
@@ -2465,13 +2407,9 @@ describe("Person client", () => {
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
       let networkCalls = 0;
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout, stderr } = await runCli(
         ["start", "--invitation", invitationPath],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           open_authorization_url: () => {
@@ -2506,14 +2444,9 @@ describe("Person client", () => {
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
       let networkCalls = 0;
-      let stdout = "";
-      let stderr = "";
-
-      const status = await runPersonClientCli(
+      const { code: status, stdout, stderr } = await runCli(
         ["login", "--authority-url", "https://authority.example"],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           fetch: async () => {
@@ -2551,13 +2484,9 @@ describe("Person client", () => {
       );
       chmodSync(invitationPath, 0o600);
       const authority = authorityDescriptor();
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout, stderr } = await runCli(
         ["start", "--invitation", invitationPath],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           open_authorization_url: () => true,
@@ -2756,12 +2685,9 @@ describe("Person client", () => {
   it("reauthenticates through the same loopback handoff without an invitation", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
-      let stdout = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout } = await runCli(
         ["login", "--authority-url", "https://authority.example"],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: () => true },
           home_directory: home,
           now: () => NOW,
           fetch: async (input, init) => {
@@ -2805,13 +2731,9 @@ describe("Person client", () => {
       const authority = authorityDescriptor();
       const authorizationUrl = "https://identity.example/authorize?state=state";
       const opened: string[] = [];
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout, stderr } = await runCli(
         ["login", "--authority-url", "https://authority.example", "--open-browser"],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           open_authorization_url: (url) => {
@@ -2863,13 +2785,9 @@ describe("Person client", () => {
     await withHome(async (home) => {
       const authorizationUrl = "https://identity.example/authorize?state=state";
       const opened: string[] = [];
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout, stderr } = await runCli(
         ["login", "--authority-url", "https://authority.example", "--open-browser"],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           open_authorization_url: (url) => {
@@ -2909,12 +2827,9 @@ describe("Person client", () => {
       chmodSync(invitationPath, 0o600);
       const authority = authorityDescriptor();
       const begins: Record<string, unknown>[] = [];
-      let stdout = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout } = await runCli(
         ["login", "--invitation", invitationPath],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: () => true },
           home_directory: home,
           now: () => NOW,
           fetch: async (input, init) => {
@@ -2972,13 +2887,9 @@ describe("Person client", () => {
       );
       chmodSync(invitationPath, 0o600);
       const begins: Record<string, unknown>[] = [];
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(
+      const { code: status, stdout, stderr } = await runCli(
         ["login", "--invitation", invitationPath],
         {
-          stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
           home_directory: home,
           now: () => NOW,
           fetch: async (input, init) => {
@@ -3040,16 +2951,12 @@ describe("Person client", () => {
       const challengeCode = "A".repeat(43);
       const challengeAttemptId = fixtureId("cat", 7);
       const challengeMessageTs = "1755518400.000001";
-      let stdout = "";
-      let stderr = "";
       await new PersonClient({
         home_directory: home,
         now: () => NOW,
         fetch: async () => json({ authority_descriptor: authority }),
       }).installSession("https://authority.example", ROTATED_SESSION);
-      const linked = await runPersonClientCli(["slack-link", "--slack-user", "U123PERSON"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: (value) => ((stderr += String(value)), true) },
+      const { code: linked, stdout, stderr } = await runCli(["slack-link", "--slack-user", "U123PERSON"], {
         home_directory: home,
         now: () => NOW,
         random_bytes: () => Buffer.from(challengeCode, "base64url"),
@@ -3206,20 +3113,16 @@ describe("Person client status recovery", () => {
         { mode: 0o600 },
       );
 
-      let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(["status"], {
-        stdout: { write: (value) => ((stdout += String(value)), true) },
-        stderr: { write: (value) => ((stderr += String(value)), true) },
+      const result = await runCli(["status"], {
         home_directory: home,
         fetch: async () => {
           throw new Error("status must not contact the Authority");
         },
       });
 
-      expect(status).toBe(0);
-      expect(stderr).toBe("");
-      expect(JSON.parse(stdout)).toMatchObject({
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(JSON.parse(result.stdout)).toMatchObject({
         signed_in: false,
         display_name: null,
         connected_authority: null,

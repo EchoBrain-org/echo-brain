@@ -1,10 +1,7 @@
-import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { PROJECT_CONTEXT_RESPONSE_MAX_BYTES, validateProjectContextAudienceV1, validateProjectIdV1, type ProjectContextAudienceV1, type ProjectIdV1 } from './project-context-v1.js';
+import { object, text, timestamp, requestBound, responseBound } from './person-update-validation.js';
+import { validateProjectContextAudienceV1, validateProjectIdV1, type ProjectContextAudienceV1, type ProjectIdV1 } from './project-context-v1.js';
 import {
-  MAX_ORGANIZATION_API_BODY_BYTES,
-  asRecord,
   assertExactKeys,
-  assertOnlyEnumerableDataProperties,
   fail,
 } from './validation.js';
 import {
@@ -67,31 +64,12 @@ export interface PersonUploadSearchResultV2 {
   }[];
 }
 
-function object(value: unknown, label: string): Record<string, unknown> {
-  assertOnlyEnumerableDataProperties(value, label);
-  return asRecord(value, label);
-}
-function text(value: unknown, label: string, maximum: number, multiline: boolean): asserts value is string {
-  if (typeof value !== 'string' || value.trim().length === 0 ||
-      Array.from(value).reduce((bytes, point) => { const n = point.codePointAt(0)!; return bytes + (n < 0x80 ? 1 : n < 0x800 ? 2 : n < 0x10000 ? 3 : 4); }, 0) > maximum ||
-      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value) ||
-      (!multiline && /[\t\r\n]/u.test(value))) fail(`${label} is invalid`);
-}
-function timestamp(value: unknown): asserts value is string {
-  if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) fail('Person update timestamp is invalid');
-}
 export function validatePersonUploadAudienceV2(value: unknown): PersonUploadAudienceV2 {
   return validateProjectContextAudienceV1(value);
 }
 function coordinates(record: Record<string, unknown>): { project_id: ProjectIdV1 | null; audience: PersonUploadAudienceV2 } {
   const project_id = record.project_id === null ? null : validateProjectIdV1(record.project_id, 'Person update project_id');
   return { project_id, audience: validatePersonUploadAudienceV2(record.audience) };
-}
-function requestBound(value: unknown, label: string): void {
-  if (canonicalJsonBytes(value).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail(`${label} exceeds JSON byte bound`);
-}
-function responseBound(value: unknown, label: string): void {
-  if (canonicalJsonBytes(value).byteLength > PROJECT_CONTEXT_RESPONSE_MAX_BYTES) fail(`${label} exceeds JSON byte bound`);
 }
 export function validatePersonUpdateSubmitV2(value: unknown): PersonUpdateSubmitV2 {
   const record = object(value, 'Person update');

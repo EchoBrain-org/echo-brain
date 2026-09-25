@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
+import { canonicalJsonForTest as canonicalJson } from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const DEPLOYMENT = "deploy/organization-authority";
@@ -30,18 +31,6 @@ const RUNTIME_PROFILE_FILES = [
 
 function deploymentFile(name: string): string {
   return readFileSync(resolve(REPO, DEPLOYMENT, name), "utf8");
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    return `{${Object.keys(object)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }
 
 function runtimeProfile(sourceSha: string) {

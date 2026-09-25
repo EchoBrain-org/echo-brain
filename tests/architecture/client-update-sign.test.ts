@@ -7,14 +7,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { initializeClientUpdateSigner, signClientUpdateFeed } from '../../tools/client-update-sign.mjs';
 import { updateDigest } from '../../src/product/person-client/client-update-contract.js';
+import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const roots: string[] = [];
-function canonical(value: any): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
-}
 function save(path: string, value: unknown) { writeFileSync(path, `${canonical(value)}\n`, { mode: 0o600 }); }
 function temporary() {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'echo-update-sign-test-'));

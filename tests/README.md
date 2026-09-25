@@ -14,6 +14,14 @@ Use `npm test` for the complete active suite. Focused commands include
 `npm run test:meeting-processing-core`, `npm run test:reference-meeting-processing`, and
 `npm run test:architecture`.
 
+Prefer named table cases for the same behavior under different inputs. Keep
+distinct failure and recovery assertions when consolidating setup. Expected
+release bytes use the independent serializer in `tests/support/test-canonical-json.ts`.
+Mutable Git fixtures use `tests/fixtures/coherent-worktree.ts` to give each case
+an isolated checkout of the original dirty and untracked inputs.
+The four stateful workspace suites share `vitest.package.serial.config.ts` and
+retain serial execution.
+
 Tests for the retired LaunchAgent machine runtime, local product database,
 installation enrollment client, JSONL outbox, and fleet updater were deleted
 with that production code. Historical qualification evidence remains in

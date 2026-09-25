@@ -944,107 +944,97 @@ export class PersonAuthorityClient {
         result.project_id === request.project_id && result.operation === operation });
   }
 
-  async documentStatus(accessToken: string, requestId: string) {
+  private async documentStatusFor<T extends { request_id: string }>(accessToken: string, requestId: string, base: string, validate: (value: unknown) => T): Promise<T> {
     validatePersonUpdateRequestId(requestId);
-    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V1}/requests/${requestId}`, {
+    const result = await this.documentResponse(await this.send(`${base}/requests/${requestId}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validatePersonDocumentStatusV1);
+    }), validate);
     if (result.request_id !== requestId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document status coordinates changed.');
     return result;
   }
 
+  async documentStatus(accessToken: string, requestId: string) {
+    return this.documentStatusFor(accessToken, requestId, PERSON_DOCUMENTS_PATH_V1, validatePersonDocumentStatusV1);
+  }
+
   async documentStatusV2(accessToken: string, requestId: string) {
-    validatePersonUpdateRequestId(requestId);
-    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/requests/${requestId}`, {
+    return this.documentStatusFor(accessToken, requestId, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentStatusV2);
+  }
+
+  private async documentMetadataFor<T extends { document_id: string }>(accessToken: string, documentId: string, projectId: string | undefined, base: string, validate: (value: unknown) => T): Promise<T> {
+    validatePersonDocumentIdV1(documentId);
+    const result = await this.documentResponse(await this.send(`${base}/${documentId}${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validatePersonDocumentStatusV2);
-    if (result.request_id !== requestId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document status coordinates changed.');
+    }), validate);
+    if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document metadata coordinates changed.');
     return result;
   }
 
   async documentMetadata(accessToken: string, documentId: string, projectId?: string) {
-    validatePersonDocumentIdV1(documentId);
-    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${documentId}${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
-      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validatePersonDocumentMetadataV1);
-    if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document metadata coordinates changed.');
-    return result;
+    return this.documentMetadataFor(accessToken, documentId, projectId, PERSON_DOCUMENTS_PATH_V1, validatePersonDocumentMetadataV1);
   }
 
   async documentMetadataV2(accessToken: string, documentId: string, projectId?: string) {
-    validatePersonDocumentIdV1(documentId);
-    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/${documentId}${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
-      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validatePersonDocumentMetadataV2);
-    if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document metadata coordinates changed.');
-    return result;
+    return this.documentMetadataFor(accessToken, documentId, projectId, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentMetadataV2);
   }
 
-  async documentText(accessToken: string, documentId: string, cursor?: string, projectId?: string) {
+  private async documentTextFor<T extends { document_id: string }>(accessToken: string, documentId: string, cursor: string | undefined, projectId: string | undefined, base: string, validate: (value: unknown) => T): Promise<T> {
     validatePersonDocumentIdV1(documentId);
     if (cursor !== undefined && (!/^[A-Za-z0-9_-]+$/.test(cursor) || cursor.length > 1024)) throw new Error('Document cursor is invalid');
     const params = new URLSearchParams();
     if (cursor !== undefined) params.set('cursor', cursor);
     if (projectId !== undefined) params.set('project_id', validateProjectIdV1(projectId));
     const query = params.size === 0 ? '' : `?${params}`;
-    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${documentId}/text${query}`, {
+    const result = await this.documentResponse(await this.send(`${base}/${documentId}/text${query}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validatePersonDocumentTextV1);
+    }), validate);
     if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document text coordinates changed.');
     return result;
   }
 
+  async documentText(accessToken: string, documentId: string, cursor?: string, projectId?: string) {
+    return this.documentTextFor(accessToken, documentId, cursor, projectId, PERSON_DOCUMENTS_PATH_V1, validatePersonDocumentTextV1);
+  }
+
   async documentTextV2(accessToken: string, documentId: string, cursor?: string, projectId?: string) {
-    validatePersonDocumentIdV1(documentId);
-    if (cursor !== undefined && (!/^[A-Za-z0-9_-]+$/.test(cursor) || cursor.length > 1024)) throw new Error('Document cursor is invalid');
-    const params = new URLSearchParams(); if (cursor !== undefined) params.set('cursor', cursor); if (projectId !== undefined) params.set('project_id', validateProjectIdV1(projectId));
-    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/${documentId}/text${params.size === 0 ? '' : `?${params}`}`, {
-      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validatePersonDocumentTextV1);
-    if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document text coordinates changed.');
+    return this.documentTextFor(accessToken, documentId, cursor, projectId, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentTextV1);
+  }
+
+  private async searchDocumentsFor<T extends { limit: number }, R extends { documents: readonly { document_id: string }[] }>(accessToken: string, input: T, base: string, validateRequest: (value: unknown) => T, validateResponse: (value: unknown) => R): Promise<R> {
+    const request = validateRequest(input);
+    const result = await this.documentResponse(await this.send(`${base}/search`, {
+      method: 'POST', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/json' }, body: canonicalJson(request),
+    }), validateResponse);
+    if (result.documents.length > request.limit || new Set(result.documents.map(item => item.document_id)).size !== result.documents.length) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Document search page was invalid.');
+    }
     return result;
   }
 
   async searchDocuments(accessToken: string, input: PersonDocumentSearchV1) {
-    const request = validatePersonDocumentSearchV1(input);
-    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V1}/search`, {
-      method: 'POST', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/json' }, body: canonicalJson(request),
-    }), validatePersonDocumentSearchResultV1);
-    if (result.documents.length > request.limit || new Set(result.documents.map(item => item.document_id)).size !== result.documents.length) {
-      throw new PersonAuthorityClientError('invalid_response', 200, 'Document search page was invalid.');
-    }
-    return result;
+    return this.searchDocumentsFor(accessToken, input, PERSON_DOCUMENTS_PATH_V1, validatePersonDocumentSearchV1, validatePersonDocumentSearchResultV1);
   }
 
   async searchDocumentsV2(accessToken: string, input: PersonDocumentSearchV2) {
-    const request = validatePersonDocumentSearchV2(input);
-    const result = await this.documentResponse(await this.send(`${PERSON_DOCUMENTS_PATH_V2}/search`, {
-      method: 'POST', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/json' }, body: canonicalJson(request),
-    }), validatePersonDocumentSearchResultV2);
-    if (result.documents.length > request.limit || new Set(result.documents.map(item => item.document_id)).size !== result.documents.length) {
-      throw new PersonAuthorityClientError('invalid_response', 200, 'Document search page was invalid.');
-    }
-    return result;
+    return this.searchDocumentsFor(accessToken, input, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2);
+  }
+
+  private async documentOriginalFor(accessToken: string, documentId: string, projectId: string | undefined, base: string): Promise<Response> {
+    validatePersonDocumentIdV1(documentId);
+    const response = await this.send(`${base}/${documentId}/original${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
+      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/octet-stream' },
+    }, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
+    if (!response.ok) await this.documentResponse(response, () => { throw new Error('Unexpected document response'); });
+    if (response.status !== 200) { await response.body?.cancel(); throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response status was unexpected.'); }
+    return response;
   }
 
   async documentOriginal(accessToken: string, documentId: string, projectId?: string): Promise<Response> {
-    validatePersonDocumentIdV1(documentId);
-    const response = await this.send(`${PERSON_DOCUMENTS_PATH_V1}/${documentId}/original${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
-      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/octet-stream' },
-    }, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
-    if (!response.ok) await this.documentResponse(response, () => { throw new Error('Unexpected document response'); });
-    if (response.status !== 200) { await response.body?.cancel(); throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response status was unexpected.'); }
-    return response;
+    return this.documentOriginalFor(accessToken, documentId, projectId, PERSON_DOCUMENTS_PATH_V1);
   }
 
   async documentOriginalV2(accessToken: string, documentId: string, projectId?: string): Promise<Response> {
-    validatePersonDocumentIdV1(documentId);
-    const response = await this.send(`${PERSON_DOCUMENTS_PATH_V2}/${documentId}/original${projectId === undefined ? '' : `?${new URLSearchParams({ project_id: validateProjectIdV1(projectId) })}`}`, {
-      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/octet-stream' },
-    }, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS);
-    if (!response.ok) await this.documentResponse(response, () => { throw new Error('Unexpected document response'); });
-    if (response.status !== 200) { await response.body?.cancel(); throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response status was unexpected.'); }
-    return response;
+    return this.documentOriginalFor(accessToken, documentId, projectId, PERSON_DOCUMENTS_PATH_V2);
   }
 
   async projects(accessToken: string, value: ProjectPageRequestV1 = {}) {

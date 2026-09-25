@@ -1,23 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  canonicalJsonForTest as canonical,
+  sha256FileForTest as digest,
+} from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const INSTALLER = join(REPO, "deploy/release/start-person-cli-kit-macos.sh");
 const roots: string[] = [];
 const nativeMac = process.platform === "darwin" && process.arch === "arm64" && process.version === "v22.22.1";
-
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`;
-}
-
-function digest(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
 
 function fixture() {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "echo-mac-cli-kit-"));
