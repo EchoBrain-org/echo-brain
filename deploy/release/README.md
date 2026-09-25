@@ -700,182 +700,87 @@ For a fresh post-promotion `status` or `diagnose`, pass that new accepted record
 to both `--accepted-release` and `--release`, with its matching profile. This
 does not stage a candidate or require inventing a future release.
 
-## First-cohort employee onboarding kit
+## Person command-line kits
 
-The graphical first-cohort download is a versioned `.zip` containing one
-`ECHO Setup.app` setup application. Build it once per accepted release, from the same
-clean committed source as the release record, client, and overlay:
+The Person kit is command-line only. The native Swift app, its paired
+installer and the graphical `ECHO Setup.app` setup are retired, and no kit
+carries a desktop app. There are two kits. Both are built by the same command
+from the same accepted release record and exact Person-client tarball:
 
-```sh
-npm run kit:person-onboarding -- \
-  --release /absolute/private/current.clean-v1.json \
-  --artifact /absolute/private/echo-brain-person-client-0.1.0-internal.1.tgz \
-  --app /absolute/private/ECHO.app.zip \
-  --output /absolute/private/ECHO-macOS-arm64-release-id.zip
-```
+| Kit | Builder flags | Manifest | Stable command |
+| --- | --- | --- | --- |
+| macOS arm64 | `--target darwin-arm64 --installation cli-kit` | schema 3, `echo-person-cli-kit-v1` | `~/Library/Application Support/ECHO/cli/bin/echo-brain` |
+| Linux x64 | `--target linux-x64` | schema 2, `echo-person-onboarding-kit-v2` | `${XDG_DATA_HOME:-~/.local/share}/echo/person/bin/echo-brain` |
 
-Transfer that exact archive through the authenticated private cohort channel.
-Each employee receives their own invitation separately. The shared app contains
-no invitation or session; it embeds the verified offline kit and needs no
-package manager. Initial delivery is an explicit approved download. The opt-in
-[client update V1](../../docs/features/client-updates-v1.md) adds a signed feed
-and macOS/Linux CLI activation before command dispatch; desktop update activation remains
-part of the future Electron packaging integration. No background updater is
-introduced.
+Each kit is a flat ZIP of eight files under `echo-person-onboarding-kit/`:
+`Start-ECHO.sh`, the pinned Node 22.22.1 runtime `node`, `release.json`,
+`person-client.tgz`, `build-identity.v1.json`, `kit-manifest.v1.json`, and the
+kit's own `verify-person-onboarding-kit.mjs` and `clean-v1-release.mjs`. The
+manifest hash-binds the release record, client artifact, build identity and
+runtime. The signed [client update feed](../../docs/features/client-updates-v1.md)
+delivers these same ZIPs.
 
-Owners use the same installed `ECHO.app`: open the menu bar icon, then
-**Organization → People**. Enter the employee's name and sign-in email, choose
-**Invite employee…**, and select a location for the private invitation folder.
-Send that employee the saved `person-invitation.json` and the approved shared
-setup download through the private cohort channel. The app displays the
-invitation expiry; issue it shortly before the employee signs in.
+The builder refuses anything else. A macOS build without `--installation
+cli-kit`, an `--app` archive, or an output that is not a `.zip` prints usage.
+The verifier rejects the retired v1 app-kit manifest. A kit that was already
+delivered carries its own installer and verifier, so it keeps working, and the
+update-feed publisher checks each kit's setup sources against that release's
+own source commit.
 
-The People window shows membership and invitation status separately. Select an
-employee to reissue a pending/expired invitation or revoke access; both actions
-ask for confirmation. Use **Refresh** to check completed onboarding; **Onboarded**
-means the invitation was redeemed, not that the employee is currently online. An
-employee's app hides this menu, and the Authority independently rejects every
-management request without current owner authorization. No separate admin build
-or automatic delivery service is required.
+### macOS arm64 command-line kit
 
-On an Apple-silicon Mac running macOS 14 or later:
-
-1. Extract the download and open `ECHO Setup.app`.
-2. Choose **Install ECHO**. Setup verifies and installs the matched client/app.
-3. For a new membership, choose the private invitation and complete Google
-   sign-in. Existing members can choose **Sign in with existing account** and enter their
-   organization address without another invitation. If this Mac is already
-   signed in, choose **Continue** for that account or explicitly sign out first.
-4. After a permission-aware read succeeds, setup opens Ask ECHO. Use **⌘E** or
-   the menu bar icon afterward.
-
-The installed app's **Account** menu supports returning sign-in, invitation
-sign-in, sign-out, and switching accounts. **Sources** on an answer opens its
-cited records through a fresh permission-aware read; **Back to answer** returns
-to the answer. These controls use the release-installed Person client.
-
-**Uploads…** in the menu bar opens original context uploads for owners and
-employees. Choose a UTF-8 text file up to 8 KiB, enter a title, select **Only me**
-or **Team**, and choose **Upload**. No Slack approval is needed. Search the saved
-originals in this window and select a result to read its full text. **Check upload
-status** also checks optional search metadata; the original is searchable while
-that metadata is pending or unavailable. Ask and approved Sources currently use
-approved records and do not include these uploads. This window requires a
-matching app/client kit and an Authority with the Person-upload V1 wire contract
-(retained in fresh V7 state). Project-aware V2 uploads are not live yet.
-
-**Account → Connected tools…** shows tools enabled by the organization. Choose
-**Connect Slack**, complete Slack sign-in in the browser, and keep the panel
-open while it finishes automatically. Once linked, **Disconnect Slack** removes
-your personal Slack association after confirmation. Your ECHO membership,
-approved records, and access to Ask and Sources remain. You can then connect
-Slack again from the same panel.
-
-The setup application has its own process identity. Installing a new overlay
-can stop the old Ask ECHO process without stopping setup. Installation and
-sign-in are separate; an install-only success or locally stored session is
-never presented as verified organization access. Cancelling sign-in removes
-the temporary invitation copy, and setup exposes safe phases rather than
-provider output or authorization URLs.
-
-ECHO currently has no Apple Developer Program / Developer ID access. Graphical
-archives are **ad hoc signed private-cohort artifacts**, not notarized public
-downloads. The archive digest and authenticated transfer remain the trust
-boundary. Apple signing/notarization and a real clean-Mac employee rehearsal
-must be recorded separately before claiming public self-service distribution.
-
-The `.tar.gz` kit below remains the operator fallback.
-
-The macOS first-cohort employee path is one private Apple-silicon
-kit plus that employee's one-use invitation. The kit carries the exact Person
-client, the matching `ECHO.app` hotkey overlay, and a pinned Node 22.22.1
-runtime. The employee does not install Node, npm, Homebrew, Xcode, Apple's
-Command Line Tools, or a repository checkout and does not edit `PATH`.
-
-From the accepted release record and exact Person-client artifact, create the
-kit on a reviewed macOS arm64 build machine running Node 22.22.1:
+Build on a reviewed macOS arm64 machine running Node 22.22.1, from the clean
+commit that the release record names:
 
 ```sh
 npm run kit:person-onboarding -- \
+  --target darwin-arm64 --installation cli-kit \
   --release /absolute/private/current.clean-v1.json \
   --artifact /absolute/private/echo-brain-person-client-0.1.0-internal.1.tgz \
-  --app /absolute/private/ECHO.app.zip \
-  --output /absolute/private/echo-person-onboarding-clean-v1-20260824-001.tar.gz
+  --runtime-node /absolute/private/node-v22.22.1-darwin-arm64/bin/node \
+  --output /absolute/private/ECHO-cli-macos-arm64-source-sha12.zip
 ```
 
-The builder rejects an overlay whose embedded build identity does not match the
-release source SHA, exact Person-client version, macOS, and arm64. The manifest
-hash-binds that exact app archive alongside the release record, client artifact,
-runtime version, platform, architecture, and Node binary. It emits the private
-archive and its SHA-256 receipt without replacing either. Keep the receipt with
-the owner-side delivery record and transfer the kit through an authenticated
-private channel. That channel is the first-cohort trust boundary: the kit is
-internally hash-bound but is not yet independently signed by ECHO.
+The runtime must be a thin arm64 Mach-O Node 22.22.1. `--runtime-node`
+defaults to the Node that runs the builder. The builder requires clean
+committed source that matches the release, rereads the setup sources after
+building, and publishes the ZIP and its SHA-256 receipt without replacing
+either. Transfer both through an authenticated private channel. The kit is
+hash-bound but is not signed by ECHO.
 
-Immediately before onboarding, the signed-in owner issues or reissues the
-employee's invitation and transfers that file privately. On the employee Mac:
+On the Mac:
 
-1. Extract the kit.
-2. Double-click `Start ECHO.command`.
-3. Choose the invitation file when macOS asks.
-4. Complete Google sign-in in the browser that opens.
+```sh
+unzip ECHO-cli-macos-arm64-source-sha12.zip
+./echo-person-onboarding-kit/Start-ECHO.sh --install-only
+```
 
-The command verifies the kit, installs the versioned client under
-`~/Library/Application Support/ECHO`, and validates then installs the matching
-overlay at `~/Applications/ECHO.app`. A different valid prior ECHO app is moved
-to a private backup before the new bundle is atomically switched into place;
-an invalid or non-ECHO bundle is left untouched. The installer requires a
-recognized matched prior app/command when either is already installed.
+`--install-only` is the only accepted mode; any other argument prints usage.
+The installer checks for macOS 14 or later on Apple silicon and for the bundled
+runtime, then runs the kit's verifier. It installs a versioned release under
+`~/Library/Application Support/ECHO/cli/releases` and atomically replaces the
+stable command `~/Library/Application Support/ECHO/cli/bin/echo-brain`. It
+prints that path. Use the absolute path or add its directory to `PATH`; setup
+never edits shell profiles. It launches nothing and never touches
+`~/Applications`. Reinstalling the same release is safe. Earlier releases are
+retained, and a private lock blocks a concurrent or interrupted installation.
 
-After successful pair activation and retirement of the prior running overlay,
-the installer archives the exact prior app and wrapper together as private
-`overlay-backups/previous.*/pair.tar.gz` with a digest-bound ownership record.
-Archives cannot be discovered as extra launchable app bundles. It retains one
-previous distinct pair and its release root alongside the current release;
-same-release reinstall keeps that rollback pair and removes its temporary
-wrapper backup. Both directories are mode `0700`, archives and records `0600`.
-Only release roots bearing this installer's ownership marker and verified
-archive slots are eligible for pruning. Unmarked legacy releases/backups,
-modified recovery slots, symlinks, foreign-owned files, other applications,
-downloads and background jobs are left untouched. Unknown app or wrapper recovery slots also
-block release pruning because their dependencies cannot be established.
+Then sign in with the installed command:
 
-A private installer lock prevents concurrent activation or pruning. Catchable
-HUP/INT/TERM observed before retention cleanup begins are deferred until a
-coherent pair is installed or restored; those cancellations skip pruning. A
-signal observed only while already-committed retention cleanup runs is
-acknowledged after cleanup: the active pair and the retained previous distinct
-rollback pair, if any, remain, but the command may report interruption after
-cleanup. Failed activation retains required recovery material. SIGKILL or
-power loss cannot run shell recovery:
-a leftover lock deliberately blocks another install pending local operator
-inspection of the app, command and private backups. Do not remove that lock or
-recovery material while an installer may still be running. This change does not
-add automatic crash recovery or sweep artifacts created by older installers.
+```sh
+"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login \
+  --invitation /absolute/private/ECHO-invitation-XXXXXXXX/person-invitation.json \
+  --open-browser
+```
 
-The command never launches or
-foregrounds the overlay. It copies the selected invitation into a temporary
-private file, completes the existing loopback login, and makes one bounded
-permission-aware record request. It prints `phase: "ready"` only after that
-request succeeds. Reinstalling the same kit preserves an existing Person
-session. If `Start ECHO.command` sees any existing session, it stops instead of
-silently applying a possibly different person's invitation; use the installed
-client for the current person, or log out before onboarding another person.
-
-This rehearsal's membership display name is carried in the server-issued
-session and shown by the overlay. It is a required session field, so use a
-fresh invitation and onboarding flow after this release instead of reusing an
-older local session.
-The invitation remains separate because it is employee-bound, short-lived, and
-may need reissue without rebuilding the release kit. Authority remains the
-source of truth for invitation validity so modest client clock skew cannot
-reject a valid invitation. If Authority rejects an unused invitation, the
-client makes one bounded existing-identity login attempt without the invitation
-grant; if no identity exists, it stops before opening Google and tells the
-employee to request a reissued invitation.
-
-Developer ID signing and notarization remain a later distribution improvement
-for both macOS kit formats.
+An existing member uses `person login --authority-url <url> --open-browser`
+instead. `person start --invitation <path>` signs in and then checks one
+permission-aware read before it reports ready. Owners issue, reissue, list and
+revoke invitations with `person employee invite|reissue|list|revoke`. The
+Person session stays at `~/.local/share/echo-brain/person`. Installing or
+updating the CLI never moves it. Enrolling the installed command in the signed
+update feed is described in
+[client updates](../../docs/features/client-updates-v1.md#trusted-bootstrap).
 
 ### Employee machine requirements and handoff
 
@@ -884,7 +789,7 @@ The shipped targets are **macOS ARM64 (Apple silicon)** and **Linux x64
 
 | Kit | Required machine | Bundled executables and tools |
 | --- | --- | --- |
-| macOS ARM64 | macOS 14 or later, Apple silicon | ECHO Setup and ECHO both compile for `arm64-apple-macos14.0`; this sets the kit floor, above Node's macOS floor. Both app plists declare 14.0. Standard macOS utilities are used during installation. |
+| macOS ARM64 | macOS 14 or later, Apple silicon | The only bundled native executable is Node 22.22.1, a thin arm64 Mach-O. The installer checks the macOS version, the CPU and the runtime header before activation. Standard macOS utilities are used during installation. CLI only. |
 | Linux x64 | Linux kernel 4.18 or later, glibc 2.28 or later, x86_64 | The only bundled native executable is Node 22.22.1. Its system libraries must be available, including libstdc++; the installer checks that this exact runtime can start. Bash, unzip, tar/gzip and standard core utilities are required. CLI only. |
 
 The Linux prerequisites follow the pinned [Node 22.22.1 build contract](https://github.com/nodejs/node/blob/v22.22.1/BUILDING.md).
@@ -898,25 +803,25 @@ runtime, verify matched kit artifacts, and stage writes/extraction in the instal
 destination. A write or extraction failure stops activation and gives permission
 and free-space guidance. Space is tested by doing the actual staged writes, not
 by promising that a compressed archive's size predicts free-space needs. Existing
-integrity, same-release, atomic activation and Mac matched-pair rollback checks
-remain authoritative. A successful install prints the command path and bundled
-Node version; the absolute command works in every shell. The Linux PATH export
-is optional and lasts for the current shell only; setup never edits profiles.
+integrity, same-release and atomic activation checks remain authoritative. A
+successful install prints the command path and bundled Node version; the
+absolute command works in every shell. The printed PATH export is optional and
+lasts for the current shell only; setup never edits profiles.
 
-The owner's People window saves a file at
-`<chosen-folder>/ECHO-invitation-<random>/person-invitation.json`. It shows the
-selectable full path and offers **Show invitation in Finder**. Privately send
-that file (or its containing folder) alongside the correct kit, and tell the
-employee to select the file inside the nested folder. Do not paste invitation
-contents into chat or a shell command. Linux rejects a relative path, a missing
-file and a symlink with separate recovery instructions. If transfer changes the
+The owner issues an invitation with
+`echo-brain person employee invite --name <name> --email <email> --out <absolute-path>`.
+`--out` must name a new file in a current-user `0700` directory. Privately send
+that file alongside the correct kit, and give the employee its absolute path
+after transfer. Do not paste invitation contents into chat or a shell command.
+Linux rejects a relative path, a missing file and a symlink with separate
+recovery instructions. If transfer changes the
 current user's file to mode 0644, use the printed, quoted `chmod 600 <path>`
 command, then retry. Ownership, file size, canonical content and symlink checks
 still apply; changing permissions does not make an invalid invitation valid.
 
 An invitation expires **15 minutes after issue**. Each browser attempt lasts
 **up to 10 minutes**, independently bounded by its printed `expires_at`; the
-CLI explains both absolute deadlines. Keep the command/setup running. Use a
+CLI explains both absolute deadlines. Keep the command running. Use a
 browser on the same machine that can reach its loopback address (`127.0.0.1`).
 Opening the URL on a different computer does not complete a remote/headless
 client's callback. Use an interactive supported machine; this kit supplies no
@@ -927,14 +832,14 @@ an expired invitation. An already-bound person can sign in on another machine
 using `person login --authority-url <url>` without a new invitation.
 
 Intel macOS and Linux ARM64 are follow-up ports, **not supported targets**.
-Intel macOS needs x64 builds of both Swift apps and Node, matching packaging and
-verification identities, and native install/reinstall/update/browser proof.
+Intel macOS needs an x64 Node runtime, matching packaging and verification
+identities, and native install/reinstall/update/browser proof.
 Linux ARM64 needs the pinned arm64 Node runtime, ELF/identity/installer support,
 and native distro and browser proof. Changing an architecture check or mocking
 `uname` proves neither port. Windows, 32-bit x86 and musl/Alpine remain outside
-this scope. Mac archives are ad-hoc signed, not Developer ID signed/notarized;
-normal downloaded-app distribution still needs Apple's program access and a
-quarantine/Gatekeeper rehearsal. Do not bypass OS protection to claim support.
+this scope. The macOS kit is not signed by ECHO, and a browser-downloaded
+archive has not had a quarantine/Gatekeeper rehearsal. Do not bypass OS
+protection to claim support.
 
 The existing smoke helper now supports both shipped native targets:
 
@@ -942,8 +847,8 @@ The existing smoke helper now supports both shipped native targets:
 node tests/fixtures/person-onboarding-smoke.mjs
 ```
 
-Run from clean committed source on the matching target. It builds the exact
-offline package (including both Mac apps), checks its digest, installs into an
+Run from clean committed source on the matching target. It builds the host's
+command-line kit, checks its digest and file list, installs into an
 empty temporary HOME/XDG path containing spaces and Unicode, starts CLI version
 and signed-out status, reinstalls, and checks tampering cannot replace the active
 command. Installer PATH contains only OS utilities, with no Node/npm/compiler or
@@ -955,7 +860,7 @@ real browser-login proof**; host libraries remain available.
 | Validation | What it establishes | Still required before distribution |
 | --- | --- | --- |
 | Linux shell tests on Mac | Mocked OS/libc/ELF failure paths, staged write failure, reinstall preservation | Native Linux kit smoke; a Mac skip is not a Linux pass |
-| Native Mac smoke and existing Mac CI | Real compiled package, fresh user state, restricted tool PATH, install/start/reinstall | Clean macOS 14 and current macOS machines; downloaded archive/quarantine, actual setup UI and browser sign-in |
+| Native Mac smoke and existing Mac CI | Real packaged client and command-line kit, fresh user state, restricted tool PATH, install/start/reinstall | Clean macOS 14 and current macOS machines; downloaded archive/quarantine and browser sign-in |
 | Native Linux smoke in existing Ubuntu CI | Real Linux Node and packaged client, fresh state, offline install/start/reinstall | Ubuntu 22.04 and Debian 12 floor-class hosts; actual browser opening, deadlines, invitation transfer modes and permission-aware reads |
 
 The previous 3b663a7 Linux rehearsal on Debian 13/glibc 2.41 is evidence for
@@ -1016,7 +921,7 @@ acceptance.
 ### Linux x64 terminal kit
 
 The Linux kit supports glibc x86_64 machines (Ubuntu 22.04+ / Debian 12+ class).
-It installs the same Person CLI used by the Mac app, with invitation login,
+It installs the same Person CLI as the macOS kit, with invitation login,
 status, records, Ask, and server-authorized organization commands. There is no
 Linux desktop app. Linux arm64, musl/Alpine, and Windows are unsupported.
 
@@ -1039,11 +944,9 @@ For a release offered on both platforms, reuse the **same canonical release
 record and exact Person-client tarball**. The Authority image is shared too;
 the employee's CPU architecture does not select a different server. The kits
 differ in their bundled Node runtime and installer. Linux uses a strict v2
-manifest binding its runtime, release, client, and kit build identity. Existing
-Mac app kits retain their v1 manifest and required app archive. The separate
-[macOS CLI-only kit](../../docs/features/client-updates-v1.md#trusted-bootstrap)
-uses `--installation cli-kit`, a schema-3 manifest, and an isolated CLI root. Linux omits the
-unused Mac UI bridge.
+manifest binding its runtime, release, client, and kit build identity. The
+macOS kit uses `--installation cli-kit`, a schema-3 manifest with the same
+bindings, and its own CLI root.
 
 Send a folder named `ECHO-Employee-Onboarding-linux-x64-<source_sha12>` containing
 the ZIP, `SHA256SUMS.txt`, and a short `README.txt` with the commands below and

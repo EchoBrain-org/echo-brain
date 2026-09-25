@@ -54,7 +54,8 @@ through the same authenticated operator channel:
 echo-brain update configure --file /absolute/path/to/bootstrap-config.json
 ```
 
-For macOS, build the **CLI-only** kit explicitly:
+For macOS, build the command-line kit. It is the only macOS kit, and the
+builder requires the installation type explicitly:
 
 ```sh
 npm run kit:person-onboarding -- \
@@ -66,13 +67,14 @@ npm run kit:person-onboarding -- \
 ```
 
 Extract the ZIP and run `./echo-person-onboarding-kit/Start-ECHO.sh --install-only`.
-The standalone Mac CLI installs to
+The Mac CLI installs to
 `~/Library/Application Support/ECHO/cli/bin/echo-brain`; add that directory to
-PATH or use the absolute command. It has a separate release/updater directory
-and never modifies `~/Applications/ECHO.app` or the legacy app's paired command
-at `~/Library/Application Support/ECHO/bin/echo-brain`. Existing app kits cannot
-be enrolled as independent CLI installations. The CLI-only kit uses manifest
-schema 3 (`echo-person-cli-kit-v1`) and contains no app archive.
+PATH or use the absolute command. It has its own release/updater directory
+and never modifies `~/Applications` or the retired Swift app's paired command
+at `~/Library/Application Support/ECHO/bin/echo-brain`. The retired app kits
+are no longer built, and an installation from one cannot be enrolled as an
+independent CLI installation. The CLI kit uses manifest schema 3
+(`echo-person-cli-kit-v1`) and contains no app archive.
 
 Linux continues to use `${XDG_DATA_HOME:-~/.local/share}/echo/person/bin/echo-brain`
 and its existing schema-2 kit. Both installations keep the current Person session

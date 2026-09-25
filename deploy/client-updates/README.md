@@ -221,11 +221,12 @@ PUT, or use an unconditional upload to force progress.
 
 ## Enroll the Mac CLI
 
-An existing ZIP-delivered Mac client needs one trusted standalone CLI kit
-installation before enrollment. Its command is
+An existing ZIP-delivered Mac client needs one trusted CLI kit installation
+before enrollment. Its command is
 `~/Library/Application Support/ECHO/cli/bin/echo-brain`. Configure that exact
-command only after the hosted feed has been verified. The separate application
-and legacy paired command remain outside this CLI update channel.
+command only after the hosted feed has been verified. The retired Swift app and
+its paired command at `~/Library/Application Support/ECHO/bin/echo-brain`
+remain outside this CLI update channel.
 
 ```sh
 "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" update configure \
