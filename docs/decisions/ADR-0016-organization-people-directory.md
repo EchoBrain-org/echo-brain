@@ -9,7 +9,7 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-09-25
 reviewed_at: 2026-09-25
-reviewed_ref: de9bab7ce99f6fd7b4022816aee24d5cf72bf692
+reviewed_ref: daec2fe0d0bb605a69a5b336751fb5c0fa1158dd
 status: accepted
 supersedes: []
 superseded_by: []

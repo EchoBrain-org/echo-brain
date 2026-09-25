@@ -63,6 +63,10 @@ response means **Not live yet** only at that capability-probe boundary. A
 non-disclosing and must never be converted to a project list, global search,
 or an unavailable claim.
 
+`directory` is the one exception: a `not_found` there means only that this
+Authority lacks the organization directory, even when `projects list` is live.
+The UI must show people search as unavailable, never as an empty list.
+
 ## Error and retry mapping
 
 The HTTP error body is always the existing closed envelope
