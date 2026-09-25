@@ -13,6 +13,8 @@ import {
 import { validatePersonUpdateRequestId, validatePersonUploadContextId } from './person-updates.js';
 
 export const PERSON_PROJECTS_PATH_V1 = '/v1/person/projects';
+/** Organization-wide people search for any active member; needs no project. */
+export const PERSON_DIRECTORY_PATH_V1 = '/v1/person/directory';
 export const PROJECT_NAME_MAX_BYTES = 200;
 export const PROJECT_PAGE_MAX_ITEMS = 10;
 /** New project/original responses may carry bounded original bytes and pages. */
@@ -71,6 +73,18 @@ export interface ProjectDirectoryV1 {
   readonly kind: 'echo-project-directory-v1';
   readonly project_id: ProjectIdV1;
   readonly items: readonly ProjectDirectoryEntryV1[];
+  readonly next_cursor: string | null;
+}
+/**
+ * The same active-member rows as the project directory, without a project.
+ * The caller's organization comes from the session, never from the body.
+ */
+export type OrganizationDirectoryEntryV1 = ProjectDirectoryEntryV1;
+export interface OrganizationDirectorySearchV1 { readonly query?: string; readonly limit?: number; readonly cursor?: string }
+export interface OrganizationDirectoryV1 {
+  readonly schema_version: 1;
+  readonly kind: 'echo-organization-directory-v1';
+  readonly items: readonly OrganizationDirectoryEntryV1[];
   readonly next_cursor: string | null;
 }
 export interface ProjectMemberSetV1 {
@@ -268,6 +282,18 @@ export function validateProjectDirectoryV1(value: unknown): ProjectDirectoryV1 {
   if (record.schema_version !== 1 || record.kind !== 'echo-project-directory-v1') fail('Project directory version or kind is unsupported');
   const result = page({ items: record.items, next_cursor: record.next_cursor }, 'Project directory', directoryEntry); unique(result.items as ProjectDirectoryEntryV1[], 'membership_id', 'Project directory');
   const response = { schema_version: 1 as const, kind: 'echo-project-directory-v1' as const, project_id: project(record, 'Project directory'), ...result }; responseBound(response, 'Project directory'); return response;
+}
+/** Same query, limit and cursor rules as the project directory, with no project_id. */
+export function validateOrganizationDirectorySearchV1(value: unknown): OrganizationDirectorySearchV1 {
+  const record = snapshot(value, 'Organization directory search'); assertExactKeys(record, [...(Object.hasOwn(record, 'query') ? ['query'] : []), ...(Object.hasOwn(record, 'limit') ? ['limit'] : []), ...(Object.hasOwn(record, 'cursor') ? ['cursor'] : [])], 'Organization directory search');
+  const query = Object.hasOwn(record, 'query') ? validatePersonQueryText(record.query) : undefined;
+  return { ...(query === undefined ? {} : { query }), ...optionalPaging(record, 'Organization directory search') };
+}
+export function validateOrganizationDirectoryV1(value: unknown): OrganizationDirectoryV1 {
+  const record = object(value, 'Organization directory'); assertExactKeys(record, ['schema_version', 'kind', 'items', 'next_cursor'], 'Organization directory');
+  if (record.schema_version !== 1 || record.kind !== 'echo-organization-directory-v1') fail('Organization directory version or kind is unsupported');
+  const result = page({ items: record.items, next_cursor: record.next_cursor }, 'Organization directory', directoryEntry); unique(result.items as OrganizationDirectoryEntryV1[], 'membership_id', 'Organization directory');
+  const response = { schema_version: 1 as const, kind: 'echo-organization-directory-v1' as const, ...result }; responseBound(response, 'Organization directory'); return response;
 }
 export function validateProjectMemberSetV1(value: unknown): ProjectMemberSetV1 {
   const record = snapshot(value, 'Project member set'); assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'project_id', 'membership_id', 'role'], 'Project member set');
