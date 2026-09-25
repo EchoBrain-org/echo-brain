@@ -141,12 +141,26 @@ digests, manifest and exact object inventory. Only content-addressed ZIPs and
 authenticated 403 never means an object is absent. Artifacts are uploaded and
 verified over public HTTPS before the signed feed is uploaded last. Original
 bytes, metadata, S3 version IDs and feed signatures are verified again.
+Before each new object write, execution requires enough remaining manifest
+validity for the bounded upload and verification operations: 24 minutes before
+the first write, then eight minutes per remaining new object. It revalidates the
+exact sealed inputs and freshness immediately before writing the feed, after
+the potentially slow object-existence check. Insufficient validity stops the
+write; an expired feed is never intentionally published as a recovery action.
 
 Keep an `unconfirmed` receipt and run `status` against it. Status only inspects
 objects; it never uploads. If an attempted write is verified, status can permit
 execution to continue with remaining unattempted objects. It never repeats an
 attempted PUT. An absent or mismatched attempted object requires investigation;
 do not create another receipt, remove locks or overwrite objects to bypass it.
+Status can inspect expired signed metadata while retaining signature, release,
+authorization, artifact and remote-version checks. Its `metadata_fresh` field
+separates current installability from verified historical object publication:
+`state: "succeeded"` with `metadata_fresh: false` confirms the uploaded bytes,
+but clients still reject that expired feed. Status cannot authorize an expired
+write or renew metadata. Signing, sealing and publication remain strict about
+freshness. Receipts remain bound to their exact tooling commit; never edit an
+old receipt's source binding to run newer tooling against it.
 Subsequent feed replacement, expiry refresh, rollback and signer rotation need
 a separately implemented reviewed operation. This initial publisher does not
 provide those operations.

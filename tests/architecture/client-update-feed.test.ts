@@ -67,9 +67,9 @@ function fixture(targets: Target[] = ['linux']) {
     writeFileSync(approvalPath, JSON.stringify({ kind: 'echo-staging-release-founder-authorization-v1', release_sha256: updateDigest(readFileSync(releasePath)), person_client_sha256: clientHash, slack_approved: true, person_records_passed: true, person_ask_passed: true, release_authorized: authorized }));
   };
   const seal = () => run(['seal', '--prepared', output, '--signature', signaturePath, '--authorization', approvalPath]);
-  const validateSealed = () => spawnSync(process.execPath, ['--input-type=module', '-e',
-    'import { validateSealedClientUpdateFeed } from "./tools/client-update-feed.mjs"; validateSealedClientUpdateFeed({prepared: process.argv[1], authorizationPath: process.argv[2]});', output, approvalPath], { cwd: REPO, encoding: 'utf8' });
-  return { root, kits, output, prepare, authorize, seal, signaturePath, validateSealed };
+  const validateSealed = (now = Date.now(), allowExpired = false) => spawnSync(process.execPath, ['--input-type=module', '-e',
+    'import { validateSealedClientUpdateFeed } from "./tools/client-update-feed.mjs"; validateSealedClientUpdateFeed({prepared: process.argv[1], authorizationPath: process.argv[2], now: Number(process.argv[3]), allowExpired: process.argv[4] === "true"});', output, approvalPath, String(now), String(allowExpired)], { cwd: REPO, encoding: 'utf8' });
+  return { root, kits, output, prepare, authorize, seal, signaturePath, approvalPath, validateSealed };
 }
 afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
@@ -128,6 +128,36 @@ describe('approved update feed publisher', () => {
     const result = f.validateSealed();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('prepared_manifest_mismatch');
+  });
+
+  it('audits expired signed feeds at their last valid instant, while retaining every other metadata check', () => {
+    const f = fixture();
+    expect(f.prepare().status).toBe(0);
+    f.authorize();
+    expect(f.seal().status).toBe(0);
+    const manifest = JSON.parse(readFileSync(join(f.output, 'manifest.json'), 'utf8'));
+    const afterExpiry = Date.parse(manifest.expires_at) + 1;
+    expect(f.validateSealed(afterExpiry).status).toBe(1);
+    expect(f.validateSealed(afterExpiry, true).status).toBe(0);
+    const feed = JSON.parse(readFileSync(join(f.output, 'feed.json'), 'utf8'));
+    feed.signature = Buffer.alloc(64).toString('base64');
+    writeFileSync(join(f.output, 'feed.json'), JSON.stringify(feed));
+    expect(f.validateSealed(afterExpiry, true).status).toBe(1);
+  });
+
+  it('refuses an audit of a signed feed issued more than five minutes in the future', () => {
+    const f = fixture();
+    expect(f.prepare().status).toBe(0);
+    const manifestPath = join(f.output, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const now = Date.now();
+    manifest.issued_at = new Date(now + 6 * 60 * 1000).toISOString();
+    manifest.expires_at = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+    writeFileSync(manifestPath, canonical(manifest) + '\n');
+    f.authorize();
+    const envelope = { payload: readFileSync(manifestPath).toString('base64'), signature: readFileSync(f.signaturePath).toString('base64') };
+    writeFileSync(join(f.output, 'feed.json'), JSON.stringify(envelope));
+    expect(f.validateSealed(now, true).status).toBe(1);
   });
 
   it('rejects altered release metadata before accepting a valid signature', () => {

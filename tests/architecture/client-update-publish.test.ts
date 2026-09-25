@@ -14,7 +14,7 @@ const STACK = 'echo-client-update-staging-s3-v1';
 const STACK_ID = `arn:aws:cloudformation:us-west-2:904560150024:stack/${STACK}/11111111-1111-4111-8111-111111111111`;
 const TEMPLATE = Buffer.from('{"Resources":{}}');
 function save(path: string, value: unknown) { writeFileSync(path, typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value), { mode: 0o600 }); }
-function fixture() {
+function fixture(options: { expiresAt?: number } = {}) {
   const directory = mkdtempSync(join(realpathSync(tmpdir()), 'echo-publish-test-'));
   chmodSync(directory, 0o700); directories.push(directory);
   const prepared = join(directory, 'prepared');
@@ -25,7 +25,8 @@ function fixture() {
   save(join(prepared, artifactKey), artifactBytes);
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const config = parseUpdateConfig({ schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'staging', feed_url: FEED, public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' });
-  const manifest = parseUpdateManifest({ schema_version: 1, kind: 'echo-client-update-manifest-v1', channel: 'staging', sequence: 1, issued_at: new Date(Date.now() - 10000).toISOString(), expires_at: new Date(Date.now() + 86400000).toISOString(), release_id: 'clean-v1-fixture', release_sha256: 'b'.repeat(64), source_sha: SOURCE, product_version: '0.1.1', artifacts: [{ platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit', sha256: sha, bytes: artifactBytes.length, url: new URL(artifactKey, FEED).href }] });
+  const createdAt = Date.now();
+  const manifest = parseUpdateManifest({ schema_version: 1, kind: 'echo-client-update-manifest-v1', channel: 'staging', sequence: 1, issued_at: new Date(createdAt - 10000).toISOString(), expires_at: new Date(options.expiresAt ?? createdAt + 86400000).toISOString(), release_id: 'clean-v1-fixture', release_sha256: 'b'.repeat(64), source_sha: SOURCE, product_version: '0.1.1', artifacts: [{ platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit', sha256: sha, bytes: artifactBytes.length, url: new URL(artifactKey, FEED).href }] });
   const payload = Buffer.from(JSON.stringify(manifest));
   const feedBytes = Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') }));
   save(join(prepared, 'bootstrap-config.json'), config); save(join(prepared, 'manifest.json'), payload); save(join(prepared, 'release.json'), { synthetic: true }); save(join(prepared, 'feed.json'), feedBytes);
@@ -37,7 +38,7 @@ function fixture() {
   const objects = new Map<string, { bytes: Buffer; metadata: Record<string, unknown> }>();
   const calls: string[][] = [];
   const events: string[] = [];
-  const state = { throwAfterPut: '', throwBeforePut: '', tamperFetch: '', headerOverride: {} as Record<string, string>, statusOverride: 200 };
+  const state = { throwAfterPut: '', throwBeforePut: '', tamperFetch: '', advanceAfterFetch: {} as Record<string, number>, advanceAfterHead: {} as Record<string, number>, headerOverride: {} as Record<string, string>, statusOverride: 200, now: createdAt, validationOptions: [] as Array<{ now?: number; allowExpired?: boolean }> };
   const aws = (args: string[]): any => {
     calls.push(args);
     const value = (flag: string) => args[args.indexOf(flag) + 1];
@@ -46,7 +47,12 @@ function fixture() {
     if (args[1] === 'get-template') return { TemplateBody: TEMPLATE.toString() };
     if (args[1] === 'list-stack-resources') return { StackResourceSummaries: hosting.inventory.map(item => ({ LogicalResourceId: item.logical_id, ResourceType: item.resource_type, PhysicalResourceId: BUCKET, ResourceStatus: 'CREATE_COMPLETE' })) };
     if (args[1] === 'get-bucket-versioning') return { Status: 'Enabled' };
-    if (args[1] === 'head-object') return objects.get(value('--key'))?.metadata ?? { absent: true };
+    if (args[1] === 'head-object') {
+      const key = value('--key');
+      const response = objects.get(key)?.metadata ?? { absent: true };
+      if (state.advanceAfterHead[key] !== undefined) state.now = state.advanceAfterHead[key];
+      return response;
+    }
     if (args[1] === 'put-object') {
       const key = value('--key');
       events.push(`put:${key}`);
@@ -71,9 +77,15 @@ function fixture() {
     expect(new URL(url).origin).toBe(new URL(FEED).origin);
     const object = objects.get(key);
     if (!object) return new Response(null, { status: 404 });
-    return new Response(Uint8Array.from(state.tamperFetch === key ? Buffer.alloc(object.bytes.length, 42) : object.bytes), { status: state.statusOverride, headers: { 'content-length': String(object.bytes.length), 'content-type': String(object.metadata.ContentType), 'cache-control': String(object.metadata.CacheControl), 'x-amz-server-side-encryption': 'AES256', 'x-amz-version-id': String(object.metadata.VersionId), ...state.headerOverride } });
+    const response = new Response(Uint8Array.from(state.tamperFetch === key ? Buffer.alloc(object.bytes.length, 42) : object.bytes), { status: state.statusOverride, headers: { 'content-length': String(object.bytes.length), 'content-type': String(object.metadata.ContentType), 'cache-control': String(object.metadata.CacheControl), 'x-amz-server-side-encryption': 'AES256', 'x-amz-version-id': String(object.metadata.VersionId), ...state.headerOverride } });
+    if (state.advanceAfterFetch[key] !== undefined) state.now = state.advanceAfterFetch[key];
+    return response;
   };
-  const dependencies: ClientUpdatePublicationDependencies = { aws, fetch, runtime: () => SOURCE, readTemplate: () => TEMPLATE, validatePrepared: () => ({ config, manifest, feedBytes }) };
+  const dependencies: ClientUpdatePublicationDependencies = { aws, fetch, runtime: () => SOURCE, readTemplate: () => TEMPLATE, now: () => state.now, validatePrepared: options => {
+    state.validationOptions.push(options);
+    if (!options.allowExpired && Date.parse(manifest.expires_at) <= state.now) throw new Error('expired_metadata');
+    return { config, manifest, feedBytes };
+  } };
   const plan = () => planClientUpdatePublish({ hostingReceipt, prepared, authorization, output: receipt }, dependencies);
   const execute = () => executeClientUpdatePublish({ receipt, approveManifest: updateDigest(payload) }, dependencies);
   const status = () => statusClientUpdatePublish({ receipt }, dependencies);
@@ -94,6 +106,73 @@ describe('bounded first S3 client update publication', () => {
     expect(receipt.objects.every((object: any) => object.attempted && object.succeeded && object.verified && object.version_id)).toBe(true);
     expect(f.calls.flat()).not.toContain('delete-object');
     expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+  });
+
+  it('does not begin publication when less than the bounded first-publication window remains', async () => {
+    const expiresAt = Date.now() + 19 * 60 * 1000;
+    const f = fixture({ expiresAt });
+    await f.plan();
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 0 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(0);
+  });
+
+  it('keeps execution strict when a planned feed expires before the first write', async () => {
+    const f = fixture();
+    await f.plan();
+    f.state.now = Date.parse(f.manifest.expires_at) + 1;
+    await expect(f.execute()).rejects.toThrow('expired_metadata');
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(0);
+  });
+
+  it('never sends the feed PUT if expiry advances during artifact verification', async () => {
+    const expiresAt = Date.now() + 25 * 60 * 1000;
+    const f = fixture({ expiresAt });
+    await f.plan();
+    f.state.advanceAfterFetch[f.artifactKey] = expiresAt - 5 * 60 * 1000;
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
+    expect(f.events).toEqual([`put:${f.artifactKey}`, `get:${f.artifactKey}`]);
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(1);
+    expect(f.objects.has('feed.json')).toBe(false);
+  });
+
+  it('revalidates freshness after the final feed HEAD and does not send its PUT when time advanced', async () => {
+    const expiresAt = Date.now() + 25 * 60 * 1000;
+    const f = fixture({ expiresAt });
+    await f.plan();
+    f.state.advanceAfterHead['feed.json'] = expiresAt - 5 * 60 * 1000;
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(1);
+    expect(f.objects.has('feed.json')).toBe(false);
+  });
+
+  it('verifies an already-published expired feed historically through status without another PUT', async () => {
+    const f = fixture();
+    await f.plan();
+    await f.execute();
+    f.state.now = Date.parse(f.manifest.expires_at) + 1;
+    expect(await f.status()).toMatchObject({ state: 'succeeded', metadata_fresh: false, verified_objects: 2 });
+    expect(f.state.validationOptions.at(-1)).toMatchObject({ allowExpired: true, now: f.state.now });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+  });
+
+  it('keeps a replaced object version unconfirmed when status audits after expiry', async () => {
+    const f = fixture();
+    await f.plan();
+    await f.execute();
+    f.state.now = Date.parse(f.manifest.expires_at) + 1;
+    f.objects.get(f.artifactKey)!.metadata.VersionId = 'replacement-version';
+    expect(await f.status()).toMatchObject({ state: 'unconfirmed', metadata_fresh: false });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+  });
+
+  it('keeps a corrupted remote feed unconfirmed when status audits after expiry', async () => {
+    const f = fixture();
+    await f.plan();
+    await f.execute();
+    f.state.now = Date.parse(f.manifest.expires_at) + 1;
+    f.state.tamperFetch = 'feed.json';
+    expect(await f.status()).toMatchObject({ state: 'unconfirmed', metadata_fresh: false });
     expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
   });
 
@@ -180,6 +259,7 @@ describe('bounded first S3 client update publication', () => {
   it('completes an uncertain final feed PUT using status without any further writes', async () => {
     const f = fixture(); await f.plan(); f.state.throwAfterPut = 'feed.json';
     expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
+    f.state.now = Date.parse(f.manifest.expires_at) + 1;
     expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
     expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
   });

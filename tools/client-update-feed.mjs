@@ -116,13 +116,24 @@ export function prepareClientUpdateFeed({ configPath, releasePath, linuxKit, mac
 
 // Shared nonmutating release validation for the signer and bounded publisher.
 // Private key handling and AWS writes belong to their separate operator tools.
-export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, now = Date.now() }) {
+function validationTime(manifest, now, allowExpired) {
+  const issuedAt = Date.parse(manifest.issued_at);
+  const expiresAt = Date.parse(manifest.expires_at);
+  // Audit verification deliberately omits only expiry. It still judges a feed
+  // against the real clock for future-issued metadata, then verifies the
+  // signature at its final valid millisecond when the feed has expired.
+  if (!Number.isFinite(now) || !Number.isFinite(issuedAt) || !Number.isFinite(expiresAt) || issuedAt > now + 5 * 60 * 1000) fail('expired_metadata');
+  if (!allowExpired && expiresAt <= now) fail('expired_metadata');
+  return allowExpired ? Math.min(now, expiresAt - 1) : now;
+}
+
+export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, now = Date.now(), allowExpired = false }) {
   const config = parseUpdateConfig(json(join(prepared, 'bootstrap-config.json')));
   if (config.installation !== 'cli-kit') fail('publisher_adapter_unavailable');
   const payload = read(join(prepared, 'manifest.json'));
   const manifest = parseUpdateManifest(JSON.parse(payload.toString('utf8')));
   if (manifest.channel !== config.channel) fail('wrong_channel');
-  if (!Number.isFinite(now) || Date.parse(manifest.issued_at) > now + 5 * 60 * 1000 || Date.parse(manifest.expires_at) <= now) fail('expired_metadata');
+  validationTime(manifest, now, allowExpired);
   if (manifest.sequence < config.minimum_sequence) fail('stale_metadata');
   if (manifest.artifacts.some(a => new URL(a.url).origin !== new URL(config.feed_url).origin)) fail('wrong_artifact_origin');
   const release = readCleanV1Release(join(prepared, 'release.json'));
@@ -145,10 +156,10 @@ export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, 
   return { config, manifest, payload, release };
 }
 
-export function validateSealedClientUpdateFeed({ prepared, authorizationPath, now = Date.now() }) {
-  const validated = validatePreparedClientUpdateFeed({ prepared, authorizationPath, now });
+export function validateSealedClientUpdateFeed({ prepared, authorizationPath, now = Date.now(), allowExpired = false }) {
+  const validated = validatePreparedClientUpdateFeed({ prepared, authorizationPath, now, allowExpired });
   const feedBytes = read(join(prepared, 'feed.json'));
-  verifyUpdateEnvelope(feedBytes, validated.config, now);
+  verifyUpdateEnvelope(feedBytes, validated.config, validationTime(validated.manifest, now, allowExpired));
   const envelope = JSON.parse(feedBytes.toString('utf8'));
   if (!Buffer.from(envelope.payload, 'base64').equals(validated.payload)) fail('prepared_manifest_mismatch');
   return { ...validated, feedBytes };

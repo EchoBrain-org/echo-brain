@@ -9,13 +9,15 @@ export interface ClientUpdatePublicationSummary {
   release_id: string;
   verified_objects: number;
   object_count: number;
+  metadata_fresh: boolean;
 }
 export interface ClientUpdatePublicationDependencies {
   aws?: (args: string[]) => any;
   runtime?: () => string;
+  now?: () => number;
   readTemplate?: () => Buffer;
   fetch?: typeof globalThis.fetch;
-  validatePrepared?: (options: { prepared: string; authorizationPath: string }) => {
+  validatePrepared?: (options: { prepared: string; authorizationPath: string; now?: number; allowExpired?: boolean }) => {
     config: ClientUpdateConfig;
     manifest: ClientUpdateManifest;
     feedBytes: Buffer;

@@ -22,6 +22,14 @@ const SHA = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
 const STACK_ID = new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${STACK}/[a-f0-9-]{36}$`);
 const INVENTORY = [{ action: 'Add', logical_id: 'FeedBucket', resource_type: 'AWS::S3::Bucket' }, { action: 'Add', logical_id: 'FeedBucketPolicy', resource_type: 'AWS::S3::BucketPolicy' }];
+// Each reserve is checked after the preflight HEAD: the remaining PUT,
+// verification HEAD, and public GET are capped at 120 seconds each, followed
+// by a two-minute scheduling cushion.
+const OBJECT_PUBLICATION_WINDOW_MS = 8 * 60 * 1000;
+// The first write reserves the full maximum two-artifact publication window.
+// Its preflight HEAD has completed, leaving eleven bounded 120-second
+// operations plus one 120-second scheduling cushion before the feed verifies.
+const INITIAL_PUBLICATION_WINDOW_MS = 24 * 60 * 1000;
 const fail = code => { throw new Error(code); };
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const equal = (left, right) => canonicalJson(left) === canonicalJson(right);
@@ -106,10 +114,10 @@ function hosting(path, aws, readTemplate) {
   if (versioning?.Status !== 'Enabled') fail('hosting_versioning_required');
   return { receipt_sha256: digest(bytes), stack_id: receipt.stack_id, template_sha256: hash, bucket, feed_url: receipt.outputs.feed_url };
 }
-function preparedInputs(prepared, authorizationPath, validatePrepared) {
+function preparedInputs(prepared, authorizationPath, validatePrepared, validation = {}) {
   privateDirectory(prepared);
   privateDirectory(join(prepared, 'artifacts'));
-  const validated = validatePrepared({ prepared, authorizationPath });
+  const validated = validatePrepared({ prepared, authorizationPath, ...validation });
   const { config, manifest } = validated;
   const files = ['bootstrap-config.json', 'manifest.json', 'release.json', 'feed.json'];
   const hashes = Object.fromEntries(files.map(file => [file, digest(read(join(prepared, file)))]));
@@ -127,27 +135,40 @@ function preparedInputs(prepared, authorizationPath, validatePrepared) {
   return { config, manifest, hashes, objects };
 }
 function deps(dependencies) {
-  return { aws: dependencies.aws ?? defaultAws, runtime: dependencies.runtime ?? runtime, fetch: dependencies.fetch ?? globalThis.fetch, validatePrepared: dependencies.validatePrepared ?? validateSealedClientUpdateFeed, readTemplate: dependencies.readTemplate ?? (() => readFileSync(join(REPO, 'deploy/client-updates/staging-feed-s3-v1.template.json'))) };
+  return { aws: dependencies.aws ?? defaultAws, runtime: dependencies.runtime ?? runtime, fetch: dependencies.fetch ?? globalThis.fetch, now: dependencies.now ?? Date.now, validatePrepared: dependencies.validatePrepared ?? validateSealedClientUpdateFeed, readTemplate: dependencies.readTemplate ?? (() => readFileSync(join(REPO, 'deploy/client-updates/staging-feed-s3-v1.template.json'))) };
 }
 function head(aws, bucket, key) { return aws(['s3api', 'head-object', '--bucket', bucket, '--key', key, '--expected-bucket-owner', ACCOUNT]); }
 function absent(aws, bucket, key) { const observed = head(aws, bucket, key); if (!equal(observed, { absent: true })) fail('first_publication_object_already_exists'); }
-function summary(receipt) { return { kind: KIND, operation_id: receipt.operation_id, state: receipt.state, manifest_sha256: receipt.hashes['manifest.json'], feed_url: receipt.hosting.feed_url, release_id: receipt.release_id, verified_objects: receipt.objects.filter(item => item.verified).length, object_count: receipt.objects.length }; }
+function currentTime(d) { const now = d.now(); if (!Number.isFinite(now)) fail('clock_unavailable'); return now; }
+function metadataFresh(inputs, d) { return Date.parse(inputs.manifest.expires_at) > currentTime(d); }
+function summary(receipt, inputs, d) { return { kind: KIND, operation_id: receipt.operation_id, state: receipt.state, manifest_sha256: receipt.hashes['manifest.json'], feed_url: receipt.hosting.feed_url, release_id: receipt.release_id, verified_objects: receipt.objects.filter(item => item.verified).length, object_count: receipt.objects.length, metadata_fresh: metadataFresh(inputs, d) }; }
 function objectIdentity(item) { return { key: item.key, sha256: item.sha256, bytes: item.bytes, content_type: item.content_type, cache_control: item.cache_control }; }
 function readReceipt(path) {
   const receipt = JSON.parse(read(path));
   if (receipt?.schema_version !== 1 || receipt.kind !== KIND || !/^[a-f0-9-]{36}$/.test(receipt.operation_id ?? '') || !COMMIT.test(receipt.source_sha ?? '') || !['planned', 'publishing', 'succeeded', 'unconfirmed'].includes(receipt.state) || !Array.isArray(receipt.objects) || !receipt.objects.length || receipt.objects.length > 3 || receipt.objects.some(item => typeof item.attempted !== 'boolean' || typeof item.succeeded !== 'boolean' || typeof item.verified !== 'boolean' || (item.succeeded && !item.attempted) || (item.verified && !item.succeeded) || (item.version_id !== null && (typeof item.version_id !== 'string' || !item.version_id || item.version_id === 'null')))) fail('publication_receipt_invalid');
   return receipt;
 }
-function boundInputs(receipt, d) {
+function boundInputs(receipt, d, { allowExpired = false } = {}) {
   if (d.runtime() !== receipt.source_sha) fail('exact_reviewed_runtime_required');
   account(d.aws);
   const currentHosting = hosting(receipt.hosting_receipt, d.aws, d.readTemplate);
   if (!equal(currentHosting, receipt.hosting)) fail('hosting_receipt_changed');
-  const inputs = preparedInputs(receipt.prepared, receipt.authorization, d.validatePrepared);
+  const inputs = preparedInputs(receipt.prepared, receipt.authorization, d.validatePrepared, { now: currentTime(d), allowExpired });
   if (inputs.config.feed_url !== currentHosting.feed_url || !equal(inputs.hashes, receipt.hashes) || inputs.manifest.release_id !== receipt.release_id || !equal(inputs.objects, receipt.objects.map(objectIdentity))) fail('publication_inputs_changed');
   return inputs;
 }
-async function verifyObject(receipt, object, inputs, d) {
+function requirePublicationWindow(receipt, index, inputs, d) {
+  const firstWrite = receipt.objects.every(object => !object.attempted);
+  const remainingObjects = receipt.objects.slice(index).filter(object => !object.attempted).length;
+  const required = firstWrite ? INITIAL_PUBLICATION_WINDOW_MS : remainingObjects * OBJECT_PUBLICATION_WINDOW_MS;
+  if (Date.parse(inputs.manifest.expires_at) - currentTime(d) < required) fail('insufficient_metadata_validity');
+}
+function revalidateSealedInputs(receipt, d) {
+  const refreshed = preparedInputs(receipt.prepared, receipt.authorization, d.validatePrepared, { now: currentTime(d) });
+  if (refreshed.config.feed_url !== receipt.hosting.feed_url || !equal(refreshed.hashes, receipt.hashes) || refreshed.manifest.release_id !== receipt.release_id || !equal(refreshed.objects, receipt.objects.map(objectIdentity))) fail('publication_inputs_changed');
+  return refreshed;
+}
+async function verifyObject(receipt, object, inputs, d, { allowExpired = false } = {}) {
   const observed = head(d.aws, receipt.hosting.bucket, object.key);
   if (observed?.absent || observed.ContentLength !== object.bytes || observed.ContentType !== object.content_type || observed.CacheControl !== object.cache_control || observed.ContentEncoding || observed.WebsiteRedirectLocation || observed.ServerSideEncryption !== 'AES256' || typeof observed.VersionId !== 'string' || !observed.VersionId || observed.VersionId === 'null' || (object.version_id !== null && object.version_id !== observed.VersionId)) fail('published_object_metadata_mismatch');
   const url = new URL(object.key, receipt.hosting.feed_url).href;
@@ -169,7 +190,11 @@ async function verifyObject(receipt, object, inputs, d) {
   } catch (error) { await reader.cancel(); throw error; }
   finally { reader.releaseLock(); }
   if (size !== object.bytes || hash.digest('hex') !== object.sha256) fail('public_object_digest_mismatch');
-  if (object.key === 'feed.json') verifyUpdateEnvelope(Buffer.concat(chunks), inputs.config, Date.now());
+  if (object.key === 'feed.json') {
+    const expiresAt = Date.parse(inputs.manifest.expires_at);
+    const verificationTime = allowExpired ? Math.min(currentTime(d), expiresAt - 1) : currentTime(d);
+    verifyUpdateEnvelope(Buffer.concat(chunks), inputs.config, verificationTime);
+  }
   object.version_id = observed.VersionId;
   object.succeeded = true;
   object.verified = true;
@@ -184,14 +209,14 @@ export async function planClientUpdatePublish({ hostingReceipt, prepared, author
     if (!COMMIT.test(source)) fail('reviewed_source_unavailable');
     account(d.aws);
     const host = hosting(absolute(hostingReceipt), d.aws, d.readTemplate);
-    const inputs = preparedInputs(absolute(prepared), absolute(authorization), d.validatePrepared);
+    const inputs = preparedInputs(absolute(prepared), absolute(authorization), d.validatePrepared, { now: currentTime(d) });
     if (inputs.config.feed_url !== host.feed_url) fail('publication_feed_url_mismatch');
     // Check feed first. A new receipt cannot bypass an existing publication.
     absent(d.aws, host.bucket, 'feed.json');
     for (const object of inputs.objects.filter(item => item.key !== 'feed.json')) absent(d.aws, host.bucket, object.key);
     const receipt = { schema_version: 1, kind: KIND, operation_id: randomUUID(), source_sha: source, state: 'planned', hosting_receipt: hostingReceipt, prepared, authorization, hosting: host, hashes: inputs.hashes, release_id: inputs.manifest.release_id, objects: inputs.objects.map(item => ({ ...item, attempted: false, succeeded: false, verified: false, version_id: null })) };
     save(output, receipt, true);
-    return summary(receipt);
+    return summary(receipt, inputs, d);
   });
 }
 
@@ -202,10 +227,10 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
     const receipt = readReceipt(path);
     if (!SHA.test(approveManifest ?? '') || approveManifest !== receipt.hashes['manifest.json']) fail('exact_manifest_approval_required');
     if (receipt.state === 'unconfirmed') fail('publication_unconfirmed_use_status');
-    const inputs = boundInputs(receipt, d);
-    if (receipt.state === 'succeeded') return summary(receipt);
+    let inputs = boundInputs(receipt, d);
+    if (receipt.state === 'succeeded') return summary(receipt, inputs, d);
     try {
-      for (const object of receipt.objects) {
+      for (const [index, object] of receipt.objects.entries()) {
         if (!object.attempted) {
           // Every artifact has just passed anonymous HTTPS verification before
           // the final feed PUT makes this release discoverable.
@@ -213,6 +238,10 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
           const file = join(receipt.prepared, object.key);
           const bytes = read(file, object.key === 'feed.json' ? UPDATE_METADATA_LIMIT : UPDATE_ARTIFACT_LIMIT);
           if (bytes.length !== object.bytes || digest(bytes) !== object.sha256) fail('publication_inputs_changed');
+          // The final feed is revalidated after its preflight HEAD and file
+          // read, immediately before the sole conditional write makes it live.
+          if (object.key === 'feed.json') inputs = revalidateSealedInputs(receipt, d);
+          requirePublicationWindow(receipt, index, inputs, d);
           receipt.state = 'publishing'; object.attempted = true; save(path, receipt);
           const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', object.key, '--body', file, '--if-none-match', '*', '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', object.content_type, '--cache-control', object.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(object.sha256, 'hex').toString('base64')]);
           if (result?.ServerSideEncryption !== 'AES256' || typeof result.VersionId !== 'string' || !result.VersionId || result.VersionId === 'null') fail('put_object_result_unconfirmed');
@@ -223,7 +252,7 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
       }
       receipt.state = 'succeeded'; save(path, receipt);
     } catch { receipt.state = 'unconfirmed'; save(path, receipt); }
-    return summary(receipt);
+    return summary(receipt, inputs, d);
   });
 }
 
@@ -232,16 +261,16 @@ export async function statusClientUpdatePublish({ receipt: path }, dependencies 
   const d = deps(dependencies);
   return locked(path, async () => {
     const receipt = readReceipt(path);
-    const inputs = boundInputs(receipt, d);
+    const inputs = boundInputs(receipt, d, { allowExpired: true });
     try {
       for (const object of receipt.objects) {
-        if (object.attempted) { await verifyObject(receipt, object, inputs, d); save(path, receipt); }
+        if (object.attempted) { await verifyObject(receipt, object, inputs, d, { allowExpired: true }); save(path, receipt); }
         else absent(d.aws, receipt.hosting.bucket, object.key);
       }
       receipt.state = receipt.objects.every(item => item.verified) ? 'succeeded' : receipt.objects.some(item => item.attempted) ? 'publishing' : 'planned';
     } catch { receipt.state = 'unconfirmed'; }
     save(path, receipt);
-    return summary(receipt);
+    return summary(receipt, inputs, d);
   });
 }
 
