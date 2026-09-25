@@ -1970,8 +1970,15 @@ export function toggleMore(): void {
   if (compose && !locked(compose)) setCompose({ ...compose, picking: !compose.picking });
 }
 
-/** A project chosen under More…: the capture goes there, for its members. */
-export function chooseProject(project: ProjectSummary): void { editCompose({ project, readers: 'project', picking: false }); }
+/**
+ * A project chosen under More…: the capture is filed there. Who can read it
+ * never widens by itself: Only me and Organization stay, and the last
+ * project's members give way to Only me until this project's are chosen.
+ */
+export function chooseProject(project: ProjectSummary): void {
+  const readers = state.compose?.readers;
+  if (readers) editCompose({ project, readers: readers === 'project' ? 'only-me' : readers, picking: false });
+}
 
 export function removeFile(): void { editCompose({ file: null }); }
 
