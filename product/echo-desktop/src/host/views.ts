@@ -2,9 +2,10 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, DocumentPage, DocumentSummary,
-  DocumentText, Extraction, Failure, FeedItem, FeedPage, Match, Matches, Member, MemberPage, ProjectChange, ProjectPage, ProjectSummary, Receipt,
-  RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk, WriteStatus,
+  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, CreatedProject, DocumentPage,
+  DocumentSummary, DocumentText, Employee, Employees, Extraction, Failure, FeedItem, FeedPage, InvitationSaved, Match, Matches, Member, MemberPage,
+  ProjectChange, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
+  WriteStatus,
 } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
@@ -198,6 +199,49 @@ export function changeView(raw: unknown, requestId: string, change: ProjectChang
           value.document_id !== change.document_id) throw new ViewError();
       return null;
   }
+}
+
+/** The receipt for exactly the create that was sent: its new project's id. */
+export function createdView(raw: unknown, requestId: string): CreatedProject {
+  const value = object(raw);
+  if (value.kind !== 'echo-project-create-receipt-v1' || value.state !== 'created' || value.request_id !== requestId) throw new ViewError();
+  return { project_id: text(value.project_id) };
+}
+
+const MEMBERSHIPS: ReadonlySet<string> = new Set<Employee['membership']>(['active', 'revoked']);
+const INVITATIONS: ReadonlySet<string> = new Set<Employee['invitation']>(['pending', 'expired', 'redeemed', 'none']);
+
+/** The owner's list of employees: each one's name, email and where they stand. */
+export function employeesView(raw: unknown): Employees {
+  const value = object(unwrap(raw));
+  if (value.schema_version !== 1 || value.kind !== 'echo-clean-person-employee-roster-v1') throw new ViewError();
+  return {
+    items: list(value.employees).map(entry => {
+      const employee = object(entry);
+      const membership = text(employee.membership_status);
+      const invitation = text(employee.invitation_state);
+      if (!MEMBERSHIPS.has(membership) || !INVITATIONS.has(invitation)) throw new ViewError();
+      return {
+        email: text(employee.email), display_name: text(employee.display_name),
+        membership: membership as Employee['membership'], invitation: invitation as Employee['invitation'],
+      };
+    }),
+  };
+}
+
+/** An invitation written exactly where main said. The path stays behind. */
+export function invitationView(raw: unknown, out: string): InvitationSaved {
+  const value = object(raw);
+  const expires = text(value.expires_at);
+  if (value.ok !== true || value.output_path !== out || Number.isNaN(Date.parse(expires))) throw new ViewError();
+  return { expires_at: expires };
+}
+
+/** Revoke access: the client confirms the membership ended. */
+export function revokedView(raw: unknown): null {
+  const value = object(raw);
+  if (value.ok !== true || value.revoked !== true) throw new ViewError();
+  return null;
 }
 
 export function contextView(raw: unknown): ContextContent {
@@ -457,8 +501,12 @@ const MAYBE_SENT = new Set(['outcome_unknown', 'timeout', 'unavailable', 'transp
 export function failureView(raw: unknown, fallback: string, write: boolean, requestId?: string): Failure {
   const value = raw !== null && typeof raw === 'object' ? raw as Json : {};
   const code = typeof value.code === 'string' && /^[a-z_]{1,64}$/.test(value.code) ? value.code : fallback;
-  const outcome = value.mutation_outcome === 'unknown' || value.mutation_outcome === 'not_submitted'
-    ? value.mutation_outcome
+  // An employee change says more: one the Authority refused was not made, and
+  // one it made (whose invitation file could not be written) is not unknown.
+  const reported = value.mutation_outcome;
+  const outcome = reported === 'unknown' || reported === 'not_submitted' ? reported
+    : reported === 'rejected' ? 'not_submitted'
+    : reported === 'committed' ? undefined
     : write ? (MAYBE_SENT.has(code) ? 'unknown' : 'not_submitted') : undefined;
   return {
     code,

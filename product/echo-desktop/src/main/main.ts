@@ -6,10 +6,11 @@ import {
 } from 'electron';
 import { randomUUID } from 'node:crypto';
 import {
-  appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync,
+  appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync,
+  statSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { extname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   externalUrl, HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, STATUS_METHODS, WRITE_METHODS, type AccountCommand, type AppStatus,
@@ -28,6 +29,8 @@ const INVITATION_FILE = 'person-invitation.json';
 const MAX_INVITATION_BYTES = 8 * 1024;
 /** Copy answer takes what an answer can hold: 12,000 characters. */
 const MAX_COPY_CHARACTERS = 12_000;
+/** New project takes up to 20 files. */
+const MAX_PROJECT_FILES = 20;
 const test = __ECHO_TEST_HOOK__ ? process.env : {} as NodeJS.ProcessEnv;
 const smoke = process.argv.includes('--smoke');
 /** `--smoke` never touches the person's session or data: it gets its own. */
@@ -184,8 +187,11 @@ function onHostNotice(message: HostNotice): void {
 
 // ---- file handles (the renderer never sees a path) -------------------------
 
-/** A file to send, an invitation to read, or where Save original… writes. */
-type HandleKind = 'document' | 'invitation' | 'save';
+/**
+ * A file to send, an invitation to read, where Save original… writes, the
+ * folder an invitation is to be saved in, or an invitation saved there.
+ */
+type HandleKind = 'document' | 'invitation' | 'save' | 'invitation-out' | 'invitation-saved';
 const handles = new Map<string, { path: string; kind: HandleKind; expires: number }>();
 
 function issueHandle(path: string, kind: HandleKind, size?: number): FileHandle {
@@ -248,6 +254,49 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       if (chosen.canceled || chosen.filePaths.length !== 1) return { ok: true, value: null };
       const vetted = vetDocument(chosen.filePaths[0]!);
       return vetted ? { ok: true, value: vetted } : refused('unsupported_file');
+    }
+    case 'dialog.openDocuments': {
+      if (!window) return refused();
+      const chosen = await dialog.showOpenDialog(window, {
+        properties: ['openFile', 'multiSelections'], filters: [{ name: 'Documents', extensions: ['txt', 'md', 'pdf', 'docx'] }],
+      });
+      if (chosen.canceled) return { ok: true, value: { files: [], refused: [] } };
+      if (chosen.filePaths.length > MAX_PROJECT_FILES) return refused('too_many_files');
+      const files: FileHandle[] = [];
+      const names: string[] = [];
+      for (const path of chosen.filePaths) {
+        const vetted = vetDocument(path);
+        if (vetted) files.push(vetted); else names.push(basename(path));
+      }
+      return { ok: true, value: { files, refused: names } };
+    }
+    case 'dialog.saveInvitation': {
+      const { name, reissue } = params as MainMethods['dialog.saveInvitation']['params'];
+      if (!window || typeof name !== 'string' || name.length > 200 || /\p{Cc}/u.test(name) || (reissue !== undefined && typeof reissue !== 'boolean')) {
+        return refused();
+      }
+      // The employee's name only suggests the folder's; it never makes a path.
+      const suggested = `ECHO invitation for ${name.replace(/[\\/:]/g, ' ').trim()}`.trim().slice(0, 120);
+      const chosen = await dialog.showSaveDialog(window, {
+        title: reissue ? 'Save new invitation' : 'Save invitation', defaultPath: suggested, buttonLabel: 'Save',
+        message: reissue ? 'The previous invitation stops working once this one is saved.' : 'ECHO saves a private invitation folder here.',
+        properties: ['createDirectory', 'showOverwriteConfirmation'],
+      });
+      if (chosen.canceled || !chosen.filePath) return { ok: true, value: null };
+      // A new folder: an existing one needs a new name.
+      if (!isAbsolute(chosen.filePath) || existsSync(chosen.filePath)) return refused('file_exists');
+      return { ok: true, value: issueHandle(chosen.filePath, 'invitation-out') };
+    }
+    case 'invitation.show': {
+      const { invitation_handle: handle } = params as MainMethods['invitation.show']['params'];
+      const file = resolveHandle(handle, 'invitation-saved');
+      if (!file) return refused();
+      // The folder, if the file never landed in it.
+      const shown = existsSync(file) ? file : join(file, '..');
+      // Tests never open Finder: they read what would have been shown.
+      if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_HIDDEN) (globalThis as TestShown).echoTestShown = shown;
+      else shell.showItemInFolder(shown);
+      return { ok: true, value: null };
     }
     case 'clipboard.writeText': {
       const { text } = params as MainMethods['clipboard.writeText']['params'];
@@ -354,7 +403,36 @@ async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Resu
     return whileSigningIn(() => callHost(method, { invitation }));
   }
   if (method === 'signin.begin') return whileSigningIn(() => callHost(method, value));
+  if (method === 'employees.invite' || method === 'employees.reissue') return saveInvitation(method, value);
   return callHost(method as HostMethodName, value);
+}
+
+/**
+ * Invite or Reissue: main makes the private folder where the owner chose, and
+ * the client writes the invitation in it. The handle then shows it in Finder.
+ */
+async function saveInvitation(method: 'employees.invite' | 'employees.reissue', value: object): Promise<Result<unknown>> {
+  const { invitation_handle: handle, ...rest } = value as { invitation_handle?: unknown };
+  const folder = resolveHandle(handle, 'invitation-out');
+  if (!folder) return refused();
+  handles.delete(handle as string); // one invitation per choice
+  let out: string;
+  try {
+    // Only this user can open it: the client writes only into a 0700 folder.
+    mkdirSync(folder, { mode: 0o700 });
+    chmodSync(folder, 0o700);
+    out = join(realpathSync(folder), INVITATION_FILE);
+  } catch (error) {
+    return refused((error as NodeJS.ErrnoException).code === 'EEXIST' ? 'file_exists' : 'invitation_output_invalid');
+  }
+  const result = await callHost(method, { ...rest, out });
+  if (!result.ok && result.failure.mutation_outcome === 'not_submitted') {
+    // Nothing was issued: the empty folder goes.
+    try { rmdirSync(folder); } catch { /* not empty, or already gone */ }
+    return result;
+  }
+  handles.set(handle as string, { path: out, kind: 'invitation-saved', expires: Date.now() + 60 * 60_000 });
+  return result;
 }
 
 async function whileSigningIn(run: () => Promise<Result<unknown>>): Promise<Result<unknown>> {
@@ -437,6 +515,8 @@ function trayImage(): Electron.NativeImage {
 interface TestMenus { echoTestAccountMenu?: Electron.Menu; echoTestTrayMenu?: Electron.Menu }
 /** Test builds: what Copy answer would have put on the clipboard. */
 interface TestClipboard { echoTestClipboard?: string }
+/** Test builds: what Show invitation in Finder would have shown. */
+interface TestShown { echoTestShown?: string }
 
 /** The window does the work: it confirms what cannot be undone, and asks the host. */
 function accountCommand(command: AccountCommand, fromTray: boolean): void {

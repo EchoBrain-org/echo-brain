@@ -100,6 +100,35 @@ export type ProjectChange =
   | { readonly kind: 'associate' | 'dissociate'; readonly project_id: string; readonly context_id: string }
   | { readonly kind: 'document-associate' | 'document-dissociate'; readonly project_id: string; readonly document_id: string };
 
+/** A project the Authority made for one request. Its name and your role in it come from reading it. */
+export interface CreatedProject {
+  readonly project_id: string;
+}
+
+/** One of the organization's employees, as its owner's list shows them. */
+export interface Employee {
+  readonly email: string;
+  readonly display_name: string;
+  readonly membership: 'active' | 'revoked';
+  readonly invitation: 'pending' | 'expired' | 'redeemed' | 'none';
+}
+
+export interface Employees {
+  readonly items: readonly Employee[];
+}
+
+/** An invitation saved in the folder main made. The path stays in main. */
+export interface InvitationSaved {
+  /** When the invitation stops working (ISO 8601). */
+  readonly expires_at: string;
+}
+
+/** Add files…: the documents chosen in main's dialog, each as a handle, and the names of any it refused. */
+export interface ChosenFiles {
+  readonly files: readonly FileHandle[];
+  readonly refused: readonly string[];
+}
+
 export interface ContextContent {
   readonly context_id: string;
   readonly title: string;
@@ -267,6 +296,18 @@ export interface HostMethods {
   'projects.directory': { params: { expect: Expect; project_id: string; query?: string; cursor?: string }; result: MemberPage };
   /** A change to a project. Only the Authority's receipt says it was made. */
   'projects.change': { params: { expect: Expect; request_id: string; change: ProjectChange }; result: null };
+  /** New project: made once per request id, and only the receipt says it was made. */
+  'projects.create': { params: { expect: Expect; request_id: string; name: string }; result: CreatedProject };
+  /** People & invites (owners only): everyone the organization invited, and where each stands. */
+  'employees.list': { params: { expect: Expect }; result: Employees };
+  /**
+   * Invite or Reissue: the renderer names where to save only by a handle main
+   * issued; main makes a private folder there and swaps in the file's path.
+   */
+  'employees.invite': { params: { expect: Expect; name: string; email: string; invitation_handle: string }; result: InvitationSaved };
+  'employees.reissue': { params: { expect: Expect; email: string; invitation_handle: string }; result: InvitationSaved };
+  /** Revoke access: ends the employee's membership at once. */
+  'employees.revoke': { params: { expect: Expect; email: string }; result: null };
   'projects.readContext': { params: { expect: Expect; project_id: string; context_id: string }; result: ContextContent };
   'notes.submit': { params: { expect: Expect; request_id: string; text: string; audience: Audience; project_id?: string }; result: Receipt };
   /** The renderer names a file only by a handle main issued; main swaps in the path. */
@@ -292,6 +333,15 @@ export interface HostMethods {
 
 export interface MainMethods {
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
+  /** Add files…, in New project: up to 20 documents at once. */
+  'dialog.openDocuments': { params: Record<string, never>; result: ChosenFiles };
+  /**
+   * Invite employee… and Reissue invitation…: where the private invitation
+   * folder goes, chosen in main's dialog. `name` only suggests the folder's name.
+   */
+  'dialog.saveInvitation': { params: { name: string; reissue?: boolean }; result: FileHandle | null };
+  /** Show invitation in Finder: the invitation saved under a handle an invite or a reissue used. */
+  'invitation.show': { params: { invitation_handle: string }; result: null };
   /** Copy answer: at most 12,000 characters, an answer's own bound. */
   'clipboard.writeText': { params: { text: string }; result: null };
   /** The invitation folder (or its file) the organization owner sent. */
@@ -314,14 +364,18 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'search.read', 'documents.list', 'documents.read', 'documents.save', 'projects.read',
-  'projects.members', 'projects.directory', 'projects.change',
+  'projects.members', 'projects.directory', 'projects.change', 'projects.create', 'employees.list', 'employees.invite', 'employees.reissue',
+  'employees.revoke',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
-  'dialog.saveDocument',
+  'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show',
 ];
 /** Host methods that change what the Authority stores. */
-export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry', 'projects.change']);
+export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
+  'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'employees.invite', 'employees.reissue',
+  'employees.revoke',
+]);
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);
 

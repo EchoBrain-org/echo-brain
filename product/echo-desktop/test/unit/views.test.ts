@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, changeView, documentPageView, documentTextView, failureView, feedView, membersView, noteMatchesView, noteTitle, noteView,
+  abandonView, answerView, changeView, createdView, documentPageView, documentTextView, employeesView, failureView, feedView, invitationView,
+  membersView, noteMatchesView, noteTitle, noteView, revokedView,
   projectMatchesView, projectPageView, projectView, receiptView, recordView, savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
@@ -309,5 +310,35 @@ describe('documents, members and project changes', () => {
       document_id: DOCUMENT, operation: 'dissociate', received_at: 'x', state: 'applied' } };
     expect(changeView(link, 'r1', { kind: 'document-dissociate', project_id: PROJECT, document_id: DOCUMENT })).toBeNull();
     expect(() => changeView(link, 'r1', { kind: 'document-associate', project_id: PROJECT, document_id: DOCUMENT })).toThrow(ViewError);
+  });
+
+  it('a create is made only by the receipt for exactly that request', () => {
+    const receipt = { schema_version: 1, kind: 'echo-project-create-receipt-v1', request_id: 'r1', project_id: PROJECT, created_at: 'x', state: 'created' };
+    expect(createdView(receipt, 'r1')).toEqual({ project_id: PROJECT });
+    expect(() => createdView(receipt, 'r2')).toThrow(ViewError);
+    expect(() => createdView({ ...receipt, state: 'pending' }, 'r1')).toThrow(ViewError);
+  });
+
+  it('employees keep their name, email and standing; an invitation says only when it expires, and only for the file asked for', () => {
+    const roster = { ok: true, result: { schema_version: 1, kind: 'echo-clean-person-employee-roster-v1', employees: [
+      { email: 'ana@example.com', display_name: 'Ana', membership_status: 'active', invitation_state: 'redeemed' },
+    ] } };
+    expect(employeesView(roster)).toEqual({ items: [{ email: 'ana@example.com', display_name: 'Ana', membership: 'active', invitation: 'redeemed' }] });
+    const odd = structuredClone(roster);
+    odd.result.employees[0]!.invitation_state = 'sent';
+    expect(() => employeesView(odd)).toThrow(ViewError);
+    const saved = { ok: true, output_path: '/private/x/person-invitation.json', expires_at: '2026-09-28T22:01:00.000Z' };
+    expect(invitationView(saved, '/private/x/person-invitation.json')).toEqual({ expires_at: '2026-09-28T22:01:00.000Z' });
+    expect(JSON.stringify(invitationView(saved, '/private/x/person-invitation.json'))).not.toContain('/private');
+    expect(() => invitationView(saved, '/private/y/person-invitation.json')).toThrow(ViewError);
+    expect(revokedView({ ok: true, revoked: true })).toBeNull();
+    expect(() => revokedView({ ok: true })).toThrow(ViewError);
+  });
+
+  it('an employee change the Authority refused was not made, and one it made is not unknown', () => {
+    expect(failureView({ code: 'employee_already_exists', mutation_outcome: 'rejected' }, 'failed', true).mutation_outcome).toBe('not_submitted');
+    const committed = failureView({ code: 'invitation_save_failed', mutation_outcome: 'committed' }, 'failed', true);
+    expect(committed).toEqual({ code: 'invitation_save_failed', retryable: false });
+    expect(failureView({ code: 'outcome_unknown', mutation_outcome: 'unknown' }, 'failed', true).mutation_outcome).toBe('unknown');
   });
 });

@@ -29,6 +29,13 @@ test('the page can never name a file path', async () => {
       // Save original… writes only where main's own dialog was told, and suggests only a file name.
       save: await rpc('documents.save', { expect, document_id: `doc_${'e'.repeat(64)}`, save_handle: 'made-up', out: '/tmp/echo-anywhere.pdf' }),
       saveName: await rpc('dialog.saveDocument', { name: '../../etc/hosts' }),
+      // An invitation is saved only in a folder main's own dialog chose, and shown only by the handle that saved it.
+      invite: await rpc('employees.invite', {
+        expect, name: 'Kim', email: 'kim@example.com', invitation_handle: 'made-up', out: '/tmp/echo-anywhere/person-invitation.json',
+      }),
+      reissue: await rpc('employees.reissue', { expect, email: 'raj@example.com', out: '/tmp/echo-anywhere/person-invitation.json' }),
+      show: await rpc('invitation.show', { invitation_handle: 'made-up' }),
+      inviteName: await rpc('dialog.saveInvitation', { name: 5 }),
     };
   });
   expect(replies.drop).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
@@ -38,6 +45,10 @@ test('the page can never name a file path', async () => {
   expect(replies.invitation).toMatchObject({ ok: false, failure: { code: 'unsupported_invitation' } });
   expect(replies.save).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
   expect(replies.saveName).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
+  for (const reply of [replies.invite, replies.reissue, replies.show, replies.inviteName]) {
+    expect(reply).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
+  }
+  expect(run.calls().some(call => call.path === '/v1/person/employees')).toBe(false);
   expect(run.calls().some(call => call.path.startsWith('/v2/session/'))).toBe(false);
   expect(replies.odd).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
   expect(run.calls().some(call => call.path.includes('document'))).toBe(false);

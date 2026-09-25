@@ -2,7 +2,7 @@
 // fixture Authority behind the real person client, the same pattern as
 // tests/fixtures/echo-projects-cli-bridge.mjs. Every request is logged to
 // <home>/calls.jsonl so tests can assert what the app actually sent.
-import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -80,7 +80,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const session = {
     organization_id: 'org_00000000-0000-4000-8000-000000000001',
     principal_id: 'prn_00000000-0000-4000-8000-000000000001',
-    membership_id: 'mem_22222222-2222-4222-8222-222222222222', display_name: 'Ari', membership_type: 'employee',
+    // The owner modes sign Ari in as the organization's owner.
+    membership_id: 'mem_22222222-2222-4222-8222-222222222222', display_name: 'Ari', membership_type: mode.startsWith('owner') ? 'owner' : 'employee',
     identity_binding_id: 'oib_00000000-0000-4000-8000-000000000001',
     session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
     access_token: 'A'.repeat(43), refresh_token: 'R'.repeat(43),
@@ -101,7 +102,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       writeFileSync(store.paths.refresh_claim, '00000000-0000-4000-8000-000000000099\n', { mode: 0o600 });
     }
   }
-  // The organization as it is now: who is in each project, and what is filed in it.
+  // The organization as it is now: its projects, who is in each, and what is filed in it.
+  const projects = mode === 'no-projects' ? [] : structuredClone(desktop.projects);
   const members = structuredClone(desktop.members);
   // No longer a lead of the first project, though the list said so.
   if (mode === 'demoted') members[desktop.projects[0]!.project_id] = members[desktop.projects[0]!.project_id]!.map(entry => ({ ...entry, role: entry.role === 'lead' ? 'member' : 'lead' }));
@@ -126,7 +128,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     filed.set(beacon, ids);
   }
   /** Changes applied, by request id: a resend of the same one gets the same receipt, anything else under it conflicts. */
-  const applied = new Map<string, { command: string; receipt: Record<string, unknown> }>();
+  const applied = new Map<string, { command: string; receipt: Record<string, unknown>; status: number }>();
+  /** The organization's employees, as their owner lists them. */
+  const employees = [
+    { email: 'ana@example.com', display_name: 'Ana Mills', membership_status: 'active', invitation_state: 'redeemed' },
+    { email: 'raj@example.com', display_name: 'Raj Kumar', membership_status: 'active', invitation_state: 'pending' },
+    { email: 'lee@example.com', display_name: 'Lee Park', membership_status: 'revoked', invitation_state: 'expired' },
+  ];
+  let employeeWrites = 0;
   let changes = 0;
   let writeAttempts = 0;
   let documentAttempts = 0;
@@ -180,18 +189,18 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * A change, as the Authority makes one: once per request id. `apply` returns
    * the receipt, or a failure the change was refused with.
    */
-  const change = (path: string, body: Record<string, unknown> | undefined, apply: () => Record<string, unknown> | Response): Response => {
+  const change = (path: string, body: Record<string, unknown> | undefined, apply: () => Record<string, unknown> | Response, status = 200): Response => {
     const requestId = String(body?.request_id);
     const command = JSON.stringify([path, body]);
     const earlier = applied.get(requestId);
-    if (earlier) return earlier.command === command ? json(earlier.receipt) : failure('conflict', 409);
+    if (earlier) return earlier.command === command ? json(earlier.receipt, earlier.status) : failure('conflict', 409);
     const receipt = apply();
     if (receipt instanceof Response) return receipt;
-    applied.set(requestId, { command, receipt });
+    applied.set(requestId, { command, receipt, status });
     changes += 1;
     // Made, but the reply is lost on its way back.
     if (mode === 'change-reply-lost' && changes === 1) return failure('unavailable', 503);
-    return json(receipt);
+    return json(receipt, status);
   };
   /** A project keeps at least one lead. */
   const leadsAfter = (projectId: string, membershipId: string, role: 'lead' | 'member' | null) =>
@@ -256,7 +265,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         ? Array.from({ length: 13 }, (_, index) => ({
           project_id: `prj_${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`, name: `Project ${index + 1}`, role: 'member',
         }))
-        : desktop.projects;
+        : projects;
       const second = url.searchParams.get('cursor') === 'cGFnZTI';
       const page = mode === 'many-projects' ? (second ? all.slice(10) : all.slice(0, 10)) : all;
       projectLists += 1;
@@ -325,10 +334,50 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // A project: your role in it, its members, and the people a lead can add.
     const project = /^\/v1\/person\/projects\/(prj_[0-9a-f-]+)$/.exec(path);
     if (method === 'GET' && project) {
-      const known = desktop.projects.find(entry => entry.project_id === project[1]);
+      const known = projects.find(entry => entry.project_id === project[1]);
       const role = roleOf(project[1]!, session.membership_id);
       if (!known || !role) return failure('not_found', 404);
       return json({ ...fixture('projects-read'), project_id: known.project_id, name: known.name, role });
+    }
+    // New project: made once per request id, with you as its lead.
+    if (method === 'POST' && path === '/v1/person/projects') {
+      const name = body?.name;
+      if (Object.keys(body ?? {}).sort().join(',') !== 'kind,name,request_id,schema_version' || body?.schema_version !== 1 ||
+          body?.kind !== 'echo-project-create-v1' || typeof name !== 'string') return failure('invalid_request', 400);
+      return change(path, body, () => {
+        const projectId = `prj_${randomUUID()}`;
+        projects.push({ project_id: projectId, name, role: 'lead' });
+        members[projectId] = [{ membership_id: session.membership_id, role: 'lead' }];
+        filed.set(projectId, []);
+        return {
+          schema_version: 1, kind: 'echo-project-create-receipt-v1', request_id: body?.request_id, project_id: projectId, created_at: NOW, state: 'created',
+        };
+      }, 201);
+    }
+    // People & invites, for the owner: list, invite (POST), reissue (PUT) and revoke (DELETE), each by email.
+    if (path === '/v1/person/employees') {
+      if (session.membership_type !== 'owner') return failure('unauthorized', 401);
+      if (method === 'GET') return json({ schema_version: 1, kind: 'echo-clean-person-employee-roster-v1', employees });
+      employeeWrites += 1;
+      const email = String(body?.email);
+      const existing = employees.find(employee => employee.email === email && employee.membership_status === 'active');
+      if (method === 'POST') {
+        if (Object.keys(body ?? {}).sort().join(',') !== 'email,name') return failure('invalid_request', 400);
+        if (existing) return failure('conflict', 409);
+        employees.push({ email, display_name: String(body?.name), membership_status: 'active', invitation_state: 'pending' });
+      } else if (method === 'PUT' || method === 'DELETE') {
+        if (Object.keys(body ?? {}).join(',') !== 'email') return failure('invalid_request', 400);
+        if (!existing) return failure('not_found', 404);
+        if (method === 'PUT' && existing.invitation_state === 'redeemed') return failure('conflict', 409);
+        if (method === 'PUT') existing.invitation_state = 'pending';
+        else Object.assign(existing, { membership_status: 'revoked', invitation_state: existing.invitation_state === 'pending' ? 'expired' : existing.invitation_state });
+      } else {
+        return failure('not_found', 404);
+      }
+      // Made, but the first reply is lost on its way back.
+      if (mode === 'owner-write-lost' && employeeWrites === 1) return failure('unavailable', 503);
+      if (method === 'DELETE') return new Response(null, { status: 204 });
+      return json({ login_grant: randomBytes(32).toString('base64url'), expires_at: '2026-09-28T22:01:00.000Z' }, method === 'POST' ? 201 : 200);
     }
     if (method === 'POST' && path === '/v1/person/projects/members') {
       const projectId = String(body?.project_id);

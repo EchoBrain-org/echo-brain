@@ -12,9 +12,9 @@ import {
 import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, changeView, contextView, documentPageView, documentTextView, evidenceView, failureView, feedView, isRecordRef,
-  membersView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, projectView, receiptView, recordView, savedOriginalView,
-  statusView, toolsView, unwrap, ViewError, writeStatusView,
+  abandonView, answerView, changeView, contextView, createdView, documentPageView, documentTextView, employeesView, evidenceView, failureView,
+  feedView, invitationView, isRecordRef, membersView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, projectView,
+  receiptView, recordView, revokedView, savedOriginalView, statusView, toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -82,7 +82,8 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'ask.run': 145_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000, 'documents.list': 45_000,
   'documents.read': 45_000, 'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000, 'projects.directory': 45_000,
-  'projects.change': 45_000,
+  'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000, 'employees.reissue': 45_000,
+  'employees.revoke': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
@@ -98,6 +99,18 @@ const DOCUMENT_ID = /^doc_[0-9a-f]{64}$/;
 const CURSOR = /^[A-Za-z0-9_-]{1,1024}$/;
 /** Writes this host has handed to the client and not yet heard back on. */
 const inFlight = new Set<string>();
+
+/** A project's name as the API takes it: one line, trimmed, NFC, at most 200 UTF-8 bytes. */
+function projectName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const name = value.normalize('NFC').trim();
+  return name === '' || Buffer.byteLength(name) > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
+}
+
+/** An employee's name and email, bounded; the client checks them exactly before anything is sent. */
+function employeeText(value: unknown, maximum: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= maximum && !/[\u0000-\u001f\u007f]/.test(value);
+}
 
 /** Values the page supplied go in `--name=value` form: a leading '-' stays text. */
 function option(name: string, value: string): string { return `--${name}=${value}`; }
@@ -386,6 +399,36 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       const argv = changeArgs(change, request_id, expect);
       if (!argv) return code('invalid_request', true, request_id);
       return forAccount(method, expect, argv, stdout => changeView(lastJson(stdout), request_id, change), request_id);
+    }
+    case 'projects.create': {
+      const { expect, request_id, name } = params as Params<'projects.create'>;
+      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id)) return code('invalid_request');
+      const title = projectName(name);
+      if (title === null) return code('invalid_request', true, request_id);
+      return forAccount(method, expect, ['projects', 'create', option('request-id', request_id), option('name', title)],
+        stdout => createdView(lastJson(stdout), request_id), request_id);
+    }
+    case 'employees.list': {
+      const { expect } = params as Params<'employees.list'>;
+      return forAccount(method, expect, ['employee', 'list'], stdout => employeesView(lastJson(stdout)));
+    }
+    case 'employees.invite':
+    case 'employees.reissue': {
+      // Main put the invitation's file here, in the private folder it made, in place of the page's handle.
+      const { expect, email } = params as Params<'employees.reissue'>;
+      const name = (params as { name?: unknown }).name;
+      const out = (params as { out?: unknown }).out;
+      if (typeof out !== 'string' || !employeeText(email, 254) || (method === 'employees.invite' && !employeeText(name, 200))) {
+        return code('invalid_request', true);
+      }
+      const who = method === 'employees.invite' ? ['invite', option('name', name as string)] : ['reissue'];
+      return forAccount(method, expect, ['employee', ...who, option('email', email), option('out', out)],
+        stdout => invitationView(lastJson(stdout), out));
+    }
+    case 'employees.revoke': {
+      const { expect, email } = params as Params<'employees.revoke'>;
+      if (!employeeText(email, 254)) return code('invalid_request', true);
+      return forAccount(method, expect, ['employee', 'revoke', option('email', email)], stdout => revokedView(lastJson(stdout)));
     }
     case 'projects.readContext': {
       const { expect, project_id, context_id } = params as Params<'projects.readContext'>;
