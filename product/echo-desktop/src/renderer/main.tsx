@@ -5,22 +5,27 @@ import { ConfirmSignOut, ConnectedTools } from './screens/account.js';
 import { AskView, Bar } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
-import { Back, SidebarIcon } from './screens/icons.js';
+import { Back, Saved, SidebarIcon } from './screens/icons.js';
 import { Project } from './screens/project.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import {
   accountCommand, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, closeSource, conceal, getState, goHome, hostFailed,
-  openCapture, refreshHome, refreshStatus, resume, retryStart, signinPhase, toggleSidebar, useStore, type State,
+  openCapture, refreshHome, refreshStatus, resume, retryStart, signinPhase, toggleMore, toggleSidebar, useStore, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
 
+function sheetUp(): boolean {
+  const { compose, sheet } = getState();
+  return Boolean((compose && !compose.hidden) || sheet);
+}
+
 /** The caret waits in the ask bar whenever the window comes forward, unless a sheet is up. */
 function focusBar(): void {
-  const { compose, sheet } = getState();
-  if ((compose && !compose.hidden) || sheet) return;
-  requestAnimationFrame(() => document.getElementById('ask-field')?.focus());
+  if (sheetUp()) return;
+  // A sheet can open before the next frame (a drop, ⌘⇧E): it keeps the focus.
+  requestAnimationFrame(() => { if (!sheetUp()) document.getElementById('ask-field')?.focus(); });
 }
 
 /** Escape steps back one level: a sheet, compose, source, answer, reader, project. */
@@ -28,7 +33,7 @@ function back(): void {
   const state = getState();
   if (state.sheet) return closeSheet();
   if (!state.status?.signed_in) return closeSigninForm();
-  if (state.compose && !state.compose.hidden) return closeCompose();
+  if (state.compose && !state.compose.hidden) return state.compose.picking ? toggleMore() : closeCompose();
   if (state.evidence) return closeSource();
   if (state.ask) return closeAsk();
   if (state.reader) return closeReader();
@@ -37,6 +42,10 @@ function back(): void {
 
 function App() {
   const state = useStore();
+
+  // Capture closed (saved, or put away): the caret goes back to the bar.
+  const capturing = Boolean(state.compose && !state.compose.hidden);
+  useEffect(() => { if (!capturing) focusBar(); }, [capturing]);
 
   useEffect(() => {
     void refreshStatus().then(focusBar);
@@ -88,6 +97,7 @@ function App() {
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} /> : inProject ? <Project state={state} project={inProject} /> : <Home state={state} />}
       </main>
+      {state.toast && !covered && <div class="toast" role="status" data-testid="toast"><Saved /><span>{state.toast}</span></div>}
       <Bar state={state} />
       {state.compose && !state.compose.hidden && <Compose state={state} />}
       {state.sheet?.kind === 'tools' ? <ConnectedTools state={state} sheet={state.sheet} />

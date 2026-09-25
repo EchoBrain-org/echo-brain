@@ -185,10 +185,10 @@ function onHostNotice(message: HostNotice): void {
 type HandleKind = 'document' | 'invitation';
 const handles = new Map<string, { path: string; kind: HandleKind; expires: number }>();
 
-function issueHandle(path: string, kind: HandleKind): FileHandle {
+function issueHandle(path: string, kind: HandleKind, size?: number): FileHandle {
   const handle = randomUUID();
   handles.set(handle, { path, kind, expires: Date.now() + 10 * 60_000 });
-  return { handle, name: path.split(sep).pop() ?? 'Document' };
+  return { handle, name: path.split(sep).pop() ?? 'Document', ...(size === undefined ? {} : { size }) };
 }
 
 function vetDocument(path: string): FileHandle | null {
@@ -196,7 +196,7 @@ function vetDocument(path: string): FileHandle | null {
   let stats;
   try { stats = lstatSync(path); } catch { return null; }
   if (!stats.isFile() || stats.isSymbolicLink() || stats.size === 0 || stats.size > MAX_DOCUMENT_BYTES) return null;
-  return issueHandle(path, 'document');
+  return issueHandle(path, 'document', stats.size);
 }
 
 /** The folder the owner sent, or the file in it. Never a link. */

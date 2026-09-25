@@ -8,11 +8,11 @@ says what a person sees today and what the fix would be when it is needed.
 
 Core use is covered by specs against the real person client and a fixture
 Authority: signing in (including the weekly re-sign-in), Home, reading a
-project, Ask with sources, writing a note or sending a file, resolving an
+project, Ask with sources, capturing a note or a file, resolving an
 unconfirmed save, the sidebar, the Account menu (in the window and the tray),
 and signing out or switching account.
 
-## Writing and files
+## Capture and files
 
 | Gap | What happens today | Fix when needed |
 | --- | --- | --- |
@@ -21,6 +21,11 @@ and signing out or switching account.
 | The unconfirmed-save record lives in memory | After Quit Anyway or a crash, nothing reminds the person about a save that may not have arrived. The quit dialog warns first. | Persist the pending request id and show it again at launch. |
 | Quit dialog wording | It says "A note may not have been sent." even when the item is a file. | Word it for either. |
 | Drafts are not kept across quit | Escape keeps a draft only while the app runs. | Persist drafts locally, only if people ask for it. |
+
+Capture from the design canvas also needs server work, and is not built:
+an Undo on the "Saved" toast (deleting or undoing a save), narrowing who can
+read something after it is saved, and a note plus a file in one save. The
+toast has no Undo, and the Organization choice warns inline instead.
 
 ## Projects and Ask
 

@@ -57,17 +57,18 @@ test('Capture in the sidebar opens capture where you are, and the account row na
   await expect(page.getByTestId('account-row')).toContainText('employee');
 
   await page.getByTestId('sidebar-capture').click();
-  await expect(page.getByTestId('compose-to')).toHaveText('Only me');
+  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('compose-body')).toBeFocused();
   await page.getByTestId('compose-body').fill('Kickoff moved');
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('sent')).toContainText('Saved for you');
-  await page.getByTestId('compose-done').click();
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
+  await expect(page.getByTestId('compose')).toHaveCount(0);
 
   await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('sidebar-capture').click();
-  await expect(page.getByTestId('compose-to')).toHaveText('Apollo');
+  await expect(page.getByTestId('readers-project')).toHaveText('Apollo');
+  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('the sidebar is on by default, and the toggle only hides it', async () => {

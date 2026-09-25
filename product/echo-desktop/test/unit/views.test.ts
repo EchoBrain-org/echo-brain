@@ -62,6 +62,14 @@ describe('view models copy only what the renderer may see', () => {
     expect(receiptView({ request_id: 'mine' }, 'mine', { kind: 'team' })).toEqual({ request_id: 'mine', audience: { kind: 'team' } });
   });
 
+  it('keeps a document receipt\'s extraction state, and only a known one', () => {
+    const receipt = (state: unknown) => receiptView({ request_id: 'mine', extraction_state: state, filename: 'secret.pdf' }, 'mine', { kind: 'only-me' });
+    expect(receipt('extracting')).toEqual({ request_id: 'mine', audience: { kind: 'only-me' }, extraction: 'extracting' });
+    expect(receipt('Something <b>odd</b>')).toEqual({ request_id: 'mine', audience: { kind: 'only-me' } });
+    expect(writeStatusView({ ok: true, result: { state: 'saved', extraction_state: 'no_text' } }, 'document'))
+      .toEqual({ state: 'saved', extraction: 'no_text' });
+  });
+
   it('reads a stored note or saved document as saved, anything else as unknown', () => {
     expect(writeStatusView({ kind: 'echo-person-update-status-v3', status: 'stored' }, 'note')).toEqual({ state: 'saved' });
     expect(writeStatusView({ ok: true, result: { state: 'saved' } }, 'document')).toEqual({ state: 'saved' });

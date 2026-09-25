@@ -1,10 +1,13 @@
 import { useEffect, useRef } from 'preact/hooks';
+import { bytes } from '../format.js';
 import { message } from '../messages.js';
 import {
-  attachFile, checkCompose, chooseTarget, closeCompose, keepUnresolved, newCompose, removeFile, sendCompose,
-  sentLabel, setComposeText, targetLabel, toggleTargets, type ComposeTarget, type State,
+  attachFile, checkCompose, chooseProject, chooseReaders, closeCompose, keepUnresolved, loadProjects, newCompose, removeFile, sendCompose,
+  setComposeText, toggleMore, type ComposeState, type State,
 } from '../store.js';
-import { Check, Chevron, Clip, Close, Up } from './icons.js';
+import { Clip, Close } from './icons.js';
+
+const SAVE_HINT = navigator.userAgent.includes('Mac') ? '⌘↩' : 'Ctrl+↩';
 
 /** Tab and Shift-Tab stay inside the sheet. */
 export function trapTab(event: KeyboardEvent, sheet: HTMLElement | null): void {
@@ -18,50 +21,36 @@ export function trapTab(event: KeyboardEvent, sheet: HTMLElement | null): void {
   else if (!event.shiftKey && (document.activeElement === last || !inside)) { event.preventDefault(); first.focus(); }
 }
 
-/** Write and Capture: To, then a note or a file, then send. A note's first line is its title. */
+/** Who can read it, said before it is saved. Organization-wide cannot be narrowed later. */
+function readersLine(compose: ComposeState): string {
+  if (compose.readers === 'team') return 'Everyone in your org can read this.';
+  if (compose.readers === 'project' && compose.project) return `${compose.project.name} members can read this.`;
+  return 'Only you can read this.';
+}
+
+/** Capture: a note or one file, who can read it, then Save. A note's first line is its title. */
 export function Compose({ state }: { state: State }) {
   const compose = state.compose!;
   const body = useRef<HTMLTextAreaElement>(null);
   const sheet = useRef<HTMLDivElement>(null);
-  const done = useRef<HTMLButtonElement>(null);
   useEffect(() => { if (!compose.hidden) (body.current ?? sheet.current)?.focus(); }, [compose.seq, compose.hidden, compose.file]);
   // When the footer changes under the focused control, keep focus in the sheet.
   useEffect(() => {
-    if (compose.status === 'sent') { done.current?.focus(); return; }
     if (sheet.current && !sheet.current.contains(document.activeElement)) sheet.current.focus();
   }, [compose.status, compose.confirmNew]);
 
-  if (compose.status === 'sent') {
-    return (
-      <div class="overlay" onClick={closeCompose}>
-        <div class="sheet" role="dialog" aria-label="Sent" ref={sheet} onClick={event => event.stopPropagation()}
-          onKeyDown={event => trapTab(event, sheet.current)}>
-          <div class="sent" data-testid="sent">
-            <div class="check"><Check /></div>
-            <div class="what">{sentLabel(compose.target)}</div>
-            <button type="button" class="plain-button" data-testid="compose-done" ref={done} onClick={closeCompose}>Done</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const targets: ComposeTarget[] = [
-    { kind: 'only-me' },
-    ...state.projects.items.map(project => ({ kind: 'project' as const, project })),
-    { kind: 'team' },
-  ];
-  const same = (a: ComposeTarget, b: ComposeTarget) =>
-    a.kind === b.kind && (a.kind !== 'project' || (b.kind === 'project' && a.project.project_id === b.project.project_id));
   const busy = compose.status === 'sending' || compose.status === 'checking';
   const unresolved = compose.status === 'unknown' || compose.status === 'checking';
   const locked = busy || unresolved;
   const empty = compose.text.trim() === '' && !compose.file;
+  // More… offers the projects not already in the row.
+  const others = state.projects.items.filter(project => project.project_id !== compose.project?.project_id);
+  const more = others.length > 0 || state.projects.next !== null;
 
   return (
     <div class="overlay" onClick={closeCompose}>
       <div
-        class="sheet" role="dialog" aria-label="Write" data-testid="compose" ref={sheet} tabIndex={-1}
+        class="sheet capture" role="dialog" aria-label="Capture" data-testid="compose" ref={sheet} tabIndex={-1}
         onClick={event => event.stopPropagation()}
         onKeyDown={event => {
           // Escape is handled once, at the window: it hides the sheet and keeps the draft.
@@ -69,50 +58,66 @@ export function Compose({ state }: { state: State }) {
           trapTab(event, sheet.current);
         }}
       >
-        <div class="to-row">
-          <button type="button" class="circle" aria-label="Close" data-testid="compose-close" onClick={closeCompose} disabled={busy}><Close /></button>
-          <span class="label">To</span>
-          <button type="button" class="to-button" data-testid="compose-to" aria-expanded={compose.picking} onClick={toggleTargets} disabled={locked}>
-            <span>{targetLabel(compose.target)}</span><Chevron />
-          </button>
+        <div class="sheet-head">
+          <h2>Capture</h2>
+          <button type="button" class="circle small" aria-label="Close" data-testid="compose-close" onClick={closeCompose} disabled={busy}><Close /></button>
         </div>
-        {compose.picking && (
-          <div class="pills" role="listbox" aria-label="To">
-            {targets.map(target => (
-              <button
-                type="button" role="option" aria-selected={same(target, compose.target)} data-testid="compose-target"
-                key={target.kind === 'project' ? target.project.project_id : target.kind}
-                class={`pill${same(target, compose.target) ? ' on' : ''}`} onClick={() => chooseTarget(target)}
-              >{targetLabel(target)}</button>
-            ))}
-          </div>
-        )}
-        {compose.target.kind === 'team' && (
-          <div class="warning" data-testid="compose-warning">Everyone in your organization will be able to read this.</div>
-        )}
-        {compose.file ? (
-          // A file goes on its own: its name is the title, and there is no note to lose.
-          <div class="file-only">
+        <div class="well">
+          {compose.file ? (
+            // A file goes on its own: its name is the title, and there is no note to lose.
             <div class="file-chip" data-testid="compose-file">
-              <span>{compose.file.name}</span>
+              <span>{compose.file.name}{compose.file.size === undefined ? '' : ` · ${bytes(compose.file.size)}`}</span>
               <button type="button" aria-label="Remove file" data-testid="compose-remove-file" onClick={removeFile} disabled={locked}><Close /></button>
             </div>
-          </div>
-        ) : (
-          <>
-            <label for="compose-body" class="sr-only">What happened?</label>
-            <textarea
-              id="compose-body" ref={body} data-testid="compose-body" placeholder="What happened?" readOnly={locked}
-              value={compose.text} onInput={event => setComposeText((event.target as HTMLTextAreaElement).value)}
-            />
-          </>
-        )}
+          ) : (
+            <>
+              <label for="compose-body" class="sr-only">What happened?</label>
+              <textarea
+                id="compose-body" ref={body} data-testid="compose-body" placeholder="What happened?" readOnly={locked}
+                value={compose.text} onInput={event => setComposeText((event.target as HTMLTextAreaElement).value)}
+              />
+            </>
+          )}
+        </div>
         {compose.notice && <div class="notice-line" data-testid="compose-notice" aria-live="polite">{compose.notice}</div>}
+        <div class="readers">
+          <span class="label" id="readers-label">Who can read</span>
+          <div class="segments" role="group" aria-labelledby="readers-label">
+            <button type="button" class="segment" data-testid="readers-only-me" aria-pressed={compose.readers === 'only-me'} disabled={locked}
+              onClick={() => chooseReaders('only-me')}>Only me</button>
+            {compose.project && (
+              <button type="button" class="segment" data-testid="readers-project" aria-pressed={compose.readers === 'project'} disabled={locked}
+                onClick={() => chooseReaders('project')}>{compose.project.name}</button>
+            )}
+            <button type="button" class="segment" data-testid="readers-team" aria-pressed={compose.readers === 'team'} disabled={locked}
+              onClick={() => chooseReaders('team')}>Organization</button>
+            {more && (
+              <button type="button" class="segment" data-testid="readers-more" aria-expanded={compose.picking} disabled={locked}
+                onClick={toggleMore}>More…</button>
+            )}
+          </div>
+        </div>
+        {compose.picking && (
+          <div class="pills" role="group" aria-label="Projects">
+            {others.map(project => (
+              <button type="button" key={project.project_id} class="pill" data-testid="readers-choice" onClick={() => chooseProject(project)}>
+                {project.name}
+              </button>
+            ))}
+            {state.projects.next && (
+              <button type="button" class="pill" data-testid="readers-choice-more" disabled={state.projects.loading}
+                onClick={() => void loadProjects(true)}>More</button>
+            )}
+          </div>
+        )}
+        <div class={`readers-line${compose.readers === 'team' ? ' warning' : ''}`} data-testid="compose-readers" aria-live="polite">
+          {readersLine(compose)}
+        </div>
         {unresolved ? (
           <div class="unresolved" data-testid="compose-unresolved" aria-live="polite">
             {compose.confirmNew ? (
               <>
-                <span class="error">Start a new note? The earlier one may still arrive.</span>
+                <span class="error">Start over? The earlier one may still arrive.</span>
                 <div class="choices">
                   <button type="button" class="plain-button" data-testid="compose-start-over" onClick={newCompose}>Start over</button>
                   <button type="button" class="plain-button" onClick={keepUnresolved}>Keep it</button>
@@ -125,8 +130,8 @@ export function Compose({ state }: { state: State }) {
                 </span>
                 <div class="choices">
                   <button type="button" class="plain-button" data-testid="compose-check" disabled={busy} onClick={() => void checkCompose()}>Check status</button>
-                  <button type="button" class="plain-button" data-testid="compose-retry" disabled={busy} onClick={() => void sendCompose()}>Retry</button>
-                  <button type="button" class="plain-button" data-testid="compose-new" disabled={busy} onClick={newCompose}>Write new</button>
+                  <button type="button" class="plain-button" data-testid="compose-retry" disabled={busy} onClick={() => void sendCompose()}>Try again</button>
+                  <button type="button" class="plain-button" data-testid="compose-new" disabled={busy} onClick={newCompose}>Start over</button>
                 </div>
               </>
             )}
@@ -137,11 +142,12 @@ export function Compose({ state }: { state: State }) {
               <button type="button" class="circle" aria-label="Attach a file" data-testid="compose-attach" onClick={() => void attachFile()} disabled={locked}><Clip /></button>
             )}
             <div class="status" aria-live="polite">
-              {compose.status === 'sending' && <span class="notice">Sending</span>}
+              {compose.status === 'sending' && <span class="notice">Saving</span>}
               {compose.status === 'error' && compose.failure && <span class="error" data-testid="compose-error">{message(compose.failure)}</span>}
             </div>
-            <span class="hint">⌘↩</span>
-            <button type="button" class="circle primary" aria-label="Send" data-testid="compose-send" disabled={locked || empty} onClick={() => void sendCompose()}><Up /></button>
+            <button type="button" class="primary-button small" data-testid="compose-send" disabled={locked || empty} onClick={() => void sendCompose()}>
+              Save <span class="hint">{SAVE_HINT}</span>
+            </button>
           </div>
         )}
       </div>

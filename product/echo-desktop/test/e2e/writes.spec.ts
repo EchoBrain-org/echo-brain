@@ -32,7 +32,8 @@ test('capture after switching away from a project starts as Only me', async () =
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:capture');
-  await expect(page.getByTestId('compose-to')).toHaveText('Only me');
+  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('readers-project')).toHaveCount(0);
   await expect(page.getByTestId('compose-body')).toBeFocused();
 });
 
@@ -64,7 +65,7 @@ test('if the host dies mid-save the note is unconfirmed, and check status finds 
   await expect(page.getByTestId('compose-check')).toBeEnabled();
   await expect(async () => {
     await page.getByTestId('compose-check').click();
-    await expect(page.getByTestId('sent')).toContainText('Saved for you', { timeout: 1_000 });
+    await expect(page.getByTestId('toast')).toHaveText('Saved for you', { timeout: 1_000 });
   }).toPass({ timeout: 10_000 });
   expect(posts()).toHaveLength(1);
 });
@@ -96,11 +97,11 @@ test('a note and a file are never sent together', async () => {
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Some words');
   await page.getByTestId('compose-attach').click();
-  await expect(page.getByTestId('compose-notice')).toHaveText('Send this note before attaching a document.');
+  await expect(page.getByTestId('compose-notice')).toHaveText('Save this note before attaching a file.');
   await expect(page.getByTestId('compose-file')).toHaveCount(0);
   await page.getByTestId('compose-body').fill('');
   await page.getByTestId('compose-attach').click();
-  await expect(page.getByTestId('compose-file')).toHaveText('Pricing.txt');
+  await expect(page.getByTestId('compose-file')).toHaveText('Pricing.txt · 15 bytes');
   await expect(page.getByTestId('compose-body')).toHaveCount(0);
   await page.getByTestId('compose-remove-file').click();
   await expect(page.getByTestId('compose-body')).toBeVisible();
@@ -114,9 +115,9 @@ test('a file attached in a project is sent to that project under its own name', 
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
-  await expect(page.getByTestId('compose-file')).toHaveText('Pricing.txt');
+  await expect(page.getByTestId('compose-file')).toHaveText('Pricing.txt · 15 bytes');
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('sent')).toContainText('Sent to Apollo');
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo · Extracting text');
   const apollo = 'prj_11111111-1111-4111-8111-111111111111';
   expect(uploads()).toHaveLength(1);
   expect(uploads()[0]!.body).toMatchObject({
@@ -135,7 +136,7 @@ test('an upload whose reply was lost is retried from the kept copy and stored on
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
   await page.getByTestId('compose-retry').click();
-  await expect(page.getByTestId('sent')).toContainText('Saved for you');
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you · Extracting text');
   const [first, second] = uploads();
   expect(uploads()).toHaveLength(2);
   expect(second!.body).toEqual(first!.body);
@@ -153,20 +154,26 @@ test('check status settles an upload whose reply was lost', async () => {
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
   await page.getByTestId('compose-check').click();
-  await expect(page.getByTestId('sent')).toContainText('Saved for you');
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you · Extracting text');
   expect(uploads()).toHaveLength(1);
   expect(run.calls().filter(call => call.path.startsWith('/v2/person/documents/requests/'))).toHaveLength(1);
 });
 
-test('Everyone warns before it is sent', async () => {
+test('Organization warns before it is saved, and the toast says it was shared', async () => {
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('compose-warning')).toHaveCount(0);
-  await page.getByTestId('compose-to').click();
-  await page.getByTestId('compose-target').last().click();
-  await expect(page.getByTestId('compose-warning')).toHaveText('Everyone in your organization will be able to read this.');
+  await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
+  await page.getByTestId('readers-team').click();
+  await expect(page.getByTestId('readers-team')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
+  await expect(page.getByTestId('compose-readers')).toHaveClass(/warning/);
+  await page.getByTestId('compose-body').fill('All hands notes');
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('toast')).toHaveText('Shared with your organization');
+  expect(posts()[0]!.body?.audience).toEqual({ kind: 'team' });
+  expect(posts()[0]!.body?.association_project_ids).toEqual([]);
 });
 
 test('saving to the project on screen adds to its feed and leaves the rest of the page alone', async () => {
@@ -177,13 +184,13 @@ test('saving to the project on screen adds to its feed and leaves the rest of th
   await page.getByTestId('scope-clear').click();
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('compose-to')).toHaveText('Apollo');
+  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('compose-body').fill('Launch moved to Friday');
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('sent')).toContainText('Sent to Apollo');
-  await expect(page.getByTestId('compose-done')).toBeFocused();
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo');
+  await expect(page.getByTestId('compose')).toHaveCount(0);
   await expect.poll(() => run.calls().filter(call => call.path === '/v2/person/projects/context/feed').length).toBe(2);
-  await page.getByTestId('compose-done').click();
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await expect(page.getByTestId('feed-row')).toHaveCount(1);
 });

@@ -57,52 +57,80 @@ test('ask inside a project is scoped to it until the chip is cleared', async () 
   expect(asks[1]!.body && 'project_id' in asks[1]!.body).toBe(false);
 });
 
-test('capture starts private outside a project and says where it went', async () => {
+const APOLLO = 'prj_11111111-1111-4111-8111-111111111111';
+const BEACON = 'prj_44444444-4444-4444-8444-444444444444';
+const notes = () => run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
+
+test('capture starts private outside a project, closes itself on save and says where it went', async () => {
   run = await launch();
   const { page, app } = run;
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose')).toBeVisible();
-  await expect(page.getByTestId('compose-to')).toHaveText('Only me');
+  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('readers-project')).toHaveCount(0);
+  await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
   await expect(page.getByTestId('compose-body')).toBeFocused();
   await page.getByTestId('compose-body').fill('Northwind wants annual\nwith a pilot clause.');
   await page.keyboard.press('Meta+Enter');
-  await expect(page.getByTestId('sent')).toContainText('Saved for you');
-  const saved = run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
-  expect(saved).toHaveLength(1);
-  expect(saved[0]!.body?.audience).toEqual({ kind: 'only_me' });
-  expect(saved[0]!.body?.title).toBe('Northwind wants annual');
-  await page.getByTestId('compose-done').click();
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   await expect(page.getByTestId('compose')).toHaveCount(0);
+  await expect(page.getByTestId('ask-field')).toBeFocused();
+  expect(notes()).toHaveLength(1);
+  expect(notes()[0]!.body?.audience).toEqual({ kind: 'only_me' });
+  expect(notes()[0]!.body?.title).toBe('Northwind wants annual');
+  expect(notes()[0]!.body?.association_project_ids).toEqual([]);
+  // The next capture starts clean, and the toast gives way to it.
+  await page.getByTestId('write-button').click();
+  await expect(page.getByTestId('toast')).toHaveCount(0);
+  await expect(page.getByTestId('compose-body')).toHaveValue('');
 });
 
-test('writing inside a project sends to that project', async () => {
+test('capturing inside a project saves to it, and Only me keeps it filed there', async () => {
   run = await launch();
   const { page } = run;
   await page.getByTestId('project-row').first().click();
   await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('compose-to')).toHaveText('Apollo');
+  await expect(page.getByTestId('readers-project')).toHaveText('Apollo');
+  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('compose-readers')).toHaveText('Apollo members can read this.');
   await page.getByTestId('compose-body').fill('Weekly update');
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('sent')).toContainText('Sent to Apollo');
-  const saved = run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
-  expect(saved[0]!.body?.audience).toEqual({ kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' });
-  expect(saved[0]!.body?.association_project_ids).toEqual(['prj_11111111-1111-4111-8111-111111111111']);
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo');
+  expect(notes()[0]!.body?.audience).toEqual({ kind: 'project', project_id: APOLLO });
+  expect(notes()[0]!.body?.association_project_ids).toEqual([APOLLO]);
+
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('readers-only-me').click();
+  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'false');
+  await page.getByTestId('compose-body').fill('My own reminder');
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
+  expect(notes()[1]!.body?.audience).toEqual({ kind: 'only_me' });
+  expect(notes()[1]!.body?.association_project_ids).toEqual([APOLLO]);
 });
 
-test('the To picker offers only me, each project and everyone', async () => {
+test('More… captures into another project', async () => {
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await page.getByTestId('write-button').click();
-  await page.getByTestId('compose-to').click();
-  await expect(page.getByTestId('compose-target')).toHaveText(['Only me', 'Apollo', 'Beacon', 'Everyone']);
-  await page.getByTestId('compose-target').nth(3).click();
-  await page.getByTestId('compose-body').fill('All hands notes');
-  await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('sent')).toContainText('Sent to everyone');
-  const saved = run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
-  expect(saved[0]!.body?.audience).toEqual({ kind: 'team' });
+  await expect(page.getByTestId('compose').locator('.segment')).toHaveText(['Only me', 'Organization', 'More…']);
+  await page.getByTestId('readers-more').click();
+  await expect(page.getByTestId('readers-choice')).toHaveText(['Apollo', 'Beacon']);
+  // Escape closes the list, not the sheet.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('readers-choice')).toHaveCount(0);
+  await expect(page.getByTestId('compose')).toBeVisible();
+  await page.getByTestId('readers-more').click();
+  await page.getByTestId('readers-choice').nth(1).click();
+  await expect(page.getByTestId('compose').locator('.segment')).toHaveText(['Only me', 'Beacon', 'Organization', 'More…']);
+  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('compose-body').fill('Beacon kickoff moved');
+  await page.keyboard.press('Meta+Enter');
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon');
+  expect(notes()[0]!.body?.audience).toEqual({ kind: 'project', project_id: BEACON });
+  expect(notes()[0]!.body?.association_project_ids).toEqual([BEACON]);
 });
 
 test('an unconfirmed save says so, locks the text and never claims it was sent', async () => {
@@ -116,7 +144,8 @@ test('an unconfirmed save says so, locks the text and never claims it was sent',
   await expect(page.getByTestId('sent')).toHaveCount(0);
   await expect(page.getByTestId('compose-body')).toHaveValue('Draft');
   await expect(page.getByTestId('compose-body')).toHaveAttribute('readonly', '');
-  await expect(page.getByTestId('compose-to')).toBeDisabled();
+  await expect(page.getByTestId('readers-team')).toBeDisabled();
+  await expect(page.getByTestId('readers-only-me')).toBeDisabled();
 });
 
 test('retry resends the identical request and then says where it went', async () => {
@@ -127,8 +156,9 @@ test('retry resends the identical request and then says where it went', async ()
   await page.getByTestId('compose-body').fill('Pricing call notes');
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('compose-unresolved')).toBeVisible();
+  await expect(page.getByTestId('compose-retry')).toHaveText('Try again');
   await page.getByTestId('compose-retry').click();
-  await expect(page.getByTestId('sent')).toContainText('Saved for you');
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   const posts = run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
   expect(posts).toHaveLength(2);
   expect(posts[1]!.body).toEqual(posts[0]!.body);
@@ -142,9 +172,9 @@ test('check status on an unconfirmed save learns it was not saved, then sends it
   await page.getByTestId('compose-body').fill('Security questionnaire sent');
   await page.getByTestId('compose-send').click();
   await page.getByTestId('compose-check').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('It was not saved. Send it again.');
+  await expect(page.getByTestId('compose-error')).toHaveText('It was not saved. Try again.');
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('sent')).toContainText('Saved for you');
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   const posts = run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
   expect(posts[1]!.body?.request_id).toBe(posts[0]!.body?.request_id);
 });

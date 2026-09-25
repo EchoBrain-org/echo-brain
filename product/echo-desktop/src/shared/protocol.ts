@@ -80,9 +80,15 @@ export interface SourceEvidence {
 /** One audience per item: only you, one project, or everyone. */
 export type Audience = { readonly kind: 'only-me' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'team' };
 
+/** Where a saved document's text extraction stands (the Authority's own states). */
+export type Extraction = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out'
+  | 'unsupported' | 'unavailable';
+
 export interface Receipt {
   readonly request_id: string;
   readonly audience: Audience;
+  /** A document's extraction state, when the Authority's receipt carries it. */
+  readonly extraction?: Extraction;
 }
 
 /** One of the organization's tools, and whether you linked your own account to it. */
@@ -99,11 +105,14 @@ export interface ConnectedTools {
 /** What a status check says about a save whose outcome was unknown. */
 export interface WriteStatus {
   readonly state: 'saved' | 'not_saved' | 'unknown';
+  readonly extraction?: Extraction;
 }
 
 export interface FileHandle {
   readonly handle: string;
   readonly name: string;
+  /** Bytes, for a document. */
+  readonly size?: number;
 }
 
 export interface Failure {

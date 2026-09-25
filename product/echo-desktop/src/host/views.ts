@@ -2,7 +2,7 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerSource, AppStatus, AskScope, Audience, ConnectedTools, ContextContent, Failure, FeedItem, FeedPage,
+  Account, Answer, AnswerSource, AppStatus, AskScope, Audience, ConnectedTools, ContextContent, Extraction, Failure, FeedItem, FeedPage,
   ProjectPage, ProjectSummary, Receipt, SourceEvidence, SourceRef, WriteStatus,
 } from '../shared/protocol.js';
 
@@ -133,17 +133,26 @@ export function toolsView(raw: unknown, membershipId: string): ConnectedTools {
   };
 }
 
+const EXTRACTION: ReadonlySet<string> = new Set<Extraction>([
+  'extracting', 'ready', 'partial', 'no_text', 'encrypted', 'malformed', 'limit_exceeded', 'timed_out', 'unsupported', 'unavailable',
+]);
+/** A document's extraction state, only as one of the known codes. A minimal "saved" receipt has none. */
+function extraction(value: Json): { extraction: Extraction } | Record<string, never> {
+  return typeof value.extraction_state === 'string' && EXTRACTION.has(value.extraction_state)
+    ? { extraction: value.extraction_state as Extraction } : {};
+}
+
 export function receiptView(raw: unknown, requestId: string, audience: Audience): Receipt {
   const value = object(raw);
   if (value.request_id !== requestId) throw new ViewError();
-  return { request_id: requestId, audience };
+  return { request_id: requestId, audience, ...extraction(value) };
 }
 
 /** A note's V3 status, or a document's V2 status: stored means saved. */
 export function writeStatusView(raw: unknown, kind: 'note' | 'document'): WriteStatus {
   const value = object(kind === 'document' ? unwrap(raw) : raw);
   if (kind === 'note') return { state: value.kind === 'echo-person-update-status-v3' && value.status === 'stored' ? 'saved' : 'unknown' };
-  return { state: value.state === 'saved' ? 'saved' : 'unknown' };
+  return value.state === 'saved' ? { state: 'saved', ...extraction(value) } : { state: 'unknown' };
 }
 
 const RETRYABLE = new Set(['unavailable', 'transport_failed', 'rate_limited', 'timeout', 'outcome_unknown', 'invalid_output', 'busy']);

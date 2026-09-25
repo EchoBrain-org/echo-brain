@@ -43,7 +43,7 @@ test('a note that starts with a dash is sent as text, not read as an option', as
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('--audience=team\nstill only for me');
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('sent')).toContainText('Saved for you');
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   const saved = run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
   expect(saved[0]!.body?.title).toBe('--audience=team');
   expect(saved[0]!.body?.audience).toEqual({ kind: 'only_me' });
@@ -56,10 +56,9 @@ test('a long title is cut to what the API takes, and a long question is capped',
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill(`${'é'.repeat(150)}\tend`);
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('sent')).toBeVisible();
+  await expect(page.getByTestId('toast')).toBeVisible();
   const title = String(run.calls().find(call => call.path === '/v3/person/updates')!.body?.title);
   expect(Buffer.byteLength(title)).toBe(200);
-  await page.getByTestId('compose-done').click();
 
   await page.getByTestId('ask-field').fill('q'.repeat(400));
   await expect(page.getByTestId('ask-field')).toHaveValue('q'.repeat(240));

@@ -8,7 +8,7 @@ const MAX_EVIDENCE = 2_000;
 const MAX_SOURCES = 32;
 import { Close, Plus, Up } from './icons.js';
 
-/** The one bar on every page: ⊕ writes, Return asks. */
+/** The one bar on every page: ⊕ captures, Return asks. */
 export function Bar({ state }: { state: State }) {
   const [text, setText] = useState('');
   const scope = state.barScope;
@@ -21,7 +21,7 @@ export function Bar({ state }: { state: State }) {
   return (
     <div class="bar-wrap">
       <form class="bar" onSubmit={event => { event.preventDefault(); submit(); }}>
-        <button type="button" class="circle" aria-label="Write" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
+        <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
         {projectName && (
           <span class="chip" data-testid="scope-chip">
             <span>{projectName}</span>
