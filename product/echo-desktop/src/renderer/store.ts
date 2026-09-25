@@ -172,11 +172,10 @@ export interface NewProjectSheet extends Finding {
   kind: 'new-project';
   seq: number;
   name: string;
-  /**
-   * The create: its request, the name it sends, and where it stands. An
-   * unknown one is resent as it was, and closing is asked first.
-   */
-  create: { requestId: string; name: string; status: 'editing' | 'sending' | 'unknown' | 'failed' | 'created'; failure?: Failure; confirmClose: boolean };
+  /** The create: its request, the name it sends, and where it stands. An unknown one is resent as it was. */
+  create: { requestId: string; name: string; status: 'editing' | 'sending' | 'unknown' | 'failed' | 'created'; failure?: Failure };
+  /** Close was chosen while the create or a file may have arrived: closing gives up finding out, so it is asked first. */
+  confirmClose: boolean;
   /** The project Create made, once read. */
   project: ProjectSummary | null;
   /** Made, but not read yet: Open reads it again, and Create is never offered twice. */
@@ -493,7 +492,7 @@ function signingOut(): boolean {
 function sheetHeld(): boolean {
   const sheet = state.sheet;
   if (sheet?.kind === 'people') return memberChangeSending();
-  if (sheet?.kind === 'new-project') return newProjectBusy(sheet) || sheet.create.status === 'unknown';
+  if (sheet?.kind === 'new-project') return newProjectBusy(sheet) || newProjectUnsettled(sheet);
   return false;
 }
 
@@ -1206,7 +1205,7 @@ export function openNewProject(): void {
   set({
     toast: null,
     sheet: {
-      kind: 'new-project', seq: ++seq, name: '', create: { requestId: crypto.randomUUID(), name: '', status: 'editing', confirmClose: false },
+      kind: 'new-project', seq: ++seq, name: '', create: { requestId: crypto.randomUUID(), name: '', status: 'editing' }, confirmClose: false,
       project: null, createdId: null, opening: false, files: [], skip: null, query: '', directory: null, menu: null, confirm: null, added: null,
     },
   });
@@ -1216,8 +1215,7 @@ export function openNewProject(): void {
 export function setNewProjectName(name: string): void {
   const sheet = newProjectSheet();
   if (!sheet || sheet.project || sheet.createdId || sheet.create.status === 'sending' || sheet.create.status === 'unknown') return;
-  setNewProject({ name, notice: undefined,
-    create: { requestId: crypto.randomUUID(), name: '', status: 'editing', confirmClose: false } });
+  setNewProject({ name, notice: undefined, create: { requestId: crypto.randomUUID(), name: '', status: 'editing' } });
 }
 
 /**
@@ -1237,7 +1235,7 @@ export async function createProject(): Promise<void> {
   const name = retrying ? create.name : projectName(sheet.name);
   if (!name) return;
   const mine = sheet.seq;
-  setNewProject({ create: { ...create, name, status: 'sending', failure: undefined, confirmClose: false }, notice: undefined }, mine);
+  setNewProject({ create: { ...create, name, status: 'sending', failure: undefined }, confirmClose: false, notice: undefined }, mine);
   const result = await rpc('projects.create', { expect: account, request_id: create.requestId, name });
   const current = newProjectSheet(mine);
   if (!current) return;
@@ -1276,30 +1274,39 @@ async function openCreated(): Promise<void> {
   pumpFiles();
 }
 
-/** Close, Cancel or Done. A create whose outcome is unknown is asked about once; nothing on its way is cut off. */
+/** The create, or a file, may have arrived and nothing says yet whether it did. */
+export function newProjectUnsettled(sheet: NewProjectSheet): boolean {
+  return (!sheet.project && !sheet.createdId && sheet.create.status === 'unknown') || sheet.files.some(file => file.status === 'unknown');
+}
+
+/**
+ * Close, Cancel or Done. A create or a file whose outcome is unknown is asked
+ * about once, as closing gives up its Try again; nothing on its way is cut off.
+ */
 function closeNewProject(): void {
   const sheet = newProjectSheet();
   if (!sheet || newProjectBusy(sheet)) return;
-  if (!sheet.project && !sheet.createdId && sheet.create.status === 'unknown' && !sheet.create.confirmClose) {
-    setNewProject({ create: { ...sheet.create, confirmClose: true } });
+  if (newProjectUnsettled(sheet) && !sheet.confirmClose) {
+    setNewProject({ confirmClose: true });
     return;
   }
   finishNewProject(sheet);
 }
 
-/** Keep it: back to the unknown create. */
-export function keepCreate(): void {
-  const sheet = newProjectSheet();
-  if (sheet) setNewProject({ create: { ...sheet.create, confirmClose: false } });
+/** Keep it: back to the create or the file whose outcome is unknown. */
+export function keepNewProject(): void {
+  if (newProjectSheet()) setNewProject({ confirmClose: false });
 }
 
 /**
  * New project goes. Copies kept to resend a file go too, as nothing can
- * resend them now; if some files may not have been saved, the toast says so.
+ * resend them now. If the project was made and some files were not saved
+ * into it, or may not have been, the toast says so.
  */
 function finishNewProject(sheet: NewProjectSheet): void {
   for (const file of sheet.files) if (file.kept) releaseCopy(file.requestId);
-  const unsaved = sheet.project !== null && sheet.files.some(file => file.status !== 'saved');
+  const made = sheet.create.status === 'created' || sheet.create.status === 'unknown';
+  const unsaved = made && sheet.files.some(file => file.status !== 'saved');
   set({ sheet: null, ...(unsaved ? { toast: UNSAVED_FILES } : {}) });
   unresolvedChanged();
   if (sheet.project) void refreshFeed(sheet.project.project_id);
@@ -1347,9 +1354,10 @@ function addFiles(mine: number, chosen: readonly { name: string; handle?: FileHa
   pumpFiles();
 }
 
+/** A file moves on (Check status, Try again, or its save): a close question asked before it no longer stands. */
 function patchFile(mine: number, id: number, patch: Partial<ProjectFile>): void {
   const sheet = newProjectSheet(mine);
-  if (sheet) setNewProject({ files: sheet.files.map(file => file.id === id ? { ...file, ...patch } : file) }, mine);
+  if (sheet) setNewProject({ files: sheet.files.map(file => file.id === id ? { ...file, ...patch } : file), confirmClose: false }, mine);
 }
 
 /** One save at a time, into the new project. A file whose outcome is unknown stops the ones after it. */
@@ -1433,7 +1441,8 @@ export function confirmSkip(): void {
   const file = sheet?.files.find(entry => entry.id === sheet.skip);
   if (!sheet || !file || file.status !== 'unknown') { cancelSkip(); return; }
   if (file.kept) releaseCopy(file.requestId);
-  setNewProject({ skip: null, files: sheet.files.map(entry => entry.id === file.id ? { ...entry, status: 'skipped', kept: false } : entry) });
+  setNewProject({ skip: null, confirmClose: false,
+    files: sheet.files.map(entry => entry.id === file.id ? { ...entry, status: 'skipped', kept: false } : entry) });
   pumpFiles();
 }
 

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { message } from '../messages.js';
 import {
-  askSkip, canDropFiles, cancelSkip, checkFile, chooseFiles, closeSheet, confirmSkip, createProject, dropFiles, EXTRACTION, keepCreate,
-  MAX_PROJECT_FILES, newProjectBusy, projectName, retryFile, setNewProjectName, type FindingSheet, type NewProjectSheet, type ProjectFile, type State,
+  askSkip, canDropFiles, cancelSkip, checkFile, chooseFiles, closeSheet, confirmSkip, createProject, dropFiles, EXTRACTION, keepNewProject,
+  MAX_PROJECT_FILES, newProjectBusy, newProjectUnsettled, projectName, retryFile, setNewProjectName, type FindingSheet, type NewProjectSheet, type ProjectFile, type State,
 } from '../store.js';
 import { trapTab } from './compose.js';
 import { Close, Doc, Saved, Warning } from './icons.js';
@@ -61,11 +61,24 @@ function SkipConfirm() {
   );
 }
 
+/** Close, asked first: what may have arrived would no longer be checked or tried again. */
+function CloseQuestion({ what }: { what: string }) {
+  return (
+    <div class="new-project-foot" aria-live="polite">
+      <span class="error">Close? {what}</span>
+      <button type="button" class="plain-button" data-testid="new-project-close-anyway" onClick={closeSheet}>Close</button>
+      <button type="button" class="plain-button" onClick={keepNewProject}>Keep it</button>
+    </div>
+  );
+}
+
 /** What the foot of the sheet offers: before the project exists, Create and its recovery; after, Done. */
 function Foot({ sheet }: { sheet: NewProjectSheet }) {
   const busy = newProjectBusy(sheet);
   const { create } = sheet;
+  const asking = sheet.confirmClose && newProjectUnsettled(sheet);
   if (sheet.project) {
+    if (asking) return <CloseQuestion what="A file may still have been saved." />;
     return (
       <div class="choices">
         <button type="button" class="primary-button small" data-testid="new-project-done" disabled={busy} onClick={closeSheet}>Done</button>
@@ -86,15 +99,7 @@ function Foot({ sheet }: { sheet: NewProjectSheet }) {
       </div>
     );
   }
-  if (create.status === 'unknown' && create.confirmClose) {
-    return (
-      <div class="new-project-foot" aria-live="polite">
-        <span class="error">Close? The project may still have been made.</span>
-        <button type="button" class="plain-button" data-testid="new-project-close-anyway" onClick={closeSheet}>Close</button>
-        <button type="button" class="plain-button" onClick={keepCreate}>Keep it</button>
-      </div>
-    );
-  }
+  if (asking) return <CloseQuestion what="The project may still have been made." />;
   if (create.status === 'unknown') {
     return (
       <div class="new-project-foot" aria-live="polite">

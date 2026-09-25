@@ -126,6 +126,11 @@ test('with another app in front New project hides its people but takes a drop; a
   await page.getByTestId('new-project-add-files').click();
   await expect(files).toHaveText([/^A\.txt · This may not have been sent\.Check statusTry againSkip…$/, 'B.txt · Not started']);
   expect(uploads()).toHaveLength(1);
+  // Closing now would give up A's Check status and Try again: it is asked first, and Escape keeps it.
+  await page.getByTestId('new-project-done').click();
+  await expect(page.getByTestId('new-project-close-anyway')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('new-project-done')).toBeVisible();
   await page.getByTestId('file-check').click();
   await expect(files).toHaveText(['A.txt · Saved · Extracting text', 'B.txt · Saved · Extracting text']);
   expect(uploads().map(call => call.body?.filename)).toEqual(['A.txt', 'B.txt']);
