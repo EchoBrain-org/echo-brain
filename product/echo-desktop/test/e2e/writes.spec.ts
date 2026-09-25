@@ -1,13 +1,29 @@
 import { expect, test } from '@playwright/test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
-test.afterEach(async () => { await run?.close(); });
+const folders: string[] = [];
+test.afterEach(async () => {
+  await run?.close();
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+});
 
 const posts = () => run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates');
+const uploads = () => run.calls().filter(call => call.method === 'PUT' && call.path.startsWith('/v2/person/documents/'));
+/** Documents the fixture Authority stored. */
+const documents = () => readdirSync(run.home).filter(name => name.startsWith('document-'));
+
+/** The paperclip's dialog picks a new temporary file with this name. */
+async function chooseFile(name: string): Promise<void> {
+  const folder = mkdtempSync(join(tmpdir(), 'echo-doc-'));
+  folders.push(folder);
+  const file = join(folder, name);
+  writeFileSync(file, 'Annual pricing.');
+  await run.app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }); }, file);
+}
 
 test('capture after switching away from a project starts as Only me', async () => {
   run = await launch();
@@ -74,11 +90,8 @@ test('quitting while a note is sending asks first', async () => {
 
 test('a note and a file are never sent together', async () => {
   run = await launch();
-  const { page, app } = run;
-  const folder = mkdtempSync(join(tmpdir(), 'echo-doc-'));
-  const file = join(folder, 'Pricing.txt');
-  writeFileSync(file, 'Annual pricing.');
-  await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }); }, file);
+  const { page } = run;
+  await chooseFile('Pricing.txt');
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Some words');
@@ -91,7 +104,58 @@ test('a note and a file are never sent together', async () => {
   await expect(page.getByTestId('compose-body')).toHaveCount(0);
   await page.getByTestId('compose-remove-file').click();
   await expect(page.getByTestId('compose-body')).toBeVisible();
-  rmSync(folder, { recursive: true, force: true });
+});
+
+test('a file attached in a project is sent to that project under its own name', async () => {
+  run = await launch();
+  const { page } = run;
+  await chooseFile('Pricing.txt');
+  await page.getByTestId('project-row').nth(0).click();
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-attach').click();
+  await expect(page.getByTestId('compose-file')).toHaveText('Pricing.txt');
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('sent')).toContainText('Sent to Apollo');
+  const apollo = 'prj_11111111-1111-4111-8111-111111111111';
+  expect(uploads()).toHaveLength(1);
+  expect(uploads()[0]!.body).toMatchObject({
+    title: 'Pricing.txt', filename: 'Pricing.txt', audience: { kind: 'project', project_id: apollo }, association_project_ids: [apollo],
+  });
+  expect(documents()).toHaveLength(1);
+});
+
+test('an upload whose reply was lost is retried from the kept copy and stored once', async () => {
+  run = await launch('document-reply-lost');
+  const { page } = run;
+  await chooseFile('Pricing.txt');
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-attach').click();
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  await page.getByTestId('compose-retry').click();
+  await expect(page.getByTestId('sent')).toContainText('Saved for you');
+  const [first, second] = uploads();
+  expect(uploads()).toHaveLength(2);
+  expect(second!.body).toEqual(first!.body);
+  expect(documents()).toHaveLength(1);
+  expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/documents\.retry ok /);
+});
+
+test('check status settles an upload whose reply was lost', async () => {
+  run = await launch('document-reply-lost');
+  const { page } = run;
+  await chooseFile('Pricing.txt');
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-attach').click();
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  await page.getByTestId('compose-check').click();
+  await expect(page.getByTestId('sent')).toContainText('Saved for you');
+  expect(uploads()).toHaveLength(1);
+  expect(run.calls().filter(call => call.path.startsWith('/v2/person/documents/requests/'))).toHaveLength(1);
 });
 
 test('Everyone warns before it is sent', async () => {

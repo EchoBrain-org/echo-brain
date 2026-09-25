@@ -2,6 +2,7 @@
 // fixture Authority behind the real person client, the same pattern as
 // tests/fixtures/echo-projects-cli-bridge.mjs. Every request is logged to
 // <home>/calls.jsonl so tests can assert what the app actually sent.
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -71,11 +72,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
   }
   let writeAttempts = 0;
+  let documentAttempts = 0;
 
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     const method = init?.method ?? 'GET';
-    const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+    // A document's metadata travels in a header; its bytes are the streamed body.
+    const metadata = new Headers(init?.headers).get('x-echo-document-metadata');
+    const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown>
+      : metadata ? JSON.parse(Buffer.from(metadata, 'base64url').toString('utf8')) as Record<string, unknown> : undefined;
     appendFileSync(join(home, 'calls.jsonl'), `${JSON.stringify({ method, path: url.pathname, query: url.search, body })}\n`);
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
@@ -144,6 +149,34 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const receipt = JSON.parse(readFileSync(saved, 'utf8')) as Record<string, unknown>;
       delete receipt.state;
       return json({ ...receipt, kind: 'echo-person-update-status-v3', status: 'stored', metadata: 'ready' });
+    }
+    const upload = /^\/v2\/person\/documents\/([0-9a-f-]{36})$/.exec(path);
+    if (method === 'PUT' && upload) {
+      documentAttempts += 1;
+      const hash = createHash('sha256');
+      let size = 0;
+      for await (const chunk of init?.body as unknown as AsyncIterable<Uint8Array>) { hash.update(chunk); size += chunk.byteLength; }
+      if (`sha256:${hash.digest('hex')}` !== body?.sha256 || size !== body?.content_length) return failure('invalid_request', 400);
+      // One document per request: a resend of the same request gets the same receipt.
+      const saved = join(home, `document-${upload[1]}.json`);
+      if (!existsSync(saved)) {
+        writeFileSync(saved, JSON.stringify({
+          ...body, kind: 'echo-person-document-receipt-v2', document_id: `doc_${createHash('sha256').update(upload[1]!).digest('hex')}`,
+          detected_media_type: 'text/plain', received_at: NOW, state: 'saved', extraction_state: 'extracting',
+        }));
+      }
+      // Stored, but the first reply is lost on its way back.
+      if (mode === 'document-reply-lost' && documentAttempts === 1) return failure('unavailable', 503);
+      return json(JSON.parse(readFileSync(saved, 'utf8')), 201);
+    }
+    const documentStatus = /^\/v2\/person\/documents\/requests\/([0-9a-f-]{36})$/.exec(path);
+    if (method === 'GET' && documentStatus) {
+      const saved = join(home, `document-${documentStatus[1]}.json`);
+      if (!existsSync(saved)) return failure('not_found', 404);
+      return json({
+        ...JSON.parse(readFileSync(saved, 'utf8')) as Record<string, unknown>, kind: 'echo-person-document-metadata-v2',
+        extraction_detail: null, extractor: null, extracted_text_bytes: 0,
+      });
     }
     if (method === 'POST' && path === '/v2/person/ask') {
       if (mode === 'ask-unavailable') return failure('unavailable', 503);
