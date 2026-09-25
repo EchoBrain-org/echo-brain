@@ -163,6 +163,8 @@ function onHostNotice(message: HostNotice): void {
   if (message.notice === 'signin.phase') {
     send('signin.phase', message.payload as Events['signin.phase']);
   } else if (message.notice === 'open-external') {
+    // The fixture Authority brings its own browser: tests never open a real one.
+    if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_TEST_FIXTURES) return;
     const url = externalUrl((message.payload as { url?: unknown }).url);
     if (url) void shell.openExternal(url);
   }

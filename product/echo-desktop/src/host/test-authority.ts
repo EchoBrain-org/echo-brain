@@ -2,11 +2,12 @@
 // fixture Authority behind the real person client, the same pattern as
 // tests/fixtures/echo-projects-cli-bridge.mjs. Every request is logged to
 // <home>/calls.jsonl so tests can assert what the app actually sent.
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const AUTHORITY = 'https://authority.example';
+const IDENTITY_PROVIDER = 'https://accounts.example';
 const NOW = '2026-09-21T22:01:00.000Z';
 /** Past the access token's expiry, still inside the week. */
 const LATER = '2026-09-21T22:30:00.000Z';
@@ -73,6 +74,29 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }
   let writeAttempts = 0;
   let documentAttempts = 0;
+  // Sign-in: the descriptor a new session is checked against, and the client's
+  // loopback receiver for each sign-in begun, by its OIDC state.
+  const signingKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey.export({ type: 'spki', format: 'der' });
+  const descriptor = {
+    schema_version: 1, kind: 'echo-organization-authority', authority_id: 'oau_00000000-0000-4000-8000-000000000001',
+    organization_id: session.organization_id, signing_key: {
+      key_id: `sha256:${createHash('sha256').update(signingKey).digest('hex')}`, algorithm: 'ecdsa-p256-sha256-der-low-s',
+      public_key_spki_der_base64: signingKey.toString('base64'),
+    },
+  };
+  const handoffs = new Map<string, { url: string; token: string }>();
+  // The browser, never a real one: past Google, the Authority's callback page
+  // posts the new session to the loopback receiver the sign-in began with.
+  const openAuthorizationUrl = (address: string): boolean => {
+    const url = new URL(address);
+    const state = url.searchParams.get('state') ?? '';
+    const handoff = url.origin === IDENTITY_PROVIDER ? handoffs.get(state) : undefined;
+    if (!handoff) return false;
+    handoffs.delete(state);
+    const form = new URLSearchParams({ token: handoff.token, session: Buffer.from(JSON.stringify(session)).toString('base64url') });
+    globalThis.fetch(handoff.url, { method: 'POST', body: form }).catch(() => undefined);
+    return true;
+  };
 
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input instanceof Request ? input.url : input));
@@ -85,6 +109,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (url.origin !== AUTHORITY) throw new Error('Unexpected authority');
     const path = url.pathname;
 
+    if (method === 'GET' && path === '/v1/authority-descriptor') return json({ authority_descriptor: descriptor });
+    if (method === 'POST' && path === '/v2/session/oidc/begin') {
+      const handoff = body?.loopback_handoff as { url: string; token: string } | undefined;
+      if (body?.kind !== 'existing_identity_login' || !handoff) return failure('invalid_request', 400);
+      const state = randomUUID();
+      handoffs.set(state, handoff);
+      return json({ authorization_url: `${IDENTITY_PROVIDER}/authorize?state=${state}`, expires_at: '2026-09-21T22:11:00.000Z' }, 201);
+    }
     if (method === 'POST' && path === '/v2/session/refresh') {
       if (mode === 'refresh-fails') return failure('unavailable', 503);
       if (mode === 'refresh-refused') return failure('unauthorized', 401);
@@ -195,7 +227,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   };
 
   return {
-    dependencies: { fetch, now: () => clock },
+    dependencies: { fetch, now: () => clock, open_authorization_url: openAuthorizationUrl },
     now: () => Date.parse(clock),
   };
 }

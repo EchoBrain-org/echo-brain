@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
-import { existsSync, readFileSync } from 'node:fs';
+import { expect, test, type Page } from '@playwright/test';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 
@@ -7,6 +7,37 @@ let run: Launched;
 test.afterEach(async () => { await run?.close(); });
 
 const refreshes = () => run.calls().filter(call => call.path === '/v2/session/refresh');
+
+/** Sign in with the fixture's browser, which stands in for Google, and land on Home. */
+async function signIn(page: Page) {
+  await expect(page.getByTestId('signin')).toBeVisible();
+  await page.getByTestId('signin-url').fill('https://authority.example');
+  await page.getByTestId('signin-button').click();
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  // Neither the sign-in address, the loopback receiver nor a token reaches the page.
+  const html = await page.content();
+  for (const secret of ['accounts.example', '127.0.0.1', 'A'.repeat(43), 'R'.repeat(43)]) expect(html).not.toContain(secret);
+}
+
+test('signing in lands on Home, and signing in again as the same person keeps the draft', async () => {
+  run = await launch('signed-out');
+  const { page, app, home } = run;
+  await signIn(page);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Half a thought');
+  await page.keyboard.press('Escape');
+  // Signed out elsewhere, as the terminal's `person logout` does.
+  rmSync(join(home, '.local', 'share', 'echo-brain', 'person', 'session.v1.json'));
+  await emit(app, 'echo-test:shown');
+  await signIn(page);
+  await emit(app, 'echo-test:capture');
+  await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
+});
+
+test('the weekly sign-in works from a session left under a refresh claim', async () => {
+  run = await launch('expired-claim');
+  await signIn(run.page);
+});
 
 test('an expired access token is refreshed once, before the calls that need it', async () => {
   run = await launch('refresh-ok');
