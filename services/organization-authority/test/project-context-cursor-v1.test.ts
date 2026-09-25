@@ -42,6 +42,21 @@ describe('project untrusted keyset cursors', () => {
       .toThrow(expect.objectContaining({ code: 'invalid_request' }));
   });
 
+  it('keeps an organization directory continuation apart from every project directory and requester', () => {
+    const { project_id: _project, ...unscoped } = scope;
+    const organization: ProjectCursorScopeV1 = { ...unscoped, operation: 'organization_directory' };
+    const encoded = encodeProjectCursorV1(organization, ['Ari', member]);
+    expect(decodeProjectCursorV1(encoded, organization)).toEqual(['Ari', member]);
+    for (const other of [
+      { ...scope, operation: 'directory' as const }, { ...organization, operation: 'directory' as const },
+      { ...organization, project_id: `prj_${id}` }, { ...organization, canonical_query: 'ari' }, { ...organization, limit: 9 },
+      { ...organization, membership_id: `mem_${id.slice(0, -1)}2` }, { ...organization, organization_id: 'other' },
+    ]) expect(() => decodeProjectCursorV1(encoded, other)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    expect(() => decodeProjectCursorV1(encodeProjectCursorV1({ ...scope, operation: 'directory' }, ['Ari', member]), organization))
+      .toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    expect(() => encodeProjectCursorV1(organization, [time, `prj_${id}`])).toThrow();
+  });
+
   it('rejects noncanonical encodings, malformed UTF-8 and invalid ordering coordinates', () => {
     const encoded = encodeProjectCursorV1(scope, ['Ari', member]);
     const raw = Buffer.from(encoded, 'base64url');

@@ -1289,6 +1289,8 @@ describe("Organization Authority API runtime", () => {
       expect(await post("/v2/person/updates/search", { query: "original" })).toMatchObject({ results: [{ context_id }] });
       expect(await post("/v1/person/projects/members", { project_id })).toMatchObject({ items: [{ membership_id: initialized.owner_membership_id, role: "lead" }] });
       expect(await post("/v1/person/projects/directory", { project_id, query: "Founder" })).toMatchObject({ items: [{ membership_id: initialized.owner_membership_id }] });
+      expect(await post("/v1/person/directory", { query: "Founder" })).toEqual({ schema_version: 1, kind: "echo-organization-directory-v1", items: [{ membership_id: initialized.owner_membership_id, display_name: expect.any(String) }], next_cursor: null });
+      expect(await post("/v1/person/directory", { project_id }, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
       await post("/v1/person/projects/members/set", { schema_version: 1, kind: "echo-project-member-set-v1", request_id: "00000000-0000-4000-8000-000000000003", project_id, membership_id: initialized.owner_membership_id, role: "lead" });
       expect(await post("/v1/person/projects/members/remove", { schema_version: 1, kind: "echo-project-member-remove-v1", request_id: "00000000-0000-4000-8000-000000000004", project_id, membership_id: initialized.owner_membership_id }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
       await post("/v1/person/projects/context/dissociate", { schema_version: 1, kind: "echo-project-context-dissociate-v1", request_id: "00000000-0000-4000-8000-000000000005", project_id, context_id });

@@ -159,6 +159,79 @@ describe("SQLite project context V1", () => {
     });
   });
 
+  it("lets any active member page the organization directory with no project, and denies revoked or foreign callers", () => {
+    const { database, repository } = open();
+    for (let number = 4; number <= 13; number += 1) {
+      const suffix = String(number).padStart(12, "0");
+      addMembership(database, {
+        organization_id: OWNER.organization_id,
+        principal_id: `prn_directory_${number}`,
+        membership_id: `mem_00000000-0000-4000-8000-${suffix}`,
+        membership_type: "employee",
+      }, `Directory ${number}`, `directory-${number}@example.test`);
+    }
+    const LEFT: AuthorityPersonMembershipBinding = { ...OWNER, principal_id: "prn_left", membership_id: "mem_44444444-4444-4444-8444-444444444444", membership_type: "employee" };
+    addMembership(database, LEFT, "Left Person", "left@example.test");
+    revokeMembership(database, LEFT);
+    const directory = (actor: AuthorityPersonMembershipBinding, request: { query?: string; limit?: number; cursor?: string }) =>
+      repository.withReadTransaction(transaction => transaction.searchOrganizationDirectory(snapshot(transaction, actor, { operation: "organization_directory" }), request));
+
+    // MEMBER holds no project grant at all.
+    expect(database.prepare("SELECT count(*) AS n FROM authority_project_memberships_v1 WHERE membership_id = ?").get(MEMBER.membership_id)).toEqual({ n: 0 });
+    const first = directory(MEMBER, { limit: 10 });
+    expect(first).toMatchObject({ schema_version: 1, kind: "echo-organization-directory-v1" });
+    expect(first.items).toHaveLength(10);
+    expect(first.next_cursor).not.toBeNull();
+    const final = directory(MEMBER, { limit: 10, cursor: first.next_cursor! });
+    expect(final.next_cursor).toBeNull();
+    const everyone = [...first.items, ...final.items];
+    expect(everyone).toHaveLength(12);
+    expect(everyone.map(item => item.display_name)).toEqual([...everyone.map(item => item.display_name)].sort());
+    expect(everyone).toContainEqual({ membership_id: OWNER.membership_id, display_name: "Owner" });
+    expect(everyone).toContainEqual({ membership_id: MEMBER.membership_id, display_name: "Member" });
+    expect(everyone.map(item => item.membership_id)).not.toContain(LEFT.membership_id);
+    expect(directory(MEMBER, { query: "member", limit: 10 }).items).toEqual([{ membership_id: MEMBER.membership_id, display_name: "Member" }]);
+    expect(directory(OWNER, { query: "left", limit: 10 }).items).toEqual([]);
+
+    // A cursor is bound to its requesting tenure, query, limit and operation.
+    const invalid = expect.objectContaining({ code: "invalid_request" });
+    expect(() => directory(OWNER, { limit: 10, cursor: first.next_cursor! })).toThrow(invalid);
+    expect(() => directory(MEMBER, { query: "directory", limit: 10, cursor: first.next_cursor! })).toThrow(invalid);
+    expect(() => directory(MEMBER, { limit: 9, cursor: first.next_cursor! })).toThrow(invalid);
+    const project = createProject(repository);
+    const organizationCursor = directory(OWNER, { limit: 10 }).next_cursor!;
+    expect(() => repository.withReadTransaction(transaction => transaction.searchDirectory(
+      snapshot(transaction, OWNER, { operation: "directory", project_id: project.project_id }), { project_id: project.project_id, limit: 10, cursor: organizationCursor },
+    ))).toThrow(invalid);
+    const projectCursor = repository.withReadTransaction(transaction => transaction.searchDirectory(
+      snapshot(transaction, OWNER, { operation: "directory", project_id: project.project_id }), { project_id: project.project_id, limit: 10 },
+    )).next_cursor!;
+    expect(() => directory(OWNER, { limit: 10, cursor: projectCursor })).toThrow(invalid);
+
+    // Revoked and other-organization callers are denied before any row is read.
+    const unauthorized = expect.objectContaining({ code: "unauthorized" });
+    expect(() => directory(LEFT, { limit: 10 })).toThrow(unauthorized);
+    expect(() => directory({ ...MEMBER, organization_id: OUTSIDE_ORGANIZATION }, { limit: 10 })).toThrow(unauthorized);
+    revokeMembership(database, MEMBER);
+    expect(() => directory(MEMBER, { limit: 10 })).toThrow(unauthorized);
+    expect(directory(OWNER, { query: "member", limit: 10 }).items).toEqual([]);
+  });
+
+  it("releases and audits an organization directory page as its own operation", () => {
+    const { database, repository } = open();
+    const released = repository.withReadTransaction(transaction => {
+      const scope = snapshot(transaction, MEMBER, { operation: "organization_directory" });
+      expect(() => transaction.searchDirectory(scope, { project_id: "prj_11111111-1111-4111-8111-111111111111", limit: 10 })).toThrow("project context scope mismatch");
+      return transaction.revalidateAndAuditRelease(scope, authorization(MEMBER), transaction.searchOrganizationDirectory(scope, { limit: 10 }));
+    });
+    expect(released.items).toHaveLength(2);
+    const audit = database.prepare("SELECT body_json FROM authority_project_read_audit_v1").all() as { body_json: string }[];
+    expect(audit.map(row => JSON.parse(row.body_json))).toEqual([expect.objectContaining({
+      operation: "organization_directory", membership_id: MEMBER.membership_id, released_count: 2,
+    })]);
+    expect(audit[0]!.body_json).not.toContain("Owner");
+  });
+
   it("persists every project port and preserves V2's independent custody coordinates", () => {
     const { repository } = open();
     const project = createProject(repository);

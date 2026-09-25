@@ -13,6 +13,8 @@ import {
   validateProjectContextBrowseV1, validateProjectContextSearchV1, validateProjectDirectorySearchV1,
   validateProjectDirectoryV1, validateProjectIdV1, validateProjectMutationReceiptV1,
   validateProjectPageRequestV1, validateProjectSummaryV1,
+  validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1,
+  type OrganizationDirectorySearchV1, type OrganizationDirectoryV1,
   type PersonUpdateReceiptV2, type PersonUpdateStatusV2, type PersonUpdateSubmitV2,
   type PersonUploadContentV2, type PersonUploadSearchV2, type PersonUploadSearchResultV2,
   type PersonUpdateReceiptV3, type PersonUpdateStatusV3, type PersonUpdateSubmitV3,
@@ -335,6 +337,18 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
   }
   searchDirectory(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectDirectorySearchV1): ProjectDirectoryV1 {
     this.open(); const input = this.input(() => validateProjectDirectorySearchV1(request)); this.require(snapshot, 'directory', input.project_id);
+    return this.store.issue(snapshot, 'directory', validateProjectDirectoryV1({ schema_version: 1, kind: 'echo-project-directory-v1', project_id: input.project_id, ...this.directoryPage(snapshot, input) }));
+  }
+  searchOrganizationDirectory(snapshot: ProjectAuthorizationSnapshotV1, request: OrganizationDirectorySearchV1): OrganizationDirectoryV1 {
+    this.open(); const input = this.input(() => validateOrganizationDirectorySearchV1(request)); this.require(snapshot, 'organization_directory');
+    return this.store.issue(snapshot, 'organization_directory', validateOrganizationDirectoryV1({ schema_version: 1, kind: 'echo-organization-directory-v1', ...this.directoryPage(snapshot, input) }));
+  }
+  /**
+   * One keyset page of the snapshot person's own organization's active
+   * members, by display name. Both directories share it; the cursor scope binds
+   * the operation, project (if any), query, limit and requesting tenure.
+   */
+  private directoryPage(snapshot: ProjectAuthorizationSnapshotV1, input: { readonly query?: string; readonly limit?: number; readonly cursor?: string }): { items: { membership_id: string; display_name: string }[]; next_cursor: string | null } {
     const limit = input.limit ?? 10; const scope = cursorScope(snapshot, limit, input.query); const position = decodeProjectCursorV1(input.cursor, scope);
     const terms = input.query === undefined ? [] : projectSearchTermsV1(input.query);
     const rows = (this.store.database.prepare(`SELECT membership.membership_id, principal.display_name FROM authority_memberships AS membership JOIN authority_principals AS principal USING (principal_id)
@@ -342,7 +356,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       .filter(row => terms.every(term => normalizeProjectSearchQueryV1(row.display_name).includes(term)));
     const remaining = after(rows, position, row => [row.display_name, row.membership_id], false);
     const page = remaining.slice(0, limit);
-    return this.store.issue(snapshot, 'directory', validateProjectDirectoryV1({ schema_version: 1, kind: 'echo-project-directory-v1', project_id: input.project_id, items: page, next_cursor: next(remaining, page, limit) ? encodeProjectCursorV1(scope, [page.at(-1)!.display_name, page.at(-1)!.membership_id]) : null }));
+    return { items: page, next_cursor: next(remaining, page, limit) ? encodeProjectCursorV1(scope, [page.at(-1)!.display_name, page.at(-1)!.membership_id]) : null };
   }
   feedV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV2 {
     this.open(); const input = this.input(() => validateProjectContextBrowseV1(request)); this.require(snapshot, 'feed_v2', input.project_id);
@@ -549,7 +563,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
   private lastLead(projectId:ProjectIdV1,_membershipId:string):void{const n=(this.store.database.prepare(`SELECT count(*) AS n FROM authority_project_memberships_v1 grant JOIN authority_memberships membership ON membership.membership_id=grant.membership_id AND membership.status='active' WHERE grant.project_id=? AND grant.status='active' AND grant.role='lead'`).get(projectId) as {n:number}).n;if(n<=1)denied('conflict');}
 }
 function readOperation(scope: ProjectAuthorizationScopeV1): ProjectReadOperationV1 {
-  const reads = ['project_list', 'project_read', 'members', 'directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'];
+  const reads = ['project_list', 'project_read', 'members', 'directory', 'organization_directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'];
   if (reads.includes(scope.operation)) return scope.operation as ProjectReadOperationV1;
   throw new Error('mutation cannot release');
 }
@@ -558,7 +572,7 @@ function projectOf(scope:ProjectAuthorizationScopeV1):ProjectIdV1|undefined {
   return 'request' in scope && 'project_id' in scope.request ? scope.request.project_id ?? undefined : undefined;
 }
 function isReadScope(scope: ProjectAuthorizationScopeV1): boolean {
-  return ['project_list', 'project_read', 'members', 'directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'].includes(scope.operation);
+  return ['project_list', 'project_read', 'members', 'directory', 'organization_directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'].includes(scope.operation);
 }
 function count(response: ProjectReadResponseV1): number {
   if ('items' in response) return response.items.length;

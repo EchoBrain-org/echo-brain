@@ -1,4 +1,5 @@
 import {
+  validateOrganizationDirectorySearchV1,
   validatePersonUpdateRequestId,
   validatePersonUpdateSubmitV2,
   validatePersonUpdateSubmitV3,
@@ -15,6 +16,7 @@ import {
   validateProjectMemberRemoveV1,
   validateProjectMemberSetV1,
   validateProjectPageRequestV1,
+  type OrganizationDirectoryV1,
   type PersonUpdateReceiptV2,
   type PersonUpdateReceiptV3,
   type PersonUpdateStatusV2,
@@ -78,6 +80,11 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
   searchDirectory(accessToken: string, value: unknown): ProjectDirectoryV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectDirectorySearchV1(value));
     return this.read(accessToken, actor, { operation: 'directory', project_id: request.project_id }, (transaction, snapshot) => transaction.searchDirectory(snapshot, request));
+  }
+  /** Any active member may search their own organization; see ADR-0016. */
+  searchOrganizationDirectory(accessToken: string, value: unknown): OrganizationDirectoryV1 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validateOrganizationDirectorySearchV1(value));
+    return this.read(accessToken, actor, { operation: 'organization_directory' }, (transaction, snapshot) => transaction.searchOrganizationDirectory(snapshot, request));
   }
   addMember(accessToken: string, value: unknown): ProjectMutationReceiptV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectMemberAddV1(value));
