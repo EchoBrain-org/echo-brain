@@ -61,7 +61,19 @@ function assertLinuxX64Elf(path) {
   ) fail('Node runtime must be a Linux x86_64 ELF executable');
 }
 
-function verifyLinuxIdentity(path, release, manifest) {
+function assertDarwinArm64MachO(path) {
+  const header = readFileSync(path).subarray(0, 16);
+  // Thin little-endian Mach-O 64, arm64 (all), MH_EXECUTE.
+  if (
+    header.length < 16 ||
+    header.readUInt32LE(0) !== 0xfeedfacf ||
+    header.readUInt32LE(4) !== 0x0100000c ||
+    header.readUInt32LE(8) !== 0 ||
+    header.readUInt32LE(12) !== 2
+  ) fail('Node runtime must be a macOS arm64 Mach-O executable');
+}
+
+function verifyCliIdentity(path, release, manifest, target) {
   const raw = readFileSync(path, 'utf8');
   let identity;
   try {
@@ -77,8 +89,8 @@ function verifyLinuxIdentity(path, release, manifest) {
   if (
     identity.schema_version !== 1 ||
     identity.kind !== 'echo-person-onboarding-kit-identity-v1' ||
-    identity.platform !== 'linux' ||
-    identity.architecture !== 'x64' ||
+    identity.platform !== target.platform ||
+    identity.architecture !== target.architecture ||
     identity.release_id !== manifest.release_id ||
     release.release_id !== manifest.release_id ||
     identity.source_sha !== manifest.source_sha ||
@@ -106,6 +118,20 @@ function verifyLinuxRuntime(root, manifest) {
   if (typeof glibc !== 'string' || !/^\d+\.\d+/.test(glibc)) {
     fail('this kit requires Linux with glibc');
   }
+}
+
+function verifyMacCliRuntime(root, manifest) {
+  let executingNode;
+  let bundledNode;
+  try {
+    executingNode = realpathSync(process.execPath);
+    bundledNode = realpathSync(join(root, 'node'));
+  } catch {
+    fail('bundled Node runtime path cannot be resolved');
+  }
+  if (executingNode !== bundledNode) fail('macOS CLI kit verifier must run with the bundled Node runtime');
+  if (process.version !== manifest.runtime.version) fail('Node runtime version does not match the kit');
+  if (process.platform !== 'darwin' || process.arch !== 'arm64') fail('this CLI kit supports macOS on Apple silicon only');
 }
 
 function verifyOverlayArchive(path, release, manifest) {
@@ -183,11 +209,18 @@ function main() {
     manifest.schema_version === 2 &&
     manifest.kind === 'echo-person-onboarding-kit-v2'
   );
+  const macCli = (
+    manifest !== null &&
+    typeof manifest === 'object' &&
+    !Array.isArray(manifest) &&
+    manifest.schema_version === 3 &&
+    manifest.kind === 'echo-person-cli-kit-v1'
+  );
   exactKeys(
     manifest,
     [
       'kind',
-      linux ? 'build_identity_sha256' : 'desktop_app_archive_sha256',
+      linux || macCli ? 'build_identity_sha256' : 'desktop_app_archive_sha256',
       'person_client_artifact_sha256',
       'release_id',
       'release_record_sha256',
@@ -215,7 +248,13 @@ function main() {
         manifest.runtime.platform !== 'linux' ||
         manifest.runtime.architecture !== 'x64'
       )
-      : (
+      : macCli
+        ? (
+          !SHA256.test(manifest.build_identity_sha256) ||
+          manifest.runtime.platform !== 'darwin' ||
+          manifest.runtime.architecture !== 'arm64'
+        )
+        : (
         manifest.schema_version !== 1 ||
         manifest.kind !== 'echo-person-onboarding-kit-v1' ||
         !SHA256.test(manifest.desktop_app_archive_sha256) ||
@@ -225,6 +264,7 @@ function main() {
   ) fail('manifest identity is invalid');
   if (raw !== `${canonicalJson(manifest)}\n`) fail('manifest is not canonical');
   if (linux) verifyLinuxRuntime(root, manifest);
+  else if (macCli) verifyMacCliRuntime(root, manifest);
   else if (process.version !== manifest.runtime.version) fail('Node runtime version does not match the kit');
   else if (process.platform !== manifest.runtime.platform || process.arch !== manifest.runtime.architecture) {
     fail('this kit supports macOS on Apple silicon only');
@@ -238,12 +278,15 @@ function main() {
   } catch {
     fail('release record is not valid JSON');
   }
-  if (linux) {
+  if (linux || macCli) {
     const identityPath = join(root, 'build-identity.v1.json');
     regularFile(identityPath, 'kit build identity');
     if (sha256(identityPath) !== manifest.build_identity_sha256) fail('kit build identity digest does not match');
-    assertLinuxX64Elf(nodePath);
-    verifyLinuxIdentity(identityPath, release, manifest);
+    if (linux) assertLinuxX64Elf(nodePath);
+    else assertDarwinArm64MachO(nodePath);
+    verifyCliIdentity(identityPath, release, manifest, linux
+      ? { platform: 'linux', architecture: 'x64' }
+      : { platform: 'darwin', architecture: 'arm64' });
   } else {
     const appPath = join(root, 'ECHO.app.zip');
     regularFile(appPath, 'desktop app archive');
