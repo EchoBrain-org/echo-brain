@@ -71,6 +71,29 @@ test('Home rows take a drop while another app is in front, and a file dropped on
   expect(uploads()[0]!.body).toMatchObject({ title: 'Terms.pdf', audience: { kind: 'team' }, association_project_ids: [APOLLO] });
 });
 
+test('a file dropped anywhere else on the window is captured for the page: Only me on Home, the project on screen in one', async () => {
+  run = await launch();
+  const { page } = run;
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await drop(page, page.getByTestId('title'), onDisk('Notes.md'));
+  await expect(page.getByTestId('compose-file')).toHaveText('Notes.md · 15 bytes');
+  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('readers-project')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+
+  // Nothing was written in it: the next drop starts over, for the project on screen.
+  await page.getByTestId('sidebar-project').nth(1).click();
+  await expect(page.getByTestId('feed-row').first()).toBeVisible();
+  await drop(page, page.getByTestId('feed'), onDisk('Brief.md'));
+  await expect(page.getByTestId('compose-file')).toHaveText('Brief.md · 15 bytes');
+  await expect(page.getByTestId('readers-project')).toHaveText('Beacon');
+  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Meta+Enter');
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon · Extracting text');
+  expect(uploads()).toHaveLength(1);
+  expect(uploads()[0]!.body).toMatchObject({ title: 'Brief.md', audience: { kind: 'project', project_id: BEACON }, association_project_ids: [BEACON] });
+});
+
 test('a drop never changes a draft with words in it, or a save not yet settled', async () => {
   run = await launch('write-unavailable');
   const { page } = run;
