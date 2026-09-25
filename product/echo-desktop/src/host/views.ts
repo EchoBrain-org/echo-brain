@@ -252,7 +252,10 @@ export function revokedView(raw: unknown): null {
 export function contextView(raw: unknown): ContextContent {
   const value = object(raw);
   if (value.kind !== 'echo-project-context-read-v2') throw new ViewError();
-  return { context_id: text(value.context_id), title: text(value.title), text: text(value.text), received_at: text(value.received_at) };
+  return {
+    context_id: text(value.context_id), title: text(value.title), text: text(value.text), received_at: text(value.received_at),
+    audience: audienceMark(value.audience),
+  };
 }
 
 function match(raw: unknown, source: Match['source']): Match {
@@ -280,7 +283,9 @@ export function noteMatchesView(raw: unknown, version: 2 | 3): Match[] {
 export function noteView(raw: unknown, version: 2 | 3, contextId: string): ContextContent {
   const value = object(raw);
   if (value.kind !== `echo-person-upload-content-v${version}` || value.context_id !== contextId) throw new ViewError();
-  return { context_id: contextId, title: text(value.title), text: text(value.text), received_at: text(value.received_at) };
+  return {
+    context_id: contextId, title: text(value.title), text: text(value.text), received_at: text(value.received_at), audience: audienceMark(value.audience),
+  };
 }
 
 function sourceRef(citation: Json): SourceRef {

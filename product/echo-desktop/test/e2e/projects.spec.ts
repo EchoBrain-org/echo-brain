@@ -71,6 +71,35 @@ test('the feed keeps its place: Back from an original, or ECHO coming back, retu
   expect(await top()).toBe(0);
 });
 
+test('the reader says who can read an original when it is not the project\'s members', async () => {
+  run = await launch('long-feed');
+  const { page } = run;
+  await page.getByTestId('project-row').nth(1).click();
+  const rows = page.getByTestId('feed-row');
+  await expect(rows).toHaveCount(10);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('readers-only-me').click();
+  await page.getByTestId('compose-body').fill('My own reminder');
+  await page.keyboard.press('Meta+Enter');
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
+  await expect(rows.first()).toContainText('My own reminder');
+  await expect(rows.first().getByLabel('Only me')).toBeVisible();
+  await rows.first().click();
+  await expect(page.getByTestId('reader-meta')).toHaveText(/^Only me · /);
+  await page.getByTestId('back').click();
+  // The project's members: nothing more to say.
+  await rows.nth(1).click();
+  await expect(page.getByTestId('reader-text')).toHaveText('Note 1 text.');
+  await expect(page.getByTestId('reader-meta')).not.toContainText('Only me');
+  await page.getByTestId('back').click();
+
+  // A saved note found in all context says it too.
+  await page.getByTestId('scope-clear').click();
+  await page.getByTestId('ask-field').fill('pricing tiers');
+  await page.getByTestId('match-row').first().click();
+  await expect(page.getByTestId('reader-meta')).toHaveText(/^Only me · /);
+});
+
 test('a save into the project on screen keeps the rows shown, even when reading them again fails', async () => {
   run = await launch('long-feed-refresh-fails');
   const { page } = run;

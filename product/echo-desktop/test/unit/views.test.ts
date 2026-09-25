@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, changeView, createdView, documentPageView, documentTextView, employeesView, failureView, feedView, invitationView,
+  abandonView, answerView, changeView, contextView, createdView, documentPageView, documentTextView, employeesView, failureView, feedView, invitationView,
   membersView, noteMatchesView, noteTitle, noteView, revokedView,
   NotReadable, projectMatchesView, projectPageView, projectView, receiptView, recordView, savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
@@ -116,9 +116,21 @@ describe('live matches', () => {
   it('a note is read only as the one asked for', () => {
     const reply = { kind: 'echo-person-upload-content-v3', context_id: 'ctx_1', received_at: item.received_at, title: 'T', text: 'Body',
       audience: { kind: 'only_me' } };
-    expect(noteView(reply, 3, 'ctx_1')).toEqual({ context_id: 'ctx_1', title: 'T', text: 'Body', received_at: item.received_at });
+    expect(noteView(reply, 3, 'ctx_1')).toEqual({ context_id: 'ctx_1', title: 'T', text: 'Body', received_at: item.received_at, audience: 'only-me' });
     expect(() => noteView(reply, 3, 'ctx_2')).toThrow(ViewError);
     expect(() => noteView(reply, 2, 'ctx_1')).toThrow(ViewError);
+  });
+});
+
+describe('an original read in full', () => {
+  it('says who can read it, as a feed row marks it', () => {
+    const reply = (audience: unknown) => ({
+      kind: 'echo-project-context-read-v2', context_id: 'ctx_1', received_at: '2026-09-21T22:01:00.000Z', title: 'T', text: 'Body', audience,
+    });
+    expect(contextView(reply({ kind: 'only_me' })).audience).toBe('only-me');
+    expect(contextView(reply({ kind: 'team' })).audience).toBe('team');
+    expect(contextView(reply({ kind: 'projects', project_ids: ['prj_1'] })).audience).toBe('project');
+    expect(() => contextView(reply(undefined))).toThrow(ViewError);
   });
 });
 

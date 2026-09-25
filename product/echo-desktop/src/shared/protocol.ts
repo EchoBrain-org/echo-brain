@@ -134,6 +134,8 @@ export interface ContextContent {
   readonly title: string;
   readonly text: string;
   readonly received_at: string;
+  /** Who can read it, as a feed row marks it. */
+  readonly audience: FeedItem['audience'];
 }
 
 /**

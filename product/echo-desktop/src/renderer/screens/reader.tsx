@@ -7,6 +7,11 @@ import {
 import { ChangeLine, changeShownInPlace, within } from './change.js';
 import { Chevron, Ellipsis } from './icons.js';
 
+/** Who can read it, when that is not a project's members: the words Capture uses. */
+function readersWord(audience: 'only-me' | 'project' | 'team' | undefined): string | null {
+  return audience === 'only-me' ? 'Only me' : audience === 'team' ? 'Organization' : null;
+}
+
 /** What Save original… came to. */
 function saveLine(reader: ReaderState): { text: string; error: boolean } | null {
   const save = reader.save;
@@ -69,6 +74,8 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
   const document = reader.document;
   const title = content?.title ?? document?.document.title;
   const received = content?.received_at ?? document?.document.received_at;
+  const meta = [readersWord(content?.audience ?? document?.document.audience), received ? when(received) : null,
+    document ? documentDetail(document.document) : null].filter(Boolean).join(' · ');
   const saving = saveLine(reader);
   const readable = Boolean(content || document);
   return (
@@ -80,9 +87,7 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
         <div class="reader-head">
           <div class="reader-title">
             <h1>{title}</h1>
-            <div class="notice" data-testid="reader-meta">
-              {received ? when(received) : ''}{document ? ` · ${documentDetail(document.document)}` : ''}
-            </div>
+            <div class="notice" data-testid="reader-meta">{meta}</div>
           </div>
           <button type="button" class="circle small" aria-label="More actions" aria-haspopup="menu" aria-expanded={reader.menu !== 'closed'}
             data-testid="reader-actions" onClick={toggleReaderMenu}><Ellipsis /></button>

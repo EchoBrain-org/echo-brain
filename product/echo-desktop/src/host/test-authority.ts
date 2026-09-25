@@ -496,10 +496,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         association_project_ids: body?.association_project_ids, state: 'received',
       };
       writeFileSync(join(home, `saved-${String(body?.request_id)}.json`), JSON.stringify(receipt));
-      // A long feed files what is saved into it, newest.
+      // A long feed files what is saved into it, newest, readable by whom the save said.
       if (mode.startsWith('long-feed')) {
         for (const projectId of (body?.association_project_ids ?? []) as string[]) {
-          catalog.set(receipt.context_id, { received_at: NOW, title: String(body?.title), text: String(body?.title), audience: { kind: 'project', project_id: projectId } });
+          catalog.set(receipt.context_id, { received_at: NOW, title: String(body?.title), text: String(body?.title),
+            audience: (body?.audience ?? { kind: 'project', project_id: projectId }) as Record<string, unknown> });
           filed.set(projectId, [...(filed.get(projectId) ?? []).filter(id => id !== receipt.context_id), receipt.context_id]);
         }
       }
