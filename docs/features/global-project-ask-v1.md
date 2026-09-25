@@ -21,6 +21,11 @@ removed. File browsing is not a prerequisite for asking. Owner administration
 remains under the menu-bar Organization → People entry. Project leads can browse
 and search a paginated organization directory inside the project people picker;
 rows show names only. Add preserves the role of anyone already in the project.
+Any active member can search the same names with no project through
+`person directory` (`POST /v1/person/directory`), so people can be picked while
+a project is being created; see
+[ADR-0016](../decisions/ADR-0016-organization-people-directory.md). Adding them
+still needs the project's lead grant.
 
 A valid Ask submission displays the submitted question and clears the input.
 Invalid input remains editable. A second submission must not silently replace

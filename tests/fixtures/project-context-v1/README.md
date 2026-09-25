@@ -51,6 +51,12 @@ encoding implementation.
 | `updates search` | `POST /v2/person/updates/search` | V2 search | `200` V2 search result |
 | `updates read` | `GET /v2/person/updates/content/{context_id}` | none | `200` V2 original read |
 
+`projects directory` requires a lead grant on that project. `directory` (fixture
+`person-directory`) lists the same active-member names for any active member of
+the caller's own organization, with no project, per
+[ADR-0016](../../../docs/decisions/ADR-0016-organization-people-directory.md).
+Its body carries only the optional query, limit and cursor.
+
 Only `projects list` is the capability probe used by the UI. Its `not_found`
 response means **Not live yet** only at that capability-probe boundary. A
 `not_found` for an individual project or original is deliberately
