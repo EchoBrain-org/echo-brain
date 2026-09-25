@@ -159,8 +159,8 @@ export interface MainMethods {
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
   /** The invitation folder (or its file) the organization owner sent. */
   'dialog.openInvitation': { params: Record<string, never>; result: FileHandle | null };
-  /** A save's outcome is unknown: quitting asks first. */
-  'app.setUnresolved': { params: { unresolved: boolean }; result: null };
+  /** A save's outcome is unknown: quitting asks first, naming a note or a file. */
+  'app.setUnresolved': { params: { unresolved: boolean; file?: boolean }; result: null };
   /** After the host gave up: start it again. */
   'app.retryHost': { params: Record<string, never>; result: null };
   /** Pops up the Account menu at a point in the window, in CSS pixels. */

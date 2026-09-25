@@ -430,10 +430,11 @@ export function closeSource(): void { set({ evidence: null }); }
 
 const NOTE_OR_FILE = 'Save this note before attaching a file.';
 
-/** Main's quit guard: a save on its way or not yet confirmed either way. */
+/** Main's quit guard: a note or a file on its way, or not yet confirmed either way. */
 function unresolvedChanged(): void {
-  const status = state.compose?.status;
-  void rpc('app.setUnresolved', { unresolved: status === 'sending' || status === 'unknown' || status === 'checking' });
+  const compose = state.compose;
+  const unresolved = compose?.status === 'sending' || compose?.status === 'unknown' || compose?.status === 'checking';
+  void rpc('app.setUnresolved', { unresolved, ...(unresolved && compose.file ? { file: true } : {}) });
 }
 
 function setCompose(compose: ComposeState | null): void {

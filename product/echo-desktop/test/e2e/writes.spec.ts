@@ -159,6 +159,26 @@ test('an upload whose reply was lost is retried from the kept copy and stored on
   expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/documents\.retry ok /);
 });
 
+test('quitting with an unconfirmed file says a file may not have been sent', async () => {
+  run = await launch('document-reply-lost');
+  const { page, app } = run;
+  await chooseFile('Pricing.txt');
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-attach').click();
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  const asked = await app.evaluate(async ({ app: electronApp, dialog }) => {
+    const prompts: string[] = [];
+    dialog.showMessageBoxSync = ((options: Electron.MessageBoxSyncOptions) => { prompts.push(options.message); return 1; }) as never; // Cancel
+    electronApp.quit();
+    await new Promise(resolveWait => setTimeout(resolveWait, 300));
+    return prompts;
+  });
+  expect(asked).toEqual(['A file may not have been sent.']);
+  await expect(page.getByTestId('compose-file')).toBeVisible();
+});
+
 test('check status settles an upload whose reply was lost', async () => {
   run = await launch('document-reply-lost');
   const { page } = run;

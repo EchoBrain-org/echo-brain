@@ -59,8 +59,8 @@ if (!smoke && !app.requestSingleInstanceLock()) {
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
-/** A save whose outcome is unknown: quitting asks first. */
-let unresolved = false;
+/** A save whose outcome is unknown, a note or a file: quitting asks first. */
+let unresolved: 'note' | 'file' | null = null;
 const shortcutProblems: string[] = [];
 /** The last account status the host reported, for the Account menu. Main reads no session itself. */
 let accountStatus: AppStatus | null = null;
@@ -258,9 +258,11 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       const vetted = vetInvitation(chosen.filePaths[0]!);
       return vetted ? { ok: true, value: vetted } : refused('unsupported_invitation');
     }
-    case 'app.setUnresolved':
-      unresolved = (params as MainMethods['app.setUnresolved']['params']).unresolved === true;
+    case 'app.setUnresolved': {
+      const { unresolved: open, file } = params as MainMethods['app.setUnresolved']['params'];
+      unresolved = open === true ? (file === true ? 'file' : 'note') : null;
       return { ok: true, value: null };
+    }
     case 'app.retryHost':
       if (hostGaveUp && !host) { hostGaveUp = false; exits = []; startHost(true); }
       return { ok: true, value: null };
@@ -493,7 +495,7 @@ app.on('before-quit', event => {
   // Asked after the wait: the page stays usable during it and may start a save.
   if (unresolved && !quitting) {
     const choice = dialog.showMessageBoxSync({
-      type: 'warning', message: 'A note may not have been sent.',
+      type: 'warning', message: `A ${unresolved} may not have been sent.`,
       detail: 'Check or retry it before quitting, or quit anyway.', buttons: ['Quit Anyway', 'Cancel'], defaultId: 1, cancelId: 1,
     });
     if (choice !== 0) { event.preventDefault(); drained = false; show(); return; }

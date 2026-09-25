@@ -208,13 +208,13 @@ test('quitting with an unresolved save asks first', async () => {
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('compose-unresolved')).toBeVisible();
   const asked = await app.evaluate(async ({ app: electronApp, dialog }) => {
-    let prompts = 0;
-    dialog.showMessageBoxSync = () => { prompts += 1; return 1; }; // Cancel
+    const prompts: string[] = [];
+    dialog.showMessageBoxSync = ((options: Electron.MessageBoxSyncOptions) => { prompts.push(options.message); return 1; }) as never; // Cancel
     electronApp.quit();
     await new Promise(resolveWait => setTimeout(resolveWait, 300));
     return prompts;
   });
-  expect(asked).toBe(1);
+  expect(asked).toEqual(['A note may not have been sent.']);
   await expect(page.getByTestId('compose-unresolved')).toBeVisible();
 });
 

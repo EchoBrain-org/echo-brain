@@ -19,7 +19,6 @@ and signing out or switching account.
 | File names in decomposed Unicode (NFD) | A file named with decomposed accents, for example one copied from an old HFS+ volume, is refused: "That cannot be sent." The API accepts only NFC names and titles. | Normalize the file name and title to NFC in the person client before upload. That is a shared client change. |
 | Kept upload copies are capped at 10 | An unconfirmed upload keeps a private copy for `documents retry`. Start over removes it (`documents abandon`), but Quit Anyway, a crash, or switching account while it is unconfirmed leaves it behind. After 10, every new upload fails with `snapshot_limit`, shown as "Something went wrong." | Give `snapshot_limit` its own message, and reconcile `documents pending` at launch. |
 | The unconfirmed-save record lives in memory | After Quit Anyway or a crash, nothing reminds the person about a save that may not have arrived. The quit dialog warns first. | Persist the pending request id and show it again at launch. |
-| Quit dialog wording | It says "A note may not have been sent." even when the item is a file. | Word it for either. |
 | Drafts are not kept across quit | Escape keeps a draft only while the app runs. | Persist drafts locally, only if people ask for it. |
 
 Capture from the design canvas also needs server work, and is not built:
