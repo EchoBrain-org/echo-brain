@@ -208,4 +208,40 @@ describe("CI workflow", () => {
       /--app\b|build:echo-overlay|person-onboarding-ui|ECHO Setup|Start ECHO\.command/,
     );
   });
+
+  it("tests, packages from a clean checkout, and smokes the desktop app on macOS", () => {
+    const source = workflow();
+    const desktopJob = source.slice(
+      source.indexOf("  desktop-app:"),
+      source.indexOf("  authority-container:"),
+    );
+    const steps = [
+      "- run: npm ci",
+      "run: node tools/build.mjs --person-client",
+      "working-directory: product/echo-desktop\n        run: npm ci",
+      "run: npx --no install-electron",
+      "run: npm run typecheck",
+      "run: npx vitest run",
+      "run: npm run build",
+      "run: npx playwright test",
+      "run: node scripts/build.mjs --release",
+      "run: node scripts/package.mjs",
+      '"$app/Contents/MacOS/ECHO" --smoke',
+      'test -z "$(git status --porcelain=v1 --untracked-files=all)"',
+    ].map((step) => [step, desktopJob.indexOf(step)] as const);
+
+    expect(desktopJob).toContain("name: macOS arm64 desktop app");
+    expect(desktopJob).toContain("runs-on: macos-15");
+    expect(desktopJob).toContain("node-version: ${{ env.PRODUCT_NODE_VERSION }}");
+    expect(desktopJob).toContain("product/echo-desktop/package-lock.json");
+    for (const [index, [step, position]] of steps.entries()) {
+      expect(position, step).toBeGreaterThan(index === 0 ? 0 : steps[index - 1]![1]);
+    }
+    expect(desktopJob).toContain(
+      "result.build?.source_sha !== process.env.GITHUB_SHA",
+    );
+    expect(desktopJob).not.toMatch(
+      /secrets\.|upload-artifact|--allow-dirty|continue-on-error|--publish always/,
+    );
+  });
 });
