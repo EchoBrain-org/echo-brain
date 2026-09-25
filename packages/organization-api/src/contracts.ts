@@ -1,16 +1,7 @@
-import type {
-  JsonValue,
-  Sha256Digest,
-  SignedIntegrity,
-} from '@echo-brain/federation-protocol';
-import type {
-  OrganizationAuthorityDescriptorV1,
-  OrganizationMembershipTypeV1,
-} from '@echo-brain/organization-protocol';
+import type { Sha256Digest } from '@echo-brain/federation-protocol';
+import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization-protocol';
 
 export type OrganizationApiSha256Digest = Sha256Digest;
-export type OrganizationApiSignedIntegrityV1 = SignedIntegrity;
-export type OrganizationApiPageCursorV1 = string;
 
 /** Excludes one whole meeting source from ingestion for the Person. */
 export interface OrganizationPersonMeetingIngestionExclusionSourceSelectorV2 {
@@ -149,82 +140,6 @@ export interface OrganizationPersonSessionRefreshRequestV2 {
 
 export interface OrganizationAuthorityDescriptorResponseV1 {
   authority_descriptor: OrganizationAuthorityDescriptorV1;
-}
-
-export interface ProvisionOrganizationMembershipRequestV1 {
-  command_id: string;
-  display_name: string;
-  membership_type: OrganizationMembershipTypeV1;
-}
-
-export interface ProvisionedOrganizationMembershipV1 {
-  organization_id: string;
-  principal_id: string;
-  membership_id: string;
-  display_name: string;
-  membership_type: OrganizationMembershipTypeV1;
-  status: 'active' | 'revoked';
-  provisioned_at: string;
-  revoked_at: string | null;
-}
-
-export interface OrganizationAdminOverviewCountsV1 {
-  memberships: number;
-  active_memberships: number;
-  revoked_memberships: number;
-  installations: number;
-  active_installations: number;
-  revoked_installations: number;
-  enrollment_grants: number;
-  pending_enrollment_grants: number;
-  consumed_enrollment_grants: number;
-  expired_enrollment_grants: number;
-  audit_entries: number;
-}
-
-export interface OrganizationAdminOverviewV1 {
-  organization_id: string;
-  organization_display_name: string;
-  authority_id: string;
-  authority_pin_sha256: OrganizationApiSha256Digest;
-  created_at: string;
-  last_observed_at: string;
-  counts: OrganizationAdminOverviewCountsV1;
-}
-
-export interface OrganizationMembershipSummaryV1 {
-  organization_id: string;
-  principal_id: string;
-  membership_id: string;
-  display_name: string;
-  membership_type: OrganizationMembershipTypeV1;
-  status: 'active' | 'revoked';
-  provisioned_at: string;
-  revoked_at: string | null;
-  revocation_reason: string | null;
-}
-
-export interface OrganizationMembershipPageV1 {
-  items: OrganizationMembershipSummaryV1[];
-  next_cursor: OrganizationApiPageCursorV1 | null;
-}
-
-export interface OrganizationAuditEntrySummaryV1 {
-  audit_sequence: number;
-  occurred_at: string;
-  actor_kind: 'admin' | 'enrollment_grant' | 'installation';
-  action: string;
-  subject_id: string;
-  detail: JsonValue;
-}
-
-export interface OrganizationAuditPageV1 {
-  items: OrganizationAuditEntrySummaryV1[];
-  next_cursor: OrganizationApiPageCursorV1 | null;
-}
-
-export interface RevokeOrganizationMembershipRequestV1 {
-  reason: string;
 }
 
 export interface OrganizationApiErrorV1 {

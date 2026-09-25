@@ -19,7 +19,6 @@ import {
   type StructuredGenerationRequest,
   type StructuredGenerationResult,
 } from "../../src/llm/llm-provider.js";
-import { referenceMeetingProcessingKey } from "../../src/reference/reference-meeting-processing-cycle.js";
 
 const processorConfig: AdapterConfig = {
   adapter_id: 'llm',
@@ -1347,9 +1346,6 @@ describe('llm decision processor configuration', () => {
     );
     expect(hostedProcessor.identity.version).not.toBe(
       localProcessor.identity.version,
-    );
-    expect(referenceMeetingProcessingKey(meeting, hostedProcessor)).not.toBe(
-      referenceMeetingProcessingKey(meeting, localProcessor),
     );
   });
   it('reports unavailable health when the configured model is not installed', async () => {

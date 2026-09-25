@@ -492,24 +492,6 @@ describe("native ECHO hotkey overlay", () => {
     );
   });
 
-  it("uses a global Ask by default and a visibly bounded project Ask without a saved-context browser", () => {
-    const source = readFileSync(SOURCE, "utf8");
-    const projects = readFileSync(resolve(REPO, "product/echo-overlay/projects.swift"), "utf8");
-
-    expect(projects).toContain('case .global: return "All accessible context"');
-    expect(source).toContain('submittedQuestionLabel.stringValue = "You asked: \\(question)"');
-    expect(source).toContain('scopeLabel.stringValue = "Scope: \\(scope.displayName)"');
-    expect(source).toContain('guard activeAsk == nil else');
-    expect(source).toContain('askButton.title = "Retry"');
-    expect(projects).not.toContain("Find saved context");
-    expect(projects).not.toContain("Organization people…");
-    expect(projects).toContain('guard acceptAsk(question, scope: .global) else { return }');
-    expect(projects).toContain('let scope = AskScope.project(id: project.project_id, name: project.name)');
-    expect(projects).toContain('guard acceptAsk(question, scope: scope) else { return }');
-    expect(projects).toContain('askField.stringValue = ""');
-  });
-
-
   it("routes ⌘⇧E to capture without reading the pasteboard or the selection", () => {
     const source = readFileSync(SOURCE, "utf8");
     const projects = readFileSync(resolve(REPO, "product/echo-overlay/projects.swift"), "utf8");
@@ -530,53 +512,24 @@ describe("native ECHO hotkey overlay", () => {
     }
   });
 
-  it("keeps the answer visible while loading permission-checked source cards", () => {
+  // Native source-card, project-scope, and composer behavior is exercised by
+  // echo-overlay-sources-fixture.test.ts and echo-projects.test.ts. Keep source
+  // checks here for the installed-client boundary and account-change wiring.
+  it("bounds source reads through the installed client and invalidates them on account changes", () => {
     const source = readFileSync(SOURCE, "utf8");
 
-    expect(source).toContain('PillButton(title: "Copy answer"');
-    expect(readFileSync(resolve(REPO, "product/echo-overlay/ui-support.swift"), "utf8")).toContain("final class PillButton: NSButton");
-    expect(readFileSync(resolve(REPO, "product/echo-overlay/ui-support.swift"), "utf8")).toContain("override func drawFocusRingMask()");
-    expect(source).not.toContain("bezelColor");
-    expect(source).toContain("NSPasteboard.general.setString(answer, forType: .string)");
-    expect(source).toContain('askButton.title = "Cancel"');
-    expect(source).toContain('statusLabel.stringValue = "Thinking…"');
-    expect(source).toContain("private func setThinking(_ thinking: Bool)");
-    expect(source).toContain('announce("ECHO is thinking.")');
-    expect(source).toContain("resetCopyFeedback()");
-    expect(source).toContain("notification: .announcementRequested");
-    expect(source).toContain("answerHeader.isHidden = true");
-    expect(source).toContain('PillButton(title: "Sources (0)"');
     expect(source).toContain('process.arguments = ["person", "records", "--record-sha256", recordSha256]');
     expect(source).toContain("maximumSourceProcessOutputBytes = 512 * 1024 + 1024");
     expect(source).toContain("BoundedReader(maximumBytes: maximumSourceProcessOutputBytes)");
-    expect(source).toContain("private struct DisplaySource");
-    expect(source).toContain("fileprivate static func parseSourceRecord");
-    expect(source).toContain("isSha256(citation.atom_id)");
-    expect(source).toContain("isSha256(citation.record_sha256)");
-    expect(source).toContain("records.count == 1");
-    expect(source).toContain("recordSha256 == source.recordSha256");
-    expect(source).toContain('event["policy_id"] as? String == source.policyID');
-    expect(source).toContain("sourceRequestIdentifier == identifier");
-    expect(source).toContain("currentSources = []");
-    expect(source).toContain("private func clearFetchedSources()");
     expect(source).not.toContain('process.arguments = ["person", "records", "--limit"');
-    expect(source).toContain("Source details are unavailable.");
-    expect(source).toContain("Visible to active organization members");
-    expect(source).toContain("Only the approver");
     expect(source).toContain("func accountWillChange()");
     expect(source).toContain("func applicationDidDeactivate()");
     expect(source).toContain("activeSources?.cancel()");
-    expect(source).toContain("Back to answer");
     expect(source).toContain('home.askSubPage = { [weak self] in self?.controller?.sourcesCoverAnswer == true ? "Answer" : nil }');
     expect(source).toContain("home.closeAskSubPage = { [weak self] in self?.controller?.closeSourcesForBack() }");
     expect(source).toContain("controller?.onSourcesCoverChanged = { [weak home] in home?.askPageChanged() }");
     expect(source).toContain("home.onInvalidateAnswer = { [weak self] in self?.controller?.accountWillChange() }");
-
   });
-
-
-
-
   it("builds as a permission-minimal macOS agent app", () => {
     const source = readFileSync(SOURCE, "utf8");
     const plist = readFileSync(PLIST, "utf8");

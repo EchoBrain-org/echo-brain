@@ -2,8 +2,6 @@ export {
   PersonAuthorityClient,
   PersonAuthorityClientError,
   type PersonAuthorityClientOptions,
-  type PersonAnswerCitationV1,
-  type PersonAnswerV2,
   type PersonAnswerCitationV3,
   type PersonAnswerV3,
   type PersonAskSourceEvidenceV1,

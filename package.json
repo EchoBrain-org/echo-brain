@@ -55,7 +55,6 @@
     "typecheck:workspaces": "tsc -b tsconfig.workspaces.json",
     "lint": "eslint . --max-warnings 0",
     "test": "npm run build && vitest run --config vitest.config.ts",
-    "test:reference-meeting-processing": "npm run build:workspaces && vitest run --config vitest.config.ts packages/organization-processing/test/reference",
     "test:meeting-processing-core": "npm run build:workspaces && vitest run --config vitest.config.ts services/organization-authority/test/processing/core",
     "test:architecture": "npm run build:workspaces && vitest run --config vitest.config.ts tests/architecture",
     "test:staging-journey": "npm run build && vitest run --config vitest.config.ts tests/architecture/authority-staging-journey.test.ts",

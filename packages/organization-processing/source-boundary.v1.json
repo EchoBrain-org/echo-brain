@@ -41,18 +41,6 @@
   "runtime_assets": [],
   "layer_rules": [
     {
-      "name": "organization-processing-reference",
-      "from": "packages/organization-processing/src/reference/**",
-      "allowed_imports": [
-        "packages/organization-processing/src/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": [
-        "crypto"
-      ]
-    },
-    {
       "name": "organization-processing-ports",
       "from": "packages/organization-processing/src/ports/**",
       "allowed_imports": [
@@ -116,11 +104,6 @@
         "name": "Admitted meeting-processing cycle",
         "path": "packages/organization-processing/src/admitted-meeting-processing/meeting-processing-cycle-v1.ts",
         "export": "AdmittedMeetingProcessingCycleV1"
-      },
-      {
-        "name": "Reference meeting-processing cycle",
-        "path": "packages/organization-processing/src/reference/reference-meeting-processing-cycle.ts",
-        "export": "runReferenceMeetingProcessingCycle"
       },
       {
         "name": "Meeting source bundle",

@@ -1,6 +1,6 @@
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, validatePersonDocumentAssociationReceiptV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
-import { validatePersonUploadContentV1, validatePersonUploadSearchV1, validatePersonUploadSearchResultV1, validatePersonUploadContextId, type PersonUploadContentV1, type PersonUploadSearchV1, type PersonUploadSearchResultV1 } from '@echo-brain/organization-api';
-import { PERSON_UPDATES_PATH_V1, validatePersonUpdateSubmitV1, validatePersonUpdateReceiptV1, validatePersonUpdateStatusV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1, type PersonUpdateReceiptV1, type PersonUpdateStatusV1 } from '@echo-brain/organization-api';
+import { validatePersonUploadContextId } from '@echo-brain/organization-api';
+import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
   PERSON_ANSWER_PATH_V2,
@@ -52,7 +52,6 @@ const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const PERSON_RECORDS_PATH_V1 = "/v1/person/records";
 const PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
-const PERSON_ANSWER_PATH_V1 = "/v1/person/ask";
 export interface EmployeeInvitationV1 {
   readonly login_grant: string;
   readonly expires_at: string;
@@ -98,22 +97,6 @@ export interface PersonRecordSearchItemV1 {
   readonly record_sha256: `sha256:${string}`;
   readonly kind: "decision" | "action" | "rationale";
   readonly text: string;
-  readonly policy_id:
-    | "organization-member-readable-person-v2"
-    | "restricted-reviewer-person-v2";
-}
-
-export interface PersonAnswerV2 {
-  readonly schema_version: 2;
-  readonly kind: "echo-clean-person-answer-v2";
-  readonly answer: string;
-  readonly citations: readonly PersonAnswerCitationV1[];
-  readonly outcome?: "authorship_unsupported";
-}
-
-export interface PersonAnswerCitationV1 {
-  readonly atom_id: `sha256:${string}`;
-  readonly record_sha256: `sha256:${string}`;
   readonly policy_id:
     | "organization-member-readable-person-v2"
     | "restricted-reviewer-person-v2";
@@ -405,14 +388,6 @@ function validatePersonRecordSearchRequest(value: unknown): {
   });
 }
 
-function validatePersonAnswerRequest(value: unknown): {
-  readonly question: string;
-} {
-  const request = asPlainRecord(value, "ask request is invalid");
-  exactKeys(request, ["question"], "ask request is invalid");
-  return Object.freeze({ question: validatePersonQueryText(request.question) });
-}
-
 function validatePersonRecordSearch(
   value: unknown,
 ): PersonRecordSearchV2 {
@@ -465,67 +440,6 @@ function validatePersonRecordSearch(
     schema_version: 2,
     kind: "echo-clean-person-record-search-v2",
     items: Object.freeze(items),
-  });
-}
-
-function validatePersonAnswer(value: unknown): PersonAnswerV2 {
-  const response = asPlainRecord(value, "ask response is invalid");
-  const answerKeys = [
-    "schema_version",
-    "kind",
-    "answer",
-    "citations",
-  ];
-  exactKeys(
-    response,
-    response.outcome === undefined ? answerKeys : [...answerKeys, "outcome"],
-    "ask response is invalid",
-  );
-  if (
-    response.schema_version !== 2 ||
-    response.kind !== "echo-clean-person-answer-v2" ||
-    typeof response.answer !== "string" ||
-    response.answer.length === 0 ||
-    response.answer.trim() !== response.answer ||
-    [...response.answer].length > 12_000 ||
-    !Array.isArray(response.citations) ||
-    response.citations.length > 16 ||
-    (response.outcome !== undefined && response.outcome !== "authorship_unsupported")
-  ) {
-    throw new Error("ask response is invalid");
-  }
-  const seenAtomIds = new Set<string>();
-  const citations = response.citations.map((value) => {
-    const citation = asPlainRecord(value, "ask citation is invalid");
-    exactKeys(
-      citation,
-      ["atom_id", "record_sha256", "policy_id"],
-      "ask citation is invalid",
-    );
-    if (
-      typeof citation.atom_id !== "string" ||
-      !/^sha256:[a-f0-9]{64}$/.test(citation.atom_id) ||
-      seenAtomIds.has(citation.atom_id) ||
-      typeof citation.record_sha256 !== "string" ||
-      !/^sha256:[a-f0-9]{64}$/.test(citation.record_sha256) ||
-      (citation.policy_id !== "organization-member-readable-person-v2" &&
-        citation.policy_id !== "restricted-reviewer-person-v2")
-    ) {
-      throw new Error("ask citation is invalid");
-    }
-    seenAtomIds.add(citation.atom_id);
-    return Object.freeze({
-      atom_id: citation.atom_id as `sha256:${string}`,
-      record_sha256: citation.record_sha256 as `sha256:${string}`,
-      policy_id: citation.policy_id,
-    }) as PersonAnswerCitationV1;
-  });
-  return Object.freeze({
-    schema_version: 2,
-    kind: "echo-clean-person-answer-v2",
-    answer: response.answer,
-    citations: Object.freeze(citations),
-    ...(response.outcome === undefined ? {} : { outcome: response.outcome }),
   });
 }
 
@@ -790,39 +704,6 @@ export class PersonAuthorityClient {
         "Person Authority returned a malformed response",
       );
     }
-  }
-
-  async submitUpdate(accessToken: string, value: PersonUpdateSubmitV1): Promise<PersonUpdateReceiptV1> {
-    const request = validatePersonUpdateSubmitV1(value);
-    try {
-      const receipt = await this.json({ path: PERSON_UPDATES_PATH_V1, body: request,
-        validate_request: validatePersonUpdateSubmitV1, validate_response: validatePersonUpdateReceiptV1,
-        access_token: accessToken, expected_status: 202, maximum_response_bytes: 4096 });
-      if (receipt.request_id !== request.request_id || receipt.visibility !== request.visibility) throw new PersonAuthorityClientError('invalid_response', 202, 'Person Authority returned a different receipt');
-      return receipt;
-    } catch (error) {
-      if (error instanceof PersonAuthorityClientError && ['invalid_request', 'unauthorized', 'conflict', 'rate_limited', 'not_found'].includes(error.code) && error.status !== null && error.status >= 400 && error.status < 500) throw error;
-      throw new PersonAuthorityClientError(error instanceof PersonAuthorityClientError ? error.code : 'outcome_unknown', error instanceof PersonAuthorityClientError ? error.status : null,
-        'Submission outcome is unknown. Check updates status with the same request ID, or retry the exact file and title with the same request ID.');
-    }
-  }
-
-  async updateStatus(accessToken: string, requestId: string): Promise<PersonUpdateStatusV1> {
-    validatePersonUpdateRequestId(requestId);
-    const status = await this.getJson({ path: `${PERSON_UPDATES_PATH_V1}/${requestId}`, access_token: accessToken, validate_response: validatePersonUpdateStatusV1, maximum_response_bytes: 4096 });
-    if (status.request_id !== requestId) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a different receipt');
-    return status;
-  }
-
-  async readUpload(accessToken: string, contextId: string): Promise<PersonUploadContentV1> {
-    validatePersonUploadContextId(contextId);
-    const response = await this.getJson({ path: `${PERSON_UPDATES_PATH_V1}/content/${contextId}`, access_token: accessToken, validate_response: validatePersonUploadContentV1, maximum_response_bytes: 24 * 1024 });
-    if (response.context_id !== contextId) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a different upload');
-    return response;
-  }
-
-  async searchUploads(accessToken: string, input: PersonUploadSearchV1): Promise<PersonUploadSearchResultV1> {
-    return this.json({ path: `${PERSON_UPDATES_PATH_V1}/search`, body: validatePersonUploadSearchV1(input), validate_request: validatePersonUploadSearchV1, validate_response: validatePersonUploadSearchResultV1, access_token: accessToken, expected_status: 200, maximum_response_bytes: 24 * 1024 });
   }
 
   /** Project/V2 replies are canonical, closed, bounded, and bound to the requested coordinates. */
@@ -1367,19 +1248,6 @@ export class PersonAuthorityClient {
       validate_response: validatePersonRecordSearch,
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-    });
-  }
-
-  /** Legacy approved-record Ask endpoint retained for older installed client compatibility. */
-  askV1(accessToken: string, question: string): Promise<PersonAnswerV2> {
-    return this.json({
-      path: PERSON_ANSWER_PATH_V1,
-      body: { question },
-      validate_request: validatePersonAnswerRequest,
-      validate_response: validatePersonAnswer,
-      access_token: accessToken,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-      timeout_ms: ASK_TIMEOUT_MS,
     });
   }
 

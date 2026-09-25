@@ -1,8 +1,8 @@
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentIdV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchV2, type PersonDocumentSearchV1, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
 import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUpload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
-import { validatePersonUploadSearchV1, validatePersonUploadContextId, type PersonUploadSearchV1 } from '@echo-brain/organization-api';
-import { validatePersonUpdateSubmitV1, validatePersonUpdateRequestId, type PersonUpdateSubmitV1 } from '@echo-brain/organization-api';
+import { validatePersonUploadContextId } from '@echo-brain/organization-api';
+import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { validatePersonQueryText } from '@echo-brain/organization-api';
 import { validatePersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
@@ -381,30 +381,6 @@ export class PersonClient {
     } finally {
       this.store.finishLogout();
     }
-  }
-
-  async submitUpdate(value: PersonUpdateSubmitV1) {
-    const request = validatePersonUpdateSubmitV1(value);
-    const stored = await this.accessSession();
-    return this.authority(stored.authority_origin).submitUpdate(stored.session.access_token, request);
-  }
-
-  async updateStatus(requestId: string) {
-    validatePersonUpdateRequestId(requestId);
-    const stored = await this.accessSession();
-    return this.authority(stored.authority_origin).updateStatus(stored.session.access_token, requestId);
-  }
-
-  async readUpload(contextId: string) {
-    validatePersonUploadContextId(contextId);
-    const stored = await this.accessSession();
-    return this.authority(stored.authority_origin).readUpload(stored.session.access_token, contextId);
-  }
-
-  async searchUploads(input: PersonUploadSearchV1) {
-    const request = validatePersonUploadSearchV1(input);
-    const stored = await this.accessSession();
-    return this.authority(stored.authority_origin).searchUploads(stored.session.access_token, request);
   }
 
   private async withContextSession<T>(
