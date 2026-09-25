@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  answerView, askText, failureView, feedView, noteTitle, projectPageView, receiptView, statusView, toolsView, ViewError, writeStatusView,
+  abandonView, answerView, askText, failureView, feedView, noteTitle, projectPageView, receiptView, statusView, toolsView, ViewError,
+  writeStatusView,
 } from '../../src/host/views.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -68,6 +69,14 @@ describe('view models copy only what the renderer may see', () => {
     expect(receipt('Something <b>odd</b>')).toEqual({ request_id: 'mine', audience: { kind: 'only-me' } });
     expect(writeStatusView({ ok: true, result: { state: 'saved', extraction_state: 'no_text' } }, 'document'))
       .toEqual({ state: 'saved', extraction: 'no_text' });
+  });
+
+  it('accepts a kept copy removed only for the request asked about', () => {
+    const reply = (requestId: string) => ({ ok: true, result: {
+      schema_version: 1, kind: 'echo-person-document-abandoned-v1', request_id: requestId, local_snapshot_removed: true, authority_outcome: 'unchanged',
+    } });
+    expect(abandonView(reply('mine'), 'mine')).toBeNull();
+    expect(() => abandonView(reply('other'), 'mine')).toThrow(ViewError);
   });
 
   it('reads a stored note or saved document as saved, anything else as unknown', () => {

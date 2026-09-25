@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
@@ -15,6 +15,21 @@ const posts = () => run.calls().filter(call => call.method === 'POST' && call.pa
 const uploads = () => run.calls().filter(call => call.method === 'PUT' && call.path.startsWith('/v2/person/documents/'));
 /** Documents the fixture Authority stored. */
 const documents = () => readdirSync(run.home).filter(name => name.startsWith('document-'));
+
+/** The private copies the person client kept to resend a file, by request id. */
+function keptCopies(): string[] {
+  const found: string[] = [];
+  const walk = (folder: string) => {
+    for (const entry of readdirSync(folder, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const path = join(folder, entry.name);
+      if (path.includes(`${sep}document-snapshots${sep}`) && /^[0-9a-f-]{36}$/.test(entry.name)) found.push(entry.name);
+      else walk(path);
+    }
+  };
+  walk(run.home);
+  return found;
+}
 
 /** The paperclip's dialog picks a new temporary file with this name. */
 async function chooseFile(name: string): Promise<void> {
@@ -157,6 +172,26 @@ test('check status settles an upload whose reply was lost', async () => {
   await expect(page.getByTestId('toast')).toHaveText('Saved for you · Extracting text');
   expect(uploads()).toHaveLength(1);
   expect(run.calls().filter(call => call.path.startsWith('/v2/person/documents/requests/'))).toHaveLength(1);
+});
+
+test('starting over on an unconfirmed upload removes the copy kept to resend it', async () => {
+  run = await launch('document-reply-lost');
+  const { page } = run;
+  await chooseFile('Pricing.txt');
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-attach').click();
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  expect(keptCopies()).toEqual([uploads()[0]!.body?.request_id]);
+  await page.getByTestId('compose-new').click();
+  await page.getByTestId('compose-start-over').click();
+  await expect(page.getByTestId('compose-body')).toHaveValue('');
+  await expect.poll(keptCopies).toEqual([]);
+  // Only this computer's copy goes: nothing is resent, and what arrived stays saved.
+  expect(uploads()).toHaveLength(1);
+  expect(documents()).toHaveLength(1);
+  expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/documents\.abandon ok /);
 });
 
 test('Organization warns before it is saved, and the toast says it was shared', async () => {

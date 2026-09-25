@@ -42,6 +42,8 @@ export interface ComposeState {
   status: 'editing' | 'sending' | 'error' | 'unknown' | 'checking';
   /** The exact request a retry resends. */
   requestId: string;
+  /** A file whose outcome was unknown: the client keeps a private copy to resend it. */
+  kept: boolean;
   failure?: Failure;
   /** Closed but kept: ⌘⇧E or + brings it back. */
   hidden: boolean;
@@ -444,8 +446,18 @@ function setCompose(compose: ComposeState | null): void {
 function fresh(project: ProjectSummary | null): ComposeState {
   return {
     seq: ++seq, text: '', file: null, project, readers: project ? 'project' : 'only-me', picking: false, status: 'editing',
-    requestId: crypto.randomUUID(), hidden: false, confirmNew: false,
+    requestId: crypto.randomUUID(), kept: false, hidden: false, confirmNew: false,
   };
+}
+
+/**
+ * A request that will never be resent: the copy the client kept of its file
+ * goes, so kept copies do not pile up (the client holds ten at most). Only
+ * this computer's copy: a file that did arrive stays saved.
+ */
+function release(compose: ComposeState): void {
+  const account = expect();
+  if (compose.kept && account) void rpc('documents.abandon', { expect: account, request_id: compose.requestId });
 }
 
 /** The project on screen, if any. */
@@ -486,8 +498,9 @@ function editCompose(patch: Partial<ComposeState>): void {
   if (!compose || locked(compose)) return;
   // Any change to what would be saved, or for whom, makes it a new request.
   const changesContent = 'text' in patch || 'file' in patch || 'project' in patch || 'readers' in patch;
+  if (changesContent) release(compose);
   setCompose({ ...compose, notice: undefined, ...patch,
-    ...(changesContent ? { requestId: crypto.randomUUID(), status: 'editing' as const, failure: undefined } : {}) });
+    ...(changesContent ? { requestId: crypto.randomUUID(), kept: false, status: 'editing' as const, failure: undefined } : {}) });
 }
 
 export function setComposeText(text: string): void { editCompose({ text }); }
@@ -573,7 +586,8 @@ export async function sendCompose(): Promise<void> {
   if (!result.ok) {
     // Only the Authority's answer settles an unknown save: a failed retry leaves it unknown.
     const unknown = retrying || result.failure.mutation_outcome === 'unknown';
-    setCompose({ ...current, status: unknown ? 'unknown' : 'error', failure: result.failure, hidden: false });
+    setCompose({ ...current, status: unknown ? 'unknown' : 'error', failure: result.failure, hidden: false,
+      kept: current.kept || (unknown && current.file !== null) });
     accountLost(result.failure);
     return;
   }
@@ -604,8 +618,9 @@ export async function checkCompose(): Promise<void> {
  */
 export function newCompose(): void {
   const compose = state.compose;
-  if (!compose) return;
+  if (!compose || compose.status === 'sending' || compose.status === 'checking') return;
   if (compose.status === 'unknown' && !compose.confirmNew) { setCompose({ ...compose, confirmNew: true }); return; }
+  release(compose);
   setCompose({ ...fresh(compose.project), readers: compose.readers });
 }
 

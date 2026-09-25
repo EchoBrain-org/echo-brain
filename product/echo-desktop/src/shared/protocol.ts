@@ -147,6 +147,8 @@ export interface HostMethods {
   'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
   /** Resends a document's retained original under the same request. */
   'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };
+  /** Start over: removes the private copy the client kept to resend a document. The Authority is not asked. */
+  'documents.abandon': { params: { expect: Expect; request_id: string }; result: null };
   /** Signs the account on screen out of this computer; the reply is the new status. */
   'account.signOut': { params: { expect: Expect }; result: AppStatus };
   /** Connected tools…: a read, for the account on screen. */
@@ -171,8 +173,8 @@ export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
-  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry', 'account.signOut',
-  'account.tools',
+  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry', 'documents.abandon',
+  'account.signOut', 'account.tools',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'dialog.openDocument', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',

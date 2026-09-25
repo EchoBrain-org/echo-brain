@@ -11,7 +11,7 @@ import {
 } from '../shared/protocol.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  answerView, askText, contextView, evidenceView, failureView, feedView, noteTitle, projectPageView, receiptView, statusView,
+  abandonView, answerView, askText, contextView, evidenceView, failureView, feedView, noteTitle, projectPageView, receiptView, statusView,
   toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
@@ -77,9 +77,13 @@ modules.catch(error => { console.error('person host failed to load the client:',
 const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'account.signOut': 45_000,
-  'account.tools': 45_000,
+  'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
+  'account.signOut': 45_000, 'account.tools': 45_000,
 };
+/** Calls that never reach the Authority: they wait out a refresh, never start one. */
+const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
+/** A request id the client accepts: a lowercase UUID v4. */
+const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** Writes this host has handed to the client and not yet heard back on. */
 const inFlight = new Set<string>();
 
@@ -316,6 +320,12 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       return forAccount(method, expect, ['documents', 'retry', option('request-id', request_id), ...expected(expect)],
         stdout => receiptView(unwrap(lastJson(stdout)), request_id, audience), request_id);
     }
+    case 'documents.abandon': {
+      const { expect, request_id } = params as Params<'documents.abandon'>;
+      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id)) return code('invalid_request');
+      return forAccount(method, expect, ['documents', 'abandon', option('request-id', request_id), ...expected(expect)],
+        stdout => abandonView(lastJson(stdout), request_id));
+    }
     case 'ask.run': {
       const { expect, question, scope } = params as Params<'ask.run'>;
       const text = askText(question);
@@ -386,7 +396,7 @@ port.on('message', ({ data }) => {
       return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);
     };
   // Status goes through the gate too: mid-refresh the client reports signed out.
-  const work = gated(() => expired ? timeout : handle(request.method, request.params), request.method !== 'app.status', refreshFailed)
+  const work = gated(() => expired ? timeout : handle(request.method, request.params), !LOCAL.has(request.method), refreshFailed)
     // A write that threw after reaching the client may have landed.
     .catch((error: unknown) => {
       if (__ECHO_TEST_HOOK__) console.error(`[client] ${request.method} threw:`, error);

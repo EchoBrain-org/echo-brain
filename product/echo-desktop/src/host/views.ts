@@ -148,6 +148,13 @@ export function receiptView(raw: unknown, requestId: string, audience: Audience)
   return { request_id: requestId, audience, ...extraction(value) };
 }
 
+/** The client removed (or never had) its kept copy of this request's document. */
+export function abandonView(raw: unknown, requestId: string): null {
+  const value = object(unwrap(raw));
+  if (value.kind !== 'echo-person-document-abandoned-v1' || value.request_id !== requestId) throw new ViewError();
+  return null;
+}
+
 /** A note's V3 status, or a document's V2 status: stored means saved. */
 export function writeStatusView(raw: unknown, kind: 'note' | 'document'): WriteStatus {
   const value = object(kind === 'document' ? unwrap(raw) : raw);
