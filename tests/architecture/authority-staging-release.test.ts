@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
 import type { StagingReleasePlanOptions, StagingReleaseRequest } from '../../tools/authority-staging-release.mjs';
+import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
 
 const temporary: string[] = [];
 const REPO = resolve(import.meta.dirname, '../..');
@@ -16,11 +17,6 @@ const VOLUME = 'vol-0123456789abcdef0';
 const STACK = 'arn:aws:cloudformation:us-west-2:904560150024:stack/echo-authority-staging-v1/12345678-1234-1234-1234-123456789012';
 const COMMAND = '11111111-1111-4111-8111-111111111111';
 const digest = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
-function canonical(value: any): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
-  return JSON.stringify(value);
-}
 function write(path: string, value: any) { writeFileSync(path, canonical(value) + '\n', { mode: 0o600 }); }
 
 function fixture() {

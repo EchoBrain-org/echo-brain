@@ -1,32 +1,23 @@
-import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  canonicalJsonForTest as canonical,
+  sha256FileForTest as sha256,
+} from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const roots: string[] = [];
 const nativeLinux = process.platform === "linux" && process.arch === "x64" && process.version === "v22.22.1";
-
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`;
-}
-
-function sha256(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
 
 function run(command: string, args: string[], cwd?: string) {
   return spawnSync(command, args, { cwd, encoding: "utf8" });

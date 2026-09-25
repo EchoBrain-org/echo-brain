@@ -141,6 +141,18 @@ export type LifecycleDependencies = Readonly<{
   fetchImpl?: FetchLike;
   putSecretValue?: PutSecretValue;
   cloudFormation?: CloudFormationAdapter;
+  ec2?: Readonly<{
+    describeImage(
+      input: Readonly<{ region: string; imageId: string }>,
+    ): Promise<
+      Readonly<{
+        imageId: string;
+        rootDeviceName: string;
+        rootDeviceType: string;
+        state: string;
+      }>
+    >;
+  }>;
   s3?: Readonly<{
     uploadObject(
       input: Readonly<{

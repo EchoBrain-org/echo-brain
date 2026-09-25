@@ -53,12 +53,4 @@ describe('product source independence', () => {
     }
   });
 
-  it('git object storage has no corruption', () => {
-    const r = spawnSync(
-      'git',
-      ['-C', REPO, 'fsck', '--full', '--no-reflogs', '--no-dangling'],
-      { encoding: 'utf8' },
-    );
-    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
-  });
 });

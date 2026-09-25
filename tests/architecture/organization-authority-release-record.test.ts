@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { applyAuthorityBaselineV5, authorityBaselineSha256V5, applyAuthorityBaselineV8, authorityBaselineSha256V8 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { afterEach, describe, expect, it } from "vitest";
+import { canonicalJsonForTest as canonical } from "../support/test-canonical-json.js";
 
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
@@ -77,16 +78,6 @@ function updateWrapperForTest(): string {
     join(releaseDirectory, "clean-v1-runtime-profile.py"),
   );
   return isolatedUpdate;
-}
-
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
-    .join(",")}}`;
 }
 
 // Unit container fixtures must explicitly return setup readiness. The connected

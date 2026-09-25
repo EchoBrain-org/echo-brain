@@ -1,7 +1,7 @@
-import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { PROJECT_CONTEXT_RESPONSE_MAX_BYTES, type ProjectIdV1 } from './project-context-v1.js';
+import { object, text, timestamp, requestBound, responseBound } from './person-update-validation.js';
+import { type ProjectIdV1 } from './project-context-v1.js';
 import { validateAssociationProjectIdsV1, validatePersonUploadAudienceV3, type PersonUploadAudienceV3 as UploadAudienceV3 } from './person-upload-audience-v3.js';
-import { MAX_ORGANIZATION_API_BODY_BYTES, asRecord, assertExactKeys, assertOnlyEnumerableDataProperties, fail } from './validation.js';
+import { assertExactKeys, fail } from './validation.js';
 import { PERSON_UPDATE_TEXT_MAX_BYTES, PERSON_UPDATE_TITLE_MAX_BYTES, validatePersonUpdateRequestId, validatePersonUploadContextId, validatePersonUploadSearchV1, type PersonUploadMetadataStateV1, type PersonUploadSearchV1 } from './person-updates.js';
 
 export const PERSON_UPDATES_PATH_V3 = '/v3/person/updates';
@@ -17,13 +17,6 @@ export interface PersonUploadContentV3 { readonly schema_version: 3; readonly ki
 export type PersonUploadSearchV3 = PersonUploadSearchV1;
 export interface PersonUploadSearchResultV3 { readonly schema_version: 3; readonly kind: 'echo-person-upload-search-v3'; readonly results: readonly { readonly context_id: string; readonly received_at: string; readonly audience: UploadAudienceV3; readonly title: string; readonly excerpt: string }[]; }
 
-function object(value: unknown, label: string): Record<string, unknown> { assertOnlyEnumerableDataProperties(value, label); return asRecord(value, label); }
-function text(value: unknown, label: string, maximum: number, multiline: boolean): asserts value is string {
-  if (typeof value !== 'string' || value.trim().length === 0 || Array.from(value).reduce((bytes, point) => { const n = point.codePointAt(0)!; return bytes + (n < 0x80 ? 1 : n < 0x800 ? 2 : n < 0x10000 ? 3 : 4); }, 0) > maximum || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value) || (!multiline && /[\t\r\n]/u.test(value))) fail(`${label} is invalid`);
-}
-function timestamp(value: unknown): asserts value is string { if (typeof value !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) fail('Person update timestamp is invalid'); }
-function requestBound(value: unknown, label: string): void { if (canonicalJsonBytes(value).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) fail(`${label} exceeds JSON byte bound`); }
-function responseBound(value: unknown, label: string): void { if (canonicalJsonBytes(value).byteLength > PROJECT_CONTEXT_RESPONSE_MAX_BYTES) fail(`${label} exceeds JSON byte bound`); }
 function coordinates(record: Record<string, unknown>): { readonly association_project_ids: readonly ProjectIdV1[]; readonly audience: UploadAudienceV3 } { return { association_project_ids: validateAssociationProjectIdsV1(record.association_project_ids), audience: validatePersonUploadAudienceV3(record.audience) }; }
 export function validatePersonUpdateSubmitV3(value: unknown): PersonUpdateSubmitV3 {
   const record = object(value, 'Person update'); assertExactKeys(record, ['schema_version','kind','request_id','title','text','association_project_ids','audience'], 'Person update');

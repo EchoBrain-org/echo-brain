@@ -1,0 +1,204 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Dedicated ECHO CLI update staging feed. The private, versioned S3 origin is reachable only through this distribution's SigV4 origin access control. This stack has no Authority, onboarding-transfer, DNS, IAM user, key, or secret resources.",
+  "Resources": {
+    "FeedBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      }
+    },
+    "FeedOriginAccessControl": {
+      "Type": "AWS::CloudFront::OriginAccessControl",
+      "Properties": {
+        "OriginAccessControlConfig": {
+          "Description": "SigV4 access from the ECHO CLI update staging distribution to its private S3 origin",
+          "Name": {
+            "Fn::Sub": "${AWS::StackName}-s3-origin"
+          },
+          "OriginAccessControlOriginType": "s3",
+          "SigningBehavior": "always",
+          "SigningProtocol": "sigv4"
+        }
+      }
+    },
+    "FeedCachePolicy": {
+      "Type": "AWS::CloudFront::CachePolicy",
+      "Properties": {
+        "CachePolicyConfig": {
+          "Comment": "One-year immutable cache for checksum-addressed ECHO CLI update artifacts",
+          "DefaultTTL": 31536000,
+          "MaxTTL": 31536000,
+          "MinTTL": 31536000,
+          "Name": {
+            "Fn::Sub": "${AWS::StackName}-immutable-artifacts"
+          },
+          "ParametersInCacheKeyAndForwardedToOrigin": {
+            "CookiesConfig": {
+              "CookieBehavior": "none"
+            },
+            "EnableAcceptEncodingBrotli": false,
+            "EnableAcceptEncodingGzip": false,
+            "HeadersConfig": {
+              "HeaderBehavior": "none"
+            },
+            "QueryStringsConfig": {
+              "QueryStringBehavior": "none"
+            }
+          }
+        }
+      }
+    },
+    "FeedDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "Comment": "ECHO CLI update staging feed",
+          "DefaultCacheBehavior": {
+            "AllowedMethods": ["GET", "HEAD"],
+            "CachedMethods": ["GET", "HEAD"],
+            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+            "Compress": false,
+            "TargetOriginId": "FeedBucketOrigin",
+            "ViewerProtocolPolicy": "https-only"
+          },
+          "CacheBehaviors": [
+            {
+              "AllowedMethods": ["GET", "HEAD"],
+              "CachedMethods": ["GET", "HEAD"],
+              "CachePolicyId": {
+                "Ref": "FeedCachePolicy"
+              },
+              "Compress": false,
+              "PathPattern": "artifacts/*",
+              "TargetOriginId": "FeedBucketOrigin",
+              "ViewerProtocolPolicy": "https-only"
+            }
+          ],
+          "Enabled": true,
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": true,
+          "Origins": [
+            {
+              "DomainName": {
+                "Fn::GetAtt": ["FeedBucket", "RegionalDomainName"]
+              },
+              "Id": "FeedBucketOrigin",
+              "OriginAccessControlId": {
+                "Fn::GetAtt": ["FeedOriginAccessControl", "Id"]
+              },
+              "S3OriginConfig": {
+                "OriginAccessIdentity": ""
+              }
+            }
+          ],
+          "PriceClass": "PriceClass_100",
+          "ViewerCertificate": {
+            "CloudFrontDefaultCertificate": true
+          }
+        }
+      }
+    },
+    "FeedBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "FeedBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowOnlyThisDistributionToReadPublishedObjects",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudfront.amazonaws.com"
+              },
+              "Action": "s3:GetObject",
+              "Resource": [
+                {
+                  "Fn::Sub": "${FeedBucket.Arn}/feed.json"
+                },
+                {
+                  "Fn::Sub": "${FeedBucket.Arn}/artifacts/*"
+                }
+              ],
+              "Condition": {
+                "StringEquals": {
+                  "AWS:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${FeedDistribution}"
+                  }
+                }
+              }
+            },
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": ["FeedBucket", "Arn"]
+                },
+                {
+                  "Fn::Sub": "${FeedBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "BucketName": {
+      "Description": "Private S3 bucket for staging feed publication",
+      "Value": {
+        "Ref": "FeedBucket"
+      }
+    },
+    "DistributionId": {
+      "Description": "CloudFront distribution serving the public staging feed",
+      "Value": {
+        "Ref": "FeedDistribution"
+      }
+    },
+    "FeedUrl": {
+      "Description": "HTTPS feed endpoint for CLI update configuration",
+      "Value": {
+        "Fn::Sub": "https://${FeedDistribution.DomainName}/feed.json"
+      }
+    }
+  }
+}

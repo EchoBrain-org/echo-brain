@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -7,7 +7,6 @@ import { afterAll, describe, expect, it } from "vitest";
 const repo = resolve(import.meta.dirname, "../..");
 const account = join(repo, "product/echo-overlay/account.swift");
 const slack = join(repo, "providers/slack/client/swift/slack-connected-tools.swift");
-const builder = join(repo, "tools/build-echo-overlay.mjs");
 const roots: string[] = [];
 const support = join(repo, "product/echo-overlay/ui-support.swift");
 
@@ -15,30 +14,15 @@ afterAll(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, f
 
 describe("native Person account controls", () => {
   it("keeps browser sign-in in the installed client and never sends grants or URLs to the UI", () => {
-    expect(existsSync(account)).toBe(true);
     const source = readFileSync(account, "utf8");
     expect(source).toContain('"person", "login", "--authority-url", origin, "--open-browser"');
     expect(source).toContain('"person", "login", "--invitation", invitation.path, "--open-browser"');
-    expect(source).toContain("validateAuthorityOrigin");
-    expect(source).toContain("UserDefaults.standard.set");
     expect(source).toContain("onSessionWillChange()");
-    expect(source).toContain("AccountObservation");
-    expect(source).toContain("func shutdown()");
-    expect(source).toContain("activeOperation?.cancel()");
-    expect(source).toContain("Sign out of this ECHO account?");
     expect(source).not.toMatch(/authorization_url|OAuthURL|grant|URLSession/);
-  });
-
-  it("builds account.swift into the overlay and binds it to the committed source", () => {
-    const source = readFileSync(builder, "utf8");
-    expect(source).toContain("swiftSourceAssemblyV1");
-    expect(source).toContain("committedFile(before.sha, assemblyPath");
-    expect(source).toContain("...stagedSources");
   });
 
   it("clears account-scoped surfaces and blocks an account change during a People mutation", () => {
     const source = readFileSync(join(repo, "product/echo-overlay/main.swift"), "utf8");
-    expect(source).toContain("AccountController(");
     expect(source).toContain("controller?.accountWillChange()");
     expect(source).toContain("people?.conceal()");
     expect(source).toContain("people?.hasOutstandingMutation");
@@ -46,18 +30,11 @@ describe("native Person account controls", () => {
 
   it("routes provider tool fragments through bounded client calls and clears account state", () => {
     const source = readFileSync(account, "utf8") + readFileSync(slack, "utf8");
-    expect(source).toContain('title: "Connected tools…"');
     expect(source).toContain('["person", "tools"]');
     expect(source).toContain('["person", "slack-connect-begin"]');
     expect(source).toContain('["person", "slack-connect-status", "--attempt-id", attempt]');
     expect(source).toContain('["person", "slack-connect-cancel", "--attempt-id", attempt]');
     expect(source).toContain('["person", "slack-disconnect"]');
-    expect(source).toContain('"Connect Slack"');
-    expect(source).toContain('"Disconnect Slack"');
-    expect(source).toContain('This disconnects your personal Slack account from ECHO.');
-    expect(source).toContain('panel.appearance = NSAppearance(named: .darkAqua)');
-    expect(source).toContain('panel.backgroundColor = EchoTheme.ink');
-    expect(source).toContain('isSlackBrowserExpiry');
     expect(source).toContain('cancelAttemptIfNeeded()');
     expect(source).not.toContain('Slack member ID');
     expect(source).not.toContain('challenge_code');

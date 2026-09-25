@@ -203,6 +203,13 @@ case " $* " in
       printf '{}\\n'
     fi
     ;;
+  *" ec2 describe-images "*)
+    if [ -n "\${FAKE_AWS_IMAGE_RESPONSE-}" ]; then
+      printf '%s\\n' "$FAKE_AWS_IMAGE_RESPONSE"
+    else
+      printf '{}\\n'
+    fi
+    ;;
   *) printf '{}\\n' ;;
 esac
 `,
@@ -288,7 +295,7 @@ const INPUT = Object.freeze({
     parameters: {
       OrgSlug: "green",
       AvailabilityZone: "us-west-2a",
-      StagingAmiId: "ami-0123456789abcdef0",
+      StagingAmiId: "ami-0d81b5e3fc6de11fe",
       AuthorityEcrRepositoryArn:
         "arn:aws:ecr:us-west-2:123456789012:repository/echo-brain/authority",
     },
@@ -386,6 +393,12 @@ function dependencies(
       "serving" | "unreachable" | "http_status" | "invalid" | "wrong_valid";
     readonly descriptorUnavailableAttempts?: number;
     readonly postExecuteHostReady?: boolean;
+    readonly ami?: {
+      readonly imageId?: string;
+      readonly rootDeviceName?: string;
+      readonly rootDeviceType?: string;
+      readonly state?: string;
+    };
     readonly changeAction?: {
       readonly action: string;
       readonly logicalId: string;
@@ -538,6 +551,7 @@ function dependencies(
     },
   };
   const edgeInputs: Array<Record<string, unknown>> = [];
+  const imageRequests: Array<{ readonly imageId: string; readonly region: string }> = [];
   const recoveredInstanceIds: string[] = [];
   const edge = {
     installToken: async (input: Record<string, unknown>) => {
@@ -548,6 +562,20 @@ function dependencies(
     status: async () => {
       events.push("edge-status");
       return { state: "ready" as const };
+    },
+  };
+  const ec2 = {
+    describeImage: async (request: {
+      readonly imageId: string;
+      readonly region: string;
+    }) => {
+      imageRequests.push(request);
+      return {
+        imageId: options.ami?.imageId ?? request.imageId,
+        rootDeviceName: options.ami?.rootDeviceName ?? "/dev/sda1",
+        rootDeviceType: options.ami?.rootDeviceType ?? "ebs",
+        state: options.ami?.state ?? "available",
+      };
     },
   };
   const s3 = {
@@ -626,12 +654,14 @@ function dependencies(
     descriptorRequests,
     edgeInputs,
     events,
+    imageRequests,
     plans,
     reviewedPlans,
     recoveredInstanceIds,
     dependencies: {
       cloudFormation,
       cloudflareApiToken: TOKEN,
+      ec2,
       edge,
       fetchImpl,
       s3,
@@ -886,6 +916,9 @@ describe("Authority staging lifecycle", () => {
       "describe-stack",
       "plan:UPDATE:true",
     ]);
+    expect(fixture.imageRequests).toEqual([
+      { imageId: "ami-0d81b5e3fc6de11fe", region: "us-west-2" },
+    ]);
     expect(fixture.plans[0]?.parameters).toEqual(
       templateParameterVector({
         HostEnabled: "true",
@@ -894,6 +927,22 @@ describe("Authority staging lifecycle", () => {
         HostSetupSha256: INPUT.hostSetup.sha256,
       }),
     );
+  });
+
+  it("refuses to plan a host when the selected AMI does not use the template root device", async () => {
+    const fixture = dependencies({
+      ami: { rootDeviceName: "/dev/xvda" },
+    });
+
+    await expect(
+      runAuthorityStaging("up", INPUT, fixture.dependencies),
+    ).rejects.toThrow("staging_ami_root_device_mismatch");
+
+    expect(fixture.imageRequests).toEqual([
+      { imageId: "ami-0d81b5e3fc6de11fe", region: "us-west-2" },
+    ]);
+    expect(fixture.events).toEqual(["describe-stack"]);
+    expect(fixture.plans).toEqual([]);
   });
 
   it("requires an explicit audited flag before an initial blank volume can be formatted", async () => {
@@ -2206,6 +2255,43 @@ describe("Authority staging lifecycle", () => {
           /ARG=cloudformation\nARG=execute-change-set/g,
         ),
       ).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("reads the selected AMI root mapping through the bounded EC2 adapter", async () => {
+    const fake = withFakeAws();
+    const restore = useFakeAwsEnvironment(fake, {
+      FAKE_AWS_IMAGE_RESPONSE: JSON.stringify({
+        Images: [
+          {
+            ImageId: "ami-0d81b5e3fc6de11fe",
+            RootDeviceName: "/dev/sda1",
+            RootDeviceType: "ebs",
+            State: "available",
+          },
+        ],
+      }),
+      FAKE_AWS_LOG: fake.log,
+      PATH: `${fake.root}:${process.env.PATH ?? ""}`,
+    });
+    try {
+      await expect(
+        createAwsCliAdapters().ec2!.describeImage({
+          imageId: "ami-0d81b5e3fc6de11fe",
+          region: "us-west-2",
+        }),
+      ).resolves.toEqual({
+        imageId: "ami-0d81b5e3fc6de11fe",
+        rootDeviceName: "/dev/sda1",
+        rootDeviceType: "ebs",
+        state: "available",
+      });
+      const calls = readFileSync(fake.log, "utf8");
+      expect(calls).toContain("ARG=ec2\nARG=describe-images");
+      expect(calls).toContain("ARG=--image-ids\nARG=ami-0d81b5e3fc6de11fe");
+      expect(calls).toContain("ARG=--profile\nARG=echo-prod");
     } finally {
       restore();
     }

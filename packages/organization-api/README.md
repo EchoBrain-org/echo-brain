@@ -10,17 +10,11 @@ or private-key implementation.
 ## Current contract areas
 
 - Person OIDC login, session refresh, and session revocation routes and DTOs.
-- Person Slack identity-link challenge requests, responses, and results.
 - Person-owned meeting-ingestion exclusions, including the bounded
   administrator break-glass read contract.
-- Authority descriptors plus administrator membership, overview, and audit
-  DTOs.
-- Installation-authenticated Slack identity-link DTOs.
-
-Person Slack identity linking and installation Slack identity linking are
-different contracts. The Person flow proves a signed-in Person's Slack
-identity. The installation flow is signed by an enrolled installation and also
-carries its installation and adapter coordinates.
+- Authority descriptors.
+- Person tool discovery, query, update, upload-audience, project-context,
+  document, document-association, and answer contracts.
 
 Meeting-ingestion exclusion names describe the behavior: they prevent a
 selected source or meeting from being admitted. Existing HTTP paths, JSON

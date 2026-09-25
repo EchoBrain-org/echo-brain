@@ -1,9 +1,3 @@
-export const TRUSTED_PROXY_AUTHORIZATION_HEADER = 'x-echo-proxy-authorization';
-export const TRUSTED_PROXY_CLIENT_ID_HEADER = 'x-echo-authenticated-client-id';
-
-export const ORGANIZATION_API_ADMIN_AUTH_SCHEME = 'Bearer';
-export const ORGANIZATION_API_PROXY_AUTH_SCHEME = 'Echo-Proxy';
-
 export const ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH =
   '/v1/authority-descriptor';
 export const ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH =
@@ -20,12 +14,3 @@ export const ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH =
   '/v2/session/refresh';
 export const ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH =
   '/v2/session/revocations';
-export const ORGANIZATION_API_ADMIN_OVERVIEW_PATH = '/v1/admin/overview';
-export const ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH = '/v1/admin/memberships';
-export const ORGANIZATION_API_ADMIN_AUDIT_PATH = '/v1/admin/audit';
-
-export function organizationApiMembershipRevocationsPath(
-  membershipId: string,
-): string {
-  return `${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}/${membershipId}/revocations`;
-}

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { executeInvitationExport, invitationExportCommands, openInvitationPayload, planInvitationExport, sealInvitationPayload } from '../../tools/authority-staging-invitation-export.mjs';
 import type { InvitationExportRequest } from '../../tools/authority-staging-invitation-export.mjs';
+import { canonicalJsonForTest as canonicalJson } from '../support/test-canonical-json.js';
 
 const roots: string[] = [];
 const INSTANCE = 'i-0123456789abcdef0';
@@ -13,11 +14,6 @@ const STACK = 'arn:aws:cloudformation:us-west-2:904560150024:stack/echo-authorit
 const COMMAND = '11111111-1111-4111-8111-111111111111';
 const PREFIX = 'echo-staging-invitation-export-v1:';
 const INVITATION = Buffer.from('{"grant":"synthetic-private-invitation-do-not-print"}\n');
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`).join(',')}}`;
-  return JSON.stringify(value);
-}
 const write = (path: string, value: unknown) => writeFileSync(path, canonicalJson(value) + '\n', { mode: 0o600 });
 
 function fixture() {

@@ -114,7 +114,7 @@ rule arm64_host_is_disposable_and_requires_imdsv2 {
     Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.ImageId == { "Ref": "StagingAmiId" }
     Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.InstanceType == { "Ref": "StagingInstanceType" }
     Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.MetadataOptions == { "HttpTokens": "required", "HttpEndpoint": "enabled", "HttpPutResponseHopLimit": 2 }
-    Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.BlockDeviceMappings == [ { "DeviceName": "/dev/xvda", "Ebs": { "DeleteOnTermination": true, "Encrypted": true, "VolumeSize": 30, "VolumeType": "gp3" } } ]
+    Resources.StagingHostLaunchTemplate.Properties.LaunchTemplateData.BlockDeviceMappings == [ { "DeviceName": "/dev/sda1", "Ebs": { "DeleteOnTermination": true, "Encrypted": true, "VolumeSize": 30, "VolumeType": "gp3" } } ]
     Resources.StagingHost.Properties.InstanceInitiatedShutdownBehavior == 'terminate'
 }
 

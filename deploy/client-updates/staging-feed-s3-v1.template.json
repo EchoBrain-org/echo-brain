@@ -1,0 +1,106 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Dedicated ECHO CLI update staging feed using the regional S3 HTTPS endpoint. Public reads are limited to feed.json and artifacts/*. This stack has no CloudFront, Authority, onboarding-transfer, DNS, IAM user, key, or secret resources.",
+  "Metadata": {
+    "PublicReadException": "Release metadata and CLI artifacts are intentionally public through a narrowly scoped HTTPS-only bucket policy. Public ACLs remain blocked and ignored. No public listing or writes are granted."
+  },
+  "Resources": {
+    "FeedBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": false,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": false
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      }
+    },
+    "FeedBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "FeedBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowPublicReadOfPublishedObjects",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "s3:GetObject",
+              "Resource": [
+                {
+                  "Fn::Sub": "${FeedBucket.Arn}/feed.json"
+                },
+                {
+                  "Fn::Sub": "${FeedBucket.Arn}/artifacts/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "true"
+                }
+              }
+            },
+            {
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": ["FeedBucket", "Arn"]
+                },
+                {
+                  "Fn::Sub": "${FeedBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "BucketName": {
+      "Description": "S3 bucket with public HTTPS reads for staging feed publication paths only",
+      "Value": {
+        "Ref": "FeedBucket"
+      }
+    },
+    "FeedUrl": {
+      "Description": "Regional S3 REST HTTPS feed endpoint for CLI update configuration",
+      "Value": {
+        "Fn::Sub": "https://${FeedBucket}.s3.${AWS::Region}.${AWS::URLSuffix}/feed.json"
+      }
+    }
+  }
+}
