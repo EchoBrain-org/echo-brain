@@ -126,11 +126,12 @@ test('More… captures into another project', async () => {
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('readers-choice')).toHaveCount(0);
   await expect(page.getByTestId('compose')).toBeVisible();
+  await page.getByTestId('compose-body').fill('Beacon kickoff moved');
   await page.getByTestId('readers-more').click();
   await page.getByTestId('readers-choice').nth(1).click();
   await expect(page.getByTestId('compose').locator('.segment')).toHaveText(['Only me', 'Beacon', 'Organization', 'More…']);
   await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
-  await page.getByTestId('compose-body').fill('Beacon kickoff moved');
+  // The caret stays in Capture: ⌘↩ saves straight away.
   await page.keyboard.press('Meta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon');
   expect(notes()[0]!.body?.audience).toEqual({ kind: 'project', project_id: BEACON });

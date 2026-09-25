@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
 import { bytes } from '../format.js';
 import { message } from '../messages.js';
 import {
@@ -40,6 +40,12 @@ export function Compose({ state }: { state: State }) {
   useEffect(() => {
     if (sheet.current && !sheet.current.contains(document.activeElement)) sheet.current.focus();
   }, [compose.status, compose.confirmNew]);
+  // A project picked under More…, or the list closing or ending, removes the
+  // focused pill: the caret stays in the sheet, so ⌘↩ and Tab still work.
+  // Before paint, so no key pressed right after the pick is lost.
+  useLayoutEffect(() => {
+    if (document.activeElement === document.body) sheet.current?.focus();
+  }, [compose.picking, compose.project, state.projects.next]);
 
   const busy = compose.status === 'sending' || compose.status === 'checking';
   const unresolved = compose.status === 'unknown' || compose.status === 'checking';
