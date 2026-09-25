@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 
@@ -43,6 +43,27 @@ test('a host that keeps exiting is given up on, and the page says ECHO could not
   await expect.poll(log, { timeout: 10_000 }).toContain('host gave-up');
   expect(log().match(/host exit/g)).toHaveLength(3);
   await expect(page.getByTestId('start-failed')).toBeVisible();
+});
+
+test('quit waits out a refresh with the window open, and never touches the closed window', async () => {
+  run = await launch('refresh-hangs');
+  const { app, home } = run;
+  await expect.poll(() => refreshes().length).toBe(1);
+  // Any throw while quitting raises Electron's error box, which can hold the
+  // quit open. macOS reports the app inactive after its window has closed.
+  await app.evaluate(({ app: electronApp, BrowserWindow }, threw) => {
+    BrowserWindow.getAllWindows()[0]!.once('closed', () => {
+      try { electronApp.emit('did-resign-active'); } catch { process.getBuiltinModule('node:fs').writeFileSync(threw, ''); }
+    });
+  }, join(home, 'threw'));
+  const exited = new Promise(resolveExit => app.process().once('exit', resolveExit));
+  await app.evaluate(({ app: electronApp }) => { electronApp.quit(); });
+  // Electron's own listeners throw on late notices to a closed window, so the
+  // window closes only as the app exits.
+  await new Promise(resolveWait => setTimeout(resolveWait, 1_000));
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
+  await exited; // the 5 s cap, not the refresh, ends the wait
+  expect(existsSync(join(home, 'threw'))).toBe(false);
 });
 
 test('a crashed page reloads and reads status again', async () => {

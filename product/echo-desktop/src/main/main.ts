@@ -280,7 +280,8 @@ async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Resu
 }
 
 function send<N extends EventName>(name: N, payload: Events[N]): void {
-  window?.webContents.send('event', { name, payload });
+  // Quitting closes the window before macOS stops reporting app events.
+  if (window && !window.isDestroyed()) window.webContents.send('event', { name, payload });
 }
 
 // ---- window, tray, shortcuts -----------------------------------------------
@@ -377,6 +378,7 @@ app.on('second-instance', (_event, argv) => {
 
 app.on('did-resign-active', () => send('lifecycle.conceal', {}));
 app.on('did-become-active', () => send('lifecycle.resume', {}));
+let drained = false;
 app.on('before-quit', event => {
   if (unresolved && !quitting) {
     const choice = dialog.showMessageBoxSync({
@@ -386,17 +388,17 @@ app.on('before-quit', event => {
     if (choice !== 0) { event.preventDefault(); show(); return; }
   }
   quitting = true;
-});
-let drained = false;
-app.on('will-quit', event => {
-  globalShortcut.unregisterAll();
-  if (!host || drained) { host?.kill(); return; }
+  if (!host || drained) return;
   // Never kill the host mid-refresh: that leaves the shared session claimed.
+  // Wait here, while the window is open: once it closes the app must exit at
+  // once, or a late macOS notice to the closed window throws, and Electron's
+  // error box can hold the quit open for good.
   event.preventDefault();
   drained = true;
   const cap = new Promise(resolveCap => setTimeout(resolveCap, 5_000));
-  void Promise.race([callHost('host.drain', {}), cap]).then(() => { host?.kill(); app.quit(); });
+  void Promise.race([callHost('host.drain', {}), cap]).then(() => app.quit());
 });
+app.on('will-quit', () => { globalShortcut.unregisterAll(); host?.kill(); });
 app.on('window-all-closed', () => { /* stays in the tray */ });
 
 if (__ECHO_TEST_HOOK__) {

@@ -82,6 +82,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
     if (method === 'POST' && path === '/v2/session/refresh') {
       if (mode === 'refresh-fails') return failure('unavailable', 503);
+      if (mode === 'refresh-hangs') return new Promise<Response>(() => undefined);
       return json({ ...session, access_token: 'B'.repeat(43), refresh_token: 'S'.repeat(43), access_expires_at: '2026-09-22T10:30:00.000Z' });
     }
 
