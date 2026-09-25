@@ -61,6 +61,13 @@ function found(query: unknown, entry: { title: string; text?: string; excerpt?: 
 /** A search result's excerpt: the start of the original text. */
 function excerpt(text: string): string { return [...text.trim()].slice(0, 300).join(''); }
 
+const LONG_NAMES = [
+  'Upload validation d92c717 Beta', 'Northwind renewal, annual pricing and the pilot clause', 'tdk', 'lin', 'echo', 'stout', 'Q4 planning',
+  'Hiring: senior backend engineer', 'Customer research interviews', 'Security questionnaire for Contoso', 'Board deck', 'Onboarding',
+  'Pricing', 'Launch', 'Design system', 'Support escalations', 'Partnerships',
+  'A project whose name is far too long to fit on one line of the Capture sheet, however wide the window is made', 'Legal', 'Finance',
+];
+
 export function installTestAuthority(home: string, fixturesDirectory: string, SessionStore: new (home: string) => unknown) {
   const repository = join(process.env.ECHO_PERSON_CLIENT_ENTRY!, '..', '..', '..', '..', '..');
   const operations = (JSON.parse(readFileSync(join(repository, 'tests/fixtures/project-context-v1/operations.json'), 'utf8')) as {
@@ -270,14 +277,18 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         ? Array.from({ length: 13 }, (_, index) => ({
           project_id: `prj_${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`, name: `Project ${index + 1}`, role: 'member',
         }))
-        : projects;
+        // Twenty in two pages, some with long names, one longer than Capture is wide.
+        : mode === 'long-project-names'
+          ? LONG_NAMES.map((name, index) => ({ project_id: `prj_${String(index + 1).padStart(8, '0')}-2222-4222-8222-222222222222`, name, role: 'member' }))
+          : projects;
       const second = url.searchParams.get('cursor') === 'cGFnZTI';
-      const page = mode === 'many-projects' ? (second ? all.slice(10) : all.slice(0, 10)) : all;
+      const paged = mode === 'many-projects' || mode === 'long-project-names';
+      const page = paged ? (second ? all.slice(10) : all.slice(0, 10)) : all;
       projectLists += 1;
       // A lead made a member since the first list.
       const demoted = (index: number) => mode === 'role-changes' && projectLists > 1 && index === 0 ? { role: 'member' } : {};
       response.items = page.map((project, index) => ({ ...(fixture('projects-read')), ...project, ...demoted(index) }));
-      response.next_cursor = mode === 'many-projects' && !second ? 'cGFnZTI' : null;
+      response.next_cursor = paged && !second ? 'cGFnZTI' : null;
       return json(response);
     }
     if (method === 'POST' && path === '/v2/person/projects/context/feed' && mode === 'feed-unauthorized') {

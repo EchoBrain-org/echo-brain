@@ -75,6 +75,8 @@ function WhoCanRead({ state, compose, locked }: { state: State; compose: Compose
   // One Tab stop: the chosen pill, or Only me while a search hides it.
   const stop = Math.max(0, choices.findIndex(choice => choice.checked));
 
+  // Opened again on a project far down the list, its pill is in sight.
+  useLayoutEffect(() => { group.current?.querySelector('[aria-checked="true"]')?.scrollIntoView({ block: 'nearest' }); }, []);
   // Only a name wider than the whole sheet is cut off, and then its tooltip says it in full.
   useLayoutEffect(() => {
     for (const radio of group.current?.querySelectorAll<HTMLElement>('[role="radio"]') ?? []) {

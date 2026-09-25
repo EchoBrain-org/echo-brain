@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import { launch, type Launched } from './launch.js';
 
 let run: Launched;
@@ -92,4 +92,52 @@ test('past eight projects a field finds one: Enter picks the first match, ⌘↩
   const project13 = 'prj_00000013-1111-4111-8111-111111111111';
   expect(notes()[0]!.body?.audience).toEqual({ kind: 'project', project_id: project13 });
   expect(notes()[0]!.body?.association_project_ids).toEqual([project13]);
+});
+
+test('at the smallest window every name that fits is whole, and twenty projects scroll above Save', async () => {
+  run = await launch('long-project-names');
+  const { page, app } = run;
+  await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.setSize(800, 560); });
+  await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([800, 560]);
+  await expect(page.getByTestId('project-row')).toHaveCount(10);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('readers-more-projects').click();
+  await expect(page.getByTestId('readers-project')).toHaveCount(20);
+
+  const pills = await page.getByRole('radio').evaluateAll(radios => radios.map(radio => ({
+    name: radio.textContent, cut: radio.scrollWidth - radio.clientWidth > 1, title: radio.getAttribute('title'),
+  })));
+  const long = 'A project whose name is far too long to fit on one line of the Capture sheet, however wide the window is made';
+  // Only the name wider than the whole sheet is cut off; it keeps its whole name, as its name and its tooltip.
+  expect(pills.filter(pill => pill.cut)).toEqual([{ name: long, cut: true, title: long }]);
+  expect(pills.filter(pill => pill.title !== null)).toHaveLength(1);
+  await expect(page.getByRole('radio', { name: long, exact: true })).toHaveCount(1);
+  await expect(page.getByRole('radio', { name: 'Upload validation d92c717 Beta', exact: true })).toBeVisible();
+
+  // The pills scroll in their own room: Save and the paperclip stay whole, below them, in the window.
+  const box = async (locator: Locator) => (await locator.boundingBox())!;
+  const room = await box(page.locator('.reader-pills'));
+  const save = await box(page.getByTestId('compose-send'));
+  const attach = await box(page.getByTestId('compose-attach'));
+  const sheet = await box(page.getByTestId('compose'));
+  expect(await page.locator('.reader-pills').evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+  expect(room.y + room.height).toBeLessThanOrEqual(Math.min(save.y, attach.y));
+  expect(sheet.y).toBeGreaterThanOrEqual(0);
+  expect(sheet.y + sheet.height).toBeLessThanOrEqual(560);
+  await expect(page.getByTestId('compose-send')).toBeInViewport({ ratio: 1 });
+
+  // The last pill is reached by scrolling, and one click picks it.
+  await page.getByRole('radio', { name: 'Organization' }).click();
+  await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
+  await page.getByRole('radio', { name: long }).click();
+  await expect(page.getByTestId('compose-readers')).toHaveText(`${long} members can read this.`);
+  await expect(page.getByTestId('compose-send')).toBeInViewport({ ratio: 1 });
+
+  // Put away and opened again, the chosen pill is in sight.
+  await page.getByRole('radio', { name: 'Finance' }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('compose')).toHaveCount(0);
+  await page.getByTestId('write-button').click();
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Finance');
+  await expect(page.getByRole('radio', { name: 'Finance' })).toBeInViewport({ ratio: 1 });
 });
