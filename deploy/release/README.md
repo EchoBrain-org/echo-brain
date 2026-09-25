@@ -719,7 +719,7 @@ Each employee receives their own invitation separately. The shared app contains
 no invitation or session; it embeds the verified offline kit and needs no
 package manager. Initial delivery is an explicit approved download. The opt-in
 [client update V1](../../docs/features/client-updates-v1.md) adds a signed feed
-and Linux activation before command dispatch; desktop update activation remains
+and macOS/Linux CLI activation before command dispatch; desktop update activation remains
 part of the future Electron packaging integration. No background updater is
 introduced.
 
@@ -1040,7 +1040,9 @@ record and exact Person-client tarball**. The Authority image is shared too;
 the employee's CPU architecture does not select a different server. The kits
 differ in their bundled Node runtime and installer. Linux uses a strict v2
 manifest binding its runtime, release, client, and kit build identity. Existing
-Mac kits retain their v1 manifest and required app archive. Linux omits the
+Mac app kits retain their v1 manifest and required app archive. The separate
+[macOS CLI-only kit](../../docs/features/client-updates-v1.md#trusted-bootstrap)
+uses `--installation cli-kit`, a schema-3 manifest, and an isolated CLI root. Linux omits the
 unused Mac UI bridge.
 
 Send a folder named `ECHO-Employee-Onboarding-linux-x64-<source_sha12>` containing

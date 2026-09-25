@@ -8,7 +8,9 @@ import {
   UPDATE_INTERVAL_MS, UPDATE_METADATA_LIMIT,
 } from './client-update-contract.js';
 import { readUpdateFile, safeUpdateDirectory, updateDirectory, writeUpdateJson } from './client-update-files.js';
-import { installLinuxClientUpdate, type UpdateInstallerInput } from './client-update-linux.js';
+import { installLinuxClientUpdate } from './client-update-linux.js';
+import { installMacosClientUpdate } from './client-update-macos.js';
+import { type UpdateInstallerInput } from './client-update-kit.js';
 import { createHash } from 'node:crypto';
 
 export interface ClientUpdateState {
@@ -137,7 +139,9 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   if (mode === 'automatic' && state && state.result !== 'available' && state.checked_at <= now && now - state.checked_at < UPDATE_INTERVAL_MS) return result('not_due', state);
   // OS detection is independent of adapter availability. Containers are updated
   // by their deployment lane; desktop activation belongs to Electron packaging.
-  if (platformKey(platform) !== 'linux/x64/glibc/cli-kit' && mode !== 'check') return result('adapter_unavailable', state);
+  const installer = platformKey(platform) === 'linux/x64/glibc/cli-kit' ? installLinuxClientUpdate
+    : platformKey(platform) === 'darwin/arm64/native/cli-kit' ? installMacosClientUpdate : undefined;
+  if (!installer && mode !== 'check') return result('adapter_unavailable', state);
   const lock = join(directory, '.lock');
   try { mkdirSync(lock, { mode: 0o700 }); } catch { return result('update_busy', state); }
   let temporary: string | undefined;
@@ -178,7 +182,7 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
       fsyncSync(fd);
     } finally { closeSync(fd); }
     if (bytes !== artifact.bytes || hash.digest('hex') !== artifact.sha256) rejectUpdate('artifact_mismatch');
-    await (dependencies.install ?? installLinuxClientUpdate)({ root, archive, artifact, manifest, expected_wrapper_sha256: expectedWrapper });
+    await (dependencies.install ?? installer!)({ root, archive, artifact, manifest, expected_wrapper_sha256: expectedWrapper });
     if (installedRelease(root) !== manifest.release_id) rejectUpdate('activation_mismatch');
     state.result = 'updated';
     writeUpdateJson(join(directory, 'state.json'), state);

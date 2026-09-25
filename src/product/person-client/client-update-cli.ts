@@ -11,6 +11,14 @@ const HELP = 'usage: echo-brain update [--check | --status | --if-due | configur
 export function installedUpdateRoot(moduleUrl = import.meta.url): string | undefined {
   const releaseRoot = resolve(dirname(fileURLToPath(moduleUrl)), '../..');
   if (!existsSync(join(releaseRoot, '.echo-owned-release-v1')) || dirname(releaseRoot).split(/[\\/]/).at(-1) !== 'releases') return undefined;
+  if (process.platform === 'darwin') {
+    if (!process.env.HOME || dirname(dirname(releaseRoot)) !== join(process.env.HOME, 'Library/Application Support/ECHO/cli')) return undefined;
+    // The old Mac kit owns a matched desktop app/CLI pair. Only the separate
+    // CLI kit may enroll for independent automatic activation.
+    const manifest = JSON.parse(readUpdateFile(join(releaseRoot, 'kit-manifest.v1.json'), UPDATE_METADATA_LIMIT).toString('utf8'));
+    if (manifest.schema_version !== 3 || manifest.kind !== 'echo-person-cli-kit-v1' ||
+        manifest.runtime?.platform !== 'darwin' || manifest.runtime?.architecture !== 'arm64') return undefined;
+  }
   return dirname(dirname(releaseRoot));
 }
 
@@ -30,7 +38,7 @@ export async function runClientUpdateCli(argv: readonly string[]): Promise<numbe
       return 0;
     }
     const config = readClientUpdateConfig(root);
-    const platform = detectUpdatePlatform(config?.installation ?? (process.platform === 'linux' ? 'cli-kit' : 'electron'));
+    const platform = detectUpdatePlatform(config?.installation ?? 'cli-kit');
     const mode = argv[0] === '--status' ? 'status' : argv[0] === '--check' ? 'check' : argv[0] === '--if-due' ? 'automatic' : 'apply';
     const result = await runClientUpdate(mode, { root, platform });
     process.stdout.write(`${JSON.stringify(result)}\n`);
@@ -44,9 +52,9 @@ export async function runClientUpdateCli(argv: readonly string[]): Promise<numbe
 /** Runs before Person command dispatch, so no submitted operation is replayed. */
 export async function updateBeforePersonCommand(argv: readonly string[]): Promise<number | undefined> {
   if (process.env.ECHO_CLIENT_UPDATE_DISPATCH === '1') return undefined;
-  const root = installedUpdateRoot();
-  if (!root) return undefined;
   try {
+    const root = installedUpdateRoot();
+    if (!root) return undefined;
     const config = readClientUpdateConfig(root);
     if (!config?.automatic) return undefined;
     const result = await runClientUpdate('automatic', { root, platform: detectUpdatePlatform(config.installation) });

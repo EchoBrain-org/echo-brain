@@ -24,9 +24,10 @@ service manager.
 
 The opt-in [client updater](../features/client-updates-v1.md) runs a bounded
 release check before command dispatch. Its public publisher trust and local
-release checkpoint are separate from Person authorization state. Linux kit
-activation reuses the installer; desktop activation belongs to its packaging
-adapter. This adds no background runtime or automatic Person-request replay.
+release checkpoint are separate from Person authorization state. macOS arm64
+and Linux x64 CLI-kit activation reuse their platform installers; desktop app
+activation belongs to its packaging adapter. The standalone Mac CLI root is
+separate from the legacy app/CLI pair. This adds no background runtime or automatic Person-request replay.
 
 ## Local state authority
 

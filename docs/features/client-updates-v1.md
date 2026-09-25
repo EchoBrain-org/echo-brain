@@ -16,17 +16,17 @@ The signed manifest selects OS (`linux`, `darwin`, `win32`), architecture
 (`cli-kit`, `electron`, `container`). One release can describe several targets.
 An absent target fails explicitly; there is no fallback to another OS or CPU.
 
-V1 implements activation and feed preparation for the existing Linux x64 glibc
-kit. It reuses `Start-ECHO.sh --install-only`, the installer lock, private
-versioned directories and atomic stable-command replacement. A captured wrapper
+V1 implements CLI activation and feed preparation for macOS arm64 (Apple
+silicon, macOS 14+) and Linux x64 glibc. Both use
+`Start-ECHO.sh --install-only`, an installer lock, private versioned directories
+and atomic stable-command replacement. A captured wrapper
 hash is rechecked under that lock to avoid overwriting a concurrent manual
 installation. Existing releases are retained. The installer validates the new
 runtime/client before switching the wrapper.
 
 The contract supports desktop and container targets, but activation returns
-`adapter_unavailable`. Electron packaging owns coordinated app/CLI activation;
-immutable containers use their deployment mechanism. No native UI code is
-changed. The public command is identical for all implemented adapters:
+`adapter_unavailable`. Desktop app updates belong to the separate Electron
+packaging work; immutable containers use their deployment mechanism. The public command is identical for all implemented adapters:
 
 ```sh
 echo-brain update --status
@@ -53,6 +53,31 @@ through the same authenticated operator channel:
 echo-brain update configure --file /absolute/path/to/bootstrap-config.json
 ```
 
+For macOS, build the **CLI-only** kit explicitly:
+
+```sh
+npm run kit:person-onboarding -- \
+  --target darwin-arm64 --installation cli-kit \
+  --release /absolute/path/to/accepted-release.json \
+  --artifact /absolute/path/to/person-client.tgz \
+  --runtime-node /absolute/path/to/node-v22.22.1-darwin-arm64/bin/node \
+  --output /absolute/path/to/ECHO-cli-macos-arm64.zip
+```
+
+Extract the ZIP and run `./echo-person-onboarding-kit/Start-ECHO.sh --install-only`.
+The standalone Mac CLI installs to
+`~/Library/Application Support/ECHO/cli/bin/echo-brain`; add that directory to
+PATH or use the absolute command. It has a separate release/updater directory
+and never modifies `~/Applications/ECHO.app` or the legacy app's paired command
+at `~/Library/Application Support/ECHO/bin/echo-brain`. Existing app kits cannot
+be enrolled as independent CLI installations. The CLI-only kit uses manifest
+schema 3 (`echo-person-cli-kit-v1`) and contains no app archive.
+
+Linux continues to use `${XDG_DATA_HOME:-~/.local/share}/echo/person/bin/echo-brain`
+and its existing schema-2 kit. Both installations keep the current Person session
+in its existing location; installing or updating the CLI does not migrate it.
+Intel Macs, Linux arm64 and musl are unsupported in this V1.
+
 The exact JSON fields are `schema_version: 1`,
 `kind: "echo-client-update-config-v1"`, `channel`, `feed_url`,
 `public_key_spki`, `minimum_sequence`, `automatic`, and `installation`.
@@ -72,7 +97,7 @@ those settings. The updater is opt-in and adds no daemon or scheduler.
 
 ## Preparing an approved feed
 
-Build the Person client and Linux kit from a clean release commit using the
+Build the Person client and each platform kit from a clean release commit using the
 existing release workflow. The publisher requires that commit to be present
 locally and compares the kit's setup sources with it. It checks the canonical
 release record, client/runtime hashes and materialized client identity.
@@ -82,10 +107,15 @@ node tools/client-update-feed.mjs prepare \
   --config /absolute/path/to/bootstrap-config.json \
   --release /absolute/path/to/accepted-release.json \
   --linux-kit /absolute/path/to/approved-linux-kit.zip \
+  --macos-kit /absolute/path/to/approved-macos-cli-kit.zip \
   --sequence 1 \
   --expires 2026-10-01T00:00:00.000Z \
   --out /absolute/path/to/new-feed-bundle
 ```
+
+Supply one or both platform kits. A single feed can serve both operating systems;
+each client selects only its exact OS, architecture, libc and installation type.
+Both kits must bind the same canonical release and Person-client artifact.
 
 Choose a sequence at least the bootstrap minimum and strictly higher than the
 previously published sequence; choose a future expiry no more than 31 days

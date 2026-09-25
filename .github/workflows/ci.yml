@@ -191,6 +191,8 @@ jobs:
       - name: Exercise native Account, People, Projects, Uploads, and Sources with offline fixtures
         run: >-
           npx vitest run --config vitest.config.ts
+          tests/architecture/mac-person-cli-kit.test.ts
+          tests/architecture/client-update-dispatch.test.ts
           tests/architecture/person-account-ui.test.ts
           tests/architecture/swift-source-boundaries.test.ts
           tests/architecture/echo-people.test.ts

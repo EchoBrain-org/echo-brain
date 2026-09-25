@@ -3,6 +3,8 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
+import { installedUpdateRoot } from '../../src/product/person-client/client-update-cli.js';
 import { ClientUpdateError, type ClientUpdateManifest, type UpdatePlatform, parseUpdateConfig, parseUpdateManifest, selectUpdateArtifact, updateDigest, verifyUpdateEnvelope, UPDATE_INTERVAL_MS } from '../../src/product/person-client/client-update-contract.js';
 import { configureClientUpdates, runClientUpdate } from '../../src/product/person-client/client-update.js';
 
@@ -41,6 +43,30 @@ function fixture() {
 afterEach(() => { for (const p of roots.splice(0)) rmSync(p, { recursive: true, force: true }); });
 
 describe('signed cross-platform client updates', () => {
+  it.skipIf(process.platform !== 'darwin')('enrolls only the independent Mac CLI root and rejects legacy paired kits', () => {
+    const home = mkdtempSync(join(realpathSync(tmpdir()), 'echo Mac enrollment '));
+    roots.push(home);
+    vi.stubEnv('HOME', home);
+    try {
+      const macRoot = join(home, 'Library/Application Support/ECHO/cli');
+      const release = join(macRoot, 'releases/clean-v1-mac-enrollment');
+      mkdirSync(release, { recursive: true, mode: 0o700 });
+      writeFileSync(join(release, '.echo-owned-release-v1'), 'clean-v1-mac-enrollment', { mode: 0o600 });
+      const metadata = join(release, 'kit-manifest.v1.json');
+      const url = pathToFileURL(join(release, 'package/dist/client-update-cli.js')).href;
+      writeFileSync(metadata, JSON.stringify({ schema_version: 1, kind: 'echo-person-onboarding-kit-v1' }), { mode: 0o600 });
+      expect(installedUpdateRoot(url)).toBeUndefined();
+      const manifest = { schema_version: 3, kind: 'echo-person-cli-kit-v1', runtime: { platform: 'darwin', architecture: 'arm64' } };
+      writeFileSync(metadata, JSON.stringify(manifest));
+      expect(installedUpdateRoot(url)).toBe(macRoot);
+      const paired = join(home, 'Library/Application Support/ECHO/releases/clean-v1-mac-enrollment');
+      mkdirSync(paired, { recursive: true, mode: 0o700 });
+      writeFileSync(join(paired, '.echo-owned-release-v1'), 'clean-v1-mac-enrollment', { mode: 0o600 });
+      writeFileSync(join(paired, 'kit-manifest.v1.json'), JSON.stringify(manifest), { mode: 0o600 });
+      expect(installedUpdateRoot(pathToFileURL(join(paired, 'package/dist/client-update-cli.js')).href)).toBeUndefined();
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('selects exact OS, architecture, libc, and installation type from one signed feed', () => {
     const f = fixture();
     const mac = { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'electron' } as const;
@@ -91,6 +117,20 @@ describe('signed cross-platform client updates', () => {
     expect((await runClientUpdate('automatic', f.dependencies)).status).toBe('not_due');
     expect(f.fetcher).toHaveBeenCalledTimes(2);
     expect((await runClientUpdate('apply', f.dependencies)).status).toBe('current');
+    expect(f.install).toHaveBeenCalledOnce();
+  });
+
+  it('selects and activates the macOS CLI kit from the same feed as Linux', async () => {
+    const f = fixture();
+    const mac: UpdatePlatform = { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit' };
+    const macBytes = Buffer.from('verified Mac CLI kit');
+    const macArtifact = { ...mac, url: 'https://updates.example.test/staging/artifacts/mac.zip', bytes: macBytes.length, sha256: updateDigest(macBytes) };
+    f.manifest.artifacts.push(macArtifact);
+    const fetcher = vi.fn(async (url: string | URL | Request) => new Response(new Uint8Array(String(url) === f.config.feed_url ? f.envelope() : macBytes)));
+    const updated = await runClientUpdate('automatic', { ...f.dependencies, platform: mac, fetch: fetcher as typeof fetch });
+    expect(updated.status).toBe('updated');
+    expect(updated.platform).toBe('darwin/arm64/native/cli-kit');
+    expect(fetcher.mock.calls.map(args => args[0])).toEqual([f.config.feed_url, macArtifact.url]);
     expect(f.install).toHaveBeenCalledOnce();
   });
 
