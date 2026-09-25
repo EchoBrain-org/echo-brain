@@ -10,23 +10,31 @@ import { fileURLToPath } from 'node:url';
 import { awsCliArguments, sanitizedAwsEnvironment } from './authority-staging-onboarding-transfer.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const TEMPLATE = resolve(REPO, 'deploy/client-updates/staging-feed-v1.template.json');
 const ACCOUNT = '904560150024';
 const REGION = 'us-west-2';
-const STACK = 'echo-client-update-staging-v1';
 const SHA = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
-const CHANGE_SET = /^arn:aws:cloudformation:us-west-2:904560150024:changeSet\/echo-client-update-staging-[0-9a-f-]{36}\/[a-f0-9-]{36}$/;
-const CHANGE_SET_NAME = /^echo-client-update-staging-[0-9a-f-]{36}$/;
-const STACK_ID = new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${STACK}/[a-f0-9-]{36}$`);
-const EXPECTED = Object.freeze([
+const BUCKET_RESOURCES = Object.freeze([
   ['FeedBucket', 'AWS::S3::Bucket'],
   ['FeedBucketPolicy', 'AWS::S3::BucketPolicy'],
-  ['FeedDistribution', 'AWS::CloudFront::Distribution'],
-  ['FeedOriginAccessControl', 'AWS::CloudFront::OriginAccessControl'],
-  ['FeedCachePolicy', 'AWS::CloudFront::CachePolicy'],
 ]);
+const HOSTING = Object.freeze(Object.fromEntries([
+  ['cloudfront', 'echo-client-update-staging-v1', 'staging-feed-v1.template.json', 'echo-client-update-staging-feed-operation-v1', 'echo-client-update-staging-', [
+    ...BUCKET_RESOURCES,
+    ['FeedDistribution', 'AWS::CloudFront::Distribution'],
+    ['FeedOriginAccessControl', 'AWS::CloudFront::OriginAccessControl'],
+    ['FeedCachePolicy', 'AWS::CloudFront::CachePolicy'],
+  ]],
+  ['s3', 'echo-client-update-staging-s3-v1', 'staging-feed-s3-v1.template.json', 'echo-client-update-staging-s3-feed-operation-v1', 'echo-client-update-staging-s3-', BUCKET_RESOURCES],
+].map(([name, stack, file, kind, prefix, expected]) => [name, Object.freeze({
+  name, stack, template: resolve(REPO, 'deploy/client-updates', file), kind, prefix, expected,
+  changeSet: new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:changeSet/${prefix}[0-9a-f-]{36}/[a-f0-9-]{36}$`),
+  changeSetName: new RegExp(`^${prefix}[0-9a-f-]{36}$`),
+  stackId: new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${stack}/[a-f0-9-]{36}$`),
+})])));
 const fail = code => { throw new Error(code); };
+const hostingLane = name => Object.hasOwn(HOSTING, name) ? HOSTING[name] : fail('hosting_invalid');
+const receiptLane = receipt => Object.values(HOSTING).find(lane => lane.kind === receipt?.kind) ?? fail('receipt_invalid');
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const canonical = value => {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -104,6 +112,7 @@ function defaultAws(args) {
     // unconfirmed instead of being mistaken for an empty account.
     if (args[0] === 'cloudformation' && args[1] === 'describe-stacks' && /does not exist/i.test(String(error?.stderr ?? ''))) return { Stacks: [] };
     if (args[0] === 'cloudformation' && args[1] === 'describe-change-set' && /does not exist/i.test(String(error?.stderr ?? ''))) return { Status: 'NOT_FOUND' };
+    if (args[0] === 's3control' && args[1] === 'get-public-access-block' && /\(NoSuchPublicAccessBlockConfiguration\)/.test(String(error?.stderr ?? ''))) return { PublicAccessBlockConfiguration: null };
     fail('aws_operation_unconfirmed');
   }
 }
@@ -117,7 +126,7 @@ function defaultAwsNoOutput(args) {
   } catch { fail('aws_operation_unconfirmed'); }
 }
 
-function templateBytes(readTemplate = () => readFileSync(TEMPLATE)) {
+function templateBytes(lane, readTemplate = () => readFileSync(lane.template)) {
   const bytes = readTemplate();
   if (!Buffer.isBuffer(bytes) || bytes.length === 0 || bytes.length > 51_200) fail('template_unreadable');
   try { JSON.parse(bytes.toString('utf8')); } catch { fail('template_unreadable'); }
@@ -135,20 +144,39 @@ function account(aws) {
   if (identity?.Account !== ACCOUNT || typeof identity?.Arn !== 'string' || !pattern.test(identity.Arn)) fail('echo_prod_sso_required');
 }
 
-function stackDescription(aws) {
-  const response = aws(['cloudformation', 'describe-stacks', '--stack-name', STACK]);
+function accountPublicAccess(lane, aws) {
+  if (lane.name !== 's3') return;
+  const response = aws(['s3control', 'get-public-access-block', '--account-id', ACCOUNT]);
+  const configuration = response?.PublicAccessBlockConfiguration;
+  // Only the explicit NoSuchPublicAccessBlockConfiguration result is absent.
+  // ACL restrictions can stay enabled; this lane relies only on bucket policy.
+  if (configuration === null) return;
+  if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration) ||
+      ['BlockPublicAcls', 'IgnorePublicAcls', 'BlockPublicPolicy', 'RestrictPublicBuckets'].some(key => typeof configuration[key] !== 'boolean')) fail('account_public_access_check_unconfirmed');
+  if (configuration.BlockPublicPolicy || configuration.RestrictPublicBuckets) fail('account_public_access_blocks_s3_feed');
+}
+
+function stackDescription(lane, aws) {
+  const response = aws(['cloudformation', 'describe-stacks', '--stack-name', lane.stack]);
   if (!Array.isArray(response?.Stacks)) fail('staging_stack_invalid');
   if (response.Stacks.length === 0) return null;
   const stack = response.Stacks[0];
-  if (response.Stacks.length !== 1 || !stack.StackId?.startsWith(`arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${STACK}/`)) fail('staging_stack_invalid');
+  if (response.Stacks.length !== 1 || !lane.stackId.test(stack.StackId ?? '')) fail('staging_stack_invalid');
   return stack;
 }
 
-function stableOutputs(stack) {
+function stableOutputs(lane, stack) {
   const outputs = Object.fromEntries((stack.Outputs ?? []).map(item => [item.OutputKey, item.OutputValue]));
   const bucket = outputs.BucketName;
   const distribution = outputs.DistributionId;
   const feed = outputs.FeedUrl;
+  if (lane.name === 's3') {
+    // Dotted bucket names cannot use S3's wildcard HTTPS certificate. Require
+    // the literal regional REST URL, rejecting normalization and other origins.
+    if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket ?? '') ||
+        (distribution !== undefined && distribution !== null) || feed !== `https://${bucket}.s3.${REGION}.amazonaws.com/feed.json`) fail('staging_outputs_invalid');
+    return { bucket_name: bucket, distribution_id: null, feed_url: feed };
+  }
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket ?? '') || !/^[A-Z0-9]{13,20}$/.test(distribution ?? '')) fail('staging_outputs_invalid');
   let url;
   try { url = new URL(feed); } catch { fail('staging_outputs_invalid'); }
@@ -156,54 +184,55 @@ function stableOutputs(stack) {
   return { bucket_name: bucket, distribution_id: distribution, feed_url: url.href };
 }
 
-function expectedChanges(changes, action) {
+function expectedChanges(lane, changes, action) {
   const actual = (changes ?? []).map(change => [change?.ResourceChange?.LogicalResourceId, change?.ResourceChange?.ResourceType, change?.ResourceChange?.Action]);
   const wantedAction = action === 'CREATE' ? 'Add' : undefined;
-  if (actual.length !== EXPECTED.length || new Set(actual.map(item => item[0])).size !== EXPECTED.length) fail('change_set_boundary_violation');
-  for (const [logicalId, type] of EXPECTED) {
+  if (actual.length !== lane.expected.length || new Set(actual.map(item => item[0])).size !== lane.expected.length) fail('change_set_boundary_violation');
+  for (const [logicalId, type] of lane.expected) {
     const entry = actual.find(item => item[0] === logicalId);
     if (!entry || entry[1] !== type || (wantedAction && entry[2] !== wantedAction) || (!wantedAction && !['Add', 'Modify'].includes(entry[2]))) fail('change_set_boundary_violation');
   }
   return actual.map(([logical_id, resource_type, action_name]) => ({ logical_id, resource_type, action: action_name })).sort((a, b) => a.logical_id.localeCompare(b.logical_id));
 }
 
-function changeSetName(operationId) { return `echo-client-update-staging-${operationId}`; }
+function changeSetName(lane, operationId) { return `${lane.prefix}${operationId}`; }
 function clientToken(purpose, value) { return `echo-client-update-${purpose}-${sha256(value).slice(0, 44)}`; }
 
-function createChangeSet({ aws, awsNoOutput, operationId }) {
+function createChangeSet({ lane, aws, awsNoOutput, operationId }) {
   account(aws);
-  const stack = stackDescription(aws);
+  const stack = stackDescription(lane, aws);
   // This lane deliberately provisions a single new feed stack. Supporting an
   // update requires an explicit new review of the prior resource inventory.
   if (stack) fail('staging_feed_stack_already_exists');
   const type = 'CREATE';
-  const name = changeSetName(operationId);
-  awsNoOutput(['cloudformation', 'create-change-set', '--stack-name', STACK, '--change-set-name', name, '--change-set-type', type,
-    '--client-token', clientToken('plan', `${STACK}:${name}`), '--template-body', `file://${TEMPLATE}`]);
+  const name = changeSetName(lane, operationId);
+  awsNoOutput(['cloudformation', 'create-change-set', '--stack-name', lane.stack, '--change-set-name', name, '--change-set-type', type,
+    '--client-token', clientToken('plan', `${lane.stack}:${name}`), '--template-body', `file://${lane.template}`]);
   return { name, type };
 }
 
-function readChangeSet(name, aws) {
-  const described = aws(['cloudformation', 'describe-change-set', '--stack-name', STACK, '--change-set-name', name]);
+function readChangeSet(lane, name, aws) {
+  const described = aws(['cloudformation', 'describe-change-set', '--stack-name', lane.stack, '--change-set-name', name]);
   if (described?.Status === 'NOT_FOUND') return null;
   if (['CREATE_PENDING', 'CREATE_IN_PROGRESS'].includes(described?.Status)) return { pending: true };
-  if (described?.Status !== 'CREATE_COMPLETE' || typeof described.ChangeSetId !== 'string' || !CHANGE_SET.test(described.ChangeSetId) || typeof described.StackId !== 'string' || !STACK_ID.test(described.StackId)) fail('change_set_not_reviewable');
-  return { id: described.ChangeSetId, stack_id: described.StackId, inventory: expectedChanges(described.Changes, 'CREATE') };
+  if (described?.Status !== 'CREATE_COMPLETE' || typeof described.ChangeSetId !== 'string' || !lane.changeSet.test(described.ChangeSetId) || described.StackName !== lane.stack || typeof described.StackId !== 'string' || !lane.stackId.test(described.StackId)) fail('change_set_not_reviewable');
+  return { id: described.ChangeSetId, stack_id: described.StackId, inventory: expectedChanges(lane, described.Changes, 'CREATE') };
 }
 
 function readReceipt(path) {
   let receipt;
   try { receipt = JSON.parse(privateFile(path).toString('utf8')); } catch { fail('receipt_invalid'); }
+  const lane = receiptLane(receipt);
   const keys = ['schema_version', 'kind', 'operation_id', 'source_sha', 'template_sha256', 'account', 'region', 'stack_name', 'change_set_name', 'change_set_id', 'stack_id', 'change_set_type', 'inventory', 'state', 'outputs'];
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || canonical(Object.keys(receipt).sort()) !== canonical(keys.sort()) ||
-      receipt.schema_version !== 1 || receipt.kind !== 'echo-client-update-staging-feed-operation-v1' || !/^[a-f0-9-]{36}$/.test(receipt.operation_id) || !COMMIT.test(receipt.source_sha) || !SHA.test(receipt.template_sha256) ||
-      receipt.account !== ACCOUNT || receipt.region !== REGION || receipt.stack_name !== STACK || receipt.change_set_name !== changeSetName(receipt.operation_id) || !CHANGE_SET_NAME.test(receipt.change_set_name) ||
+      receipt.schema_version !== 1 || !/^[a-f0-9-]{36}$/.test(receipt.operation_id) || !COMMIT.test(receipt.source_sha) || !SHA.test(receipt.template_sha256) ||
+      receipt.account !== ACCOUNT || receipt.region !== REGION || receipt.stack_name !== lane.stack || receipt.change_set_name !== changeSetName(lane, receipt.operation_id) || !lane.changeSetName.test(receipt.change_set_name) ||
       !['planning', 'planned', 'executing', 'succeeded', 'unconfirmed'].includes(receipt.state) || (receipt.state === 'planning' ? (receipt.change_set_id !== null || receipt.stack_id !== null || receipt.change_set_type !== null || receipt.inventory !== null) :
-        (!CHANGE_SET.test(receipt.change_set_id) || !STACK_ID.test(receipt.stack_id) || receipt.change_set_type !== 'CREATE' || !Array.isArray(receipt.inventory) || canonical(receipt.inventory) !== canonical([...receipt.inventory].sort((a, b) => String(a.logical_id).localeCompare(String(b.logical_id)))) || canonical(receipt.inventory.map(item => [item.logical_id, item.resource_type]).sort()) !== canonical(EXPECTED.map(item => [...item]).sort()))) ||
+        (!lane.changeSet.test(receipt.change_set_id) || !lane.stackId.test(receipt.stack_id) || receipt.change_set_type !== 'CREATE' || !Array.isArray(receipt.inventory) || receipt.inventory.some(item => !item || item.action !== 'Add') || canonical(receipt.inventory) !== canonical([...receipt.inventory].sort((a, b) => String(a.logical_id).localeCompare(String(b.logical_id)))) || canonical(receipt.inventory.map(item => [item.logical_id, item.resource_type]).sort()) !== canonical(lane.expected.map(item => [...item]).sort()))) ||
       (receipt.state === 'succeeded' ? receipt.outputs === null : receipt.outputs !== null)) fail('receipt_invalid');
   if (receipt.outputs !== null) {
     if (!receipt.outputs || typeof receipt.outputs !== 'object' || Array.isArray(receipt.outputs) || canonical(Object.keys(receipt.outputs).sort()) !== canonical(['bucket_name', 'distribution_id', 'feed_url'])) fail('receipt_invalid');
-    stableOutputs({ Outputs: [
+    stableOutputs(lane, { Outputs: [
       { OutputKey: 'BucketName', OutputValue: receipt.outputs.bucket_name },
       { OutputKey: 'DistributionId', OutputValue: receipt.outputs.distribution_id },
       { OutputKey: 'FeedUrl', OutputValue: receipt.outputs.feed_url },
@@ -212,23 +241,23 @@ function readReceipt(path) {
   return receipt;
 }
 
-function describeBoundChangeSet(receipt, aws) {
+function describeBoundChangeSet(lane, receipt, aws) {
   account(aws);
-  const value = aws(['cloudformation', 'describe-change-set', '--stack-name', STACK, '--change-set-name', receipt.change_set_id]);
-  if (value?.ChangeSetId !== receipt.change_set_id || value?.StackName !== STACK || value?.StackId !== receipt.stack_id || value?.Status !== 'CREATE_COMPLETE' || expectedChanges(value.Changes, receipt.change_set_type).some((item, index) => canonical(item) !== canonical(receipt.inventory[index]))) fail('change_set_changed');
+  const value = aws(['cloudformation', 'describe-change-set', '--stack-name', lane.stack, '--change-set-name', receipt.change_set_id]);
+  if (value?.ChangeSetId !== receipt.change_set_id || value?.StackName !== lane.stack || value?.StackId !== receipt.stack_id || value?.Status !== 'CREATE_COMPLETE' || expectedChanges(lane, value.Changes, receipt.change_set_type).some((item, index) => canonical(item) !== canonical(receipt.inventory[index]))) fail('change_set_changed');
   return value;
 }
 
-function remoteTemplateMatches(receipt, aws) {
-  const remote = aws(['cloudformation', 'get-template', '--stack-name', STACK, '--change-set-name', receipt.change_set_id, '--template-stage', 'Original']);
+function remoteTemplateMatches(lane, receipt, aws) {
+  const remote = aws(['cloudformation', 'get-template', '--stack-name', lane.stack, '--change-set-name', receipt.change_set_id, '--template-stage', 'Original']);
   if (remote?.TemplateBody === undefined || templateHash(remote.TemplateBody) !== receipt.template_sha256) fail('remote_template_binding_mismatch');
 }
 
-function predeployValidation(receipt, aws) {
+function predeployValidation(lane, receipt, aws) {
   // This newer CloudFormation API exposes Early Validation failures for the
   // exact change set. It is deliberately not describe-stack-events.
   let events;
-  try { events = aws(['cloudformation', 'describe-events', '--stack-name', STACK, '--change-set-name', receipt.change_set_id, '--filters', 'FailedEvents=true']); }
+  try { events = aws(['cloudformation', 'describe-events', '--stack-name', lane.stack, '--change-set-name', receipt.change_set_id, '--filters', 'FailedEvents=true']); }
   catch { fail('predeploy_validation_unavailable'); }
   if (!Array.isArray(events?.OperationEvents)) fail('predeploy_validation_unavailable');
   if (events.OperationEvents.length !== 0) fail('predeploy_validation_failed');
@@ -238,38 +267,41 @@ function summary(receipt) {
   return { schema_version: 1, kind: receipt.kind, operation_id: receipt.operation_id, state: receipt.state, change_set_id: receipt.change_set_id, feed_url: receipt.outputs?.feed_url ?? null };
 }
 
-export function planClientUpdateStaging({ output }, dependencies = {}) {
+export function planClientUpdateStaging({ output, hosting = 'cloudfront' }, dependencies = {}) {
+  const lane = hostingLane(hosting);
   const runtime = dependencies.runtime ?? planningRuntime;
   const aws = dependencies.aws ?? defaultAws;
   const awsNoOutput = dependencies.awsNoOutput ?? defaultAwsNoOutput;
-  const template = templateBytes(dependencies.readTemplate);
+  const template = templateBytes(lane, dependencies.readTemplate);
   const destination = resolve(output);
   privateDirectory(dirname(destination));
   const operationId = dependencies.operationId ?? randomUUID();
   const source = runtime();
   if (!COMMIT.test(source)) fail('reviewed_source_unavailable');
+  const fresh = !existsSync(destination);
   let receipt;
-  if (existsSync(destination)) {
+  if (!fresh) {
     receipt = readReceipt(destination);
-    if (receipt.source_sha !== source || receipt.template_sha256 !== templateHash(template) || receipt.state !== 'planning') fail('receipt_destination_exists');
+    if (receipt.kind !== lane.kind || receipt.source_sha !== source || receipt.template_sha256 !== templateHash(template) || receipt.state !== 'planning') fail('receipt_destination_exists');
   } else {
-    receipt = { schema_version: 1, kind: 'echo-client-update-staging-feed-operation-v1', operation_id: operationId, source_sha: source,
-      template_sha256: templateHash(template), account: ACCOUNT, region: REGION, stack_name: STACK, change_set_name: changeSetName(operationId),
+    receipt = { schema_version: 1, kind: lane.kind, operation_id: operationId, source_sha: source,
+      template_sha256: templateHash(template), account: ACCOUNT, region: REGION, stack_name: lane.stack, change_set_name: changeSetName(lane, operationId),
       change_set_id: null, stack_id: null, change_set_type: null, inventory: null, state: 'planning', outputs: null };
-    save(destination, receipt, true);
   }
   account(aws);
-  const existing = readChangeSet(receipt.change_set_name, aws);
+  accountPublicAccess(lane, aws);
+  if (fresh) save(destination, receipt, true);
+  const existing = readChangeSet(lane, receipt.change_set_name, aws);
   if (existing?.pending) return summary(receipt);
-  if (existing === null) createChangeSet({ aws, awsNoOutput, operationId: receipt.operation_id });
-  const change = readChangeSet(receipt.change_set_name, aws);
+  if (existing === null) createChangeSet({ lane, aws, awsNoOutput, operationId: receipt.operation_id });
+  const change = readChangeSet(lane, receipt.change_set_name, aws);
   if (change === null || change.pending) return summary(receipt);
   receipt.change_set_id = change.id;
   receipt.stack_id = change.stack_id;
   receipt.change_set_type = 'CREATE';
   receipt.inventory = change.inventory;
-  remoteTemplateMatches(receipt, aws);
-  predeployValidation(receipt, aws);
+  remoteTemplateMatches(lane, receipt, aws);
+  predeployValidation(lane, receipt, aws);
   receipt.state = 'planned';
   save(destination, receipt);
   return summary(receipt);
@@ -282,15 +314,17 @@ export function executeClientUpdateStaging({ receipt: receiptPath, approveChange
   const path = resolve(receiptPath);
   return withLock(path, () => {
     const receipt = readReceipt(path);
+    const lane = receiptLane(receipt);
     if (approveChangeSet !== receipt.change_set_id) fail('exact_change_set_approval_required');
     if (receipt.state === 'succeeded') return summary(receipt);
     if (receipt.state === 'unconfirmed') fail('operation_unconfirmed');
     if (runtime() !== receipt.source_sha) fail('exact_reviewed_runtime_required');
-    const template = templateBytes(dependencies.readTemplate);
+    const template = templateBytes(lane, dependencies.readTemplate);
     if (templateHash(template) !== receipt.template_sha256) fail('template_changed');
     if (receipt.state === 'planned') {
-      describeBoundChangeSet(receipt, aws);
-      remoteTemplateMatches(receipt, aws);
+      describeBoundChangeSet(lane, receipt, aws);
+      remoteTemplateMatches(lane, receipt, aws);
+      accountPublicAccess(lane, aws);
       receipt.state = 'executing'; save(path, receipt);
       try { awsNoOutput(['cloudformation', 'execute-change-set', '--change-set-name', receipt.change_set_id, '--client-request-token', clientToken('execute', receipt.change_set_id)]); }
       catch { return summary(receipt); }
@@ -300,14 +334,15 @@ export function executeClientUpdateStaging({ receipt: receiptPath, approveChange
 }
 
 function statusReceipt(path, receipt, aws) {
+  const lane = receiptLane(receipt);
   account(aws);
   let stack;
-  try { stack = stackDescription(aws); } catch { receipt.state = 'unconfirmed'; save(path, receipt); return summary(receipt); }
+  try { stack = stackDescription(lane, aws); } catch { receipt.state = 'unconfirmed'; save(path, receipt); return summary(receipt); }
   if (!stack) { receipt.state = 'unconfirmed'; save(path, receipt); return summary(receipt); }
   if (['CREATE_IN_PROGRESS', 'UPDATE_IN_PROGRESS', 'REVIEW_IN_PROGRESS'].includes(stack.StackStatus)) return summary(receipt);
   if (stack.StackId !== receipt.stack_id) { receipt.state = 'unconfirmed'; save(path, receipt); return summary(receipt); }
   if (!['CREATE_COMPLETE', 'UPDATE_COMPLETE'].includes(stack.StackStatus)) { receipt.state = 'unconfirmed'; save(path, receipt); return summary(receipt); }
-  try { receipt.outputs = stableOutputs(stack); receipt.state = 'succeeded'; save(path, receipt); }
+  try { receipt.outputs = stableOutputs(lane, stack); receipt.state = 'succeeded'; save(path, receipt); }
   catch { receipt.state = 'unconfirmed'; save(path, receipt); }
   return summary(receipt);
 }
@@ -330,6 +365,7 @@ function main(argv) {
     options[rest[index]] = rest[index + 1];
   }
   if (command === 'plan' && canonical(Object.keys(options).sort()) === canonical(['--output'])) return planClientUpdateStaging({ output: options['--output'] });
+  if (command === 'plan' && canonical(Object.keys(options).sort()) === canonical(['--hosting', '--output'])) return planClientUpdateStaging({ output: options['--output'], hosting: options['--hosting'] });
   if (command === 'execute' && canonical(Object.keys(options).sort()) === canonical(['--approve-change-set', '--receipt'])) return executeClientUpdateStaging({ receipt: options['--receipt'], approveChangeSet: options['--approve-change-set'] });
   if (command === 'status' && canonical(Object.keys(options).sort()) === canonical(['--receipt'])) return statusClientUpdateStaging({ receipt: options['--receipt'] });
   fail('arguments_invalid');
