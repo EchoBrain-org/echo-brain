@@ -69,7 +69,7 @@ person out cleanly, as ADR-0002 §4 requires.
 | --- | --- | --- |
 | macOS arm64 only, ad-hoc signed | It is not notarized, and there are no Windows or Linux builds. | Phases 5–7 of `2026-09-24-electron-desktop-v1.md`. |
 | Default Electron icon | Finder and About show Electron's icon. The Swift app had none either. | Add an `.icns`. |
-| Shortcut conflicts are not detected | If another app holds ⌘E or ⌘⇧E, both apps respond. This mattered only while Swift ECHO ran. | Detect the known holder, or register one alternative chord. |
+| Shortcut conflicts are not detected | If another app holds ⌘E or ⌘⇧E, both apps respond. This mattered only while Swift ECHO ran. When registering does fail, only the tray says so ("⌘⇧E is used by another app"): the sidebar's Capture row still shows ⌘⇧E, where the Swift app hid it. | Detect the known holder, or register one alternative chord. Tell the page whether ⌘⇧E was registered, and show the hint only then. |
 | A tiny exit window | Electron could still show its main-process error box if a late macOS notice lands in the last 10–20 ms of exit. It was never seen in more than 300 runs after the quit fix. | Install an error handler for the exit period if it is ever seen. |
 
 ## Retirement and release
