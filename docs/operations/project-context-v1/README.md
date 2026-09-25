@@ -126,9 +126,9 @@ OIDC is synthetic; current session resolution, authorization and application
 selection are real. This gate remains enabled; an injected application cannot
 substitute for its result.
 
-The native subprocess case compiles
-[`native-cli-proof.swift`](../../../tests/fixtures/project-context-integration/native-cli-proof.swift)
-with the real `ProjectSession`, `ProjectClient`, `ProjectCLI` and `UploadClient`.
+The native subprocess case compiled `native-cli-proof.swift` (removed with the
+Swift app on 2026-09-25; the Electron desktop app in `product/echo-desktop`
+replaces it) with the real `ProjectSession`, `ProjectClient`, `ProjectCLI` and `UploadClient`.
 Its executable runs this worktree's built CLI, including real account status,
 request parsing and response decoding, against the loopback server. Alice and
 Carol exercise overlapping/disjoint discovery, feed/search/roster/original

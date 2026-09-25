@@ -1,6 +1,5 @@
 // Test hook only (compiled out of release bundles): a synthetic session and a
-// fixture Authority behind the real person client, the same pattern as
-// tests/fixtures/echo-projects-cli-bridge.mjs. Every request is logged to
+// fixture Authority behind the real person client. Every request is logged to
 // <home>/calls.jsonl so tests can assert what the app actually sent.
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';

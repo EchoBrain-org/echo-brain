@@ -1,6 +1,4 @@
 import { once } from 'node:events';
-import { execFileSync, spawn } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
@@ -203,36 +201,5 @@ describe('PC-06 real CLI -> loopback HTTP -> application -> V9, fixture authenti
     expect(JSON.parse(submit.stderr)).toMatchObject({ code: 'not_found', mutation_outcome: 'not_submitted' });
     expect(requests).toEqual(['POST /v2/person/updates']);
     expect(h.database.prepare('SELECT count(*) AS n FROM authority_person_updates_v2').get()).toEqual({ n: 0 });
-  });
-
-  it.skipIf(process.platform !== 'darwin')('drives native ProjectSession and UploadClient through real CLI subprocesses and HTTP', async () => {
-    const repo = fileURLToPath(new URL('../../../../', import.meta.url));
-    const binary = join(h.root, 'native-proof');
-    execFileSync('/usr/bin/xcrun', ['swiftc', '-swift-version', '5', '-parse-as-library', '-warnings-as-errors',
-      '-target', `${process.arch === 'arm64' ? 'arm64' : 'x86_64'}-apple-macos14.0`, '-framework', 'AppKit',
-      '-module-cache-path', join(h.root, 'modules'),
-      ...['ui-support', 'account', 'projects', 'uploads'].map(name => join(repo, `product/echo-overlay/${name}.swift`)),
-      join(repo, 'tests/fixtures/project-context-integration/native-cli-proof.swift'), '-o', binary,
-    ], { stdio: 'pipe', timeout: 120_000 });
-    const s = h.seed();
-    const run = async (person: Person, mode: string) => {
-      const script = join(h.root, `${mode}.mjs`);
-      const executable = join(h.root, `${mode}-cli`);
-      writeFileSync(script, `import { runPersonClientCli } from ${JSON.stringify(pathToFileURL(join(repo, 'src/product/person-client/dist/composition.js')).href)};
-const args = process.argv.slice(2); if (args[0] === 'person') args.shift();
-process.exitCode = await runPersonClientCli(args, { home_directory: ${JSON.stringify(homes.get(person))}, now: () => ${JSON.stringify(PROJECT_CONTEXT_NOW)},
-fetch: (input, init) => { const url = new URL(String(input)); if (url.origin !== 'https://authority.example') throw new Error('unexpected origin'); return fetch(${JSON.stringify(origin)} + url.pathname + url.search, init); } });
-`);
-      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-      writeFileSync(executable, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} "$@"\n`, { mode: 0o700 });
-      const child = spawn(binary, [executable, mode, s.alpha, s.beta, s.cross.context_id], { stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = ''; let stderr = '';
-      child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
-      const timeout = setTimeout(() => child.kill('SIGKILL'), 90_000);
-      try { const [code] = await once(child, 'close'); expect(code, stderr).toBe(0); expect(stdout).toContain(`passed ${mode}`); }
-      finally { clearTimeout(timeout); if (child.exitCode === null) child.kill('SIGKILL'); }
-    };
-    await run('alice', 'alice'); await run('carol', 'carol');
-    await stop(); await start(false); await run('alice', 'unsupported');
   });
 });
