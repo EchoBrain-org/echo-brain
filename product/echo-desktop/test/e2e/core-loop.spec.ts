@@ -76,8 +76,11 @@ test('capture starts private outside a project, closes itself on save and says w
   await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
   await expect(page.getByTestId('compose-body')).toBeFocused();
   await page.getByTestId('compose-body').fill('Northwind wants annual\nwith a pilot clause.');
+  // The live region is there before the toast, so a screen reader announces the toast.
+  await expect(page.getByRole('status')).toHaveText('');
   await page.keyboard.press('Meta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
+  await expect(page.getByRole('status')).toHaveText('Saved for you');
   await expect(page.getByTestId('compose')).toHaveCount(0);
   await expect(page.getByTestId('ask-field')).toBeFocused();
   expect(notes()).toHaveLength(1);

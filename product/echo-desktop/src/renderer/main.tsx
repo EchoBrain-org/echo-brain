@@ -136,9 +136,12 @@ function App() {
           : inProject ? <Project state={state} project={inProject} />
           : organization ? <Organization state={state} page={organization} /> : <Home state={state} />}
       </main>
-      {state.toast && !state.concealed && (
-        <div class="toast" role="status" data-testid="toast">{state.toast === UNSAVED_FILES ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
-      )}
+      {/* Always there, so a screen reader announces each toast as it appears. */}
+      <div role="status">
+        {state.toast && !state.concealed && (
+          <div class="toast" data-testid="toast">{state.toast === UNSAVED_FILES ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
+        )}
+      </div>
       {banner && !state.toast && <div class="banner" data-testid="change-banner"><ChangeLine change={banner} /></div>}
       <Bar state={state} />
       {pane && <SourcePane state={state} />}
