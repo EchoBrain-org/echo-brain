@@ -71,10 +71,11 @@ describe("CI workflow", () => {
 
     expect(source).toMatch(/required-checks:\s*\n\s+name: CI required checks/);
     expect(source).toMatch(
-      /needs: \[check, person-client-package, authority-container, authority-recovery-infrastructure\]/,
+      /needs: \[check, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure\]/,
     );
     expect(source).toContain('test "$CHECK_RESULT" = success');
     expect(source).toContain('test "$PERSON_CLIENT_PACKAGE_RESULT" = success');
+    expect(source).toContain('test "$DESKTOP_APP_RESULT" = success');
     expect(source).toContain('test "$AUTHORITY_CONTAINER_RESULT" = success');
     expect(source).toContain(
       'test "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" = success',
