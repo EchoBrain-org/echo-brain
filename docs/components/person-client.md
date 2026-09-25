@@ -40,7 +40,8 @@ provider adapter, product database, installation key, access lease, or
 background update runner. The opt-in foreground
 [client updater](../features/client-updates-v1.md) owns bounded release discovery
 and platform installation before Person command dispatch. Other machine-installed surfaces may wrap this client
-without becoming part of its responsibility.
+without becoming part of its responsibility; the Electron desktop app in
+`product/echo-desktop` is one, and runs this client in process.
 
 ## Data authority
 

@@ -68,5 +68,5 @@ The shared implementation packages are `packages/organization-processing` and
 | `providers/openrouter` | OpenRouter processing, generation and model vocabulary |
 | `providers/granola` | Granola source, custody, admission and setup proofs |
 | `providers/synthetic-demo` | Fixed synthetic source and its evaluation/setup proofs |
-| `providers/slack/client` | Client contracts, Person commands and Swift tool surface |
+| `providers/slack/client` | Client contracts and Person commands |
 | `providers/slack/server` | Server identity, approval, historical codec/projector, connection/setup and assets |

@@ -59,7 +59,9 @@ and rollback procedure.
 The release-owned Person kits are command-line only: a macOS arm64 kit and a
 Linux x64 kit, each with a pinned Node runtime, the exact Person client, and
 its own installer and verifier. The graphical setup application and the app
-kit that carried the native overlay are retired. See the
+kit that carried the native overlay are retired, and the Swift app's sources
+and builder are deleted; the Electron desktop app in `product/echo-desktop`
+replaces it. See the
 [release procedure](../../deploy/release/README.md#person-command-line-kits).
 
 Release readers accept the onboarding writer's literal environment format,
