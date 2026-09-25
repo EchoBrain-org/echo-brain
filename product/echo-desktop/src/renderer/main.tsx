@@ -18,7 +18,7 @@ import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeProjects, closeReader,
   closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, pageCovered,
   refreshStatus, resume, retryStart, signinPhase, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization,
-  UNSAVED_FILES, useStore, windowShown, type State,
+  useStore, WARNINGS, windowShown, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -143,7 +143,7 @@ function App() {
       {/* Always there, so a screen reader announces each toast as it appears. */}
       <div role="status">
         {state.toast && !state.concealed && (
-          <div class="toast" data-testid="toast">{state.toast === UNSAVED_FILES ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
+          <div class="toast" data-testid="toast">{WARNINGS.has(state.toast) ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
         )}
       </div>
       {/* Under a toast, not hidden by it: Try again and Dismiss stay in reach. */}

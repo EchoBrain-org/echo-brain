@@ -329,6 +329,10 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .sheet.new-project .people-list { max-height: 200px; min-height: 40px; }
 .sheet.new-project .section-label { flex-shrink: 0; margin-top: 6px; }
 .sheet.new-project .field:disabled { opacity: 0.5; cursor: default; }
+/* A person picked: where their add stands, and Try again or Skip… when it may not have been sent. */
+.person.pick .standing { max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person.pick .standing.error { color: var(--danger); }
+.person.pick .pill { flex-shrink: 0; height: 24px; padding: 0 10px; font-size: 12.5px; }
 .files-well { min-height: 0; overflow: hidden; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px dashed rgba(240, 236, 230, 0.25); border-radius: 10px; }
 .files-well > .pill { flex-shrink: 0; }
 .file-list { align-self: stretch; max-height: 142px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }

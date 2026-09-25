@@ -122,9 +122,11 @@ export interface ToolsSheet {
 }
 
 /**
- * Finding people for a project and adding one, which People and New project
- * share. Adding is instant, with an Undo; making a lead or removing someone
- * is asked first.
+ * Finding people by name. People finds them in the project's directory and
+ * adds one at once, with an Undo; making a lead or removing someone is asked
+ * first. New project finds them in the organization's directory and lists
+ * the ones picked, or, on an Authority without it, uses People's way once
+ * its project exists.
  */
 export interface Finding {
   /** The name typed to find someone. */
@@ -152,7 +154,7 @@ export interface PeopleSheet extends Finding {
   failure?: Failure;
 }
 
-/** One file in New project. They save one at a time, each under its own request. */
+/** One file in New project. Once the project exists they save one at a time, each under its own request. */
 export interface ProjectFile {
   id: number;
   name: string;
@@ -167,10 +169,22 @@ export interface ProjectFile {
   kept: boolean;
 }
 
+/** One person picked in New project. Once the project exists they are added one at a time, each under its own request. */
+export interface ProjectPick {
+  /** From the same sequence as the files', so a Skip… names either. */
+  id: number;
+  person: Member;
+  requestId: string;
+  /** unknown: the add may or may not have arrived; nothing after it starts until that is settled. */
+  status: 'waiting' | 'adding' | 'added' | 'unknown' | 'failed' | 'skipped';
+  failure?: Failure;
+}
+
 /**
- * New project, one page: a name, then Create. Once the project exists it
- * opens behind the sheet, and the same sheet takes people, then files if
- * any, which save into it one by one as they are added.
+ * New project, one page: a name, the people to add and the files to save,
+ * both optional. Nothing is sent before Create. Create makes the project;
+ * then the same page adds each person and saves each file, in turn, and the
+ * project opens behind the sheet. Done closes it.
  */
 export interface NewProjectSheet extends Finding {
   kind: 'new-project';
@@ -178,7 +192,7 @@ export interface NewProjectSheet extends Finding {
   name: string;
   /** The create: its request, the name it sends, and where it stands. An unknown one is resent as it was. */
   create: { requestId: string; name: string; status: 'editing' | 'sending' | 'unknown' | 'failed' | 'created'; failure?: Failure };
-  /** Close was chosen while the create or a file may have arrived: closing gives up finding out, so it is asked first. */
+  /** Close was chosen while the create, an add or a file may have arrived: closing gives up finding out, so it is asked first. */
   confirmClose: boolean;
   /** The project Create made, once read. */
   project: ProjectSummary | null;
@@ -186,8 +200,17 @@ export interface NewProjectSheet extends Finding {
   createdId: string | null;
   opening: boolean;
   openFailure?: Failure;
+  /** The project opened behind the sheet, once nothing more could start. */
+  opened: boolean;
+  /** The people to add, in the order picked. You lead the project, so you are never one of them. */
+  picks: ProjectPick[];
+  /**
+   * This Authority has no organization directory (an older one): people are
+   * added after Create, from the project's own directory, as People does.
+   */
+  peopleLater: boolean;
   files: ProjectFile[];
-  /** The file whose Skip… is being asked. */
+  /** The person or file whose Skip… is being asked. */
   skip: number | null;
   /** A fixed line about the last gesture, such as too many files. */
   notice?: string;
@@ -1013,12 +1036,15 @@ function changed(done: ChangeState): void {
 
 // ---- people ----------------------------------------------------------------------
 
-/** A sheet that finds people for a project: People, or New project once its project exists. */
+/**
+ * A sheet that finds people in a project's directory: People, or New project
+ * once its project exists when the Authority has no organization directory.
+ */
 export type FindingSheet = PeopleSheet | (NewProjectSheet & { project: ProjectSummary });
 
 export function findingSheet(current: State = state): FindingSheet | null {
   const sheet = current.sheet;
-  return sheet?.kind === 'people' || (sheet?.kind === 'new-project' && sheet.project) ? sheet as FindingSheet : null;
+  return sheet?.kind === 'people' || (sheet?.kind === 'new-project' && sheet.project && sheet.peopleLater) ? sheet as FindingSheet : null;
 }
 
 function peopleSheet(mine?: number): FindingSheet | null {
@@ -1176,13 +1202,17 @@ export function confirmMemberChange(): void {
 /** New project takes up to 20 files, as the Swift app did. */
 export const MAX_PROJECT_FILES = 20;
 const TOO_MANY_FILES = 'Add up to 20 files.';
-/** Said when a file is dropped on New project before it has a project to save into. */
-const CREATE_FIRST = 'Create the project first.';
-const OPEN_FIRST = 'Open the project first.';
-/** Said when New project closes with files that may not have been saved. */
+/** Said when New project closes after Create with files that may not have been saved, people who may not have been added, or both. */
 export const UNSAVED_FILES = 'Some files may not have been saved.';
+const UNADDED_PEOPLE = 'Some people may not have been added.';
+const UNFINISHED = 'Some people and files may not have been added.';
+/** The toasts that warn, shown with the warning mark. */
+export const WARNINGS: ReadonlySet<string> = new Set([UNSAVED_FILES, UNADDED_PEOPLE, UNFINISHED]);
+/** How an Authority without the organization directory answers it: the route is not there. */
+const NO_DIRECTORY = ['not_found', 'unsupported'];
 
-let fileIds = 0;
+/** New project's people and files, numbered in one sequence. */
+let rowIds = 0;
 
 function newProjectSheet(mine?: number): NewProjectSheet | null {
   const sheet = state.sheet;
@@ -1196,9 +1226,9 @@ function setNewProject(patch: Partial<NewProjectSheet>, mine?: number): void {
   unresolvedChanged();
 }
 
-/** Something in New project is on its way: the create, the read of what it made, a file, or an add. */
+/** Something in New project is on its way: the create, the read of what it made, an add, or a file. */
 export function newProjectBusy(sheet: NewProjectSheet): boolean {
-  return sheet.create.status === 'sending' || sheet.opening || memberChangeSending() ||
+  return sheet.create.status === 'sending' || sheet.opening || memberChangeSending() || sheet.picks.some(pick => pick.status === 'adding') ||
     sheet.files.some(file => file.status === 'saving' || file.status === 'checking');
 }
 
@@ -1208,16 +1238,18 @@ export function projectName(text: string): string | null {
   return name === '' || new TextEncoder().encode(name).length > 200 || /[\u0000-\u001f\u007f-\u009f]/.test(name) ? null : name;
 }
 
-/** The sidebar's New project, and Home's when there are no projects. */
+/** The sidebar's New project, and Home's when there are no projects. The organization's first people show at once. */
 export function openNewProject(): void {
   if (!expect() || state.sheet || state.concealed || (state.compose && !state.compose.hidden)) return;
   set({
     toast: null,
     sheet: {
       kind: 'new-project', seq: ++seq, name: '', create: { requestId: crypto.randomUUID(), name: '', status: 'editing' }, confirmClose: false,
-      project: null, createdId: null, opening: false, files: [], skip: null, query: '', directory: null, menu: null, confirm: null, added: null,
+      project: null, createdId: null, opening: false, opened: false, picks: [], peopleLater: false, files: [], skip: null,
+      query: '', directory: null, menu: null, confirm: null, added: null,
     },
   });
+  void searchPeople();
 }
 
 /** Typing the name. A different name is a different request; while a create is on its way or unknown it cannot change. */
@@ -1230,8 +1262,8 @@ export function setNewProjectName(name: string): void {
 /**
  * Create, or Try again on one whose outcome is unknown: the same request,
  * with the same name. Only the Authority's receipt says it was made; then
- * the project is read and opens behind the sheet. Made but not read, the
- * button reads it again (Open): it never creates twice.
+ * the project is read, and the people and files picked go into it. Made but
+ * not read, the button reads it again (Open): it never creates twice.
  */
 export async function createProject(): Promise<void> {
   const account = expect();
@@ -1259,7 +1291,11 @@ export async function createProject(): Promise<void> {
   await openCreated();
 }
 
-/** The project Create made, read: it joins your projects, opens behind the sheet, and takes people, then files. */
+/**
+ * The project Create made, read: it joins your projects, and the people and
+ * files picked go into it. Without the organization's directory, a lead now
+ * finds people in the project's own.
+ */
 async function openCreated(): Promise<void> {
   const account = expect();
   const sheet = newProjectSheet();
@@ -1278,18 +1314,43 @@ async function openCreated(): Promise<void> {
     set({ projects: { ...state.projects, items: [project, ...state.projects.items] } });
   }
   setNewProject({ opening: false, project, notice: undefined }, mine);
-  void openProject(project);
-  if (project.role === 'lead') void findPeople();
-}
-
-/** The create, or a file, may have arrived and nothing says yet whether it did. */
-export function newProjectUnsettled(sheet: NewProjectSheet): boolean {
-  return (!sheet.project && !sheet.createdId && sheet.create.status === 'unknown') || sheet.files.some(file => file.status === 'unknown');
+  if (newProjectSheet(mine)?.peopleLater && project.role === 'lead') {
+    void loadRoster(project.project_id);
+    void findPeople();
+  }
+  pumpNewProject();
 }
 
 /**
- * Close, Cancel or Done. A create or a file whose outcome is unknown is asked
- * about once, as closing gives up its Try again; nothing on its way is cut off.
+ * Once the project exists, New project works down its list one request at a
+ * time: each person, then each file. One whose outcome is unknown holds back
+ * the rest until it is settled. When nothing more can start, the project
+ * opens behind the sheet, once.
+ */
+function pumpNewProject(): void {
+  const sheet = newProjectSheet();
+  if (!sheet?.project) return;
+  if (sheet.picks.some(pick => pick.status === 'adding') || sheet.files.some(file => file.status === 'saving' || file.status === 'checking')) return;
+  const held = sheet.picks.some(pick => pick.status === 'unknown');
+  const person = held ? undefined : sheet.picks.find(pick => pick.status === 'waiting');
+  if (person) { void addPick(sheet.seq, person.id, false); return; }
+  const file = held || sheet.files.some(entry => entry.status === 'unknown') ? undefined : sheet.files.find(entry => entry.status === 'waiting');
+  if (file) { void saveFile(sheet.seq, file.id, false); return; }
+  if (sheet.opened) return;
+  setNewProject({ opened: true }, sheet.seq);
+  void openProject(sheet.project);
+}
+
+/** The create, an add, or a file may have arrived and nothing says yet whether it did. */
+export function newProjectUnsettled(sheet: NewProjectSheet): boolean {
+  return (!sheet.project && !sheet.createdId && sheet.create.status === 'unknown') || sheet.picks.some(pick => pick.status === 'unknown') ||
+    sheet.files.some(file => file.status === 'unknown');
+}
+
+/**
+ * Close, Cancel or Done. A create, an add or a file whose outcome is unknown
+ * is asked about once, as closing gives up its Try again; nothing on its way
+ * is cut off.
  */
 function closeNewProject(): void {
   const sheet = newProjectSheet();
@@ -1301,22 +1362,29 @@ function closeNewProject(): void {
   finishNewProject(sheet);
 }
 
-/** Keep it: back to the create or the file whose outcome is unknown. */
+/** Keep it: back to what may have arrived. */
 export function keepNewProject(): void {
   if (newProjectSheet()) setNewProject({ confirmClose: false });
 }
 
 /**
  * New project goes. Copies kept to resend a file go too, as nothing can
- * resend them now. If some files added to the project were not saved into
- * it, or may not have been, the toast says so.
+ * resend them now. Once the project was made, the toast says if some people
+ * were not added to it or some files not saved into it, or may not have been.
+ * Before Create nothing was sent, so nothing is said.
  */
 function finishNewProject(sheet: NewProjectSheet): void {
   for (const file of sheet.files) if (file.kept) releaseCopy(file.requestId);
-  const unsaved = sheet.files.some(file => file.status !== 'saved');
-  set({ sheet: null, ...(unsaved ? { toast: UNSAVED_FILES } : {}) });
+  const made = sheet.createdId !== null;
+  const people = made && sheet.picks.some(pick => pick.status !== 'added');
+  const files = made && sheet.files.some(file => file.status !== 'saved');
+  const toast = people && files ? UNFINISHED : people ? UNADDED_PEOPLE : files ? UNSAVED_FILES : null;
+  set({ sheet: null, ...(toast ? { toast } : {}) });
   unresolvedChanged();
-  if (sheet.project) void refreshFeed(sheet.project.project_id);
+  if (!sheet.project) return;
+  void refreshFeed(sheet.project.project_id);
+  // Someone added after the project opened shows in its title bar too.
+  if (state.roster?.projectId === sheet.project.project_id) void loadRoster(sheet.project.project_id);
 }
 
 function releaseCopy(requestId: string): void {
@@ -1324,10 +1392,128 @@ function releaseCopy(requestId: string): void {
   if (account) void rpc('documents.abandon', { expect: account, request_id: requestId });
 }
 
-/** Add files…, once the project exists: main's dialog, several at once. */
+// People, picked on the page from the organization's directory.
+
+/** Typing a name finds the organization's people once it pauses. */
+export function setPickQuery(query: string): void {
+  const sheet = newProjectSheet();
+  if (!sheet || sheet.peopleLater) return;
+  setNewProject({ query });
+  clearTimeout(peopleTimer);
+  peopleTimer = setTimeout(() => void searchPeople(), SEARCH_PAUSE_MS);
+}
+
+/**
+ * The organization's people for the name typed (the first ones, with none),
+ * or the next page of them (More people). An Authority without the directory
+ * turns people to after Create, once, and never as an empty list.
+ */
+export async function searchPeople(more = false): Promise<void> {
+  clearTimeout(peopleTimer);
+  const account = expect();
+  const sheet = newProjectSheet();
+  if (!account || !sheet || sheet.peopleLater) return;
+  const cursor = more ? sheet.directory?.next : undefined;
+  if (more && !cursor) return;
+  const query = askText(sheet.query);
+  const mine = ++seq;
+  const shown = more ? sheet.directory?.items ?? [] : [];
+  setNewProject({ directory: { seq: mine, items: shown, next: sheet.directory?.next ?? null, loading: true } }, sheet.seq);
+  const result = await rpc('people.directory', { expect: account, ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) });
+  const current = newProjectSheet(sheet.seq);
+  if (!current || current.directory?.seq !== mine) return;
+  if (!result.ok) {
+    if (NO_DIRECTORY.includes(result.failure.code)) { setNewProject({ peopleLater: true, query: '', directory: null }, sheet.seq); return; }
+    setNewProject({ directory: { seq: mine, items: shown, next: null, loading: false, failure: result.failure } }, sheet.seq);
+    accountLost(result.failure);
+    return;
+  }
+  const seen = new Set(shown.map(person => person.membership_id));
+  setNewProject({ directory: {
+    seq: mine, items: [...shown, ...result.value.items.filter(person => !seen.has(person.membership_id))], next: result.value.next_cursor, loading: false,
+  } }, sheet.seq);
+}
+
+/** The people found who can be picked: not you, who lead it, and not picked already. */
+export function pickable(current: State = state): readonly Member[] {
+  const sheet = current.sheet;
+  if (sheet?.kind !== 'new-project' || sheet.peopleLater || !sheet.directory) return [];
+  const me = current.status?.account?.membership_id;
+  const picked = new Set(sheet.picks.map(pick => pick.person.membership_id));
+  return sheet.directory.items.filter(person => person.membership_id !== me && !picked.has(person.membership_id));
+}
+
+/** Add: listed at once. Before the project exists nothing is sent; after, they are added in turn. */
+export function pickPerson(person: Member): void {
+  const sheet = newProjectSheet();
+  if (!sheet || !pickable().some(entry => entry.membership_id === person.membership_id)) return;
+  const pick: ProjectPick = {
+    id: ++rowIds, person: { membership_id: person.membership_id, display_name: person.display_name }, requestId: crypto.randomUUID(), status: 'waiting',
+  };
+  setNewProject({ picks: [...sheet.picks, pick] });
+  pumpNewProject();
+}
+
+/** ×: a person or a file never sent leaves the list. */
+export function removeRow(id: number): void {
+  const sheet = newProjectSheet();
+  if (!sheet) return;
+  setNewProject({
+    picks: sheet.picks.filter(pick => pick.id !== id || pick.status !== 'waiting'),
+    files: sheet.files.filter(file => file.id !== id || !unsent(file)),
+  });
+}
+
+/** A file nothing was sent for: waiting its turn, or one main refused. */
+export function unsent(file: ProjectFile): boolean {
+  return file.status === 'waiting' || (file.status === 'failed' && !file.handle);
+}
+
+/** A person moves on (Try again, Skip, or the add): a close question asked before it no longer stands. */
+function patchPick(mine: number, id: number, patch: Partial<ProjectPick>): void {
+  const sheet = newProjectSheet(mine);
+  if (sheet) setNewProject({ picks: sheet.picks.map(pick => pick.id === id ? { ...pick, ...patch } : pick), confirmClose: false }, mine);
+}
+
+/** Adds a person picked to the new project, or resends the same request (Try again). Only the receipt says they were added. */
+async function addPick(mine: number, id: number, retrying: boolean): Promise<void> {
+  const account = expect();
+  const sheet = newProjectSheet(mine);
+  const pick = sheet?.picks.find(entry => entry.id === id);
+  if (!account || !sheet?.project || !pick) return;
+  patchPick(mine, id, { status: 'adding', failure: undefined });
+  const result = await rpc('projects.change', {
+    expect: account, request_id: pick.requestId,
+    change: { kind: 'member-add', project_id: sheet.project.project_id, membership_id: pick.person.membership_id },
+  });
+  if (!newProjectSheet(mine)?.picks.some(entry => entry.id === id)) return;
+  if (!result.ok) {
+    // Only the Authority's answer settles an unknown add: a failed resend leaves it unknown.
+    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    patchPick(mine, id, { status: unknown ? 'unknown' : 'failed', failure: result.failure });
+    accountLost(result.failure);
+    // Refused, the rest carry on; unknown, they wait, and the project opens meanwhile.
+    pumpNewProject();
+    return;
+  }
+  patchPick(mine, id, { status: 'added' });
+  pumpNewProject();
+}
+
+/** Try again: the same add, under the same request id. */
+export function retryPick(id: number): void {
+  const sheet = newProjectSheet();
+  const pick = sheet?.picks.find(entry => entry.id === id);
+  if (!sheet || pick?.status !== 'unknown' || newProjectBusy(sheet)) return;
+  void addPick(sheet.seq, id, true);
+}
+
+// Files, added on the page and saved into the project once it exists.
+
+/** Add files…: main's dialog, several at once. */
 export async function chooseFiles(): Promise<void> {
   const sheet = newProjectSheet();
-  if (!sheet?.project) return;
+  if (!sheet) return;
   const result = await rpc('dialog.openDocuments', {});
   if (!newProjectSheet(sheet.seq)) return;
   if (!result.ok) { setNewProject({ notice: result.failure.code === 'too_many_files' ? TOO_MANY_FILES : message(result.failure) }, sheet.seq); return; }
@@ -1335,14 +1521,10 @@ export async function chooseFiles(): Promise<void> {
   addFiles(sheet.seq, [...result.value.files.map(handle => ({ name: handle.name, handle })), ...result.value.refused.map(name => ({ name, failure: refused }))]);
 }
 
-/**
- * Files dropped on New project. Before its project exists they are refused;
- * after, each is handed to main on its own, which answers with a handle.
- */
+/** Files dropped on New project: each is handed to main on its own, which answers with a handle. */
 export async function dropFiles(files: readonly File[]): Promise<void> {
   const sheet = newProjectSheet();
   if (!sheet || files.length === 0) return;
-  if (!sheet.project) { setNewProject({ notice: sheet.createdId ? OPEN_FIRST : CREATE_FIRST }, sheet.seq); return; }
   if (sheet.files.length + files.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, sheet.seq); return; }
   const chosen: { name: string; handle?: FileHandle; failure?: Failure }[] = [];
   for (const file of files) {
@@ -1352,31 +1534,23 @@ export async function dropFiles(files: readonly File[]): Promise<void> {
   addFiles(sheet.seq, chosen);
 }
 
-/** Files join the project's list and start saving in turn; one main refused says why. */
+/** Files join the list, and save in turn once the project exists; one main refused says why. */
 function addFiles(mine: number, chosen: readonly { name: string; handle?: FileHandle; failure?: Failure }[]): void {
   const sheet = newProjectSheet(mine);
-  if (!sheet?.project || chosen.length === 0) return;
+  if (!sheet || chosen.length === 0) return;
   if (sheet.files.length + chosen.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, mine); return; }
   const added: ProjectFile[] = chosen.map(file => ({
-    id: ++fileIds, name: file.name, requestId: crypto.randomUUID(), kept: false,
+    id: ++rowIds, name: file.name, requestId: crypto.randomUUID(), kept: false,
     ...(file.handle ? { handle: file.handle, status: 'waiting' as const } : { status: 'failed' as const, failure: file.failure }),
   }));
   setNewProject({ files: [...sheet.files, ...added], notice: undefined }, mine);
-  pumpFiles();
+  pumpNewProject();
 }
 
 /** A file moves on (Check status, Try again, or its save): a close question asked before it no longer stands. */
 function patchFile(mine: number, id: number, patch: Partial<ProjectFile>): void {
   const sheet = newProjectSheet(mine);
   if (sheet) setNewProject({ files: sheet.files.map(file => file.id === id ? { ...file, ...patch } : file), confirmClose: false }, mine);
-}
-
-/** One save at a time, into the new project. A file whose outcome is unknown stops the ones after it. */
-function pumpFiles(): void {
-  const sheet = newProjectSheet();
-  if (!sheet?.project || sheet.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown')) return;
-  const next = sheet.files.find(file => file.status === 'waiting');
-  if (next) void saveFile(sheet.seq, next.id, false);
 }
 
 /** Saves a file for the project's members, or resends the copy the client kept of one (Try again). */
@@ -1400,11 +1574,12 @@ async function saveFile(mine: number, id: number, retrying: boolean): Promise<vo
     const unknown = retrying || result.failure.mutation_outcome === 'unknown';
     patchFile(mine, id, { status: unknown ? 'unknown' : 'failed', failure: result.failure, kept: current.kept || unknown });
     accountLost(result.failure);
-    if (!unknown) pumpFiles();
+    // Refused, the rest carry on; unknown, they wait, and the project opens meanwhile.
+    pumpNewProject();
     return;
   }
   patchFile(mine, id, { status: 'saved', kept: false, ...(result.value.extraction ? { extraction: result.value.extraction } : {}) });
-  pumpFiles();
+  pumpNewProject();
 }
 
 /** Try again: the same request, from the copy the client kept. */
@@ -1427,39 +1602,45 @@ export async function checkFile(id: number): Promise<void> {
   if (!newProjectSheet(mine)?.files.some(entry => entry.id === id)) return;
   if (result.ok && result.value.state === 'saved') {
     patchFile(mine, id, { status: 'saved', kept: false, failure: undefined, ...(result.value.extraction ? { extraction: result.value.extraction } : {}) });
-    pumpFiles();
+    pumpNewProject();
     return;
   }
   if (result.ok && result.value.state === 'not_saved') {
     // It never arrived: Try again resends it, and the rest carry on meanwhile.
     patchFile(mine, id, { status: 'failed', failure: { code: 'not_saved', retryable: true } });
-    pumpFiles();
+    pumpNewProject();
     return;
   }
   patchFile(mine, id, { status: 'unknown' });
   if (!result.ok) accountLost(result.failure);
 }
 
-/** Skip…: asked first, since it may have been saved. */
+/** Skip…: asked first, since the person may have been added or the file saved. */
 export function askSkip(id: number): void {
   const sheet = newProjectSheet();
-  if (sheet?.files.some(file => file.id === id && file.status === 'unknown')) setNewProject({ skip: id });
+  if (sheet?.picks.some(pick => pick.id === id && pick.status === 'unknown') || sheet?.files.some(file => file.id === id && file.status === 'unknown')) {
+    setNewProject({ skip: id });
+  }
 }
 
 export function cancelSkip(): void { setNewProject({ skip: null }); }
 
-/** Skip: the file is left as it is, its kept copy goes, and the rest carry on. */
+/** Skip: the person or file is left as it is (a file's kept copy goes), and the rest carry on. */
 export function confirmSkip(): void {
   const sheet = newProjectSheet();
-  const file = sheet?.files.find(entry => entry.id === sheet.skip);
-  if (!sheet || !file || file.status !== 'unknown') { cancelSkip(); return; }
-  if (file.kept) releaseCopy(file.requestId);
-  setNewProject({ skip: null, confirmClose: false,
-    files: sheet.files.map(entry => entry.id === file.id ? { ...entry, status: 'skipped', kept: false } : entry) });
-  pumpFiles();
+  const pick = sheet?.picks.find(entry => entry.id === sheet.skip && entry.status === 'unknown');
+  const file = sheet?.files.find(entry => entry.id === sheet.skip && entry.status === 'unknown');
+  if (!sheet || (!pick && !file)) { cancelSkip(); return; }
+  if (file?.kept) releaseCopy(file.requestId);
+  setNewProject({
+    skip: null, confirmClose: false,
+    picks: sheet.picks.map(entry => entry === pick ? { ...entry, status: 'skipped' as const } : entry),
+    files: sheet.files.map(entry => entry === file ? { ...entry, status: 'skipped' as const, kept: false } : entry),
+  });
+  pumpNewProject();
 }
 
-/** Files can be dropped on New project, one or more, while it is up: before Create, only to be told to create it first. */
+/** Files can be dropped on New project, one or more, while it is up. */
 export function canDropFiles(event: DragEvent): boolean {
   const items = event.dataTransfer?.items;
   return state.status?.signed_in === true && state.sheet?.kind === 'new-project' && items !== undefined && items.length > 0 &&
@@ -1987,15 +2168,16 @@ const TOO_LONG = 'Up to 8 KiB of text.';
 let unresolvedTold = '';
 
 /**
- * Main's quit guard: a note, a file or a project change (a create included)
- * on its way, or not yet confirmed either way.
+ * Main's quit guard: a note, a file or a project change (a create, and New
+ * project's adds, included) on its way, or not yet confirmed either way.
  */
 function unresolvedChanged(): void {
   const compose = state.compose;
   const saving = compose?.status === 'sending' || compose?.status === 'unknown' || compose?.status === 'checking';
   const sheet = state.sheet?.kind === 'new-project' ? state.sheet : null;
   const uploading = sheet?.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown') === true;
-  const changing = changeBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown';
+  const changing = changeBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown' ||
+    sheet?.picks.some(pick => pick.status === 'adding' || pick.status === 'unknown') === true;
   const told = {
     unresolved: saving || uploading || changing,
     ...(saving ? (compose.file ? { file: true } : {}) : uploading ? { file: true } : changing ? { change: true } : {}),
@@ -2051,7 +2233,7 @@ export function openCompose(): void {
  */
 export function openCapture(): void {
   const current = state.compose;
-  // New project stays in front, as Capture would open under it. Once its project is made, files dropped on it go there.
+  // New project stays in front, as Capture would open under it. Files dropped on it go into its project.
   if (state.sheet?.kind === 'new-project') return;
   set({ toast: null });
   setCompose(current ? { ...current, hidden: false } : fresh(null));
