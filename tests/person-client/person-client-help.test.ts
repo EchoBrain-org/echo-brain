@@ -22,6 +22,14 @@ describe("Person client help", () => {
     await expect(help(["--help"])).resolves.toContain("employee");
     await expect(help(["--help"])).resolves.toContain("ask");
     await expect(help(["--help"])).resolves.toContain("start");
+    await expect(help(["--help"])).resolves.toContain("directory   Find people in your organization by name.");
+  });
+
+  it("documents the organization directory as a single command with no project", async () => {
+    const text = await help(["directory", "--help"]);
+    expect(text).toContain("usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]");
+    expect(text).toContain("no project is needed");
+    expect(text).not.toContain("--project-id");
   });
 
   it("documents sign-in, reads, session commands, and nested employee commands", async () => {

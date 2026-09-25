@@ -38,6 +38,7 @@ encoding implementation.
 | `projects read` | `GET /v1/person/projects/{project_id}` | none | `200` project summary |
 | `projects members` | `POST /v1/person/projects/members` | project browse | `200` members page |
 | `projects directory` | `POST /v1/person/projects/directory` | directory search | `200` directory page |
+| `directory` | `POST /v1/person/directory` | organization directory search | `200` organization directory page |
 | `projects member-set` | `POST /v1/person/projects/members/set` | member-set | `200` immutable mutation receipt |
 | `projects member-remove` | `POST /v1/person/projects/members/remove` | member-remove | `200` immutable mutation receipt |
 | `projects associate` | `POST /v1/person/projects/context/associate` | association | `200` immutable mutation receipt |
@@ -79,6 +80,7 @@ echo-brain person projects create --request-id <uuid> --name <name>
 echo-brain person projects read --project-id <project-id>
 echo-brain person projects members --project-id <project-id> [--limit <1-10>] [--cursor <opaque-base64url>]
 echo-brain person projects directory --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
+echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 echo-brain person projects member-set --request-id <uuid> --project-id <project-id> --membership-id <membership-id> --role <member|lead>
 echo-brain person projects member-remove --request-id <uuid> --project-id <project-id> --membership-id <membership-id>
 echo-brain person projects associate --request-id <uuid> --project-id <project-id> --context-id <context-id>

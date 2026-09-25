@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   validateOrganizationApiError,
+  validateOrganizationDirectorySearchV1,
+  validateOrganizationDirectoryV1,
   validatePersonUpdateRequestId,
   validatePersonUpdateSubmitV1,
   validatePersonUpdateSubmitV2,
@@ -136,6 +138,7 @@ const requestValidators: Readonly<Record<string, (value: unknown) => unknown>> =
   'projects-create': validateProjectCreateV1,
   'projects-members': validateProjectContextBrowseV1,
   'projects-directory': validateProjectDirectorySearchV1,
+  'person-directory': validateOrganizationDirectorySearchV1,
   'projects-member-add': validateProjectMemberAddV1,
   'projects-member-set': validateProjectMemberSetV1,
   'projects-member-remove': validateProjectMemberRemoveV1,
@@ -153,6 +156,7 @@ const responseValidators: Readonly<Record<string, (value: unknown) => unknown>> 
   'projects-read': validateProjectSummaryV1,
   'projects-members': validateProjectMembersV1,
   'projects-directory': validateProjectDirectoryV1,
+  'person-directory': validateOrganizationDirectoryV1,
   'projects-member-add': validateProjectMutationReceiptV1,
   'projects-member-set': validateProjectMutationReceiptV1,
   'projects-member-remove': validateProjectMutationReceiptV1,
@@ -182,7 +186,7 @@ describe('project-context-v1 contract fixtures', () => {
     expect(operations).toMatchObject({ schema_version: 1, kind: 'echo-project-context-command-fixtures-v1' });
     expect(operations.operations.map(({ id }) => id)).toEqual([
       'projects-list', 'projects-create', 'projects-read', 'projects-members',
-      'projects-directory', 'projects-member-add', 'projects-member-set', 'projects-member-remove',
+      'projects-directory', 'person-directory', 'projects-member-add', 'projects-member-set', 'projects-member-remove',
       'projects-associate', 'projects-dissociate', 'projects-feed', 'projects-search',
       'projects-read-context', 'updates-submit-v2', 'updates-status-v2',
       'updates-search-v2', 'updates-read-v2',

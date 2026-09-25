@@ -24,6 +24,9 @@ import { Buffer } from "node:buffer";
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV1, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV1, validatePersonDocumentMetadataV2, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV1, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV1, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
 import {
+  PERSON_DIRECTORY_PATH_V1, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, type OrganizationDirectorySearchV1,
+} from '@echo-brain/organization-api';
+import {
   PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
   validateProjectPageRequestV1, validateProjectListV1, validateProjectCreateV1, validateProjectCreateReceiptV1,
   validateProjectIdV1, validateProjectSummaryV1, validateProjectContextBrowseV1, validateProjectMembersV1,
@@ -1106,6 +1109,13 @@ export class PersonAuthorityClient {
     const request = validateProjectDirectorySearchV1(value);
     return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/directory`, body: request, validate: validateProjectDirectoryV1,
       matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
+  }
+
+  /** Active people in the signed-in person's own organization; no project needed. */
+  async organizationDirectory(accessToken: string, value: OrganizationDirectorySearchV1 = {}) {
+    const request = validateOrganizationDirectorySearchV1(value);
+    return this.contextRequest(accessToken, { path: PERSON_DIRECTORY_PATH_V1, body: request, validate: validateOrganizationDirectoryV1,
+      matches: result => result.items.length <= (request.limit ?? 10) });
   }
 
   async addProjectMember(accessToken: string, value: ProjectMemberAddV1) {

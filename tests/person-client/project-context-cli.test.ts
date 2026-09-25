@@ -157,6 +157,10 @@ describe('frozen project context CLI contract', () => {
     [...upload.argv.slice(0, upload.argv.indexOf('--visibility')), '--visibility', 'only_me'],
     [...operation('projects-member-set').argv.slice(0, -1), 'owner'],
     [...operation('projects-create').argv, '--organization-id', 'private-input'],
+    ['directory', '--project-id', projectId], ['directory', '--membership-id', 'mem_44444444-4444-4444-8444-444444444444'],
+    ['directory', '--query', ''], ['directory', '--query', ' ari'], ['directory', '--limit', '0'], ['directory', '--limit', '11'],
+    ['directory', '--cursor', 'AB'], ['directory', '--query', 'ari', '--query', 'bo'], ['directory', 'private-input'],
+    ['directory', '--organization-id', 'private-input'],
   ];
   it.each(invalidArgv.map(argv => ({ argv })))('rejects invalid/ambiguous argv before network: $argv', async ({ argv }) => {
     const network = vi.fn();
@@ -259,9 +263,11 @@ describe('frozen project context CLI contract', () => {
 
   it.each(fixtures.operations)('$id has help without network or a session', async operation => {
     const network = vi.fn(); let output = '';
-    expect(await runPersonClientCli([...operation.argv.slice(0, 2), '--help'], { fetch: network,
+    // `person directory` is one word; the project families are `<family> <action>`.
+    const command = operation.argv.slice(0, operation.argv[0] === 'directory' ? 1 : 2);
+    expect(await runPersonClientCli([...command, '--help'], { fetch: network,
       stdout: { write: value => { output += value; } }, stderr: { write: () => {} } })).toBe(0);
-    expect(output).toContain(`echo-brain person ${operation.argv.slice(0, 2).join(' ')}`);
+    expect(output).toContain(`echo-brain person ${command.join(' ')}`);
     expect(network).not.toHaveBeenCalled();
   });
 
@@ -281,5 +287,67 @@ describe('frozen project context CLI contract', () => {
     expect(result.stdout.endsWith('\n')).toBe(true);
     expect(JSON.parse(result.stdout)).toEqual(operation.http.response);
     expect(network).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('person directory CLI', () => {
+  const page = operation('person-directory').http.response;
+  async function directory(argv: string[], fetch: typeof globalThis.fetch, signedIn = true) {
+    const home = signedIn ? setup().home : realpathSync(mkdtempSync(join(tmpdir(), 'echo-project-cli-')));
+    if (!signedIn) homes.push(home);
+    let stdout = ''; let stderr = '';
+    const code = await runPersonClientCli(['directory', ...argv], { home_directory: home, now: () => now, fetch,
+      stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } });
+    return { code, stdout, stderr };
+  }
+
+  it('browses the first page with no query or project, then follows the opaque cursor', async () => {
+    const bodies: unknown[] = [];
+    const network = vi.fn<typeof fetch>(async (input, init) => {
+      expect(new URL(String(input)).pathname).toBe('/v1/person/directory');
+      bodies.push(JSON.parse(String(init?.body)));
+      return json({ ...page, next_cursor: bodies.length === 1 ? 'AQ' : null });
+    });
+    const first = await directory([], network);
+    expect(first.code, first.stderr).toBe(0);
+    expect(JSON.parse(first.stdout)).toEqual({ ...page, next_cursor: 'AQ' });
+    const next = await directory(['--limit', '5', '--cursor', 'AQ'], network);
+    expect(next.code, next.stderr).toBe(0);
+    expect(bodies).toEqual([{ limit: 10 }, { limit: 5, cursor: 'AQ' }]);
+  });
+
+  it('asks for sign-in without a session and never calls the Authority', async () => {
+    const network = vi.fn();
+    const result = await directory(['--query', 'ari'], network, false);
+    expect(result.code).toBe(1); expect(result.stdout).toBe(''); expect(network).not.toHaveBeenCalled();
+    expect(JSON.parse(result.stderr)).toMatchObject({ ok: false, action: 'directory', code: 'sign_in_required' });
+  });
+
+  it.each([[401, 'unauthorized'], [400, 'invalid_request'], [404, 'not_found'], [503, 'unavailable']] as const)(
+    'reports a %i %s rejection as a read failure without server text', async (status, code) => {
+      const result = await directory(['--query', 'ari'], async () => json({ error: { code, message: 'private diagnostic' } }, status));
+      expect(result.code).toBe(1); expect(result.stdout).toBe(''); expect(result.stderr).not.toContain('private');
+      const failure = JSON.parse(result.stderr);
+      expect(failure).toEqual({ ok: false, action: 'directory', error: 'Person Authority rejected the request', code, status });
+    });
+
+  it('does not release a page after the local account changes during the request', async () => {
+    const { home } = setup(); const store = new PersonSessionStore(home);
+    const client = new PersonClient({ home_directory: home, now: () => now, fetch: async () => {
+      const stored = store.read();
+      store.install(stored.authority_origin, stored.authority_id, { ...stored.session,
+        membership_id: 'mem_44444444-4444-4444-8444-444444444444' });
+      return json(page);
+    } });
+    await expect(client.organizationDirectory({ query: 'ari' })).rejects.toMatchObject({ code: 'stale_access_state' });
+  });
+
+  it('withholds a page longer than the requested limit or carrying a project', async () => {
+    const extra = { membership_id: 'mem_44444444-4444-4444-8444-444444444444', display_name: 'Bo' };
+    for (const response of [{ ...page, items: [...(page.items as unknown[]), extra] }, { ...page, project_id: projectId }]) {
+      const result = await directory(['--limit', '1'], async () => json(response));
+      expect(result.code).toBe(1); expect(result.stdout).toBe('');
+      expect(JSON.parse(result.stderr)).toMatchObject({ action: 'directory', code: 'invalid_response' });
+    }
   });
 });

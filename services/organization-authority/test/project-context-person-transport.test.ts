@@ -7,7 +7,7 @@ import { PersonAuthorityClient } from '../../../src/product/person-client/author
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
-import { OWNER, MEMBER, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from './fixtures/project-context-sqlite.js';
+import { OWNER, MEMBER, PROJECT_CONTEXT_NOW, addMembership, authorization, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
 // Real PC-03 HTTP checkpoint 77e1b75 and PC-02 application checkpoint 7244fc5,
 // with the actual V7 repository. Authentication uses synthetic fixture people;
@@ -118,6 +118,31 @@ describe('Person project transport against committed Authority routes and policy
     expect(await client.updateStatusV2('owner', request.request_id)).toEqual(status);
     expect(await client.readUploadV2('owner', status.context_id)).toMatchObject({ text: request.text, audience: request.audience });
     expect((await client.projectFeed('owner', { project_id })).items).toHaveLength(1);
+  });
+
+  it('lets a member with no project page the organization directory; revoked, unknown or absent sessions get nothing', async () => {
+    const { client, database } = await start();
+    for (let number = 4; number <= 13; number += 1) {
+      addMembership(database, { organization_id: OWNER.organization_id, principal_id: `prn_directory_${number}`,
+        membership_id: `mem_00000000-0000-4000-8000-${String(number).padStart(12, '0')}`, membership_type: 'employee' },
+      `Directory ${number}`, `directory-${number}@example.test`);
+    }
+    expect((await client.projects('member')).items).toEqual([]);
+    const first = await client.organizationDirectory('member', { limit: 10 });
+    expect(first).toMatchObject({ schema_version: 1, kind: 'echo-organization-directory-v1' });
+    expect(first.items).toHaveLength(10); expect(first.next_cursor).not.toBeNull();
+    const second = await client.organizationDirectory('member', { limit: 10, cursor: first.next_cursor! });
+    expect(second.items).toHaveLength(2); expect(second.next_cursor).toBeNull();
+    expect(new Set([...first.items, ...second.items].map(item => item.membership_id)).size).toBe(12);
+    expect((await client.organizationDirectory('member', { query: 'Owner' })).items).toEqual([{ membership_id: OWNER.membership_id, display_name: 'Owner' }]);
+    // Another person cannot continue this person's page.
+    await expect(client.organizationDirectory('owner', { limit: 10, cursor: first.next_cursor! })).rejects.toMatchObject({ code: 'invalid_request', status: 400 });
+    await expect(client.organizationDirectory('nobody', {})).rejects.toMatchObject({ code: 'unauthorized', status: 401 });
+    revokeMembership(database, MEMBER);
+    await expect(client.organizationDirectory('member', {})).rejects.toMatchObject({ code: 'unauthorized', status: 401 });
+    expect((await client.organizationDirectory('owner', { query: 'Member' })).items).toEqual([]);
+    const absent = await start(false);
+    await expect(absent.client.organizationDirectory('owner', {})).rejects.toMatchObject({ code: 'not_found', status: 404 });
   });
 
   it('keeps capability absence, hidden coordinates, and final session revalidation failures explicit', async () => {

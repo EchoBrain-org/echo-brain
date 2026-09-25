@@ -24,6 +24,7 @@ const fixtures = (JSON.parse(readFileSync(new URL('../../../tests/fixtures/proje
 const operations: Record<string, Operation> = {
   'projects-list': 'listProjects', 'projects-create': 'createProject', 'projects-read': 'readProject',
   'projects-members': 'listMembers', 'projects-directory': 'searchDirectory',
+  'person-directory': 'searchOrganizationDirectory',
   'projects-member-add': 'addMember',
   'projects-member-set': 'setMember', 'projects-member-remove': 'removeMember',
   'projects-associate': 'associateContext', 'projects-dissociate': 'dissociateContext',

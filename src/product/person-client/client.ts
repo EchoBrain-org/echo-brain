@@ -16,6 +16,7 @@ import {
   type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2, type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import { validatePersonUpdateSubmitV3, validatePersonUploadSearchV3, type PersonUpdateSubmitV3, type PersonUploadSearchV3 } from '@echo-brain/organization-api';
+import { validateOrganizationDirectorySearchV1, type OrganizationDirectorySearchV1 } from '@echo-brain/organization-api';
 import { randomBytes, randomUUID } from "node:crypto";
 import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonMeetingIngestionExclusionSelectorV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 import {
@@ -641,6 +642,11 @@ export class PersonClient {
   async projectDirectory(value: ProjectDirectorySearchV1) {
     const request = validateProjectDirectorySearchV1(value);
     return this.withContextSession((authority, token) => authority.projectDirectory(token, request));
+  }
+
+  async organizationDirectory(value: OrganizationDirectorySearchV1 = {}) {
+    const request = validateOrganizationDirectorySearchV1(value);
+    return this.withContextSession((authority, token) => authority.organizationDirectory(token, request));
   }
 
   async addProjectMember(value: ProjectMemberAddV1) {
