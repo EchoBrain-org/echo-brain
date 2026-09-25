@@ -78,14 +78,17 @@ export interface ComposeState {
   text: string;
   file: FileHandle | null;
   /**
-   * The project in the Who can read row: the page's, or one chosen under
-   * More…. The capture is filed there, whoever can read it.
+   * The project Capture was opened for: the page's, or the row a file was
+   * dropped on. Only me and Organization keep the capture filed there.
+   */
+  context: ProjectSummary | null;
+  /**
+   * The project the capture is filed in: the one chosen in Who can read, or
+   * else the context.
    */
   project: ProjectSummary | null;
-  /** 'project' only ever with a project. */
+  /** 'project' only ever with a project: that project's members. */
   readers: Readers;
-  /** More… is open: the other projects to choose from. */
-  picking: boolean;
   /** unknown: the save may or may not have arrived; the text is locked. */
   status: 'editing' | 'sending' | 'error' | 'unknown' | 'checking';
   /** The exact request a retry resends. */
@@ -2008,7 +2011,7 @@ function setCompose(compose: ComposeState | null): void {
 /** A new capture: filed in this project and readable by its members, or only yours. */
 function fresh(project: ProjectSummary | null): ComposeState {
   return {
-    seq: ++seq, text: '', file: null, project, readers: project ? 'project' : 'only-me', picking: false, status: 'editing',
+    seq: ++seq, text: '', file: null, context: project, project, readers: project ? 'project' : 'only-me', status: 'editing',
     requestId: crypto.randomUUID(), kept: false, hidden: false, confirmNew: false,
   };
 }
@@ -2055,7 +2058,7 @@ export function openCapture(): void {
 export function closeCompose(): void {
   const compose = state.compose;
   if (!compose || compose.status === 'sending' || compose.status === 'checking') return;
-  setCompose({ ...compose, hidden: true, picking: false, confirmNew: false, notice: undefined });
+  setCompose({ ...compose, hidden: true, confirmNew: false, notice: undefined });
 }
 
 function locked(compose: ComposeState): boolean {
@@ -2074,26 +2077,18 @@ function editCompose(patch: Partial<ComposeState>): void {
 
 export function setComposeText(text: string): void { editCompose({ text }); }
 
-/** One of the Who can read choices. The project's needs a project in the row. */
-export function chooseReaders(readers: Readers): void {
-  if (readers === 'project' && !state.compose?.project) return;
-  editCompose({ readers, picking: false });
-}
-
-/** More…: the other projects, to capture into one of them instead. */
-export function toggleMore(): void {
-  const compose = state.compose;
-  if (compose && !locked(compose)) setCompose({ ...compose, picking: !compose.picking });
-}
-
 /**
- * A project chosen under More…: the capture is filed there. Who can read it
- * never widens by itself: Only me and Organization stay, and the last
- * project's members give way to Only me until this project's are chosen.
+ * One click in Who can read. A project means its members, and the capture is
+ * filed in it; Only me and Organization keep it filed in the project Capture
+ * was opened for, if any.
  */
-export function chooseProject(project: ProjectSummary): void {
-  const readers = state.compose?.readers;
-  if (readers) editCompose({ project, readers: readers === 'project' ? 'only-me' : readers, picking: false });
+export function chooseReaders(choice: 'only-me' | 'team' | ProjectSummary): void {
+  const compose = state.compose;
+  if (!compose) return;
+  const readers = typeof choice === 'string' ? choice : 'project';
+  const project = typeof choice === 'string' ? compose.context : choice;
+  if (readers === compose.readers && project?.project_id === compose.project?.project_id) return;
+  editCompose({ readers, project });
 }
 
 export function removeFile(): void { editCompose({ file: null }); }
@@ -2148,7 +2143,7 @@ export async function sendCompose(): Promise<void> {
     setCompose({ ...compose, notice: TOO_LONG });
     return;
   }
-  setCompose({ ...compose, status: 'sending', failure: undefined, picking: false, confirmNew: false, notice: undefined });
+  setCompose({ ...compose, status: 'sending', failure: undefined, confirmNew: false, notice: undefined });
   const audience = audienceOf(compose);
   const project = compose.project ? { project_id: compose.project.project_id } : {};
   let result: Result<Receipt>;
@@ -2202,7 +2197,7 @@ export function newCompose(): void {
   if (!compose || compose.status === 'sending' || compose.status === 'checking') return;
   if (compose.status === 'unknown' && !compose.confirmNew) { setCompose({ ...compose, confirmNew: true }); return; }
   release(compose);
-  setCompose({ ...fresh(compose.project), readers: compose.readers });
+  setCompose({ ...fresh(compose.context), readers: compose.readers, project: compose.project });
 }
 
 export function keepUnresolved(): void {

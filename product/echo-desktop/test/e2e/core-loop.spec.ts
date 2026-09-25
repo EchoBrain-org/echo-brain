@@ -71,8 +71,7 @@ test('capture starts private outside a project, closes itself on save and says w
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose')).toBeVisible();
-  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('readers-project')).toHaveCount(0);
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
   await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
   await expect(page.getByTestId('compose-body')).toBeFocused();
   await page.getByTestId('compose-body').fill('Northwind wants annual\nwith a pilot clause.');
@@ -98,8 +97,7 @@ test('capturing inside a project saves to it, and Only me keeps it filed there',
   const { page } = run;
   await page.getByTestId('project-row').first().click();
   await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('readers-project')).toHaveText('Apollo');
-  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
   await expect(page.getByTestId('compose-readers')).toHaveText('Apollo members can read this.');
   await page.getByTestId('compose-body').fill('Weekly update');
   await page.getByTestId('compose-send').click();
@@ -109,7 +107,7 @@ test('capturing inside a project saves to it, and Only me keeps it filed there',
 
   await page.getByTestId('write-button').click();
   await page.getByTestId('readers-only-me').click();
-  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('radio', { name: 'Apollo' })).toHaveAttribute('aria-checked', 'false');
   await page.getByTestId('compose-body').fill('My own reminder');
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
@@ -117,46 +115,39 @@ test('capturing inside a project saves to it, and Only me keeps it filed there',
   expect(notes()[1]!.body?.association_project_ids).toEqual([APOLLO]);
 });
 
-test('More… files a capture in another project, and never widens who can read it', async () => {
+test('every project is one click in Who can read, and Only me keeps it filed in the project it was opened for', async () => {
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('compose').locator('.segment')).toHaveText(['Only me', 'Organization', 'More…']);
-  await page.getByTestId('readers-more').click();
-  await expect(page.getByTestId('readers-choice')).toHaveText(['Apollo', 'Beacon']);
-  // Escape closes the list, not the sheet.
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('readers-choice')).toHaveCount(0);
-  await expect(page.getByTestId('compose')).toBeVisible();
+  const group = page.getByRole('radiogroup', { name: 'Who can read' });
+  await expect(group.getByRole('radio')).toHaveText(['Only me', 'Apollo', 'Beacon', 'Organization']);
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
   await page.getByTestId('compose-body').fill('Beacon kickoff moved');
-  await page.getByTestId('readers-more').click();
-  await page.getByTestId('readers-choice').nth(1).click();
-  await expect(page.getByTestId('compose').locator('.segment')).toHaveText(['Only me', 'Beacon', 'Organization', 'More…']);
-  // Picking where it is filed does not pick who can read it.
-  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
+  // One click: Beacon's members read it, and it is filed in Beacon.
+  await page.getByRole('radio', { name: 'Beacon' }).click();
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Beacon');
+  await expect(page.getByTestId('compose-readers')).toHaveText('Beacon members can read this.');
   // The caret stays in Capture: ⌘↩ saves straight away.
   await page.keyboard.press('Meta+Enter');
-  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
-  expect(notes()[0]!.body?.audience).toEqual({ kind: 'only_me' });
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon');
+  expect(notes()[0]!.body?.audience).toEqual({ kind: 'project', project_id: BEACON });
   expect(notes()[0]!.body?.association_project_ids).toEqual([BEACON]);
 
-  // Inside Apollo its members read it by default; Beacon's members read it only once chosen.
+  // Inside Apollo, Apollo comes first and is chosen. Another project, then
+  // Only me: it stays filed in Apollo, not in the project clicked on the way.
   await page.getByTestId('project-row').first().click();
   await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
-  await page.getByTestId('readers-more').click();
-  await page.getByTestId('readers-choice').first().click();
-  await expect(page.getByTestId('readers-project')).toHaveText('Beacon');
-  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
-  await page.getByTestId('readers-project').click();
-  await expect(page.getByTestId('compose-readers')).toHaveText('Beacon members can read this.');
-  await page.getByTestId('compose-body').fill('For the Beacon team');
+  await expect(group.getByRole('radio')).toHaveText(['Only me', 'Apollo', 'Beacon', 'Organization']);
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
+  await page.getByRole('radio', { name: 'Beacon' }).click();
+  await page.getByRole('radio', { name: 'Only me' }).click();
+  await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
+  await page.getByTestId('compose-body').fill('For me, about Apollo');
   await page.keyboard.press('Meta+Enter');
-  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon');
-  expect(notes()[1]!.body?.audience).toEqual({ kind: 'project', project_id: BEACON });
-  expect(notes()[1]!.body?.association_project_ids).toEqual([BEACON]);
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
+  expect(notes()[1]!.body?.audience).toEqual({ kind: 'only_me' });
+  expect(notes()[1]!.body?.association_project_ids).toEqual([APOLLO]);
 });
 
 test('an unconfirmed save says so, locks the text and never claims it was sent', async () => {

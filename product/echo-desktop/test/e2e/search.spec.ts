@@ -106,7 +106,7 @@ test('the Home search survives every way back in, and a sidebar click narrows it
   folders.push(folder);
   writeFileSync(join(folder, 'Brief.md'), 'Annual pricing.');
   await drop(page, page.getByTestId('project-row').nth(1), join(folder, 'Brief.md'));
-  await expect(page.getByTestId('readers-project')).toHaveText('Beacon');
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Beacon');
   await page.keyboard.press('Escape');
   await expect(field).toHaveValue('apollo');
   await expect(page.getByTestId('match-row')).toHaveCount(2);

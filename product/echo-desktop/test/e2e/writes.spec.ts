@@ -47,8 +47,7 @@ test('capture after switching away from a project starts as Only me', async () =
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:capture');
-  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('readers-project')).toHaveCount(0);
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
   await expect(page.getByTestId('compose-body')).toBeFocused();
 });
 
@@ -239,7 +238,7 @@ test('Organization warns before it is saved, and the toast says it was shared', 
   await page.getByTestId('write-button').click();
   await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
   await page.getByTestId('readers-team').click();
-  await expect(page.getByTestId('readers-team')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('readers-team')).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
   await expect(page.getByTestId('compose-readers')).toHaveClass(/warning/);
   await page.getByTestId('compose-body').fill('All hands notes');
@@ -257,7 +256,7 @@ test('saving to the project on screen adds to its feed and leaves the rest of th
   await page.getByTestId('scope-clear').click();
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await page.getByTestId('write-button').click();
-  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
   await page.getByTestId('compose-body').fill('Launch moved to Friday');
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo');

@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
+import type { ProjectSummary } from '../../shared/protocol.js';
 import { bytes } from '../format.js';
 import { message } from '../messages.js';
 import {
-  attachFile, checkCompose, chooseProject, chooseReaders, closeCompose, keepUnresolved, loadProjects, newCompose, removeFile, sendCompose,
-  setComposeText, toggleMore, type ComposeState, type State,
+  attachFile, checkCompose, chooseReaders, closeCompose, keepUnresolved, newCompose, removeFile, sendCompose,
+  setComposeText, type ComposeState, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
 import { Clip, Close } from './icons.js';
@@ -13,7 +14,9 @@ const SAVE_HINT = navigator.userAgent.includes('Mac') ? '⌘↩' : 'Ctrl+↩';
 /** Tab and Shift-Tab stay inside the sheet. */
 export function trapTab(event: KeyboardEvent, sheet: HTMLElement | null): void {
   if (event.key !== 'Tab' || !sheet) return;
-  const focusable = [...sheet.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea, [tabindex="0"]')];
+  const focusable = [...sheet.querySelectorAll<HTMLElement>(
+    'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]):not([tabindex="-1"]), textarea, [tabindex="0"]',
+  )];
   if (focusable.length === 0) return;
   const first = focusable[0]!;
   const last = focusable[focusable.length - 1]!;
@@ -29,6 +32,83 @@ function readersLine(compose: ComposeState): string {
   return 'Only you can read this.';
 }
 
+/** Arrow keys move through Who can read, and pick as they go. */
+const STEPS: Readonly<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+
+/**
+ * Every project a capture can be for: the one Capture was opened for first,
+ * then Home's list. One chosen that the list no longer has stays in sight.
+ */
+function projectChoices(compose: ComposeState, listed: readonly ProjectSummary[]): ProjectSummary[] {
+  const choices: ProjectSummary[] = [];
+  const seen = new Set<string>();
+  const add = (project: ProjectSummary | null) => {
+    if (project && !seen.has(project.project_id)) { seen.add(project.project_id); choices.push(project); }
+  };
+  add(compose.context);
+  if (compose.project && !listed.some(project => project.project_id === compose.project!.project_id)) add(compose.project);
+  listed.forEach(add);
+  return choices;
+}
+
+/**
+ * Who can read: Only me, every project by name, then Organization. One click
+ * picks, and the pills wrap.
+ */
+function WhoCanRead({ state, compose, locked }: { state: State; compose: ComposeState; locked: boolean }) {
+  const group = useRef<HTMLDivElement>(null);
+  const projects = projectChoices(compose, state.projects.items);
+  const choices = [
+    { key: 'only-me', label: 'Only me', choice: 'only-me' as const, testid: 'readers-only-me', checked: compose.readers === 'only-me' },
+    ...projects.map(project => ({
+      key: project.project_id, label: project.name, choice: project, testid: 'readers-project',
+      checked: compose.readers === 'project' && compose.project?.project_id === project.project_id,
+    })),
+    { key: 'team', label: 'Organization', choice: 'team' as const, testid: 'readers-team', checked: compose.readers === 'team' },
+  ];
+  // One Tab stop: the chosen pill.
+  const stop = Math.max(0, choices.findIndex(choice => choice.checked));
+
+  // Only a name wider than the whole sheet is cut off, and then its tooltip says it in full.
+  useLayoutEffect(() => {
+    for (const radio of group.current?.querySelectorAll<HTMLElement>('[role="radio"]') ?? []) {
+      if (radio.scrollWidth - radio.clientWidth > 1) radio.title = radio.textContent ?? '';
+      else radio.removeAttribute('title');
+    }
+  });
+
+  return (
+    <div class="readers">
+      <div class="readers-head">
+        <span class="label" id="readers-label">Who can read</span>
+      </div>
+      <div class="reader-pills">
+        <div
+          role="radiogroup" aria-labelledby="readers-label" ref={group}
+          onKeyDown={event => {
+            const step = STEPS[event.key];
+            if (!step || event.metaKey || event.ctrlKey || event.altKey) return;
+            const radios = [...group.current!.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+            const at = radios.indexOf(document.activeElement as HTMLButtonElement);
+            if (at < 0) return;
+            event.preventDefault();
+            const next = (at + step + radios.length) % radios.length;
+            radios[next]!.focus();
+            chooseReaders(choices[next]!.choice);
+          }}
+        >
+          {choices.map((choice, index) => (
+            <button
+              type="button" role="radio" key={choice.key} class="reader-pill" data-testid={choice.testid} aria-checked={choice.checked}
+              tabIndex={index === stop ? 0 : -1} disabled={locked} onClick={() => chooseReaders(choice.choice)}
+            >{choice.label}</button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Capture: a note or one file, who can read it, then Save. A note's first line is its title. */
 export function Compose({ state }: { state: State }) {
   const compose = state.compose!;
@@ -40,20 +120,11 @@ export function Compose({ state }: { state: State }) {
   useEffect(() => {
     if (sheet.current && !sheet.current.contains(document.activeElement)) sheet.current.focus();
   }, [compose.status, compose.confirmNew]);
-  // A project picked under More…, or the list closing or ending, removes the
-  // focused pill: the caret stays in the sheet, so ⌘↩ and Tab still work.
-  // Before paint, so no key pressed right after the pick is lost.
-  useLayoutEffect(() => {
-    if (document.activeElement === document.body) sheet.current?.focus();
-  }, [compose.picking, compose.project, state.projects.next]);
 
   const busy = compose.status === 'sending' || compose.status === 'checking';
   const unresolved = compose.status === 'unknown' || compose.status === 'checking';
   const locked = busy || unresolved;
   const empty = compose.text.trim() === '' && !compose.file;
-  // More… offers the projects not already in the row.
-  const others = state.projects.items.filter(project => project.project_id !== compose.project?.project_id);
-  const more = others.length > 0 || state.projects.next !== null;
 
   return (
     <div class="overlay" onClick={closeCompose}>
@@ -89,36 +160,7 @@ export function Compose({ state }: { state: State }) {
           )}
         </div>
         {compose.notice && <div class="notice-line" data-testid="compose-notice" aria-live="polite">{compose.notice}</div>}
-        <div class="readers">
-          <span class="label" id="readers-label">Who can read</span>
-          <div class="segments" role="group" aria-labelledby="readers-label">
-            <button type="button" class="segment" data-testid="readers-only-me" aria-pressed={compose.readers === 'only-me'} disabled={locked}
-              onClick={() => chooseReaders('only-me')}>Only me</button>
-            {compose.project && (
-              <button type="button" class="segment" data-testid="readers-project" aria-pressed={compose.readers === 'project'} disabled={locked}
-                onClick={() => chooseReaders('project')}>{compose.project.name}</button>
-            )}
-            <button type="button" class="segment" data-testid="readers-team" aria-pressed={compose.readers === 'team'} disabled={locked}
-              onClick={() => chooseReaders('team')}>Organization</button>
-            {more && (
-              <button type="button" class="segment" data-testid="readers-more" aria-expanded={compose.picking} disabled={locked}
-                onClick={toggleMore}>More…</button>
-            )}
-          </div>
-        </div>
-        {compose.picking && (
-          <div class="pills" role="group" aria-label="Projects">
-            {others.map(project => (
-              <button type="button" key={project.project_id} class="pill" data-testid="readers-choice" onClick={() => chooseProject(project)}>
-                {project.name}
-              </button>
-            ))}
-            {state.projects.next && (
-              <button type="button" class="pill" data-testid="readers-choice-more" disabled={state.projects.loading}
-                onClick={() => void loadProjects(true)}>More</button>
-            )}
-          </div>
-        )}
+        <WhoCanRead state={state} compose={compose} locked={locked} />
         <div class={`readers-line${compose.readers === 'team' ? ' warning' : ''}`} data-testid="compose-readers" aria-live="polite">
           {readersLine(compose)}
         </div>

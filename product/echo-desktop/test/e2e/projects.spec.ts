@@ -237,8 +237,7 @@ test('an original can leave the project it is in, or be added to another, and th
   // An empty project offers Capture, into it.
   await page.getByTestId('sidebar-project').nth(0).click();
   await page.getByTestId('empty-capture').click();
-  await expect(page.getByTestId('readers-project')).toHaveText('Apollo');
-  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
 });
 
 test('a lead adds someone at once, Undo removes only them, and making a lead or removing is asked first', async () => {

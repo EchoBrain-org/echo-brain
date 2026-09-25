@@ -59,7 +59,7 @@ test('Capture in the sidebar opens capture where you are, and the account row na
   await expect(page.getByTestId('sidebar-organization')).toHaveCount(0);
 
   await page.getByTestId('sidebar-capture').click();
-  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByTestId('compose-body')).toBeFocused();
   await page.getByTestId('compose-body').fill('Kickoff moved');
   await page.getByTestId('compose-send').click();
@@ -69,8 +69,7 @@ test('Capture in the sidebar opens capture where you are, and the account row na
   await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('sidebar-capture').click();
-  await expect(page.getByTestId('readers-project')).toHaveText('Apollo');
-  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
 });
 
 test('the sidebar is on by default, and the toggle only hides it', async () => {

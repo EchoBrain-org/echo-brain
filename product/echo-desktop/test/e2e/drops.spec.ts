@@ -33,8 +33,7 @@ test('a file dropped on a sidebar project, with another app in front, is capture
   await expect(page.getByTestId('concealed')).toBeVisible();
   await drop(page, page.getByTestId('sidebar-project').nth(1), onDisk('Brief.md'));
   await expect(page.getByTestId('compose-file')).toHaveText('Brief.md · 15 bytes');
-  await expect(page.getByTestId('readers-project')).toHaveText('Beacon');
-  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Beacon');
   // Ready for ⌘↩ once ECHO is in front.
   await expect(page.getByTestId('compose')).toBeFocused();
   await emit(app, 'echo-test:resume');
@@ -57,13 +56,12 @@ test('Home rows take a drop while another app is in front, and a file dropped on
   await emit(app, 'echo-test:conceal');
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await drop(page, page.getByTestId('project-row').nth(0), onDisk('Pricing.txt'));
-  await expect(page.getByTestId('readers-project')).toHaveText('Apollo');
-  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
   await emit(app, 'echo-test:resume');
   await page.getByTestId('readers-team').click();
   await drop(page, page.getByTestId('compose'), onDisk('Terms.pdf', 'Payment in 30 days.'));
   await expect(page.getByTestId('compose-file')).toHaveText('Terms.pdf · 19 bytes');
-  await expect(page.getByTestId('readers-team')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('readers-team')).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('toast')).toHaveText('Shared with your organization · Extracting text');
@@ -77,8 +75,7 @@ test('a file dropped anywhere else on the window is captured for the page: Only 
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await drop(page, page.getByTestId('title'), onDisk('Notes.md'));
   await expect(page.getByTestId('compose-file')).toHaveText('Notes.md · 15 bytes');
-  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('readers-project')).toHaveCount(0);
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
   await page.keyboard.press('Escape');
 
   // Nothing was written in it: the next drop starts over, for the project on screen.
@@ -86,8 +83,7 @@ test('a file dropped anywhere else on the window is captured for the page: Only 
   await expect(page.getByTestId('feed-row').first()).toBeVisible();
   await drop(page, page.getByTestId('feed'), onDisk('Brief.md'));
   await expect(page.getByTestId('compose-file')).toHaveText('Brief.md · 15 bytes');
-  await expect(page.getByTestId('readers-project')).toHaveText('Beacon');
-  await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Beacon');
   // Ready for ⌘↩.
   await expect(page.getByTestId('compose')).toBeFocused();
   await page.keyboard.press('Meta+Enter');
@@ -116,8 +112,7 @@ test('a drop never changes a draft with words in it, or a save not yet settled',
   await drop(page, page.getByTestId('sidebar-project').nth(1), onDisk('Brief.md'));
   await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
   await expect(page.getByTestId('compose-notice')).toHaveText('The file was not attached. Save this note first.');
-  await expect(page.getByTestId('readers-only-me')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('readers-project')).toHaveCount(0);
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
   await expect(page.getByTestId('compose-file')).toHaveCount(0);
 
   await page.getByTestId('compose-send').click();
@@ -136,7 +131,7 @@ test('a drop main cannot vouch for is refused: a file made in the page, or a lin
   await drop(page, page.getByTestId('project-row').nth(0), null);
   await expect(page.getByTestId('compose-notice')).toHaveText('Choose a TXT, Markdown, PDF or Word file up to 25 MB.');
   await expect(page.getByTestId('compose-file')).toHaveCount(0);
-  await expect(page.getByTestId('readers-project')).toHaveText('Apollo');
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Apollo');
 
   const link = join(mkdtempSync(join(tmpdir(), 'echo-drop-')), 'Link.txt');
   folders.push(join(link, '..'));
