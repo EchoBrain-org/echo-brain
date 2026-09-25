@@ -120,8 +120,9 @@ function App() {
   const covered = pageCovered(state);
   const pageName = inProject ? inProject.name : organization ? 'People & invites' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
-  // Back leaves Ask for the page it was asked from.
-  const backLabel = covered ? null : state.ask || state.reader ? pageName ?? 'Home' : pageName ? 'Home' : null;
+  // Back leaves Ask for the page it was asked from; asked over a reader, Back goes to the reader.
+  const backLabel = covered ? null : state.ask && state.reader ? 'Back'
+    : state.ask || state.reader ? pageName ?? 'Home' : pageName ? 'Home' : null;
   const pane = !covered && state.ask !== null && state.sources?.open != null;
   // A project change not shown where it was asked for shows at the top of the page.
   const banner = state.change && !state.concealed && !changeShownInPlace(state) ? state.change : null;

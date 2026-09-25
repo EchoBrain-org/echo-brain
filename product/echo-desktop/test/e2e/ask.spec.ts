@@ -60,6 +60,22 @@ test('follow-ups stack in a thread, newest at the bottom: earlier answers collap
   await expect(earlier).toHaveCount(0);
 });
 
+test('a question asked over an open match goes Back to that match', async () => {
+  run = await launch();
+  const { page } = run;
+  const field = page.getByTestId('ask-field');
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await field.fill('ship');
+  await page.getByTestId('match-row').click();
+  await expect(page.getByTestId('reader-text')).toHaveText('We agreed to ship.');
+  await field.press('Enter');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  await expect(page.getByTestId('back')).toHaveText('Back');
+  await page.getByTestId('back').click();
+  await expect(page.getByTestId('reader-text')).toHaveText('We agreed to ship.');
+  await expect(page.getByTestId('back')).toHaveText('Home');
+});
+
 test('a follow-up can be cancelled and its late answer is dropped; one that fails leaves the answer before it, with Try again', async () => {
   run = await launch('ask-follow-ups');
   const { page } = run;
