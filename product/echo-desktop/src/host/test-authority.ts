@@ -137,11 +137,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       response.next_cursor = mode === 'many-projects' && !second ? 'cGFnZTI' : null;
       return json(response);
     }
-    const read = /^\/v1\/person\/projects\/(prj_[0-9a-f-]+)$/.exec(path);
-    if (method === 'GET' && read) {
-      const project = desktop.projects.find(entry => entry.project_id === read[1]);
-      return project ? json({ ...fixture('projects-read'), ...project }) : failure('not_found', 404);
-    }
     if (method === 'POST' && path === '/v2/person/projects/context/feed' && mode === 'feed-unauthorized') {
       return failure('unauthorized', 401);
     }

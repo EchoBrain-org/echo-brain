@@ -17,8 +17,7 @@
         "anchor_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
         "label": "Apollo update"
       }
-    ],
-    "scope": { "kind": "global" }
+    ]
   },
   "evidence_label": "Apollo update",
   "evidence_text": "We agreed to ship."
