@@ -93,6 +93,8 @@ const pending = new Map<number, { method: string; requestId?: string; resolve: (
 /** Exits in the last minute. Three and the supervisor stops. */
 let exits: number[] = [];
 let hostGaveUp = false;
+/** Test builds: the host runs the fixture Authority, whose fake browser stands in for a real one. */
+let fixtureHost = false;
 
 function startHost(restarted = false): void {
   const home = smokeRoot ? join(smokeRoot, 'home') : homedir();
@@ -108,6 +110,7 @@ function startHost(restarted = false): void {
   if (__ECHO_TEST_HOOK__ && !smokeRoot && test.ECHO_HOME && resolve(test.ECHO_HOME) !== resolve(homedir())) {
     env.ECHO_HOME = test.ECHO_HOME;
     for (const name of ['ECHO_DESKTOP_TEST_FIXTURES', 'ECHO_DESKTOP_TEST_MODE']) if (test[name]) env[name] = test[name]!;
+    fixtureHost = Boolean(env.ECHO_DESKTOP_TEST_FIXTURES);
   }
   // Dev builds reach the local Authority, whose certificate is the kit's own.
   if (__ECHO_TEST_HOOK__ && test.NODE_EXTRA_CA_CERTS) env.NODE_EXTRA_CA_CERTS = test.NODE_EXTRA_CA_CERTS;
@@ -164,7 +167,8 @@ function onHostNotice(message: HostNotice): void {
     send('signin.phase', message.payload as Events['signin.phase']);
   } else if (message.notice === 'open-external') {
     // The fixture Authority brings its own browser: tests never open a real one.
-    if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_TEST_FIXTURES) return;
+    // Only a host that runs it: any other host's sign-in needs this browser.
+    if (__ECHO_TEST_HOOK__ && fixtureHost) return;
     const url = externalUrl((message.payload as { url?: unknown }).url);
     if (url) void shell.openExternal(url);
   }
