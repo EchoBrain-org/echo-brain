@@ -299,6 +299,8 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
             {finder ? <Finder state={state} sheet={finder} menus={false} field={find} />
               : sheet.peopleLater ? <div class="notice-line" data-testid="people-later">Add people after Create</div>
               : <Picker state={state} sheet={sheet} field={find} queued={queued} halted={heldByPerson} busy={busy} />}
+            {/* Picks made before the directory stopped answering (an Authority rolled back mid-sheet) are still added after
+                Create, and one whose add is unknown holds back the rest: its row, Try again and Skip must stay in view. */}
             {sheet.peopleLater && sheet.picks.length > 0 && (
               <div class="people-list">
                 {sheet.picks.map(pick => <PickRow key={pick.id} pick={pick} halted={heldByPerson} queued={queued} busy={busy} />)}
