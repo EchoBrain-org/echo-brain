@@ -222,7 +222,7 @@ it.skipIf(!nativeTarget)('updates a packaged CLI before exactly one Person comma
     expect(status).toMatchObject({ kind: 'echo-person-client-status-v1', signed_in: false,
       client_build: { source_sha: clientB.sourceSha, source_kind: clientB.sourceKind } });
     expect(dispatched.stderr).toContain(`ECHO updated to ${releaseB}.`);
-    const updateStatus = JSON.parse(run(cli, ['update', '--status'], updateEnvironment).stdout);
+    const updateStatus = JSON.parse(run(cli, ['update', '--status', '--json'], updateEnvironment).stdout);
     expect(updateStatus).toMatchObject({ status: 'updated', installed_release: releaseB });
     expect(readFileSync(sessionSentinel, 'utf8')).toBe('preserve synthetic session');
     expect(readFileSync(appSentinel, 'utf8')).toBe('preserve unrelated app');
