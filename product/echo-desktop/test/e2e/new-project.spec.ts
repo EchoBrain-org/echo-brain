@@ -307,3 +307,35 @@ test('with another app in front New project hides its people but takes a drop; a
   await page.getByTestId('new-project-done').click();
   await expect(page.getByTestId('toast')).toHaveCount(0);
 });
+
+test('focus stays in New project when what had it goes: an Add, a ×, and Create while you type a name to find', async () => {
+  run = await launch('no-projects');
+  const { page } = run;
+  const sheet = page.getByTestId('new-project');
+  const focusInSheet = () => sheet.evaluate(box => box.contains(document.activeElement) && document.activeElement !== document.body);
+  await page.getByTestId('empty-new-project').click();
+  // Add takes the person out of the list, and its button with them: the caret goes back to the find field.
+  await page.getByRole('button', { name: 'Add Raj Kumar' }).click();
+  await expect(page.getByTestId('pick-row')).toHaveText(['RKRaj Kumar']);
+  await expect(page.getByTestId('people-find')).toBeFocused();
+  // × on a pick: the same. × on a file: the sheet. Either way Tab goes on inside it, never to the page behind.
+  await page.getByRole('button', { name: 'Remove Raj Kumar' }).click();
+  await expect(page.getByTestId('pick-row')).toHaveCount(0);
+  await expect(page.getByTestId('people-find')).toBeFocused();
+  const [brief] = onDisk('Brief.md');
+  await drop(page, sheet, brief!);
+  await page.getByRole('button', { name: 'Remove Brief.md' }).click();
+  await expect(page.getByTestId('new-project-file')).toHaveCount(0);
+  await expect(sheet).toBeFocused();
+  for (let step = 0; step < 12; step += 1) {
+    await page.keyboard.press('Tab');
+    expect(await focusInSheet()).toBe(true);
+  }
+  // Create while the caret is in the find field: the project is made and the caret stays where it was.
+  await page.getByTestId('new-project-name').fill('Cedar');
+  await page.getByTestId('people-find').fill('ma');
+  await page.getByTestId('new-project-create').evaluate(button => (button as HTMLButtonElement).click());
+  await expect(page.getByTestId('new-project-title')).toHaveText('Cedar');
+  await expect(page.getByTestId('people-find')).toBeFocused();
+  await expect(page.getByTestId('people-find')).toHaveValue('ma');
+});

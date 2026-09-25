@@ -240,8 +240,19 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
   const find = useRef<HTMLInputElement>(null);
   const [over, setOver] = useState(false);
   const made = sheet.project;
-  // The name first; once the project exists, the project's directory where it is used, or else the sheet.
-  useEffect(() => { (made ? (sheet.peopleLater ? find.current : null) ?? box.current : name.current)?.focus(); }, [made?.project_id]);
+  // Whether the focus was last in the people listed, where an Add or a × takes its own button away.
+  const inPeople = useRef(false);
+  // The name first. Once the project exists, a control you are in keeps the focus; else the project's directory where it is used, or the sheet.
+  useEffect(() => {
+    const at = document.activeElement;
+    if (made && at !== box.current && box.current?.contains(at)) return;
+    (made ? (sheet.peopleLater ? find.current : null) ?? box.current : name.current)?.focus();
+  }, [made?.project_id]);
+  // What had the focus went (an Add, a ×, Create, a Skip question): it goes back to finding people, or to the sheet, so Tab stays here.
+  useEffect(() => {
+    if (sheet.skip !== null || sheet.confirm || !box.current || box.current.contains(document.activeElement)) return;
+    ((inPeople.current ? find.current : null) ?? box.current).focus();
+  });
   const busy = newProjectBusy(sheet);
   const locked = sheet.createdId !== null || sheet.create.status === 'sending' || sheet.create.status === 'unknown';
   const queued = made !== null;
@@ -253,6 +264,7 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
       <div
         class={`sheet people new-project${over ? ' drop-target' : ''}`} role="dialog" aria-label="New project" data-testid="new-project" ref={box}
         tabIndex={-1} onKeyDown={event => trapTab(event, box.current)}
+        onFocusIn={event => { inPeople.current = (event.target as Element).closest('.people-list') !== null; }}
         onDragOver={event => {
           if (!canDropFiles(event)) return;
           event.preventDefault();
