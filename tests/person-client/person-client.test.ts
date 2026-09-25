@@ -3181,21 +3181,48 @@ describe("Person client", () => {
     return { client, calls };
   }
 
+  const unreachable = (code: string) => (): Response => {
+    throw new TypeError("fetch failed", { cause: Object.assign(new Error(`connect ${code}`), { code }) });
+  };
+
   it.each([
-    ["no reply", (): Response => { throw new Error("connection outcome is unknown"); }],
+    ["the name cannot be looked up", unreachable("ENOTFOUND")],
+    ["the connection is refused", unreachable("ECONNREFUSED")],
+    ["every address is unreachable", (): Response => {
+      throw new TypeError("fetch failed", { cause: new AggregateError([
+        Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" }),
+        Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" }),
+      ]) });
+    }],
+  ])("keeps the session when %s, and refreshes again on the next call", async (_, reply) => {
+    await withHome(async (home) => {
+      const { client, calls } = refreshingClient(home, reply);
+      await client.installSession("https://authority.example", SESSION);
+
+      await expect(client.records()).rejects.toThrow(/request failed/);
+      expect(client.sessionSummary().membership_id).toBe(SESSION.membership_id);
+      await expect(client.records()).rejects.toThrow(/request failed/);
+      expect(calls.refresh).toBe(2);
+      const store = new PersonSessionStore(home);
+      expect([store.paths.refresh_claim, store.paths.refreshing].filter(existsSync)).toEqual([]);
+    });
+  });
+
+  it.each([
+    ["an ambiguous transport failure", (): Response => { throw new Error("connection outcome is unknown"); }],
+    ["a reset after sending", unreachable("ECONNRESET")],
     ["a server failure", () => json({ error: { code: "unavailable", message: "unavailable" } }, 503)],
     ["an unreadable reply", () => json({ ...ROTATED_SESSION, access_token: "short" })],
-  ])("keeps the session after a refresh with %s, and refreshes again on the next call", async (_, reply) => {
+  ])("never replays a refresh credential after %s, and signs out cleanly", async (_, reply) => {
     await withHome(async (home) => {
       const { client, calls } = refreshingClient(home, reply);
       await client.installSession("https://authority.example", SESSION);
 
       await expect(client.records()).rejects.toThrow(/Person Authority/);
-      expect(client.sessionSummary().membership_id).toBe(SESSION.membership_id);
-      await expect(client.records()).rejects.toThrow(/Person Authority/);
-      expect(calls.refresh).toBe(2);
+      await expect(client.records()).rejects.toThrow(/sign in again|Person session/);
+      expect(calls.refresh).toBe(1);
       const store = new PersonSessionStore(home);
-      expect([store.paths.refresh_claim, store.paths.refreshing].filter(existsSync)).toEqual([]);
+      expect([store.paths.live, store.paths.refresh_claim, store.paths.refreshing].filter(existsSync)).toEqual([]);
     });
   });
 

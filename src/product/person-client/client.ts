@@ -319,19 +319,17 @@ export class PersonClient {
       );
       assertRefreshIdentity(claimed.stored.session, next);
     } catch (error) {
-      // The session ends only when it is known to be over: past its weekly
-      // deadline, refused by the Authority, or rotated to another identity.
-      // Anything else (no reply, a server failure, a reply that cannot be
-      // read) may have left the refresh token unused, so the claimed session
-      // goes back and a later call refreshes again. If the Authority did
-      // rotate it, that retry presents a used token: the Authority closes the
-      // family and refuses, and the person signs in again.
+      // Only a request that never left this machine (no connection at all,
+      // as when the network is not up yet) puts the claimed session back: the
+      // refresh token is certainly unused. Any other failure is ambiguous or
+      // final, and ADR-0002 never replays an ambiguous refresh: the claim is
+      // released and the store is left plainly signed out.
       const refused =
         error instanceof PersonAuthorityClientError &&
         ((error.code === "unauthorized" && error.status === 401) ||
           (error.code === "invalid_request" && error.status === 400));
-      const ended = refused || error instanceof PersonClientSessionUnavailableError;
-      this.store.releaseRefresh(claimed, !ended);
+      const unsent = error instanceof PersonAuthorityClientError && error.unsent;
+      this.store.releaseRefresh(claimed, unsent);
       if (refused) {
         throw new PersonClientSessionUnavailableError(
           "Person session refresh was refused; sign in again",

@@ -125,14 +125,41 @@ export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 
 export class PersonAuthorityClientError extends Error {
+  /** The request never left this machine: no connection was made. */
+  readonly unsent: boolean;
+
   constructor(
     public readonly code: string,
     public readonly status: number | null,
     message: string,
+    options: { readonly unsent?: boolean } = {},
   ) {
     super(message);
     this.name = "PersonAuthorityClientError";
+    this.unsent = options.unsent === true;
   }
+}
+
+/** Failures before any connection exists: name lookup, refusal, no route. */
+const NEVER_SENT_CODES = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EADDRNOTAVAIL",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+function neverSent(error: unknown, depth = 0): boolean {
+  if (depth > 4 || typeof error !== "object" || error === null) return false;
+  const { code, cause, errors } = error as { code?: unknown; cause?: unknown; errors?: unknown };
+  if (typeof code === "string" && NEVER_SENT_CODES.has(code)) return true;
+  if (Array.isArray(errors) && errors.length > 0) {
+    return errors.every((entry) => neverSent(entry, depth + 1));
+  }
+  return neverSent(cause, depth + 1);
 }
 
 export class PersonContextMutationError extends PersonAuthorityClientError {
@@ -642,11 +669,12 @@ export class PersonAuthorityClient {
         redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
       });
-    } catch {
+    } catch (error) {
       throw new PersonAuthorityClientError(
         "transport_failed",
         null,
         "Person Authority request failed",
+        { unsent: neverSent(error) },
       );
     }
   }
