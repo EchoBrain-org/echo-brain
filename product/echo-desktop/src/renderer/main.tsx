@@ -7,12 +7,13 @@ import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
 import { Back, Saved, SidebarIcon } from './screens/icons.js';
 import { Project } from './screens/project.js';
+import { Reader } from './screens/reader.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import {
-  acceptDrop, accountCommand, canDrop, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, closeSource, conceal, getState,
-  goHome, hostFailed, openCapture, refreshHome, refreshStatus, resume, retryStart, signinPhase, toggleMore, toggleSidebar, useStore,
-  type State,
+  acceptDrop, accountCommand, canDrop, clearBar, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, closeSource, conceal,
+  getState, goHome, hostFailed, matchesShown, openCapture, refreshStatus, resume, retryStart, signinPhase, toggleMore, toggleSidebar,
+  useStore, windowShown, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -29,7 +30,18 @@ function focusBar(): void {
   requestAnimationFrame(() => { if (!sheetUp()) document.getElementById('ask-field')?.focus(); });
 }
 
-/** Escape steps back one level: a sheet, compose, source, answer, reader, project. */
+/**
+ * Escape: the bar's text goes first, when the caret is in the bar or its
+ * matches show; otherwise one level back.
+ */
+function escape(): void {
+  const state = getState();
+  const inBar = document.activeElement?.id === 'ask-field';
+  if (state.status?.signed_in && !sheetUp() && state.barText !== '' && (inBar || matchesShown(state))) return clearBar();
+  back();
+}
+
+/** Back steps back one level: a sheet, compose, source, answer, reader, project. */
 function back(): void {
   const state = getState();
   if (state.sheet) return closeSheet();
@@ -56,7 +68,7 @@ function App() {
       on('lifecycle.resume', resume),
       on('window.shown', () => {
         if (getState().concealed) return;
-        void refreshStatus().then(refreshHome);
+        void windowShown();
         focusBar();
       }),
       on('signin.phase', payload => signinPhase(payload.browser_opened)),
@@ -65,7 +77,7 @@ function App() {
       on('account.command', payload => accountCommand(payload.command)),
     ];
     // One Escape handler for the whole window: it steps back exactly one level.
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); back(); } };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); escape(); } };
     window.addEventListener('keydown', onKey);
     return () => { stops.forEach(stop => stop()); window.removeEventListener('keydown', onKey); };
   }, []);
@@ -87,17 +99,19 @@ function App() {
   }
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
-  // Another app is in front: cover what a project or an answer shows until
-  // ECHO is back. Project rows stay (Home's and the sidebar's), so a file
-  // dragged from Finder can still be dropped on one.
-  const covered = state.concealed && (state.ask !== null || inProject !== null);
+  // Another app is in front: cover what a project, an answer or an original
+  // shows until ECHO is back. Project rows stay (Home's and the sidebar's), so
+  // a file dragged from Finder can still be dropped on one.
+  const covered = state.concealed && (state.ask !== null || inProject !== null || state.reader !== null);
   const title = covered ? 'ECHO' : state.ask ? '' : inProject ? inProject.name : 'ECHO';
-  const backLabel = covered ? null : state.evidence || state.ask ? 'Back' : state.reader ? inProject?.name : inProject ? 'Home' : null;
+  const backLabel = covered ? null : state.evidence || state.ask ? 'Back' : state.reader ? inProject?.name ?? 'Home' : inProject ? 'Home' : null;
   return (
     <Shell state={state} title={title} backLabel={backLabel ?? null}>
       <main class="page">
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
-          : state.ask ? <AskView state={state} /> : inProject ? <Project state={state} project={inProject} /> : <Home state={state} />}
+          : state.ask ? <AskView state={state} />
+          : state.reader ? <Reader reader={state.reader} backTo={inProject?.name ?? 'Home'} />
+          : inProject ? <Project state={state} project={inProject} /> : <Home state={state} />}
       </main>
       {state.toast && !state.concealed && <div class="toast" role="status" data-testid="toast"><Saved /><span>{state.toast}</span></div>}
       <Bar state={state} />

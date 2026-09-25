@@ -94,3 +94,28 @@ export function chooseFromTray(run: Launched, label: string): Promise<void> {
     item.click();
   }, label);
 }
+
+/**
+ * Drops one file on a target, as a drag from Finder does. Playwright cannot
+ * drag from the desktop, so a hidden file input makes a File with a real path
+ * on disk; `null` drops a file made in the page, which has none.
+ */
+export async function drop(page: Page, target: Locator, path: string | null): Promise<void> {
+  const transfer = await page.evaluateHandle(() => new DataTransfer());
+  if (path) {
+    await page.evaluate(() => {
+      const input = Object.assign(document.createElement('input'), { type: 'file', id: 'drop-source', hidden: true });
+      document.body.append(input);
+    });
+    await page.setInputFiles('#drop-source', path);
+    await page.evaluate(dataTransfer => {
+      const input = document.getElementById('drop-source') as HTMLInputElement;
+      dataTransfer.items.add(input.files![0]!);
+      input.remove();
+    }, transfer);
+  } else {
+    await page.evaluate(dataTransfer => { dataTransfer.items.add(new File(['made in the page'], 'Made.txt', { type: 'text/plain' })); }, transfer);
+  }
+  await target.dispatchEvent('dragover', { dataTransfer: transfer });
+  await target.dispatchEvent('drop', { dataTransfer: transfer });
+}

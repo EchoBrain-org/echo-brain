@@ -35,3 +35,6 @@ export const SidebarIcon = () => (
 export const Person = () => (
   <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="4" r="2.3" fill="rgba(240,236,230,0.66)" /><path d="M1.8 11c.5-2.4 2.2-3.6 4.2-3.6s3.7 1.2 4.2 3.6z" fill="rgba(240,236,230,0.66)" /></svg>
 );
+export const Doc = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l4 4v14H7zM14 3v4h4" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
+);

@@ -98,8 +98,8 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .notice { color: var(--faint); }
 .error { color: var(--danger); }
 
-/* Bottom bar: Write at the left, Ask on the right. */
-.bar-wrap { flex-shrink: 0; display: flex; justify-content: center; padding: 0 0 28px; }
+/* Bottom bar: Capture at the left, Ask on the right. */
+.bar-wrap { position: relative; flex-shrink: 0; display: flex; justify-content: center; padding: 0 0 28px; }
 .bar { display: flex; align-items: center; gap: 8px; width: 520px; max-width: calc(100% - 48px); height: 46px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 23px; background: var(--panel); }
 .bar input { flex-grow: 1; min-width: 0; height: 40px; padding: 0; border: 0; outline: none; font-size: 15px; background: transparent; }
 .bar input::placeholder, textarea::placeholder { color: rgba(240, 236, 230, 0.5); }
@@ -109,6 +109,18 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .chip { display: flex; align-items: center; gap: 4px; height: 28px; max-width: 170px; flex-shrink: 0; padding: 0 4px 0 10px; border-radius: 14px; font-size: 13px; color: var(--accent-text); background: var(--accent-soft); }
 .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip button { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--accent-text); background: transparent; }
+
+/* Live matches for the bar's text, just above it. */
+.matches { position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%); width: 520px; max-width: calc(100% - 48px); max-height: min(360px, calc(100vh - 150px)); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 12px; background: #171616; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
+.matches-head { padding: 6px 12px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: var(--faint); }
+.match-row { height: 40px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 12px; border: 0; border-radius: 8px; font-size: 13.5px; text-align: left; background: transparent; }
+.match-row:hover { background: rgba(240, 236, 230, 0.07); }
+.match-row svg { flex-shrink: 0; }
+.match-row .label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.match-row .meta { flex-shrink: 0; font-size: 12px; color: var(--faint); }
+.match-row.ask-row { color: var(--accent-text); }
+.matches-rule { height: 1px; flex-shrink: 0; margin: 4px 6px; background: var(--line-strong); }
+.matches-note { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; color: var(--faint); }
 
 /* Ask: the question, the answer, then where it came from. */
 .ask { width: 520px; max-width: calc(100% - 48px); height: 400px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }

@@ -1,27 +1,11 @@
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { when } from '../format.js';
 import { message } from '../messages.js';
-import { closeReader, openItem, openProject, type State } from '../store.js';
+import { openItem, openProject, type State } from '../store.js';
 import { Globe, Lock, Note } from './icons.js';
 
 /** A project's items, one line each; choosing one reads it in place. */
 export function Project({ state, project }: { state: State; project: ProjectSummary }) {
-  const reader = state.reader;
-  if (reader) {
-    return (
-      <article class="reader" data-testid="reader" aria-busy={reader.loading}>
-        {reader.failure && <div class="error">{message(reader.failure)}</div>}
-        {reader.content && (
-          <>
-            <h1>{reader.content.title}</h1>
-            <div class="notice">{when(reader.content.received_at)}</div>
-            <div class="body selectable" data-testid="reader-text">{reader.content.text}</div>
-          </>
-        )}
-        <div class="actions"><button type="button" class="link-button" onClick={closeReader}>Back to {project.name}</button></div>
-      </article>
-    );
-  }
   const feed = state.feed;
   if (feed?.failure && feed.items.length === 0) {
     return (

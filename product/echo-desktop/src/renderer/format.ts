@@ -37,3 +37,47 @@ export function bytes(size: number): string {
   if (size < 999_500) return `${Math.round(size / 1000)} KB`;
   return `${(size / 1_000_000).toFixed(1)} MB`;
 }
+
+/** A piece of a match's text, and whether it is one of the query's words. */
+export interface Marked { readonly text: string; readonly hit: boolean }
+
+function wordsPattern(terms: readonly string[]): RegExp | null {
+  if (terms.length === 0) return null;
+  const escaped = [...terms].sort((a, b) => b.length - a.length).map(term => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(escaped.join('|'), 'giu');
+}
+
+/** A match's text in pieces, the query's words marked wherever they appear. */
+export function marked(text: string, terms: readonly string[]): Marked[] {
+  const pattern = wordsPattern(terms);
+  if (!pattern) return [{ text, hit: false }];
+  const pieces: Marked[] = [];
+  let from = 0;
+  for (const found of text.matchAll(pattern)) {
+    if (found[0] === '') continue;
+    if (found.index > from) pieces.push({ text: text.slice(from, found.index), hit: false });
+    pieces.push({ text: found[0], hit: true });
+    from = found.index + found[0].length;
+  }
+  if (from < text.length) pieces.push({ text: text.slice(from), hit: false });
+  return pieces;
+}
+
+/**
+ * The words around the first of the query's words in an excerpt, as
+ * "…pricing tiers…", for a match whose title does not show why it matched.
+ * Null when the excerpt has none of them.
+ */
+export function snippet(excerpt: string, terms: readonly string[]): string | null {
+  const pattern = wordsPattern(terms);
+  const line = excerpt.replace(/\s+/g, ' ').trim();
+  const found = pattern ? pattern.exec(line) : null;
+  if (!found) return null;
+  const at = found.index;
+  // A few words either side, cut between words.
+  const before = line.indexOf(' ', at - 24);
+  const start = at <= 24 ? 0 : before >= 0 && before < at ? before + 1 : at;
+  const after = line.indexOf(' ', at + found[0].length + 16);
+  const end = after < 0 ? line.length : after;
+  return `${start > 0 ? '…' : ''}${line.slice(start, end)}${end < line.length ? '…' : ''}`;
+}

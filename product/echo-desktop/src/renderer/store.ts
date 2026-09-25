@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AppStatus, AskScope, Audience, ConnectedTool, ContextContent, Expect, Extraction, Failure, FeedItem, FileHandle,
-  ProjectSummary, Receipt, Result,
+  Match, ProjectSummary, Receipt, Result,
 } from '../shared/protocol.js';
+import { searchQuery } from '../shared/query.js';
 import { dropFile, rpc } from './api.js';
 import { message } from './messages.js';
 
@@ -71,14 +72,40 @@ export interface ToolsSheet {
 
 export type Sheet = SignOutSheet | ToolsSheet;
 
+/** An original open in the reader: an item of a project, or a saved note found in all context. */
+export interface ReaderState {
+  contextId: string;
+  from: { kind: 'project'; project_id: string } | { kind: 'note'; source: 'v2' | 'v3' };
+  loading: boolean;
+  content?: ContextContent;
+  failure?: Failure;
+}
+
+/** The live matches for the bar's text, within the scope they were searched in. */
+export interface MatchesState {
+  seq: number;
+  query: string;
+  scope: AskScope;
+  loading: boolean;
+  items: readonly Match[];
+  failure?: Failure;
+}
+
 export interface State {
   status: AppStatus | null;
   booting: boolean;
   route: Route;
   projects: { items: ProjectSummary[]; next: string | null; loading: boolean; failure?: Failure };
   feed: { projectId: string; items: FeedItem[]; loading: boolean; failure?: Failure } | null;
-  reader: { contextId: string; loading: boolean; content?: ContextContent; failure?: Failure } | null;
+  reader: ReaderState | null;
+  /**
+   * What the bar asks about, and searches: a project (the chip) or all
+   * context. The page never moves with it.
+   */
   barScope: AskScope;
+  /** The bar's text. Only asking, Escape, or a real change of access empties it. */
+  barText: string;
+  matches: MatchesState | null;
   ask: AskState | null;
   evidence: { seq: number; label: string; loading: boolean; text?: string; failure?: Failure } | null;
   compose: ComposeState | null;
@@ -103,8 +130,8 @@ function rememberedSidebar(): boolean {
 
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false }, feed: null, reader: null,
-  barScope: { kind: 'global' }, ask: null, evidence: null, compose: null, toast: null, concealed: false, signin: { phase: 'idle', form: false },
-  sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(),
+  barScope: { kind: 'global' }, barText: '', matches: null, ask: null, evidence: null, compose: null, toast: null, concealed: false,
+  signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(),
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -130,12 +157,16 @@ function expect(): Expect | null {
   return account ? { authority: account.authority, membership_id: account.membership_id } : null;
 }
 
+/** Access that was lost or refused. A timeout, an outage or a bad reply says nothing about it. */
+const ACCESS_LOST = ['signed_out', 'unauthorized', 'stale_access_state', 'sign_in_required', 'not_found', 'forbidden'];
+
 /**
  * Signed out or switched under us: re-read the account. The page that failed
  * still shows its failure, so nothing is left loading when the account is the
- * same one after all.
+ * same one after all. Lost or refused access also empties the bar.
  */
 function accountLost(failure: Failure): void {
+  if (ACCESS_LOST.includes(failure.code)) emptyBar();
   if (['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'].includes(failure.code)) {
     void refreshStatus();
   }
@@ -160,13 +191,16 @@ export async function refreshStatus(): Promise<void> {
 function applyStatus(status: AppStatus): void {
   statusSeq += 1; // an older read still on its way is stale now
   const wasSignedIn = state.status?.signed_in === true;
+  const before = state.status?.account ?? null;
   const next = status.account;
   set({ status, booting: false, startFailed: false });
   // Signed out: the sign-in page covers everything until someone signs in.
-  if (!next) { set({ sheet: null }); return; }
+  if (!next) { emptyBar(); set({ sheet: null }); return; }
   const same = lastAccount?.authority === next.authority && lastAccount.membership_id === next.membership_id;
   // Someone else: nothing of the last account's survives, not even a draft.
   if (!same) forgetAccount();
+  // A new role is a change of access: the bar's text goes.
+  else if (before && before.role !== next.role) emptyBar();
   lastAccount = { authority: next.authority, membership_id: next.membership_id };
   if (!same || !wasSignedIn) void loadProjects();
 }
@@ -174,6 +208,7 @@ function applyStatus(status: AppStatus): void {
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
 function forgetAccount(): void {
   lastAccount = null;
+  emptyBar();
   set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null, sheet: null, toast: null,
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false } });
   setCompose(null);
@@ -303,14 +338,22 @@ export async function loadProjects(more = false): Promise<void> {
     set({ projects: { ...state.projects, loading: false, failure: result.failure } });
     return;
   }
+  if (rolesChanged(result.value.items)) emptyBar();
   const seen = new Set(more ? state.projects.items.map(project => project.project_id) : []);
   const items = [...(more ? state.projects.items : []), ...result.value.items.filter(project => !seen.has(project.project_id))];
   set({ projects: { items, next: result.value.next_cursor, loading: false } });
 }
 
-/** Back to Home as it was left: the same pages, the same scroll. */
+/** A project you were lead of is now one you are a member of, or the other way: a change of access. */
+function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
+  const known = new Map(state.projects.items.map(project => [project.project_id, project.role]));
+  return fresh.some(project => known.has(project.project_id) && known.get(project.project_id) !== project.role);
+}
+
+/** Back to Home as it was left: the same pages, the same scroll. The bar searches all context. */
 export function goHome(): void {
   set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null, barScope: { kind: 'global' }, toast: null });
+  syncSearch();
 }
 
 /**
@@ -324,12 +367,14 @@ export async function refreshHome(): Promise<void> {
   if (!result.ok) { accountLost(result.failure); return; }
   if (state.route.page !== 'home') return;
   const first = result.value.items;
+  if (rolesChanged(first)) emptyBar();
   const seen = new Set(first.map(project => project.project_id));
   const loadedMore = state.projects.items.length > first.length;
   const later = loadedMore ? state.projects.items.slice(first.length).filter(project => !seen.has(project.project_id)) : [];
   set({ projects: { items: [...first, ...later], next: loadedMore ? state.projects.next : result.value.next_cursor, loading: false } });
 }
 
+/** Opens a project, from Home or the sidebar: the bar's scope narrows to it, and its text stays. */
 export async function openProject(project: ProjectSummary): Promise<void> {
   const account = expect();
   if (!account) return;
@@ -338,6 +383,7 @@ export async function openProject(project: ProjectSummary): Promise<void> {
     barScope: { kind: 'project', project_id: project.project_id },
     feed: { projectId: project.project_id, items: [], loading: true },
   });
+  syncSearch();
   const result = await rpc('projects.feed', { expect: account, project_id: project.project_id });
   if (state.feed?.projectId !== project.project_id) return; // moved on
   if (!result.ok) {
@@ -357,27 +403,49 @@ async function refreshFeed(projectId: string): Promise<void> {
   set({ feed: { ...state.feed, items: [...result.value.items], loading: false, failure: undefined } });
 }
 
-export async function openItem(item: FeedItem): Promise<void> {
-  const account = expect();
+export function openItem(item: FeedItem): Promise<void> {
   const route = state.route;
-  if (!account || route.page !== 'project') return;
-  set({ reader: { contextId: item.context_id, loading: true }, toast: null });
-  const result = await rpc('projects.readContext', { expect: account, project_id: route.project.project_id, context_id: item.context_id });
-  if (state.reader?.contextId !== item.context_id) return;
-  if (!result.ok) {
-    accountLost(result.failure);
-    set({ reader: { contextId: item.context_id, loading: false, failure: result.failure } });
-    return;
-  }
-  set({ reader: { contextId: item.context_id, loading: false, content: result.value } });
+  if (route.page !== 'project') return Promise.resolve();
+  return read(item.context_id, { kind: 'project', project_id: route.project.project_id });
 }
 
-export function closeReader(): void { set({ reader: null }); }
+/** A live match, read in place: the page stays, and Back returns to the matches. */
+export function openMatch(match: Match): Promise<void> {
+  const scope = state.matches?.scope;
+  if (match.source !== 'project') return read(match.context_id, { kind: 'note', source: match.source });
+  if (scope?.kind !== 'project') return Promise.resolve();
+  return read(match.context_id, { kind: 'project', project_id: scope.project_id });
+}
+
+/** The read on screen; a reply for one since closed or replaced is dropped. */
+let readSeq = 0;
+
+async function read(contextId: string, from: ReaderState['from']): Promise<void> {
+  const account = expect();
+  if (!account) return;
+  const mine = ++readSeq;
+  set({ reader: { contextId, from, loading: true }, toast: null });
+  const result = from.kind === 'project'
+    ? await rpc('projects.readContext', { expect: account, project_id: from.project_id, context_id: contextId })
+    : await rpc('search.read', { expect: account, context_id: contextId, source: from.source });
+  if (state.reader?.contextId !== contextId || readSeq !== mine) return;
+  if (!result.ok) {
+    set({ reader: { contextId, from, loading: false, failure: result.failure } });
+    accountLost(result.failure);
+    return;
+  }
+  set({ reader: { contextId, from, loading: false, content: result.value } });
+}
+
+export function closeReader(): void { readSeq += 1; set({ reader: null }); }
 
 // ---- ask ---------------------------------------------------------------------
 
-/** The × on the scope chip: the next question asks everything you can read. */
-export function widenScope(): void { set({ barScope: { kind: 'global' } }); }
+/** The × on the scope chip: the bar searches and asks everything you can read. The page stays. */
+export function widenScope(): void {
+  set({ barScope: { kind: 'global' } });
+  syncSearch();
+}
 
 function scopeName(scope: AskScope): string {
   if (scope.kind === 'global') return 'All accessible context';
@@ -403,7 +471,10 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
 }
 
 /** Leaves the answer. While asking it is Cancel: a late answer is dropped. */
-export function closeAsk(): void { set({ ask: null, evidence: null }); }
+export function closeAsk(): void {
+  set({ ask: null, evidence: null });
+  syncSearch();
+}
 
 export async function openSource(index: number): Promise<void> {
   const account = expect();
@@ -425,6 +496,96 @@ export async function openSource(index: number): Promise<void> {
 }
 
 export function closeSource(): void { set({ evidence: null }); }
+
+// ---- the bar: live search -------------------------------------------------------
+
+/** Typing searches once it pauses. */
+const SEARCH_PAUSE_MS = 250;
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+
+function sameScope(a: AskScope, b: AskScope): boolean {
+  return a.kind === b.kind && (a.kind === 'global' || (b.kind === 'project' && a.project_id === b.project_id));
+}
+
+/** What the bar should search now: never on the Ask page, never while another app is in front. */
+function wantedSearch(): { query: string; scope: AskScope } | null {
+  if (!state.status?.signed_in || state.concealed || state.ask) return null;
+  const query = searchQuery(state.barText);
+  return query === null ? null : { query, scope: state.barScope };
+}
+
+/**
+ * Searches for the bar's text in its scope, unless the matches shown are
+ * already for them; `fresh` reads them again anyway. With nothing to search
+ * the matches go.
+ */
+function syncSearch(fresh = false): void {
+  clearTimeout(searchTimer);
+  searchTimer = undefined;
+  const wanted = wantedSearch();
+  if (!wanted) { if (state.matches) set({ matches: null }); return; }
+  const current = state.matches;
+  const sameList = current !== null && sameScope(current.scope, wanted.scope);
+  if (!fresh && sameList && current.query === wanted.query && !current.failure) return;
+  void runSearch(wanted.query, wanted.scope, sameList ? current.items : []);
+}
+
+/** The search runs; the scope's last matches stay until the new ones arrive. */
+async function runSearch(query: string, scope: AskScope, shown: readonly Match[]): Promise<void> {
+  const account = expect();
+  if (!account) return;
+  const mine = ++seq;
+  set({ matches: { seq: mine, query, scope, loading: true, items: shown } });
+  const result = await rpc('search.run', { expect: account, query, scope });
+  if (state.matches?.seq !== mine) return;
+  if (!result.ok) {
+    set({ matches: { seq: mine, query, scope, loading: false, items: [], failure: result.failure } });
+    accountLost(result.failure);
+    return;
+  }
+  set({ matches: { seq: mine, query, scope, loading: false, items: result.value.items } });
+}
+
+/** Typing in the bar. A search waits for a pause; text that cannot be searched shows no matches. */
+export function setBarText(text: string): void {
+  set({ barText: text });
+  clearTimeout(searchTimer);
+  if (!wantedSearch()) { syncSearch(); return; }
+  searchTimer = setTimeout(() => syncSearch(), SEARCH_PAUSE_MS);
+}
+
+/** The same search, read again: Try again after a failure, or the window or ECHO came back. */
+export function searchAgain(): void { syncSearch(true); }
+
+/** Escape in the bar: the text and its matches go; the page stays. */
+export function clearBar(): void { emptyBar(); }
+
+function emptyBar(): void {
+  clearTimeout(searchTimer);
+  searchTimer = undefined;
+  if (state.barText !== '' || state.matches) set({ barText: '', matches: null });
+}
+
+/** Return, or the Ask row under the matches: asks the bar's scope, and the bar empties. */
+export function submitBar(): void {
+  const text = state.barText;
+  if (text.trim() === '') return;
+  emptyBar();
+  void ask(text, state.barScope);
+}
+
+/** The matches show over the page: not over a reader, an answer, a sheet, or a covered window. */
+export function matchesShown(current: State = state): boolean {
+  return current.matches !== null && !current.concealed && !current.ask && !current.reader && !current.sheet &&
+    !(current.compose && !current.compose.hidden) && searchQuery(current.barText) !== null;
+}
+
+/** The project the chip names, while its page is on screen. */
+export function chipProject(current: State = state): ProjectSummary | null {
+  const { route, barScope } = current;
+  return !current.concealed && route.page === 'project' && barScope.kind === 'project' && barScope.project_id === route.project.project_id
+    ? route.project : null;
+}
 
 // ---- capture -----------------------------------------------------------------
 
@@ -466,7 +627,11 @@ function onScreen(): ProjectSummary | null {
   return state.route.page === 'project' && !state.concealed ? state.route.project : null;
 }
 
-/** ⊕ and the sidebar's Capture: the draft comes back as it was, or a new capture for the project on screen. */
+/**
+ * ⊕ and the sidebar's Capture: the draft comes back as it was, or a new
+ * capture for the project on screen, even with the chip widened (asking
+ * everything never picks who can read a capture).
+ */
 export function openCompose(): void {
   const current = state.compose;
   set({ toast: null });
@@ -681,10 +846,24 @@ export function toggleSidebar(): void {
 
 // ---- concealment ---------------------------------------------------------------
 
-/** Another app is in front: cover the window until ECHO is back. */
-export function conceal(): void { set({ concealed: true }); }
+/**
+ * Another app is in front: cover the window until ECHO is back. The bar keeps
+ * its text; its matches go, and are read again for the account on return.
+ */
+export function conceal(): void {
+  set({ concealed: true });
+  syncSearch();
+}
 export function resume(): void {
   if (!state.concealed) return;
   set({ concealed: false });
-  void refreshStatus();
+  void refreshStatus().then(searchAgain);
+}
+
+/** The window came forward (⌘E, the tray): the account, Home and the bar's search are read again. */
+export async function windowShown(): Promise<void> {
+  if (state.concealed) return;
+  await refreshStatus();
+  searchAgain();
+  await refreshHome();
 }

@@ -1,8 +1,8 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emit, launch, type Launched } from './launch.js';
+import { drop, emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
 const folders: string[] = [];
@@ -22,31 +22,6 @@ function onDisk(name: string, text = 'Annual pricing.'): string {
   const file = join(folder, name);
   writeFileSync(file, text);
   return file;
-}
-
-/**
- * Drops one file on a target, as a drag from Finder does. Playwright cannot
- * drag from the desktop, so a hidden file input makes a File with a real path
- * on disk; `null` drops a file made in the page, which has none.
- */
-async function drop(page: Page, target: Locator, path: string | null): Promise<void> {
-  const transfer = await page.evaluateHandle(() => new DataTransfer());
-  if (path) {
-    await page.evaluate(() => {
-      const input = Object.assign(document.createElement('input'), { type: 'file', id: 'drop-source', hidden: true });
-      document.body.append(input);
-    });
-    await page.setInputFiles('#drop-source', path);
-    await page.evaluate(dataTransfer => {
-      const input = document.getElementById('drop-source') as HTMLInputElement;
-      dataTransfer.items.add(input.files![0]!);
-      input.remove();
-    }, transfer);
-  } else {
-    await page.evaluate(dataTransfer => { dataTransfer.items.add(new File(['made in the page'], 'Made.txt', { type: 'text/plain' })); }, transfer);
-  }
-  await target.dispatchEvent('dragover', { dataTransfer: transfer });
-  await target.dispatchEvent('drop', { dataTransfer: transfer });
 }
 
 test('a file dropped on a sidebar project, with another app in front, is captured into that project', async () => {

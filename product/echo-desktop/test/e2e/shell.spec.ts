@@ -99,7 +99,7 @@ test('while another app is in front the page is covered, and the project rows st
   // Nothing says which project was open.
   await expect(page.getByTestId('sidebar-project').nth(0)).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
-  await expect(page.getByTestId('ask-field')).toHaveAttribute('placeholder', 'Ask ECHO');
+  await expect(page.getByTestId('ask-field')).toHaveAttribute('placeholder', 'Search or ask ECHO');
   await emit(app, 'echo-test:resume');
   await expect(page.getByTestId('sidebar-project').nth(0)).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('scope-chip')).toHaveText('Apollo');
