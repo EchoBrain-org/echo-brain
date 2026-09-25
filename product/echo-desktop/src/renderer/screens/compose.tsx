@@ -1,9 +1,9 @@
-import { useEffect, useLayoutEffect, useRef } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { bytes } from '../format.js';
 import { message } from '../messages.js';
 import {
-  attachFile, checkCompose, chooseReaders, closeCompose, keepUnresolved, newCompose, removeFile, sendCompose,
+  attachFile, checkCompose, chooseReaders, closeCompose, keepUnresolved, loadProjects, newCompose, removeFile, sendCompose,
   setComposeText, type ComposeState, type State,
 } from '../store.js';
 import { useDropTarget } from './drop.js';
@@ -32,6 +32,8 @@ function readersLine(compose: ComposeState): string {
   return 'Only you can read this.';
 }
 
+/** Past this many projects, a field finds one by name. */
+const FIND_AFTER = 8;
 /** Arrow keys move through Who can read, and pick as they go. */
 const STEPS: Readonly<Record<string, number>> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
 
@@ -53,20 +55,24 @@ function projectChoices(compose: ComposeState, listed: readonly ProjectSummary[]
 
 /**
  * Who can read: Only me, every project by name, then Organization. One click
- * picks, and the pills wrap.
+ * picks; the pills wrap, and with many projects a field finds one.
  */
 function WhoCanRead({ state, compose, locked }: { state: State; compose: ComposeState; locked: boolean }) {
   const group = useRef<HTMLDivElement>(null);
+  const [find, setFind] = useState('');
   const projects = projectChoices(compose, state.projects.items);
+  const finding = projects.length > FIND_AFTER;
+  const query = finding ? find.trim().toLocaleLowerCase() : '';
+  const shown = query ? projects.filter(project => project.name.toLocaleLowerCase().includes(query)) : projects;
   const choices = [
     { key: 'only-me', label: 'Only me', choice: 'only-me' as const, testid: 'readers-only-me', checked: compose.readers === 'only-me' },
-    ...projects.map(project => ({
+    ...shown.map(project => ({
       key: project.project_id, label: project.name, choice: project, testid: 'readers-project',
       checked: compose.readers === 'project' && compose.project?.project_id === project.project_id,
     })),
     { key: 'team', label: 'Organization', choice: 'team' as const, testid: 'readers-team', checked: compose.readers === 'team' },
   ];
-  // One Tab stop: the chosen pill.
+  // One Tab stop: the chosen pill, or Only me while a search hides it.
   const stop = Math.max(0, choices.findIndex(choice => choice.checked));
 
   // Only a name wider than the whole sheet is cut off, and then its tooltip says it in full.
@@ -81,6 +87,18 @@ function WhoCanRead({ state, compose, locked }: { state: State; compose: Compose
     <div class="readers">
       <div class="readers-head">
         <span class="label" id="readers-label">Who can read</span>
+        {finding && (
+          <input
+            type="text" class="field find" data-testid="readers-find" placeholder="Find a project" aria-label="Find a project" spellcheck={false}
+            value={find} disabled={locked} onInput={event => setFind((event.target as HTMLInputElement).value)}
+            onKeyDown={event => {
+              // ⌘↩ still saves and Escape still closes: only a plain Enter is the field's.
+              if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
+              event.preventDefault();
+              if (query && shown[0]) chooseReaders(shown[0]);
+            }}
+          />
+        )}
       </div>
       <div class="reader-pills">
         <div
@@ -104,6 +122,10 @@ function WhoCanRead({ state, compose, locked }: { state: State; compose: Compose
             >{choice.label}</button>
           ))}
         </div>
+        {state.projects.next && (
+          <button type="button" class="reader-pill reader-more" data-testid="readers-more-projects" disabled={locked || state.projects.loading}
+            onClick={() => void loadProjects(true)}>More projects</button>
+        )}
       </div>
     </div>
   );
@@ -120,6 +142,12 @@ export function Compose({ state }: { state: State }) {
   useEffect(() => {
     if (sheet.current && !sheet.current.contains(document.activeElement)) sheet.current.focus();
   }, [compose.status, compose.confirmNew]);
+  // More projects is off while a page loads, and gone after the last: the
+  // caret stays in the sheet, so ⌘↩ and Tab still work. Before paint, so no
+  // key pressed right after is lost.
+  useLayoutEffect(() => {
+    if (document.activeElement === document.body) sheet.current?.focus();
+  }, [state.projects.loading, state.projects.next]);
 
   const busy = compose.status === 'sending' || compose.status === 'checking';
   const unresolved = compose.status === 'unknown' || compose.status === 'checking';
