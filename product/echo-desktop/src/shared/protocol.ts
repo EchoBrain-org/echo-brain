@@ -129,7 +129,6 @@ export interface HostMethods {
 
 export interface MainMethods {
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
-  'clipboard.writeText': { params: { text: string }; result: null };
   /** A save's outcome is unknown: quitting asks first. */
   'app.setUnresolved': { params: { unresolved: boolean }; result: null };
   /** After the host gave up: start it again. */
@@ -145,7 +144,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'clipboard.writeText', 'app.setUnresolved', 'app.retryHost',
+  'dialog.openDocument', 'app.setUnresolved', 'app.retryHost',
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry']);

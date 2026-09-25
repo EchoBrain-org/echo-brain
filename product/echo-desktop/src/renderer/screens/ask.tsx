@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import { clock } from '../format.js';
 import { message } from '../messages.js';
-import { ask, closeAsk, closeSource, copyAnswer, openCompose, openSource, widenScope, type State } from '../store.js';
+import { ask, closeAsk, closeSource, openCompose, openSource, widenScope, type State } from '../store.js';
 
 /** What a source may show: 2,000 characters, and at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -80,7 +80,6 @@ export function AskView({ state }: { state: State }) {
         <>
           <div class="answer selectable" data-testid="answer">{current.answer.text}</div>
           <div class="actions">
-            <button type="button" class="link-button" onClick={() => void copyAnswer()}>Copy</button>
             <button type="button" class="link-button" onClick={() => void ask(current.question, current.scope)}>Ask again</button>
           </div>
           {current.answer.sources.length > 0 && (

@@ -1,6 +1,5 @@
-// The renderer's only door out: one rpc call, one event stream, and dropped
-// files, whose paths go straight to main and are never exposed to page script.
-import { contextBridge, ipcRenderer, webUtils } from 'electron';
+// The renderer's only door out: one rpc call and one event stream.
+import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('echo', {
   rpc: (method: string, params?: unknown) => ipcRenderer.invoke('rpc', { method, params }),
@@ -11,6 +10,4 @@ contextBridge.exposeInMainWorld('echo', {
     ipcRenderer.on('event', handler);
     return () => { ipcRenderer.removeListener('event', handler); };
   },
-  // A path only ever comes from a real dropped File, on its own channel.
-  dropFile: (file: File) => ipcRenderer.invoke('drop', webUtils.getPathForFile(file)),
 });

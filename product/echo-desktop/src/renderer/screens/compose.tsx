@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
 import { message } from '../messages.js';
 import {
-  acceptDrop, attachFile, checkCompose, chooseTarget, closeCompose, keepUnresolved, newCompose, removeFile, sendCompose,
+  attachFile, checkCompose, chooseTarget, closeCompose, keepUnresolved, newCompose, removeFile, sendCompose,
   sentLabel, setComposeText, targetLabel, toggleTargets, type ComposeTarget, type State,
 } from '../store.js';
 import { Check, Chevron, Clip, Close, Up } from './icons.js';
@@ -24,7 +24,6 @@ export function Compose({ state }: { state: State }) {
   const body = useRef<HTMLTextAreaElement>(null);
   const sheet = useRef<HTMLDivElement>(null);
   const done = useRef<HTMLButtonElement>(null);
-  const [over, setOver] = useState(false);
   useEffect(() => { if (!compose.hidden) (body.current ?? sheet.current)?.focus(); }, [compose.seq, compose.hidden, compose.file]);
   // When the footer changes under the focused control, keep focus in the sheet.
   useEffect(() => {
@@ -62,19 +61,12 @@ export function Compose({ state }: { state: State }) {
   return (
     <div class="overlay" onClick={closeCompose}>
       <div
-        class={`sheet${over ? ' drop-target' : ''}`} role="dialog" aria-label="Write" data-testid="compose" ref={sheet} tabIndex={-1}
+        class="sheet" role="dialog" aria-label="Write" data-testid="compose" ref={sheet} tabIndex={-1}
         onClick={event => event.stopPropagation()}
         onKeyDown={event => {
           // Escape is handled once, at the window: it hides the sheet and keeps the draft.
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !unresolved) { event.preventDefault(); void sendCompose(); }
           trapTab(event, sheet.current);
-        }}
-        onDragOver={event => { event.preventDefault(); setOver(true); }}
-        onDragLeave={() => setOver(false)}
-        onDrop={event => {
-          event.preventDefault(); event.stopPropagation(); setOver(false);
-          const file = event.dataTransfer?.files[0];
-          if (file) void acceptDrop(file);
         }}
       >
         <div class="to-row">

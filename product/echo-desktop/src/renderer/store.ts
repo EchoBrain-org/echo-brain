@@ -4,7 +4,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type {
   Answer, AppStatus, AskScope, Audience, ContextContent, Expect, Failure, FeedItem, FileHandle, ProjectSummary, Result,
 } from '../shared/protocol.js';
-import { dropFile, rpc } from './api.js';
+import { rpc } from './api.js';
 import { message } from './messages.js';
 
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary };
@@ -287,11 +287,6 @@ export async function openSource(index: number): Promise<void> {
 
 export function closeSource(): void { set({ evidence: null }); }
 
-export async function copyAnswer(): Promise<void> {
-  const text = state.ask?.answer?.text;
-  if (text) await rpc('clipboard.writeText', { text });
-}
-
 // ---- write and capture -------------------------------------------------------
 
 const NOTE_OR_FILE = 'Send this note before attaching a document.';
@@ -308,10 +303,10 @@ function setCompose(compose: ComposeState | null): void {
   if (before !== compose?.status) unresolvedChanged();
 }
 
-function fresh(file: FileHandle | null, target: ComposeTarget, notice?: string): ComposeState {
+function fresh(target: ComposeTarget): ComposeState {
   return {
-    seq: ++seq, text: '', file, picking: false, status: 'editing', requestId: crypto.randomUUID(), hidden: false, confirmNew: false,
-    target, ...(notice === undefined ? {} : { notice }),
+    seq: ++seq, text: '', file: null, picking: false, status: 'editing', requestId: crypto.randomUUID(), hidden: false, confirmNew: false,
+    target,
   };
 }
 
@@ -329,7 +324,7 @@ function draft(): ComposeState | null {
 /** ⊕: the draft comes back as it was, or a new note for the project on screen. */
 export function openCompose(): void {
   const current = draft();
-  setCompose(current ? { ...current, hidden: false } : fresh(null, onScreen()));
+  setCompose(current ? { ...current, hidden: false } : fresh(onScreen()));
 }
 
 /**
@@ -338,7 +333,7 @@ export function openCompose(): void {
  */
 export function openCapture(): void {
   const current = draft();
-  setCompose(current ? { ...current, hidden: false } : fresh(null, { kind: 'only-me' }));
+  setCompose(current ? { ...current, hidden: false } : fresh({ kind: 'only-me' }));
 }
 
 /** Escape or Close hides the sheet and keeps the draft; only a sent note is gone. */
@@ -378,27 +373,6 @@ export async function attachFile(): Promise<void> {
   const result = await rpc('dialog.openDocument', {});
   if (result.ok && result.value) editCompose({ file: result.value });
   else if (!result.ok && state.compose && !locked(state.compose)) setCompose({ ...state.compose, notice: message(result.failure) });
-}
-
-/**
- * A dropped file. On a Home row it is for that project; elsewhere for the
- * project on screen or Only me. A draft with words in it, or a save still
- * unresolved, is never changed: it comes back and says the file was left out.
- */
-export async function acceptDrop(file: File, project?: ProjectSummary): Promise<void> {
-  const result = await dropFile(file);
-  const target: ComposeTarget = project ? { kind: 'project', project } : onScreen();
-  const current = draft();
-  if (current && (locked(current) || current.text.trim() !== '')) {
-    setCompose({ ...current, hidden: false, notice: locked(current) ? 'The file was not attached.' : NOTE_OR_FILE });
-    return;
-  }
-  if (!result.ok) {
-    setCompose(current ? { ...current, hidden: false, notice: message(result.failure) } : fresh(null, target, message(result.failure)));
-    return;
-  }
-  // Nothing written yet: the drop starts over, addressed as the gesture says.
-  setCompose(fresh(result.value, target));
 }
 
 function audienceOf(target: ComposeTarget): Audience {
@@ -471,7 +445,7 @@ export function newCompose(): void {
   const compose = state.compose;
   if (!compose) return;
   if (compose.status === 'unknown' && !compose.confirmNew) { setCompose({ ...compose, confirmNew: true }); return; }
-  setCompose(fresh(null, onScreen()));
+  setCompose(fresh(onScreen()));
 }
 
 export function keepUnresolved(): void {

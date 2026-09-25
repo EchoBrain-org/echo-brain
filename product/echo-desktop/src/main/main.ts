@@ -1,7 +1,7 @@
 // ECHO desktop main process: windows, tray, shortcuts and the IPC broker. It
 // never reads the session or holds a token; the person host does that.
 import {
-  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, protocol, session, shell,
+  app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, protocol, session, shell,
   Tray, utilityProcess, type IpcMainInvokeEvent, type UtilityProcess,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
@@ -220,12 +220,6 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       const vetted = vetDocument(chosen.filePaths[0]!);
       return vetted ? { ok: true, value: vetted } : refused('unsupported_file');
     }
-    case 'clipboard.writeText': {
-      const text = (params as MainMethods['clipboard.writeText']['params']).text;
-      if (typeof text !== 'string' || text.length > 12_000) return refused();
-      clipboard.writeText(text);
-      return { ok: true, value: null };
-    }
     case 'app.setUnresolved':
       unresolved = (params as MainMethods['app.setUnresolved']['params']).unresolved === true;
       return { ok: true, value: null };
@@ -246,15 +240,6 @@ ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> 
   log(`${method} ${result.ok ? 'ok' : result.failure.code}` +
     `${typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId) ? ` ${requestId}` : ''} ${Date.now() - started}ms`);
   return result;
-});
-
-// A dropped file's path comes only from the preload, which reads it off a real
-// File the person dropped; the page's rpc can never name a path.
-ipcMain.handle('drop', (event, path: unknown): Result<FileHandle> => {
-  if (!trustedSender(event)) return refused('forbidden');
-  const vetted = typeof path === 'string' ? vetDocument(path) : null;
-  log(`drop ${vetted ? 'ok' : 'unsupported_file'}`);
-  return vetted ? { ok: true, value: vetted } : refused('unsupported_file');
 });
 
 async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Result<unknown>> {
@@ -369,9 +354,7 @@ function applicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
 }
 
-app.on('second-instance', (_event, argv) => {
-  if (argv.includes('--capture')) capture(); else show();
-});
+app.on('second-instance', show);
 
 app.on('did-resign-active', () => send('lifecycle.conceal', {}));
 app.on('did-become-active', () => send('lifecycle.resume', {}));

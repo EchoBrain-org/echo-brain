@@ -8,7 +8,7 @@ import { Back } from './screens/icons.js';
 import { Project } from './screens/project.js';
 import { SignIn } from './screens/signin.js';
 import {
-  acceptDrop, closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, hostFailed, openCapture, refreshHome, refreshStatus,
+  closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, hostFailed, openCapture, refreshHome, refreshStatus,
   resume, retryStart, signinPhase, useStore,
 } from './store.js';
 
@@ -77,21 +77,12 @@ function App() {
   }
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
-  // Another app is in front: cover what a project or an answer shows. Home's
-  // rows stay, so a file dragged from Finder can still land on one.
-  const covered = state.concealed && (state.ask !== null || inProject !== null);
+  // Another app is in front: cover the window until ECHO is back.
+  const covered = state.concealed;
   const title = covered ? 'ECHO' : state.ask ? '' : inProject ? inProject.name : 'ECHO';
   const backLabel = covered ? null : state.evidence || state.ask ? 'Back' : state.reader ? inProject?.name : inProject ? 'Projects' : null;
   return (
-    <div
-      class="app"
-      onDragOver={event => event.preventDefault()}
-      onDrop={event => {
-        event.preventDefault();
-        const file = event.dataTransfer?.files[0];
-        if (file && (!state.compose || state.compose.hidden)) void acceptDrop(file);
-      }}
-    >
+    <div class="app">
       <header class="titlebar">
         <div class="side">
           {backLabel && <button type="button" class="back" data-testid="back" onClick={back}><Back /><span>{backLabel}</span></button>}
