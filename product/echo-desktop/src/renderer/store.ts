@@ -1849,7 +1849,7 @@ async function readEvidence(gen: number, index: number): Promise<void> {
   if (!result.ok) accountLost(result.failure);
 }
 
-/** Retry evidence, on the original the pane shows. */
+/** Try again, on the original the pane shows. */
 export function retryEvidence(): void {
   const sources = state.sources;
   if (sources?.open != null) void readEvidence(sources.gen, sources.open);

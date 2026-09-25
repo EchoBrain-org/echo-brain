@@ -285,7 +285,7 @@ export function SourcePane({ state }: { state: State }) {
         {!read.loading && 'failure' in read && (
           <div class="source-failure">
             <div class="error" data-testid="source-error">{message(read.failure)}</div>
-            <button type="button" class="link-button" data-testid="retry-evidence" onClick={retryEvidence}>Retry evidence</button>
+            <button type="button" class="link-button" data-testid="retry-evidence" onClick={retryEvidence}>Try again</button>
           </div>
         )}
         {text !== undefined && (

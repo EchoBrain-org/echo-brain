@@ -194,7 +194,7 @@ test('a cited record the person can no longer read says so, with no Try again th
   expect(recordReads()).toHaveLength(2);
 });
 
-test('evidence that could not be read says so, and Retry evidence reads it again', async () => {
+test('evidence that could not be read says so, and Try again reads it again', async () => {
   run = await launch('evidence-fails-once');
   const { page } = run;
   await askFromHome(page, 'What did we agree?');
@@ -202,6 +202,8 @@ test('evidence that could not be read says so, and Retry evidence reads it again
   const pane = page.getByTestId('source-pane');
   await expect(pane.getByTestId('source-error')).toHaveText('ECHO is unavailable right now. Try again.');
   await expect(pane.getByTestId('evidence-text')).toHaveCount(0);
+  // One word for every recovery: Try again.
+  await expect(pane.getByTestId('retry-evidence')).toHaveText('Try again');
   await pane.getByTestId('retry-evidence').click();
   await expect(pane.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
   expect(evidenceReads()).toHaveLength(2);
