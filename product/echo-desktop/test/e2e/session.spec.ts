@@ -107,6 +107,24 @@ test('quit waits out a refresh with the window open, and never touches the close
   expect(existsSync(join(home, 'threw'))).toBe(false);
 });
 
+test('a note sent while quit waits out a refresh is asked about, once', async () => {
+  run = await launch('refresh-hangs');
+  const { app, page, home } = run;
+  await expect.poll(() => refreshes().length).toBe(1);
+  const asked = join(home, 'asked');
+  const exited = new Promise(resolveExit => app.process().once('exit', resolveExit));
+  await app.evaluate(({ app: electronApp, dialog }, file) => {
+    dialog.showMessageBoxSync = () => { process.getBuiltinModule('node:fs').appendFileSync(file, 'asked\n'); return 0; }; // Quit Anyway
+    electronApp.quit();
+  }, asked);
+  // The window stays open while quit waits, so a note can still be sent.
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Offsite dates');
+  await page.getByTestId('compose-send').click();
+  await exited;
+  expect(existsSync(asked) && readFileSync(asked, 'utf8')).toBe('asked\n');
+});
+
 test('a crashed page reloads and reads status again', async () => {
   run = await launch();
   const { page, app } = run;

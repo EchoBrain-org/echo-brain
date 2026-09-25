@@ -279,8 +279,7 @@ async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Resu
 }
 
 function send<N extends EventName>(name: N, payload: Events[N]): void {
-  // Quitting closes the window before macOS stops reporting app events.
-  if (window && !window.isDestroyed()) window.webContents.send('event', { name, payload });
+  window?.webContents.send('event', { name, payload });
 }
 
 // ---- window, tray, shortcuts -----------------------------------------------
@@ -305,6 +304,8 @@ function createWindow(): BrowserWindow {
   created.on('close', event => {
     if (!quitting) { event.preventDefault(); created.hide(); }
   });
+  // Quitting closes the window before macOS stops reporting app events.
+  created.on('closed', () => { if (window === created) window = null; });
   created.on('blur', () => {
     if (process.platform === 'darwin') return;
     setTimeout(() => { if (!BrowserWindow.getFocusedWindow()) send('lifecycle.conceal', {}); }, 150);
@@ -379,23 +380,26 @@ app.on('did-resign-active', () => send('lifecycle.conceal', {}));
 app.on('did-become-active', () => send('lifecycle.resume', {}));
 let drained = false;
 app.on('before-quit', event => {
+  // Never kill the host mid-refresh: that leaves the shared session claimed.
+  // Wait here, while the window is open: once it closes the app must exit at
+  // once, or a late macOS notice to the closed window throws, and Electron's
+  // error box can hold the quit open for good.
+  if (host && !drained) {
+    event.preventDefault();
+    drained = true;
+    const cap = new Promise(resolveCap => setTimeout(resolveCap, 5_000));
+    void Promise.race([callHost('host.drain', {}), cap]).then(() => app.quit());
+    return;
+  }
+  // Asked after the wait: the page stays usable during it and may start a save.
   if (unresolved && !quitting) {
     const choice = dialog.showMessageBoxSync({
       type: 'warning', message: 'A note may not have been sent.',
       detail: 'Check or retry it before quitting, or quit anyway.', buttons: ['Quit Anyway', 'Cancel'], defaultId: 1, cancelId: 1,
     });
-    if (choice !== 0) { event.preventDefault(); show(); return; }
+    if (choice !== 0) { event.preventDefault(); drained = false; show(); return; }
   }
   quitting = true;
-  if (!host || drained) return;
-  // Never kill the host mid-refresh: that leaves the shared session claimed.
-  // Wait here, while the window is open: once it closes the app must exit at
-  // once, or a late macOS notice to the closed window throws, and Electron's
-  // error box can hold the quit open for good.
-  event.preventDefault();
-  drained = true;
-  const cap = new Promise(resolveCap => setTimeout(resolveCap, 5_000));
-  void Promise.race([callHost('host.drain', {}), cap]).then(() => app.quit());
 });
 app.on('will-quit', () => { globalShortcut.unregisterAll(); host?.kill(); });
 app.on('window-all-closed', () => { /* stays in the tray */ });
