@@ -167,7 +167,7 @@ describe("CI workflow", () => {
     );
   });
 
-  it("runs the native Projects proof in the macOS Person-client job", () => {
+  it("runs the macOS-only CLI-kit and update-dispatch proofs in the macOS Person-client job", () => {
     const source = workflow();
     const personClientJob = source.slice(
       source.indexOf("  person-client-package:"),
@@ -175,8 +175,12 @@ describe("CI workflow", () => {
     );
 
     expect(personClientJob).toContain(
-      "tests/architecture/echo-projects.test.ts",
+      "tests/architecture/mac-person-cli-kit.test.ts",
     );
+    expect(personClientJob).toContain(
+      "tests/architecture/client-update-dispatch.test.ts",
+    );
+    expect(source).not.toMatch(/swift|echo-overlay|echo-onboarding/i);
   });
 
   it("builds, verifies, and installs only the macOS command-line kit in the macOS Person-client job", () => {

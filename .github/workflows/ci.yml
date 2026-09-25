@@ -159,17 +159,11 @@ jobs:
           test -x "$kit_root/node"
           "$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"
           node tests/fixtures/person-onboarding-smoke.mjs --kit-root "$kit_root"
-      - name: Exercise native Account, People, Projects, Uploads, and Sources with offline fixtures
+      - name: Exercise the macOS command-line kit installer and update dispatch
         run: >-
           npx vitest run --config vitest.config.ts
           tests/architecture/mac-person-cli-kit.test.ts
           tests/architecture/client-update-dispatch.test.ts
-          tests/architecture/person-account-ui.test.ts
-          tests/architecture/swift-source-boundaries.test.ts
-          tests/architecture/echo-people.test.ts
-          tests/architecture/echo-projects.test.ts
-          tests/architecture/echo-uploads.test.ts
-          tests/architecture/echo-overlay-sources-fixture.test.ts
 
   authority-container:
     name: Organization authority container
