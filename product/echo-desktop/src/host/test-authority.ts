@@ -162,7 +162,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (!handoff) return false;
     handoffs.delete(state);
     const form = new URLSearchParams({ token: handoff.token, session: Buffer.from(JSON.stringify(session)).toString('base64url') });
-    globalThis.fetch(handoff.url, { method: 'POST', body: form }).catch(() => undefined);
+    const post = () => { globalThis.fetch(handoff.url, { method: 'POST', body: form }).catch(() => undefined); };
+    // Still in the browser when a slow sign-out finishes.
+    if (mode === 'signout-slow-browser') setTimeout(post, 4_000); else post();
     return true;
   };
 
@@ -255,7 +257,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (method === 'POST' && path === '/v2/session/revocations') {
       if (body === undefined || Object.keys(body).length !== 0) return failure('invalid_request', 400);
       // While it is on its way the client has set the session aside: status reads signed out.
-      if (mode === 'signout-slow') await new Promise(resolveLater => setTimeout(resolveLater, 1_500));
+      if (mode.startsWith('signout-slow')) await new Promise(resolveLater => setTimeout(resolveLater, 1_500));
       return new Response(null, { status: 204 });
     }
 

@@ -531,15 +531,21 @@ export async function signOut(): Promise<void> {
   const account = expect();
   const sheet = state.sheet;
   if (!account || !sheet || (sheet.kind !== 'signout' && sheet.kind !== 'switch') || sheet.busy || signOutHeld()) return;
-  set({ sheet: { ...sheet, busy: true, failure: undefined } });
+  const busy: SignOutSheet = { ...sheet, busy: true, failure: undefined };
+  set({ sheet: busy });
   const result = await rpc('account.signOut', { expect: account });
   if (!result.ok) {
     if (state.sheet?.kind === sheet.kind) set({ sheet: { ...sheet, busy: false, failure: result.failure } });
     accountLost(result.failure);
     return;
   }
-  // Applied even if a status read already showed sign-in and closed the sheet.
+  // The account is forgotten even if a status read already showed sign-in
+  // and closed the sheet (the window came forward while the Authority ended
+  // the session). A sign-in may have begun since: then this reply is stale,
+  // so that sign-in is left alone and who is signed in is read again.
+  const stale = state.sheet !== busy;
   forgetAccount();
+  if (stale) { await refreshStatus(); return; }
   applyStatus(result.value);
   // Switch account goes straight on to the next organization's address.
   set({ signin: { phase: 'idle', form: sheet.kind === 'switch' } });

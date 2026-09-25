@@ -209,3 +209,27 @@ test('a sign-out still forgets everything when a status read showed sign-in firs
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose-body')).toHaveValue('');
 });
+
+test('a sign-in begun while a sign-out is still finishing is left alone', async () => {
+  run = await launch('signout-slow-browser');
+  const { page, app } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Switch account…');
+  await page.getByTestId('confirm-signout').click();
+  await expect.poll(() => revocations().length).toBe(1);
+  // The window comes forward while the Authority is still ending the session, and the person signs in again.
+  await emit(app, 'echo-test:shown');
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
+  await page.getByTestId('signin-url').fill('https://authority.example');
+  await page.getByTestId('signin-button').click();
+  await expect(page.getByTestId('signin-button')).toHaveText('Waiting for your browser');
+
+  // The sign-out's reply arrives while the browser is still open: the sign-in still waits, so it cannot be begun twice.
+  await expect.poll(() => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/account\.signOut ok/);
+  await page.waitForTimeout(500);
+  await expect(page.getByTestId('signin-button')).toBeDisabled({ timeout: 1_000 });
+  await expect(page.getByTestId('signin-button')).toHaveText('Waiting for your browser');
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  expect(run.calls().filter(call => call.path === '/v2/session/oidc/begin')).toHaveLength(1);
+});
