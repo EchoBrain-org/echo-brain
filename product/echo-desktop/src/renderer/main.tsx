@@ -5,15 +5,17 @@ import { ConfirmSignOut, ConnectedTools } from './screens/account.js';
 import { AskView, Bar, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
+import { ChangeLine, changeShownInPlace } from './screens/change.js';
 import { Back, Saved, SidebarIcon } from './screens/icons.js';
-import { Project } from './screens/project.js';
+import { People } from './screens/people.js';
+import { MembersButton, Project } from './screens/project.js';
 import { Reader } from './screens/reader.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import {
-  acceptDrop, accountCommand, canDrop, clearBar, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, conceal,
-  getState, goHome, hostFailed, matchesShown, openCapture, refreshStatus, resume, retryStart, signinPhase, toggleMore, toggleSidebar,
-  useStore, windowShown, type State,
+  acceptDrop, accountCommand, canDrop, cancelMemberChange, clearBar, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, conceal,
+  getState, goHome, hostFailed, matchesShown, openCapture, refreshStatus, resume, retryStart, signinPhase, toggleMemberMenu, toggleMore,
+  toggleReaderMenu, toggleSidebar, useStore, windowShown, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -41,13 +43,16 @@ function escape(): void {
   back();
 }
 
-/** Back steps back one level: a sheet, compose, the answer (and the source beside it), reader, project. */
+/** Back steps back one level: a sheet (or what is open in it), compose, the answer (and the source beside it), reader, project. */
 function back(): void {
   const state = getState();
+  if (state.sheet?.kind === 'people' && state.sheet.confirm) return cancelMemberChange();
+  if (state.sheet?.kind === 'people' && state.sheet.menu) return toggleMemberMenu(state.sheet.menu);
   if (state.sheet) return closeSheet();
   if (!state.status?.signed_in) return closeSigninForm();
   if (state.compose && !state.compose.hidden) return state.compose.picking ? toggleMore() : closeCompose();
   if (state.ask) return closeAsk();
+  if (state.reader?.menu !== undefined && state.reader.menu !== 'closed') return toggleReaderMenu();
   if (state.reader) return closeReader();
   if (state.route.page === 'project') return goHome();
 }
@@ -106,20 +111,26 @@ function App() {
   // Back leaves Ask for the page it was asked from.
   const backLabel = covered ? null : state.ask || state.reader ? inProject?.name ?? 'Home' : inProject ? 'Home' : null;
   const pane = !covered && state.ask !== null && state.sources?.open != null;
+  // A project change not shown where it was asked for shows at the top of the page.
+  const banner = state.change && !state.concealed && !changeShownInPlace(state) ? state.change : null;
+  const sheet = state.sheet;
   return (
-    <Shell state={state} title={title} backLabel={backLabel} pane={pane}>
+    <Shell state={state} title={title} backLabel={backLabel} pane={pane}
+      trailing={inProject && !covered && !state.ask ? <MembersButton state={state} /> : null}>
       <main class="page">
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
-          : state.reader ? <Reader reader={state.reader} backTo={inProject?.name ?? 'Home'} />
+          : state.reader ? <Reader state={state} reader={state.reader} backTo={inProject?.name ?? 'Home'} />
           : inProject ? <Project state={state} project={inProject} /> : <Home state={state} />}
       </main>
       {state.toast && !state.concealed && <div class="toast" role="status" data-testid="toast"><Saved /><span>{state.toast}</span></div>}
+      {banner && !state.toast && <div class="banner" data-testid="change-banner"><ChangeLine change={banner} /></div>}
       <Bar state={state} />
       {pane && <SourcePane state={state} />}
       {state.compose && !state.compose.hidden && <Compose state={state} />}
-      {state.sheet?.kind === 'tools' ? <ConnectedTools state={state} sheet={state.sheet} />
-        : state.sheet && <ConfirmSignOut state={state} sheet={state.sheet} />}
+      {sheet?.kind === 'tools' ? <ConnectedTools state={state} sheet={sheet} />
+        : sheet?.kind === 'people' ? !state.concealed && <People state={state} sheet={sheet} />
+        : sheet && <ConfirmSignOut state={state} sheet={sheet} />}
     </Shell>
   );
 }
@@ -129,8 +140,8 @@ function App() {
  * A file dropped anywhere but a project row goes to Capture: into the open
  * sheet, or a new capture for the project on screen.
  */
-function Shell({ state, title, backLabel, pane = false, children }: {
-  state: State; title: string; backLabel: string | null; pane?: boolean; children: ComponentChildren;
+function Shell({ state, title, backLabel, pane = false, trailing = null, children }: {
+  state: State; title: string; backLabel: string | null; pane?: boolean; trailing?: ComponentChildren; children: ComponentChildren;
 }) {
   const open = state.sidebarOpen;
   const onDrop = (event: DragEvent) => {
@@ -152,7 +163,7 @@ function Shell({ state, title, backLabel, pane = false, children }: {
             {backLabel && <button type="button" class="back" data-testid="back" onClick={back}><Back /><span>{backLabel}</span></button>}
           </div>
           <div class={`title${title === 'ECHO' ? ' brand' : ''}`} data-testid="title">{title}</div>
-          <div class="side" />
+          <div class="side">{trailing}</div>
         </header>
         {children}
       </div>

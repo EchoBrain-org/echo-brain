@@ -13,7 +13,7 @@ const SAVE_HINT = navigator.userAgent.includes('Mac') ? '⌘↩' : 'Ctrl+↩';
 /** Tab and Shift-Tab stay inside the sheet. */
 export function trapTab(event: KeyboardEvent, sheet: HTMLElement | null): void {
   if (event.key !== 'Tab' || !sheet) return;
-  const focusable = [...sheet.querySelectorAll<HTMLElement>('button:not([disabled]), textarea, [tabindex="0"]')];
+  const focusable = [...sheet.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea, [tabindex="0"]')];
   if (focusable.length === 0) return;
   const first = focusable[0]!;
   const last = focusable[focusable.length - 1]!;

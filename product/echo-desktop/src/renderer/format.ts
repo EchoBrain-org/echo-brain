@@ -11,6 +11,19 @@ export function initial(name: string): string {
   return [...name.trim()][0]?.toUpperCase() ?? '?';
 }
 
+/** A person's circle: the first letters of their first two names. */
+export function initials(name: string): string {
+  const letters = name.trim().split(/\s+/u).slice(0, 2).map(part => [...part][0]?.toUpperCase() ?? '').join('');
+  return letters === '' ? '?' : letters;
+}
+
+const TYPES: Record<'pdf' | 'word' | 'markdown' | 'text', string> = { pdf: 'PDF', word: 'Word', markdown: 'Markdown', text: 'Text' };
+
+/** A document's kind and size, the way its row shows them: "PDF · 2.1 MB". */
+export function documentDetail(document: { type: 'pdf' | 'word' | 'markdown' | 'text'; size: number }): string {
+  return `${TYPES[document.type]} · ${bytes(document.size)}`;
+}
+
 /** 2h, Yesterday, Mon, Sep 18: short, like a message list. */
 export function when(iso: string, now = Date.now()): string {
   const time = Date.parse(iso);

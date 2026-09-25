@@ -7,11 +7,13 @@ retired. Everything below is known and deliberately not built yet. Each entry
 says what a person sees today and what the fix would be when it is needed.
 
 Core use is covered by specs against the real person client and a fixture
-Authority: signing in (including the weekly re-sign-in), Home, reading a
-project, Ask with sources, capturing a note or a file, resolving an
-unconfirmed save, the sidebar, the bar's scope chip and live matches, the
-Account menu (in the window and the tray), and signing out or switching
-account.
+Authority: signing in (including the weekly re-sign-in), Home, a project's
+feed of notes and documents, the reader (a note's text, a document's text
+pages, Save original…, and moving an original between projects), a
+project's People, Ask with sources, capturing a note or a file, resolving an
+unconfirmed save or project change, the sidebar, the bar's scope chip and
+live matches, the Account menu (in the window and the tray), and signing out
+or switching account.
 
 ## Capture and files
 
@@ -19,7 +21,7 @@ account.
 | --- | --- | --- |
 | File names in decomposed Unicode (NFD) | A file named with decomposed accents, for example one copied from an old HFS+ volume, is refused: "That cannot be sent." The API accepts only NFC names and titles. | Normalize the file name and title to NFC in the person client before upload. That is a shared client change. |
 | Kept upload copies are capped at 10 | An unconfirmed upload keeps a private copy for `documents retry`. Start over removes it (`documents abandon`), but Quit Anyway, a crash, or switching account while it is unconfirmed leaves it behind. After 10, every new upload fails with `snapshot_limit`, shown as "Something went wrong." | Give `snapshot_limit` its own message, and reconcile `documents pending` at launch. |
-| The unconfirmed-save record lives in memory | After Quit Anyway or a crash, nothing reminds the person about a save that may not have arrived. The quit dialog warns first. | Persist the pending request id and show it again at launch. |
+| The unconfirmed-save record lives in memory | After Quit Anyway or a crash, nothing reminds the person about a save or a project change that may not have arrived. The quit dialog warns first ("A project change may not have finished."). The Swift app kept an unconfirmed project change in its preferences and offered Retry after a relaunch. | Persist the pending request id (and, for a project change, the change) and show it again at launch. |
 | Drafts are not kept across quit | Escape keeps a draft only while the app runs. | Persist drafts locally, only if people ask for it. |
 | ⌘⇧E with ECHO in front on a project page | A new capture starts on Only me, as it does from another app. The Swift app started it on the project on screen. ⊕ and the sidebar's Capture do start on the project. | Have main tell the page whether its window was in front when ⌘⇧E was pressed. |
 
@@ -32,8 +34,8 @@ toast has no Undo, and the Organization choice warns inline instead.
 
 | Gap | What happens today | Fix when needed |
 | --- | --- | --- |
-| A project page shows its 10 newest items | There is no "Older" paging. | Copy Home's More pattern, using the feed cursor. |
-| No document rows or reader on a project page | Uploaded documents cannot be read in the app, and the bar's live matches leave them out. The Swift app also searched `documents search-v2` and opened documents in a text reader. | Add rows from the document feed and a text reader (`documents read-v2`), then add document matches to the bar. |
+| Live matches leave documents out | A project's documents show in its feed and open in the reader, but the bar's live matches find notes only. The Swift app's all-context results also listed documents (`documents search-v2 --query`). | Search documents beside the notes in `search.run`, and open a document match in the reader. |
+| Link changes have no Undo | Remove from this project and Add to project are instant, and each reverses the other, but the toast after them offers no Undo, as the proposed design had. The Swift branch had none either. | Put Undo on the toast: the opposite link change, under a new request id. |
 | Live matches stop at 10 | The bar shows the first 10 matches, with no More. In all context those are your newest saved notes (V3) first, then older ones (V2); each version is searched on its own. The Swift app paged a project's search with "More results". | Add More with the search cursor when someone misses a match. |
 
 ## Account and sign-in

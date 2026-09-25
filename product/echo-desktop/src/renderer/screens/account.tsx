@@ -11,6 +11,7 @@ export function ConfirmSignOut({ state, sheet }: { state: State; sheet: SignOutS
   useEffect(() => { cancel.current?.focus(); }, [sheet.kind]);
   const saving = saveInFlight();
   const unresolved = state.compose?.status === 'unknown';
+  const changeUnresolved = state.change?.status === 'unknown';
   return (
     <div class="overlay" onClick={closeSheet}>
       <div class="sheet confirm" role="alertdialog" aria-labelledby="confirm-title" data-testid="confirm" ref={box}
@@ -21,6 +22,7 @@ export function ConfirmSignOut({ state, sheet }: { state: State; sheet: SignOutS
           : 'Ask and organization information will be cleared on this computer.'}</p>
         {saving && <p class="error">Finish the current save first.</p>}
         {!saving && unresolved && <p class="warning">A save may not have arrived. Signing out forgets it.</p>}
+        {!saving && !unresolved && changeUnresolved && <p class="warning">A project change may not have finished. Signing out forgets it.</p>}
         {sheet.failure && <p class="error" aria-live="polite">{message(sheet.failure)}</p>}
         <div class="choices">
           <button type="button" class="plain-button" data-testid="confirm-cancel" ref={cancel} disabled={sheet.busy} onClick={closeSheet}>Cancel</button>

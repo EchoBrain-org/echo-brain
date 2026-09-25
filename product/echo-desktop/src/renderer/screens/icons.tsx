@@ -38,3 +38,12 @@ export const Person = () => (
 export const Doc = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l4 4v14H7zM14 3v4h4" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
 );
+export const People = () => (
+  <svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true"><circle cx="5.5" cy="4.5" r="2.4" stroke="rgba(240,236,230,0.66)" stroke-width="1.3" fill="none" /><path d="M1 12.5c.4-2.4 2.2-3.6 4.5-3.6s4.1 1.2 4.5 3.6" stroke="rgba(240,236,230,0.66)" stroke-width="1.3" stroke-linecap="round" fill="none" /><circle cx="11.3" cy="4.8" r="2" stroke="rgba(240,236,230,0.66)" stroke-width="1.2" fill="none" /><path d="M11.6 8.9c1.8.1 3 1.2 3.4 3.3" stroke="rgba(240,236,230,0.66)" stroke-width="1.2" stroke-linecap="round" fill="none" /></svg>
+);
+export const Ellipsis = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="1.2" fill="rgba(240,236,230,0.66)" stroke="rgba(240,236,230,0.66)" stroke-width="1" /><circle cx="12" cy="12" r="1.2" fill="rgba(240,236,230,0.66)" stroke="rgba(240,236,230,0.66)" stroke-width="1" /><circle cx="18" cy="12" r="1.2" fill="rgba(240,236,230,0.66)" stroke="rgba(240,236,230,0.66)" stroke-width="1" /></svg>
+);
+export const Chevron = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" stroke="rgba(240,236,230,0.66)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
+);

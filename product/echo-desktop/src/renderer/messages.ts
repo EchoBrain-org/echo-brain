@@ -22,6 +22,7 @@ const MESSAGES: Record<string, string> = {
   unsupported_invitation: 'Choose the invitation folder your organization owner sent you.',
   invitation_failed: 'Sign-in did not finish. Try again, or ask your organization owner for a new invitation.',
   signout_failed: 'Sign-out did not finish. Try again.',
+  file_exists: 'A file with that name is already there. Choose a new name.',
 };
 
 export function message(failure: Failure): string {
