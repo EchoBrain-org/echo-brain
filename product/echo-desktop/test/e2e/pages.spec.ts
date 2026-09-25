@@ -55,6 +55,6 @@ test('a source shows at most 2,000 characters', async () => {
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await page.getByTestId('ask-field').fill('What did we agree?');
   await page.getByTestId('ask-field').press('Enter');
-  await page.getByTestId('source-row').first().click();
+  await page.getByTestId('source-chip').nth(1).click();
   await expect(page.getByTestId('evidence-text')).toHaveText(`${'x'.repeat(2_000)}…`);
 });

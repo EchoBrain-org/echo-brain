@@ -78,10 +78,19 @@ export interface SourceRef {
   readonly document_id?: string;
 }
 
-export interface AnswerSource {
-  readonly label: string;
-  readonly ref: SourceRef | null;
+/** Who may read an approved record: the organization's members, or its reviewer only. */
+export type RecordPolicy = 'organization-member-readable-person-v2' | 'restricted-reviewer-person-v2';
+
+/** An approved record an answer cites, read with `person records --record-sha256`. */
+export interface RecordRef {
+  readonly record_sha256: string;
+  readonly policy_id: RecordPolicy;
 }
+
+/** What an answer is based on: an approved meeting record, or an original source. */
+export type AnswerSource =
+  | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef }
+  | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef };
 
 export interface Answer {
   readonly text: string;
@@ -92,6 +101,37 @@ export interface Answer {
 export interface SourceEvidence {
   readonly label: string;
   readonly text: string;
+}
+
+/** One approved decision, action or rationale, with up to three excerpts that support it. */
+export interface RecordItem {
+  readonly text: string;
+  /** Only a decision still open says so. */
+  readonly status?: 'proposed' | 'unresolved';
+  readonly excerpts: readonly { readonly quote: string; readonly at?: string }[];
+}
+
+/** At most 32 items; `more` says some were left out. */
+export interface RecordSection {
+  readonly items: readonly RecordItem[];
+  readonly more: boolean;
+}
+
+/** An approved meeting record, as the source pane shows it. Every text is at most 2,000 characters. */
+export interface ApprovedRecord {
+  readonly title?: string;
+  /** When the meeting started (ISO 8601), in which time zone, and whether it was all day. */
+  readonly started_at?: string;
+  readonly timezone?: string;
+  readonly all_day: boolean;
+  readonly approved_by?: string;
+  /** At most 32 names; `participants_more` says others were left out. */
+  readonly participants: readonly string[];
+  readonly participants_more: boolean;
+  readonly visibility: 'organization' | 'approver';
+  readonly decisions: RecordSection;
+  readonly actions: RecordSection;
+  readonly rationales: RecordSection;
 }
 
 /** One audience per item: only you, one project, or everyone. */
@@ -165,6 +205,8 @@ export interface HostMethods {
   /** Reads a saved note found in all context. A project's match is read with projects.readContext. */
   'search.read': { params: { expect: Expect; context_id: string; source: 'v2' | 'v3' }; result: ContextContent };
   'ask.source': { params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
+  /** Reads one approved record an answer cites. */
+  'ask.record': { params: { expect: Expect; record: RecordRef }; result: ApprovedRecord };
   'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
   /** Resends a document's retained original under the same request. */
   'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };
@@ -194,7 +236,7 @@ export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
-  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry', 'documents.abandon',
+  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'search.read',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [

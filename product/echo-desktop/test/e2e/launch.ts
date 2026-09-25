@@ -12,7 +12,7 @@ export interface Launched {
   /** Chromium's data and ECHO's diagnostic log. */
   userData: string;
   /** Requests the real person client sent to the fixture Authority. */
-  calls(): { method: string; path: string; body?: Record<string, unknown> }[];
+  calls(): { method: string; path: string; query: string; body?: Record<string, unknown> }[];
   close(): Promise<void>;
 }
 

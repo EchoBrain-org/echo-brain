@@ -19,6 +19,8 @@ interface DesktopFixtures {
   /** Saved V3 notes the person can read, for search. */
   notes: Note[];
   answer: Record<string, unknown>;
+  /** The approved record the answer cites, as its brief was approved. */
+  record: { record_sha256: string; approved_by: string; brief: Record<string, unknown> };
   evidence_text: string;
   evidence_label: string;
 }
@@ -85,6 +87,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }
   let writeAttempts = 0;
   let documentAttempts = 0;
+  let evidenceReads = 0;
   let projectLists = 0;
   // Sign-in: the descriptor a new session is checked against, and the client's
   // loopback receiver for each sign-in begun, by its OIDC state.
@@ -286,10 +289,25 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return json({ ...desktop.answer, scope });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
+      evidenceReads += 1;
+      if (mode === 'evidence-fails-once' && evidenceReads === 1) return failure('unavailable', 503);
       return json({
         schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: body?.scope,
         citation: { ...(body?.citation as Record<string, unknown>), label: desktop.evidence_label },
         text: mode === 'long-evidence' ? 'x'.repeat(3_000) : desktop.evidence_text,
+      });
+    }
+    // One approved record, by the digest an answer cited.
+    if (method === 'GET' && path === '/v1/person/records' && url.searchParams.has('record_sha256')) {
+      const { record_sha256: digest, approved_by: approver, brief } = desktop.record;
+      if (url.searchParams.get('record_sha256') !== digest || [...url.searchParams.keys()].length !== 1) return failure('not_found', 404);
+      const event = { kind: 'approved', policy_id: 'organization-member-readable-person-v2', approved_snapshot: { approved_payload: { brief } } };
+      return json({
+        schema_version: 1, kind: 'echo-clean-person-record-list-v1',
+        records: [{
+          position: 1, approval_id: 'apr_fixture', record_sha256: digest, envelope: { record_sha256: digest, body: { event } },
+          source_metadata: { record_approved_by: { display_name: approver } },
+        }],
       });
     }
     return failure('not_found', 404);

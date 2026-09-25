@@ -1,16 +1,15 @@
-import type { Match } from '../../shared/protocol.js';
+import type { AnswerSource, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
-import { clock, marked, snippet, when } from '../format.js';
+import { clock, marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  ask, chipProject, closeAsk, closeSource, matchesShown, openCompose, openMatch, openSource, searchAgain, setBarText, submitBar, widenScope,
-  type State,
+  answerSources, ask, chipProject, chooseSource, closeAsk, matchesShown, openCompose, openMatch, retryEvidence, retryRecord, searchAgain,
+  setBarText, submitBar, toggleSources, widenScope, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Plus, Up } from './icons.js';
 
-/** What a source may show: 2,000 characters, and at most 32 sources. */
+/** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
-const MAX_SOURCES = 32;
 
 /** One match: its title with the query's words marked, or where in its text they are. */
 function MatchRow({ match, terms }: { match: Match; terms: readonly string[] }) {
@@ -87,24 +86,40 @@ export function Bar({ state }: { state: State }) {
   );
 }
 
-/** The latest question, its answer, and the sources it came from. */
+/** A chip: its place in the answer, and its meeting's title once its record is read. */
+function chipLabel(source: AnswerSource, sources: SourcesState | null): string {
+  if (source.kind === 'original') return source.label;
+  const read = sources?.records[source.record.record_sha256];
+  return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
+}
+
+const UNTITLED = 'Untitled meeting';
+
+/** BASED ON: one chip per source. The chosen one is lit while the pane shows it. */
+function BasedOn({ state }: { state: State }) {
+  const sources = answerSources(state);
+  if (sources.length === 0) return null;
+  const open = state.sources?.open ?? null;
+  return (
+    <div class="based-on" data-testid="based-on">
+      <div class="section-label">Based on</div>
+      <div class="chips">
+        {sources.map((source, index) => (
+          <button type="button" key={index} class={`source-chip${open === index ? ' on' : ''}`} data-testid="source-chip"
+            aria-pressed={open === index} onClick={() => chooseSource(index)}
+            title={source.kind === 'record' ? 'Show the approved record and supporting excerpts' : 'Show the verified evidence packet for this original source'}>
+            <span class="n">{index + 1}</span><span class="label">{chipLabel(source, state.sources)}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** The latest question, its answer, and what it was based on. */
 export function AskView({ state }: { state: State }) {
   const current = state.ask!;
-  const evidence = state.evidence;
-  if (evidence) {
-    return (
-      <article class="reader" data-testid="evidence" aria-busy={evidence.loading}>
-        <h1>{evidence.label}</h1>
-        {evidence.failure && <div class="error">{message(evidence.failure)}</div>}
-        {evidence.text !== undefined && (
-          <div class="body selectable" data-testid="evidence-text">
-            {evidence.text.length > MAX_EVIDENCE ? `${evidence.text.slice(0, MAX_EVIDENCE)}…` : evidence.text}
-          </div>
-        )}
-        <div class="actions"><button type="button" class="link-button" onClick={closeSource}>Back to answer</button></div>
-      </article>
-    );
-  }
+  const count = answerSources(state).length;
   return (
     <section class="ask" data-testid="ask-view" aria-live="polite">
       <div class="question selectable" data-testid="question">{current.question}</div>
@@ -126,20 +141,110 @@ export function AskView({ state }: { state: State }) {
       {current.status === 'answer' && current.answer && (
         <>
           <div class="answer selectable" data-testid="answer">{current.answer.text}</div>
+          <BasedOn state={state} />
           <div class="actions">
+            {count > 0 && (
+              <button type="button" class="link-button" data-testid="sources-toggle" aria-pressed={state.sources?.open != null}
+                onClick={toggleSources}>Sources ({count})</button>
+            )}
             <button type="button" class="link-button" onClick={() => void ask(current.question, current.scope)}>Ask again</button>
           </div>
-          {current.answer.sources.length > 0 && (
-            <div class="sources">
-              <h2>Sources</h2>
-              {current.answer.sources.slice(0, MAX_SOURCES).map((source, index) => (
-                <button type="button" key={`${source.label}-${index}`} class="source-row" data-testid="source-row"
-                  disabled={!source.ref} onClick={() => void openSource(index)}>{source.label}</button>
-              ))}
-            </div>
-          )}
         </>
       )}
     </section>
+  );
+}
+
+/** A decision, action or rationale, and the excerpts that support it. */
+function Item({ item }: { item: RecordItem }) {
+  return (
+    <div class="record-item">
+      {item.status && <div class="status">{item.status === 'proposed' ? 'Proposed' : 'Unresolved'}</div>}
+      <div>{item.text}</div>
+      {item.excerpts.map((excerpt, index) => (
+        <div key={index} class="excerpt">
+          <div class="quote">“{excerpt.quote}”</div>
+          {excerpt.at && <div class="at">{meetingTime(excerpt.at)}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const SECTIONS = [['decisions', 'Decisions', 'decision'], ['actions', 'Actions', 'action'], ['rationales', 'Rationale', 'rationale']] as const;
+
+/** MEETING · APPROVED RECORD: who approved it, who was there, who can read it, and what was approved. */
+function RecordDetail({ record }: { record: ApprovedRecord }) {
+  const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];
+  return (
+    <div class="source-detail selectable" data-testid="record">
+      <div class="section-label">Meeting · Approved record</div>
+      <h2>{record.title ?? UNTITLED}</h2>
+      {record.started_at && <div class="meta">{meetingTime(record.started_at, record.timezone, record.all_day)}</div>}
+      <dl class="fields">
+        {record.approved_by && <><dt>Record approved by</dt><dd>{record.approved_by}</dd></>}
+        {participants.length > 0 && <><dt>Participants</dt><dd>{participants.join(', ')}</dd></>}
+        <dt>Visibility</dt>
+        <dd>{record.visibility === 'organization' ? 'Visible to active organization members' : 'Only the approver'}</dd>
+      </dl>
+      {SECTIONS.map(([key, heading, kind]) => {
+        const section = record[key];
+        if (section.items.length === 0) return null;
+        return (
+          <div key={key} class="record-section" data-testid={`record-${key}`}>
+            <div class="section-label">{heading}</div>
+            {section.items.map((item, index) => <Item key={index} item={item} />)}
+            {section.more && <div class="record-item">Additional approved {kind} items are not shown.</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Beside the answer: the source a chip chose. An approved record, or an
+ * original source's verified evidence packet, at most 2,000 characters.
+ */
+export function SourcePane({ state }: { state: State }) {
+  const sources = state.sources!;
+  const index = sources.open!;
+  const source = answerSources(state)[index];
+  if (!source) return null;
+  let body;
+  if (source.kind === 'record') {
+    const read = sources.records[source.record.record_sha256];
+    body = !read || read.loading ? <div class="notice">Loading…</div>
+      : 'failure' in read ? (
+        <div class="source-failure">
+          <div class="error" data-testid="source-error">{message(read.failure)}</div>
+          <button type="button" class="link-button" onClick={retryRecord}>Try again</button>
+        </div>
+      ) : <RecordDetail record={read.value} />;
+  } else {
+    const read = sources.evidence?.index === index ? sources.evidence.read : { loading: true } as const;
+    const text = !read.loading && 'value' in read ? read.value.text : undefined;
+    body = (
+      <div class="source-detail">
+        <div class="section-label">Original source</div>
+        <h2>{!read.loading && 'value' in read ? read.value.label : source.label}</h2>
+        {read.loading && <div class="notice">Loading verified evidence…</div>}
+        {!read.loading && 'failure' in read && (
+          <div class="source-failure">
+            <div class="error" data-testid="source-error">{message(read.failure)}</div>
+            <button type="button" class="link-button" data-testid="retry-evidence" onClick={retryEvidence}>Retry evidence</button>
+          </div>
+        )}
+        {text !== undefined && (
+          <div class="body selectable" data-testid="evidence-text">{text.length > MAX_EVIDENCE ? `${text.slice(0, MAX_EVIDENCE)}…` : text}</div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <aside class="source-pane" data-testid="source-pane" aria-label="Source">
+      <button type="button" class="icon-button close" aria-label="Close sources" data-testid="source-close" onClick={toggleSources}><Close /></button>
+      {body}
+    </aside>
   );
 }

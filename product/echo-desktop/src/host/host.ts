@@ -12,8 +12,8 @@ import {
 import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, contextView, evidenceView, failureView, feedView, noteMatchesView, noteTitle, noteView, projectMatchesView,
-  projectPageView, receiptView, statusView, toolsView, unwrap, ViewError, writeStatusView,
+  abandonView, answerView, contextView, evidenceView, failureView, feedView, isRecordRef, noteMatchesView, noteTitle, noteView,
+  projectMatchesView, projectPageView, receiptView, recordView, statusView, toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -78,7 +78,7 @@ modules.catch(error => { console.error('person host failed to load the client:',
 const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
+  'ask.run': 145_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
@@ -343,6 +343,13 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
         option('source-sha256', ref.source_sha256), option('representation-sha256', ref.representation_sha256),
         option('anchor-sha256', ref.anchor_sha256), ...(ref.document_id ? [option('document-id', ref.document_id)] : []), ...scopeArgs(scope),
       ], stdout => evidenceView(lastJson(stdout)));
+    }
+    case 'ask.record': {
+      const { expect, record } = params as Params<'ask.record'>;
+      if (!isRecordRef(record)) return code('invalid_request');
+      const asked = { record_sha256: record.record_sha256, policy_id: record.policy_id };
+      return forAccount(method, expect, ['records', option('record-sha256', asked.record_sha256)],
+        stdout => recordView(lastJson(stdout), asked));
     }
     case 'search.run': {
       const { expect, query, scope } = params as Params<'search.run'>;

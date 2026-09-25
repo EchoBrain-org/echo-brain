@@ -2,7 +2,7 @@ import { render, type ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { on } from './api.js';
 import { ConfirmSignOut, ConnectedTools } from './screens/account.js';
-import { AskView, Bar } from './screens/ask.js';
+import { AskView, Bar, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
 import { Back, Saved, SidebarIcon } from './screens/icons.js';
@@ -11,7 +11,7 @@ import { Reader } from './screens/reader.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import {
-  acceptDrop, accountCommand, canDrop, clearBar, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, closeSource, conceal,
+  acceptDrop, accountCommand, canDrop, clearBar, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, conceal,
   getState, goHome, hostFailed, matchesShown, openCapture, refreshStatus, resume, retryStart, signinPhase, toggleMore, toggleSidebar,
   useStore, windowShown, type State,
 } from './store.js';
@@ -41,13 +41,12 @@ function escape(): void {
   back();
 }
 
-/** Back steps back one level: a sheet, compose, source, answer, reader, project. */
+/** Back steps back one level: a sheet, compose, the answer (and the source beside it), reader, project. */
 function back(): void {
   const state = getState();
   if (state.sheet) return closeSheet();
   if (!state.status?.signed_in) return closeSigninForm();
   if (state.compose && !state.compose.hidden) return state.compose.picking ? toggleMore() : closeCompose();
-  if (state.evidence) return closeSource();
   if (state.ask) return closeAsk();
   if (state.reader) return closeReader();
   if (state.route.page === 'project') return goHome();
@@ -103,10 +102,12 @@ function App() {
   // shows until ECHO is back. Project rows stay (Home's and the sidebar's), so
   // a file dragged from Finder can still be dropped on one.
   const covered = state.concealed && (state.ask !== null || inProject !== null || state.reader !== null);
-  const title = covered ? 'ECHO' : state.ask ? '' : inProject ? inProject.name : 'ECHO';
-  const backLabel = covered ? null : state.evidence || state.ask ? 'Back' : state.reader ? inProject?.name ?? 'Home' : inProject ? 'Home' : null;
+  const title = covered ? 'ECHO' : state.ask ? 'Ask' : inProject ? inProject.name : 'ECHO';
+  // Back leaves Ask for the page it was asked from.
+  const backLabel = covered ? null : state.ask || state.reader ? inProject?.name ?? 'Home' : inProject ? 'Home' : null;
+  const pane = !covered && state.ask !== null && state.sources?.open != null;
   return (
-    <Shell state={state} title={title} backLabel={backLabel ?? null}>
+    <Shell state={state} title={title} backLabel={backLabel} pane={pane}>
       <main class="page">
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
@@ -115,6 +116,7 @@ function App() {
       </main>
       {state.toast && !state.concealed && <div class="toast" role="status" data-testid="toast"><Saved /><span>{state.toast}</span></div>}
       <Bar state={state} />
+      {pane && <SourcePane state={state} />}
       {state.compose && !state.compose.hidden && <Compose state={state} />}
       {state.sheet?.kind === 'tools' ? <ConnectedTools state={state} sheet={state.sheet} />
         : state.sheet && <ConfirmSignOut state={state} sheet={state.sheet} />}
@@ -127,7 +129,9 @@ function App() {
  * A file dropped anywhere but a project row goes to Capture: into the open
  * sheet, or a new capture for the project on screen.
  */
-function Shell({ state, title, backLabel, children }: { state: State; title: string; backLabel: string | null; children: ComponentChildren }) {
+function Shell({ state, title, backLabel, pane = false, children }: {
+  state: State; title: string; backLabel: string | null; pane?: boolean; children: ComponentChildren;
+}) {
   const open = state.sidebarOpen;
   const onDrop = (event: DragEvent) => {
     // Text and links drop as usual, into the note or the bar.
@@ -140,7 +144,7 @@ function Shell({ state, title, backLabel, children }: { state: State; title: str
   return (
     <div class={`app shell${open ? ' with-sidebar' : ''}`} onDragOver={event => { if (canDrop(event)) event.preventDefault(); }} onDrop={onDrop}>
       {open && <Sidebar state={state} />}
-      <div class="main">
+      <div class={`main${pane ? ' with-pane' : ''}`}>
         <header class="titlebar">
           <div class="side">
             <button type="button" class="icon-button" data-testid="sidebar-toggle" aria-label={open ? 'Hide sidebar' : 'Show sidebar'}

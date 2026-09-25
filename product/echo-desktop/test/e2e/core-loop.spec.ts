@@ -41,12 +41,16 @@ test('ask inside a project is scoped to it until the chip is cleared', async () 
   expect(scoped).toHaveLength(1);
   expect(scoped[0]!.body?.project_id).toBe('prj_11111111-1111-4111-8111-111111111111');
 
-  await page.getByTestId('source-row').first().click();
+  await page.getByTestId('source-chip').nth(1).click();
   await expect(page.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('answer')).toBeVisible();
+  expect(run.calls().find(call => call.path === '/v2/person/ask/source')?.body?.scope)
+    .toEqual({ kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' });
 
+  // Escape leaves the answer, and the source beside it, for the project it was asked in.
   await page.keyboard.press('Escape');
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+  await expect(page.getByTestId('source-pane')).toHaveCount(0);
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('scope-clear').click();
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await page.getByTestId('ask-field').fill('Anything else?');

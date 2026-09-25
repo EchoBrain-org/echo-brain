@@ -35,7 +35,6 @@ toast has no Undo, and the Organization choice warns inline instead.
 | A project page shows its 10 newest items | There is no "Older" paging. | Copy Home's More pattern, using the feed cursor. |
 | No document rows or reader on a project page | Uploaded documents cannot be read in the app, and the bar's live matches leave them out. The Swift app also searched `documents search-v2` and opened documents in a text reader. | Add rows from the document feed and a text reader (`documents read-v2`), then add document matches to the bar. |
 | Live matches stop at 10 | The bar shows the first 10 matches, with no More. In all context those are your newest saved notes (V3) first, then older ones (V2); each version is searched on its own. The Swift app paged a project's search with "More results". | Add More with the search cursor when someone misses a match. |
-| Approved-decision citations cannot be opened | They show as a plain "Approved decision" row. The Swift app opened them with `person records`. | Add a record reader keyed by `record_sha256`. |
 
 ## Account and sign-in
 

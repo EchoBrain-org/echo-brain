@@ -9,6 +9,12 @@
     "answer": "We agreed to ship Apollo with annual plans first.",
     "citations": [
       {
+        "kind": "approved_record",
+        "atom_id": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        "record_sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "policy_id": "organization-member-readable-person-v2"
+      },
+      {
         "kind": "source_revision",
         "source_id": "source:1111111111111111111111111111111111111111111111111111111111111111",
         "revision_id": "rev-1",
@@ -18,6 +24,31 @@
         "label": "Apollo update"
       }
     ]
+  },
+  "record": {
+    "record_sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    "approved_by": "Maya Chen",
+    "brief": {
+      "meeting": {
+        "id": "meeting-tuesday-sync",
+        "title": "Tuesday sync",
+        "time": { "scheduled_start_at": "2026-09-15T17:00:00Z", "timezone": "America/Los_Angeles" },
+        "participants": [
+          { "id": "p1", "display_name": "Maya Chen", "roles": ["invitee"] },
+          { "id": "p2", "display_name": "Ari" },
+          { "id": "p3", "display_name": "Maya Chen" },
+          { "id": "p4", "identities": [{ "kind": "email", "value": "private@example.test" }] }
+        ]
+      },
+      "decisions": [
+        {
+          "id": "d1", "kind": "decision", "status": "decided", "text": "Ship Apollo with annual plans first.",
+          "evidence": [{ "quote": "Annual plans first, monthly after launch.", "started_at": "2026-09-15T17:12:00Z" }]
+        }
+      ],
+      "actions": [{ "id": "a1", "kind": "action", "text": "Maya updates the pricing page." }],
+      "rationales": [{ "id": "r1", "kind": "rationale", "text": "Annual plans fund the launch." }]
+    }
   },
   "notes": [
     {

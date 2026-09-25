@@ -2,8 +2,9 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerSource, AppStatus, AskScope, Audience, ConnectedTools, ContextContent, Extraction, Failure, FeedItem, FeedPage,
-  Match, Matches, ProjectPage, ProjectSummary, Receipt, SourceEvidence, SourceRef, WriteStatus,
+  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, Extraction, Failure, FeedItem,
+  FeedPage, Match, Matches, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef,
+  WriteStatus,
 } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
@@ -127,16 +128,156 @@ function sourceRef(citation: Json): SourceRef {
   };
 }
 
+const SHA256 = /^sha256:[a-f0-9]{64}$/;
+const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['organization-member-readable-person-v2', 'restricted-reviewer-person-v2']);
+
+/** A record the page may ask the host to read: a well-formed digest and a known policy. */
+export function isRecordRef(value: unknown): value is RecordRef {
+  const record = value !== null && typeof value === 'object' ? value as Json : {};
+  return typeof record.record_sha256 === 'string' && SHA256.test(record.record_sha256) &&
+    typeof record.policy_id === 'string' && POLICIES.has(record.policy_id);
+}
+
+/**
+ * An answer and what it is based on, in the answer's order, each source once:
+ * an approved record by its digest and policy, an original by its revision
+ * and anchor. Labels are the Swift app's: "Approved record 1", or the
+ * original's own label ("Original source 2" without one).
+ */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const value = object(unwrap(raw));
   if (value.kind !== 'echo-clean-person-answer-v3') throw new ViewError();
-  const sources: AnswerSource[] = list(value.citations).map(entry => {
+  const sources: AnswerSource[] = [];
+  const seen = new Set<string>();
+  for (const entry of list(value.citations)) {
     const citation = object(entry);
-    if (citation.kind === 'source_revision') return { label: optionalText(citation.label) ?? 'Source', ref: sourceRef(citation) };
-    if (citation.kind === 'approved_record') return { label: 'Approved decision', ref: null };
-    throw new ViewError();
-  });
+    const place = sources.length + 1;
+    if (citation.kind === 'approved_record') {
+      const record = { record_sha256: citation.record_sha256, policy_id: citation.policy_id };
+      if (!isRecordRef(record)) throw new ViewError();
+      const key = `record|${record.record_sha256}|${record.policy_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      sources.push({ kind: 'record', label: `Approved record ${place}`, record });
+    } else if (citation.kind === 'source_revision') {
+      const ref = sourceRef(citation);
+      const key = `original|${ref.source_id}|${ref.revision_id}|${ref.anchor_sha256}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const label = optionalText(citation.label)?.trim();
+      sources.push({ kind: 'original', label: label ? label : `Original source ${place}`, ref });
+    } else {
+      throw new ViewError();
+    }
+  }
   return { text: text(value.answer), scope, sources };
+}
+
+/** Longest text the source pane shows, in characters; longer is cut and marked. */
+const MAX_SOURCE_TEXT = 2_000;
+/** Items shown per section, and participants shown. */
+const MAX_RECORD_ITEMS = 32;
+
+/**
+ * Text as the source pane may show it: control and format characters made
+ * spaces, trimmed, and at most 2,000 characters. Nothing left is none.
+ */
+function sourceText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const cleaned = value.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim();
+  if (cleaned === '') return undefined;
+  const characters = [...cleaned];
+  return characters.length > MAX_SOURCE_TEXT ? `${characters.slice(0, MAX_SOURCE_TEXT - 1).join('')}… (truncated)` : cleaned;
+}
+
+/** An ISO 8601 time the renderer can format, or none. */
+function isoTime(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= 64 && !Number.isNaN(Date.parse(value)) ? value : undefined;
+}
+
+/**
+ * One section of the approved brief. Every item must be of the section's kind,
+ * with its own id and some text, or the whole record is refused. The first 32
+ * show, each with its first three distinct excerpts.
+ */
+function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale'): RecordSection {
+  const ids = new Set<string>();
+  const items: RecordItem[] = [];
+  const entries = list(raw);
+  for (const entry of entries) {
+    const item = object(entry);
+    const itemText = sourceText(item.text);
+    if (item.kind !== kind || typeof item.id !== 'string' || item.id === '' || ids.has(item.id) || itemText === undefined) {
+      throw new ViewError();
+    }
+    ids.add(item.id);
+    if (items.length === MAX_RECORD_ITEMS) continue;
+    const excerpts: { quote: string; at?: string }[] = [];
+    for (const span of Array.isArray(item.evidence) ? item.evidence.slice(0, 32) : []) {
+      const found = span !== null && typeof span === 'object' ? span as Json : {};
+      const quote = sourceText(found.quote);
+      if (quote === undefined || excerpts.some(excerpt => excerpt.quote === quote)) continue;
+      const at = isoTime(found.started_at);
+      excerpts.push(at === undefined ? { quote } : { quote, at });
+      if (excerpts.length === 3) break;
+    }
+    const status = kind === 'decision' && (item.status === 'proposed' || item.status === 'unresolved') ? item.status : undefined;
+    items.push({ text: itemText, ...(status === undefined ? {} : { status }), excerpts });
+  }
+  return { items, more: entries.length > MAX_RECORD_ITEMS };
+}
+
+/**
+ * The one approved record asked for, as `person records --record-sha256`
+ * prints it: only an approved event under the policy the answer cited. Only
+ * what the pane shows is copied; participants' identities stay behind.
+ */
+export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
+  const root = object(raw);
+  if (root.ok !== true) throw new ViewError();
+  const value = object(root.result);
+  if (value.schema_version !== 1 || value.kind !== 'echo-clean-person-record-list-v1') throw new ViewError();
+  const records = list(value.records);
+  if (records.length !== 1) throw new ViewError();
+  const record = object(records[0]);
+  const envelope = object(record.envelope);
+  if (typeof record.position !== 'number' || record.position < 1 ||
+      record.record_sha256 !== asked.record_sha256 || envelope.record_sha256 !== asked.record_sha256) {
+    throw new ViewError();
+  }
+  const event = object(object(envelope.body).event);
+  if (event.kind !== 'approved' || event.policy_id !== asked.policy_id) throw new ViewError();
+  const brief = object(object(object(event.approved_snapshot).approved_payload).brief);
+  const meeting = object(brief.meeting);
+  const decisions = recordSection(brief.decisions, 'decision');
+  const actions = recordSection(brief.actions, 'action');
+  const rationales = recordSection(brief.rationales, 'rationale');
+
+  const participants: string[] = [];
+  let participantsMore = false;
+  for (const entry of Array.isArray(meeting.participants) ? meeting.participants.slice(0, 10_000) : []) {
+    const name = sourceText(entry !== null && typeof entry === 'object' ? (entry as Json).display_name : undefined);
+    if (name === undefined || participants.includes(name)) continue;
+    if (participants.length === MAX_RECORD_ITEMS) { participantsMore = true; break; }
+    participants.push(name);
+  }
+  const time = meeting.time !== null && typeof meeting.time === 'object' ? meeting.time as Json : {};
+  const startedAt = isoTime(time.actual_start_at) ?? isoTime(time.scheduled_start_at);
+  const timezone = typeof time.timezone === 'string' && /^[A-Za-z0-9_+\-/]{1,64}$/.test(time.timezone) ? time.timezone : undefined;
+  const metadata = record.source_metadata !== null && typeof record.source_metadata === 'object' ? record.source_metadata as Json : {};
+  const approver = metadata.record_approved_by !== null && typeof metadata.record_approved_by === 'object'
+    ? sourceText((metadata.record_approved_by as Json).display_name) : undefined;
+  const title = sourceText(meeting.title);
+  return {
+    ...(title === undefined ? {} : { title }),
+    ...(startedAt === undefined ? {} : { started_at: startedAt }),
+    ...(timezone === undefined ? {} : { timezone }),
+    all_day: time.all_day === true,
+    ...(approver === undefined ? {} : { approved_by: approver }),
+    participants, participants_more: participantsMore,
+    visibility: asked.policy_id === 'organization-member-readable-person-v2' ? 'organization' : 'approver',
+    decisions, actions, rationales,
+  };
 }
 
 export function evidenceView(raw: unknown): SourceEvidence {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   abandonView, answerView, failureView, feedView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, receiptView,
-  statusView, toolsView, ViewError, writeStatusView,
+  recordView, statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
 
@@ -45,18 +45,27 @@ describe('view models copy only what the renderer may see', () => {
     expect(page.items.map(item => item.audience)).toEqual(['only-me', 'team', 'project']);
   });
 
-  it('keeps openable coordinates for sources and a plain label for approved decisions', () => {
+  it('keeps an approved record\'s digest and policy, and an original\'s coordinates, each source once', () => {
+    const record = { kind: 'approved_record', record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' };
+    const original = { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
+      representation_sha256: sha('5'), anchor_sha256: sha('6') };
     const answer = answerView({ ok: true, result: {
       schema_version: 3, kind: 'echo-clean-person-answer-v3', answer: 'Ship it.', scope: { kind: 'global' },
       citations: [
-        { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' },
-        { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
-          representation_sha256: sha('5'), anchor_sha256: sha('6'), label: 'Pricing call' },
+        { ...record, atom_id: sha('1') }, { ...record, atom_id: sha('7') },
+        { ...original, label: ' Pricing call ' }, { ...original, representation_sha256: sha('8') },
+        { ...original, anchor_sha256: sha('9') },
       ],
     } }, { kind: 'global' });
-    expect(answer.sources.map(source => source.label)).toEqual(['Approved decision', 'Pricing call']);
-    expect(answer.sources[0]!.ref).toBeNull();
-    expect(answer.sources[1]!.ref?.source_id).toBe(`source:${'3'.repeat(64)}`);
+    expect(answer.sources).toEqual([
+      { kind: 'record', label: 'Approved record 1', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' } },
+      { kind: 'original', label: 'Pricing call', ref: { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
+        representation_sha256: sha('5'), anchor_sha256: sha('6') } },
+      { kind: 'original', label: 'Original source 3', ref: expect.objectContaining({ anchor_sha256: sha('9') }) },
+    ]);
+    const unknownPolicy = { ...record, atom_id: sha('1'), policy_id: 'someone-else' };
+    expect(() => answerView({ ok: true, result: { kind: 'echo-clean-person-answer-v3', answer: 'a', citations: [unknownPolicy] } }, { kind: 'global' }))
+      .toThrow(ViewError);
   });
 
   it('accepts a receipt only for the request that was sent', () => {
@@ -156,5 +165,81 @@ describe('text the API accepts', () => {
     expect(searchQuery('x'.repeat(65))).toBeNull();
     expect(searchQuery('é'.repeat(32))).toBe('é'.repeat(32));
     expect(searchQuery('é'.repeat(33))).toBeNull();
+  });
+});
+
+describe('an approved record shows only what the source pane needs', () => {
+  const asked = { record_sha256: sha('5'), policy_id: 'organization-member-readable-person-v2' } as const;
+  const item = (kind: string, id: string, text: string, extra: Record<string, unknown> = {}) => ({ id, kind, text, ...extra });
+  const reply = (brief: Record<string, unknown>, change: (record: Record<string, unknown>) => void = () => undefined) => {
+    const record: Record<string, unknown> = {
+      position: 1, approval_id: 'apr_1', record_sha256: sha('5'),
+      envelope: { record_sha256: sha('5'), body: { event: {
+        kind: 'approved', policy_id: 'organization-member-readable-person-v2', approved_snapshot: { approved_payload: { brief: {
+          meeting: { id: 'm1', title: 'Tuesday sync' }, decisions: [], actions: [], rationales: [], ...brief,
+        } } },
+      } } },
+      source_metadata: { record_approved_by: { display_name: 'Maya Chen' } },
+    };
+    change(record);
+    return { ok: true, result: { schema_version: 1, kind: 'echo-clean-person-record-list-v1', records: [record] } };
+  };
+
+  it('copies the meeting, who approved it, who was there, who can read it, and what was approved', () => {
+    const view = recordView(reply({
+      meeting: {
+        id: 'm1', title: 'Tuesday\u0000sync', time: { scheduled_start_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles' },
+        participants: [
+          { id: 'p1', display_name: 'Maya Chen' }, { id: 'p2', display_name: 'Ari' }, { id: 'p3', display_name: 'Maya Chen' },
+          { id: 'p4', identities: [{ kind: 'email', value: 'private@example.test' }] },
+        ],
+      },
+      decisions: [item('decision', 'd1', 'Ship annual plans first.', {
+        status: 'proposed', evidence: [
+          { quote: 'Annual first.', started_at: '2026-09-15T17:12:00Z', speaker_email: 'private@example.test' }, { quote: 'Annual first.' },
+          { quote: 'Two' }, { quote: 'Three' }, { quote: 'Four' },
+        ],
+      })],
+      actions: [item('action', 'a1', 'Update pricing.', { status: 'proposed' })],
+      rationales: [item('rationale', 'r1', 'It funds the launch.')],
+    }), asked);
+    expect(view).toEqual({
+      title: 'Tuesday sync', started_at: '2026-09-15T17:00:00Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Maya Chen',
+      participants: ['Maya Chen', 'Ari'], participants_more: false, visibility: 'organization',
+      decisions: { more: false, items: [{ text: 'Ship annual plans first.', status: 'proposed', excerpts: [
+        { quote: 'Annual first.', at: '2026-09-15T17:12:00Z' }, { quote: 'Two' }, { quote: 'Three' },
+      ] }] },
+      actions: { more: false, items: [{ text: 'Update pricing.', excerpts: [] }] },
+      rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [] }] },
+    });
+    expect(JSON.stringify(view)).not.toContain('private@example.test');
+  });
+
+  it('shows at most 2,000 characters of any text, 32 items a section and 32 participants', () => {
+    const decisions = Array.from({ length: 33 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(2_001) : `Decision ${index}`));
+    const participants = Array.from({ length: 40 }, (_, index) => ({ id: `p${index}`, display_name: `Person ${index}` }));
+    const view = recordView(reply({ meeting: { id: 'm1', participants }, decisions }), asked);
+    expect(view.title).toBeUndefined();
+    expect(view.decisions.items).toHaveLength(32);
+    expect(view.decisions.more).toBe(true);
+    expect(view.decisions.items[0]!.text).toBe(`${'x'.repeat(1_999)}… (truncated)`);
+    expect(view.participants).toHaveLength(32);
+    expect(view.participants_more).toBe(true);
+  });
+
+  it('refuses a record other than the one asked for, an unapproved one, or a malformed brief', () => {
+    expect(() => recordView(reply({}), { ...asked, record_sha256: sha('6') })).toThrow(ViewError);
+    expect(() => recordView(reply({}), { ...asked, policy_id: 'restricted-reviewer-person-v2' })).toThrow(ViewError);
+    expect(() => recordView(reply({}, record => { (record.envelope as Record<string, unknown>).record_sha256 = sha('6'); }), asked))
+      .toThrow(ViewError);
+    expect(() => recordView(reply({ decisions: [item('action', 'd1', 'Wrong kind')] }), asked)).toThrow(ViewError);
+    expect(() => recordView(reply({ decisions: [item('decision', 'd1', 'One'), item('decision', 'd1', 'Same id')] }), asked)).toThrow(ViewError);
+    expect(() => recordView(reply({ actions: undefined }), asked)).toThrow(ViewError);
+    const restricted = recordView(reply({}, record => {
+      ((record.envelope as { body: { event: Record<string, unknown> } }).body.event).policy_id = 'restricted-reviewer-person-v2';
+      delete record.source_metadata;
+    }), { ...asked, policy_id: 'restricted-reviewer-person-v2' });
+    expect(restricted.visibility).toBe('approver');
+    expect(restricted.approved_by).toBeUndefined();
   });
 });

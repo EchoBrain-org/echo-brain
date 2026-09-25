@@ -81,3 +81,20 @@ export function snippet(excerpt: string, terms: readonly string[]): string | nul
   const end = after < 0 ? line.length : after;
   return `${start > 0 ? '…' : ''}${line.slice(start, end)}${end < line.length ? '…' : ''}`;
 }
+
+/**
+ * A meeting's time as the source pane shows it, "Sep 15, 2026, 10:00 AM PDT":
+ * in the meeting's own time zone when it has one, and without the time for an
+ * all-day meeting.
+ */
+export function meetingTime(iso: string, timeZone?: string, allDay = false): string {
+  const options: Intl.DateTimeFormatOptions = allDay
+    ? { year: 'numeric', month: 'short', day: 'numeric' }
+    : { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' };
+  const date = new Date(iso);
+  try {
+    return new Intl.DateTimeFormat(undefined, timeZone ? { ...options, timeZone } : options).format(date);
+  } catch {
+    return new Intl.DateTimeFormat(undefined, options).format(date); // a time zone this computer does not know
+  }
+}

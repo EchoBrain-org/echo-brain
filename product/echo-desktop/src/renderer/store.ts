@@ -2,8 +2,8 @@
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  AccountCommand, Answer, AppStatus, AskScope, Audience, ConnectedTool, ContextContent, Expect, Extraction, Failure, FeedItem, FileHandle,
-  Match, ProjectSummary, Receipt, Result,
+  AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, Expect, Extraction,
+  Failure, FeedItem, FileHandle, Match, ProjectSummary, Receipt, RecordRef, Result, SourceEvidence,
 } from '../shared/protocol.js';
 import { searchQuery } from '../shared/query.js';
 import { dropFile, rpc } from './api.js';
@@ -20,6 +20,30 @@ interface AskState {
   status: 'loading' | 'answer' | 'error';
   answer?: Answer;
   failure?: Failure;
+}
+
+/** A read the source pane waits on, has, or could not make. */
+export type Read<T> =
+  | { readonly loading: true }
+  | { readonly loading: false; readonly value: T }
+  | { readonly loading: false; readonly failure: Failure };
+
+/**
+ * The current answer's sources: the pane beside it, and the approved records
+ * read for it. Nothing here outlives the answer, or another app coming in
+ * front: those start it over.
+ */
+export interface SourcesState {
+  /** Which start this is: a read for an earlier one is dropped. */
+  gen: number;
+  /** The source the pane shows, by its place in the answer; null while the pane is closed. */
+  open: number | null;
+  /** The last one chosen: Sources (n) opens the pane on it again. */
+  selected: number;
+  /** Approved records read for this answer, by digest. */
+  records: Readonly<Record<string, Read<ApprovedRecord>>>;
+  /** The original the pane shows, read each time it is chosen. */
+  evidence: { seq: number; index: number; read: Read<SourceEvidence> } | null;
 }
 
 /** Who can read a capture: only you, the members of its project, or everyone in the organization. */
@@ -107,7 +131,7 @@ export interface State {
   barText: string;
   matches: MatchesState | null;
   ask: AskState | null;
-  evidence: { seq: number; label: string; loading: boolean; text?: string; failure?: Failure } | null;
+  sources: SourcesState | null;
   compose: ComposeState | null;
   /** Where the last confirmed save went, until the next capture or page. */
   toast: string | null;
@@ -130,7 +154,7 @@ function rememberedSidebar(): boolean {
 
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false }, feed: null, reader: null,
-  barScope: { kind: 'global' }, barText: '', matches: null, ask: null, evidence: null, compose: null, toast: null, concealed: false,
+  barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, concealed: false,
   signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(),
 };
 const listeners = new Set<() => void>();
@@ -209,7 +233,7 @@ function applyStatus(status: AppStatus): void {
 function forgetAccount(): void {
   lastAccount = null;
   emptyBar();
-  set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null, sheet: null, toast: null,
+  set({ route: { page: 'home' }, feed: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false } });
   setCompose(null);
 }
@@ -352,7 +376,7 @@ function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
 
 /** Back to Home as it was left: the same pages, the same scroll. The bar searches all context. */
 export function goHome(): void {
-  set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null, barScope: { kind: 'global' }, toast: null });
+  set({ route: { page: 'home' }, feed: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null });
   syncSearch();
 }
 
@@ -379,7 +403,7 @@ export async function openProject(project: ProjectSummary): Promise<void> {
   const account = expect();
   if (!account) return;
   set({
-    route: { page: 'project', project }, reader: null, ask: null, evidence: null, toast: null,
+    route: { page: 'project', project }, reader: null, ask: null, sources: null, toast: null,
     barScope: { kind: 'project', project_id: project.project_id },
     feed: { projectId: project.project_id, items: [], loading: true },
   });
@@ -459,7 +483,7 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
   const text = question.trim();
   if (!account || text === '') return;
   const mine = ++seq;
-  set({ ask: { seq: mine, question: text, scope, scopeName: scopeName(scope), askedAt: Date.now(), status: 'loading' }, evidence: null, toast: null });
+  set({ ask: { seq: mine, question: text, scope, scopeName: scopeName(scope), askedAt: Date.now(), status: 'loading' }, sources: null, toast: null });
   const result = await rpc('ask.run', { expect: account, question: text, scope });
   if (state.ask?.seq !== mine) return;
   if (!result.ok) {
@@ -468,34 +492,115 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
     return;
   }
   set({ ask: { ...state.ask, status: 'answer', answer: result.value } });
+  startSources();
 }
 
 /** Leaves the answer. While asking it is Cancel: a late answer is dropped. */
 export function closeAsk(): void {
-  set({ ask: null, evidence: null });
+  set({ ask: null, sources: null });
   syncSearch();
 }
 
-export async function openSource(index: number): Promise<void> {
-  const account = expect();
-  const current = state.ask;
-  const source = current?.answer?.sources[index];
-  if (!account || !current || !source?.ref) return;
-  const mine = ++seq;
-  set({ evidence: { seq: mine, label: source.label, loading: true } });
-  const result = await rpc('ask.source', { expect: account, scope: current.scope, ref: source.ref });
-  // Replies that land while another app is in front are dropped, not shown later.
-  if (state.ask?.seq !== current.seq || state.evidence?.seq !== mine) return;
-  if (state.concealed) { set({ evidence: null }); return; }
-  if (!result.ok) {
-    accountLost(result.failure);
-    set({ evidence: { seq: mine, label: source.label, loading: false, failure: result.failure } });
-    return;
-  }
-  set({ evidence: { seq: mine, label: result.value.label, loading: false, text: result.value.text } });
+// ---- an answer's sources -----------------------------------------------------
+
+/** What the pane may show: at most 32 sources. */
+export const MAX_SOURCES = 32;
+
+/** The sources of the answer on screen. */
+export function answerSources(current: State = state): readonly AnswerSource[] {
+  return current.ask?.answer?.sources.slice(0, MAX_SOURCES) ?? [];
 }
 
-export function closeSource(): void { set({ evidence: null }); }
+/** Access-level failures: a background read reports only these. */
+const ACCOUNT_GONE = ['signed_out', 'account_changed', 'unauthorized', 'stale_access_state', 'sign_in_required'];
+
+/**
+ * An answer came on screen, or ECHO came back to one: its sources start
+ * unread, the pane closed, and its approved records are read one after
+ * another, so each chip can name its meeting.
+ */
+function startSources(): void {
+  const gen = ++seq;
+  set({ sources: { gen, open: null, selected: state.sources?.selected ?? 0, records: {}, evidence: null } });
+  void readRecords(gen);
+}
+
+function sourcesAt(gen: number): SourcesState | null {
+  return state.sources?.gen === gen && !state.concealed ? state.sources : null;
+}
+
+async function readRecords(gen: number): Promise<void> {
+  for (const source of answerSources()) {
+    const sources = sourcesAt(gen);
+    if (!sources) return;
+    if (source.kind === 'record' && !sources.records[source.record.record_sha256]) await readRecord(gen, source.record, true);
+  }
+}
+
+/** One approved record. A read the person did not ask for fails quietly, unless the account is gone. */
+async function readRecord(gen: number, record: RecordRef, background: boolean): Promise<void> {
+  const account = expect();
+  if (!account || !sourcesAt(gen)) return;
+  const patch = (read: Read<ApprovedRecord>) => {
+    const sources = sourcesAt(gen);
+    if (sources) set({ sources: { ...sources, records: { ...sources.records, [record.record_sha256]: read } } });
+  };
+  patch({ loading: true });
+  const result = await rpc('ask.record', { expect: account, record });
+  // Replies for another answer, or that land while another app is in front, are dropped.
+  patch(result.ok ? { loading: false, value: result.value } : { loading: false, failure: result.failure });
+  if (!result.ok && sourcesAt(gen) && (!background || ACCOUNT_GONE.includes(result.failure.code))) accountLost(result.failure);
+}
+
+/** A chip: the pane opens beside the answer on that source, read unless it already was. */
+export function chooseSource(index: number): void {
+  const sources = state.sources;
+  const source = answerSources()[index];
+  if (!sources || !source) return;
+  set({ sources: { ...sources, open: index, selected: index, evidence: null } });
+  if (source.kind === 'original') { void readEvidence(sources.gen, index); return; }
+  const read = sources.records[source.record.record_sha256];
+  if (!read || (!read.loading && 'failure' in read)) void readRecord(sources.gen, source.record, false);
+}
+
+/** Sources (n): opens the pane on the last source chosen, or closes it. */
+export function toggleSources(): void {
+  const sources = state.sources;
+  if (!sources) return;
+  if (sources.open === null) chooseSource(sources.selected);
+  else set({ sources: { ...sources, open: null, evidence: null } });
+}
+
+/** The original's verified evidence packet, read each time it is chosen. */
+async function readEvidence(gen: number, index: number): Promise<void> {
+  const account = expect();
+  const answer = state.ask?.answer;
+  const source = answerSources()[index];
+  const sources = sourcesAt(gen);
+  if (!account || !answer || source?.kind !== 'original' || !sources) return;
+  const mine = ++seq;
+  set({ sources: { ...sources, evidence: { seq: mine, index, read: { loading: true } } } });
+  const result = await rpc('ask.source', { expect: account, scope: answer.scope, ref: source.ref });
+  // Replies for another source or answer, or that land while another app is in front, are dropped.
+  const now = sourcesAt(gen);
+  if (now?.evidence?.seq !== mine) return;
+  set({ sources: { ...now, evidence: { seq: mine, index,
+    read: result.ok ? { loading: false, value: result.value } : { loading: false, failure: result.failure } } } });
+  if (!result.ok) accountLost(result.failure);
+}
+
+/** Retry evidence, on the original the pane shows. */
+export function retryEvidence(): void {
+  const sources = state.sources;
+  if (sources?.open != null) void readEvidence(sources.gen, sources.open);
+}
+
+/** Try again, on an approved record that could not be read. */
+export function retryRecord(): void {
+  const sources = state.sources;
+  const source = sources?.open != null ? answerSources()[sources.open] : undefined;
+  if (sources && source?.kind === 'record') void readRecord(sources.gen, source.record, false);
+}
 
 // ---- the bar: live search -------------------------------------------------------
 
@@ -851,13 +956,18 @@ export function toggleSidebar(): void {
  * its text; its matches go, and are read again for the account on return.
  */
 export function conceal(): void {
-  set({ concealed: true });
+  // The source pane closes and forgets what it read; the records are read again on return.
+  const reading = state.sources !== null;
+  set({ concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, records: {}, evidence: null } } : {}) });
   syncSearch();
 }
 export function resume(): void {
   if (!state.concealed) return;
   set({ concealed: false });
-  void refreshStatus().then(searchAgain);
+  void refreshStatus().then(() => {
+    searchAgain();
+    if (state.sources && !state.concealed) startSources();
+  });
 }
 
 /** The window came forward (⌘E, the tray): the account, Home and the bar's search are read again. */
