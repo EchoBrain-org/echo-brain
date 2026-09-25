@@ -75,11 +75,9 @@ export function feedView(raw: unknown): FeedPage {
       const kind = object(item.audience).kind;
       const audience: FeedItem['audience'] = kind === 'only_me' ? 'only-me' : kind === 'team' ? 'team' : 'project';
       return {
-        context_id: text(item.context_id), title: text(item.title), excerpt: optionalText(item.excerpt) ?? '',
-        received_at: text(item.received_at), audience,
+        context_id: text(item.context_id), title: text(item.title), received_at: text(item.received_at), audience,
       };
     }),
-    next_cursor: optionalText(value.next_cursor) ?? null,
   };
 }
 

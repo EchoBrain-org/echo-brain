@@ -150,13 +150,6 @@ export function signinPhase(browserOpened: boolean | undefined): void {
   if (state.signin.phase === 'waiting') set({ signin: { phase: 'waiting', browserOpened } });
 }
 
-export async function signOut(): Promise<void> {
-  const account = expect();
-  if (!account) return;
-  await rpc('account.logout', { expect: account });
-  await refreshStatus();
-}
-
 // ---- home and projects -------------------------------------------------------
 
 /** The first page again, or the next page appended (More projects). */

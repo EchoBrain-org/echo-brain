@@ -31,7 +31,6 @@ export interface ProjectPage {
 export interface FeedItem {
   readonly context_id: string;
   readonly title: string;
-  readonly excerpt: string;
   readonly received_at: string;
   /** Who can read it; project rows carry no mark. */
   readonly audience: 'only-me' | 'project' | 'team';
@@ -40,7 +39,6 @@ export interface FeedItem {
 export interface FeedPage {
   readonly project_id: string;
   readonly items: readonly FeedItem[];
-  readonly next_cursor: string | null;
 }
 
 export interface ContextContent {
@@ -95,7 +93,6 @@ export interface WriteStatus {
 export interface FileHandle {
   readonly handle: string;
   readonly name: string;
-  readonly size: number;
 }
 
 export interface Failure {
@@ -117,9 +114,8 @@ export interface Expect {
 export interface HostMethods {
   'app.status': { params: Record<string, never>; result: AppStatus };
   'signin.begin': { params: { authority_url: string }; result: AppStatus };
-  'account.logout': { params: { expect: Expect }; result: AppStatus };
   'projects.list': { params: { expect: Expect; cursor?: string }; result: ProjectPage };
-  'projects.feed': { params: { expect: Expect; project_id: string; cursor?: string }; result: FeedPage };
+  'projects.feed': { params: { expect: Expect; project_id: string }; result: FeedPage };
   'projects.readContext': { params: { expect: Expect; project_id: string; context_id: string }; result: ContextContent };
   'notes.submit': { params: { expect: Expect; request_id: string; text: string; audience: Audience; project_id?: string }; result: Receipt };
   /** The renderer names a file only by a handle main issued; main swaps in the path. */
@@ -134,8 +130,6 @@ export interface HostMethods {
 export interface MainMethods {
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
   'clipboard.writeText': { params: { text: string }; result: null };
-  'window.hide': { params: Record<string, never>; result: null };
-  'app.quit': { params: Record<string, never>; result: null };
   /** A save's outcome is unknown: quitting asks first. */
   'app.setUnresolved': { params: { unresolved: boolean }; result: null };
   /** After the host gave up: start it again. */
@@ -147,11 +141,11 @@ export type MethodName = keyof Methods;
 export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
-  'app.status', 'signin.begin', 'account.logout', 'projects.list', 'projects.feed', 'projects.readContext',
+  'app.status', 'signin.begin', 'projects.list', 'projects.feed', 'projects.readContext',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'clipboard.writeText', 'window.hide', 'app.quit', 'app.setUnresolved', 'app.retryHost',
+  'dialog.openDocument', 'clipboard.writeText', 'app.setUnresolved', 'app.retryHost',
 ];
 
 /** Events main pushes to the renderer. */
@@ -160,7 +154,7 @@ export interface Events {
   'window.shown': Record<string, never>;
   'lifecycle.conceal': Record<string, never>;
   'lifecycle.resume': Record<string, never>;
-  'signin.phase': { phase: 'open-browser' | 'installed'; expires_at?: string; browser_opened?: boolean };
+  'signin.phase': { phase: 'open-browser' | 'installed'; browser_opened?: boolean };
   'host.restarted': Record<string, never>;
   /** The host kept exiting and main stopped restarting it. */
   'host.failed': Record<string, never>;

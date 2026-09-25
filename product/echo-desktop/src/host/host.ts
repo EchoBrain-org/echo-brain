@@ -75,7 +75,7 @@ modules.catch(error => { console.error('person host failed to load the client:',
 
 /** Per-method limits; the client enforces its own shorter network timeouts. */
 const TIMEOUT_MS: Record<HostMethodName, number> = {
-  'app.status': 5_000, 'signin.begin': 11 * 60_000, 'account.logout': 45_000, 'projects.list': 45_000,
+  'app.status': 5_000, 'signin.begin': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000,
 };
@@ -248,11 +248,10 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       const run = await cli(['login', option('authority-url', authority_url), '--open-browser'], line => {
         // Only the phase crosses to the renderer; the sign-in URL never does.
         for (const value of jsonLines(line)) {
-          const phase = value as { phase?: unknown; expires_at?: unknown; browser_opened?: unknown };
+          const phase = value as { phase?: unknown; browser_opened?: unknown };
           if (phase.phase === 'open-browser' || phase.phase === 'installed') {
             port.postMessage({ notice: 'signin.phase', payload: {
               phase: phase.phase,
-              ...(typeof phase.expires_at === 'string' ? { expires_at: phase.expires_at } : {}),
               ...(typeof phase.browser_opened === 'boolean' ? { browser_opened: phase.browser_opened } : {}),
             } });
           }
@@ -262,23 +261,14 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       const current = await status();
       return current === null ? code('unavailable') : ok(current);
     }
-    case 'account.logout': {
-      const { expect } = params as Params<'account.logout'>;
-      if (!sameAccount(await status(), expect)) return code('account_changed');
-      const run = await cli(['logout']);
-      if (run.exit !== 0) return fail(failureView(lastJson(run.stderr), 'failed', false));
-      const current = await status();
-      return current === null ? code('unavailable') : ok(current);
-    }
     case 'projects.list': {
       const { expect, cursor } = params as Params<'projects.list'>;
       return forAccount(method, expect, ['projects', 'list', '--limit=10', ...(cursor ? [option('cursor', cursor)] : [])],
         stdout => projectPageView(lastJson(stdout)));
     }
     case 'projects.feed': {
-      const { expect, project_id, cursor } = params as Params<'projects.feed'>;
-      return forAccount(method, expect,
-        ['projects', 'feed-v2', option('project-id', project_id), '--limit=10', ...(cursor ? [option('cursor', cursor)] : [])],
+      const { expect, project_id } = params as Params<'projects.feed'>;
+      return forAccount(method, expect, ['projects', 'feed-v2', option('project-id', project_id), '--limit=10'],
         stdout => feedView(lastJson(stdout)));
     }
     case 'projects.readContext': {
@@ -361,10 +351,9 @@ port.on('message', ({ data }) => {
   const timeout = new Promise<Result<unknown>>(resolve => {
     timer = setTimeout(() => { expired = true; resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[request.method]);
   });
-  // Sign-in and sign-out still run after a refresh with no answer: sign-in
-  // replaces the session, and sign-out works offline. Any other call was not
-  // made, so no write went out.
-  const refreshFailed = request.method === 'signin.begin' || request.method === 'account.logout' ? undefined
+  // Sign-in still runs after a refresh with no answer: it replaces the
+  // session. Any other call was not made, so no write went out.
+  const refreshFailed = request.method === 'signin.begin' ? undefined
     : (refresh: CliRun) => {
       const failure = failureView(lastJson(refresh.stderr), 'failed', false, requestId);
       return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);

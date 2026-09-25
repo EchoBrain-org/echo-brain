@@ -185,7 +185,7 @@ function vetDocument(path: string): FileHandle | null {
   if (!stats.isFile() || stats.isSymbolicLink() || stats.size === 0 || stats.size > MAX_DOCUMENT_BYTES) return null;
   const handle = randomUUID();
   handles.set(handle, { path, expires: Date.now() + 10 * 60_000 });
-  return { handle, name: path.split(sep).pop() ?? 'Document', size: stats.size };
+  return { handle, name: path.split(sep).pop() ?? 'Document' };
 }
 
 /** A handle stays valid for 10 minutes, so an unconfirmed upload can be retried. */
@@ -227,12 +227,6 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       clipboard.writeText(text);
       return { ok: true, value: null };
     }
-    case 'window.hide':
-      window?.hide();
-      return { ok: true, value: null };
-    case 'app.quit':
-      app.quit();
-      return { ok: true, value: null };
     case 'app.setUnresolved':
       unresolved = (params as MainMethods['app.setUnresolved']['params']).unresolved === true;
       return { ok: true, value: null };
