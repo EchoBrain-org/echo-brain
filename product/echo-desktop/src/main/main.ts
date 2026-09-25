@@ -378,9 +378,10 @@ function toggle(): void {
 }
 
 function capture(): void {
-  // The page stays loaded while hidden: ask it to open compose, then bring it forward.
+  // The page stays loaded while hidden: ask it to open Capture, then bring it forward.
   send('capture.open', {});
-  show();
+  // Tests never put a window on screen or take focus from other apps: the page hears what show() tells it.
+  if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
 }
 
 function trayImage(): Electron.NativeImage {
@@ -477,8 +478,12 @@ function applicationMenu(): void {
 
 app.on('second-instance', show);
 
-app.on('did-resign-active', () => send('lifecycle.conceal', {}));
-app.on('did-become-active', () => send('lifecycle.resume', {}));
+// Tests drive these with echo-test:conceal and echo-test:resume: a hidden test
+// window never follows which app the machine has in front.
+if (!test.ECHO_DESKTOP_HIDDEN) {
+  app.on('did-resign-active', () => send('lifecycle.conceal', {}));
+  app.on('did-become-active', () => send('lifecycle.resume', {}));
+}
 let drained = false;
 app.on('before-quit', event => {
   // Never kill the host mid-refresh: that leaves the shared session claimed.
