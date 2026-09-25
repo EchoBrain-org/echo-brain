@@ -232,6 +232,7 @@ describe("CI workflow", () => {
 
     expect(desktopJob).toContain("name: macOS arm64 desktop app");
     expect(desktopJob).toContain("runs-on: macos-15");
+    expect(desktopJob).toMatch(/^    timeout-minutes: 20$/m);
     expect(desktopJob).toContain("node-version: ${{ env.PRODUCT_NODE_VERSION }}");
     expect(desktopJob).toContain("product/echo-desktop/package-lock.json");
     for (const [index, [step, position]] of steps.entries()) {
@@ -240,8 +241,10 @@ describe("CI workflow", () => {
     expect(desktopJob).toContain(
       "result.build?.source_sha !== process.env.GITHUB_SHA",
     );
+    // A skipped step still leaves the job, and so the aggregate, a success:
+    // no step or the job itself may carry a condition.
     expect(desktopJob).not.toMatch(
-      /secrets\.|upload-artifact|--allow-dirty|continue-on-error|--publish always/,
+      /secrets\.|upload-artifact|--allow-dirty|continue-on-error|--publish always|\bif:/,
     );
   });
 });
