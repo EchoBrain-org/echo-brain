@@ -3,7 +3,7 @@ import { generateKeyPairSync, sign } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { executeClientUpdatePublish, planClientUpdatePublish, statusClientUpdatePublish, type ClientUpdatePublicationDependencies } from '../../tools/client-update-publish.mjs';
+import { isAbsentClientUpdateHead, executeClientUpdatePublish, planClientUpdatePublish, statusClientUpdatePublish, type ClientUpdatePublicationDependencies } from '../../tools/client-update-publish.mjs';
 import { parseUpdateConfig, parseUpdateManifest, updateDigest } from '../../src/product/person-client/client-update-contract.js';
 
 const directories: string[] = [];
@@ -219,5 +219,34 @@ describe('bounded first S3 client update publication', () => {
     mkdirSync(`${f.receipt}.lock`, { mode: 0o700 });
     await expect(f.execute()).rejects.toThrow('receipt_locked');
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
+  });
+});
+
+
+describe('authenticated S3 HEAD absence classification', () => {
+  it.each([
+    'An error occurred (404) when calling the HeadObject operation (reached max retries: 0): Not Found',
+    'An error occurred (404) when calling the HeadObject operation: Not Found',
+    'An error occurred (NoSuchKey) when calling the HeadObject operation: The specified key does not exist.',
+    'An error occurred (NoSuchKey) when calling the HeadObject operation (reached max retries: 0): The specified key does not exist.',
+  ])('recognizes a confirmed missing key: %s', stderr => {
+    expect(isAbsentClientUpdateHead(['s3api', 'head-object'], stderr)).toBe(true);
+  });
+
+  it.each([
+    'An error occurred (403) when calling the HeadObject operation (reached max retries: 0): Forbidden',
+    'An error occurred (AccessDenied) when calling the HeadObject operation: Access Denied',
+    'An error occurred (404) when calling the GetObject operation (reached max retries: 0): Not Found',
+    'An error occurred (404) when calling the HeadObject operation (unknown annotation): Not Found',
+    'An error occurred (500) when calling the HeadObject operation: Internal Server Error',
+  ])('keeps denied, unrelated, or unknown errors unconfirmed: %s', stderr => {
+    expect(isAbsentClientUpdateHead(['s3api', 'head-object'], stderr)).toBe(false);
+  });
+
+  it('does not classify a different command as a missing HEAD even if its stderr mentions HeadObject', () => {
+    const stderr = 'An error occurred (404) when calling the HeadObject operation (reached max retries: 0): Not Found';
+    expect(isAbsentClientUpdateHead(['s3api', 'put-object'], stderr)).toBe(false);
+    expect(isAbsentClientUpdateHead(['cloudformation', 'head-object'], stderr)).toBe(false);
+    expect(isAbsentClientUpdateHead(['s3api', 'head-object'], undefined)).toBe(false);
   });
 });

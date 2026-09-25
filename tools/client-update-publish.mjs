@@ -66,6 +66,10 @@ async function locked(path, action) {
   try { mkdirSync(lock, { mode: 0o700 }); } catch { fail('receipt_locked'); }
   try { return await action(); } finally { rmdirSync(lock); }
 }
+export function isAbsentClientUpdateHead(args, stderr) {
+  return args[0] === 's3api' && args[1] === 'head-object' &&
+    /^An error occurred \((404|NoSuchKey)\) when calling the HeadObject operation(?: \(reached max retries: [0-9]+\))?: [^\r\n]+$/.test(String(stderr ?? '').trim());
+}
 function defaultAws(args) {
   try {
     const output = execFileSync('aws', awsCliArguments([...args, '--region', REGION, '--output', 'json']), {
@@ -75,7 +79,7 @@ function defaultAws(args) {
     return output ? JSON.parse(output) : {};
   } catch (error) {
     // An authenticated 403 is never evidence that an object is absent.
-    if (args[0] === 's3api' && args[1] === 'head-object' && /An error occurred \((404|NoSuchKey)\) when calling the HeadObject operation:/.test(String(error?.stderr ?? ''))) return { absent: true };
+    if (isAbsentClientUpdateHead(args, error?.stderr)) return { absent: true };
     fail('aws_operation_unconfirmed');
   }
 }

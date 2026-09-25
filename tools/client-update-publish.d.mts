@@ -24,3 +24,5 @@ export interface ClientUpdatePublicationDependencies {
 export function planClientUpdatePublish(options: { hostingReceipt: string; prepared: string; authorization: string; output: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
 export function executeClientUpdatePublish(options: { receipt: string; approveManifest: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
 export function statusClientUpdatePublish(options: { receipt: string }, dependencies?: ClientUpdatePublicationDependencies): Promise<ClientUpdatePublicationSummary>;
+
+export function isAbsentClientUpdateHead(args: readonly string[], stderr: unknown): boolean;
