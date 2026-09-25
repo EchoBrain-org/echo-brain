@@ -67,6 +67,8 @@ describe('failures carry a code, never text', () => {
 
   it('treats an unavailable write as unknown and a refused one as not submitted', () => {
     expect(failureView({ code: 'unavailable' }, 'failed', true).mutation_outcome).toBe('unknown');
+    expect(failureView({ code: 'transport_failed' }, 'failed', true)).toMatchObject({ mutation_outcome: 'unknown', retryable: true });
+    expect(failureView({ code: 'transport_failed', mutation_outcome: 'not_submitted' }, 'failed', true).mutation_outcome).toBe('not_submitted');
     expect(failureView({ code: 'invalid_request' }, 'failed', true).mutation_outcome).toBe('not_submitted');
     expect(failureView({ code: 'unavailable' }, 'failed', false).mutation_outcome).toBeUndefined();
   });

@@ -51,10 +51,10 @@ test('an expired access token is refreshed once, before the calls that need it',
   expect(refreshes()).toHaveLength(1);
 });
 
-test('a refresh that fails with a server error keeps you signed in, and status alone never refreshes', async () => {
-  run = await launch('refresh-fails');
+test('a refresh that never left the machine keeps you signed in, and status alone never refreshes', async () => {
+  run = await launch('refresh-offline');
   const { page, app } = run;
-  await expect(page.getByTestId('home-error')).toContainText('ECHO is unavailable right now.');
+  await expect(page.getByTestId('home-error')).toContainText('ECHO cannot be reached. Check your connection');
   await expect(page.getByTestId('signin')).toHaveCount(0);
   // One refresh, and the call that needed it is not made.
   expect(run.calls().map(call => call.path)).toEqual(['/v2/session/refresh']);
@@ -68,13 +68,15 @@ test('a refresh that fails with a server error keeps you signed in, and status a
   expect(refreshes()).toHaveLength(1);
 });
 
-test('a refused refresh shows sign-in at once', async () => {
-  run = await launch('refresh-refused');
-  const started = Date.now();
-  await expect(run.page.getByTestId('signin')).toBeVisible();
-  expect(Date.now() - started).toBeLessThan(2_500); // not the 3 s wait for a refresh elsewhere
-  expect(refreshes()).toHaveLength(1);
-});
+for (const [mode, why] of [['refresh-refused', 'is refused'], ['refresh-fails', 'may have reached the Authority']] as const) {
+  test(`a refresh that ${why} shows sign-in at once and is never replayed`, async () => {
+    run = await launch(mode);
+    const started = Date.now();
+    await expect(run.page.getByTestId('signin')).toBeVisible();
+    expect(Date.now() - started).toBeLessThan(2_500); // not the 3 s wait for a refresh elsewhere
+    expect(refreshes()).toHaveLength(1);
+  });
+}
 
 test('a host that keeps exiting is given up on, and the page says ECHO could not start', async () => {
   run = await launch('host-crash');

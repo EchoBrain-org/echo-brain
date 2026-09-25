@@ -113,11 +113,10 @@ async function gated<T>(run: () => Promise<T>, network: boolean, refreshFailed?:
     exclusive = new Promise(resolve => { release = resolve; });
     try {
       while (active > 0) await new Promise<void>(resolve => idle.push(resolve));
-      // A refresh the Authority refused leaves the client signed out, and the
-      // call reports that. One with no answer puts the session back, and the
-      // call is not made: its client would try the same refresh again, and if
-      // the Authority did rotate the pair and only the reply was lost, the old
-      // access token is already revoked. The next call refreshes again.
+      // A refresh that failed leaves the client signed out, and the call
+      // reports that; only one that never left the machine (no network yet)
+      // puts the session back. Then the call is not made, since its client
+      // would only try the same refresh again; the next call does.
       if (refreshDue(store, now())) {
         const refresh = await cli(['session-refresh']);
         if (refresh.exit !== 0 && refreshFailed && refreshDue(store, now())) return refreshFailed(refresh);

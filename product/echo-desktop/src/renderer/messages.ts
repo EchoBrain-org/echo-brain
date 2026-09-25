@@ -6,6 +6,7 @@ const MESSAGES: Record<string, string> = {
   account_changed: 'Your account changed. Try again.',
   signed_out: 'You are signed out.',
   unavailable: 'ECHO is unavailable right now. Try again.',
+  transport_failed: 'ECHO cannot be reached. Check your connection and try again.',
   timeout: 'That took too long. Try again.',
   rate_limited: 'Too many requests. Try again in a moment.',
   not_found: 'This is no longer available to you.',

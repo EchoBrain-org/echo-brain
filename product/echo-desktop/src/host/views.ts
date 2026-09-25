@@ -130,7 +130,9 @@ export function writeStatusView(raw: unknown, kind: 'note' | 'document'): WriteS
   return { state: value.state === 'saved' ? 'saved' : 'unknown' };
 }
 
-const RETRYABLE = new Set(['unavailable', 'rate_limited', 'timeout', 'outcome_unknown', 'invalid_output', 'busy']);
+const RETRYABLE = new Set(['unavailable', 'transport_failed', 'rate_limited', 'timeout', 'outcome_unknown', 'invalid_output', 'busy']);
+/** A write that failed this way may have reached the Authority, unless the client says otherwise. */
+const MAYBE_SENT = new Set(['outcome_unknown', 'timeout', 'unavailable', 'transport_failed']);
 
 /** A failure the renderer may see: a code, never the server's or client's text. */
 export function failureView(raw: unknown, fallback: string, write: boolean, requestId?: string): Failure {
@@ -138,7 +140,7 @@ export function failureView(raw: unknown, fallback: string, write: boolean, requ
   const code = typeof value.code === 'string' && /^[a-z_]{1,64}$/.test(value.code) ? value.code : fallback;
   const outcome = value.mutation_outcome === 'unknown' || value.mutation_outcome === 'not_submitted'
     ? value.mutation_outcome
-    : write ? (code === 'outcome_unknown' || code === 'timeout' || code === 'unavailable' ? 'unknown' : 'not_submitted') : undefined;
+    : write ? (MAYBE_SENT.has(code) ? 'unknown' : 'not_submitted') : undefined;
   return {
     code,
     retryable: RETRYABLE.has(code),
