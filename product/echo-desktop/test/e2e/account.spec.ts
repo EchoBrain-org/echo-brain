@@ -18,6 +18,8 @@ test('the Account menu names who is signed in, and the tray holds the same items
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  // Screen readers and voice control hear who is signed in, as the row shows it.
+  await expect(page.getByRole('button', { name: 'Account, Ari, employee', exact: true })).toHaveAttribute('aria-haspopup', 'menu');
   await openAccountMenu(run, page.getByTestId('account-row'));
   const account = await menuLabels(run, 'account');
   expect(account.slice(0, 2)).toEqual(['Signed in as Ari · employee', 'Organization: https://authority.example']);
@@ -38,6 +40,8 @@ test('signed out shows "Sign in to use ECHO"; Sign in with Google… asks for th
   await expect(page.getByTestId('signed-out')).toContainText('Sign in to use ECHO');
   // The sidebar keeps only the Account entry, and nothing else can be used.
   await expect(page.getByTestId('account-row')).toHaveText('Account · Sign in');
+  await expect(page.getByRole('button', { name: 'Account · Sign in', exact: true })).toBeVisible();
+  await expect(page.getByTestId('signin-open')).toHaveAttribute('aria-haspopup', 'menu');
   await expect(page.getByTestId('sidebar-capture')).toHaveCount(0);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(0);
   await expect(page.getByTestId('ask-field')).toHaveCount(0);

@@ -17,7 +17,7 @@ export function SignedOut({ state }: { state: State }) {
     <div class="page">
       <div class="signin" data-testid="signed-out">
         <p class="lead">Sign in to use ECHO</p>
-        <button type="button" class="primary-button small" data-testid="signin-open" disabled={waiting}
+        <button type="button" class="primary-button small" data-testid="signin-open" disabled={waiting} aria-haspopup="menu"
           onClick={event => showAccountMenu(event.currentTarget, 'below')}>
           {waiting ? 'Waiting for your browser' : 'Sign in…'}
         </button>

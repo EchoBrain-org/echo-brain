@@ -66,7 +66,8 @@ export function Sidebar({ state }: { state: State }) {
           </button>
         </div>
       )}
-      <button type="button" class="account-row" data-testid="account-row" aria-label="Account" aria-haspopup="menu"
+      <button type="button" class="account-row" data-testid="account-row" aria-haspopup="menu"
+        aria-label={account ? `Account, ${account.display_name}, ${account.role}` : undefined}
         onClick={event => showAccountMenu(event.currentTarget, 'row')}>
         {account ? (
           <>
