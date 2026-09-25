@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import { clock } from '../format.js';
 import { message } from '../messages.js';
-import { ask, cancelAsk, closeSource, copyAnswer, openCompose, openSource, widenScope, type State } from '../store.js';
+import { ask, closeAsk, closeSource, copyAnswer, openCompose, openSource, widenScope, type State } from '../store.js';
 
 /** What a source may show: 2,000 characters, and at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -65,7 +65,7 @@ export function AskView({ state }: { state: State }) {
       {current.status === 'loading' && (
         <div class="asking" data-testid="asking">
           <i /><i /><i /><span>Asking</span>
-          <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
+          <button type="button" class="link-button" data-testid="ask-cancel" onClick={closeAsk}>Cancel</button>
         </div>
       )}
       {current.status === 'error' && current.failure && (

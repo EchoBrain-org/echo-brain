@@ -29,6 +29,3 @@ export const Lock = () => (
 export const Globe = () => (
   <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" stroke="rgba(240,236,230,0.55)" stroke-width="1.2" fill="none" /><path d="M1 6h10M6 1c1.6 1.4 2.4 3.1 2.4 5S7.6 9.6 6 11M6 1C4.4 2.4 3.6 4.1 3.6 6S4.4 9.6 6 11" stroke="rgba(240,236,230,0.55)" stroke-width="1.1" fill="none" /></svg>
 );
-export const FileIcon = () => (
-  <svg width="13" height="16" viewBox="0 0 18 22" aria-hidden="true"><path d="M2 1h9l5 5v15H2z" stroke="rgba(240,236,230,0.8)" stroke-width="1.6" stroke-linejoin="round" fill="none" /><path d="M11 1v5h5" stroke="rgba(240,236,230,0.8)" stroke-width="1.6" stroke-linejoin="round" fill="none" /></svg>
-);

@@ -83,9 +83,9 @@ function buildInfo(): BuildInfo | null {
 // A packaged app ships the person client exactly as packed, beside the host,
 // and never takes a code path from the environment.
 const HOST_PATH = app.isPackaged ? join(process.resourcesPath, 'host.mjs') : join(BUILD, 'host.mjs');
-const clientEntry = (__ECHO_TEST_HOOK__ && process.env.ECHO_PERSON_CLIENT_ENTRY) || (app.isPackaged
+const clientEntry = app.isPackaged
   ? join(process.resourcesPath, 'person-client', 'package', 'dist', 'composition.js')
-  : resolve(BUILD, '..', '..', '..', 'src', 'product', 'person-client', 'dist', 'composition.js'));
+  : resolve(BUILD, '..', '..', '..', 'src', 'product', 'person-client', 'dist', 'composition.js');
 let host: UtilityProcess | null = null;
 let nextId = 1;
 const WRITE_METHODS = new Set<string>(['notes.submit', 'documents.upload', 'documents.retry']);
@@ -327,7 +327,7 @@ function toggle(): void {
 }
 
 function capture(): void {
-  // The compose layer is always mounted: ask it to open, then bring it forward.
+  // The page stays loaded while hidden: ask it to open compose, then bring it forward.
   send('capture.open', {});
   show();
 }
@@ -436,7 +436,6 @@ async function runSmoke(): Promise<void> {
   checks.client_identity = status.ok && typeof (status.value as { client_version?: unknown }).client_version === 'string';
   const passed = Object.values(checks).every(Boolean);
   process.stdout.write(`${JSON.stringify({ smoke: passed ? 'passed' : 'failed', checks, build: buildInfo() })}\n`);
-  quitting = true;
   host?.kill();
   try { rmSync(smokeRoot!, { recursive: true, force: true }); } catch { /* temporary */ }
   app.exit(passed ? 0 : 1);

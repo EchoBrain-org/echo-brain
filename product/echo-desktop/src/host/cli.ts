@@ -12,7 +12,7 @@ export interface CliRun {
 }
 
 /** More than the largest bounded client output (32 KiB documents, answers). */
-export const MAX_OUTPUT_BYTES = 1024 * 1024;
+const MAX_OUTPUT_BYTES = 1024 * 1024;
 
 export async function runCli(
   cli: PersonCli,

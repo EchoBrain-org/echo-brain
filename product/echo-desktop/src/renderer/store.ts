@@ -7,9 +7,9 @@ import type {
 import { dropFile, rpc } from './api.js';
 import { message } from './messages.js';
 
-export type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary };
+type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary };
 
-export interface AskState {
+interface AskState {
   seq: number;
   question: string;
   scope: AskScope;
@@ -22,7 +22,7 @@ export interface AskState {
 
 export type ComposeTarget = { kind: 'only-me' } | { kind: 'team' } | { kind: 'project'; project: ProjectSummary };
 
-export interface ComposeState {
+interface ComposeState {
   seq: number;
   text: string;
   target: ComposeTarget;
@@ -263,9 +263,8 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
   set({ ask: { ...state.ask, status: 'answer', answer: result.value } });
 }
 
+/** Leaves the answer. While asking it is Cancel: a late answer is dropped. */
 export function closeAsk(): void { set({ ask: null, evidence: null }); }
-/** Stop waiting: a late answer is dropped. */
-export const cancelAsk = closeAsk;
 
 export async function openSource(index: number): Promise<void> {
   const account = expect();
