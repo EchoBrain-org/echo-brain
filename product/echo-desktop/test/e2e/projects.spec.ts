@@ -131,6 +131,15 @@ test('a document reads a page of text at a time, and Save original writes the ch
   await expect(page.getByTestId('reader-save-status')).toHaveText('A file with that name is already there. Choose a new name.');
   expect(originals()).toBe(1);
   expect(existsSync(target)).toBe(true);
+
+  // It leaves the project it was opened in.
+  await page.getByTestId('reader-actions').click();
+  await page.getByTestId('reader-remove').click();
+  await expect(page.getByTestId('toast')).toHaveText('Removed from Beacon');
+  await expect(page.getByTestId('reader')).toHaveCount(0);
+  await expect(page.locator('[data-kind="document"]')).toHaveCount(0);
+  const dissociate = run.calls().filter(call => call.path === `/v1/person/documents/${DOCUMENT}/dissociate`);
+  expect(dissociate.map(call => call.body)).toEqual([expect.objectContaining({ project_id: BEACON })]);
 });
 
 test('an original can leave the project it is in, or be added to another, and the reader says where it went', async () => {
