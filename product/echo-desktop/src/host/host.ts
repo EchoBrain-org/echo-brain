@@ -12,7 +12,7 @@ import {
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
   answerView, askText, contextView, evidenceView, failureView, feedView, noteTitle, projectPageView, receiptView, statusView,
-  unwrap, ViewError, writeStatusView,
+  toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -78,6 +78,7 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'account.signOut': 45_000,
+  'account.tools': 45_000,
 };
 /** Writes this host has handed to the client and not yet heard back on. */
 const inFlight = new Set<string>();
@@ -339,6 +340,10 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       // Nothing stored under this request: it never arrived, so resending is safe.
       if (!result.ok && result.failure.code === 'not_found') return ok({ state: 'not_saved' as const });
       return result;
+    }
+    case 'account.tools': {
+      const { expect } = params as Params<'account.tools'>;
+      return forAccount(method, expect, ['tools'], stdout => toolsView(lastJson(stdout), expect.membership_id));
     }
     case 'account.signOut': {
       const { expect } = params as Params<'account.signOut'>;

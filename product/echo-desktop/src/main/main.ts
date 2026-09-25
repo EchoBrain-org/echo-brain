@@ -410,6 +410,7 @@ function accountItems(fromTray: boolean): MenuItemConstructorOptions[] {
       { type: 'separator' },
       { label: 'Switch account…', click: run('switch') },
       { label: 'Sign out…', click: run('signout') },
+      { label: 'Connected tools…', click: run('tools') },
     ];
   }
   // Signing in is offered only once the host has said no one is signed in.

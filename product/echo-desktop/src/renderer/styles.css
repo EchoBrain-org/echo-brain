@@ -174,6 +174,20 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .sheet.confirm p.warning { color: var(--accent-text); }
 .sheet .choices { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .plain-button.danger { color: var(--danger); }
+
+/* Connected tools: the organization's tools and your link to each. */
+.sheet.tools { width: 460px; height: auto; gap: 12px; padding: 18px 20px 18px; }
+.sheet.tools:focus { outline: none; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; }
+.sheet-head h2 { margin: 0; font-size: 18px; }
+.sheet.tools p { margin: 0; font-size: 13.5px; }
+.sheet.tools p.context { font-size: 12.5px; color: var(--faint); }
+.sheet.tools p.error { color: var(--danger); }
+.sheet .choices.start { justify-content: flex-start; align-items: center; margin-top: 0; }
+.tool-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.tool-row { display: flex; flex-direction: column; gap: 2px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.tool-row .name { font-size: 14.5px; font-weight: 500; }
+.tool-row .state { font-size: 12.5px; color: var(--muted); }
 .plain-button:disabled { opacity: 0.5; cursor: default; }
 .cover { width: 520px; max-width: calc(100% - 48px); height: 400px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; letter-spacing: 1.8px; color: var(--muted); }
 .unresolved { display: flex; flex-direction: column; gap: 8px; }

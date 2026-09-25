@@ -22,7 +22,7 @@ test('the Account menu names who is signed in, and the tray holds the same items
   const account = await menuLabels(run, 'account');
   expect(account.slice(0, 2)).toEqual(['Signed in as Ari · employee', 'Organization: https://authority.example']);
   expect(account[2]).toMatch(/^ECHO \S+$/);
-  expect(account.slice(3)).toEqual(['Switch account…', 'Sign out…']);
+  expect(account.slice(3)).toEqual(['Switch account…', 'Sign out…', 'Connected tools…']);
 
   const tray = await menuLabels(run, 'tray');
   expect(tray.filter(label => !label.startsWith('Build '))).toEqual(['Open ECHO', 'Capture', 'Account', 'Quit ECHO']);
@@ -142,4 +142,21 @@ test('Open invitation… signs in with the folder the owner sent, and the page n
   expect(begun[0]!.body).toMatchObject({ kind: 'identity_bootstrap', login_grant: grant });
   expect(await page.content()).not.toContain(folder);
   expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).not.toContain(folder);
+});
+
+test('Connected tools… shows what your organization has enabled and whether you are linked', async () => {
+  run = await launch();
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Connected tools…');
+  await expect(page.getByTestId('tools')).toContainText('Ari · https://authority.example');
+  await expect(page.getByTestId('tool-row')).toHaveText([
+    'SlackOrganization: enabled · Your link: Connected',
+    'GranolaNot enabled for this organization. Ask an owner to connect it.',
+  ]);
+  // The external workspace and account ids never reach the page.
+  expect(await page.content()).not.toMatch(/T0123ABCD|U0123ABCD/);
+  expect(run.calls().filter(call => call.path === '/v3/person/tools')).toHaveLength(1);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('tools')).toHaveCount(0);
 });

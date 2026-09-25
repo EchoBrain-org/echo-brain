@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  answerView, askText, failureView, feedView, noteTitle, projectPageView, receiptView, statusView, ViewError, writeStatusView,
+  answerView, askText, failureView, feedView, noteTitle, projectPageView, receiptView, statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
@@ -18,6 +18,18 @@ describe('view models copy only what the renderer may see', () => {
       account: { authority: 'https://a.example', membership_id: 'mem_1', display_name: 'Ari', role: 'employee' },
     });
     expect(JSON.stringify(view)).not.toContain('SECRET');
+  });
+
+  it('tools keep each name and state, never external ids, and only for the account asked about', () => {
+    const reply = (membership: string) => ({ ok: true, result: {
+      schema_version: 3, kind: 'echo-organization-person-tools', organization_id: 'org_1', membership_id: membership,
+      tools: [{ tool_id: 'slack', display_name: 'Slack', availability: 'enabled', personal_status: 'linked',
+        external_scope_id: 'T0SECRET', external_subject_id: 'U0SECRET' }],
+    } });
+    const view = toolsView(reply('mem_1'), 'mem_1');
+    expect(view).toEqual({ tools: [{ name: 'Slack', enabled: true, linked: true }] });
+    expect(JSON.stringify(view)).not.toContain('SECRET');
+    expect(() => toolsView(reply('mem_2'), 'mem_1')).toThrow(ViewError);
   });
 
   it('rejects a reply of the wrong kind', () => {

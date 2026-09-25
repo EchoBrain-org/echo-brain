@@ -2,8 +2,8 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerSource, AppStatus, AskScope, Audience, ContextContent, Failure, FeedItem, FeedPage, ProjectPage,
-  ProjectSummary, Receipt, SourceEvidence, SourceRef, WriteStatus,
+  Account, Answer, AnswerSource, AppStatus, AskScope, Audience, ConnectedTools, ContextContent, Failure, FeedItem, FeedPage,
+  ProjectPage, ProjectSummary, Receipt, SourceEvidence, SourceRef, WriteStatus,
 } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
@@ -115,6 +115,22 @@ export function evidenceView(raw: unknown): SourceEvidence {
   const value = object(unwrap(raw));
   if (value.kind !== 'echo-person-source-evidence-v1') throw new ViewError();
   return { label: text(object(value.citation).label), text: text(value.text) };
+}
+
+/** Connected tools: each name and state. External workspace and account ids stay behind. */
+export function toolsView(raw: unknown, membershipId: string): ConnectedTools {
+  const value = object(unwrap(raw));
+  if (value.schema_version !== 3 || value.kind !== 'echo-organization-person-tools' || value.membership_id !== membershipId) {
+    throw new ViewError();
+  }
+  const tools = list(value.tools);
+  if (tools.length > 32) throw new ViewError();
+  return {
+    tools: tools.map(entry => {
+      const tool = object(entry);
+      return { name: text(tool.display_name), enabled: tool.availability === 'enabled', linked: tool.personal_status === 'linked' };
+    }),
+  };
 }
 
 export function receiptView(raw: unknown, requestId: string, audience: Audience): Receipt {

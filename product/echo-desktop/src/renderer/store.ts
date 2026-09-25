@@ -2,7 +2,8 @@
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  AccountCommand, Answer, AppStatus, AskScope, Audience, ContextContent, Expect, Failure, FeedItem, FileHandle, ProjectSummary, Result,
+  AccountCommand, Answer, AppStatus, AskScope, Audience, ConnectedTool, ContextContent, Expect, Failure, FeedItem, FileHandle,
+  ProjectSummary, Result,
 } from '../shared/protocol.js';
 import { rpc } from './api.js';
 import { message } from './messages.js';
@@ -48,6 +49,17 @@ export interface SignOutSheet {
   failure?: Failure;
 }
 
+/** Connected tools…: a read of the organization's tools. It can be closed while it loads. */
+export interface ToolsSheet {
+  kind: 'tools';
+  seq: number;
+  loading: boolean;
+  tools?: readonly ConnectedTool[];
+  failure?: Failure;
+}
+
+export type Sheet = SignOutSheet | ToolsSheet;
+
 export interface State {
   status: AppStatus | null;
   booting: boolean;
@@ -63,7 +75,7 @@ export interface State {
   /** form: the organization address is being asked for (Sign in with Google…). */
   signin: { phase: 'idle' | 'waiting' | 'failed'; form: boolean; failure?: Failure; browserOpened?: boolean };
   /** A sheet over the window for the account: only one at a time. */
-  sheet: SignOutSheet | null;
+  sheet: Sheet | null;
   /** No status could be read (the host is down): not the same as signed out. */
   startFailed: boolean;
   /** On by default; the toggle only hides it, and this computer remembers. */
@@ -199,12 +211,31 @@ export function accountCommand(command: AccountCommand): void {
     else void openInvitation();
     return;
   }
-  if (signedIn && !state.sheet?.busy) set({ sheet: { kind: command, busy: false } });
+  // A sign-out already under way is not interrupted.
+  if (!signedIn || (state.sheet?.kind !== 'tools' && state.sheet?.busy)) return;
+  if (command === 'tools') void loadTools();
+  else set({ sheet: { kind: command, busy: false } });
 }
 
 export function closeSheet(): void {
-  if (!state.sheet || state.sheet.busy) return;
+  if (!state.sheet || (state.sheet.kind !== 'tools' && state.sheet.busy)) return;
   set({ sheet: null });
+}
+
+/** Opens Connected tools, or reads it again (Try again). A reply for a sheet since closed is dropped. */
+export async function loadTools(): Promise<void> {
+  const account = expect();
+  if (!account) return;
+  const mine = ++seq;
+  set({ sheet: { kind: 'tools', seq: mine, loading: true } });
+  const result = await rpc('account.tools', { expect: account });
+  if (state.sheet?.kind !== 'tools' || state.sheet.seq !== mine) return;
+  if (!result.ok) {
+    set({ sheet: { kind: 'tools', seq: mine, loading: false, failure: result.failure } });
+    accountLost(result.failure);
+    return;
+  }
+  set({ sheet: { kind: 'tools', seq: mine, loading: false, tools: result.value.tools } });
 }
 
 /** A save on its way: signing out now would lose whether it arrived. */
@@ -217,7 +248,7 @@ export function saveInFlight(): boolean {
 export async function signOut(): Promise<void> {
   const account = expect();
   const sheet = state.sheet;
-  if (!account || !sheet || sheet.busy || saveInFlight()) return;
+  if (!account || !sheet || sheet.kind === 'tools' || sheet.busy || saveInFlight()) return;
   set({ sheet: { ...sheet, busy: true, failure: undefined } });
   const result = await rpc('account.signOut', { expect: account });
   if (state.sheet?.kind !== sheet.kind) return;

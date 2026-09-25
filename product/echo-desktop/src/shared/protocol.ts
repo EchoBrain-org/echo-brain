@@ -85,6 +85,17 @@ export interface Receipt {
   readonly audience: Audience;
 }
 
+/** One of the organization's tools, and whether you linked your own account to it. */
+export interface ConnectedTool {
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly linked: boolean;
+}
+
+export interface ConnectedTools {
+  readonly tools: readonly ConnectedTool[];
+}
+
 /** What a status check says about a save whose outcome was unknown. */
 export interface WriteStatus {
   readonly state: 'saved' | 'not_saved' | 'unknown';
@@ -129,6 +140,8 @@ export interface HostMethods {
   'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };
   /** Signs the account on screen out of this computer; the reply is the new status. */
   'account.signOut': { params: { expect: Expect }; result: AppStatus };
+  /** Connected tools…: a read, for the account on screen. */
+  'account.tools': { params: { expect: Expect }; result: ConnectedTools };
 }
 
 export interface MainMethods {
@@ -150,6 +163,7 @@ export type HostMethodName = keyof HostMethods;
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry', 'account.signOut',
+  'account.tools',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'dialog.openDocument', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -160,7 +174,7 @@ export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['note
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);
 
 /** What an Account menu item asks the window to do. */
-export type AccountCommand = 'signin' | 'invitation' | 'switch' | 'signout';
+export type AccountCommand = 'signin' | 'invitation' | 'switch' | 'signout' | 'tools';
 
 /** Events main pushes to the renderer. */
 export interface Events {

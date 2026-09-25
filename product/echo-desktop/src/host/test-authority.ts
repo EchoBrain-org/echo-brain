@@ -132,6 +132,17 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'refresh-hangs') return new Promise<Response>(() => undefined);
       return json({ ...session, access_token: 'B'.repeat(43), refresh_token: 'S'.repeat(43), access_expires_at: '2026-09-22T10:30:00.000Z' });
     }
+    if (method === 'GET' && path === '/v3/person/tools') {
+      return json({
+        schema_version: 3, kind: 'echo-organization-person-tools', organization_id: session.organization_id, membership_id: session.membership_id,
+        tools: [
+          { tool_id: 'slack', display_name: 'Slack', availability: 'enabled', personal_status: 'linked',
+            external_scope_id: 'T0123ABCD', external_subject_id: 'U0123ABCD' },
+          { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
+            external_scope_id: null, external_subject_id: null },
+        ],
+      });
+    }
     // Sign-out: the Authority ends the session; its request body is always empty.
     if (method === 'POST' && path === '/v2/session/revocations') {
       if (body === undefined || Object.keys(body).length !== 0) return failure('invalid_request', 400);

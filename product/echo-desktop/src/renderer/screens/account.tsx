@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { message } from '../messages.js';
-import { closeSheet, saveInFlight, signOut, type SignOutSheet, type State } from '../store.js';
+import { closeSheet, loadTools, saveInFlight, signOut, type SignOutSheet, type State, type ToolsSheet } from '../store.js';
 import { trapTab } from './compose.js';
+import { Close } from './icons.js';
 
 /** Sign out and Switch account cannot be undone, so they are asked first. Cancel has the focus. */
 export function ConfirmSignOut({ state, sheet }: { state: State; sheet: SignOutSheet }) {
@@ -27,6 +28,48 @@ export function ConfirmSignOut({ state, sheet }: { state: State; sheet: SignOutS
             {sheet.failure ? 'Try again' : 'Sign out'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Connected tools…: what the organization has enabled, and whether you linked your own account. */
+export function ConnectedTools({ state, sheet }: { state: State; sheet: ToolsSheet }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => { box.current?.focus(); }, []);
+  const account = state.status?.account;
+  return (
+    <div class="overlay" onClick={closeSheet}>
+      <div class="sheet tools" role="dialog" aria-labelledby="tools-title" data-testid="tools" ref={box} tabIndex={-1}
+        onClick={event => event.stopPropagation()} onKeyDown={event => trapTab(event, box.current)}>
+        <div class="sheet-head">
+          <h2 id="tools-title">Connected tools</h2>
+          <button type="button" class="circle" aria-label="Close" data-testid="tools-close" onClick={closeSheet}><Close /></button>
+        </div>
+        {account && <p class="context">{account.display_name} · {account.authority}</p>}
+        <div aria-live="polite" aria-busy={sheet.loading}>
+          {sheet.loading && <p>Checking organization tools…</p>}
+          {sheet.failure && (
+            <div class="choices start">
+              <p class="error">{message(sheet.failure)}</p>
+              <button type="button" class="plain-button" onClick={() => void loadTools()}>Try again</button>
+            </div>
+          )}
+          {sheet.tools && sheet.tools.length === 0 && <p>Your organization has no supported tools enabled.</p>}
+          {sheet.tools && sheet.tools.length > 0 && (
+            <ul class="tool-list">
+              {sheet.tools.map(tool => (
+                <li class="tool-row" data-testid="tool-row" key={tool.name}>
+                  <span class="name">{tool.name}</span>
+                  <span class="state">{tool.enabled
+                    ? `Organization: enabled · Your link: ${tool.linked ? 'Connected' : 'Not connected'}`
+                    : 'Not enabled for this organization. Ask an owner to connect it.'}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <p class="context">Linking a tool is optional; Ask and Sources already use your ECHO access.</p>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 import { render, type ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { on } from './api.js';
-import { ConfirmSignOut } from './screens/account.js';
+import { ConfirmSignOut, ConnectedTools } from './screens/account.js';
 import { AskView, Bar } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
@@ -90,7 +90,8 @@ function App() {
       </main>
       <Bar state={state} />
       {state.compose && !state.compose.hidden && <Compose state={state} />}
-      {state.sheet && <ConfirmSignOut state={state} sheet={state.sheet} />}
+      {state.sheet?.kind === 'tools' ? <ConnectedTools state={state} sheet={state.sheet} />
+        : state.sheet && <ConfirmSignOut state={state} sheet={state.sheet} />}
     </Shell>
   );
 }
