@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, askText, failureView, feedView, noteTitle, projectPageView, receiptView, statusView, toolsView, ViewError,
-  writeStatusView,
+  abandonView, answerView, failureView, feedView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, receiptView,
+  statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
+import { askText, searchQuery } from '../../src/shared/query.js';
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 
@@ -86,6 +87,31 @@ describe('view models copy only what the renderer may see', () => {
   });
 });
 
+describe('live matches', () => {
+  const item = { context_id: 'ctx_1', received_at: '2026-09-21T22:01:00.000Z', title: 'Apollo update', excerpt: 'We agreed to ship.' };
+
+  it('a project search counts only for the project searched, and says how to read each match', () => {
+    const reply = { kind: 'echo-project-context-search-result-v2', project_id: 'prj_1', items: [{ ...item, audience: { kind: 'projects' } }] };
+    expect(projectMatchesView(reply, 'prj_1')).toEqual({ items: [{ ...item, source: 'project' }] });
+    expect(() => projectMatchesView(reply, 'prj_2')).toThrow(ViewError);
+    expect(() => projectMatchesView({ ...reply, kind: 'echo-project-context-feed-v2' }, 'prj_1')).toThrow(ViewError);
+  });
+
+  it('saved notes keep their version, so each is read the way it was saved', () => {
+    expect(noteMatchesView({ kind: 'echo-person-upload-search-v3', results: [item] }, 3)).toEqual([{ ...item, source: 'v3' }]);
+    expect(noteMatchesView({ kind: 'echo-person-upload-search-v2', results: [item] }, 2)).toEqual([{ ...item, source: 'v2' }]);
+    expect(() => noteMatchesView({ kind: 'echo-person-upload-search-v2', results: [item] }, 3)).toThrow(ViewError);
+  });
+
+  it('a note is read only as the one asked for', () => {
+    const reply = { kind: 'echo-person-upload-content-v3', context_id: 'ctx_1', received_at: item.received_at, title: 'T', text: 'Body',
+      audience: { kind: 'only_me' } };
+    expect(noteView(reply, 3, 'ctx_1')).toEqual({ context_id: 'ctx_1', title: 'T', text: 'Body', received_at: item.received_at });
+    expect(() => noteView(reply, 3, 'ctx_2')).toThrow(ViewError);
+    expect(() => noteView(reply, 2, 'ctx_1')).toThrow(ViewError);
+  });
+});
+
 describe('failures carry a code, never text', () => {
   it('drops the error message and keeps the outcome of a write', () => {
     const failure = failureView({ ok: false, error: 'Token AAAA expired at /Users/x', code: 'outcome_unknown', mutation_outcome: 'unknown' },
@@ -120,5 +146,15 @@ describe('text the API accepts', () => {
     expect(askText('  what\nchanged?\u2028 ')).toBe('what changed?');
     expect(askText('e\u0301')).toBe('é');
     expect([...askText('😀'.repeat(300))].length).toBe(240);
+  });
+
+  it('a search is a question of two or more characters with 1 to 32 distinct words of at most 64 bytes', () => {
+    expect(searchQuery('  pri\ncing ')).toBe('pri cing');
+    expect(searchQuery('p')).toBeNull();
+    expect(searchQuery('!!')).toBeNull();
+    expect(searchQuery(Array.from({ length: 33 }, (_, index) => `w${index}`).join(' '))).toBeNull();
+    expect(searchQuery('x'.repeat(65))).toBeNull();
+    expect(searchQuery('é'.repeat(32))).toBe('é'.repeat(32));
+    expect(searchQuery('é'.repeat(33))).toBeNull();
   });
 });

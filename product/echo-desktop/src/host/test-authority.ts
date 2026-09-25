@@ -13,8 +13,11 @@ const NOW = '2026-09-21T22:01:00.000Z';
 const LATER = '2026-09-21T22:30:00.000Z';
 
 interface Operation { id: string; http: { method: string; status: number; response: Record<string, unknown> } }
+interface Note { context_id: string; received_at: string; audience: Record<string, unknown>; title: string; text: string }
 interface DesktopFixtures {
   projects: { project_id: string; name: string; role: 'lead' | 'member' }[];
+  /** Saved V3 notes the person can read, for search. */
+  notes: Note[];
   answer: Record<string, unknown>;
   evidence_text: string;
   evidence_label: string;
@@ -31,6 +34,14 @@ function json(body: unknown, status = 200): Response {
 function failure(code: string, status: number): Response {
   return json({ error: { code, message: 'request failed' } }, status);
 }
+/** As the Authority searches: every word of the query in the title or text. */
+function found(query: unknown, entry: { title: string; text?: string; excerpt?: string }): boolean {
+  const haystack = `${entry.title}\n${entry.text ?? entry.excerpt ?? ''}`.normalize('NFC').toLowerCase();
+  const terms = String(query).normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return terms.length > 0 && terms.every(term => haystack.includes(term));
+}
+/** A search result's excerpt: the start of the original text. */
+function excerpt(text: string): string { return [...text.trim()].slice(0, 300).join(''); }
 
 export function installTestAuthority(home: string, fixturesDirectory: string, SessionStore: new (home: string) => unknown) {
   const repository = join(process.env.ECHO_PERSON_CLIENT_ENTRY!, '..', '..', '..', '..', '..');
@@ -74,6 +85,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }
   let writeAttempts = 0;
   let documentAttempts = 0;
+  let projectLists = 0;
   // Sign-in: the descriptor a new session is checked against, and the client's
   // loopback receiver for each sign-in begun, by its OIDC state.
   const signingKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey.export({ type: 'spki', format: 'der' });
@@ -160,7 +172,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         : desktop.projects;
       const second = url.searchParams.get('cursor') === 'cGFnZTI';
       const page = mode === 'many-projects' ? (second ? all.slice(10) : all.slice(0, 10)) : all;
-      response.items = page.map(project => ({ ...(fixture('projects-read')), ...project }));
+      projectLists += 1;
+      // A lead made a member since the first list.
+      const demoted = (index: number) => mode === 'role-changes' && projectLists > 1 && index === 0 ? { role: 'member' } : {};
+      response.items = page.map((project, index) => ({ ...(fixture('projects-read')), ...project, ...demoted(index) }));
       response.next_cursor = mode === 'many-projects' && !second ? 'cGFnZTI' : null;
       return json(response);
     }
@@ -173,6 +188,38 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       response.project_id = body?.project_id;
       (response.items as Record<string, unknown>[]).forEach(item => { item.audience = { kind: 'projects', project_ids: [body?.project_id] }; });
       return json(response);
+    }
+    if (method === 'POST' && path === '/v2/person/projects/context/search') {
+      if (mode === 'search-fails') return failure('unauthorized', 401);
+      const response = fixture('projects-search');
+      response.schema_version = 2; response.kind = 'echo-project-context-search-result-v2';
+      response.project_id = body?.project_id;
+      response.items = (response.items as { title: string; excerpt: string }[])
+        .filter(item => found(body?.query, item))
+        .map(item => ({ ...item, audience: { kind: 'projects', project_ids: [body?.project_id] } }));
+      return json(response);
+    }
+    // All context: saved notes, each version searched and read on its own.
+    if (method === 'POST' && (path === '/v3/person/updates/search' || path === '/v2/person/updates/search')) {
+      if (mode === 'search-fails') return failure('unavailable', 503);
+      if (path.startsWith('/v2/')) {
+        const response = fixture('updates-search-v2');
+        response.results = (response.results as { title: string; excerpt: string }[]).filter(item => found(body?.query, item));
+        return json(response);
+      }
+      const results = desktop.notes.filter(note => found(body?.query, note)).map(({ text, ...note }) => ({ ...note, excerpt: excerpt(text) }));
+      return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results });
+    }
+    const note = /^\/v3\/person\/updates\/content\/(ctx_[0-9a-f]{64})$/.exec(path);
+    if (method === 'GET' && note) {
+      const saved = desktop.notes.find(entry => entry.context_id === note[1]);
+      if (!saved) return failure('not_found', 404);
+      return json({ schema_version: 3, kind: 'echo-person-upload-content-v3', ...saved });
+    }
+    const olderNote = /^\/v2\/person\/updates\/content\/(ctx_[0-9a-f]{64})$/.exec(path);
+    if (method === 'GET' && olderNote) {
+      const saved = fixture('updates-read-v2');
+      return saved.context_id === olderNote[1] ? json(saved) : failure('not_found', 404);
     }
     const context = /^\/v2\/person\/projects\/(prj_[0-9a-f-]+)\/context\/(ctx_[0-9a-f]+)$/.exec(path);
     if (method === 'GET' && context) {

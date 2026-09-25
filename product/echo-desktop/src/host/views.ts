@@ -3,7 +3,7 @@
 // the client prints beyond these fields can reach the renderer.
 import type {
   Account, Answer, AnswerSource, AppStatus, AskScope, Audience, ConnectedTools, ContextContent, Extraction, Failure, FeedItem, FeedPage,
-  ProjectPage, ProjectSummary, Receipt, SourceEvidence, SourceRef, WriteStatus,
+  Match, Matches, ProjectPage, ProjectSummary, Receipt, SourceEvidence, SourceRef, WriteStatus,
 } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
@@ -85,6 +85,34 @@ export function contextView(raw: unknown): ContextContent {
   const value = object(raw);
   if (value.kind !== 'echo-project-context-read-v2') throw new ViewError();
   return { context_id: text(value.context_id), title: text(value.title), text: text(value.text), received_at: text(value.received_at) };
+}
+
+function match(raw: unknown, source: Match['source']): Match {
+  const item = object(raw);
+  return {
+    context_id: text(item.context_id), title: text(item.title), excerpt: text(item.excerpt), received_at: text(item.received_at), source,
+  };
+}
+
+/** A project's search results, only for the project that was searched. */
+export function projectMatchesView(raw: unknown, projectId: string): Matches {
+  const value = object(raw);
+  if (value.kind !== 'echo-project-context-search-result-v2' || value.project_id !== projectId) throw new ViewError();
+  return { items: list(value.items).map(item => match(item, 'project')) };
+}
+
+/** Saved notes of one version found by a search. */
+export function noteMatchesView(raw: unknown, version: 2 | 3): Match[] {
+  const value = object(raw);
+  if (value.kind !== `echo-person-upload-search-v${version}`) throw new ViewError();
+  return list(value.results).map(item => match(item, version === 3 ? 'v3' : 'v2'));
+}
+
+/** A saved note read in full, only the one asked for. */
+export function noteView(raw: unknown, version: 2 | 3, contextId: string): ContextContent {
+  const value = object(raw);
+  if (value.kind !== `echo-person-upload-content-v${version}` || value.context_id !== contextId) throw new ViewError();
+  return { context_id: contextId, title: text(value.title), text: text(value.text), received_at: text(value.received_at) };
 }
 
 function sourceRef(citation: Json): SourceRef {
@@ -197,10 +225,4 @@ export function noteTitle(body: string): string {
     title += character;
   }
   return title.trim();
-}
-
-/** A question the API accepts: NFC, one line, trimmed, at most 240 code points. */
-export function askText(question: string): string {
-  const line = question.normalize('NFC').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ').trim();
-  return [...line].slice(0, 240).join('').trim();
 }

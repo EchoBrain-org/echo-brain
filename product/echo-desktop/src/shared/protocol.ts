@@ -48,6 +48,23 @@ export interface ContextContent {
   readonly received_at: string;
 }
 
+/**
+ * A live match for the bar's text: an item in the project in scope, or, in
+ * all context, one of the saved notes you can read (of either note version).
+ */
+export interface Match {
+  readonly context_id: string;
+  readonly title: string;
+  readonly excerpt: string;
+  readonly received_at: string;
+  /** Which read opens it: the project's, or the saved-note read of its version. */
+  readonly source: 'project' | 'v2' | 'v3';
+}
+
+export interface Matches {
+  readonly items: readonly Match[];
+}
+
 /** Ask is always explicitly scoped; there is no default. */
 export type AskScope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
 
@@ -143,6 +160,10 @@ export interface HostMethods {
   /** The renderer names a file only by a handle main issued; main swaps in the path. */
   'documents.upload': { params: { expect: Expect; request_id: string; file_handle: string; title: string; audience: Audience; project_id?: string }; result: Receipt };
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope }; result: Answer };
+  /** The bar's live search, within its scope: a project, or all context. */
+  'search.run': { params: { expect: Expect; query: string; scope: AskScope }; result: Matches };
+  /** Reads a saved note found in all context. A project's match is read with projects.readContext. */
+  'search.read': { params: { expect: Expect; context_id: string; source: 'v2' | 'v3' }; result: ContextContent };
   'ask.source': { params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
   'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
   /** Resends a document's retained original under the same request. */
@@ -174,7 +195,7 @@ export type HostMethodName = keyof HostMethods;
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry', 'documents.abandon',
-  'account.signOut', 'account.tools',
+  'account.signOut', 'account.tools', 'search.run', 'search.read',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'dialog.openDocument', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',

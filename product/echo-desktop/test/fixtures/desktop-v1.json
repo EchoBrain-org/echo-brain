@@ -19,6 +19,15 @@
       }
     ]
   },
+  "notes": [
+    {
+      "context_id": "ctx_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "received_at": "2026-09-21T21:00:00.000Z",
+      "audience": { "kind": "only_me" },
+      "title": "Pricing decision from Tuesday sync",
+      "text": "Apollo moves to usage-based pricing tiers from October.\n"
+    }
+  ],
   "evidence_label": "Apollo update",
   "evidence_text": "We agreed to ship."
 }

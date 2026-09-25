@@ -9,10 +9,11 @@ import {
   externalUrl, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type Result,
 } from '../shared/protocol.js';
+import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, askText, contextView, evidenceView, failureView, feedView, noteTitle, projectPageView, receiptView, statusView,
-  toolsView, unwrap, ViewError, writeStatusView,
+  abandonView, answerView, contextView, evidenceView, failureView, feedView, noteMatchesView, noteTitle, noteView, projectMatchesView,
+  projectPageView, receiptView, statusView, toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -78,10 +79,12 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
-  'account.signOut': 45_000, 'account.tools': 45_000,
+  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
+/** A saved note's id, as the client takes it. */
+const CONTEXT_ID = /^ctx_[0-9a-f]{64}$/;
 /** A request id the client accepts: a lowercase UUID v4. */
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** Writes this host has handed to the client and not yet heard back on. */
@@ -340,6 +343,32 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
         option('source-sha256', ref.source_sha256), option('representation-sha256', ref.representation_sha256),
         option('anchor-sha256', ref.anchor_sha256), ...(ref.document_id ? [option('document-id', ref.document_id)] : []), ...scopeArgs(scope),
       ], stdout => evidenceView(lastJson(stdout)));
+    }
+    case 'search.run': {
+      const { expect, query, scope } = params as Params<'search.run'>;
+      const text = typeof query === 'string' ? searchQuery(query) : null;
+      if (text === null) return code('invalid_request');
+      const terms = [option('query', text), '--limit=10'];
+      if (scope?.kind === 'project' && typeof scope.project_id === 'string') {
+        return forAccount(method, expect, ['projects', 'search-v2', option('project-id', scope.project_id), ...terms],
+          stdout => projectMatchesView(lastJson(stdout), scope.project_id));
+      }
+      if (scope?.kind !== 'global') return code('invalid_request');
+      // All context: your saved notes, which the API searches one note
+      // version at a time. Newer notes (V3) first, ten in all.
+      const [newer, older] = await Promise.all([
+        forAccount(method, expect, ['updates', 'search-v3', ...terms], stdout => noteMatchesView(lastJson(stdout), 3)),
+        forAccount(method, expect, ['updates', 'search', ...terms], stdout => noteMatchesView(lastJson(stdout), 2)),
+      ]);
+      if (!newer.ok) return newer;
+      if (!older.ok) return older;
+      return ok({ items: [...newer.value, ...older.value].slice(0, 10) });
+    }
+    case 'search.read': {
+      const { expect, context_id, source } = params as Params<'search.read'>;
+      if (typeof context_id !== 'string' || !CONTEXT_ID.test(context_id) || (source !== 'v2' && source !== 'v3')) return code('invalid_request');
+      return forAccount(method, expect, ['updates', source === 'v3' ? 'read-v3' : 'read', option('context-id', context_id)],
+        stdout => noteView(lastJson(stdout), source === 'v3' ? 3 : 2, context_id));
     }
     case 'writes.status': {
       const { expect, request_id, kind } = params as Params<'writes.status'>;
