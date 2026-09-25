@@ -61,6 +61,13 @@ function found(query: unknown, entry: { title: string; text?: string; excerpt?: 
 /** A search result's excerpt: the start of the original text. */
 function excerpt(text: string): string { return [...text.trim()].slice(0, 300).join(''); }
 
+/** The modes whose project list comes ten at a time. */
+const LIST_PAGES = new Set(['many-projects', 'long-project-names', 'over-twenty-projects']);
+/** A project ID, as the API writes one. */
+const PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** The most projects a capture is filed in, or read by (PERSON_UPLOAD_PROJECT_SET_MAX). */
+const MAX_PROJECT_SET = 20;
+
 const LONG_NAMES = [
   'Upload validation d92c717 Beta', 'Northwind renewal, annual pricing and the pilot clause', 'tdk', 'lin', 'echo', 'stout', 'Q4 planning',
   'Hiring: senior backend engineer', 'Customer research interviews', 'Security questionnaire for Contoso', 'Board deck', 'Onboarding',
@@ -214,6 +221,44 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (mode === 'change-reply-lost' && changes === 1) return failure('unavailable', 503);
     return json(receipt, status);
   };
+  /** Your projects, in the list's order, as the mode has them. */
+  const listed = (): { project_id: string; name: string; role: 'lead' | 'member' }[] => {
+    const numbered = (count: number, digit: string, name: (index: number) => string) => Array.from({ length: count }, (_, index) => ({
+      project_id: `prj_${String(index + 1).padStart(8, '0')}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`,
+      name: name(index), role: 'member' as const,
+    }));
+    if (mode === 'many-projects') return numbered(13, '1', index => `Project ${index + 1}`);
+    // Twenty in two pages, some with long names, one longer than Capture is wide.
+    if (mode === 'long-project-names') return numbered(20, '2', index => LONG_NAMES[index]!);
+    // More than a capture can be filed in: twenty-two, in three pages.
+    if (mode === 'over-twenty-projects') return numbered(22, '3', index => `Project ${index + 1}`);
+    // Added to a project made since the first list: the newest, it leads.
+    if (mode === 'project-added' && projectLists > 0) {
+      return [{ project_id: 'prj_55555555-5555-4555-8555-555555555555', name: 'Comet', role: 'member' }, ...projects];
+    }
+    return projects;
+  };
+  /**
+   * A capture's projects, as the Authority takes them: the projects it is
+   * filed in and the projects whose members can read it are each a sorted,
+   * unique set of at most twenty (a projects audience names at least one), and
+   * every one is yours. The refusal, or null.
+   */
+  const refusedProjects = (body: Record<string, unknown> | undefined): Response | null => {
+    const canonical = (value: unknown, minimum: number): value is string[] => Array.isArray(value) &&
+      value.length >= minimum && value.length <= MAX_PROJECT_SET &&
+      value.every((id: unknown, index) => typeof id === 'string' && PROJECT_ID.test(id) && (index === 0 || value[index - 1] < id));
+    const audience = (body?.audience ?? {}) as Record<string, unknown>;
+    const keys = Object.keys(audience).sort().join(',');
+    const single = [audience.project_id];
+    const readers = audience.kind === 'projects' && keys === 'kind,project_ids' && canonical(audience.project_ids, 1) ? audience.project_ids
+      : audience.kind === 'project' && keys === 'kind,project_id' && canonical(single, 1) ? single
+        : (audience.kind === 'only_me' || audience.kind === 'team') && keys === 'kind' ? [] : null;
+    const filed = body?.association_project_ids;
+    if (readers === null || !canonical(filed, 0)) return failure('invalid_request', 400);
+    const yours = new Set(listed().map(project => project.project_id));
+    return [...filed, ...readers].every(id => yours.has(id)) ? null : failure('not_found', 404);
+  };
   /** A project keeps at least one lead. */
   const leadsAfter = (projectId: string, membershipId: string, role: 'lead' | 'member' | null) =>
     (members[projectId] ?? []).filter(entry => (entry.membership_id === membershipId ? role : entry.role) === 'lead').length;
@@ -273,25 +318,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
     if (method === 'GET' && path === '/v1/person/projects') {
       const response = fixture('projects-list');
-      const all = mode === 'many-projects'
-        ? Array.from({ length: 13 }, (_, index) => ({
-          project_id: `prj_${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`, name: `Project ${index + 1}`, role: 'member',
-        }))
-        // Twenty in two pages, some with long names, one longer than Capture is wide.
-        : mode === 'long-project-names'
-          ? LONG_NAMES.map((name, index) => ({ project_id: `prj_${String(index + 1).padStart(8, '0')}-2222-4222-8222-222222222222`, name, role: 'member' }))
-          // Added to a project made since the first list: the newest, it leads.
-          : mode === 'project-added' && projectLists > 0
-            ? [{ project_id: 'prj_55555555-5555-4555-8555-555555555555', name: 'Comet', role: 'member' as const }, ...projects]
-            : projects;
-      const second = url.searchParams.get('cursor') === 'cGFnZTI';
-      const paged = mode === 'many-projects' || mode === 'long-project-names';
-      const page = paged ? (second ? all.slice(10) : all.slice(0, 10)) : all;
+      const all = listed();
+      // Ten at a time in the modes with many: from the second page, then the third.
+      const paged = LIST_PAGES.has(mode);
+      const from = !paged ? 0 : url.searchParams.get('cursor') === 'cGFnZTM' ? 20 : url.searchParams.get('cursor') === 'cGFnZTI' ? 10 : 0;
+      const page = paged ? all.slice(from, from + 10) : all;
       projectLists += 1;
       // A lead made a member since the first list.
       const demoted = (index: number) => mode === 'role-changes' && projectLists > 1 && index === 0 ? { role: 'member' } : {};
       response.items = page.map((project, index) => ({ ...(fixture('projects-read')), ...project, ...demoted(index) }));
-      response.next_cursor = paged && !second ? 'cGFnZTI' : null;
+      response.next_cursor = paged && from + 10 < all.length ? (from === 0 ? 'cGFnZTI' : 'cGFnZTM') : null;
       return json(response);
     }
     if (method === 'POST' && path === '/v2/person/projects/context/feed' && mode === 'feed-unauthorized') {
@@ -504,6 +540,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       writeAttempts += 1;
       if (mode === 'write-unavailable' || (mode.startsWith('write-unavailable-') && writeAttempts === 1)) return failure('unavailable', 503);
       if (mode === 'write-unavailable-then-refused') return failure('invalid_request', 400);
+      const refused = refusedProjects(body);
+      if (refused) return refused;
       const receipt = {
         schema_version: 3, kind: 'echo-person-update-receipt-v3', request_id: body?.request_id,
         context_id: 'ctx_' + 'c'.repeat(64), received_at: NOW, audience: body?.audience,
@@ -537,6 +575,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       let size = 0;
       for await (const chunk of init?.body as unknown as AsyncIterable<Uint8Array>) { hash.update(chunk); size += chunk.byteLength; }
       if (`sha256:${hash.digest('hex')}` !== body?.sha256 || size !== body?.content_length) return failure('invalid_request', 400);
+      const refused = refusedProjects(body);
+      if (refused) return refused;
       // One document per request: a resend of the same request gets the same receipt.
       const saved = join(home, `document-${upload[1]}.json`);
       if (!existsSync(saved)) {
