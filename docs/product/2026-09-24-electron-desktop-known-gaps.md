@@ -34,6 +34,8 @@ unconfirmed save.
 
 | Gap | What happens today | Fix when needed |
 | --- | --- | --- |
+| No sidebar | By decision (simplest option): no collapsible sidebar, no account panel, no organization People entry. | Add it back after the Swift retirement if it is missed. |
+| No organization People admin | The owner cannot invite employees, reissue invitations or revoke access from the app. The Swift app had this in its sidebar and under the menu bar's Organization → People. | Use the operator CLI meanwhile; add a tray entry when a new person needs to join. |
 | No sign-out in the app | Switching accounts needs `person logout` in a terminal. | Add a tray "Sign out" item (about 10 lines; the plumbing was cut as unused). |
 | No Cancel while waiting for the browser | A closed sign-in tab means up to 10 minutes before "Sign-in did not finish." | Add Cancel. The client's loopback wait must be made abortable. |
 | Browser launch is not confirmed | Main never reports whether `shell.openExternal` actually opened a browser, so with no default browser the page waits. | Reply from main to the host with the result. |
