@@ -74,6 +74,21 @@ test('a refresh that never left the machine keeps you signed in, and status alon
   expect(refreshes()).toHaveLength(1);
 });
 
+test('a note written while the refresh cannot leave the machine is not sent, and that call refreshes again', async () => {
+  run = await launch('refresh-offline');
+  const { page } = run;
+  await expect(page.getByTestId('home-error')).toBeVisible();
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Offline note');
+  await page.getByTestId('compose-send').click();
+  // Not sent, so not unknown: nothing went out, and the note stays editable.
+  await expect(page.getByTestId('compose-error')).toContainText('ECHO cannot be reached');
+  await expect(page.getByTestId('compose-unresolved')).toHaveCount(0);
+  await expect(page.getByTestId('compose-body')).not.toHaveAttribute('readonly', '');
+  expect(run.calls().some(call => call.path === '/v3/person/updates')).toBe(false);
+  expect(refreshes()).toHaveLength(2);
+});
+
 for (const [mode, why] of [['refresh-refused', 'is refused'], ['refresh-fails', 'may have reached the Authority']] as const) {
   test(`a refresh that ${why} shows sign-in at once and is never replayed`, async () => {
     run = await launch(mode);

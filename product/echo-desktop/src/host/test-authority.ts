@@ -239,7 +239,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'refresh-fails') return failure('unavailable', 503);
       // What fetch throws when the network is not up yet: no connection was made.
       if (mode === 'refresh-offline') {
-        throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
+        throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED', syscall: 'connect' }) });
       }
       if (mode === 'refresh-refused') return failure('unauthorized', 401);
       if (mode === 'refresh-hangs') return new Promise<Response>(() => undefined);
