@@ -256,6 +256,9 @@ test('a change whose reply was lost is never called made: Try again resends the 
   const { page, app } = run;
   const adds = () => run.calls().filter(call => call.path === '/v1/person/projects/members/add').map(call => call.body!);
   await page.getByTestId('project-row').nth(0).click();
+  // People over a note: its line shows once, in People.
+  await page.getByTestId('feed-row').click();
+  await expect(page.getByTestId('reader-text')).toBeVisible();
   await page.getByTestId('members-button').click();
   await page.getByTestId('candidate-add').first().click();
   await expect(page.getByTestId('change-error')).toHaveText('This may not have been sent.');
@@ -274,6 +277,12 @@ test('a change whose reply was lost is never called made: Try again resends the 
 
   // Closed and opened again, it shows at the top of the page, then back in People.
   await page.getByTestId('people-close').click();
+  await expect(page.getByTestId('change-banner')).toContainText('This may not have been sent.');
+  // A save's toast does not hide it.
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Kickoff notes');
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo');
   await expect(page.getByTestId('change-banner')).toContainText('This may not have been sent.');
   await page.getByTestId('members-button').click();
   await page.getByTestId('change-retry').click();

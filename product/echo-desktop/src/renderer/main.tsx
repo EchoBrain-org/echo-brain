@@ -143,7 +143,8 @@ function App() {
           <div class="toast" data-testid="toast">{state.toast === UNSAVED_FILES ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
         )}
       </div>
-      {banner && !state.toast && <div class="banner" data-testid="change-banner"><ChangeLine change={banner} /></div>}
+      {/* Under a toast, not hidden by it: Try again and Dismiss stay in reach. */}
+      {banner && <div class={`banner${state.toast ? ' below' : ''}`} data-testid="change-banner"><ChangeLine change={banner} /></div>}
       <Bar state={state} />
       {pane && <SourcePane state={state} />}
       {state.compose && !state.compose.hidden && <Compose state={state} />}

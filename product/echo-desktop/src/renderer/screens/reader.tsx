@@ -89,7 +89,7 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
           {reader.menu !== 'closed' && <Actions state={state} reader={reader} />}
         </div>
       )}
-      {state.change && changeShownInPlace(state) && <ChangeLine change={state.change} />}
+      {state.change?.origin === 'reader' && changeShownInPlace(state) && <ChangeLine change={state.change} />}
       {saving && <div class={saving.error ? 'error' : 'notice'} data-testid="reader-save-status" aria-live="polite">{saving.text}</div>}
       {reader.failure && <div class="error">{message(reader.failure)}</div>}
       {content && <div class="body selectable" data-testid="reader-text">{content.text}</div>}
