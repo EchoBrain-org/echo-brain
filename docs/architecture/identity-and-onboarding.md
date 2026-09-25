@@ -43,11 +43,14 @@ can begin login without another bootstrap grant.
 
 The Person client stores the installed session below
 `~/.local/share/echo-brain/person/` and sends the access credential only to its
-stored Authority origin. Refresh consumes and rotates the refresh credential;
-an ambiguous refresh outcome cannot replay it. Logout removes local authority
-even if the remote revocation outcome is unknown. Every Person read, exclusion,
-and integration-link request rechecks the current session, membership, and
-revocation state on the Authority.
+stored Authority origin. Refresh consumes and rotates the refresh credential.
+An ambiguous refresh outcome keeps the stored session, and a later call
+presents the same refresh credential again; if the Authority had already
+rotated it, that replay closes the session family and the Person signs in
+again. A refresh the Authority refuses signs the Person out. Logout removes
+local authority even if the remote revocation outcome is unknown. Every Person
+read, exclusion, and integration-link request rechecks the current session,
+membership, and revocation state on the Authority.
 
 Organization-tool onboarding remains an Authority administrator operation. An
 owner supplies the organization Slack bot credential and a public channel
