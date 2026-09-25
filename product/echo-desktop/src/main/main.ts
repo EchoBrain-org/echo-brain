@@ -64,8 +64,8 @@ let unresolved = false;
 const shortcutProblems: string[] = [];
 /** The last account status the host reported, for the Account menu. Main reads no session itself. */
 let accountStatus: AppStatus | null = null;
-/** A sign-in is waiting on the browser. */
-let signingIn = false;
+/** Sign-ins waiting on the browser. */
+let signingIn = 0;
 
 // ---- diagnostic log: codes only, never content, tokens or paths ------------
 
@@ -315,12 +315,12 @@ async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Resu
 }
 
 async function whileSigningIn(run: () => Promise<Result<unknown>>): Promise<Result<unknown>> {
-  signingIn = true;
+  signingIn += 1;
   updateTray();
   try {
     return await run();
   } finally {
-    signingIn = false;
+    signingIn -= 1;
     updateTray();
   }
 }
@@ -400,7 +400,7 @@ function accountCommand(command: AccountCommand, fromTray: boolean): void {
 
 function accountItems(fromTray: boolean): MenuItemConstructorOptions[] {
   const run = (command: AccountCommand) => () => accountCommand(command, fromTray);
-  if (signingIn) return [{ label: 'Finish signing in in your browser.', enabled: false }];
+  if (signingIn > 0) return [{ label: 'Finish signing in in your browser.', enabled: false }];
   const account = accountStatus?.account ?? null;
   if (account) {
     return [
@@ -438,7 +438,7 @@ function accountChanged(next: AppStatus): void {
 function updateTray(): void {
   tray ??= new Tray(trayImage());
   // Rebuilt only when what it shows changes: status is read every time the window comes forward.
-  const shown = JSON.stringify([accountStatus, signingIn, shortcutProblems]);
+  const shown = JSON.stringify([accountStatus, signingIn > 0, shortcutProblems]);
   if (shown === trayShown) return;
   trayShown = shown;
   tray.setToolTip('ECHO');

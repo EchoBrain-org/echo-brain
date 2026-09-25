@@ -251,12 +251,12 @@ export async function signOut(): Promise<void> {
   if (!account || !sheet || sheet.kind === 'tools' || sheet.busy || saveInFlight()) return;
   set({ sheet: { ...sheet, busy: true, failure: undefined } });
   const result = await rpc('account.signOut', { expect: account });
-  if (state.sheet?.kind !== sheet.kind) return;
   if (!result.ok) {
-    set({ sheet: { ...sheet, busy: false, failure: result.failure } });
+    if (state.sheet?.kind === sheet.kind) set({ sheet: { ...sheet, busy: false, failure: result.failure } });
     accountLost(result.failure);
     return;
   }
+  // Applied even if a status read already showed sign-in and closed the sheet.
   forgetAccount();
   applyStatus(result.value);
   // Switch account goes straight on to the next organization's address.

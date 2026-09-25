@@ -160,3 +160,27 @@ test('Connected tools… shows what your organization has enabled and whether yo
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('tools')).toHaveCount(0);
 });
+
+test('a sign-out still forgets everything when a status read showed sign-in first', async () => {
+  run = await launch('signout-slow');
+  const { page, app } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Half a thought');
+  await page.keyboard.press('Escape');
+  await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Sign out…');
+  await page.getByTestId('confirm-signout').click();
+  await expect.poll(() => revocations().length).toBe(1);
+  // The window comes forward while the Authority is still ending the session.
+  await emit(app, 'echo-test:shown');
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  // Then its reply arrives.
+  await expect.poll(() => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).toMatch(/account\.signOut ok/);
+
+  await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
+  await page.getByTestId('signin-url').fill('https://authority.example');
+  await page.getByTestId('signin-button').click();
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await emit(app, 'echo-test:capture');
+  await expect(page.getByTestId('compose-body')).toHaveValue('');
+});

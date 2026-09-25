@@ -146,6 +146,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // Sign-out: the Authority ends the session; its request body is always empty.
     if (method === 'POST' && path === '/v2/session/revocations') {
       if (body === undefined || Object.keys(body).length !== 0) return failure('invalid_request', 400);
+      // While it is on its way the client has set the session aside: status reads signed out.
+      if (mode === 'signout-slow') await new Promise(resolveLater => setTimeout(resolveLater, 1_500));
       return new Response(null, { status: 204 });
     }
 
