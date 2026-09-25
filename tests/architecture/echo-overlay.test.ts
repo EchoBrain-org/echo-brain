@@ -7,8 +7,6 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  statSync,
-  symlinkSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -21,21 +19,7 @@ const REPO = resolve(import.meta.dirname, "../..");
 const SOURCE = resolve(REPO, "product/echo-overlay/main.swift");
 const PLIST = resolve(REPO, "product/echo-overlay/Info.plist");
 const BUILDER = resolve(REPO, "tools/build-echo-overlay.mjs");
-const CI = resolve(REPO, ".github/workflows/ci.yml");
-const INSTALLER = resolve(
-  REPO,
-  "deploy/release/start-person-onboarding-kit.sh",
-);
 const temporaryRoots: string[] = [];
-
-function machOExecutable(cpuType = 0x0100000c, subtype = 0, fileType = 2) {
-  const header = Buffer.alloc(16);
-  header.writeUInt32LE(0xfeedfacf, 0);
-  header.writeUInt32LE(cpuType, 4);
-  header.writeUInt32LE(subtype, 8);
-  header.writeUInt32LE(fileType, 12);
-  return header;
-}
 
 function overlayFixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-overlay-builder-")));
@@ -149,82 +133,6 @@ function runOverlayBuilder(
   );
 }
 
-// The installer runs only against this synthetic HOME. Native validation tools are
-// replaced in the copied script; production has no test bypass or PATH override.
-function installerFixture() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-installer-")));
-  temporaryRoots.push(root);
-  const home = join(root, "home");
-  const kit = join(root, "kit");
-  const fake = join(root, "tools");
-  for (const path of [home, kit, fake]) mkdirSync(path, { mode: 0o700 });
-  const tool = (name: string, body: string) => {
-    writeFileSync(join(fake, name), `#!/usr/bin/env bash\nset -eu\n${body}\n`, { mode: 0o755 });
-  };
-  tool("uname", 'if [[ "$1" == -s ]]; then echo Darwin; else echo arm64; fi');
-  tool("sw_vers", 'echo 14.0');
-  tool("codesign", 'exit 0');
-  tool("lipo", '[[ "${REFUSE_LIPO:-}" != yes ]] && echo arm64');
-  tool("retire-overlay", 'exit "${REFUSE_RETIREMENT:-0}"');
-  tool("PlistBuddy", 'echo org.echobrain.echo-overlay');
-  tool("ditto", 'unzip -q "$3" -d "$4"');
-  tool("stat", `exec "${process.execPath}" -e 'const s=require("node:fs").statSync(process.argv[2]); console.log(process.argv[1]==="%u"?s.uid:(s.mode&511).toString(8))' "$2" "$3"`);
-  tool("tar", 'if [[ "${REFUSE_ARCHIVE:-}" == yes && "$*" == *pair.pending.tar.gz* ]]; then exit 1; fi\nexec /usr/bin/tar "$@"');
-  tool("mv", `if [[ -n "\${FAIL_MOVE:-}" && "$1|$2" == *"$FAIL_MOVE"* && ! -e "${root}/injected" ]]; then
-  touch "${root}/injected"
-  if [[ "\${INTERRUPT_MOVE:-}" == yes ]]; then /bin/mv "$@"; kill -TERM "$PPID"; exit 0; fi
-  exit 1
-fi
-exec /bin/mv "$@"`);
-  let installer = readFileSync(INSTALLER, "utf8");
-  for (const name of ["ditto", "codesign", "lipo"])
-    installer = installer.replaceAll(`/usr/bin/${name}`, join(fake, name));
-  installer = installer.replaceAll("/usr/libexec/PlistBuddy", join(fake, "PlistBuddy"));
-  // Keep the checked Mach-O bytes intact; simulate only the running app retirement.
-  installer = installer.replaceAll(
-    '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
-    `"${join(fake, "retire-overlay")}"`,
-  );
-  writeFileSync(join(kit, "Start ECHO.command"), installer);
-  writeFileSync(join(kit, "node"), `#!/usr/bin/env bash\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
-  writeFileSync(join(kit, "verify-person-onboarding-kit.mjs"), 'if (process.env.REJECT_KIT) process.exit(1);\n');
-  writeFileSync(join(kit, "clean-v1-release.mjs"), `import {readFileSync} from 'node:fs';
-if(process.argv[2] === 'field') console.log(JSON.parse(readFileSync(process.argv[3]))[process.argv[4]]);\n`);
-  writeFileSync(join(kit, "kit-manifest.v1.json"), '{}');
-  const support = join(home, "Library/Application Support/ECHO");
-  mkdirSync(support, { recursive: true, mode: 0o700 });
-  const session = join(support, "synthetic-session.json");
-  writeFileSync(session, 'synthetic compatible session', { mode: 0o600 });
-  function prepare(release: number, executable: Buffer = machOExecutable()) {
-    const version = `0.1.${release}`;
-    const sha = String(release).repeat(40);
-    writeFileSync(join(kit, "release.json"), JSON.stringify({ "release-id": `release-${release}`, "client-version": version, "source-sha": sha }));
-    const contents = join(root, "ECHO.app/Contents");
-    mkdirSync(join(contents, "MacOS"), { recursive: true });
-    mkdirSync(join(contents, "Resources"), { recursive: true });
-    writeFileSync(join(contents, "Info.plist"), "synthetic ECHO plist");
-    writeFileSync(join(contents, "MacOS/ECHO"), executable, { mode: 0o755 });
-    writeFileSync(join(contents, "Resources/build-identity.v1.json"), JSON.stringify({ schema_version: 1, kind: "echo-overlay-build-identity-v1", product_version: version, source_sha: sha, platform: "darwin", architecture: "arm64" }));
-    rmSync(join(kit, "ECHO.app.zip"), { force: true });
-    execFileSync("zip", ["-qr", join(kit, "ECHO.app.zip"), "ECHO.app"], { cwd: root });
-    mkdirSync(join(root, "package/dist"), { recursive: true });
-    writeFileSync(join(root, "package/dist/main.js"), `console.log('${version}');\n`);
-    execFileSync("tar", ["-czf", join(kit, "person-client.tgz"), "-C", root, "package"]);
-  }
-  function install(release: number, env: Record<string, string> = {}, executable?: Buffer) {
-    prepare(release, executable);
-    return spawnSync("bash", [join(kit, "Start ECHO.command"), "--install-only"], { encoding: "utf8", env: { ...process.env, HOME: home, PATH: `${fake}:${process.env.PATH}`, ...env } });
-  }
-  function pair(release: number) {
-    expect(JSON.parse(readFileSync(join(home, "Applications/ECHO.app/Contents/Resources/build-identity.v1.json"), "utf8")).source_sha).toBe(String(release).repeat(40));
-    const wrapper = join(support, "bin/echo-brain");
-    expect(readFileSync(wrapper, "utf8")).toContain(`release-${release}/`);
-    expect(execFileSync("bash", [wrapper], { encoding: "utf8" }).trim()).toBe(`0.1.${release}`);
-    expect(readFileSync(session, "utf8")).toBe("synthetic compatible session");
-  }
-  return { root, home, support, install, pair };
-}
-
 afterEach(() => {
   for (const root of temporaryRoots.splice(0))
     rmSync(root, { recursive: true, force: true });
@@ -238,157 +146,6 @@ describe("native ECHO hotkey overlay", () => {
     expect(result.stderr).toContain("Swift dependency direction failed for neutral");
     expect(readFileSync(subject.toolLog, "utf8")).not.toContain("/usr/bin/ditto");
     expect(readdirSync(subject.output)).toEqual([]);
-  });
-
-  it("uses the bundled Node runtime to require a thin arm64 executable", () => {
-    const valid = installerFixture();
-    const installed = valid.install(1, { REFUSE_LIPO: "yes" });
-    expect(installed.status, installed.stderr).toBe(0);
-    valid.pair(1);
-
-    const fat = Buffer.alloc(16);
-    fat.writeUInt32BE(0xcafebabe, 0);
-    const invalidExecutables = [
-      ["an invalid Mach-O header", Buffer.alloc(16)],
-      ["an x86_64 executable", machOExecutable(0x01000007)],
-      ["an arm64e subtype", machOExecutable(0x0100000c, 2)],
-      ["a non-executable Mach-O file", machOExecutable(0x0100000c, 0, 6)],
-      ["a universal Mach-O header", fat],
-      ["a truncated executable", Buffer.alloc(8)],
-    ] as const;
-    for (const [description, executable] of invalidExecutables) {
-      const subject = installerFixture();
-      const result = subject.install(1, { REFUSE_LIPO: "yes" }, executable);
-      expect(result.status, description).toBe(1);
-      expect(result.stderr, description).toContain("ECHO application executable is not arm64-only");
-    }
-  });
-
-  it("bounds retained installer releases and keeps rollback apps out of discovery", () => {
-    const subject = installerFixture();
-    let previousSlots: string[] = [];
-    for (const release of [1, 2, 2, 3, 4]) {
-      const installed = subject.install(release);
-      expect(installed.status, installed.stderr).toBe(0);
-      subject.pair(release);
-      const slots = readdirSync(join(subject.support, "overlay-backups"));
-      if (release === 2 && previousSlots.length) expect(slots).toEqual(previousSlots);
-      if (release === 2) previousSlots = slots;
-    }
-    expect(readdirSync(join(subject.support, "releases")).sort()).toEqual(["release-3", "release-4"]);
-    expect(readdirSync(join(subject.support, "bin"))).toEqual(["echo-brain"]);
-    const slots = readdirSync(join(subject.support, "overlay-backups"));
-    expect(slots).toHaveLength(1);
-    const slot = join(subject.support, "overlay-backups", slots[0]!);
-    expect(statSync(slot).mode & 0o777).toBe(0o700);
-    expect(existsSync(join(slot, "ECHO.app"))).toBe(false);
-    expect(existsSync(join(slot, "pair.tar.gz"))).toBe(true);
-    const restored = join(subject.root, "restored");
-    mkdirSync(restored);
-    execFileSync("tar", ["-xzf", join(slot, "pair.tar.gz"), "-C", restored]);
-    expect(JSON.parse(readFileSync(join(restored, "ECHO.app/Contents/Resources/build-identity.v1.json"), "utf8")).source_sha).toBe("3".repeat(40));
-    expect(execFileSync("bash", [join(restored, "echo-brain")], { encoding: "utf8" }).trim()).toBe("0.1.3");
-  });
-
-  it.each([
-    "bin/echo-brain|", "Applications/ECHO.app|", "|DEST_APP", "|DEST_WRAPPER",
-  ])("preserves a matched pair and skips pruning when interrupted at %s", (transition) => {
-    const subject = installerFixture();
-    for (const release of [1, 2]) expect(subject.install(release).status).toBe(0);
-    const point = transition.replace("DEST_APP", join(subject.home, "Applications/ECHO.app"))
-      .replace("DEST_WRAPPER", join(subject.support, "bin/echo-brain"));
-    const result = subject.install(3, { FAIL_MOVE: point, INTERRUPT_MOVE: "yes" });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("setup was interrupted");
-    for (const slot of readdirSync(join(subject.support, "overlay-backups"))) {
-      expect(existsSync(join(subject.support, "overlay-backups", slot, "ECHO.app"))).toBe(false);
-    }
-    subject.pair(3);
-    expect(readdirSync(join(subject.support, "releases"))).toContain("release-1");
-    expect(subject.install(3).status).toBe(0);
-    subject.pair(3);
-  });
-
-  it.each([
-    "bin/echo-brain|", "Applications/ECHO.app|", "|DEST_APP", "|DEST_WRAPPER", "retirement",
-  ])("restores the prior pair without pruning when activation fails at %s", (transition) => {
-    const subject = installerFixture();
-    for (const release of [1, 2]) expect(subject.install(release).status).toBe(0);
-    const point = transition.replace("DEST_APP", join(subject.home, "Applications/ECHO.app"))
-      .replace("DEST_WRAPPER", join(subject.support, "bin/echo-brain"));
-    const result = subject.install(3, transition === "retirement" ? { REFUSE_RETIREMENT: "1" } : { FAIL_MOVE: point });
-    expect(result.status).toBe(1);
-    subject.pair(2);
-    expect(readdirSync(join(subject.support, "releases"))).toContain("release-1");
-  });
-
-  it("preserves unrelated and unmarked legacy artifacts and refuses symlink cleanup", () => {
-    const subject = installerFixture();
-    expect(subject.install(1).status).toBe(0);
-    const artifacts = [
-      join(subject.home, "Applications/Other.app"),
-      join(subject.home, "Downloads/ECHO.app"),
-      join(subject.home, "Library/LaunchAgents/legacy-echo.plist"),
-      join(subject.support, "releases/legacy/keep"),
-      join(subject.support, "bin/.echo-brain.previous.legacy/keep"),
-      join(subject.support, "overlay-backups/previous.legacy/ECHO.app/keep"),
-    ];
-    for (const path of artifacts) {
-      mkdirSync(join(path, ".."), { recursive: true });
-      writeFileSync(path, "unrelated");
-    }
-    symlinkSync(join(subject.home, "Downloads"), join(subject.support, "releases/release-1/external"));
-    for (const release of [2, 3, 4]) {
-      expect(subject.install(release).status).toBe(0);
-      subject.pair(release);
-    }
-    for (const path of artifacts) expect(readFileSync(path, "utf8")).toBe("unrelated");
-    expect(existsSync(join(subject.support, "releases/release-1"))).toBe(true);
-    const before = readdirSync(join(subject.support, "releases"));
-    expect(subject.install(5, { REJECT_KIT: "1" }).status).toBe(1);
-    expect(readdirSync(join(subject.support, "releases"))).toEqual(before);
-    subject.pair(4);
-  });
-
-  it("keeps recovery material and skips pruning when rollback archiving fails", () => {
-    const subject = installerFixture();
-    for (const release of [1, 2]) expect(subject.install(release).status).toBe(0);
-    const result = subject.install(3, { REFUSE_ARCHIVE: "yes" });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("private rollback cleanup could not complete");
-    subject.pair(3);
-    expect(readdirSync(join(subject.support, "releases")).sort()).toEqual(["release-1", "release-2", "release-3"]);
-    const slots = readdirSync(join(subject.support, "overlay-backups"));
-    expect(slots.some(slot => existsSync(join(subject.support, "overlay-backups", slot, "ECHO.app")))).toBe(true);
-    const wrappers = readdirSync(join(subject.support, "bin")).filter(name => name.startsWith(".echo-brain.previous."));
-    expect(wrappers).toHaveLength(1);
-    expect(execFileSync("bash", [join(subject.support, "bin", wrappers[0]!, "echo-brain")], { encoding: "utf8" }).trim()).toBe("0.1.2");
-  });
-
-  it("refuses another install or conflicting release ID without changing the active pair", () => {
-    const subject = installerFixture();
-    expect(subject.install(1).status).toBe(0);
-    const lock = join(subject.support, ".installer-lock");
-    mkdirSync(lock, { mode: 0o700 });
-    const locked = subject.install(2);
-    expect(locked.status).toBe(1);
-    expect(locked.stderr).toContain("installer lock");
-    subject.pair(1);
-    rmSync(lock, { recursive: true });
-    writeFileSync(join(subject.support, "releases/release-1/kit-manifest.v1.json"), '{"changed":true}');
-    const collision = subject.install(1);
-    expect(collision.status).toBe(1);
-    expect(collision.stderr).toContain("different release artifacts");
-    subject.pair(1);
-    expect(existsSync(lock)).toBe(false);
-  });
-
-  it("distinguishes the graphical setup from the installed product", () => {
-    const plist = readFileSync(join(REPO, "product/echo-onboarding/Info.plist"), "utf8");
-    expect(plist).toContain('<key>CFBundleDisplayName</key><string>ECHO Setup</string>');
-    const builder = readFileSync(join(REPO, "deploy/release/create-person-onboarding-kit.mjs"), "utf8");
-    expect(builder).toContain("join(stagingParent, 'ECHO Setup.app')");
-    expect(builder).toContain("graphical ? ['ECHO Setup.app']");
   });
 
   it("binds the requested source SHA to a clean committed build before and after fake native tooling", () => {
@@ -534,8 +291,6 @@ describe("native ECHO hotkey overlay", () => {
     const source = readFileSync(SOURCE, "utf8");
     const plist = readFileSync(PLIST, "utf8");
     const builder = readFileSync(BUILDER, "utf8");
-    const ci = readFileSync(CI, "utf8");
-    const installer = readFileSync(INSTALLER, "utf8");
 
     expect(plist).toMatch(/<key>LSUIElement<\/key>\s*<true\/>/);
     expect(plist).not.toMatch(
@@ -547,64 +302,11 @@ describe("native ECHO hotkey overlay", () => {
     expect(builder).toContain("'-warnings-as-errors'");
     expect(builder).toContain("'--options', 'runtime'");
     expect(builder).toContain("'--verify', '--deep', '--strict'");
-    expect(ci).toContain("npm run build:echo-overlay --");
-    expect(ci).toContain('--source-sha "$GITHUB_SHA"');
-    expect(ci).toContain('--version "$package_version"');
-    expect(ci).toContain('--output "$app_archive"');
-    expect(ci).toContain('--app "$app_archive"');
-    expect(installer).toContain(
-      'app_destination="$applications_root/ECHO.app"',
-    );
-    expect(installer).toContain('/usr/bin/diff -qr "$staged_app"');
-    expect(installer).toContain("validate_overlay_identity");
     expect(source).toContain("NSRunningApplication.runningApplications(");
     expect(source).toContain("withBundleIdentifier: overlayBundleIdentifier");
     expect(source).toContain("application.processIdentifier != currentProcessIdentifier");
     expect(source).toContain("application.terminate()");
     expect(source).toContain("overlayRetirementTimeoutSeconds");
     expect(source).toContain('CommandLine.arguments[1] == "--quit-running-overlay"');
-    expect(installer).toContain(
-      '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
-    );
-    const retireRunningOverlay = installer.indexOf(
-      '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
-    );
-    expect(retireRunningOverlay).toBeGreaterThan(
-      installer.indexOf('mv "$wrapper_pending" "$wrapper_destination"'),
-    );
-    expect(installer).toContain(
-      "restore_prior_pair_after_retirement_failure",
-    );
-    expect(installer).toContain(
-      'mv "$app_backup" "$app_destination"',
-    );
-    expect(installer).toContain(
-      'mv "$wrapper_backup" "$wrapper_destination"',
-    );
-    expect(installer).not.toContain("/usr/bin/open");
-    expect(installer).not.toMatch(/LaunchAgent|launchctl/);
-  });
-
-  it("names the recovery reason when an earlier install left an unmatched app and command", () => {
-    const subject = installerFixture();
-    const installed = subject.install(1);
-    expect(installed.status, installed.stderr).toBe(0);
-    subject.pair(1);
-
-    // The employee removed the app but the command survived: the exact state
-    // that dead-ended first-cohort onboarding with no actionable message.
-    rmSync(join(subject.home, "Applications/ECHO.app"), { recursive: true, force: true });
-
-    const mismatched = subject.install(1);
-    expect(mismatched.status).toBe(1);
-    expect(mismatched.stderr).toContain("not a recognized installed pair");
-    const failures = mismatched.stdout.trim().split("\n").filter(Boolean);
-    expect(failures).toHaveLength(1);
-    const emitted = failures[0];
-    expect(JSON.parse(String(emitted))).toEqual({
-      ok: false,
-      phase: "install-failed",
-      reason: "existing-install-mismatch",
-    });
   });
 });

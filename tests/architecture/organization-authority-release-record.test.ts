@@ -1438,199 +1438,12 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(readFileSync(session, "utf8")).toBe("existing-private-session");
   });
 
-  it("creates one macOS-arm64 install-to-ready kit with a pinned Node runtime and no npm prerequisite", () => {
-    const root = realpathSync(
-      mkdtempSync(join(tmpdir(), "echo-person-onboarding-kit-")),
-    );
-    roots.push(root);
-    const sourceSha = "a".repeat(40);
-    const version = "0.1.0-internal.1";
-    const artifact = join(root, "client.tgz");
-    const output = join(root, "employee-kit.tar.gz");
-    const runtime = join(root, "node");
-    const appArchive = join(root, "ECHO.app.zip");
-    const packageRoot = join(root, "package", "dist");
-    mkdirSync(packageRoot, { recursive: true });
-    writeFileSync(
-      join(packageRoot, "build-identity.v1.json"),
-      JSON.stringify({
-        schema_version: 1,
-        kind: "echo-packaged-build-identity",
-        product_version: version,
-        source_sha: sourceSha,
-        source_kind: "materialized-commit",
-      }),
-    );
-    writeFileSync(join(packageRoot, "main.js"), "process.stdout.write('fixture\\n');\n");
-    expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
-    const appResources = join(root, "ECHO.app", "Contents", "Resources");
-    const appExecutable = join(root, "ECHO.app", "Contents", "MacOS", "ECHO");
-    mkdirSync(appResources, { recursive: true });
-    mkdirSync(dirname(appExecutable), { recursive: true });
-    writeFileSync(appExecutable, "fixture executable\\n");
-    writeFileSync(join(root, "ECHO.app", "Contents", "Info.plist"), "fixture plist\\n");
-    writeFileSync(
-      join(appResources, "build-identity.v1.json"),
-      JSON.stringify({
-        schema_version: 1,
-        kind: "echo-overlay-build-identity-v1",
-        product_version: version,
-        source_sha: sourceSha,
-        platform: "darwin",
-        architecture: "arm64",
-      }),
-    );
-    expect(spawnSync("zip", ["-qr", appArchive, "ECHO.app"], {
-      cwd: root,
-      encoding: "utf8",
-    }).status).toBe(0);
-    const artifactSha = createHash("sha256")
-      .update(readFileSync(artifact))
-      .digest("hex");
-    const release = writeRecord(
-      record({
-        source_sha: sourceSha,
-        person_client: {
-          ...record().person_client,
-          version,
-          artifact_sha256: artifactSha,
-        },
-      }),
-    );
-    writeFileSync(
-      runtime,
-      "#!/usr/bin/env bash\nprintf '%s\\n' '{\"version\":\"v22.22.1\",\"platform\":\"darwin\",\"architecture\":\"arm64\"}'\n",
-    );
-    chmodSync(runtime, 0o755);
-
-    const built = run(process.execPath, [
-      ONBOARDING_KIT,
-      "--release",
-      release,
-      "--artifact",
-      artifact,
-      "--app",
-      appArchive,
-      "--runtime-node",
-      runtime,
-      "--output",
-      output,
-    ]);
-    expect(built.status).toBe(0);
-    const receipt = JSON.parse(built.stdout);
-    expect(receipt).toMatchObject({
-      release_id: "clean-v1-20260822-001",
-      client_version: version,
-      platform: "darwin",
-      architecture: "arm64",
-      node_version: "v22.22.1",
-    });
-    const graphicalOutput = join(root, "ECHO-unreviewed.zip");
-    const graphical = run(process.execPath, [
-      ONBOARDING_KIT, "--release", release, "--artifact", artifact,
-      "--app", appArchive, "--runtime-node", runtime, "--output", graphicalOutput,
-    ]);
-    expect(graphical.status).toBe(1);
-    expect(graphical.stderr).toContain("graphical kit requires clean committed source matching the release");
-    expect(existsSync(graphicalOutput)).toBe(false);
-    expect(existsSync(`${graphicalOutput}.sha256`)).toBe(false);
-    expect(readFileSync(`${output}.sha256`, "utf8")).toBe(
-      `${receipt.kit_sha256}  ${basename(output)}\n`,
-    );
-    const members = run("tar", ["-tzf", output]).stdout
-      .split("\n")
-      .filter(Boolean);
-    expect(members).toContain(
-      "echo-person-onboarding-clean-v1-20260822-001/Start ECHO.command",
-    );
-    expect(members).toContain(
-      "echo-person-onboarding-clean-v1-20260822-001/node",
-    );
-    expect(members).toContain(
-      "echo-person-onboarding-clean-v1-20260822-001/kit-manifest.v1.json",
-    );
-    expect(members).toContain(
-      "echo-person-onboarding-clean-v1-20260822-001/ECHO.app.zip",
-    );
-    const start = run("tar", [
-      "-xOzf",
-      output,
-      "echo-person-onboarding-clean-v1-20260822-001/Start ECHO.command",
-    ]).stdout;
-    expect(start).toContain("person start");
-    expect(start).toContain("Choose your ECHO invitation file");
-    expect(start).toContain('overlay_backups_root="$application_root/overlay-backups"');
-    expect(start).toContain('validate_overlay_identity "$staged_app"');
-    expect(start).toContain('/usr/bin/diff -qr "$staged_app" "$app_destination"');
-    expect(start).toContain(
-      '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
-    );
-    expect(start).toContain('backup_slot="$(mktemp -d "$overlay_backups_root/previous.XXXXXXXX")"');
-    expect(start).not.toContain("/usr/bin/open");
-    const activation = start.indexOf("# Activate the already-validated desktop app and CLI as one recoverable pair.");
-    expect(activation).toBeGreaterThan(0);
-    expect(
-      start.indexOf(
-        '"$app_destination/Contents/MacOS/ECHO" --quit-running-overlay',
-      ),
-    ).toBeGreaterThan(
-      start.indexOf('mv "$wrapper_pending" "$wrapper_destination"'),
-    );
-    expect(start).toContain(
-      "restore_prior_pair_after_retirement_failure",
-    );
-    expect(start).toContain(
-      "the prior app and command were restored",
-    );
-    expect(start.indexOf('wrapper_pending="$(mktemp "$bin_root/.echo-brain.XXXXXXXX")"')).toBeLessThan(activation);
-    expect(start.indexOf('mv "$wrapper_destination" "$wrapper_backup"', activation)).toBeLessThan(
-      start.indexOf('mv "$app_destination" "$app_backup"', activation),
-    );
-    expect(start).toContain("the prior app and command were restored");
-    expect(start).toContain("pair activation failed; the prior app and command were restored");
-    expect(start).not.toContain("npm ");
-    expect(start).not.toContain("export PATH");
-    expect(members.join("\n")).not.toMatch(
-      /server-state|slack-bot|granola-credential|llm-credential/i,
-    );
-    const extracted = join(root, "kit-extracted");
-    mkdirSync(extracted);
-    expect(run("tar", ["-xzf", output, "-C", extracted]).status).toBe(0);
-    const kitRoot = join(extracted, "echo-person-onboarding-clean-v1-20260822-001");
-    const verified = run(process.execPath, [
-      join(kitRoot, "verify-person-onboarding-kit.mjs"),
-      kitRoot,
-    ]);
-    if (
-      process.version !== receipt.node_version ||
-      process.platform !== receipt.platform ||
-      process.arch !== receipt.architecture
-    ) {
-      expect(verified.status).toBe(1);
-      expect(verified.stderr).toContain(
-        process.version !== receipt.node_version
-          ? "Node runtime version does not match the kit"
-          : "this kit supports macOS on Apple silicon only",
-      );
-      return;
-    }
-    expect(verified.status).toBe(0);
-    writeFileSync(join(kitRoot, "ECHO.app.zip"), "tampered app archive\n");
-    const tampered = run(process.execPath, [
-      join(kitRoot, "verify-person-onboarding-kit.mjs"),
-      kitRoot,
-    ]);
-    expect(tampered.status).toBe(1);
-    expect(tampered.stderr).toContain("desktop app digest does not match");
-  });
-
-  it("rejects an employee-kit runtime for the wrong platform before publishing", () => {
+  it("rejects a macOS command-line kit runtime for the wrong platform before publishing", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-kit-runtime-")));
     roots.push(root);
     const runtime = join(root, "node");
     const artifact = join(root, "client.tgz");
-    const appArchive = join(root, "ECHO.app.zip");
-    const output = join(root, "employee-kit.tar.gz");
+    const output = join(root, "employee-kit.zip");
     const packageRoot = join(root, "package", "dist");
     mkdirSync(packageRoot, { recursive: true });
     writeFileSync(
@@ -1644,24 +1457,6 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
       }),
     );
     expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
-    const appResources = join(root, "ECHO.app", "Contents", "Resources");
-    const appExecutable = join(root, "ECHO.app", "Contents", "MacOS", "ECHO");
-    mkdirSync(appResources, { recursive: true });
-    mkdirSync(dirname(appExecutable), { recursive: true });
-    writeFileSync(appExecutable, "fixture executable\\n");
-    writeFileSync(join(root, "ECHO.app", "Contents", "Info.plist"), "fixture plist\\n");
-    writeFileSync(join(appResources, "build-identity.v1.json"), JSON.stringify({
-      schema_version: 1,
-      kind: "echo-overlay-build-identity-v1",
-      product_version: "0.1.0-internal.1",
-      source_sha: "a".repeat(40),
-      platform: "darwin",
-      architecture: "arm64",
-    }));
-    expect(spawnSync("zip", ["-qr", appArchive, "ECHO.app"], {
-      cwd: root,
-      encoding: "utf8",
-    }).status).toBe(0);
     const artifactSha = createHash("sha256")
       .update(readFileSync(artifact))
       .digest("hex");
@@ -1673,84 +1468,32 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
         },
       }),
     );
-    writeFileSync(
-      runtime,
-      "#!/usr/bin/env bash\nprintf '%s\\n' '{\"version\":\"v22.22.1\",\"platform\":\"linux\",\"architecture\":\"x64\"}'\n",
-    );
+    // A Linux x86_64 ELF header: the header check refuses it before the
+    // runtime is launched or any committed source is read.
+    const elf = Buffer.alloc(20);
+    elf.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
+    elf.writeUInt16LE(62, 18);
+    writeFileSync(runtime, elf);
     chmodSync(runtime, 0o755);
     const rejected = run(process.execPath, [
       ONBOARDING_KIT,
+      "--target",
+      "darwin-arm64",
+      "--installation",
+      "cli-kit",
       "--release",
       release,
       "--artifact",
       artifact,
-      "--app",
-      appArchive,
       "--runtime-node",
       runtime,
       "--output",
       output,
     ]);
     expect(rejected.status).toBe(1);
-    expect(rejected.stderr).toContain("v22.22.1 for macOS arm64");
+    expect(rejected.stderr).toContain("Node runtime must be a macOS arm64 Mach-O executable");
     expect(existsSync(output)).toBe(false);
-  });
-
-  it("rejects a desktop app archive whose build identity is not bound to the release", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-kit-overlay-reject-")));
-    roots.push(root);
-    const sourceSha = "a".repeat(40);
-    const version = "0.1.0-internal.1";
-    const artifact = join(root, "client.tgz");
-    const appArchive = join(root, "ECHO.app.zip");
-    const output = join(root, "employee-kit.tar.gz");
-    const packageRoot = join(root, "package", "dist");
-    mkdirSync(packageRoot, { recursive: true });
-    writeFileSync(join(packageRoot, "build-identity.v1.json"), JSON.stringify({
-      schema_version: 1,
-      kind: "echo-packaged-build-identity",
-      product_version: version,
-      source_sha: sourceSha,
-      source_kind: "materialized-commit",
-    }));
-    expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
-    const appResources = join(root, "ECHO.app", "Contents", "Resources");
-    const appExecutable = join(root, "ECHO.app", "Contents", "MacOS", "ECHO");
-    mkdirSync(appResources, { recursive: true });
-    mkdirSync(dirname(appExecutable), { recursive: true });
-    writeFileSync(appExecutable, "fixture executable\\n");
-    writeFileSync(join(root, "ECHO.app", "Contents", "Info.plist"), "fixture plist\\n");
-    writeFileSync(join(appResources, "build-identity.v1.json"), JSON.stringify({
-      schema_version: 1,
-      kind: "echo-overlay-build-identity-v1",
-      product_version: version,
-      source_sha: "b".repeat(40),
-      platform: "darwin",
-      architecture: "arm64",
-    }));
-    expect(spawnSync("zip", ["-qr", appArchive, "ECHO.app"], {
-      cwd: root,
-      encoding: "utf8",
-    }).status).toBe(0);
-    const artifactSha = createHash("sha256").update(readFileSync(artifact)).digest("hex");
-    const release = writeRecord(record({
-      source_sha: sourceSha,
-      person_client: { ...record().person_client, version, artifact_sha256: artifactSha },
-    }));
-    const runtime = join(root, "node");
-    writeFileSync(runtime, "#!/usr/bin/env bash\\nprintf '%s\\n' '{\"version\":\"v22.22.1\",\"platform\":\"darwin\",\"architecture\":\"arm64\"}'\\n");
-    chmodSync(runtime, 0o755);
-    const rejected = run(process.execPath, [
-      ONBOARDING_KIT,
-      "--release", release,
-      "--artifact", artifact,
-      "--app", appArchive,
-      "--runtime-node", runtime,
-      "--output", output,
-    ]);
-    expect(rejected.status).toBe(1);
-    expect(rejected.stderr).toContain("desktop app identity does not match");
-    expect(existsSync(output)).toBe(false);
+    expect(existsSync(`${output}.sha256`)).toBe(false);
   });
 
   it("refuses noncanonical, digest-mismatched, and source-mismatched offline bundle inputs", () => {

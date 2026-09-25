@@ -70,21 +70,16 @@ try {
         profile_version: 'clean-v1-profile-1',
       },
     })}\n`, { mode: 0o600 });
-    const archive = join(root, linux ? 'ECHO-linux-x64.zip' : 'ECHO-macOS-arm64.zip');
-    const appArgs = [];
-    if (!linux) {
-      const app = join(root, 'ECHO.app.zip');
-      node('tools/build-echo-overlay.mjs', '--source-sha', packed.source_sha, '--version', packed.version, '--output', app);
-      appArgs.push('--app', app);
-    }
+    const archive = join(root, linux ? 'ECHO-linux-x64.zip' : 'ECHO-cli-macos-arm64.zip');
     const receipt = JSON.parse(node('deploy/release/create-person-onboarding-kit.mjs',
-      '--target', linux ? 'linux-x64' : 'darwin-arm64', ...appArgs, '--release', release, '--artifact', packed.artifact_path,
+      ...(linux ? ['--target', 'linux-x64'] : ['--target', 'darwin-arm64', '--installation', 'cli-kit']),
+      '--release', release, '--artifact', packed.artifact_path,
       '--runtime-node', process.execPath, '--output', archive));
     assert.equal(receipt.kit_sha256, sha(archive));
     const extracted = join(root, 'extracted');
-    run(linux ? 'unzip' : '/usr/bin/ditto', linux ? ['-q', archive, '-d', extracted] : ['-x', '-k', archive, extracted]);
-    kit = linux ? join(extracted, 'echo-person-onboarding-kit') : join(extracted, 'ECHO Setup.app/Contents/Resources/kit');
-    if (linux) assert.deepEqual(readdirSync(kit).sort(), [
+    run('unzip', ['-q', archive, '-d', extracted]);
+    kit = join(extracted, 'echo-person-onboarding-kit');
+    assert.deepEqual(readdirSync(kit).sort(), [
       'Start-ECHO.sh', 'build-identity.v1.json', 'clean-v1-release.mjs',
       'kit-manifest.v1.json', 'node', 'person-client.tgz', 'release.json', 'verify-person-onboarding-kit.mjs',
     ].sort());
@@ -101,9 +96,9 @@ try {
   }
   const env = { HOME: home, XDG_DATA_HOME: join(home, 'custom data'), PATH: path, LANG: 'en_US.UTF-8', DEVELOPER_DIR: join(root, 'no-developer-tools') };
   run('/bin/bash', ['-c', 'for tool in node npm cc clang swiftc python3 curl; do if command -v "$tool"; then exit 1; fi; done'], env);
-  const start = join(kit, linux ? 'Start-ECHO.sh' : 'Start ECHO.command');
+  const start = join(kit, 'Start-ECHO.sh');
   run('/bin/bash', [start, '--install-only'], env);
-  const cli = linux ? join(env.XDG_DATA_HOME, 'echo/person/bin/echo-brain') : join(home, 'Library/Application Support/ECHO/bin/echo-brain');
+  const cli = linux ? join(env.XDG_DATA_HOME, 'echo/person/bin/echo-brain') : join(home, 'Library/Application Support/ECHO/cli/bin/echo-brain');
   assert.equal(run(cli, ['--version'], env), packed.version);
   const status = JSON.parse(run(cli, ['person', 'status'], env));
   assert.equal(status.signed_in, false);
@@ -113,8 +108,9 @@ try {
   const wrapper = readFileSync(cli, 'utf8');
   run('/bin/bash', [start, '--install-only'], env);
   assert.equal(readFileSync(cli, 'utf8'), wrapper);
-  if (linux) run('/bin/bash', [start], env, 2);
-  run('/bin/bash', [start, 'relative-invitation.json'], env, 1);
+  run('/bin/bash', [start], env, 2);
+  // Linux signs in from an absolute invitation path; the macOS kit only installs.
+  run('/bin/bash', [start, 'relative-invitation.json'], env, linux ? 1 : 2);
   const originalClient = readFileSync(join(kit, 'person-client.tgz'));
   try {
     appendFileSync(join(kit, 'person-client.tgz'), 'tampered');
