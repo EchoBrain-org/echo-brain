@@ -1,10 +1,15 @@
 import { expect, test } from '@playwright/test';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chooseFromAccountMenu, chooseFromTray, emit, launch, menuLabels, openAccountMenu, type Launched } from './launch.js';
 
 let run: Launched;
-test.afterEach(async () => { await run?.close(); });
+const folders: string[] = [];
+test.afterEach(async () => {
+  await run?.close();
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+});
 
 const revocations = () => run.calls().filter(call => call.method === 'POST' && call.path === '/v2/session/revocations');
 const session = () => join(run.home, '.local', 'share', 'echo-brain', 'person', 'session.v1.json');
@@ -38,7 +43,7 @@ test('signed out shows "Sign in to use ECHO"; Sign in with Google… asks for th
   await expect(page.getByTestId('ask-field')).toHaveCount(0);
 
   await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
-  expect(await menuLabels(run, 'account')).toEqual(['Not signed in', 'Sign in with Google…']);
+  expect(await menuLabels(run, 'account')).toEqual(['Not signed in', 'Sign in with Google…', 'Open invitation…']);
   await expect(page.getByTestId('signin-url')).toBeFocused();
   await expect(page.getByTestId('signin-button')).toBeDisabled();
   await page.keyboard.press('Escape');
@@ -107,4 +112,34 @@ test('sign out waits for a save on its way', async () => {
   await chooseFromTray(run, 'Sign out…');
   await expect(page.getByTestId('confirm')).toContainText('Finish the current save first.');
   await expect(page.getByTestId('confirm-signout')).toBeDisabled();
+});
+
+test('Open invitation… signs in with the folder the owner sent, and the page never learns where it is', async () => {
+  run = await launch('signed-out');
+  const { page, app } = run;
+  const choose = (path: string) => app.evaluate(({ dialog }, chosen) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [chosen] });
+  }, path);
+  const empty = realpathSync(mkdtempSync(join(tmpdir(), 'echo-empty-')));
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), 'ECHO-invitation-')));
+  folders.push(empty, folder);
+  // The owner's export: one private, canonical file inside the folder.
+  const grant = Buffer.alloc(32, 7).toString('base64url');
+  writeFileSync(join(folder, 'person-invitation.json'), `${JSON.stringify({
+    authority_url: 'https://authority.example', expires_at: '2026-09-21T22:15:00.000Z',
+    kind: 'echo-person-onboarding-invitation', login_grant: grant, schema_version: 1,
+  })}\n`, { mode: 0o600 });
+
+  await choose(empty);
+  await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Open invitation…');
+  await expect(page.getByTestId('signin-error')).toHaveText('Choose the invitation folder your organization owner sent you.');
+
+  await choose(folder);
+  await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Open invitation…');
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  const begun = run.calls().filter(call => call.path === '/v2/session/oidc/begin');
+  expect(begun).toHaveLength(1);
+  expect(begun[0]!.body).toMatchObject({ kind: 'identity_bootstrap', login_grant: grant });
+  expect(await page.content()).not.toContain(folder);
+  expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).not.toContain(folder);
 });

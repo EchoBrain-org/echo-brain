@@ -19,6 +19,9 @@ const MESSAGES: Record<string, string> = {
   signin_failed: 'Sign-in did not finish. Try again.',
   conflict: 'That changed meanwhile. Refresh and try again.',
   not_saved: 'It was not saved. Send it again.',
+  unsupported_invitation: 'Choose the invitation folder your organization owner sent you.',
+  invitation_failed: 'Sign-in did not finish. Try again, or ask your organization owner for a new invitation.',
+  signout_failed: 'Sign-out did not finish. Try again.',
 };
 
 export function message(failure: Failure): string {

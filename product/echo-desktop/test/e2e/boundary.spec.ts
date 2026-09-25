@@ -21,10 +21,13 @@ test('the page can never name a file path', async () => {
         expect, request_id: crypto.randomUUID(), file_handle: 'made-up', file: '/etc/hosts', title: 'x', audience: { kind: 'only-me' },
       }),
       odd: await rpc('../../<script>', {}),
+      invitation: await rpc('signin.invitation', { invitation_handle: 'made-up', invitation: '/etc/hosts' }),
     };
   });
   expect(replies.drop).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
   expect(replies.upload).toMatchObject({ ok: false, failure: { code: 'unsupported_file' } });
+  expect(replies.invitation).toMatchObject({ ok: false, failure: { code: 'unsupported_invitation' } });
+  expect(run.calls().some(call => call.path.startsWith('/v2/session/'))).toBe(false);
   expect(replies.odd).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
   expect(run.calls().some(call => call.path.includes('document'))).toBe(false);
   // The log names only methods the app knows.

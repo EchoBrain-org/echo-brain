@@ -23,6 +23,9 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 's
   "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; frame-src 'none'; worker-src 'none'; form-action 'none'";
 const DOCUMENT_EXTENSIONS = new Set(['.txt', '.md', '.markdown', '.pdf', '.docx']);
 const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+/** What an owner's invitation export holds; the person client checks the rest. */
+const INVITATION_FILE = 'person-invitation.json';
+const MAX_INVITATION_BYTES = 8 * 1024;
 const test = __ECHO_TEST_HOOK__ ? process.env : {} as NodeJS.ProcessEnv;
 const smoke = process.argv.includes('--smoke');
 /** `--smoke` never touches the person's session or data: it gets its own. */
@@ -179,23 +182,42 @@ function onHostNotice(message: HostNotice): void {
 
 // ---- file handles (the renderer never sees a path) -------------------------
 
-const handles = new Map<string, { path: string; expires: number }>();
+type HandleKind = 'document' | 'invitation';
+const handles = new Map<string, { path: string; kind: HandleKind; expires: number }>();
+
+function issueHandle(path: string, kind: HandleKind): FileHandle {
+  const handle = randomUUID();
+  handles.set(handle, { path, kind, expires: Date.now() + 10 * 60_000 });
+  return { handle, name: path.split(sep).pop() ?? 'Document' };
+}
 
 function vetDocument(path: string): FileHandle | null {
   if (typeof path !== 'string' || path === '' || !isAbsolute(path) || !DOCUMENT_EXTENSIONS.has(extname(path).toLowerCase())) return null;
   let stats;
   try { stats = lstatSync(path); } catch { return null; }
   if (!stats.isFile() || stats.isSymbolicLink() || stats.size === 0 || stats.size > MAX_DOCUMENT_BYTES) return null;
-  const handle = randomUUID();
-  handles.set(handle, { path, expires: Date.now() + 10 * 60_000 });
-  return { handle, name: path.split(sep).pop() ?? 'Document' };
+  return issueHandle(path, 'document');
 }
 
-/** A handle stays valid for 10 minutes, so an unconfirmed upload can be retried. */
-function resolveHandle(handle: unknown): string | null {
+/** The folder the owner sent, or the file in it. Never a link. */
+function vetInvitation(chosen: string): FileHandle | null {
+  if (typeof chosen !== 'string' || !isAbsolute(chosen)) return null;
+  try {
+    const path = lstatSync(chosen).isDirectory() ? join(chosen, INVITATION_FILE) : chosen;
+    const stats = lstatSync(path);
+    if (!stats.isFile() || stats.size === 0 || stats.size > MAX_INVITATION_BYTES || extname(path).toLowerCase() !== '.json') return null;
+    return issueHandle(path, 'invitation');
+  } catch {
+    return null;
+  }
+}
+
+/** A handle stays valid for 10 minutes, so an unconfirmed upload can be retried. It names one kind of file. */
+function resolveHandle(handle: unknown, kind: HandleKind): string | null {
   if (typeof handle !== 'string') return null;
   const entry = handles.get(handle);
-  if (!entry || entry.expires <= Date.now()) { handles.delete(handle); return null; }
+  if (!entry || entry.kind !== kind) return null;
+  if (entry.expires <= Date.now()) { handles.delete(handle); return null; }
   return entry.path;
 }
 
@@ -223,6 +245,18 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       if (chosen.canceled || chosen.filePaths.length !== 1) return { ok: true, value: null };
       const vetted = vetDocument(chosen.filePaths[0]!);
       return vetted ? { ok: true, value: vetted } : refused('unsupported_file');
+    }
+    case 'dialog.openInvitation': {
+      if (!window) return refused();
+      // macOS chooses the folder or the file in it; elsewhere a dialog is one or the other.
+      const chosen = await dialog.showOpenDialog(window, {
+        title: 'Choose your ECHO invitation', message: 'Choose the invitation folder your organization owner sent you.',
+        properties: process.platform === 'darwin' ? ['openFile', 'openDirectory'] : ['openFile'],
+        filters: [{ name: 'ECHO invitation', extensions: ['json'] }],
+      });
+      if (chosen.canceled || chosen.filePaths.length !== 1) return { ok: true, value: null };
+      const vetted = vetInvitation(chosen.filePaths[0]!);
+      return vetted ? { ok: true, value: vetted } : refused('unsupported_invitation');
     }
     case 'app.setUnresolved':
       unresolved = (params as MainMethods['app.setUnresolved']['params']).unresolved === true;
@@ -265,9 +299,16 @@ async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Resu
   if (!hostMethods.has(method)) return refused();
   if (method === 'documents.upload') {
     const { file_handle: fileHandle, ...rest } = value as { file_handle?: unknown };
-    const file = resolveHandle(fileHandle);
+    const file = resolveHandle(fileHandle, 'document');
     if (!file) return refused('unsupported_file');
     return callHost(method, { ...rest, file });
+  }
+  if (method === 'signin.invitation') {
+    const handle = (value as { invitation_handle?: unknown }).invitation_handle;
+    const invitation = resolveHandle(handle, 'invitation');
+    if (!invitation) return refused('unsupported_invitation');
+    handles.delete(handle as string); // one sign-in per choice
+    return whileSigningIn(() => callHost(method, { invitation }));
   }
   if (method === 'signin.begin') return whileSigningIn(() => callHost(method, value));
   return callHost(method as HostMethodName, value);
@@ -377,6 +418,7 @@ function accountItems(fromTray: boolean): MenuItemConstructorOptions[] {
     { label: 'Not signed in', enabled: false },
     { type: 'separator' },
     { label: 'Sign in with Google…', click: run('signin') },
+    { label: 'Open invitation…', click: run('invitation') },
   ];
 }
 

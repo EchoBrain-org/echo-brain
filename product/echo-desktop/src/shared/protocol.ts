@@ -114,6 +114,8 @@ export interface Expect {
 export interface HostMethods {
   'app.status': { params: Record<string, never>; result: AppStatus };
   'signin.begin': { params: { authority_url: string }; result: AppStatus };
+  /** The renderer names the invitation only by a handle main issued; main swaps in the path. */
+  'signin.invitation': { params: { invitation_handle: string }; result: AppStatus };
   'projects.list': { params: { expect: Expect; cursor?: string }; result: ProjectPage };
   'projects.feed': { params: { expect: Expect; project_id: string }; result: FeedPage };
   'projects.readContext': { params: { expect: Expect; project_id: string; context_id: string }; result: ContextContent };
@@ -131,6 +133,8 @@ export interface HostMethods {
 
 export interface MainMethods {
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
+  /** The invitation folder (or its file) the organization owner sent. */
+  'dialog.openInvitation': { params: Record<string, never>; result: FileHandle | null };
   /** A save's outcome is unknown: quitting asks first. */
   'app.setUnresolved': { params: { unresolved: boolean }; result: null };
   /** After the host gave up: start it again. */
@@ -144,19 +148,19 @@ export type MethodName = keyof Methods;
 export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
-  'app.status', 'signin.begin', 'projects.list', 'projects.feed', 'projects.readContext',
+  'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry', 'account.signOut',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'app.setUnresolved', 'app.retryHost', 'menu.account',
+  'dialog.openDocument', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry']);
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
-export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'account.signOut']);
+export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);
 
 /** What an Account menu item asks the window to do. */
-export type AccountCommand = 'signin' | 'switch' | 'signout';
+export type AccountCommand = 'signin' | 'invitation' | 'switch' | 'signout';
 
 /** Events main pushes to the renderer. */
 export interface Events {

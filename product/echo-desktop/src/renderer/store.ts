@@ -156,7 +156,20 @@ function forgetAccount(): void {
 
 export async function signIn(authorityUrl: string): Promise<void> {
   set({ signin: { phase: 'waiting', form: state.signin.form } });
-  const result = await rpc('signin.begin', { authority_url: authorityUrl });
+  await afterSignIn(await rpc('signin.begin', { authority_url: authorityUrl }));
+}
+
+/** Open invitation…: the folder the owner sent, chosen in main's dialog. The page gets a handle, never the path. */
+async function openInvitation(): Promise<void> {
+  const chosen = await rpc('dialog.openInvitation', {});
+  if (state.status?.signed_in || state.signin.phase === 'waiting') return;
+  if (!chosen.ok) { set({ signin: { phase: 'failed', form: false, failure: chosen.failure } }); return; }
+  if (!chosen.value) return;
+  set({ signin: { phase: 'waiting', form: false } });
+  await afterSignIn(await rpc('signin.invitation', { invitation_handle: chosen.value.handle }));
+}
+
+async function afterSignIn(result: Result<AppStatus>): Promise<void> {
   if (!result.ok) { set({ signin: { phase: 'failed', form: state.signin.form, failure: result.failure } }); return; }
   set({ signin: { phase: 'idle', form: false } });
   await refreshStatus();
@@ -180,8 +193,10 @@ export function showAccountMenu(anchor: HTMLElement, placement: 'row' | 'below')
 /** An Account menu item, chosen in the window or the tray. */
 export function accountCommand(command: AccountCommand): void {
   const signedIn = state.status?.signed_in === true;
-  if (command === 'signin') {
-    if (!signedIn && state.signin.phase !== 'waiting') set({ signin: { phase: 'idle', form: true } });
+  if (command === 'signin' || command === 'invitation') {
+    if (signedIn || state.signin.phase === 'waiting') return;
+    if (command === 'signin') set({ signin: { phase: 'idle', form: true } });
+    else void openInvitation();
     return;
   }
   if (signedIn && !state.sheet?.busy) set({ sheet: { kind: command, busy: false } });

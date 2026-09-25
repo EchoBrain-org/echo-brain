@@ -75,7 +75,7 @@ modules.catch(error => { console.error('person host failed to load the client:',
 
 /** Per-method limits; the client enforces its own shorter network timeouts. */
 const TIMEOUT_MS: Record<HostMethodName, number> = {
-  'app.status': 5_000, 'signin.begin': 11 * 60_000, 'projects.list': 45_000,
+  'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'account.signOut': 45_000,
 };
@@ -220,6 +220,24 @@ async function forAccount<T>(
   }
 }
 
+/** Google in the browser, then the new session. Only the phase crosses to the renderer; the sign-in URL never does. */
+async function login(identity: string[], fallback: string): Promise<Result<AppStatus>> {
+  const run = await cli(['login', ...identity, '--open-browser'], line => {
+    for (const value of jsonLines(line)) {
+      const phase = value as { phase?: unknown; browser_opened?: unknown };
+      if (phase.phase === 'open-browser' || phase.phase === 'installed') {
+        port.postMessage({ notice: 'signin.phase', payload: {
+          phase: phase.phase,
+          ...(typeof phase.browser_opened === 'boolean' ? { browser_opened: phase.browser_opened } : {}),
+        } });
+      }
+    }
+  });
+  if (run.exit !== 0) return fail(failureView(lastJson(run.stderr), fallback, false));
+  const current = await status();
+  return current === null ? code('unavailable') : ok(current);
+}
+
 function audienceArgs(audience: Audience, projectId: string | undefined): string[] {
   const association = projectId === undefined ? [] : [option('association-project-ids-json', JSON.stringify([projectId]))];
   switch (audience.kind) {
@@ -243,21 +261,13 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
     }
     case 'signin.begin': {
       const { authority_url } = params as Params<'signin.begin'>;
-      const run = await cli(['login', option('authority-url', authority_url), '--open-browser'], line => {
-        // Only the phase crosses to the renderer; the sign-in URL never does.
-        for (const value of jsonLines(line)) {
-          const phase = value as { phase?: unknown; browser_opened?: unknown };
-          if (phase.phase === 'open-browser' || phase.phase === 'installed') {
-            port.postMessage({ notice: 'signin.phase', payload: {
-              phase: phase.phase,
-              ...(typeof phase.browser_opened === 'boolean' ? { browser_opened: phase.browser_opened } : {}),
-            } });
-          }
-        }
-      });
-      if (run.exit !== 0) return fail(failureView(lastJson(run.stderr), 'signin_failed', false));
-      const current = await status();
-      return current === null ? code('unavailable') : ok(current);
+      return login([option('authority-url', authority_url)], 'signin_failed');
+    }
+    case 'signin.invitation': {
+      // Main put the path here in place of the page's handle.
+      const invitation = (params as { invitation?: unknown }).invitation;
+      if (typeof invitation !== 'string') return code('invalid_request');
+      return login([option('invitation', invitation)], 'invitation_failed');
     }
     case 'projects.list': {
       const { expect, cursor } = params as Params<'projects.list'>;
@@ -365,7 +375,7 @@ port.on('message', ({ data }) => {
   // Sign-in still runs after a refresh with no answer: it replaces the
   // session, and sign-out ends it either way. Any other call was not made,
   // so no write went out.
-  const refreshFailed = request.method === 'signin.begin' || request.method === 'account.signOut' ? undefined
+  const refreshFailed = ['signin.begin', 'signin.invitation', 'account.signOut'].includes(request.method) ? undefined
     : (refresh: CliRun) => {
       const failure = failureView(lastJson(refresh.stderr), 'failed', false, requestId);
       return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);

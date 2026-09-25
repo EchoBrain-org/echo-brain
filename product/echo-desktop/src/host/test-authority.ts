@@ -112,7 +112,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (method === 'GET' && path === '/v1/authority-descriptor') return json({ authority_descriptor: descriptor });
     if (method === 'POST' && path === '/v2/session/oidc/begin') {
       const handoff = body?.loopback_handoff as { url: string; token: string } | undefined;
-      if (body?.kind !== 'existing_identity_login' || !handoff) return failure('invalid_request', 400);
+      // An existing identity, or an invitation's one-time grant (with the invited address, from a v2 invitation).
+      const keys = Object.keys(body ?? {}).sort().join(',');
+      const known = body?.kind === 'existing_identity_login' ? keys === 'kind,loopback_handoff'
+        : body?.kind === 'identity_bootstrap' && /^[A-Za-z0-9_-]{43}$/.test(String(body.login_grant)) &&
+          ['kind,login_grant,loopback_handoff', 'kind,login_grant,login_hint,loopback_handoff'].includes(keys);
+      if (!known || !handoff) return failure('invalid_request', 400);
       const state = randomUUID();
       handoffs.set(state, handoff);
       return json({ authorization_url: `${IDENTITY_PROVIDER}/authorize?state=${state}`, expires_at: '2026-09-21T22:11:00.000Z' }, 201);
