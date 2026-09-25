@@ -196,7 +196,8 @@ const handles = new Map<string, { path: string; kind: HandleKind; expires: numbe
 
 function issueHandle(path: string, kind: HandleKind, size?: number): FileHandle {
   const handle = randomUUID();
-  handles.set(handle, { path, kind, expires: Date.now() + 10 * 60_000 });
+  // A file to send may wait its turn a long time: in a draft, or behind New project's other files.
+  handles.set(handle, { path, kind, expires: kind === 'document' ? Infinity : Date.now() + 10 * 60_000 });
   return { handle, name: path.split(sep).pop() ?? 'Document', ...(size === undefined ? {} : { size }) };
 }
 
@@ -221,7 +222,11 @@ function vetInvitation(chosen: string): FileHandle | null {
   }
 }
 
-/** A handle stays valid for 10 minutes, so an unconfirmed upload can be retried. It names one kind of file. */
+/**
+ * A file to send stays valid while ECHO runs (Try again after an unknown
+ * outcome resends the client's own copy, not the file); any other handle for
+ * 10 minutes. It names one kind of file.
+ */
 function resolveHandle(handle: unknown, kind: HandleKind): string | null {
   if (typeof handle !== 'string') return null;
   const entry = handles.get(handle);
