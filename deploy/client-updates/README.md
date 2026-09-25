@@ -5,7 +5,7 @@ This dedicated hosting stack prepares an HTTPS endpoint for the signed
 the Authority staging stack and onboarding-transfer storage. Creating the
 endpoint does not publish a release, enroll a client, or authorize a candidate.
 
-The fixed target is account `904560150024`, region `us-west-2`, stack
+The fixed target is the repository-pinned staging account, region `us-west-2`, stack
 `echo-client-update-staging-v1`, using the `echo-prod` IAM Identity Center profile.
 The stack contains a private, encrypted, versioned S3 bucket, a bucket policy,
 CloudFront distribution, origin access control, and artifact cache policy.
@@ -26,6 +26,9 @@ digest, resource inventory, source commit, and change-set ARN in a mode-0600
 receipt. It provisions no bucket or distribution. Review that named change set
 before execution. Planning may use a committed feature branch; execution
 requires that exact source to be merged into fetched `origin/main`.
+If the result is `planning`, repeat `plan` with the same output path to collect
+the existing change set after AWS finishes validation. Do not choose a new
+receipt for the same operation.
 
 After the human approves the exact change set, use the unchanged receipt:
 
