@@ -12,7 +12,7 @@ import {
 import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, changeView, contextView, createdView, documentPageView, documentTextView, employeesView, evidenceView, failureView,
+  abandonView, answerView, changeView, contextView, createdView, directoryView, documentPageView, documentTextView, employeesView, evidenceView, failureView,
   feedView, invitationView, isRecordRef, membersView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, projectView,
   NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
@@ -82,8 +82,8 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'ask.run': 145_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000, 'documents.list': 45_000,
   'documents.read': 45_000, 'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000, 'projects.directory': 45_000,
-  'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000, 'employees.reissue': 45_000,
-  'employees.revoke': 45_000,
+  'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
+  'employees.reissue': 45_000, 'employees.revoke': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
@@ -416,6 +416,16 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       return forAccount(method, expect, [
         'projects', 'directory', option('project-id', project_id), ...(name === '' ? [] : [option('query', name)]), ...page(cursor),
       ], stdout => membersView(lastJson(stdout), project_id, true));
+    }
+    case 'people.directory': {
+      const { expect, query, cursor } = params as Params<'people.directory'>;
+      if ((query !== undefined && typeof query !== 'string') || (cursor !== undefined && (typeof cursor !== 'string' || !CURSOR.test(cursor)))) {
+        return code('invalid_request');
+      }
+      // No name: the first people, by name. Ten at a time, as the project directory.
+      const name = query === undefined ? '' : askText(query);
+      return forAccount(method, expect, ['directory', ...(name === '' ? [] : [option('query', name)]), ...page(cursor)],
+        stdout => directoryView(lastJson(stdout)));
     }
     case 'projects.change': {
       const { expect, request_id, change } = params as Params<'projects.change'>;

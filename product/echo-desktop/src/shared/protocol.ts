@@ -77,7 +77,7 @@ export interface DocumentText {
   readonly next_cursor: string | null;
 }
 
-/** A person in a project, or one the directory found for it. */
+/** A person in a project, or one a directory found. */
 export interface Member {
   readonly membership_id: string;
   readonly display_name: string;
@@ -307,6 +307,12 @@ export interface HostMethods {
   'projects.members': { params: { expect: Expect; project_id: string; cursor?: string }; result: MemberPage };
   /** People in the organization a lead can add, by name. */
   'projects.directory': { params: { expect: Expect; project_id: string; query?: string; cursor?: string }; result: MemberPage };
+  /**
+   * People in your own organization, by name, for any member and with no
+   * project: New project's people before the project exists. An Authority
+   * without it answers not_found.
+   */
+  'people.directory': { params: { expect: Expect; query?: string; cursor?: string }; result: MemberPage };
   /** A change to a project. Only the Authority's receipt says it was made. */
   'projects.change': { params: { expect: Expect; request_id: string; change: ProjectChange }; result: null };
   /** New project: made once per request id, and only the receipt says it was made. */
@@ -381,8 +387,8 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'search.read', 'documents.list', 'documents.read', 'documents.save', 'projects.read',
-  'projects.members', 'projects.directory', 'projects.change', 'projects.create', 'employees.list', 'employees.invite', 'employees.reissue',
-  'employees.revoke',
+  'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'employees.list', 'employees.invite',
+  'employees.reissue', 'employees.revoke',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',

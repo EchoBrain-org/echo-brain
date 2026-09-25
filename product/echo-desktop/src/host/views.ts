@@ -177,6 +177,13 @@ export function membersView(raw: unknown, projectId: string, directory = false):
   return { items: list(value.items).map(item => member(item, directory)), next_cursor: optionalText(value.next_cursor) ?? null };
 }
 
+/** One page of the people in your organization, as `person directory` finds them: a name and a membership id each. */
+export function directoryView(raw: unknown): MemberPage {
+  const value = object(raw);
+  if (value.schema_version !== 1 || value.kind !== 'echo-organization-directory-v1') throw new ViewError();
+  return { items: list(value.items).map(item => member(item, true)), next_cursor: optionalText(value.next_cursor) ?? null };
+}
+
 /** The receipt for exactly the change that was sent: applied. */
 export function changeView(raw: unknown, requestId: string, change: ProjectChange): null {
   const document = change.kind === 'document-associate' || change.kind === 'document-dissociate';

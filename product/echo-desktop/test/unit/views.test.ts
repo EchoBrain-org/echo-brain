@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, changeView, contextView, createdView, documentPageView, documentTextView, employeesView, failureView, feedView, invitationView,
-  membersView, noteMatchesView, noteTitle, noteView, revokedView,
+  abandonView, answerView, changeView, contextView, createdView, directoryView, documentPageView, documentTextView, employeesView, failureView, feedView,
+  invitationView, membersView, noteMatchesView, noteTitle, noteView, revokedView,
   NotReadable, projectMatchesView, projectPageView, projectView, receiptView, recordView, savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
@@ -314,6 +314,18 @@ describe('documents, members and project changes', () => {
     const summary = { schema_version: 1, kind: 'echo-project-summary-v1', project_id: PROJECT, name: 'Apollo', created_at: 'x', role: 'member' };
     expect(projectView(summary, PROJECT).role).toBe('member');
     expect(() => projectView(summary, 'prj_other')).toThrow(ViewError);
+  });
+
+  it('the organization directory names no project, and only a name and a membership id cross', () => {
+    const people = { schema_version: 1, kind: 'echo-organization-directory-v1', next_cursor: 'AQ',
+      items: [{ membership_id: 'mem_2', display_name: 'Raj', email: 'raj@example.test', role: 'lead' }] };
+    expect(directoryView(people)).toEqual({ items: [{ membership_id: 'mem_2', display_name: 'Raj' }], next_cursor: 'AQ' });
+    expect(directoryView({ ...people, items: [], next_cursor: null })).toEqual({ items: [], next_cursor: null });
+    const project = { schema_version: 1, kind: 'echo-project-directory-v1', project_id: PROJECT, next_cursor: null, items: [] };
+    expect(() => directoryView(project)).toThrow(ViewError);
+    expect(() => membersView(people, PROJECT, true)).toThrow(ViewError);
+    expect(() => directoryView({ ...people, schema_version: 2 })).toThrow(ViewError);
+    expect(() => directoryView({ ...people, items: [{ membership_id: 'mem_2' }] })).toThrow(ViewError);
   });
 
   it('a change is made only by the receipt for exactly that request and change', () => {
