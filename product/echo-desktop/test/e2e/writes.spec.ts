@@ -122,6 +122,24 @@ test('a note and a file are never sent together', async () => {
   await expect(page.getByTestId('compose-body')).toBeVisible();
 });
 
+test('a note over 8 KiB says so before anything is sent, and one that fits is saved', async () => {
+  run = await launch();
+  const { page } = run;
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill(`Long note\n${'x'.repeat(8 * 1024)}`);
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('compose-notice')).toHaveText('Up to 8 KiB of text.');
+  await expect(page.getByTestId('compose-error')).toHaveCount(0);
+  expect(posts()).toHaveLength(0);
+  // Shortened, the notice goes and the note is saved.
+  await page.getByTestId('compose-body').fill(`Long note\n${'x'.repeat(8 * 1024 - 10)}`);
+  await expect(page.getByTestId('compose-notice')).toHaveCount(0);
+  await page.keyboard.press('Meta+Enter');
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
+  expect(posts()).toHaveLength(1);
+});
+
 test('a file attached in a project is sent to that project under its own name', async () => {
   run = await launch();
   const { page } = run;

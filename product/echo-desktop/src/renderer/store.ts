@@ -1968,6 +1968,9 @@ export function chipProject(current: State = state): ProjectSummary | null {
 // ---- capture -----------------------------------------------------------------
 
 const NOTE_OR_FILE = 'Save this note before attaching a file.';
+/** What a note may hold, as the API takes it: 8 KiB of text. */
+const MAX_NOTE_BYTES = 8 * 1024;
+const TOO_LONG = 'Up to 8 KiB of text.';
 
 /** What main's quit guard was last told. */
 let unresolvedTold = '';
@@ -2135,6 +2138,11 @@ export async function sendCompose(): Promise<void> {
   if (!account || !compose || compose.status === 'sending' || compose.status === 'checking') return;
   if (!compose.file && compose.text.trim() === '') return;
   const retrying = compose.status === 'unknown';
+  // Too long is said here, before anything is sent, not as a refusal.
+  if (!compose.file && !retrying && new TextEncoder().encode(compose.text).length > MAX_NOTE_BYTES) {
+    setCompose({ ...compose, notice: TOO_LONG });
+    return;
+  }
   setCompose({ ...compose, status: 'sending', failure: undefined, picking: false, confirmNew: false, notice: undefined });
   const audience = audienceOf(compose);
   const project = compose.project ? { project_id: compose.project.project_id } : {};
