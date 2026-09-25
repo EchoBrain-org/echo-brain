@@ -79,9 +79,11 @@ function Foot({ sheet }: { sheet: NewProjectSheet }) {
   const asking = sheet.confirmClose && newProjectUnsettled(sheet);
   if (sheet.project) {
     if (asking) return <CloseQuestion what="A file may still have been saved." />;
+    // Done sits where Create was: the second click of a double-click on Create does not close the sheet.
     return (
       <div class="choices">
-        <button type="button" class="primary-button small" data-testid="new-project-done" disabled={busy} onClick={closeSheet}>Done</button>
+        <button type="button" class="primary-button small" data-testid="new-project-done" disabled={busy}
+          onClick={event => { if (event.detail <= 1) closeSheet(); }}>Done</button>
       </div>
     );
   }

@@ -119,6 +119,10 @@ test('a create whose reply was lost is never called made: Try again resends the 
   await expect(page.getByTestId('sidebar-project')).toHaveCount(3);
   expect(creates()).toHaveLength(2);
   expect(creates()[1]!.body).toEqual(creates()[0]!.body);
+  // Done sits where Create was: the second click of a double-click there leaves the sheet open for people.
+  await page.getByTestId('new-project-done').dispatchEvent('click', { detail: 2 });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve))));
+  await expect(page.getByTestId('new-project-title')).toHaveText('Cedar');
   // Files are optional: Done closes it with none.
   await page.getByTestId('new-project-done').click();
   await expect(page.getByTestId('new-project')).toHaveCount(0);
