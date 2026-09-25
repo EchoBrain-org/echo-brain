@@ -1,7 +1,7 @@
 // ECHO desktop main process: windows, tray, shortcuts and the IPC broker. It
 // never reads the session or holds a token; the person host does that.
 import {
-  app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, protocol, session, shell,
+  app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, protocol, session, shell,
   Tray, utilityProcess, type IpcMainInvokeEvent, type MenuItemConstructorOptions, type UtilityProcess,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
@@ -26,6 +26,8 @@ const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 /** What an owner's invitation export holds; the person client checks the rest. */
 const INVITATION_FILE = 'person-invitation.json';
 const MAX_INVITATION_BYTES = 8 * 1024;
+/** Copy answer takes what an answer can hold: 12,000 characters. */
+const MAX_COPY_CHARACTERS = 12_000;
 const test = __ECHO_TEST_HOOK__ ? process.env : {} as NodeJS.ProcessEnv;
 const smoke = process.argv.includes('--smoke');
 /** `--smoke` never touches the person's session or data: it gets its own. */
@@ -246,6 +248,14 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       const vetted = vetDocument(chosen.filePaths[0]!);
       return vetted ? { ok: true, value: vetted } : refused('unsupported_file');
     }
+    case 'clipboard.writeText': {
+      const { text } = params as MainMethods['clipboard.writeText']['params'];
+      if (typeof text !== 'string' || text === '' || [...text].length > MAX_COPY_CHARACTERS) return refused();
+      // Tests never touch the machine's clipboard: they read what would have been copied.
+      if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_HIDDEN) (globalThis as TestClipboard).echoTestClipboard = text;
+      else clipboard.writeText(text);
+      return { ok: true, value: null };
+    }
     case 'dialog.openInvitation': {
       if (!window) return refused();
       // macOS chooses the folder or the file in it; elsewhere a dialog is one or the other.
@@ -405,6 +415,8 @@ function trayImage(): Electron.NativeImage {
 
 /** Test builds: a test cannot click a native menu, so it reads and clicks these. */
 interface TestMenus { echoTestAccountMenu?: Electron.Menu; echoTestTrayMenu?: Electron.Menu }
+/** Test builds: what Copy answer would have put on the clipboard. */
+interface TestClipboard { echoTestClipboard?: string }
 
 /** The window does the work: it confirms what cannot be undone, and asks the host. */
 function accountCommand(command: AccountCommand, fromTray: boolean): void {

@@ -1,10 +1,10 @@
-import { useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { AnswerSource, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  answerSources, ask, cancelAsk, chipProject, chooseSource, earlierTurns, matchesShown, openCompose, openMatch, retryEvidence, retryRecord,
+  answerSources, ask, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, matchesShown, openCompose, openMatch, retryEvidence, retryRecord,
   searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Plus, Up } from './icons.js';
@@ -130,10 +130,19 @@ function EarlierTurn({ turn }: { turn: AskTurn }) {
   );
 }
 
+/** How long Copy answer says Copied. */
+const COPIED_MS = 1_600;
+
 /** The current answer: what it was based on, and what can be done with it. */
 function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
   const thread = state.ask!;
   const count = answerSources(state).length;
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
   return (
     <div class="turn">
       <div class="question selectable" data-testid="question">{turn.question}</div>
@@ -145,6 +154,8 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
           <button type="button" class="link-button" data-testid="sources-toggle" aria-pressed={state.sources?.open != null}
             onClick={toggleSources}>Sources ({count})</button>
         )}
+        <button type="button" class="link-button" data-testid="copy-answer" aria-label={copied ? 'Answer copied' : 'Copy answer'}
+          onClick={() => void copyAnswer().then(done => setCopied(done))}>{copied ? 'Copied' : 'Copy answer'}</button>
         {/* A question that failed below has its own Try again. */}
         {!thread.failed && (
           <button type="button" class="link-button" data-testid="ask-again" onClick={() => void ask(turn.question, turn.scope)}>Try again</button>
@@ -169,7 +180,7 @@ export function AskView({ state }: { state: State }) {
   return (
     <section class="ask" data-testid="ask-view" aria-live="polite" ref={scroller}>
       {earlierTurns(thread).map(turn => <EarlierTurn key={turn.id} turn={turn} />)}
-      {thread.shown && <CurrentAnswer state={state} turn={thread.shown} />}
+      {thread.shown && <CurrentAnswer key={thread.shown.id} state={state} turn={thread.shown} />}
       {asking && (
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>

@@ -175,3 +175,24 @@ test('evidence that could not be read says so, and Retry evidence reads it again
   await expect(pane.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
   expect(evidenceReads()).toHaveLength(2);
 });
+
+test('Copy answer copies the answer and says so, and main takes no more than an answer holds', async () => {
+  run = await launch();
+  const { page, app } = run;
+  const copied = () => app.evaluate(() => (globalThis as { echoTestClipboard?: string }).echoTestClipboard);
+  await askFromHome(page, 'What did we agree?');
+  const copy = page.getByTestId('copy-answer');
+  await copy.click();
+  await expect(copy).toHaveText('Copied');
+  expect(await copied()).toBe('We agreed to ship Apollo with annual plans first.');
+  await expect(copy).toHaveText('Copy answer');
+
+  // An answer is at most 12,000 characters; the broker refuses more.
+  const write = (text: string) => page.evaluate(value =>
+    (window as unknown as { echo: { rpc(method: string, params: object): Promise<{ ok: boolean }> } }).echo.rpc('clipboard.writeText', { text: value }),
+  text);
+  expect(await write('x'.repeat(12_001))).toEqual({ ok: false, failure: { code: 'invalid_request', retryable: false } });
+  expect(await copied()).toBe('We agreed to ship Apollo with annual plans first.');
+  // Counted in characters: 12,000 that each take two UTF-16 units still fit.
+  expect((await write('𝄞'.repeat(12_000))).ok).toBe(true);
+});

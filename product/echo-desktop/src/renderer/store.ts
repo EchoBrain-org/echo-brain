@@ -543,6 +543,12 @@ export function cancelAsk(): void {
   startSources();
 }
 
+/** Copy answer: the current answer's text, onto the clipboard. Says whether it got there. */
+export async function copyAnswer(): Promise<boolean> {
+  const text = state.ask?.shown?.answer.text;
+  return text !== undefined && (await rpc('clipboard.writeText', { text })).ok;
+}
+
 /** Back or Escape: leaves the thread, and it is gone. */
 export function closeAsk(): void {
   set({ ask: null, sources: null });

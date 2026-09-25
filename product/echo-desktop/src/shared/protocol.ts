@@ -220,6 +220,8 @@ export interface HostMethods {
 
 export interface MainMethods {
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
+  /** Copy answer: at most 12,000 characters, an answer's own bound. */
+  'clipboard.writeText': { params: { text: string }; result: null };
   /** The invitation folder (or its file) the organization owner sent. */
   'dialog.openInvitation': { params: Record<string, never>; result: FileHandle | null };
   /** A save's outcome is unknown: quitting asks first, naming a note or a file. */
@@ -240,7 +242,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'account.signOut', 'account.tools', 'search.run', 'search.read',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
+  'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry']);
