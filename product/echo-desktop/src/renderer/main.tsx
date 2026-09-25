@@ -17,7 +17,7 @@ import { SignedOut } from './screens/signin.js';
 import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeReader, closeSheet,
   closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, pageCovered, refreshStatus, resume, retryStart,
-  signinPhase, toggleEmployeeMenu, toggleMemberMenu, toggleMore, toggleReaderMenu, toggleSidebar, UNSAVED_FILES, useStore, windowShown, type State,
+  signinPhase, toggleEmployeeMenu, toggleMemberMenu, toggleMore, toggleReaderMenu, toggleSidebar, trayOrganization, UNSAVED_FILES, useStore, windowShown, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -89,6 +89,7 @@ function App() {
       on('host.restarted', () => { void refreshStatus(); }),
       on('host.failed', hostFailed),
       on('account.command', payload => accountCommand(payload.command)),
+      on('organization.open', () => { if (getState().status?.signed_in) trayOrganization(); }),
     ];
     // One Escape handler for the whole window: it steps back exactly one level.
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); escape(); } };

@@ -394,6 +394,8 @@ export interface Events {
   'host.failed': Record<string, never>;
   /** An Account menu item was chosen, in the window or the tray. */
   'account.command': { command: AccountCommand };
+  /** Organization ▸ People & invites… was chosen in the tray (owners only). */
+  'organization.open': Record<string, never>;
 }
 export type EventName = keyof Events;
 

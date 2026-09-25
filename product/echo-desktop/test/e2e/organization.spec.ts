@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emit, launch, type Launched } from './launch.js';
+import { emit, launch, menuLabels, type Launched } from './launch.js';
 
 let run: Launched;
 const folders: string[] = [];
@@ -70,6 +70,36 @@ test('People & invites: typing narrows the list, Invite saves a private folder m
   await expect(rows.nth(3).getByTestId('employee-standing')).toHaveText('Revoked · Invitation expired');
   expect(writes('DELETE')).toEqual([{ email: 'kim@example.com' }]);
   await expect(page.getByTestId('org-saved')).toHaveCount(0);
+});
+
+test('owners also reach People & invites from the tray, under Organization', async () => {
+  run = await launch('owner');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-organization')).toBeVisible();
+  const tray = await menuLabels(run, 'tray');
+  expect(tray.filter(label => !label.startsWith('Build '))).toEqual(['Open ECHO', 'Capture', 'Account', 'Organization', 'Quit ECHO']);
+  const labels = await run.app.evaluate(() => {
+    const menu = (globalThis as { echoTestTrayMenu?: Electron.Menu }).echoTestTrayMenu!;
+    const organization = menu.items.find(item => item.label === 'Organization')!.submenu!;
+    organization.items[0]!.click();
+    return organization.items.map(item => item.label);
+  });
+  expect(labels).toEqual(['People & invites…']);
+  await expect(page.getByTestId('title')).toHaveText('People & invites');
+  await expect(page.getByTestId('employee-row')).toHaveCount(3);
+
+  // Chosen with another app in front, as a tray click is: it is there once ECHO is.
+  await page.getByTestId('back').click();
+  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await emit(run.app, 'echo-test:conceal');
+  await run.app.evaluate(() => {
+    const menu = (globalThis as { echoTestTrayMenu?: Electron.Menu }).echoTestTrayMenu!;
+    menu.items.find(item => item.label === 'Organization')!.submenu!.items[0]!.click();
+  });
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await emit(run.app, 'echo-test:resume');
+  await expect(page.getByTestId('title')).toHaveText('People & invites');
+  await expect(page.getByTestId('employee-row')).toHaveCount(3);
 });
 
 test('Revoke access is asked first, and Reissue saves a new invitation for someone still to sign in', async () => {

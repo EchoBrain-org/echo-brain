@@ -59,7 +59,7 @@ export function Sidebar({ state }: { state: State }) {
       {account?.role === 'owner' && (
         <div class="sidebar-rows organization-rows">
           <div class="side-header">ORGANIZATION</div>
-          <button type="button" data-testid="sidebar-organization" onClick={openOrganization}
+          <button type="button" data-testid="sidebar-organization" onClick={() => openOrganization()}
             class={`side-row${!state.concealed && state.route.page === 'organization' ? ' current' : ''}`}
             aria-current={!state.concealed && state.route.page === 'organization' ? 'page' : undefined}>
             <People /><span class="label">People &amp; invites</span>

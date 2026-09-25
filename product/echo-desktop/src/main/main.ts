@@ -508,6 +508,12 @@ function capture(): void {
   if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
 }
 
+/** Organization ▸ People & invites…: the page opens it, then the window comes forward. */
+function openOrganization(): void {
+  send('organization.open', {});
+  if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show();
+}
+
 function trayImage(): Electron.NativeImage {
   const image = nativeImage.createFromPath(join(BUILD, process.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png'));
   if (process.platform === 'darwin') image.setTemplateImage(true);
@@ -579,6 +585,9 @@ function updateTray(): void {
     { label: 'Capture', accelerator: 'CommandOrControl+Shift+E', click: capture },
     ...shortcutProblems.map(problem => ({ label: problem, enabled: false })),
     { label: 'Account', submenu: accountItems(true) },
+    // Owners only, as the sidebar's People & invites.
+    ...(accountStatus?.account?.role === 'owner'
+      ? [{ label: 'Organization', submenu: [{ label: 'People & invites…', click: openOrganization }] }] : []),
     { type: 'separator' },
     ...(info ? [{ label: `Build ${info.source_sha.slice(0, 7)}${info.dirty ? ' (modified)' : ''}`, enabled: false }] : []),
     { label: 'Quit ECHO', accelerator: 'CommandOrControl+Q', click: () => app.quit() },

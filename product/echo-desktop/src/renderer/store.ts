@@ -1476,9 +1476,12 @@ function setOrganization(patch: Partial<OrganizationState>, mine?: number): void
   if (page) set({ organization: { ...page, ...patch } });
 }
 
-/** The sidebar's People & invites: owners only. The page moves, the bar searches all context. */
-export function openOrganization(): void {
-  if (state.status?.account?.role !== 'owner' || state.concealed) return;
+/**
+ * The sidebar's People & invites: owners only. The page moves, the bar
+ * searches all context. The tray's comes while another app may be in front.
+ */
+export function openOrganization(fromTray = false): void {
+  if (state.status?.account?.role !== 'owner' || (state.concealed && !fromTray)) return;
   readSeq += 1;
   // A change sent on an earlier visit may still be on its way: this visit waits for it too.
   const sending = state.employeeWrite;
@@ -1491,6 +1494,15 @@ export function openOrganization(): void {
   });
   syncSearch();
   void loadEmployees();
+}
+
+/**
+ * Organization ▸ People & invites… in the tray. A sheet or Capture that is up
+ * stays, as does People & invites already open: the window only comes forward.
+ */
+export function trayOrganization(): void {
+  if (state.sheet || (state.compose && !state.compose.hidden) || state.route.page === 'organization') return;
+  openOrganization(true);
 }
 
 /** Employee list reads, and employee changes, each counted as they start. */
