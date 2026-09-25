@@ -1850,6 +1850,16 @@ export function matchesShown(current: State = state): boolean {
     !(current.compose && !current.compose.hidden) && searchQuery(current.barText) !== null;
 }
 
+/**
+ * Another app is in front and the page is covered: a project, People &
+ * invites, an answer or an original. The bar's text is covered with it.
+ */
+export function pageCovered(current: State = state): boolean {
+  const { route } = current;
+  return current.concealed && (current.ask !== null || route.page === 'project' || current.reader !== null ||
+    (route.page === 'organization' && current.organization !== null));
+}
+
 /** The project the chip names, while its page is on screen. */
 export function chipProject(current: State = state): ProjectSummary | null {
   const { route, barScope } = current;
@@ -2142,7 +2152,8 @@ export function toggleSidebar(): void {
 
 /**
  * Another app is in front: cover the window until ECHO is back. The bar keeps
- * its text; its matches go, and are read again for the account on return.
+ * its text (out of sight over a covered page); its matches go, and are read
+ * again for the account on return.
  */
 export function conceal(): void {
   // The source pane closes and forgets what it read; the records are read again on return.

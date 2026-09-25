@@ -16,7 +16,7 @@ import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeReader, closeSheet,
-  closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepCreate, matchesShown, openCapture, refreshStatus, resume, retryStart,
+  closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepCreate, matchesShown, openCapture, pageCovered, refreshStatus, resume, retryStart,
   signinPhase, toggleEmployeeMenu, toggleMemberMenu, toggleMore, toggleReaderMenu, toggleSidebar, UNSAVED_FILES, useStore, windowShown, type State,
 } from './store.js';
 
@@ -117,7 +117,7 @@ function App() {
   // Another app is in front: cover what a project, People & invites, an answer
   // or an original shows until ECHO is back. Project rows stay (Home's and the
   // sidebar's), so a file dragged from Finder can still be dropped on one.
-  const covered = state.concealed && (state.ask !== null || inProject !== null || state.reader !== null || organization !== null);
+  const covered = pageCovered(state);
   const pageName = inProject ? inProject.name : organization ? 'People & invites' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
   // Back leaves Ask for the page it was asked from.

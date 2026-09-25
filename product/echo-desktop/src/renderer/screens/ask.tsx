@@ -4,7 +4,7 @@ import { askText, queryTerms } from '../../shared/query.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  answerSources, ask, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, matchesShown, openCompose, openMatch, retryEvidence, retryRecord,
+  answerSources, ask, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, matchesShown, openCompose, openMatch, pageCovered, retryEvidence, retryRecord,
   searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Plus, Up } from './icons.js';
@@ -60,9 +60,13 @@ function Matches({ state, scopeName }: { state: State; scopeName: string | null 
  * its × widens to all context without moving the page.
  */
 export function Bar({ state }: { state: State }) {
-  // While another app is in front nothing says which project is open.
+  // While another app is in front nothing says which project is open, or what
+  // was typed over a covered page: the text is kept, and shows again on return.
   const chip = chipProject(state);
+  const covered = pageCovered(state);
+  const text = covered ? '' : state.barText;
   const verb = state.ask ? 'Ask' : 'Search or ask';
+  const name = `${verb} ${chip?.name ?? 'ECHO'}`;
   return (
     <div class="bar-wrap">
       {matchesShown(state) && <Matches state={state} scopeName={chip?.name ?? null} />}
@@ -75,14 +79,13 @@ export function Bar({ state }: { state: State }) {
               onClick={() => { widenScope(); document.getElementById('ask-field')?.focus(); }}><Close /></button>
           </span>
         )}
-        <label for="ask-field" class="sr-only">{verb} ECHO</label>
+        <label for="ask-field" class="sr-only">{name}</label>
         <input
-          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck maxLength={240}
-          placeholder={`${verb} ${chip?.name ?? 'ECHO'}`}
-          value={state.barText} onInput={event => setBarText((event.target as HTMLInputElement).value)}
+          id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck maxLength={240} placeholder={name}
+          value={text} readOnly={covered} onInput={event => setBarText((event.target as HTMLInputElement).value)}
         />
         <button type="submit" class="circle primary" aria-label="Ask" data-testid="ask-send"
-          disabled={state.barText.trim() === '' || Boolean(state.ask?.asking)}><Up /></button>
+          disabled={text.trim() === '' || Boolean(state.ask?.asking)}><Up /></button>
       </form>
     </div>
   );

@@ -94,16 +94,22 @@ test('while another app is in front the page is covered, and the project rows st
   const { page, app } = run;
   await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('feed-row')).toBeVisible();
+  await page.getByTestId('ask-field').fill('ship');
+  await expect(page.getByTestId('match-row')).toHaveCount(1);
   await emit(app, 'echo-test:conceal');
   await expect(page.getByTestId('concealed')).toBeVisible();
   await expect(page.getByTestId('feed-row')).toHaveCount(0);
   await expect(page.getByTestId('sidebar-project')).toHaveText([/Apollo$/, /Beacon$/]);
-  // Nothing says which project was open.
+  // Nothing says which project was open, or what was searched in it.
   await expect(page.getByTestId('sidebar-project').nth(0)).not.toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await expect(page.getByTestId('ask-field')).toHaveAttribute('placeholder', 'Search or ask ECHO');
+  await expect(page.getByTestId('ask-field')).toHaveValue('');
+  await expect(page.getByTestId('matches')).toHaveCount(0);
   await emit(app, 'echo-test:resume');
   await expect(page.getByTestId('sidebar-project').nth(0)).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('scope-chip')).toHaveText('Apollo');
   await expect(page.getByTestId('feed-row')).toBeVisible();
+  await expect(page.getByTestId('ask-field')).toHaveValue('ship');
+  await expect(page.getByTestId('match-row')).toHaveCount(1);
 });
