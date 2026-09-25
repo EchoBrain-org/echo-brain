@@ -5,6 +5,7 @@
 import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const AUTHORITY = 'https://authority.example';
 const IDENTITY_PROVIDER = 'https://accounts.example';
@@ -29,7 +30,7 @@ interface DesktopFixtures {
   record: { record_sha256: string; approved_by: string; brief: Record<string, unknown> };
   evidence_text: string;
   evidence_label: string;
-  /** Everyone in the organization, as the project directory finds them. */
+  /** Everyone in the organization, as the project and organization directories find them. */
   people: { membership_id: string; display_name: string }[];
   /** Each project's members and their roles. */
   members: Record<string, { membership_id: string; role: 'lead' | 'member' }[]>;
@@ -40,6 +41,12 @@ interface DesktopFixtures {
 const SECOND_PAGE = 'cGFnZTI';
 const PAGE = 10;
 const EXTRACTOR = 'fixture-extractor-v1';
+
+/** The organization directory's request and response, checked by the contract's own validators. */
+interface DirectoryContract {
+  validateOrganizationDirectorySearchV1(value: unknown): { query?: string; limit?: number; cursor?: string };
+  validateOrganizationDirectoryV1(value: unknown): unknown;
+}
 
 interface Store {
   paths: { live: string; refreshing: string; refresh_claim: string };
@@ -81,6 +88,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     operations: Operation[];
   }).operations;
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
+  const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<DirectoryContract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   const fixture = (id: string) => {
     const found = operations.find(entry => entry.id === id);
@@ -152,6 +160,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let employeeWrites = 0;
   let employeeLists = 0;
   let changes = 0;
+  let memberAdds = 0;
   let writeAttempts = 0;
   let documentAttempts = 0;
   let evidenceReads = 0;
@@ -217,8 +226,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (receipt instanceof Response) return receipt;
     applied.set(requestId, { command, receipt, status });
     changes += 1;
-    // Made, but the reply is lost on its way back.
-    if (mode === 'change-reply-lost' && changes === 1) return failure('unavailable', 503);
+    if (path.endsWith('/members/add')) memberAdds += 1;
+    // Made, but the reply is lost on its way back: the first change, or the first person added.
+    if ((mode === 'change-reply-lost' && changes === 1) || (mode === 'member-reply-lost' && memberAdds === 1 && path.endsWith('/members/add'))) {
+      return failure('unavailable', 503);
+    }
     return json(receipt, status);
   };
   /** Your projects, in the list's order, as the mode has them. */
@@ -456,6 +468,29 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (roleOf(projectId, session.membership_id) !== 'lead') return failure('not_found', 404);
       const all = desktop.people.filter(person => body?.query === undefined || found(body.query, { title: person.display_name }));
       return json({ schema_version: 1, kind: 'echo-project-directory-v1', project_id: projectId, ...paged(all, body?.cursor) });
+    }
+    // Everyone in your organization, for any member and with no project (ADR-0016). An
+    // Authority from before it has no such route: not_found, as any unknown path.
+    if (method === 'POST' && path === '/v1/person/directory' && mode !== 'no-person-directory') {
+      const api = await contract();
+      let request: ReturnType<DirectoryContract['validateOrganizationDirectorySearchV1']>;
+      try {
+        request = api.validateOrganizationDirectorySearchV1(body);
+      } catch {
+        return failure('invalid_request', 400);
+      }
+      // The client sends the request as the validator returns it, its limit included; a cursor is only one this fixture gave.
+      const sorted = (value: object) => JSON.stringify(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
+      if (sorted(request) !== sorted(body ?? {}) || (request.cursor !== undefined && request.cursor !== SECOND_PAGE)) {
+        return failure('invalid_request', 400);
+      }
+      const limit = request.limit ?? PAGE;
+      const from = request.cursor === SECOND_PAGE ? limit : 0;
+      const all = desktop.people.filter(person => request.query === undefined || found(request.query, { title: person.display_name }));
+      return json(api.validateOrganizationDirectoryV1({
+        schema_version: 1, kind: 'echo-organization-directory-v1', items: all.slice(from, from + limit),
+        next_cursor: from + limit < all.length ? SECOND_PAGE : null,
+      }));
     }
     if (method === 'POST' && path.startsWith('/v1/person/projects/members/')) {
       const projectId = String(body?.project_id);
