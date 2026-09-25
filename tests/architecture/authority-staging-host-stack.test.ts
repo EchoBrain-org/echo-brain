@@ -289,7 +289,7 @@ describe("Authority staging host stack", () => {
     });
     expect(data.BlockDeviceMappings).toEqual([
       {
-        DeviceName: "/dev/xvda",
+        DeviceName: "/dev/sda1",
         Ebs: {
           DeleteOnTermination: true,
           Encrypted: true,

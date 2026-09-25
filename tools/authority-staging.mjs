@@ -84,6 +84,7 @@ const DEFAULT_TEMPLATE_PATH = resolve(
   "deploy/organization-authority/authority-staging-host-v1.template.json",
 );
 const CLEAN_DATA_MOUNT = "/srv/echo-authority-clean-v1/clean-data";
+const STAGING_AMI_ROOT_DEVICE = "/dev/sda1";
 const BASE_PARAMETERS = new Set([
   "OrgSlug",
   "AvailabilityZone",
@@ -458,6 +459,36 @@ function adapterFunction(dependencies, name) {
   const value = dependencies?.cloudFormation?.[name];
   if (typeof value !== "function") refuse(`cloudformation_${name}_required`);
   return value;
+}
+
+function ec2AdapterFunction(dependencies, name) {
+  const value = dependencies?.ec2?.[name];
+  if (typeof value !== "function") refuse(`ec2_${name}_required`);
+  return value;
+}
+
+async function assertStagingAmiRootDevice(input, dependencies) {
+  const describeImage = ec2AdapterFunction(dependencies, "describeImage");
+  let image;
+  try {
+    image = await describeImage({
+      imageId: input.stack.parameters.StagingAmiId,
+      region: input.region,
+    });
+  } catch {
+    refuse("staging_ami_root_device_unproven");
+  }
+  if (
+    image === null ||
+    typeof image !== "object" ||
+    Array.isArray(image) ||
+    image.imageId !== input.stack.parameters.StagingAmiId ||
+    image.state !== "available" ||
+    image.rootDeviceName !== STAGING_AMI_ROOT_DEVICE ||
+    image.rootDeviceType !== "ebs"
+  ) {
+    refuse("staging_ami_root_device_mismatch");
+  }
 }
 
 async function describeExactStack(input, dependencies) {
@@ -1143,6 +1174,7 @@ async function runUp(
       verification_only: true,
     });
   }
+  await assertStagingAmiRootDevice(input, dependencies);
   if (input.hostSetup === undefined) refuse("host_setup_required");
   const setupArtifact = execute
     ? undefined
@@ -1988,6 +2020,40 @@ export function createAwsCliAdapters() {
         ]);
       },
     }),
+    ec2: Object.freeze({
+      async describeImage({ imageId, region }) {
+        const result = await awsJson([
+          "ec2",
+          "describe-images",
+          "--region",
+          region,
+          "--image-ids",
+          imageId,
+          "--output",
+          "json",
+        ]);
+        const images = result.Images;
+        if (!Array.isArray(images) || images.length !== 1)
+          throw new AwsCliError("ami_root_mapping_response_invalid");
+        const image = images[0];
+        if (
+          image === null ||
+          typeof image !== "object" ||
+          typeof image.ImageId !== "string" ||
+          typeof image.RootDeviceName !== "string" ||
+          typeof image.RootDeviceType !== "string" ||
+          typeof image.State !== "string"
+        ) {
+          throw new AwsCliError("ami_root_mapping_response_invalid");
+        }
+        return Object.freeze({
+          imageId: image.ImageId,
+          rootDeviceName: image.RootDeviceName,
+          rootDeviceType: image.RootDeviceType,
+          state: image.State,
+        });
+      },
+    }),
     s3: Object.freeze({
       async uploadObject({ bucket, key, path, region, sha256 }) {
         const sourcePath = resolve(path);
@@ -2200,6 +2266,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     ...defaults,
     ...dependencies,
     cloudFormation: dependencies.cloudFormation ?? defaults.cloudFormation,
+    ec2: dependencies.ec2 ?? defaults.ec2,
     putSecretValue: dependencies.putSecretValue ?? defaults.putSecretValue,
     s3: dependencies.s3 ?? defaults.s3,
     ssm: dependencies.ssm ?? defaults.ssm,
