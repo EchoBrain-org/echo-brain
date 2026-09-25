@@ -12,7 +12,8 @@ import { Close, Plus, Up } from './icons.js';
 export function Bar({ state }: { state: State }) {
   const [text, setText] = useState('');
   const scope = state.barScope;
-  const projectName = state.route.page === 'project' && scope.kind === 'project' ? state.route.project.name : null;
+  // While another app is in front nothing says which project is open.
+  const projectName = !state.concealed && state.route.page === 'project' && scope.kind === 'project' ? state.route.project.name : null;
   const submit = () => {
     if (text.trim() === '') return;
     void ask(text, scope);

@@ -254,13 +254,13 @@ test('a failed ask shows a fixed message, not server text', async () => {
   await expect(page.getByTestId('ask-error')).toHaveText('ECHO is unavailable right now. Try again.');
 });
 
-test('switching to another app covers the window until ECHO is back', async () => {
+test('switching to another app covers a project, but Home rows stay for drops', async () => {
   run = await launch();
   const { page, app } = run;
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await emit(app, 'echo-test:conceal');
-  await expect(page.getByTestId('concealed')).toBeVisible();
-  await expect(page.getByTestId('project-row')).toHaveCount(0);
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('concealed')).toHaveCount(0);
   await emit(app, 'echo-test:resume');
   await page.getByTestId('project-row').first().click();
   await expect(page.getByTestId('feed-row')).toBeVisible();

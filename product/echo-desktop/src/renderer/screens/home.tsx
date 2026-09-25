@@ -3,10 +3,14 @@ import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
 import { message } from '../messages.js';
 import { loadProjects, openProject, type State } from '../store.js';
+import { useDropTarget } from './drop.js';
 
+/** One project. A file dropped on it is captured into it. */
 function ProjectRow({ project }: { project: ProjectSummary }) {
+  const drop = useDropTarget(project);
   return (
-    <button type="button" class="row" data-testid="project-row" onClick={() => void openProject(project)}>
+    <button type="button" class={`row${drop.over ? ' drop-target' : ''}`} data-testid="project-row" onClick={() => void openProject(project)}
+      {...drop.handlers}>
       <span class="avatar" style={{ background: colorFor(project.project_id) }} aria-hidden="true">{initial(project.name)}</span>
       <span class="name">{project.name}</span>
       {project.role === 'lead' && <span class="tag">Lead</span>}

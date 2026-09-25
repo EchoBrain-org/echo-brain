@@ -1,8 +1,24 @@
+import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
 import { loadProjects, openCompose, openProject, showAccountMenu, type State } from '../store.js';
+import { useDropTarget } from './drop.js';
 import { Capture, Person } from './icons.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
+
+/** One project: a click opens it, a dropped file is captured into it. */
+function SidebarProject({ project, current }: { project: ProjectSummary; current: boolean }) {
+  const drop = useDropTarget(project);
+  return (
+    <button
+      type="button" data-testid="sidebar-project" class={`side-project${current ? ' current' : ''}${drop.over ? ' drop-target' : ''}`}
+      aria-current={current ? 'page' : undefined} onClick={() => void openProject(project)} {...drop.handlers}
+    >
+      <span class="dot" style={{ background: colorFor(project.project_id) }} aria-hidden="true">{initial(project.name)}</span>
+      <span class="label">{project.name}</span>
+    </button>
+  );
+}
 
 /**
  * Always beside the page: Capture, your projects (one click switches), and who
@@ -27,16 +43,7 @@ export function Sidebar({ state }: { state: State }) {
         {account && items.length > 0 && (
           <>
             <div class="side-header">PROJECTS</div>
-            {items.map(project => (
-              <button
-                type="button" key={project.project_id} data-testid="sidebar-project"
-                class={`side-project${project.project_id === current ? ' current' : ''}`}
-                aria-current={project.project_id === current ? 'page' : undefined} onClick={() => void openProject(project)}
-              >
-                <span class="dot" style={{ background: colorFor(project.project_id) }} aria-hidden="true">{initial(project.name)}</span>
-                <span class="label">{project.name}</span>
-              </button>
-            ))}
+            {items.map(project => <SidebarProject key={project.project_id} project={project} current={project.project_id === current} />)}
             {next && (
               <button type="button" class="link-button side-more" data-testid="sidebar-more" disabled={loading} onClick={() => void loadProjects(true)}>
                 More

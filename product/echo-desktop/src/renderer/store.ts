@@ -5,7 +5,7 @@ import type {
   AccountCommand, Answer, AppStatus, AskScope, Audience, ConnectedTool, ContextContent, Expect, Extraction, Failure, FeedItem, FileHandle,
   ProjectSummary, Receipt, Result,
 } from '../shared/protocol.js';
-import { rpc } from './api.js';
+import { dropFile, rpc } from './api.js';
 import { message } from './messages.js';
 
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary };
@@ -461,9 +461,9 @@ function release(compose: ComposeState): void {
   if (compose.kept && account) void rpc('documents.abandon', { expect: account, request_id: compose.requestId });
 }
 
-/** The project on screen, if any. */
+/** The project on screen, if any. While another app is in front there is none: its page is covered. */
 function onScreen(): ProjectSummary | null {
-  return state.route.page === 'project' ? state.route.project : null;
+  return state.route.page === 'project' && !state.concealed ? state.route.project : null;
 }
 
 /** ⊕ and the sidebar's Capture: the draft comes back as it was, or a new capture for the project on screen. */
@@ -627,6 +627,48 @@ export function newCompose(): void {
 
 export function keepUnresolved(): void {
   if (state.compose) setCompose({ ...state.compose, confirmNew: false });
+}
+
+// ---- drops -------------------------------------------------------------------
+
+const NOT_ATTACHED = 'The file was not attached.';
+
+/** A drop can land: someone is signed in, no account sheet is up, and it is one file. */
+export function canDrop(event: DragEvent): boolean {
+  const items = event.dataTransfer?.items;
+  return state.status?.signed_in === true && !state.sheet && items?.length === 1 && items[0]!.kind === 'file';
+}
+
+/**
+ * A dropped file. On the open sheet it is attached, and who can read it
+ * stays; on a project row it is captured into that project; anywhere else
+ * into the project on screen, or Only me. A draft with words in it, or a save
+ * not yet settled, is never changed: it comes back and says the file was not
+ * attached.
+ */
+export async function acceptDrop(file: File, on: ProjectSummary | 'window' | 'sheet'): Promise<void> {
+  if (!expect() || state.sheet) return;
+  const result = await dropFile(file);
+  if (!expect() || state.sheet) return;
+  const current = state.compose;
+  if (current && (locked(current) || current.text.trim() !== '')) {
+    setCompose({ ...current, hidden: false, notice: locked(current) ? NOT_ATTACHED : `${NOT_ATTACHED} Save this note first.` });
+    return;
+  }
+  if (on === 'sheet' && current && !current.hidden) {
+    if (result.ok) editCompose({ file: result.value });
+    else setCompose({ ...current, notice: message(result.failure) });
+    return;
+  }
+  set({ toast: null });
+  const project = on === 'window' || on === 'sheet' ? onScreen() : on;
+  if (!result.ok) {
+    setCompose(current ? { ...current, hidden: false, notice: message(result.failure) } : { ...fresh(project), notice: message(result.failure) });
+    return;
+  }
+  // Nothing written yet: the drop starts over, for whoever the gesture says.
+  if (current) release(current);
+  setCompose({ ...fresh(project), file: result.value });
 }
 
 // ---- window ------------------------------------------------------------------------

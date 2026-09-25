@@ -20,6 +20,7 @@ and signing out or switching account.
 | Kept upload copies are capped at 10 | An unconfirmed upload keeps a private copy for `documents retry`. Start over removes it (`documents abandon`), but Quit Anyway, a crash, or switching account while it is unconfirmed leaves it behind. After 10, every new upload fails with `snapshot_limit`, shown as "Something went wrong." | Give `snapshot_limit` its own message, and reconcile `documents pending` at launch. |
 | The unconfirmed-save record lives in memory | After Quit Anyway or a crash, nothing reminds the person about a save that may not have arrived. The quit dialog warns first. | Persist the pending request id and show it again at launch. |
 | Drafts are not kept across quit | Escape keeps a draft only while the app runs. | Persist drafts locally, only if people ask for it. |
+| ⌘⇧E with ECHO in front on a project page | A new capture starts on Only me, as it does from another app. The Swift app started it on the project on screen. ⊕ and the sidebar's Capture do start on the project. | Have main tell the page whether its window was in front when ⌘⇧E was pressed. |
 
 Capture from the design canvas also needs server work, and is not built:
 an Undo on the "Saved" toast (deleting or undoing a save), narrowing who can

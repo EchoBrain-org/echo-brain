@@ -7,16 +7,20 @@ let run: Launched;
 test.afterEach(async () => { await run?.close(); });
 
 type Rpc = (method: string, params?: unknown) => Promise<{ ok: boolean; failure?: { code: string } }>;
+type DropFile = (file: unknown) => Promise<{ ok: boolean; failure?: { code: string } }>;
 
 test('the page can never name a file path', async () => {
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   const replies = await page.evaluate(async () => {
-    const rpc = (window as unknown as { echo: { rpc: Rpc } }).echo.rpc;
+    const { rpc, dropFile } = (window as unknown as { echo: { rpc: Rpc; dropFile: DropFile } }).echo;
     const expect = { authority: 'https://authority.example', membership_id: 'mem_22222222-2222-4222-8222-222222222222' };
     return {
       drop: await rpc('drop.accept', { path: '/etc/hosts' }),
+      // The drop channel reads a path only off a real dropped File, never from the page.
+      dropPath: await dropFile('/etc/hosts'),
+      dropObject: await dropFile({ path: '/etc/hosts', name: 'hosts.txt' }),
       upload: await rpc('documents.upload', {
         expect, request_id: crypto.randomUUID(), file_handle: 'made-up', file: '/etc/hosts', title: 'x', audience: { kind: 'only-me' },
       }),
@@ -25,6 +29,8 @@ test('the page can never name a file path', async () => {
     };
   });
   expect(replies.drop).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
+  expect(replies.dropPath).toMatchObject({ ok: false, failure: { code: 'unsupported_file' } });
+  expect(replies.dropObject).toMatchObject({ ok: false, failure: { code: 'unsupported_file' } });
   expect(replies.upload).toMatchObject({ ok: false, failure: { code: 'unsupported_file' } });
   expect(replies.invitation).toMatchObject({ ok: false, failure: { code: 'unsupported_invitation' } });
   expect(run.calls().some(call => call.path.startsWith('/v2/session/'))).toBe(false);

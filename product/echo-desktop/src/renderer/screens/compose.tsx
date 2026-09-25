@@ -5,6 +5,7 @@ import {
   attachFile, checkCompose, chooseProject, chooseReaders, closeCompose, keepUnresolved, loadProjects, newCompose, removeFile, sendCompose,
   setComposeText, toggleMore, type ComposeState, type State,
 } from '../store.js';
+import { useDropTarget } from './drop.js';
 import { Clip, Close } from './icons.js';
 
 const SAVE_HINT = navigator.userAgent.includes('Mac') ? '⌘↩' : 'Ctrl+↩';
@@ -33,6 +34,7 @@ export function Compose({ state }: { state: State }) {
   const compose = state.compose!;
   const body = useRef<HTMLTextAreaElement>(null);
   const sheet = useRef<HTMLDivElement>(null);
+  const drop = useDropTarget('sheet');
   useEffect(() => { if (!compose.hidden) (body.current ?? sheet.current)?.focus(); }, [compose.seq, compose.hidden, compose.file]);
   // When the footer changes under the focused control, keep focus in the sheet.
   useEffect(() => {
@@ -50,7 +52,8 @@ export function Compose({ state }: { state: State }) {
   return (
     <div class="overlay" onClick={closeCompose}>
       <div
-        class="sheet capture" role="dialog" aria-label="Capture" data-testid="compose" ref={sheet} tabIndex={-1}
+        class={`sheet capture${drop.over ? ' drop-target' : ''}`} role="dialog" aria-label="Capture" data-testid="compose" ref={sheet} tabIndex={-1}
+        {...drop.handlers}
         onClick={event => event.stopPropagation()}
         onKeyDown={event => {
           // Escape is handled once, at the window: it hides the sheet and keeps the draft.

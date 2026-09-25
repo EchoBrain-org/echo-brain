@@ -10,8 +10,9 @@ import { Project } from './screens/project.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import {
-  accountCommand, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, closeSource, conceal, getState, goHome, hostFailed,
-  openCapture, refreshHome, refreshStatus, resume, retryStart, signinPhase, toggleMore, toggleSidebar, useStore, type State,
+  acceptDrop, accountCommand, canDrop, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, closeSource, conceal, getState,
+  goHome, hostFailed, openCapture, refreshHome, refreshStatus, resume, retryStart, signinPhase, toggleMore, toggleSidebar, useStore,
+  type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -86,9 +87,10 @@ function App() {
   }
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
-  // Another app is in front: cover the page until ECHO is back. The sidebar's
-  // project rows stay, so a file can still be dropped on one.
-  const covered = state.concealed;
+  // Another app is in front: cover what a project or an answer shows until
+  // ECHO is back. Project rows stay (Home's and the sidebar's), so a file
+  // dragged from Finder can still be dropped on one.
+  const covered = state.concealed && (state.ask !== null || inProject !== null);
   const title = covered ? 'ECHO' : state.ask ? '' : inProject ? inProject.name : 'ECHO';
   const backLabel = covered ? null : state.evidence || state.ask ? 'Back' : state.reader ? inProject?.name : inProject ? 'Home' : null;
   return (
@@ -97,7 +99,7 @@ function App() {
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} /> : inProject ? <Project state={state} project={inProject} /> : <Home state={state} />}
       </main>
-      {state.toast && !covered && <div class="toast" role="status" data-testid="toast"><Saved /><span>{state.toast}</span></div>}
+      {state.toast && !state.concealed && <div class="toast" role="status" data-testid="toast"><Saved /><span>{state.toast}</span></div>}
       <Bar state={state} />
       {state.compose && !state.compose.hidden && <Compose state={state} />}
       {state.sheet?.kind === 'tools' ? <ConnectedTools state={state} sheet={state.sheet} />
@@ -106,11 +108,23 @@ function App() {
   );
 }
 
-/** One window: the sidebar (unless hidden), then the title bar and the page. */
+/**
+ * One window: the sidebar (unless hidden), then the title bar and the page.
+ * A file dropped anywhere but a project row goes to Capture: into the open
+ * sheet, or a new capture for the project on screen.
+ */
 function Shell({ state, title, backLabel, children }: { state: State; title: string; backLabel: string | null; children: ComponentChildren }) {
   const open = state.sidebarOpen;
+  const onDrop = (event: DragEvent) => {
+    // Text and links drop as usual, into the note or the bar.
+    const files = event.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+    event.preventDefault();
+    const capturing = Boolean(state.compose && !state.compose.hidden);
+    if (files.length === 1) void acceptDrop(files[0]!, capturing ? 'sheet' : 'window');
+  };
   return (
-    <div class={`app shell${open ? ' with-sidebar' : ''}`}>
+    <div class={`app shell${open ? ' with-sidebar' : ''}`} onDragOver={event => { if (canDrop(event)) event.preventDefault(); }} onDrop={onDrop}>
       {open && <Sidebar state={state} />}
       <div class="main">
         <header class="titlebar">

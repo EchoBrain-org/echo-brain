@@ -290,6 +290,17 @@ ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> 
   return result;
 });
 
+// A dropped file's path comes only from the preload, which reads it off a real
+// File the person dropped; the page's rpc can never name a path.
+ipcMain.handle('drop', (event, path: unknown): Result<FileHandle> => {
+  if (!trustedSender(event)) return refused('forbidden');
+  const vetted = typeof path === 'string' ? vetDocument(path) : null;
+  log(`drop ${vetted ? 'ok' : 'unsupported_file'}`);
+  // Dropped from Finder with another app in front: ECHO comes forward with Capture, ready for ⌘↩.
+  if (window && !window.isFocused() && !test.ECHO_DESKTOP_HIDDEN) show();
+  return vetted ? { ok: true, value: vetted } : refused('unsupported_file');
+});
+
 async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Result<unknown>> {
   if (!trustedSender(event)) return refused('forbidden');
   if (request === null || typeof request !== 'object') return refused();
