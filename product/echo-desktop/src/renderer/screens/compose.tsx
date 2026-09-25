@@ -93,11 +93,13 @@ function ProjectList({ state, compose, projects, anchor }: {
     element.style.maxHeight = `${Math.max(160, Math.min(320, button.getBoundingClientRect().top - 16))}px`;
     element.querySelector<HTMLElement>('input')?.focus();
   }, []);
-  // A click anywhere else closes it; Projects itself opens and closes it.
+  // A click anywhere else closes it. Projects itself opens and closes it, and
+  // Only me or Organization close it as they are chosen, keeping what is unticked.
+  const choices = () => anchor.current?.closest('[role="radiogroup"]') ?? null;
   useEffect(() => {
     const outside = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!list.current?.contains(target) && !anchor.current?.contains(target)) closeProjects();
+      if (!list.current?.contains(target) && !choices()?.contains(target)) closeProjects();
     };
     document.addEventListener('pointerdown', outside, true);
     return () => document.removeEventListener('pointerdown', outside, true);
@@ -114,7 +116,7 @@ function ProjectList({ state, compose, projects, anchor }: {
       // Tab out of it closes it, as a click elsewhere does.
       onFocusOut={event => {
         const next = event.relatedTarget as Node | null;
-        if (next && !list.current?.contains(next) && !anchor.current?.contains(next)) closeProjects();
+        if (next && !list.current?.contains(next) && !choices()?.contains(next)) closeProjects();
       }}
     >
       {finding && (
@@ -200,7 +202,7 @@ function WhoCanRead({ state, compose, locked }: { state: State; compose: Compose
             event.preventDefault();
             const next = (at + step + radios.length) % radios.length;
             radios[next]!.focus();
-            // Projects with none ticked only takes the focus: Enter or Space opens its list.
+            // Projects with none ticked is chosen with nothing to save: Enter or Space opens its list.
             chooseReaders(CHOICES[next]!);
           }}
         >

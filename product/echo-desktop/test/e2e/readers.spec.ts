@@ -46,20 +46,35 @@ test('Who can read is Only me, Projects and Organization on one row: arrow keys 
   // From the note, Tab lands on the chosen one only.
   await page.keyboard.press('Tab');
   await expect(radio('Only me')).toBeFocused();
-  // Projects with nothing ticked takes the focus but is not chosen.
+  // Projects with nothing ticked is chosen, with nothing to save until one is.
   await page.keyboard.press('ArrowRight');
   await expect(projects(page)).toBeFocused();
-  await expect(projects(page)).toHaveAttribute('aria-checked', 'false');
-  await expect(radio('Only me')).toHaveAttribute('aria-checked', 'true');
+  await expect(projects(page)).toHaveAttribute('aria-checked', 'true');
+  await expect(radio('Only me')).toHaveAttribute('aria-checked', 'false');
   await expect(list(page)).toHaveCount(0);
+  await expect(page.getByTestId('compose-readers')).toHaveText('Choose one or more projects.');
+  await expect(page.getByTestId('compose-send')).toBeDisabled();
   await page.keyboard.press('ArrowDown');
   await expect(radio('Organization')).toBeFocused();
+  await expect(radio('Organization')).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
   await expect(page.getByTestId('compose-readers')).toHaveClass(/warning/);
+  // Leaving Organization for Projects leaves it: what has the caret is what is chosen, and ⌘↩ waits.
+  await page.keyboard.press('ArrowLeft');
+  await expect(projects(page)).toBeFocused();
+  await expect(projects(page)).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByTestId('compose-readers')).toHaveText('Choose one or more projects.');
+  await page.keyboard.press('Meta+Enter');
+  await expect(page.getByTestId('compose')).toBeVisible();
+  await expect(list(page)).toHaveCount(0);
+  expect(notes()).toHaveLength(0);
   // The ends wrap round.
   await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await expect(radio('Only me')).toBeFocused();
   await expect(radio('Only me')).toHaveAttribute('aria-checked', 'true');
   await page.keyboard.press('ArrowLeft');
+  await expect(radio('Organization')).toBeFocused();
   await page.keyboard.press('ArrowUp');
   await expect(projects(page)).toBeFocused();
 
@@ -139,6 +154,41 @@ test('Projects holds several: the list closes with nothing ticked back to what i
   // Sorted, as the API takes them.
   expect(notes()[0]!.body?.audience).toEqual({ kind: 'projects', project_ids: [APOLLO, BEACON] });
   expect(notes()[0]!.body?.association_project_ids).toEqual([APOLLO, BEACON]);
+});
+
+test('projects unticked in the list stay unticked when Only me or Organization is chosen next', async () => {
+  run = await launch();
+  const { page, app } = run;
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await emit(app, 'echo-test:capture');
+  await page.getByTestId('compose-body').fill('Not for either team');
+  const choose = async (names: string[]) => {
+    await projects(page).click();
+    for (const name of names) await tick(page, name).click();
+  };
+  await choose(['Apollo', 'Beacon']);
+  await list(page).getByTestId('projects-done').click();
+  await expect(projects(page)).toHaveText('Apollo +1');
+
+  // Both unticked, then Organization: the list closes as it stands.
+  await choose(['Apollo', 'Beacon']);
+  await page.getByTestId('readers-team').click();
+  await expect(list(page)).toHaveCount(0);
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Organization');
+  await expect(projects(page)).toHaveText('Projects');
+
+  // The same with Only me, and nothing is filed in the project unticked.
+  await choose(['Apollo']);
+  await list(page).getByTestId('projects-done').click();
+  await choose(['Apollo']);
+  await page.getByTestId('readers-only-me').click();
+  await expect(list(page)).toHaveCount(0);
+  await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
+  await expect(projects(page)).toHaveText('Projects');
+  await page.keyboard.press('Meta+Enter');
+  await expect(page.getByTestId('toast')).toHaveText('Saved for you');
+  expect(notes()[0]!.body?.audience).toEqual({ kind: 'only_me' });
+  expect(notes()[0]!.body?.association_project_ids).toEqual([]);
 });
 
 test('⌘⇧E starts as Only me with nothing ticked, a drop on a row starts with it ticked, and Start over keeps the choice', async () => {

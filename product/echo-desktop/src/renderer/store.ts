@@ -86,7 +86,7 @@ export interface ComposeState {
    * none is ticked.
    */
   projects: ProjectSummary[];
-  /** 'projects' always has a project ticked, except while its list is open. */
+  /** 'projects' with none ticked has nothing to save until one is. */
   readers: Readers;
   /** The Projects list is open: the choice it goes back to if it closes with none ticked. */
   picking: { readers: Readers; projects: ProjectSummary[] } | null;
@@ -2082,15 +2082,16 @@ export function setComposeText(text: string): void { editCompose({ text }); }
 
 /**
  * A choice in Who can read. Only me and Organization keep the projects
- * ticked: the capture stays filed in them. Projects with none ticked is
- * chosen only by opening its list.
+ * ticked: the capture stays filed in them. Chosen with the list open, they
+ * close it as it stands, so projects just unticked stay unticked. Projects
+ * with none ticked has nothing to save until one is.
  */
 export function chooseReaders(readers: Readers): void {
-  if (!state.compose || locked(state.compose)) return;
-  closeProjects();
   const compose = state.compose;
-  if (readers === compose.readers || (readers === 'projects' && compose.projects.length === 0)) return;
-  editCompose({ readers });
+  if (!compose || locked(compose)) return;
+  if (compose.picking && readers !== 'projects') { editCompose({ picking: null, readers }); return; }
+  closeProjects();
+  if (readers !== state.compose!.readers) editCompose({ readers });
 }
 
 /**
