@@ -134,8 +134,10 @@ export function Compose({ state }: { state: State }) {
               </>
             ) : (
               <>
+                {/* Saved when it is kept for yourself, sent when others get it. */}
                 <span class="error" data-testid="compose-error">
-                  {compose.status === 'checking' ? 'Checking…' : 'This may not have been sent.'}
+                  {compose.status === 'checking' ? 'Checking…'
+                    : compose.readers === 'only-me' ? 'This may not have been saved.' : 'This may not have been sent.'}
                 </span>
                 <div class="choices">
                   <button type="button" class="plain-button" data-testid="compose-check" disabled={busy} onClick={() => void checkCompose()}>Check status</button>

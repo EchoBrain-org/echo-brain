@@ -162,6 +162,8 @@ test('an unconfirmed save says so, locks the text and never claims it was sent',
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Draft');
+  // Shared, it may not have been sent; kept for yourself, it may not have been saved.
+  await page.getByTestId('readers-team').click();
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
   await expect(page.getByTestId('sent')).toHaveCount(0);

@@ -62,7 +62,7 @@ test('a retry refused for a known reason still says the first try may have arriv
   await expect(page.getByTestId('compose-unresolved')).toBeVisible();
   await page.getByTestId('compose-retry').click();
   await expect.poll(() => posts().length).toBe(2);
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
   await expect(page.getByTestId('compose-body')).toHaveAttribute('readonly', '');
 });
 
@@ -75,7 +75,7 @@ test('if the host dies mid-save the note is unconfirmed, and check status finds 
   await page.getByTestId('compose-send').click();
   await expect.poll(() => posts().length).toBe(1);
   await emit(app, 'echo-test:kill-host');
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
   await expect(page.getByTestId('compose-body')).toHaveAttribute('readonly', '');
   await expect(page.getByTestId('compose-check')).toBeEnabled();
   await expect(async () => {
@@ -149,7 +149,7 @@ test('an upload whose reply was lost is retried from the kept copy and stored on
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
   await page.getByTestId('compose-retry').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved for you · Extracting text');
   const [first, second] = uploads();
@@ -167,7 +167,7 @@ test('quitting with an unconfirmed file says a file may not have been sent', asy
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
   const asked = await app.evaluate(async ({ app: electronApp, dialog }) => {
     const prompts: string[] = [];
     dialog.showMessageBoxSync = ((options: Electron.MessageBoxSyncOptions) => { prompts.push(options.message); return 1; }) as never; // Cancel
@@ -187,7 +187,7 @@ test('check status settles an upload whose reply was lost', async () => {
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
   await page.getByTestId('compose-check').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved for you · Extracting text');
   expect(uploads()).toHaveLength(1);
@@ -202,7 +202,7 @@ test('starting over on an unconfirmed upload removes the copy kept to resend it'
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-attach').click();
   await page.getByTestId('compose-send').click();
-  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
+  await expect(page.getByTestId('compose-error')).toHaveText('This may not have been saved.');
   expect(keptCopies()).toEqual([uploads()[0]!.body?.request_id]);
   await page.getByTestId('compose-new').click();
   await page.getByTestId('compose-start-over').click();
