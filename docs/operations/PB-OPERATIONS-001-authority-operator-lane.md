@@ -90,19 +90,24 @@ Use the actor below; preserve the underlying identity, approval and health check
 | Final decision on the exact candidate release | Human, after successful candidate-client checks. |
 
 For browser onboarding, the local operator privately transfers the invitation
-and accepted record through the reviewed export CLI, verifies the matching kit,
-then runs `"<release-matched-kit>/Start ECHO.command" <transferred-absolute-path>`.
+and accepted record through the reviewed export CLI, verifies the matching
+command-line kit, runs `"<release-matched-kit>/Start-ECHO.sh" --install-only`,
+then runs
+`"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser`.
 Keep invitation mode `0600`; never print or paste its grant. The human completes
 browser login, any required logout, and `person slack-link`. Export does not
 advance onboarding. Confirm Interactivity only when its configuration needs work.
+A host wrapper installed before the Swift app was retired still prints
+`Start ECHO.command` and the `ECHO/bin` command path; neither exists any more,
+so use the command-line kit steps here.
 
 For the ordinary release-canary path, after initial approval the local operator
 on the designated owner Mac verifies the kit-installed client against the
 accepted release and runs:
 
 ```sh
-"$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20
-"$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY"
+"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --limit 20
+"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY"
 ```
 
 Both commands must return the same release's approved canary record, with search

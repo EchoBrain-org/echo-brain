@@ -2087,17 +2087,17 @@ resume() {
         client_version="$(release_field client-version)"
         release_id="$(release_field release-id)"
         source_sha="$(release_field source-sha)"
-        printf 'ACTION: Privately transfer invitation %s, canonical accepted release record %s, and the verified Person onboarding kit matching that release to the initial-owner machine; preserve the invitation mode 0600. Do not use a preexisting global echo-brain command. Run "<release-matched-kit>/Start ECHO.command" <transferred-absolute-path>. If that kit reports an existing ECHO session and this invitation is for a different person, run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person logout, then retry that same kit command.\n' \
+        printf 'ACTION: Privately transfer invitation %s, canonical accepted release record %s, and the verified Person onboarding kit matching that release to the initial-owner machine; preserve the invitation mode 0600. Do not use a preexisting global echo-brain command. Run "<release-matched-kit>/Start-ECHO.sh" --install-only, then "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser. If login reports that this Mac is already signed in and this invitation is for a different person, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person logout, then retry that same login command.\n' \
           "$initial_owner_invitation" "$RELEASE_FILE"
         printf 'RELEASE-MATCHED-KIT: release_id=%s source_sha=%s client_version=%s client_artifact_sha256=%s\n' \
           "$release_id" "$source_sha" "$client_version" "$client_sha256"
-        printf 'KIT-BUILD: If no verified kit was supplied, use a reviewed checkout at source_sha above and deploy/release/README.md. Obtain the artifact only from the privately transferred accepted release record, verify its SHA-256, build the macOS-arm64 kit with `npm run kit:person-onboarding -- --release <accepted-release.json> --artifact <exact-client.tgz> --app <matching-ECHO.app.zip> --output <private-kit.tar.gz>`, then use its Start ECHO.command command.\n'
+        printf 'KIT-BUILD: If no verified kit was supplied, use a reviewed checkout at source_sha above and deploy/release/README.md. Obtain the artifact only from the privately transferred accepted release record, verify its SHA-256, build the macOS-arm64 command-line kit with `npm run kit:person-onboarding -- --target darwin-arm64 --installation cli-kit --release <accepted-release.json> --artifact <exact-client.tgz> --output <private-kit.zip>`, unzip it, then use its echo-person-onboarding-kit/Start-ECHO.sh as the release-matched kit above.\n'
         print_status "$(setup_status)"
         return
         ;;
       complete_founder_slack_link)
         start_runtime
-        printf 'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person slack-link and complete its one-time Slack code exchange.\n'
+        printf 'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person slack-link and complete its one-time Slack code exchange.\n'
         print_status "$(setup_status)"
         return
         ;;
@@ -2125,7 +2125,7 @@ resume() {
         fi
         printf 'HOST ACTION: On the exact staging host, run ./update-clean-v1.sh canary.\n'
         printf 'FOUNDER ACTION: Approve its private Slack card.\n'
-        printf 'OPERATOR ACTION: After the founder approves, on the initial-owner machine verify the installed client matches the accepted release, then run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20 and "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY".\n'
+        printf 'OPERATOR ACTION: After the founder approves, on the initial-owner machine verify the installed client matches the accepted release, then run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --limit 20 and "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY".\n'
         printf 'HOST ACTION: On the exact staging host, rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status. The staging-only synthetic receipt is release-bound; terminal green still requires one positive Layer 1 read and one positive Layer 2 search after the approved record and current generation.\n'
         print_status "$(setup_status)"
         return

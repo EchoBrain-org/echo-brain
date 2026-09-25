@@ -468,7 +468,14 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain("canonical accepted release record %s");
     expect(source).toContain("verified Person onboarding kit matching that release");
     expect(source).toContain('"$initial_owner_invitation" "$RELEASE_FILE"');
-    expect(source).toContain('"<release-matched-kit>/Start ECHO.command" <transferred-absolute-path>');
+    expect(source).toContain('"<release-matched-kit>/Start-ECHO.sh" --install-only');
+    expect(source).toContain(
+      '"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser',
+    );
+    // The retired app kit and its paired command path must not come back.
+    expect(source).not.toContain("Start ECHO.command");
+    expect(source).not.toContain("ECHO/bin/echo-brain");
+    expect(source).not.toContain("--app ");
     expect(source).toContain("Do not use a preexisting global echo-brain command");
     expect(source).toContain('client_sha256="$(release_field client-sha256)"');
     expect(source).toContain('client_version="$(release_field client-version)"');
@@ -544,10 +551,70 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(result.stdout).not.toContain(urlToken);
       expect(result.stdout).not.toContain("client_artifact_url=");
       expect(result.stdout).toContain(
-        '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person logout',
+        '"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person logout',
       );
       expect(result.stdout).not.toContain("echo-brain person logout");
       expect(result.stdout).not.toContain("echo-brain person login");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("prints a founder kit build and install the command-line kit accepts", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const onboarding = join(
+        fixture.deploy,
+        "clean-data",
+        "state",
+        "onboarding",
+      );
+      mkdirSync(onboarding, { recursive: true });
+      writeFileSync(join(onboarding, "founder-person-invitation.json"), "{}\n", {
+        mode: 0o600,
+      });
+
+      const result = fixture.run("resume", {
+        ECHO_FAKE_SETUP_STATUS:
+          '{"next_step":"complete_founder_browser_login"}',
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        '"<release-matched-kit>/Start-ECHO.sh" --install-only, then "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser.',
+      );
+      // The macOS kit installer accepts exactly this one mode.
+      expect(
+        readFileSync(
+          resolve(REPO, "deploy/release/start-person-cli-kit-macos.sh"),
+          "utf8",
+        ),
+      ).toContain("usage: Start-ECHO.sh --install-only");
+
+      // Run the printed KIT-BUILD command's arguments through the real kit
+      // builder: it must get past argument parsing to the first input check.
+      const build = /^KIT-BUILD: .*`npm run kit:person-onboarding -- ([^`]+)`/m.exec(
+        result.stdout,
+      );
+      expect(build).not.toBeNull();
+      const placeholders = join(fixture.root, "kit-build");
+      const args = build![1]
+        .split(" ")
+        .map((argument) =>
+          /^<[a-z0-9.-]+>$/.test(argument)
+            ? join(placeholders, argument.slice(1, -1))
+            : argument,
+        );
+      expect(args).toContain(join(placeholders, "private-kit.zip"));
+      const built = spawnSync(
+        process.execPath,
+        [resolve(REPO, "deploy/release/create-person-onboarding-kit.mjs"), ...args],
+        { cwd: REPO, encoding: "utf8" },
+      );
+      expect(built.status).toBe(1);
+      expect(built.stderr).not.toContain("usage:");
+      expect(built.stderr).toContain("Person onboarding kit: release record is missing");
+      expect(existsSync(placeholders)).toBe(false);
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }
@@ -563,7 +630,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(
-        '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person slack-link',
+        '"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person slack-link',
       );
       expect(result.stdout).not.toContain("run echo-brain person slack-link");
     } finally {
@@ -586,7 +653,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "FOUNDER ACTION: Approve its private Slack card.\n",
       );
       expect(result.stdout).toContain(
-        'OPERATOR ACTION: After the founder approves, on the initial-owner machine verify the installed client matches the accepted release, then run "$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20',
+        'OPERATOR ACTION: After the founder approves, on the initial-owner machine verify the installed client matches the accepted release, then run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --limit 20',
       );
       expect(result.stdout).not.toMatch(
         /^FOUNDER ACTION:.*person records/m,
@@ -595,10 +662,10 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "HOST ACTION: On the exact staging host, rerun ./onboard-clean-v1.sh resume, then ./onboard-clean-v1.sh status.",
       );
       expect(result.stdout).toContain(
-        '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --limit 20',
+        '"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --limit 20',
       );
       expect(result.stdout).toContain(
-        '"$HOME/Library/Application Support/ECHO/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY"',
+        '"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person records --query "SYNTHETIC STAGING CANARY"',
       );
       expect(result.stdout).not.toContain(
         "run echo-brain person records --limit 20",
