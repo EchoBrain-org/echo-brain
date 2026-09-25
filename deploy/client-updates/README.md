@@ -72,7 +72,7 @@ change set does not approve the new resources. This is not a recovery operation
 on the failed stack. Existing CloudFront receipts stay bound to their original
 template and resource inventory.
 
-## Publication and Mac enrollment remain separate
+## Sign and publish the first release
 
 Only `feed.json` and `artifacts/*` are publicly readable. The `s3:GetObject`
 permission permits HTTPS GET/HEAD downloads. At publication, set
@@ -83,18 +83,93 @@ not overwrite an artifact key or upload private records, session state,
 invitations, or signing keys.
 
 Use the output URL in the public bootstrap configuration. The release signer
-keeps the Ed25519 private key outside the artifact bucket and client kit. Follow
-the existing feed `prepare` and `seal` commands with the exact approved release,
-Mac CLI kit, detached signature, and digest-bound founder authorization. Upload
-verified immutable artifacts first, verify their HTTPS bytes, and publish the
-sealed feed last through a reviewed publication operation. This hosting CLI
-does not yet implement that upload operation or provision signing keys.
+keeps the Ed25519 private key outside the artifact bucket and client kit. The
+local signer generates a dedicated Ed25519 key without printing private bytes.
+Use an existing operator-owned mode-0700 parent outside every checkout; the
+new signer directory must not exist, and paths must have no symlink ancestors:
+
+```sh
+npm run client-update:sign -- init --directory /absolute/private/new-staging-signer
+```
+
+Keep `private-key.pkcs8.der` in that private directory. `signer.json` contains
+only the public key and its fingerprint. Copy its `public_key_spki` into the
+bootstrap configuration with the deployed S3 `feed_url`, intended channel,
+sequence floor, `automatic: true`, and `installation: "cli-kit"`. No client,
+kit, feed, repository or publication receipt receives the private key.
+
+Run the [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed)
+with the exact accepted release and platform kit. Keep the prepared bundle,
+authorization and receipts in private mode-0700 directories with mode-0600
+files. Preview signing before approving its exact manifest digest:
+
+```sh
+npm run client-update:sign -- sign \
+  --directory /absolute/private/new-staging-signer \
+  --prepared /absolute/private/new-feed-bundle \
+  --authorization /absolute/private/founder-authorization.json \
+  --signature /absolute/private/new-manifest.sig
+```
+
+After review, repeat that command with `--approve-manifest <manifest-sha256>`.
+Existing user authorization for the same release, channel and operation remains
+valid. The signer revalidates the release, kits, founder authorization and pinned
+public key; it signs the original manifest bytes and writes a new detached
+signature exclusively. Run `client-update-feed.mjs seal` with that signature
+and the same authorization to create `feed.json`.
+
+From a reviewed, clean committed checkout, prepare the first publication:
+
+```sh
+npm run client-update:publish -- plan \
+  --hosting-receipt /absolute/private/feed-hosting-s3.json \
+  --prepared /absolute/private/new-feed-bundle \
+  --authorization /absolute/private/founder-authorization.json \
+  --output /absolute/private/first-publication.json
+npm run client-update:publish -- execute \
+  --receipt /absolute/private/first-publication.json \
+  --approve-manifest '<exact-reviewed-manifest-sha256>'
+npm run client-update:publish -- status \
+  --receipt /absolute/private/first-publication.json
+```
+
+This publisher supports only the first release in the dedicated S3 stack. It
+rechecks the account, completed hosting receipt, deployed template, resources,
+outputs and versioning. The receipt binds the tooling commit, local input
+digests, manifest and exact object inventory. Only content-addressed ZIPs and
+`feed.json` can be uploaded. Conditional creates refuse existing keys; an
+authenticated 403 never means an object is absent. Artifacts are uploaded and
+verified over public HTTPS before the signed feed is uploaded last. Original
+bytes, metadata, S3 version IDs and feed signatures are verified again.
+
+Keep an `unconfirmed` receipt and run `status` against it. Status only inspects
+objects; it never uploads. If an attempted write is verified, status can permit
+execution to continue with remaining unattempted objects. It never repeats an
+attempted PUT. An absent or mismatched attempted object requires investigation;
+do not create another receipt, remove locks or overwrite objects to bypass it.
+Subsequent feed replacement, expiry refresh, rollback and signer rotation need
+a separately implemented reviewed operation. This initial publisher does not
+provide those operations.
+
+## Enroll the Mac CLI
 
 An existing ZIP-delivered Mac client needs one trusted standalone CLI kit
 installation before enrollment. Its command is
 `~/Library/Application Support/ECHO/cli/bin/echo-brain`. Configure that exact
 command only after the hosted feed has been verified. The separate application
 and legacy paired command remain outside this CLI update channel.
+
+```sh
+"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" update configure \
+  --file /absolute/private/new-feed-bundle/bootstrap-config.json
+"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" update --check
+"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" update --status
+```
+
+When the installed client already matches the first published release,
+`up_to_date` proves feed retrieval, signature verification and release matching.
+It does not prove installation of a different release. Preserve the existing
+Person session and verify authenticated reads after enrollment.
 
 Live acceptance requires a Mac on release A to start a normal Person command,
 automatically install signed release B, and complete authenticated document

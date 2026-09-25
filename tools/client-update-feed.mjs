@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Buffer } from 'node:buffer';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -106,7 +106,7 @@ export function prepareClientUpdateFeed({ configPath, releasePath, linuxKit, mac
     for (const artifact of artifacts) writeFileSync(join(output, 'artifacts', `${artifact.sha256}.zip`), artifact.bytes, { mode: 0o600, flag: 'wx' });
     save(join(output, 'manifest.json'), manifest);
     save(join(output, 'bootstrap-config.json'), config);
-    copyFileSync(releasePath, join(output, 'release.json'));
+    writeFileSync(join(output, 'release.json'), read(releasePath), { mode: 0o600, flag: 'wx' });
   } catch (error) {
     rmSync(output, { recursive: true, force: true });
     throw error;
@@ -114,21 +114,26 @@ export function prepareClientUpdateFeed({ configPath, releasePath, linuxKit, mac
   return { status: 'prepared', manifest_sha256: updateDigest(read(join(output, 'manifest.json'))), release_id: release.release_id, artifact_count: artifacts.length };
 }
 
-export function sealClientUpdateFeed({ prepared, signaturePath, authorizationPath, now = Date.now() }) {
+// Shared nonmutating release validation for the signer and bounded publisher.
+// Private key handling and AWS writes belong to their separate operator tools.
+export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, now = Date.now() }) {
   const config = parseUpdateConfig(json(join(prepared, 'bootstrap-config.json')));
   if (config.installation !== 'cli-kit') fail('publisher_adapter_unavailable');
   const payload = read(join(prepared, 'manifest.json'));
-  const signature = read(signaturePath, 64);
-  if (signature.length !== 64) fail('invalid_signature');
-  const envelope = { payload: payload.toString('base64'), signature: signature.toString('base64') };
-  const { manifest } = verifyUpdateEnvelope(Buffer.from(JSON.stringify(envelope)), config, now);
+  const manifest = parseUpdateManifest(JSON.parse(payload.toString('utf8')));
+  if (manifest.channel !== config.channel) fail('wrong_channel');
+  if (!Number.isFinite(now) || Date.parse(manifest.issued_at) > now + 5 * 60 * 1000 || Date.parse(manifest.expires_at) <= now) fail('expired_metadata');
+  if (manifest.sequence < config.minimum_sequence) fail('stale_metadata');
+  if (manifest.artifacts.some(a => new URL(a.url).origin !== new URL(config.feed_url).origin)) fail('wrong_artifact_origin');
   const release = readCleanV1Release(join(prepared, 'release.json'));
   const approval = json(authorizationPath);
   if (approval.kind !== 'echo-staging-release-founder-authorization-v1' ||
       approval.release_sha256 !== manifest.release_sha256 ||
       approval.person_client_sha256 !== release.person_client.artifact_sha256 ||
       ['slack_approved', 'person_records_passed', 'person_ask_passed', 'release_authorized'].some(k => approval[k] !== true)) fail('exact_release_authorization_required');
-  if (updateDigest(read(join(prepared, 'release.json'))) !== manifest.release_sha256) fail('release_mismatch');
+  if (updateDigest(read(join(prepared, 'release.json'))) !== manifest.release_sha256 ||
+      release.release_id !== manifest.release_id || release.source_sha !== manifest.source_sha ||
+      release.person_client.version !== manifest.product_version) fail('release_mismatch');
   for (const artifact of manifest.artifacts) {
     const target = Object.values(KIT_TARGETS).find(candidate => sameTarget(candidate, artifact));
     if (!target) fail('publisher_adapter_unavailable');
@@ -137,6 +142,24 @@ export function sealClientUpdateFeed({ prepared, signaturePath, authorizationPat
     if (bytes.length !== artifact.bytes || updateDigest(bytes) !== artifact.sha256) fail('artifact_mismatch');
     validateKit(path, prepared, manifest, release, target);
   }
+  return { config, manifest, payload, release };
+}
+
+export function validateSealedClientUpdateFeed({ prepared, authorizationPath, now = Date.now() }) {
+  const validated = validatePreparedClientUpdateFeed({ prepared, authorizationPath, now });
+  const feedBytes = read(join(prepared, 'feed.json'));
+  verifyUpdateEnvelope(feedBytes, validated.config, now);
+  const envelope = JSON.parse(feedBytes.toString('utf8'));
+  if (!Buffer.from(envelope.payload, 'base64').equals(validated.payload)) fail('prepared_manifest_mismatch');
+  return { ...validated, feedBytes };
+}
+
+export function sealClientUpdateFeed({ prepared, signaturePath, authorizationPath, now = Date.now() }) {
+  const { config, manifest, payload } = validatePreparedClientUpdateFeed({ prepared, authorizationPath, now });
+  const signature = read(signaturePath, 64);
+  if (signature.length !== 64) fail('invalid_signature');
+  const envelope = { payload: payload.toString('base64'), signature: signature.toString('base64') };
+  verifyUpdateEnvelope(Buffer.from(JSON.stringify(envelope)), config, now);
   // The signature authorizes these exact channel bytes and artifact hashes.
   // Upload immutable artifacts first, then atomically replace the feed last.
   save(join(prepared, 'feed.json'), envelope);

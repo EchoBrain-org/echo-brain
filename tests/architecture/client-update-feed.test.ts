@@ -67,7 +67,9 @@ function fixture(targets: Target[] = ['linux']) {
     writeFileSync(approvalPath, JSON.stringify({ kind: 'echo-staging-release-founder-authorization-v1', release_sha256: updateDigest(readFileSync(releasePath)), person_client_sha256: clientHash, slack_approved: true, person_records_passed: true, person_ask_passed: true, release_authorized: authorized }));
   };
   const seal = () => run(['seal', '--prepared', output, '--signature', signaturePath, '--authorization', approvalPath]);
-  return { root, kits, output, prepare, authorize, seal, signaturePath };
+  const validateSealed = () => spawnSync(process.execPath, ['--input-type=module', '-e',
+    'import { validateSealedClientUpdateFeed } from "./tools/client-update-feed.mjs"; validateSealedClientUpdateFeed({prepared: process.argv[1], authorizationPath: process.argv[2]});', output, approvalPath], { cwd: REPO, encoding: 'utf8' });
+  return { root, kits, output, prepare, authorize, seal, signaturePath, validateSealed };
 }
 afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
@@ -110,6 +112,35 @@ describe('approved update feed publisher', () => {
       writeFileSync(join(f.output, 'artifacts', manifest.artifacts[0].sha256 + '.zip'), 'altered');
     }
     expect(f.seal().status).toBe(1);
+    expect(existsSync(join(f.output, 'feed.json'))).toBe(false);
+  });
+
+  it('rejects a valid signed envelope that differs from the prepared manifest', () => {
+    const f = fixture();
+    expect(f.prepare().status).toBe(0);
+    f.authorize();
+    expect(f.seal().status).toBe(0);
+    expect(f.validateSealed().status).toBe(0);
+    const file = join(f.output, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(file, 'utf8'));
+    manifest.sequence = 2;
+    writeFileSync(file, canonical(manifest) + '\n');
+    const result = f.validateSealed();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('prepared_manifest_mismatch');
+  });
+
+  it('rejects altered release metadata before accepting a valid signature', () => {
+    const f = fixture();
+    expect(f.prepare().status).toBe(0);
+    const file = join(f.output, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(file, 'utf8'));
+    manifest.product_version = '0.1.2';
+    writeFileSync(file, canonical(manifest) + '\n');
+    f.authorize();
+    const result = f.seal();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('verify the inputs, signature, and exact release authorization');
     expect(existsSync(join(f.output, 'feed.json'))).toBe(false);
   });
 
