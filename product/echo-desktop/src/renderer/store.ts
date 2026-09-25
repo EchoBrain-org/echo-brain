@@ -513,19 +513,24 @@ export async function loadTools(): Promise<void> {
   set({ sheet: { kind: 'tools', seq: mine, loading: false, tools: result.value.tools } });
 }
 
-/** A save or a project change on its way: signing out now would lose whether it arrived. */
-export function saveInFlight(): boolean {
+/**
+ * A save or a project change on its way, or one whose outcome is unknown:
+ * signing out now would lose whether it arrived, and the request a retry must
+ * resend. Check or Try again settles it; Start over or Dismiss gives it up.
+ */
+export function signOutHeld(): boolean {
   const status = state.compose?.status;
   const sheet = state.sheet;
-  return status === 'sending' || status === 'checking' || state.change?.status === 'sending' ||
-    (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.organization?.write?.status === 'sending';
+  return status === 'sending' || status === 'checking' || status === 'unknown' || state.change?.status === 'sending' ||
+    state.change?.status === 'unknown' || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) ||
+    state.organization?.write?.status === 'sending';
 }
 
 /** Sign out, or Switch account, after the person confirmed it. */
 export async function signOut(): Promise<void> {
   const account = expect();
   const sheet = state.sheet;
-  if (!account || !sheet || (sheet.kind !== 'signout' && sheet.kind !== 'switch') || sheet.busy || saveInFlight()) return;
+  if (!account || !sheet || (sheet.kind !== 'signout' && sheet.kind !== 'switch') || sheet.busy || signOutHeld()) return;
   set({ sheet: { ...sheet, busy: true, failure: undefined } });
   const result = await rpc('account.signOut', { expect: account });
   if (!result.ok) {

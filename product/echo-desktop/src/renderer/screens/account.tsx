@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { message } from '../messages.js';
-import { closeSheet, loadTools, saveInFlight, signOut, type SignOutSheet, type State, type ToolsSheet } from '../store.js';
+import { closeSheet, loadTools, signOut, signOutHeld, type SignOutSheet, type State, type ToolsSheet } from '../store.js';
 import { trapTab } from './compose.js';
 import { Close } from './icons.js';
 
@@ -9,9 +9,11 @@ export function ConfirmSignOut({ state, sheet }: { state: State; sheet: SignOutS
   const box = useRef<HTMLDivElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => { cancel.current?.focus(); }, [sheet.kind]);
-  const saving = saveInFlight();
-  const unresolved = state.compose?.status === 'unknown';
-  const changeUnresolved = state.change?.status === 'unknown';
+  const held = signOutHeld();
+  // An outcome that is unknown is settled where it shows, before signing out.
+  const settle = state.compose?.status === 'unknown' ? 'A save may not have arrived. Check it in Capture first.'
+    : state.change?.status === 'unknown' ? 'A project change may not have finished. Try it again or dismiss it first.'
+    : 'Finish the current save first.';
   return (
     <div class="overlay" onClick={closeSheet}>
       <div class="sheet confirm" role="alertdialog" aria-labelledby="confirm-title" data-testid="confirm" ref={box}
@@ -20,13 +22,11 @@ export function ConfirmSignOut({ state, sheet }: { state: State; sheet: SignOutS
         <p>{sheet.kind === 'switch'
           ? 'ECHO will sign out before you choose the next organization account.'
           : 'Ask and organization information will be cleared on this computer.'}</p>
-        {saving && <p class="error">Finish the current save first.</p>}
-        {!saving && unresolved && <p class="warning">A save may not have arrived. Signing out forgets it.</p>}
-        {!saving && !unresolved && changeUnresolved && <p class="warning">A project change may not have finished. Signing out forgets it.</p>}
+        {held && <p class="error">{settle}</p>}
         {sheet.failure && <p class="error" aria-live="polite">{message(sheet.failure)}</p>}
         <div class="choices">
           <button type="button" class="plain-button" data-testid="confirm-cancel" ref={cancel} disabled={sheet.busy} onClick={closeSheet}>Cancel</button>
-          <button type="button" class="plain-button danger" data-testid="confirm-signout" disabled={sheet.busy || saving} onClick={() => void signOut()}>
+          <button type="button" class="plain-button danger" data-testid="confirm-signout" disabled={sheet.busy || held} onClick={() => void signOut()}>
             {sheet.failure ? 'Try again' : 'Sign out'}
           </button>
         </div>

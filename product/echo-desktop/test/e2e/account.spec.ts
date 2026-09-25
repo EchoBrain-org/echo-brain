@@ -114,6 +114,31 @@ test('sign out waits for a save on its way', async () => {
   await expect(page.getByTestId('confirm-signout')).toBeDisabled();
 });
 
+test('sign out waits until a save whose outcome is unknown is settled, so its retry is never lost', async () => {
+  run = await launch('write-unavailable-once');
+  const { page, app } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Offsite dates');
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('compose-unresolved')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await chooseFromTray(run, 'Sign out…');
+  await expect(page.getByTestId('confirm')).toContainText('A save may not have arrived. Check it in Capture first.');
+  await expect(page.getByTestId('confirm-signout')).toBeDisabled();
+  await page.getByTestId('confirm-cancel').click();
+
+  // Checked, it did not arrive: now nothing is lost by signing out.
+  await emit(app, 'echo-test:capture');
+  await page.getByTestId('compose-check').click();
+  await expect(page.getByTestId('compose-error')).toHaveText('It was not saved. Try again.');
+  await page.keyboard.press('Escape');
+  await chooseFromTray(run, 'Sign out…');
+  await page.getByTestId('confirm-signout').click();
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  expect(revocations()).toHaveLength(1);
+});
+
 test('Open invitation… signs in with the folder the owner sent, and the page never learns where it is', async () => {
   run = await launch('signed-out');
   const { page, app } = run;
