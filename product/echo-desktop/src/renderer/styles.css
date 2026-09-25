@@ -308,10 +308,12 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .sheet.new-project .sheet-head { gap: 12px; }
 .name-field { flex-grow: 1; min-width: 0; height: 44px; font-size: 20px; font-weight: 600; }
 .sheet.new-project .project-name { min-width: 0; font-size: 20px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sheet.new-project .people-list { max-height: 200px; }
+/* In a short window the people and the files share the room, and at least one person shows. */
+.sheet.new-project .people-list { max-height: 200px; min-height: 40px; }
 .sheet.new-project .section-label { flex-shrink: 0; margin-top: 6px; }
 .sheet.new-project .field:disabled { opacity: 0.5; cursor: default; }
-.files-well { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px dashed rgba(240, 236, 230, 0.25); border-radius: 10px; }
+.files-well { min-height: 0; overflow: hidden; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px dashed rgba(240, 236, 230, 0.25); border-radius: 10px; }
+.files-well > .pill { flex-shrink: 0; }
 .file-list { align-self: stretch; max-height: 142px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .file-row { flex-shrink: 0; display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: 13px; }
 .file-row svg { flex-shrink: 0; }
