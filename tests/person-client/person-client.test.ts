@@ -3181,18 +3181,21 @@ describe("Person client", () => {
     return { client, calls };
   }
 
-  const unreachable = (code: string) => (): Response => {
-    throw new TypeError("fetch failed", { cause: Object.assign(new Error(`connect ${code}`), { code }) });
+  // What undici rejects with: the socket error, carrying the step that failed.
+  const failed = (code: string, syscall: string) =>
+    Object.assign(new Error(`${syscall} ${code}`), { code, syscall });
+  const unreachable = (code: string, syscall = "connect") => (): Response => {
+    throw new TypeError("fetch failed", { cause: failed(code, syscall) });
   };
 
   it.each([
-    ["the name cannot be looked up", unreachable("ENOTFOUND")],
+    ["the name cannot be looked up", unreachable("ENOTFOUND", "getaddrinfo")],
     ["the connection is refused", unreachable("ECONNREFUSED")],
     ["every address is unreachable", (): Response => {
-      throw new TypeError("fetch failed", { cause: new AggregateError([
-        Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" }),
-        Object.assign(new Error("connect ENETUNREACH"), { code: "ENETUNREACH" }),
-      ]) });
+      throw new TypeError("fetch failed", { cause: Object.assign(new AggregateError([
+        failed("EHOSTUNREACH", "connect"),
+        failed("ENETUNREACH", "connect"),
+      ]), { code: "EHOSTUNREACH" }) });
     }],
   ])("keeps the session when %s, and refreshes again on the next call", async (_, reply) => {
     await withHome(async (home) => {
@@ -3210,7 +3213,15 @@ describe("Person client", () => {
 
   it.each([
     ["an ambiguous transport failure", (): Response => { throw new Error("connection outcome is unknown"); }],
-    ["a reset after sending", unreachable("ECONNRESET")],
+    ["a reset after sending", unreachable("ECONNRESET", "read")],
+    ["a lost route on a connected socket", unreachable("EHOSTUNREACH", "read")],
+    ["a refused write after connecting", unreachable("EADDRNOTAVAIL", "write")],
+    ["one of several addresses failing after connecting", (): Response => {
+      throw new TypeError("fetch failed", { cause: Object.assign(new AggregateError([
+        failed("ECONNREFUSED", "connect"),
+        failed("EHOSTUNREACH", "read"),
+      ]), { code: "ECONNREFUSED" }) });
+    }],
     ["a server failure", () => json({ error: { code: "unavailable", message: "unavailable" } }, 503)],
     ["an unreadable reply", () => json({ ...ROTATED_SESSION, access_token: "short" })],
   ])("never replays a refresh credential after %s, and signs out cleanly", async (_, reply) => {

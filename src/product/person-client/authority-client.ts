@@ -140,24 +140,24 @@ export class PersonAuthorityClientError extends Error {
   }
 }
 
-/** Failures before any connection exists: name lookup, refusal, no route. */
-const NEVER_SENT_CODES = new Set([
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "ENETDOWN",
-  "EADDRNOTAVAIL",
-  "UND_ERR_CONNECT_TIMEOUT",
-]);
+/**
+ * Failures before any connection exists, judged by the step that failed: the
+ * same code from a read or write on a connected socket may follow sent bytes.
+ */
+const CONNECT_FAILURES = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN", "EADDRNOTAVAIL"]);
+const LOOKUP_FAILURES = new Set(["ENOTFOUND", "EAI_AGAIN"]);
 
 function neverSent(error: unknown, depth = 0): boolean {
   if (depth > 4 || typeof error !== "object" || error === null) return false;
-  const { code, cause, errors } = error as { code?: unknown; cause?: unknown; errors?: unknown };
-  if (typeof code === "string" && NEVER_SENT_CODES.has(code)) return true;
+  const { code, syscall, cause, errors } = error as { code?: unknown; syscall?: unknown; cause?: unknown; errors?: unknown };
+  // Every address tried (an aggregate copies its first code, not its step).
   if (Array.isArray(errors) && errors.length > 0) {
     return errors.every((entry) => neverSent(entry, depth + 1));
+  }
+  if (code === "UND_ERR_CONNECT_TIMEOUT") return true;
+  if (typeof code === "string" && typeof syscall === "string") {
+    if (CONNECT_FAILURES.has(code)) return syscall === "connect";
+    if (LOOKUP_FAILURES.has(code)) return syscall === "getaddrinfo" || syscall.startsWith("query");
   }
   return neverSent(cause, depth + 1);
 }

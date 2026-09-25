@@ -451,8 +451,23 @@ export class PersonSessionStore {
       }
       throw error;
     }
-    this.cleanupTransitions();
+    this.releaseOwnClaim(claimed);
     return value;
+  }
+
+  /**
+   * Removes this refresh's claim and set-aside session, unless another process
+   * has claimed since: once the live session is back, a reader elsewhere may
+   * already have cleaned up and started its own refresh.
+   */
+  private releaseOwnClaim(claimed: PersonSessionRefreshClaim): void {
+    try {
+      if (readPrivateFile(this.paths.refresh_claim) !== `${claimed.claim_id}\n`) return;
+    } catch {
+      return; // Already cleaned up by a reader.
+    }
+    const removed = removeIfPresent(this.paths.refreshing);
+    if (removeIfPresent(this.paths.refresh_claim) || removed) fsyncDirectory(this.paths.directory);
   }
 
   /**
@@ -471,7 +486,7 @@ export class PersonSessionStore {
         throw error;
       }
     }
-    this.cleanupTransitions();
+    this.releaseOwnClaim(claimed);
   }
 
   claimLogout(): StoredPersonClientSessionV1 {
