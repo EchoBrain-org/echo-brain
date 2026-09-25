@@ -14,9 +14,10 @@ Authority: signing in (including the weekly re-sign-in), Home, a project's
 feed of notes and documents (and its place when you come back to it), the
 reader (a note's text, who can read it, a document's text pages, Save
 original…, and moving an original between projects), a project's People,
-Ask as a thread with sources and Copy answer, capturing a note or a file,
-dropping a file on a project row, the Capture sheet or the window, resolving
-an unconfirmed save or project change, the sidebar, the bar's scope chip and
+Ask as a thread with sources and Copy answer, capturing a note or a file
+and choosing who can read it (with a few projects or twenty), dropping a
+file on a project row, the Capture sheet or the window, resolving an
+unconfirmed save or project change, the sidebar, the bar's scope chip and
 live matches, New project (its people and files), People & invites for owners
 (from the sidebar or the tray), the Account menu (in the window and the tray),
 reopening ECHO while it runs, and signing out or switching account.
@@ -25,14 +26,16 @@ reopening ECHO while it runs, and signing out or switching account.
 
 | Gap | What happens today | Fix when needed |
 | --- | --- | --- |
-| One project per capture | Capture files a note or a file in one project: the page's, or one picked under More…. The Swift app's picker filed it in up to 20 projects at once, readable by "Members of selected projects". | Let More… pick several, and send them as `--association-project-ids-json` (and `--audience projects` with `--audience-project-ids-json` for their members). The client already takes both. |
+| One project per capture | Capture files a note or a file in one project at most: the one picked in Who can read, or the project Capture was opened for. The Swift app's picker filed it in up to 20 projects at once, readable by "Members of selected projects". | Let Who can read pick several projects, and send them as `--association-project-ids-json` (and `--audience projects` with `--audience-project-ids-json` for their members). The client already takes both. |
+| Only me in another project | A project in Who can read means its members can read the capture, and files it there. Only me and Organization file it in the project Capture was opened for (the page's, or the row a file was dropped on), or in none. To keep a private note filed in another project, open that project first. | A separate "filed in" choice, if people ask for one. |
+| Find a project sees only loaded projects | Past eight projects, Find a project narrows the pills to the names that contain what is typed, among the projects loaded so far: Home's first page, and each page More projects adds. A project on a later page shows only after More projects. When nothing matches, only Only me and Organization are left, and nothing says so. | Read the remaining pages as someone types, or search project names in the API. |
 | No Discard | Escape or Close puts a draft away, and ⌘⇧E or ⊕ brings it back; nothing throws it away in one step. You clear its text or remove its file. The Swift app asked "Discard this note?" when a draft was closed. | Add Discard to Capture, if people want to drop a draft in one step. |
 | File names in decomposed Unicode (NFD) | A file named with decomposed accents, for example one copied from an old HFS+ volume, is refused: "That cannot be sent." The API accepts only NFC names and titles. | Normalize the file name and title to NFC in the person client before upload. That is a shared client change. |
 | Kept upload copies are capped at 10 | An unconfirmed upload keeps a private copy for `documents retry`. Start over removes it (`documents abandon`), and Sign out and Switch account wait until it is settled, but Quit Anyway, a crash, or the account changing from the terminal while it is unconfirmed leaves it behind. After 10, every new upload fails with `snapshot_limit`, shown as "Something went wrong." | Give `snapshot_limit` its own message, and reconcile `documents pending` at launch. |
 | The unconfirmed-save record lives in memory | After Quit Anyway or a crash, nothing reminds the person about a save, a project change or a new project that may not have arrived. The quit dialog warns first ("A note may not have been sent.", "A project change may not have finished."). The Swift app kept an unconfirmed save or project change (a create included) in its preferences, and offered Check status or Retry after a relaunch. | Persist the pending request id (and, for a project change, the change) and show it again at launch. |
 | Drafts are not kept across quit | A draft put away is kept only while the app runs. | Persist drafts locally, only if people ask for it. |
 | ⌘⇧E with ECHO in front on a project page | A new capture starts on Only me, as it does from another app. The Swift app started it on the project on screen. ⊕ and the sidebar's Capture do start on the project. | Have main tell the page whether its window was in front when ⌘⇧E was pressed. |
-| Capture after losing a project | A draft filed in a project keeps that project in its Who can read row after access to it is lost, even while Capture is hidden, and saving it there then fails. The Swift app cleared such a draft and closed Capture when project access changed, unless its save was unconfirmed. | Clear and close a draft filed in a project the refreshed list no longer has, unless its save is unconfirmed. |
+| Capture after losing a project | A draft filed in a project keeps that project's pill in Who can read after access to it is lost, even while Capture is hidden, and saving it there then fails. The Swift app cleared such a draft and closed Capture when project access changed, unless its save was unconfirmed. | Clear and close a draft filed in a project the refreshed list no longer has, unless its save is unconfirmed. |
 | No drop outline on the whole window | While a file that would be taken hovers, project rows and the Capture sheet light up, but the rest of the window takes the drop with no outline. The Swift app drew a 1 pt gold border around the content area. | Outline the content area while such a file hovers, if people miss where a drop will land. |
 | ⌘⇧E while New project is open | ECHO comes forward on New project, which stays open so files dragged from Finder land on it once the project is created; Capture does not open over it. | Open Capture once New project closes, if people ask for it. |
 
