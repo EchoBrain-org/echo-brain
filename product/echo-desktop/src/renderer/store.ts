@@ -2045,7 +2045,7 @@ export function openCompose(): void {
  */
 export function openCapture(): void {
   const current = state.compose;
-  // New project stays in front: its files are dropped on it.
+  // New project stays in front, as Capture would open under it. Once its project is made, files dropped on it go there.
   if (state.sheet?.kind === 'new-project') return;
   set({ toast: null });
   setCompose(current ? { ...current, hidden: false } : fresh(null));

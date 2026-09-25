@@ -113,9 +113,15 @@ test('a create whose reply was lost is never called made: Try again resends the 
   await expect(page.getByTestId('new-project-close-anyway')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('new-project-retry')).toBeVisible();
+  // Until it is made and open, a file dropped on the sheet is refused, not held for later.
+  const [brief] = onDisk('Brief.md');
+  await drop(page, page.getByTestId('new-project'), brief!);
+  await expect(page.getByTestId('new-project-notice')).toHaveText('Create the project first.');
+  await expect(page.getByTestId('new-project-file')).toHaveCount(0);
 
   await page.getByTestId('new-project-retry').click();
   await expect(page.getByTestId('new-project-title')).toHaveText('Cedar');
+  await expect(page.getByTestId('new-project-notice')).toHaveCount(0);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(3);
   expect(creates()).toHaveLength(2);
   expect(creates()[1]!.body).toEqual(creates()[0]!.body);
