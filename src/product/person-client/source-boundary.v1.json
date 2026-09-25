@@ -218,7 +218,8 @@
       "name": "person-client-composition-selects-tool-fragments",
       "from": "src/product/person-client/composition.ts",
       "allowed_imports": [
-        "src/product/person-client/commands.ts"
+        "src/product/person-client/commands.ts",
+        "src/product/person-client/client-update-cli.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/provider-slack-client"
@@ -254,6 +255,108 @@
         "buffer",
         "crypto",
         "fs",
+        "path"
+      ]
+    },
+    {
+      "name": "person-client-update-contract",
+      "from": "src/product/person-client/client-update-contract.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "buffer",
+        "crypto"
+      ]
+    },
+    {
+      "name": "person-client-update-files",
+      "from": "src/product/person-client/client-update-files.ts",
+      "allowed_imports": [
+        "src/product/person-client/client-update-contract.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "fs",
+        "path",
+        "crypto"
+      ]
+    },
+    {
+      "name": "person-client-update-linux",
+      "from": "src/product/person-client/client-update-linux.ts",
+      "allowed_imports": [
+        "src/product/person-client/client-update-contract.ts",
+        "src/product/person-client/client-update-kit.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "path"
+      ]
+    },
+    {
+      "name": "person-client-update-core",
+      "from": "src/product/person-client/client-update.ts",
+      "allowed_imports": [
+        "src/product/person-client/client-update-contract.ts",
+        "src/product/person-client/client-update-files.ts",
+        "src/product/person-client/client-update-linux.ts",
+        "src/product/person-client/client-update-kit.ts",
+        "src/product/person-client/client-update-macos.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "buffer",
+        "fs",
+        "path",
+        "crypto"
+      ]
+    },
+    {
+      "name": "person-client-update-cli",
+      "from": "src/product/person-client/client-update-cli.ts",
+      "allowed_imports": [
+        "src/product/person-client/client-update-contract.ts",
+        "src/product/person-client/client-update-files.ts",
+        "src/product/person-client/client-update.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "child_process",
+        "fs",
+        "path",
+        "url"
+      ]
+    },
+    {
+      "name": "person-client-update-kit",
+      "from": "src/product/person-client/client-update-kit.ts",
+      "allowed_imports": [
+        "src/product/person-client/client-update-contract.ts",
+        "src/product/person-client/client-update-files.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
+        "child_process",
+        "fs",
+        "path"
+      ]
+    },
+    {
+      "name": "person-client-update-macos",
+      "from": "src/product/person-client/client-update-macos.ts",
+      "allowed_imports": [
+        "src/product/person-client/client-update-contract.ts",
+        "src/product/person-client/client-update-kit.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": [
         "path"
       ]
     }

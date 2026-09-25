@@ -97,6 +97,12 @@ validate_client_archive_layout() {
   done < <(tar -tvzf "$archive")
 }
 
+expected_wrapper_sha256=''
+if [[ $# -eq 3 && "$1" == --install-only && "$2" == --expected-wrapper-sha256 ]]; then
+  [[ "$3" =~ ^[a-f0-9]{64}$ ]] || usage
+  expected_wrapper_sha256="$3"
+  set -- --install-only
+fi
 [[ $# -eq 1 ]] || usage
 install_only=0
 invitation=''
@@ -159,6 +165,15 @@ cleanup() {
   rmdir "$install_lock" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+# The updater captures the active wrapper before downloading. Recheck while
+# holding the ordinary installer lock so a concurrent manual install wins.
+if [[ -n "$expected_wrapper_sha256" ]]; then
+  require_safe_regular_file "$bin_root/echo-brain" 'the active ECHO command'
+  actual_wrapper_sha256="$(sha256sum "$bin_root/echo-brain")"
+  [[ "${actual_wrapper_sha256%% *}" == "$expected_wrapper_sha256" ]] || \
+    fail 'the active ECHO release changed during download; check again'
+fi
 
 release_root="$releases_root/$release_id"
 if [[ -e "$release_root" || -L "$release_root" ]]; then
