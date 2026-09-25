@@ -38,6 +38,10 @@ test('New project is one page: a name and Create, then people, then files if any
   await expect(page.getByTestId('new-project-first')).toHaveText('Create the project first to add people and files.');
   await expect(page.getByTestId('people-find')).toBeDisabled();
   await expect(page.getByTestId('new-project-add-files')).toBeDisabled();
+  // Tab skips them, so the reason is read out with the name field too.
+  for (const id of ['new-project-name', 'people-find', 'new-project-add-files']) {
+    await expect(page.getByTestId(id)).toHaveAccessibleDescription('Create the project first to add people and files.');
+  }
   const [brief] = onDisk('Brief.md');
   await drop(page, page.getByTestId('new-project'), brief!);
   await expect(page.getByTestId('new-project-notice')).toHaveText('Create the project first.');
@@ -51,6 +55,7 @@ test('New project is one page: a name and Create, then people, then files if any
   await expect(page.getByTestId('title')).toHaveText('Cedar');
   await expect(page.getByTestId('sidebar-project')).toHaveText(['CCedar']);
   await expect(page.getByTestId('new-project-first')).toHaveCount(0);
+  await expect(page.getByTestId('new-project-add-files')).toHaveAccessibleDescription('');
   await expect(page.getByTestId('people-find')).toBeFocused();
   const people = (await page.getByTestId('people-find').boundingBox())!;
   const well = (await page.getByTestId('new-project-files').boundingBox())!;

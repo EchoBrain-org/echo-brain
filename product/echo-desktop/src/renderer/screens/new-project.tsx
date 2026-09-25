@@ -137,6 +137,9 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
   const busy = newProjectBusy(sheet);
   const locked = sheet.createdId !== null || sheet.create.status === 'sending' || sheet.create.status === 'unknown';
   const halted = sheet.files.some(file => file.status === 'unknown' || file.status === 'checking');
+  // Why People and Files are off, read out with the name field and with each of them.
+  const first = !made && !sheet.createdId;
+  const why = first ? 'new-project-first' : undefined;
   return (
     <div class="overlay top">
       <div
@@ -165,21 +168,22 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
           {made ? <h2 class="project-name" data-testid="new-project-title">{made.name}</h2> : (
             <input
               ref={name} class="field name-field" data-testid="new-project-name" type="text" autocomplete="off" maxLength={200}
-              placeholder="Name" aria-label="Project name" value={sheet.name} readOnly={locked}
+              placeholder="Name" aria-label="Project name" aria-describedby={why} value={sheet.name} readOnly={locked}
               onInput={event => setNewProjectName((event.target as HTMLInputElement).value)}
               onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void createProject(); } }}
             />
           )}
           <button type="button" class="circle small" aria-label="Close" data-testid="new-project-close" disabled={busy} onClick={closeSheet}><Close /></button>
         </div>
-        {!made && !sheet.createdId && (
-          <div class="notice-line" data-testid="new-project-first">Create the project first to add people and files.</div>
+        {first && (
+          <div class="notice-line" id="new-project-first" data-testid="new-project-first">Create the project first to add people and files.</div>
         )}
         {!state.concealed && (
           <>
             <div class="section-label">People</div>
             {made ? <Finder state={state} sheet={sheet as FindingSheet} menus={false} field={find} /> : (
-              <input class="field small" data-testid="people-find" type="text" disabled placeholder="Add someone by name" aria-label="Add someone by name" />
+              <input class="field small" data-testid="people-find" type="text" disabled placeholder="Add someone by name" aria-label="Add someone by name"
+                aria-describedby={why} />
             )}
           </>
         )}
@@ -191,7 +195,7 @@ export function NewProject({ state, sheet }: { state: State; sheet: NewProjectSh
             </div>
           )}
           <button type="button" class="pill" data-testid="new-project-add-files" disabled={!made || sheet.files.length >= MAX_PROJECT_FILES}
-            onClick={() => void chooseFiles()}>Add files…</button>
+            aria-describedby={why} onClick={() => void chooseFiles()}>Add files…</button>
         </div>
         {sheet.notice && <div class="notice-line" data-testid="new-project-notice" aria-live="polite">{sheet.notice}</div>}
         <Foot sheet={sheet} />
