@@ -46,8 +46,6 @@
       "src/product/person-client/composition.ts"
     ],
     "source_assemblies": [
-      "product/echo-overlay/source-assembly.v1.json",
-      "product/echo-onboarding/source-assembly.v1.json",
       "deploy/organization-authority/journey-explorer-assembly.v1.json"
     ]
   },

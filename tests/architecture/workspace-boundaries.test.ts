@@ -1204,20 +1204,19 @@ describe("workspace source boundaries", () => {
     expect(runBoundary(fixture).status).toBe(0);
   });
 
-  it("checks provider assets and native assembly ownership through the same gate", () => {
+  it("checks provider assets and source assembly ownership through the same gate", () => {
     const fixture = fixtureRepository();
     const entry = join(fixture, "packages/federation-protocol/src/asset-probe.ts");
     writeFileSync(entry, "export const asset = new URL('../../../providers/openrouter/assets/telemetry-vocabulary.v1.json', import.meta.url);\n");
     expect(runBoundary(fixture).stdout).toContain("neutral module reaches provider");
     rmSync(entry);
-    const orphan = join(fixture, "product/echo-overlay/unregistered.swift");
+    const orphan = join(fixture, "product/unregistered.swift");
     writeFileSync(orphan, "struct Unregistered {}\n");
     expect(runBoundary(fixture).stdout).toContain("Swift source has no assembly owner");
     rmSync(orphan);
-    const assemblyPath = "product/echo-overlay/source-assembly.v1.json";
-    const assembly = readFixtureJson<{ neutral_sources: string[]; provider_sources: string[] }>(fixture, assemblyPath);
-    assembly.neutral_sources.push(...assembly.provider_sources);
-    assembly.provider_sources = [];
+    const assemblyPath = "deploy/organization-authority/journey-explorer-assembly.v1.json";
+    const assembly = readFixtureJson<{ provider_assets: string[] }>(fixture, assemblyPath);
+    assembly.provider_assets.push("deploy/organization-authority/authority-staging-v1.example.json");
     writeFixtureJson(fixture, assemblyPath, assembly);
     expect(runBoundary(fixture).stdout).toContain("assembly input has the wrong provider owner");
   });
