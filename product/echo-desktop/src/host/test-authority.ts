@@ -280,7 +280,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         // Twenty in two pages, some with long names, one longer than Capture is wide.
         : mode === 'long-project-names'
           ? LONG_NAMES.map((name, index) => ({ project_id: `prj_${String(index + 1).padStart(8, '0')}-2222-4222-8222-222222222222`, name, role: 'member' }))
-          : projects;
+          // Added to a project made since the first list: the newest, it leads.
+          : mode === 'project-added' && projectLists > 0
+            ? [{ project_id: 'prj_55555555-5555-4555-8555-555555555555', name: 'Comet', role: 'member' as const }, ...projects]
+            : projects;
       const second = url.searchParams.get('cursor') === 'cGFnZTI';
       const paged = mode === 'many-projects' || mode === 'long-project-names';
       const page = paged ? (second ? all.slice(10) : all.slice(0, 10)) : all;

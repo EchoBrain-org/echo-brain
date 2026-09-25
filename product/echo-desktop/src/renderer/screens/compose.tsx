@@ -54,13 +54,26 @@ function projectChoices(compose: ComposeState, listed: readonly ProjectSummary[]
 }
 
 /**
+ * The pills keep the places they first showed in. The window coming forward
+ * reads Home's list again while Capture may be open: a project new to it
+ * joins at the end, and one it no longer has keeps its place, so a click
+ * never lands on a pill that moved under it. The Authority still refuses a
+ * save to a project that is no longer yours.
+ */
+function keepPlaces(placed: Map<string, ProjectSummary>, choices: readonly ProjectSummary[]): ProjectSummary[] {
+  for (const project of choices) placed.set(project.project_id, project);
+  return [...placed.values()];
+}
+
+/**
  * Who can read: Only me, every project by name, then Organization. One click
  * picks; the pills wrap, and with many projects a field finds one.
  */
 function WhoCanRead({ state, compose, locked }: { state: State; compose: ComposeState; locked: boolean }) {
   const group = useRef<HTMLDivElement>(null);
   const [find, setFind] = useState('');
-  const projects = projectChoices(compose, state.projects.items);
+  const [placed] = useState(() => new Map<string, ProjectSummary>());
+  const projects = keepPlaces(placed, projectChoices(compose, state.projects.items));
   const finding = projects.length > FIND_AFTER;
   const query = finding ? find.trim().toLocaleLowerCase() : '';
   const shown = query ? projects.filter(project => project.name.toLocaleLowerCase().includes(query)) : projects;
@@ -190,7 +203,8 @@ export function Compose({ state }: { state: State }) {
           )}
         </div>
         {compose.notice && <div class="notice-line" data-testid="compose-notice" aria-live="polite">{compose.notice}</div>}
-        <WhoCanRead state={state} compose={compose} locked={locked} />
+        {/* A new capture places its pills afresh, its project first. */}
+        <WhoCanRead key={compose.seq} state={state} compose={compose} locked={locked} />
         <div class={`readers-line${compose.readers === 'team' ? ' warning' : ''}`} data-testid="compose-readers" aria-live="polite">
           {readersLine(compose)}
         </div>

@@ -1,5 +1,5 @@
 import { expect, test, type Locator } from '@playwright/test';
-import { launch, type Launched } from './launch.js';
+import { emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -49,6 +49,31 @@ test('Who can read is one radio group: arrow keys move and pick, one Tab stop, a
   expect(notes()).toHaveLength(1);
   expect(notes()[0]!.body?.audience).toEqual({ kind: 'project', project_id: BEACON });
   expect(notes()[0]!.body?.association_project_ids).toEqual([BEACON]);
+});
+
+test('the list read again while Capture is open moves no pill: a project new to it joins at the end', async () => {
+  run = await launch('project-added');
+  const { page, app } = run;
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await page.getByTestId('write-button').click();
+  const radios = page.getByRole('radiogroup', { name: 'Who can read' }).getByRole('radio');
+  await expect(radios).toHaveText(['Only me', 'Apollo', 'Beacon', 'Organization']);
+  await page.getByTestId('compose-body').fill('Pilot notes');
+
+  // The window comes forward with Capture open: Home reads its list again, and Comet, the newest, leads it.
+  await emit(app, 'echo-test:shown');
+  await expect(page.getByTestId('project-row')).toHaveCount(3);
+  await expect(page.getByTestId('project-row').first()).toContainText('Comet');
+  // In Capture every pill stays where it was, so a click lands where it was aimed.
+  await expect(radios).toHaveText(['Only me', 'Apollo', 'Beacon', 'Comet', 'Organization']);
+  await page.getByRole('radio', { name: 'Beacon', exact: true }).click();
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon');
+  expect(notes()[0]!.body?.audience).toEqual({ kind: 'project', project_id: BEACON });
+
+  // A new capture places them afresh, in the list's order.
+  await page.getByTestId('write-button').click();
+  await expect(radios).toHaveText(['Only me', 'Comet', 'Apollo', 'Beacon', 'Organization']);
 });
 
 test('past eight projects a field finds one: Enter picks the first match, ⌘↩ still saves and Escape still closes', async () => {
