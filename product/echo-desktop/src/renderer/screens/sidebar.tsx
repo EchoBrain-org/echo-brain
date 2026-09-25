@@ -1,6 +1,6 @@
 import { colorFor, initial } from '../format.js';
-import { loadProjects, openCompose, openProject, type State } from '../store.js';
-import { Capture } from './icons.js';
+import { loadProjects, openCompose, openProject, showAccountMenu, type State } from '../store.js';
+import { Capture, Person } from './icons.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
 
@@ -45,12 +45,17 @@ export function Sidebar({ state }: { state: State }) {
           </>
         )}
       </nav>
-      {account && (
-        <div class="account-row" data-testid="account-row">
-          <span class="avatar" style={{ background: colorFor(account.membership_id) }} aria-hidden="true">{initial(account.display_name)}</span>
-          <span class="who"><span class="name">{account.display_name}</span><span class="role">{account.role}</span></span>
-        </div>
-      )}
+      <button type="button" class="account-row" data-testid="account-row" aria-label="Account" aria-haspopup="menu"
+        onClick={event => showAccountMenu(event.currentTarget, 'row')}>
+        {account ? (
+          <>
+            <span class="avatar" style={{ background: colorFor(account.membership_id) }} aria-hidden="true">{initial(account.display_name)}</span>
+            <span class="who"><span class="name">{account.display_name}</span><span class="role">{account.role}</span></span>
+          </>
+        ) : (
+          <><span class="avatar signed-out" aria-hidden="true"><Person /></span><span class="who"><span class="name">Account · Sign in</span></span></>
+        )}
+      </button>
     </aside>
   );
 }

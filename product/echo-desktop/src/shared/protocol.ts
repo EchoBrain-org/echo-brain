@@ -125,6 +125,8 @@ export interface HostMethods {
   'writes.status': { params: { expect: Expect; request_id: string; kind: 'note' | 'document' }; result: WriteStatus };
   /** Resends a document's retained original under the same request. */
   'documents.retry': { params: { expect: Expect; request_id: string; audience: Audience }; result: Receipt };
+  /** Signs the account on screen out of this computer; the reply is the new status. */
+  'account.signOut': { params: { expect: Expect }; result: AppStatus };
 }
 
 export interface MainMethods {
@@ -133,6 +135,8 @@ export interface MainMethods {
   'app.setUnresolved': { params: { unresolved: boolean }; result: null };
   /** After the host gave up: start it again. */
   'app.retryHost': { params: Record<string, never>; result: null };
+  /** Pops up the Account menu at a point in the window, in CSS pixels. */
+  'menu.account': { params: { x: number; y: number }; result: null };
 }
 
 export type Methods = HostMethods & MainMethods;
@@ -141,13 +145,18 @@ export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'projects.list', 'projects.feed', 'projects.readContext',
-  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry',
+  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'writes.status', 'documents.retry', 'account.signOut',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'app.setUnresolved', 'app.retryHost',
+  'dialog.openDocument', 'app.setUnresolved', 'app.retryHost', 'menu.account',
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry']);
+/** Host methods whose reply is the account status: main keeps the Account menu current from them. */
+export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'account.signOut']);
+
+/** What an Account menu item asks the window to do. */
+export type AccountCommand = 'signin' | 'switch' | 'signout';
 
 /** Events main pushes to the renderer. */
 export interface Events {
@@ -159,6 +168,8 @@ export interface Events {
   'host.restarted': Record<string, never>;
   /** The host kept exiting and main stopped restarting it. */
   'host.failed': Record<string, never>;
+  /** An Account menu item was chosen, in the window or the tray. */
+  'account.command': { command: AccountCommand };
 }
 export type EventName = keyof Events;
 

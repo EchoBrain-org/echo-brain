@@ -8,8 +8,9 @@ says what a person sees today and what the fix would be when it is needed.
 
 Core use is covered by specs against the real person client and a fixture
 Authority: signing in (including the weekly re-sign-in), Home, reading a
-project, Ask with sources, writing a note or sending a file, and resolving an
-unconfirmed save.
+project, Ask with sources, writing a note or sending a file, resolving an
+unconfirmed save, the sidebar, the Account menu (in the window and the tray),
+and signing out or switching account.
 
 ## Writing and files
 
@@ -34,9 +35,8 @@ unconfirmed save.
 
 | Gap | What happens today | Fix when needed |
 | --- | --- | --- |
-| No sidebar | By decision (simplest option): no collapsible sidebar, no account panel, no organization People entry. | Add it back after the Swift retirement if it is missed. |
 | No organization People admin | The owner cannot invite employees, reissue invitations or revoke access from the app. The Swift app had this in its sidebar and under the menu bar's Organization → People. | Use the operator CLI meanwhile; add a tray entry when a new person needs to join. |
-| No sign-out in the app | Switching accounts needs `person logout` in a terminal. | Add a tray "Sign out" item (about 10 lines; the plumbing was cut as unused). |
+| A sign-out that cannot reach the Authority | The session is removed from this computer and the window shows sign-in, but nothing says the Authority did not end it there. The refresh token is gone from this computer, so it expires unused. The Swift app said "Account status was not verified." | Report the client's failed revocation on the signed-out page. |
 | No Cancel while waiting for the browser | A closed sign-in tab means up to 10 minutes before "Sign-in did not finish." | Add Cancel. The client's loopback wait must be made abortable. |
 | Browser launch is not confirmed | Main never reports whether `shell.openExternal` actually opened a browser, so with no default browser the page waits. | Reply from main to the host with the result. |
 | An organization address with a path | `https://host/login` is refused with the generic "Sign-in did not finish." | Say that the address is wrong. |

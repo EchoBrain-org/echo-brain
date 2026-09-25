@@ -2,7 +2,7 @@
 // never reads the session or holds a token; the person host does that.
 import {
   app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, net, protocol, session, shell,
-  Tray, utilityProcess, type IpcMainInvokeEvent, type UtilityProcess,
+  Tray, utilityProcess, type IpcMainInvokeEvent, type MenuItemConstructorOptions, type UtilityProcess,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
 import {
@@ -12,8 +12,8 @@ import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, WRITE_METHODS, type EventName, type Events, type FileHandle,
-  type HostMethodName, type HostNotice, type HostReply, type MainMethods, type Result,
+  externalUrl, HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, STATUS_METHODS, WRITE_METHODS, type AccountCommand, type AppStatus,
+  type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods, type Result,
 } from '../shared/protocol.js';
 
 const BUILD = __dirname;
@@ -59,6 +59,10 @@ let quitting = false;
 /** A save whose outcome is unknown: quitting asks first. */
 let unresolved = false;
 const shortcutProblems: string[] = [];
+/** The last account status the host reported, for the Account menu. Main reads no session itself. */
+let accountStatus: AppStatus | null = null;
+/** A sign-in is waiting on the browser. */
+let signingIn = false;
 
 // ---- diagnostic log: codes only, never content, tokens or paths ------------
 
@@ -226,6 +230,13 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
     case 'app.retryHost':
       if (hostGaveUp && !host) { hostGaveUp = false; exits = []; startHost(true); }
       return { ok: true, value: null };
+    case 'menu.account': {
+      const { x, y } = params as MainMethods['menu.account']['params'];
+      const inside = (value: unknown) => Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 10_000;
+      if (!window || !inside(x) || !inside(y)) return refused();
+      popupAccountMenu(x, y);
+      return { ok: true, value: null };
+    }
   }
   return refused();
 }
@@ -236,6 +247,7 @@ ipcMain.handle('rpc', async (event, request: unknown): Promise<Result<unknown>> 
   // Only names from the allowlists reach the log; anything else the page sent is '?'.
   const named = (request as { method?: unknown })?.method;
   const method = typeof named === 'string' && (hostMethods.has(named) || mainMethods.has(named)) ? named : '?';
+  if (result.ok && STATUS_METHODS.has(method)) accountChanged(result.value as AppStatus);
   const requestId = (request as { params?: { request_id?: unknown } })?.params?.request_id;
   log(`${method} ${result.ok ? 'ok' : result.failure.code}` +
     `${typeof requestId === 'string' && /^[0-9a-f-]{36}$/.test(requestId) ? ` ${requestId}` : ''} ${Date.now() - started}ms`);
@@ -257,7 +269,19 @@ async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Resu
     if (!file) return refused('unsupported_file');
     return callHost(method, { ...rest, file });
   }
+  if (method === 'signin.begin') return whileSigningIn(() => callHost(method, value));
   return callHost(method as HostMethodName, value);
+}
+
+async function whileSigningIn(run: () => Promise<Result<unknown>>): Promise<Result<unknown>> {
+  signingIn = true;
+  updateTray();
+  try {
+    return await run();
+  } finally {
+    signingIn = false;
+    updateTray();
+  }
 }
 
 function send<N extends EventName>(name: N, payload: Events[N]): void {
@@ -322,19 +346,71 @@ function trayImage(): Electron.NativeImage {
   return image;
 }
 
-function createTray(): void {
+// ---- the Account menu: in the tray, and popped up from the window ----------
+
+/** Test builds: a test cannot click a native menu, so it reads and clicks these. */
+interface TestMenus { echoTestAccountMenu?: Electron.Menu; echoTestTrayMenu?: Electron.Menu }
+
+/** The window does the work: it confirms what cannot be undone, and asks the host. */
+function accountCommand(command: AccountCommand, fromTray: boolean): void {
+  send('account.command', { command });
+  if (fromTray) show();
+}
+
+function accountItems(fromTray: boolean): MenuItemConstructorOptions[] {
+  const run = (command: AccountCommand) => () => accountCommand(command, fromTray);
+  if (signingIn) return [{ label: 'Finish signing in in your browser.', enabled: false }];
+  const account = accountStatus?.account ?? null;
+  if (account) {
+    return [
+      { label: `Signed in as ${account.display_name} · ${account.role}`, enabled: false },
+      { label: `Organization: ${account.authority}`, enabled: false },
+      { label: `ECHO ${accountStatus!.client_version}`, enabled: false },
+      { type: 'separator' },
+      { label: 'Switch account…', click: run('switch') },
+      { label: 'Sign out…', click: run('signout') },
+    ];
+  }
+  // Signing in is offered only once the host has said no one is signed in.
+  if (!accountStatus) return [{ label: 'Account status unavailable', enabled: false }];
+  return [
+    { label: 'Not signed in', enabled: false },
+    { type: 'separator' },
+    { label: 'Sign in with Google…', click: run('signin') },
+  ];
+}
+
+function popupAccountMenu(x: number, y: number): void {
+  const menu = Menu.buildFromTemplate(accountItems(false));
+  if (__ECHO_TEST_HOOK__ && test.ECHO_DESKTOP_HIDDEN) { (globalThis as TestMenus).echoTestAccountMenu = menu; return; }
+  menu.popup({ window: window!, x, y });
+}
+
+let trayShown = '';
+function accountChanged(next: AppStatus): void {
+  accountStatus = next;
+  updateTray();
+}
+
+function updateTray(): void {
   tray ??= new Tray(trayImage());
+  // Rebuilt only when what it shows changes: status is read every time the window comes forward.
+  const shown = JSON.stringify([accountStatus, signingIn, shortcutProblems]);
+  if (shown === trayShown) return;
+  trayShown = shown;
   tray.setToolTip('ECHO');
   const info = buildInfo();
   const menu = Menu.buildFromTemplate([
     { label: 'Open ECHO', accelerator: 'CommandOrControl+E', click: show },
     { label: 'Capture', accelerator: 'CommandOrControl+Shift+E', click: capture },
     ...shortcutProblems.map(problem => ({ label: problem, enabled: false })),
+    { label: 'Account', submenu: accountItems(true) },
     { type: 'separator' },
     ...(info ? [{ label: `Build ${info.source_sha.slice(0, 7)}${info.dirty ? ' (modified)' : ''}`, enabled: false }] : []),
-    { label: 'Quit ECHO', click: () => app.quit() },
+    { label: 'Quit ECHO', accelerator: 'CommandOrControl+Q', click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
+  if (__ECHO_TEST_HOOK__) (globalThis as TestMenus).echoTestTrayMenu = menu;
 }
 
 function registerShortcuts(): void {
@@ -446,6 +522,6 @@ void app.whenReady().then(() => {
   window.once('ready-to-show', () => { if (!test.ECHO_DESKTOP_HIDDEN) show(); });
   // Tests never take the person's own keys.
   if (!test.ECHO_DESKTOP_HIDDEN) registerShortcuts();
-  createTray();
+  updateTray();
   log('started');
 });

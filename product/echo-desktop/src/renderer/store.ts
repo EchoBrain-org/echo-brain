@@ -2,7 +2,7 @@
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  Answer, AppStatus, AskScope, Audience, ContextContent, Expect, Failure, FeedItem, FileHandle, ProjectSummary, Result,
+  AccountCommand, Answer, AppStatus, AskScope, Audience, ContextContent, Expect, Failure, FeedItem, FileHandle, ProjectSummary, Result,
 } from '../shared/protocol.js';
 import { rpc } from './api.js';
 import { message } from './messages.js';
@@ -41,6 +41,13 @@ interface ComposeState {
   notice?: string;
 }
 
+/** Sign out or Switch account: asked first, since it cannot be undone. */
+export interface SignOutSheet {
+  kind: 'signout' | 'switch';
+  busy: boolean;
+  failure?: Failure;
+}
+
 export interface State {
   status: AppStatus | null;
   booting: boolean;
@@ -53,7 +60,10 @@ export interface State {
   evidence: { seq: number; label: string; loading: boolean; text?: string; failure?: Failure } | null;
   compose: ComposeState | null;
   concealed: boolean;
-  signin: { phase: 'idle' | 'waiting' | 'failed'; failure?: Failure; browserOpened?: boolean };
+  /** form: the organization address is being asked for (Sign in with Google…). */
+  signin: { phase: 'idle' | 'waiting' | 'failed'; form: boolean; failure?: Failure; browserOpened?: boolean };
+  /** A sheet over the window for the account: only one at a time. */
+  sheet: SignOutSheet | null;
   /** No status could be read (the host is down): not the same as signed out. */
   startFailed: boolean;
   /** On by default; the toggle only hides it, and this computer remembers. */
@@ -68,8 +78,8 @@ function rememberedSidebar(): boolean {
 
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false }, feed: null, reader: null,
-  barScope: { kind: 'global' }, ask: null, evidence: null, compose: null, concealed: false, signin: { phase: 'idle' },
-  startFailed: false, sidebarOpen: rememberedSidebar(),
+  barScope: { kind: 'global' }, ask: null, evidence: null, compose: null, concealed: false, signin: { phase: 'idle', form: false },
+  sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(),
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -119,30 +129,92 @@ export async function refreshStatus(): Promise<void> {
   if (mine !== statusSeq) return; // a newer read is on its way
   // Keep what is on screen; with nothing on screen yet, say ECHO could not start.
   if (!result.ok) { set({ booting: false, startFailed: state.status === null || result.failure.code === 'host_failed' }); return; }
+  applyStatus(result.value);
+}
+
+function applyStatus(status: AppStatus): void {
+  statusSeq += 1; // an older read still on its way is stale now
   const wasSignedIn = state.status?.signed_in === true;
-  const next = result.value.account;
-  set({ status: result.value, booting: false, startFailed: false });
+  const next = status.account;
+  set({ status, booting: false, startFailed: false });
   // Signed out: the sign-in page covers everything until someone signs in.
-  if (!next) return;
+  if (!next) { set({ sheet: null }); return; }
   const same = lastAccount?.authority === next.authority && lastAccount.membership_id === next.membership_id;
+  // Someone else: nothing of the last account's survives, not even a draft.
+  if (!same) forgetAccount();
   lastAccount = { authority: next.authority, membership_id: next.membership_id };
-  if (!same) {
-    // Someone else: nothing of the last account's survives, not even a draft.
-    set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null,
-      barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false } });
-    setCompose(null);
-    void loadProjects();
-  } else if (!wasSignedIn) {
-    void loadProjects();
-  }
+  if (!same || !wasSignedIn) void loadProjects();
+}
+
+/** Nothing of an account's stays on screen or in memory, not even a draft. */
+function forgetAccount(): void {
+  lastAccount = null;
+  set({ route: { page: 'home' }, feed: null, reader: null, ask: null, evidence: null, sheet: null,
+    barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false } });
+  setCompose(null);
 }
 
 export async function signIn(authorityUrl: string): Promise<void> {
-  set({ signin: { phase: 'waiting' } });
+  set({ signin: { phase: 'waiting', form: state.signin.form } });
   const result = await rpc('signin.begin', { authority_url: authorityUrl });
-  if (!result.ok) { set({ signin: { phase: 'failed', failure: result.failure } }); return; }
-  set({ signin: { phase: 'idle' } });
+  if (!result.ok) { set({ signin: { phase: 'failed', form: state.signin.form, failure: result.failure } }); return; }
+  set({ signin: { phase: 'idle', form: false } });
   await refreshStatus();
+}
+
+/** Escape or Cancel on the organization address: back to "Sign in to use ECHO". */
+export function closeSigninForm(): void {
+  if (state.signin.phase !== 'waiting') set({ signin: { phase: 'idle', form: false } });
+}
+
+// ---- the Account menu --------------------------------------------------------
+
+/** The menu is native, in main: the page says where to pop it up. */
+export function showAccountMenu(anchor: HTMLElement, placement: 'row' | 'below'): void {
+  const box = anchor.getBoundingClientRect();
+  const x = placement === 'row' ? box.left + 16 : box.left;
+  const y = placement === 'row' ? box.top + 8 : box.bottom + 4;
+  void rpc('menu.account', { x: Math.max(0, Math.round(x)), y: Math.max(0, Math.round(y)) });
+}
+
+/** An Account menu item, chosen in the window or the tray. */
+export function accountCommand(command: AccountCommand): void {
+  const signedIn = state.status?.signed_in === true;
+  if (command === 'signin') {
+    if (!signedIn && state.signin.phase !== 'waiting') set({ signin: { phase: 'idle', form: true } });
+    return;
+  }
+  if (signedIn && !state.sheet?.busy) set({ sheet: { kind: command, busy: false } });
+}
+
+export function closeSheet(): void {
+  if (!state.sheet || state.sheet.busy) return;
+  set({ sheet: null });
+}
+
+/** A save on its way: signing out now would lose whether it arrived. */
+export function saveInFlight(): boolean {
+  const status = state.compose?.status;
+  return status === 'sending' || status === 'checking';
+}
+
+/** Sign out, or Switch account, after the person confirmed it. */
+export async function signOut(): Promise<void> {
+  const account = expect();
+  const sheet = state.sheet;
+  if (!account || !sheet || sheet.busy || saveInFlight()) return;
+  set({ sheet: { ...sheet, busy: true, failure: undefined } });
+  const result = await rpc('account.signOut', { expect: account });
+  if (state.sheet?.kind !== sheet.kind) return;
+  if (!result.ok) {
+    set({ sheet: { ...sheet, busy: false, failure: result.failure } });
+    accountLost(result.failure);
+    return;
+  }
+  forgetAccount();
+  applyStatus(result.value);
+  // Switch account goes straight on to the next organization's address.
+  set({ signin: { phase: 'idle', form: sheet.kind === 'switch' } });
 }
 
 /** The host gave up after repeated exits. */
@@ -155,7 +227,7 @@ export async function retryStart(): Promise<void> {
 }
 
 export function signinPhase(browserOpened: boolean | undefined): void {
-  if (state.signin.phase === 'waiting') set({ signin: { phase: 'waiting', browserOpened } });
+  if (state.signin.phase === 'waiting') set({ signin: { ...state.signin, browserOpened } });
 }
 
 // ---- home and projects -------------------------------------------------------

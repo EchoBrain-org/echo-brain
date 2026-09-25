@@ -212,7 +212,7 @@ test('more projects loads the next page', async () => {
 
 test('a session left behind by the weekly expiry shows sign-in at once', async () => {
   run = await launch('expired-claim');
-  await expect(run.page.getByTestId('signin')).toBeVisible({ timeout: 2500 });
+  await expect(run.page.getByTestId('signed-out')).toBeVisible({ timeout: 2500 });
 });
 
 test('a failed ask shows a fixed message, not server text', async () => {
@@ -241,15 +241,4 @@ test('switching to another app covers the window until ECHO is back', async () =
   await emit(app, 'echo-test:resume');
   await expect(page.getByTestId('concealed')).toHaveCount(0);
   await expect(page.getByTestId('title')).toHaveText('Apollo');
-});
-
-test('signed out shows sign-in and nothing else', async () => {
-  run = await launch('signed-out');
-  const { page } = run;
-  await expect(page.getByTestId('signin')).toBeVisible();
-  await expect(page.getByTestId('signin-button')).toBeDisabled();
-  await page.getByTestId('signin-url').fill('https://echo.example.com');
-  await expect(page.getByTestId('signin-button')).toBeEnabled();
-  await expect(page.getByTestId('project-row')).toHaveCount(0);
-  await expect(page.getByTestId('ask-field')).toHaveCount(0);
 });

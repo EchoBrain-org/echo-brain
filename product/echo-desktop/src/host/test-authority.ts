@@ -127,6 +127,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'refresh-hangs') return new Promise<Response>(() => undefined);
       return json({ ...session, access_token: 'B'.repeat(43), refresh_token: 'S'.repeat(43), access_expires_at: '2026-09-22T10:30:00.000Z' });
     }
+    // Sign-out: the Authority ends the session; its request body is always empty.
+    if (method === 'POST' && path === '/v2/session/revocations') {
+      if (body === undefined || Object.keys(body).length !== 0) return failure('invalid_request', 400);
+      return new Response(null, { status: 204 });
+    }
 
     if (method === 'GET' && path === '/v1/person/projects') {
       const response = fixture('projects-list');

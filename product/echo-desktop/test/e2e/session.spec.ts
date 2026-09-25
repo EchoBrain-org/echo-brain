@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { emit, launch, type Launched } from './launch.js';
+import { chooseFromAccountMenu, emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -10,7 +10,8 @@ const refreshes = () => run.calls().filter(call => call.path === '/v2/session/re
 
 /** Sign in with the fixture's browser, which stands in for Google, and land on Home. */
 async function signIn(page: Page) {
-  await expect(page.getByTestId('signin')).toBeVisible();
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
   await page.getByTestId('signin-url').fill('https://authority.example');
   await page.getByTestId('signin-button').click();
   await expect(page.getByTestId('project-row')).toHaveCount(2);
@@ -55,7 +56,7 @@ test('a refresh that never left the machine keeps you signed in, and status alon
   run = await launch('refresh-offline');
   const { page, app } = run;
   await expect(page.getByTestId('home-error')).toContainText('ECHO cannot be reached. Check your connection');
-  await expect(page.getByTestId('signin')).toHaveCount(0);
+  await expect(page.getByTestId('signed-out')).toHaveCount(0);
   // One refresh, and the call that needed it is not made.
   expect(run.calls().map(call => call.path)).toEqual(['/v2/session/refresh']);
   // Showing the window again re-reads status; it does not try the network.
@@ -72,7 +73,7 @@ for (const [mode, why] of [['refresh-refused', 'is refused'], ['refresh-fails', 
   test(`a refresh that ${why} shows sign-in at once and is never replayed`, async () => {
     run = await launch(mode);
     const started = Date.now();
-    await expect(run.page.getByTestId('signin')).toBeVisible();
+    await expect(run.page.getByTestId('signed-out')).toBeVisible();
     expect(Date.now() - started).toBeLessThan(2_500); // not the 3 s wait for a refresh elsewhere
     expect(refreshes()).toHaveLength(1);
   });
@@ -82,7 +83,7 @@ test('a host that keeps exiting is given up on, and the page says ECHO could not
   run = await launch('host-crash');
   const { page } = run;
   await expect(page.getByTestId('start-failed')).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByTestId('signin')).toHaveCount(0);
+  await expect(page.getByTestId('signed-out')).toHaveCount(0);
   const log = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8');
   await expect.poll(log, { timeout: 10_000 }).toContain('host gave-up');
   expect(log().match(/host exit/g)).toHaveLength(3);

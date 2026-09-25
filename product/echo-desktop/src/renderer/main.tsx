@@ -1,30 +1,33 @@
 import { render, type ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { on } from './api.js';
+import { ConfirmSignOut } from './screens/account.js';
 import { AskView, Bar } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
 import { Back, SidebarIcon } from './screens/icons.js';
 import { Project } from './screens/project.js';
 import { Sidebar } from './screens/sidebar.js';
-import { SignIn } from './screens/signin.js';
+import { SignedOut } from './screens/signin.js';
 import {
-  closeAsk, closeCompose, closeReader, closeSource, conceal, getState, goHome, hostFailed, openCapture, refreshHome, refreshStatus,
-  resume, retryStart, signinPhase, toggleSidebar, useStore, type State,
+  accountCommand, closeAsk, closeCompose, closeReader, closeSheet, closeSigninForm, closeSource, conceal, getState, goHome, hostFailed,
+  openCapture, refreshHome, refreshStatus, resume, retryStart, signinPhase, toggleSidebar, useStore, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
 
 /** The caret waits in the ask bar whenever the window comes forward, unless a sheet is up. */
 function focusBar(): void {
-  const compose = getState().compose;
-  if (compose && !compose.hidden) return;
+  const { compose, sheet } = getState();
+  if ((compose && !compose.hidden) || sheet) return;
   requestAnimationFrame(() => document.getElementById('ask-field')?.focus());
 }
 
-/** Escape steps back one level: compose, source, answer, reader, project. */
+/** Escape steps back one level: a sheet, compose, source, answer, reader, project. */
 function back(): void {
   const state = getState();
+  if (state.sheet) return closeSheet();
+  if (!state.status?.signed_in) return closeSigninForm();
   if (state.compose && !state.compose.hidden) return closeCompose();
   if (state.evidence) return closeSource();
   if (state.ask) return closeAsk();
@@ -49,6 +52,7 @@ function App() {
       on('signin.phase', payload => signinPhase(payload.browser_opened)),
       on('host.restarted', () => { void refreshStatus(); }),
       on('host.failed', hostFailed),
+      on('account.command', payload => accountCommand(payload.command)),
     ];
     // One Escape handler for the whole window: it steps back exactly one level.
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); back(); } };
@@ -69,12 +73,7 @@ function App() {
     );
   }
   if (!state.status?.signed_in) {
-    return (
-      <div class="app">
-        <div class="titlebar"><div class="side" /><div class="title brand">ECHO</div><div class="side" /></div>
-        <SignIn state={state} />
-      </div>
-    );
+    return <Shell state={state} title="ECHO" backLabel={null}><SignedOut state={state} /></Shell>;
   }
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
@@ -91,6 +90,7 @@ function App() {
       </main>
       <Bar state={state} />
       {state.compose && !state.compose.hidden && <Compose state={state} />}
+      {state.sheet && <ConfirmSignOut state={state} sheet={state.sheet} />}
     </Shell>
   );
 }

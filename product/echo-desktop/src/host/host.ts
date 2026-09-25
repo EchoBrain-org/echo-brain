@@ -77,7 +77,7 @@ modules.catch(error => { console.error('person host failed to load the client:',
 const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000,
+  'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'account.signOut': 45_000,
 };
 /** Writes this host has handed to the client and not yet heard back on. */
 const inFlight = new Set<string>();
@@ -330,6 +330,19 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       if (!result.ok && result.failure.code === 'not_found') return ok({ state: 'not_saved' as const });
       return result;
     }
+    case 'account.signOut': {
+      const { expect } = params as Params<'account.signOut'>;
+      const before = await status();
+      if (before === null) return code('unavailable');
+      // Already signed out (a failed refresh does that) is what was asked.
+      if (before.signed_in && !sameAccount(before, expect)) return code('account_changed');
+      // The client removes the session even when the Authority cannot be
+      // reached to end it there, so the status after is what counts.
+      if (before.signed_in) await cli(['logout']);
+      const after = await status();
+      if (after === null) return code('unavailable');
+      return after.signed_in ? code('signout_failed') : ok(after);
+    }
   }
 }
 
@@ -350,8 +363,9 @@ port.on('message', ({ data }) => {
     timer = setTimeout(() => { expired = true; resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[request.method]);
   });
   // Sign-in still runs after a refresh with no answer: it replaces the
-  // session. Any other call was not made, so no write went out.
-  const refreshFailed = request.method === 'signin.begin' ? undefined
+  // session, and sign-out ends it either way. Any other call was not made,
+  // so no write went out.
+  const refreshFailed = request.method === 'signin.begin' || request.method === 'account.signOut' ? undefined
     : (refresh: CliRun) => {
       const failure = failureView(lastJson(refresh.stderr), 'failed', false, requestId);
       return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);

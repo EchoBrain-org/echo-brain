@@ -7,7 +7,7 @@ import {
 import { Check, Chevron, Clip, Close, Up } from './icons.js';
 
 /** Tab and Shift-Tab stay inside the sheet. */
-function trapTab(event: KeyboardEvent, sheet: HTMLElement | null): void {
+export function trapTab(event: KeyboardEvent, sheet: HTMLElement | null): void {
   if (event.key !== 'Tab' || !sheet) return;
   const focusable = [...sheet.querySelectorAll<HTMLElement>('button:not([disabled]), textarea, [tabindex="0"]')];
   if (focusable.length === 0) return;
