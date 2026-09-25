@@ -58,8 +58,12 @@ workspace source; it loads the built Person client package at run time.
 The architecture suite compiles all eight neutral packages in an isolated tree
 with no provider, Person, service or prebuilt workspace output available.
 External dependencies remain installed; workspace symlinks point only into the
-isolated tree. Full source tests and the existing offline kit and artifact
-checks exercise the composed products. No additional CI job is needed.
+isolated tree. This isolated compile runs inside the architecture suite and
+needs no CI job of its own. Full source tests and the offline kit and artifact
+checks exercise the Person tarball and the Authority image. The root suite does
+not reach `product/echo-desktop`; the separate "macOS arm64 desktop app" CI job
+runs its typecheck, unit tests, Playwright suite, release leak check, packaging
+and packaged smoke.
 
 Neutral package tests may import neutral workspace code, their own test
 fixtures, and shared neutral test support. The test-layer architecture check
