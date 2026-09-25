@@ -12,8 +12,8 @@ import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, type EventName, type Events, type FileHandle, type HostMethodName,
-  type HostNotice, type HostReply, type MainMethods, type Result,
+  externalUrl, HOST_METHODS, MAIN_METHODS, MAX_PARAMS_BYTES, WRITE_METHODS, type EventName, type Events, type FileHandle,
+  type HostMethodName, type HostNotice, type HostReply, type MainMethods, type Result,
 } from '../shared/protocol.js';
 
 const BUILD = __dirname;
@@ -88,7 +88,6 @@ const clientEntry = app.isPackaged
   : resolve(BUILD, '..', '..', '..', 'src', 'product', 'person-client', 'dist', 'composition.js');
 let host: UtilityProcess | null = null;
 let nextId = 1;
-const WRITE_METHODS = new Set<string>(['notes.submit', 'documents.upload', 'documents.retry']);
 const pending = new Map<number, { method: string; requestId?: string; resolve: (result: Result<unknown>) => void }>();
 /** Exits in the last minute. Three and the supervisor stops. */
 let exits: number[] = [];

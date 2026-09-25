@@ -6,8 +6,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods, type HostMethodName,
-  type HostRequest, type Result,
+  externalUrl, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
+  type HostMethodName, type HostRequest, type Result,
 } from '../shared/protocol.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
@@ -79,7 +79,6 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.source': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000,
 };
-const WRITES = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry']);
 /** Writes this host has handed to the client and not yet heard back on. */
 const inFlight = new Set<string>();
 
@@ -189,7 +188,7 @@ function sameAccount(current: AppStatus | null, expect: Expect): boolean {
 async function forAccount<T>(
   method: HostMethodName, expect: Expect, argv: readonly string[], view: (stdout: string) => T, requestId?: string,
 ): Promise<Result<T>> {
-  const write = WRITES.has(method);
+  const write = WRITE_METHODS.has(method);
   if (!sameAccount(await status(), expect)) return code('account_changed', write, requestId);
   if (write && requestId !== undefined) inFlight.add(requestId);
   let run: CliRun;
@@ -344,7 +343,7 @@ port.on('message', ({ data }) => {
   }
   const requestId = typeof (request.params as { request_id?: unknown })?.request_id === 'string'
     ? (request.params as { request_id: string }).request_id : undefined;
-  const write = WRITES.has(request.method);
+  const write = WRITE_METHODS.has(request.method);
   // A call still queued behind a refresh when its time runs out never starts.
   let expired = false;
   let timer: NodeJS.Timeout | undefined;

@@ -147,6 +147,8 @@ export const HOST_METHODS: readonly HostMethodName[] = [
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'dialog.openDocument', 'clipboard.writeText', 'app.setUnresolved', 'app.retryHost',
 ];
+/** Host methods that change what the Authority stores. */
+export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry']);
 
 /** Events main pushes to the renderer. */
 export interface Events {
