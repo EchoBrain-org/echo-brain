@@ -241,6 +241,8 @@ export interface ReaderState {
 /** A project's notes and documents, each read ten at a time. */
 export interface FeedState {
   projectId: string;
+  /** This visit to the project: where its feed was scrolled is kept while it lasts. */
+  opened: number;
   notes: FeedItem[];
   notesNext: string | null;
   documents: DocumentSummary[];
@@ -629,7 +631,7 @@ export async function openProject(project: ProjectSummary): Promise<void> {
   set({
     route: { page: 'project', project }, reader: null, ask: null, sources: null, toast: null, organization: null,
     barScope: { kind: 'project', project_id: project.project_id },
-    feed: { projectId: project.project_id, notes: [], notesNext: null, documents: [], documentsNext: null, unread: [], loading: true },
+    feed: { projectId: project.project_id, opened: ++seq, notes: [], notesNext: null, documents: [], documentsNext: null, unread: [], loading: true },
   });
   syncSearch();
   void loadRoster(project.project_id);

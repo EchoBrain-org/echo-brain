@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'preact/hooks';
 import type { FeedItem, ProjectSummary } from '../../shared/protocol.js';
 import { mergedFeed, moreSources } from '../feed.js';
 import { colorFor, documentDetail, initials, when } from '../format.js';
@@ -13,11 +14,26 @@ function Mark({ audience }: { audience: FeedItem['audience'] }) {
 }
 
 /**
+ * Where the feed was scrolled on this visit to the project. Back from an
+ * original or an answer, or ECHO coming back, returns there; opening the
+ * project again starts at the top.
+ */
+let savedPlace: { opened: number; top: number } | null = null;
+
+/**
  * A project's one feed: its notes and documents, newest first, one line each,
  * and one More for older ones. Choosing a row reads it in place.
  */
 export function Project({ state, project }: { state: State; project: ProjectSummary }) {
   const feed = state.feed;
+  const column = useRef<HTMLDivElement>(null);
+  const opened = feed?.opened;
+  useLayoutEffect(() => {
+    const element = column.current;
+    if (!element || opened === undefined) return;
+    element.scrollTop = savedPlace?.opened === opened ? savedPlace.top : 0;
+    return () => { savedPlace = { opened, top: element.scrollTop }; };
+  }, [column.current, opened]);
   const entries = feed ? mergedFeed(feed) : [];
   const more = feed ? moreSources(feed).length > 0 : false;
   if (feed?.failure && entries.length === 0 && !more) {
@@ -39,7 +55,7 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
     );
   }
   return (
-    <div class="column" data-testid="feed" aria-busy={feed?.loading ?? true}>
+    <div class="column" data-testid="feed" aria-busy={feed?.loading ?? true} ref={column}>
       {entries.map(entry => entry.kind === 'note' ? (
         <button type="button" key={entry.item.context_id} class="row item-row" data-testid="feed-row" onClick={() => void openItem(entry.item)}>
           <span class="item-icon" aria-hidden="true"><Note /></span>

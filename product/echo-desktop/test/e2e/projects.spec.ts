@@ -39,6 +39,38 @@ test('a project is one feed of notes and documents, and More reads older ones in
     .toEqual([{ schema_version: 2, kind: 'echo-person-document-search-v2', project_id: BEACON, query: '', limit: 10, cursor: null }]);
 });
 
+test('the feed keeps its place: Back from an original, or ECHO coming back, returns to where it was scrolled', async () => {
+  run = await launch('long-feed');
+  const { page, app } = run;
+  await page.getByTestId('project-row').nth(1).click();
+  const rows = page.getByTestId('feed-row');
+  await expect(rows).toHaveCount(10);
+  await page.getByTestId('feed-more').click();
+  await expect(rows).toHaveCount(13);
+  const feed = page.getByTestId('feed');
+  const top = () => feed.evaluate(element => element.scrollTop);
+  await feed.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  const bottom = await top();
+  expect(bottom).toBeGreaterThan(0);
+
+  await rows.nth(12).click();
+  await expect(page.getByTestId('reader-text')).toBeVisible();
+  await page.getByTestId('back').click();
+  await expect(rows).toHaveCount(13);
+  expect(await top()).toBe(bottom);
+
+  await emit(app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await emit(app, 'echo-test:resume');
+  await expect(rows).toHaveCount(13);
+  expect(await top()).toBe(bottom);
+
+  // Opening the project again is a new visit: its first page, from the top.
+  await page.getByTestId('sidebar-project').nth(1).click();
+  await expect(rows).toHaveCount(10);
+  expect(await top()).toBe(0);
+});
+
 test('a save into the project on screen keeps the rows shown, even when reading them again fails', async () => {
   run = await launch('long-feed-refresh-fails');
   const { page } = run;
