@@ -116,10 +116,15 @@ test('an invite whose reply was lost is never called done: the list goes until i
   await page.getByTestId('invite-email').fill('kim@example.com');
   await saveInto('Kim');
   await page.getByTestId('invite').click();
-  await expect(page.getByTestId('org-notice')).toHaveText('The invitation may already have been issued. Refresh before trying again.');
+  const mayHave = 'The invitation may already have been issued. Refresh before trying again.';
+  await expect(page.getByTestId('org-notice')).toHaveText(mayHave);
   await expect(page.getByTestId('employee-row')).toHaveCount(0);
   await expect(page.getByTestId('invite')).toBeDisabled();
   await expect(page.getByTestId('invitation-show')).toHaveCount(0);
+  // Typing does not hide why the list is gone.
+  await page.getByTestId('invite-name').fill('Kim');
+  await page.getByTestId('invite-name').fill('Kim Lee');
+  await expect(page.getByTestId('org-notice')).toHaveText(mayHave);
 
   // Another app in front covers the page; coming back reads the list again, which settles it.
   await emit(app, 'echo-test:conceal');
@@ -138,4 +143,39 @@ test('an invite whose reply was lost is never called done: the list goes until i
   const before = lists();
   await page.getByTestId('employees-refresh').click();
   await expect.poll(lists).toBe(before + 1);
+
+  // An invite's Undo lasts only while ECHO stays in front.
+  await page.getByTestId('invite-name').fill('Sam Wu');
+  await page.getByTestId('invite-email').fill('sam@example.com');
+  await saveInto('Sam');
+  await page.getByTestId('invite').click();
+  await expect(page.getByTestId('invite-undo')).toBeVisible();
+  await emit(app, 'echo-test:conceal');
+  await emit(app, 'echo-test:resume');
+  await expect(page.getByTestId('employees-count')).toHaveText('5 employees.');
+  await expect(page.getByTestId('invite-undo')).toHaveCount(0);
+  expect(writes('DELETE')).toHaveLength(0);
+});
+
+test('a list read sent before a change never settles it, and Refresh stays in reach', async () => {
+  run = await launch('owner-write-lost-slow-list');
+  const { page } = run;
+  await page.getByTestId('sidebar-organization').click();
+  const raj = page.getByTestId('employee-row').nth(1);
+  await expect(raj.getByTestId('employee-standing')).toHaveText('Active · Awaiting sign-in');
+  // Refresh is still on its way when Raj's access is revoked, and answers only after the revoke's reply was lost.
+  await page.getByTestId('employees-refresh').click();
+  await raj.getByTestId('employee-more').click();
+  await page.getByTestId('employee-revoke').click();
+  await page.getByTestId('revoke-confirm-go').click();
+  const mayHave = 'Access may already have been revoked. Refresh before trying again.';
+  await expect(page.getByTestId('org-notice')).toHaveText(mayHave);
+  // What the late read shows may predate the revoke: it settles nothing, and Refresh comes back.
+  await expect(page.getByTestId('employees-refresh')).toBeEnabled();
+  await expect(page.getByTestId('org-notice')).toHaveText(mayHave);
+  await expect(page.getByTestId('employee-row')).toHaveCount(0);
+  await page.getByTestId('employees-refresh').click();
+  await expect(raj.getByTestId('employee-standing')).toHaveText('Revoked · Invitation expired');
+  await expect(page.getByTestId('org-notice')).toHaveCount(0);
+  expect(writes('DELETE')).toEqual([{ email: 'raj@example.com' }]);
 });

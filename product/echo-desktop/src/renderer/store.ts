@@ -327,6 +327,12 @@ export interface State {
   sidebarOpen: boolean;
   /** People & invites, while it is the page. */
   organization: OrganizationState | null;
+  /**
+   * The employee change on its way. It outlives a visit to People & invites:
+   * no other change starts while it is, and a visit made meanwhile shows what
+   * it did.
+   */
+  employeeWrite: { id: number; action: 'invite' | 'reissue' | 'revoke' } | null;
 }
 
 const SIDEBAR_OPEN = 'echo.sidebarOpen';
@@ -339,7 +345,7 @@ let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false }, feed: null, roster: null,
   reader: null, change: null,
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, concealed: false,
-  signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null,
+  signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, employeeWrite: null,
 };
 const listeners = new Set<() => void>();
 let seq = 0;
@@ -421,7 +427,7 @@ function forgetAccount(): void {
   lastAccount = null;
   emptyBar();
   set({ route: { page: 'home' }, feed: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
-    barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, organization: null });
+    barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, organization: null, employeeWrite: null });
   setCompose(null);
   setChange(null);
 }
@@ -524,8 +530,7 @@ export function signOutHeld(): boolean {
   const status = state.compose?.status;
   const sheet = state.sheet;
   return status === 'sending' || status === 'checking' || status === 'unknown' || state.change?.status === 'sending' ||
-    state.change?.status === 'unknown' || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) ||
-    state.organization?.write?.status === 'sending';
+    state.change?.status === 'unknown' || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null;
 }
 
 /** Sign out, or Switch account, after the person confirmed it. */
@@ -1466,36 +1471,62 @@ function setOrganization(patch: Partial<OrganizationState>, mine?: number): void
 export function openOrganization(): void {
   if (state.status?.account?.role !== 'owner' || state.concealed) return;
   readSeq += 1;
+  // A change sent on an earlier visit may still be on its way: this visit waits for it too.
+  const sending = state.employeeWrite;
   set({
     route: { page: 'organization' }, feed: null, roster: null, reader: null, ask: null, sources: null, toast: null, barScope: { kind: 'global' },
-    organization: { seq: ++seq, loading: false, items: null, name: '', email: '', menu: null, confirm: null, write: null, notice: null, saved: null },
+    organization: {
+      seq: ++seq, loading: false, items: null, name: '', email: '', menu: null, confirm: null,
+      write: sending ? { action: sending.action, status: 'sending' } : null, notice: null, saved: null,
+    },
   });
   syncSearch();
   void loadEmployees();
 }
 
-/** The list, read (again): Refresh, coming back to ECHO, and after each change. It settles an unknown change. */
+/** Employee list reads, and employee changes, each counted as they start. */
+let employeeReads = 0;
+let employeeChanges = 0;
+
+/**
+ * The list, read (again): Refresh, coming back to ECHO, and after each change.
+ * It settles an unknown change, unless a change began after it was sent: then
+ * what it read may predate that change, so it is dropped.
+ */
 export async function loadEmployees(): Promise<void> {
   const account = expect();
   const page = organization();
-  if (!account || !page || page.write?.status === 'sending') return;
+  if (!account || !page || state.employeeWrite) return;
   const mine = page.seq;
+  const read = ++employeeReads;
+  const changes = employeeChanges;
   setOrganization({ loading: true, failure: undefined }, mine);
   const result = await rpc('employees.list', { expect: account });
+  // A newer read is on its way, and says what the list is.
+  if (read !== employeeReads) return;
   const current = organization(mine);
-  if (!current || current.write?.status === 'sending') return;
+  if (!current) return;
+  if (changes !== employeeChanges) { setOrganization({ loading: false }, mine); return; }
   if (!result.ok) {
     // A list that could not be read is never left showing.
     setOrganization({ loading: false, items: null, failure: result.failure }, mine);
     accountLost(result.failure);
     return;
   }
+  const { items } = result.value;
   const settled = current.write?.status === 'unknown';
-  setOrganization({ loading: false, items: result.value.items, write: null, ...(settled ? { notice: null } : {}) }, mine);
+  // An invitation just saved is offered back only while it still waits to be used.
+  const saved = current.saved;
+  const waiting = saved !== null && items.some(employee => employee.email === saved.email && employee.membership === 'active' &&
+    employee.invitation === 'pending');
+  setOrganization({ loading: false, items, write: null, ...(settled ? { notice: null } : {}), ...(waiting ? {} : { saved: null }) }, mine);
 }
 
 export function setOrganizationField(field: 'name' | 'email', value: string): void {
-  setOrganization({ ...(field === 'name' ? { name: value } : { email: value }), notice: null });
+  const page = organization();
+  if (!page) return;
+  // Why the list is not shown stays until the list is read again.
+  setOrganization({ ...(field === 'name' ? { name: value } : { email: value }), notice: page.items === null ? page.notice : null });
 }
 
 /** The employees the typed name or email narrow the list to: search, then Invite. */
@@ -1576,41 +1607,51 @@ export function undoInvite(): void {
   if (saved?.action === 'invite') void employeeChange('revoke', saved.email);
 }
 
-/** An invite, a reissue or a revoke. Only the list, read again, says what an unknown one did. */
+/**
+ * An invite, a reissue or a revoke. Only the list, read again, says what an
+ * unknown one did. Its outcome shows on People & invites as it is then, even
+ * if the page was left and opened again meanwhile.
+ */
 async function employeeChange(action: 'invite' | 'reissue' | 'revoke', email: string, handle?: string, name?: string): Promise<void> {
   const account = expect();
   const page = organization();
-  if (!account || !page || page.write) return;
-  const mine = page.seq;
+  if (!account || !page || page.write || state.employeeWrite) return;
+  const id = ++employeeChanges;
   // Only the last change is offered back: any other ends its Undo.
   const undoing = action === 'revoke' && page.saved?.action === 'invite' && page.saved.email === email;
-  setOrganization({ write: { action, status: 'sending' }, notice: null, confirm: null, menu: null, saved: null }, mine);
+  set({
+    employeeWrite: { id, action },
+    organization: { ...page, write: { action, status: 'sending' }, notice: null, confirm: null, menu: null, saved: null },
+  });
   const result = action === 'invite'
     ? await rpc('employees.invite', { expect: account, name: name!, email, invitation_handle: handle! })
     : action === 'reissue'
       ? await rpc('employees.reissue', { expect: account, email, invitation_handle: handle! })
       : await rpc('employees.revoke', { expect: account, email });
-  if (!organization(mine)) return;
+  // Another account since: what the change did was the last account's.
+  if (getState().employeeWrite?.id !== id) return;
+  const current = organization();
+  const done = (patch: Partial<OrganizationState>) => set({ employeeWrite: null, ...(current ? { organization: { ...current, ...patch } } : {}) });
   if (!result.ok) {
     const unknown = result.failure.mutation_outcome === 'unknown';
     // An unknown change, or an invitation made whose file could not be saved: the list shown may be wrong now.
     const stale = unknown || result.failure.code === 'invitation_save_failed';
-    setOrganization({
+    done({
       write: unknown ? { action, status: 'unknown' } : null, notice: unknown ? MAY_HAVE[action] : message(result.failure),
       ...(stale ? { items: null } : {}),
-    }, mine);
+    });
     accountLost(result.failure);
     return;
   }
   if (action === 'revoke') {
     // Undo says nothing more: the list shows it.
-    setOrganization({ write: null, notice: undoing ? null : 'Access revoked.' }, mine);
+    done({ write: null, notice: undoing ? null : 'Access revoked.' });
   } else {
     const expires = (result.value as { expires_at: string }).expires_at;
-    setOrganization({
+    done({
       write: null, notice: null, saved: { handle: handle!, action, name: name ?? email, email, expires_at: expires },
       ...(action === 'invite' ? { name: '', email: '' } : {}),
-    }, mine);
+    });
   }
   await loadEmployees();
 }
@@ -2195,10 +2236,11 @@ export function conceal(): void {
   // People closes, as Home's and the sidebar's rows must take a drop; unless a change in it is on its way.
   const people = state.sheet?.kind === 'people' && !memberChangeSending();
   // New project stays: files are dropped on it from other apps.
+  // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
   set({
     concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, records: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
-    ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null } } : {}),
+    ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });
   syncSearch();
 }

@@ -136,6 +136,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     { email: 'lee@example.com', display_name: 'Lee Park', membership_status: 'revoked', invitation_state: 'expired' },
   ];
   let employeeWrites = 0;
+  let employeeLists = 0;
   let changes = 0;
   let writeAttempts = 0;
   let documentAttempts = 0;
@@ -364,7 +365,15 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // People & invites, for the owner: list, invite (POST), reissue (PUT) and revoke (DELETE), each by email.
     if (path === '/v1/person/employees') {
       if (session.membership_type !== 'owner') return failure('unauthorized', 401);
-      if (method === 'GET') return json({ schema_version: 1, kind: 'echo-clean-person-employee-roster-v1', employees });
+      if (method === 'GET') {
+        const listed = structuredClone(employees);
+        // A slow Refresh: the list as it was when asked, answered a second after a change arrived.
+        if (mode === 'owner-write-lost-slow-list' && ++employeeLists === 2) {
+          for (let waited = 0; employeeWrites === 0 && waited < 10_000; waited += 50) await new Promise(resolveLater => setTimeout(resolveLater, 50));
+          await new Promise(resolveLater => setTimeout(resolveLater, 1_000));
+        }
+        return json({ schema_version: 1, kind: 'echo-clean-person-employee-roster-v1', employees: listed });
+      }
       employeeWrites += 1;
       const email = String(body?.email);
       const existing = employees.find(employee => employee.email === email && employee.membership_status === 'active');
@@ -382,7 +391,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return failure('not_found', 404);
       }
       // Made, but the first reply is lost on its way back.
-      if (mode === 'owner-write-lost' && employeeWrites === 1) return failure('unavailable', 503);
+      if (mode.startsWith('owner-write-lost') && employeeWrites === 1) return failure('unavailable', 503);
       if (method === 'DELETE') return new Response(null, { status: 204 });
       return json({ login_grant: randomBytes(32).toString('base64url'), expires_at: '2026-09-28T22:01:00.000Z' }, method === 'POST' ? 201 : 200);
     }
