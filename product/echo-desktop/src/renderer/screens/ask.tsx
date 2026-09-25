@@ -230,7 +230,6 @@ function RecordDetail({ record }: { record: ApprovedRecord }) {
   const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];
   return (
     <div class="source-detail selectable" data-testid="record">
-      <div class="section-label">Meeting · Approved record</div>
       <h2>{record.title ?? UNTITLED}</h2>
       {record.started_at && <div class="meta">{meetingTime(record.started_at, record.timezone, record.all_day)}</div>}
       <dl class="fields">
@@ -278,7 +277,6 @@ export function SourcePane({ state }: { state: State }) {
     const text = !read.loading && 'value' in read ? read.value.text : undefined;
     body = (
       <div class="source-detail">
-        <div class="section-label">Original source</div>
         <h2>{!read.loading && 'value' in read ? read.value.label : source.label}</h2>
         {read.loading && <div class="notice">Loading verified evidence…</div>}
         {!read.loading && 'failure' in read && (
@@ -295,7 +293,10 @@ export function SourcePane({ state }: { state: State }) {
   }
   return (
     <aside class="source-pane" data-testid="source-pane" aria-label="Source">
-      <button type="button" class="icon-button close" aria-label="Close sources" data-testid="source-close" onClick={toggleSources}><Close /></button>
+      <div class="pane-head">
+        <div class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : 'Original source'}</div>
+        <button type="button" class="icon-button" aria-label="Close sources" data-testid="source-close" onClick={toggleSources}><Close /></button>
+      </div>
       {body}
     </aside>
   );

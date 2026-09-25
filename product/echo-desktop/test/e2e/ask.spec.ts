@@ -122,7 +122,7 @@ test('an approved record opens beside the answer: who approved it, who was there
   await chips.nth(0).click();
   const pane = page.getByTestId('source-pane');
   const record = pane.getByTestId('record');
-  await expect(record).toContainText('Meeting · Approved record');
+  await expect(pane).toContainText('Meeting · Approved record');
   await expect(record.locator('h2')).toHaveText('Tuesday sync');
   await expect(record).toContainText('Record approved byMaya Chen');
   await expect(record).toContainText('ParticipantsMaya Chen, Ari');
