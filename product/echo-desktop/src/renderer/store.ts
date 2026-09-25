@@ -1786,9 +1786,10 @@ function wantedSearch(): { query: string; scope: AskScope } | null {
 /**
  * Searches for the bar's text in its scope, unless the matches shown are
  * already for them; `fresh` reads them again anyway. With nothing to search
- * the matches go.
+ * the matches go. A new search `typed` in the bar closes the reader, so its
+ * matches show.
  */
-function syncSearch(fresh = false): void {
+function syncSearch(fresh = false, typed = false): void {
   clearTimeout(searchTimer);
   searchTimer = undefined;
   const wanted = wantedSearch();
@@ -1796,6 +1797,7 @@ function syncSearch(fresh = false): void {
   const current = state.matches;
   const sameList = current !== null && sameScope(current.scope, wanted.scope);
   if (!fresh && sameList && current.query === wanted.query && !current.failure) return;
+  if (typed && state.reader) closeReader();
   void runSearch(wanted.query, wanted.scope, sameList ? current.items : []);
 }
 
@@ -1820,7 +1822,7 @@ export function setBarText(text: string): void {
   set({ barText: text });
   clearTimeout(searchTimer);
   if (!wantedSearch()) { syncSearch(); return; }
-  searchTimer = setTimeout(() => syncSearch(), SEARCH_PAUSE_MS);
+  searchTimer = setTimeout(() => syncSearch(false, true), SEARCH_PAUSE_MS);
 }
 
 /** The same search, read again: Try again after a failure, or the window or ECHO came back. */

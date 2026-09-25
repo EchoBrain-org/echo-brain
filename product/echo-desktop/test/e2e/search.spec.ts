@@ -77,6 +77,15 @@ test('the Home search survives every way back in, and a sidebar click narrows it
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('match-row')).toHaveCount(2);
 
+  // A new search typed while a match is open closes it, so its matches show.
+  await page.getByTestId('match-row').nth(1).click();
+  await expect(page.getByTestId('reader-text')).toHaveText('We agreed to ship.');
+  await field.fill('pricing tiers');
+  await expect(page.getByTestId('reader')).toHaveCount(0);
+  await expect(page.getByTestId('match-row')).toHaveText([/Pricing decision from Tuesday sync/]);
+  await field.fill('apollo');
+  await expect(page.getByTestId('match-row')).toHaveCount(2);
+
   // Another app in front: the matches are covered, the text stays, and they are read again on return.
   const before = noteSearches();
   await emit(app, 'echo-test:conceal');
