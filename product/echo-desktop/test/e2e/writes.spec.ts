@@ -45,7 +45,7 @@ test('a retry refused for a known reason still says the first try may have arriv
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('compose-unresolved')).toBeVisible();
   await page.getByTestId('compose-retry').click();
-  await expect(posts()).toHaveLength(2);
+  await expect.poll(() => posts().length).toBe(2);
   await expect(page.getByTestId('compose-error')).toHaveText('This may not have been sent.');
   await expect(page.getByTestId('compose-body')).toHaveAttribute('readonly', '');
 });
