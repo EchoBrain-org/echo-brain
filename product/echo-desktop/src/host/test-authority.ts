@@ -65,7 +65,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       } : {}),
     });
     if (expired) {
-      // What a weekly expiry leaves behind: the session set aside under a claim.
+      // What an older client's weekly expiry left behind: the session set aside under a claim.
       renameSync(store.paths.live, store.paths.refreshing);
       writeFileSync(store.paths.refresh_claim, '00000000-0000-4000-8000-000000000099\n', { mode: 0o600 });
     }
@@ -82,6 +82,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
     if (method === 'POST' && path === '/v2/session/refresh') {
       if (mode === 'refresh-fails') return failure('unavailable', 503);
+      if (mode === 'refresh-refused') return failure('unauthorized', 401);
       if (mode === 'refresh-hangs') return new Promise<Response>(() => undefined);
       return json({ ...session, access_token: 'B'.repeat(43), refresh_token: 'S'.repeat(43), access_expires_at: '2026-09-22T10:30:00.000Z' });
     }

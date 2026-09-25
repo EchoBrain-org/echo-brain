@@ -251,7 +251,7 @@ describe("Person session store", () => {
     });
   });
 
-  it("refuses a delayed refresh completion after an explicit install wins", () => {
+  it("refuses a delayed refresh completion or release after an explicit install wins", () => {
     withHome((home) => {
       const store = new PersonSessionStore(home);
       store.install("https://authority.example", AUTHORITY_ID, SESSION);
@@ -272,6 +272,10 @@ describe("Person session store", () => {
           access_expires_at: "2026-08-18T12:10:00.000Z",
         }),
       ).toThrow(/stale completion/);
+      // A stale release leaves a newer claim alone; the newer one restores.
+      const newer = store.claimRefresh();
+      store.releaseRefresh(claimed, false);
+      store.releaseRefresh(newer, true);
       expect(store.read().session).toEqual(installed);
     });
   });

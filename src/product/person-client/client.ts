@@ -204,11 +204,11 @@ function assertRefreshIdentity(
     "hard_reauthentication_at",
   ] as const) {
     if (previous[key] !== next[key]) {
-      throw new Error(`Person session refresh changed ${key}`);
+      throw new PersonClientSessionUnavailableError(`Person session refresh changed ${key}; sign in again`);
     }
   }
   if (previous.refresh_token === next.refresh_token) {
-    throw new Error("Person session refresh did not rotate its refresh token");
+    throw new PersonClientSessionUnavailableError("Person session refresh did not rotate its refresh token; sign in again");
   }
 }
 
@@ -304,18 +304,42 @@ export class PersonClient {
 
   async refresh(): Promise<PersonClientSessionSummary> {
     const claimed = this.store.claimRefresh();
-    if (
-      this.currentTime() >=
-      Date.parse(claimed.stored.session.hard_reauthentication_at)
-    ) {
-      throw new PersonClientSessionUnavailableError(
-        "Person session requires authentication again",
+    let next: OrganizationPersonSessionV2;
+    try {
+      if (
+        this.currentTime() >=
+        Date.parse(claimed.stored.session.hard_reauthentication_at)
+      ) {
+        throw new PersonClientSessionUnavailableError(
+          "Person session requires authentication again",
+        );
+      }
+      next = await this.authority(claimed.stored.authority_origin).refresh(
+        claimed.stored.session.refresh_token,
       );
+      assertRefreshIdentity(claimed.stored.session, next);
+    } catch (error) {
+      // The session ends only when it is known to be over: past its weekly
+      // deadline, refused by the Authority, or rotated to another identity.
+      // Anything else (no reply, a server failure, a reply that cannot be
+      // read) may have left the refresh token unused, so the claimed session
+      // goes back and a later call refreshes again. If the Authority did
+      // rotate it, that retry presents a used token: the Authority closes the
+      // family and refuses, and the person signs in again.
+      const refused =
+        error instanceof PersonAuthorityClientError &&
+        ((error.code === "unauthorized" && error.status === 401) ||
+          (error.code === "invalid_request" && error.status === 400));
+      const ended = refused || error instanceof PersonClientSessionUnavailableError;
+      this.store.releaseRefresh(claimed, !ended);
+      if (refused) {
+        throw new PersonClientSessionUnavailableError(
+          "Person session refresh was refused; sign in again",
+          { cause: error },
+        );
+      }
+      throw error;
     }
-    const next = await this.authority(claimed.stored.authority_origin).refresh(
-      claimed.stored.session.refresh_token,
-    );
-    assertRefreshIdentity(claimed.stored.session, next);
     return summary(this.store.completeRefresh(claimed, next));
   }
 

@@ -3162,28 +3162,56 @@ describe("Person client", () => {
     });
   });
 
-  it("never replays a refresh credential after an ambiguous transport failure", async () => {
+  function refreshingClient(home: string, reply: () => Response) {
+    const authority = authorityDescriptor();
+    const calls = { refresh: 0 };
+    const client = new PersonClient({
+      home_directory: home,
+      now: () => NOW,
+      fetch: async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/v1/authority-descriptor") {
+          return json({ authority_descriptor: authority });
+        }
+        expect(path).toBe("/v2/session/refresh");
+        calls.refresh += 1;
+        return reply();
+      },
+    });
+    return { client, calls };
+  }
+
+  it.each([
+    ["no reply", (): Response => { throw new Error("connection outcome is unknown"); }],
+    ["a server failure", () => json({ error: { code: "unavailable", message: "unavailable" } }, 503)],
+    ["an unreadable reply", () => json({ ...ROTATED_SESSION, access_token: "short" })],
+  ])("keeps the session after a refresh with %s, and refreshes again on the next call", async (_, reply) => {
     await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      let refreshCalls = 0;
-      const client = new PersonClient({
-        home_directory: home,
-        now: () => NOW,
-        fetch: async (input) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          expect(path).toBe("/v2/session/refresh");
-          refreshCalls += 1;
-          throw new Error("connection outcome is unknown");
-        },
-      });
+      const { client, calls } = refreshingClient(home, reply);
       await client.installSession("https://authority.example", SESSION);
 
-      await expect(client.records()).rejects.toThrow(/request failed/);
+      await expect(client.records()).rejects.toThrow(/Person Authority/);
+      expect(client.sessionSummary().membership_id).toBe(SESSION.membership_id);
+      await expect(client.records()).rejects.toThrow(/Person Authority/);
+      expect(calls.refresh).toBe(2);
+      const store = new PersonSessionStore(home);
+      expect([store.paths.refresh_claim, store.paths.refreshing].filter(existsSync)).toEqual([]);
+    });
+  });
+
+  it.each([
+    ["refuses the refresh", () => json({ error: { code: "unauthorized", message: "person authentication failed" } }, 401)],
+    ["rotates another identity", () => json({ ...ROTATED_SESSION, membership_id: fixtureId("mem", 2) })],
+  ])("signs out cleanly when the Authority %s", async (_, reply) => {
+    await withHome(async (home) => {
+      const { client, calls } = refreshingClient(home, reply);
+      await client.installSession("https://authority.example", SESSION);
+
       await expect(client.records()).rejects.toThrow(/sign in again/);
-      expect(refreshCalls).toBe(1);
+      await expect(client.records()).rejects.toThrow(/sign in again/);
+      expect(calls.refresh).toBe(1);
+      const store = new PersonSessionStore(home);
+      expect([store.paths.live, store.paths.refresh_claim, store.paths.refreshing].filter(existsSync)).toEqual([]);
     });
   });
 });

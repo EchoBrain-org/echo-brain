@@ -20,17 +20,27 @@ test('an expired access token is refreshed once, before the calls that need it',
   expect(refreshes()).toHaveLength(1);
 });
 
-test('a failed refresh shows sign-in at once, and status alone never refreshes', async () => {
+test('a refresh the Authority never answered keeps you signed in, and status alone never refreshes', async () => {
   run = await launch('refresh-fails');
   const { page, app } = run;
-  const started = Date.now();
-  await expect(page.getByTestId('signin')).toBeVisible();
-  expect(Date.now() - started).toBeLessThan(2_500); // not the 3 s wait for a refresh elsewhere
-  expect(refreshes()).toHaveLength(1);
+  await expect(page.getByTestId('home-error')).toContainText('ECHO is unavailable right now.');
+  await expect(page.getByTestId('signin')).toHaveCount(0);
+  expect(refreshes()).toHaveLength(2); // the gate's refresh, then the call's own
   // Showing the window again re-reads status; it does not try the network.
+  const statuses = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/app\.status ok/g)?.length ?? 0;
+  const before = statuses();
   await emit(app, 'echo-test:conceal');
   await emit(app, 'echo-test:resume');
-  await expect(page.getByTestId('signin')).toBeVisible();
+  await expect.poll(statuses).toBe(before + 1);
+  await expect(page.getByTestId('home-error')).toBeVisible();
+  expect(refreshes()).toHaveLength(2);
+});
+
+test('a refused refresh shows sign-in at once', async () => {
+  run = await launch('refresh-refused');
+  const started = Date.now();
+  await expect(run.page.getByTestId('signin')).toBeVisible();
+  expect(Date.now() - started).toBeLessThan(2_500); // not the 3 s wait for a refresh elsewhere
   expect(refreshes()).toHaveLength(1);
 });
 

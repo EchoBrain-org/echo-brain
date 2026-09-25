@@ -94,16 +94,6 @@ function expected(expect: Expect): string[] {
 let active = 0;
 let exclusive: Promise<void> | null = null;
 const idle: Array<() => void> = [];
-/**
- * The claim this host's own failed refresh left behind. The client does not
- * release it, so it reads as a refresh in progress; it is not one, and the
- * person must sign in again.
- */
-let ownFailedClaim: string | null = null;
-
-function readClaim(path: string): string | null {
-  try { return readFileSync(path, 'utf8'); } catch { return null; }
-}
 
 function refreshDue(store: SessionStore, now: number): boolean {
   try {
@@ -114,17 +104,16 @@ function refreshDue(store: SessionStore, now: number): boolean {
 }
 
 async function gated<T>(run: () => Promise<T>, network: boolean): Promise<T> {
-  const { store, now, paths } = await modules;
+  const { store, now } = await modules;
   while (exclusive) await exclusive;
   if (network && refreshDue(store, now())) {
     let release!: () => void;
     exclusive = new Promise(resolve => { release = resolve; });
     try {
       while (active > 0) await new Promise<void>(resolve => idle.push(resolve));
-      if (refreshDue(store, now())) {
-        const refreshed = await cli(['session-refresh']);
-        if (refreshed.exit !== 0) ownFailedClaim = readClaim(paths.refresh_claim);
-      }
+      // A failed refresh leaves the session as it was, or signed out when the
+      // Authority refused it; the call itself then reports which.
+      if (refreshDue(store, now())) await cli(['session-refresh']);
     } finally {
       exclusive = null;
       release();
@@ -159,12 +148,12 @@ async function readStatus(): Promise<AppStatus | null> {
 /**
  * While another process (the terminal CLI) refreshes, the session file is set
  * aside and the client reads as signed out. A claim whose session is past its
- * weekly deadline is left over from expiry: that one is signed out at once.
+ * weekly deadline is left over from an older client's expiry: that one is
+ * signed out at once.
  */
 async function refreshRunningElsewhere(): Promise<boolean> {
   const { paths, now } = await modules;
   if (!existsSync(paths.refresh_claim) || !existsSync(paths.refreshing)) return false;
-  if (ownFailedClaim !== null && readClaim(paths.refresh_claim) === ownFailedClaim) return false;
   try {
     const stored = JSON.parse(readFileSync(paths.refreshing, 'utf8')) as { session?: { hard_reauthentication_at?: unknown } };
     const deadline = Date.parse(String(stored.session?.hard_reauthentication_at));
