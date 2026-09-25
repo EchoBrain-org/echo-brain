@@ -51,12 +51,13 @@ test('an expired access token is refreshed once, before the calls that need it',
   expect(refreshes()).toHaveLength(1);
 });
 
-test('a refresh the Authority never answered keeps you signed in, and status alone never refreshes', async () => {
+test('a refresh that fails with a server error keeps you signed in, and status alone never refreshes', async () => {
   run = await launch('refresh-fails');
   const { page, app } = run;
   await expect(page.getByTestId('home-error')).toContainText('ECHO is unavailable right now.');
   await expect(page.getByTestId('signin')).toHaveCount(0);
-  expect(refreshes()).toHaveLength(2); // the gate's refresh, then the call's own
+  // One refresh, and the call that needed it is not made.
+  expect(run.calls().map(call => call.path)).toEqual(['/v2/session/refresh']);
   // Showing the window again re-reads status; it does not try the network.
   const statuses = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/app\.status ok/g)?.length ?? 0;
   const before = statuses();
@@ -64,7 +65,7 @@ test('a refresh the Authority never answered keeps you signed in, and status alo
   await emit(app, 'echo-test:resume');
   await expect.poll(statuses).toBe(before + 1);
   await expect(page.getByTestId('home-error')).toBeVisible();
-  expect(refreshes()).toHaveLength(2);
+  expect(refreshes()).toHaveLength(1);
 });
 
 test('a refused refresh shows sign-in at once', async () => {

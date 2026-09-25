@@ -106,7 +106,7 @@ function refreshDue(store: SessionStore, now: number): boolean {
   }
 }
 
-async function gated<T>(run: () => Promise<T>, network: boolean): Promise<T> {
+async function gated<T>(run: () => Promise<T>, network: boolean, refreshFailed?: (refresh: CliRun) => T): Promise<T> {
   const { store, now } = await modules;
   while (exclusive) await exclusive;
   if (network && refreshDue(store, now())) {
@@ -114,9 +114,15 @@ async function gated<T>(run: () => Promise<T>, network: boolean): Promise<T> {
     exclusive = new Promise(resolve => { release = resolve; });
     try {
       while (active > 0) await new Promise<void>(resolve => idle.push(resolve));
-      // A failed refresh leaves the session as it was, or signed out when the
-      // Authority refused it; the call itself then reports which.
-      if (refreshDue(store, now())) await cli(['session-refresh']);
+      // A refresh the Authority refused leaves the client signed out, and the
+      // call reports that. One with no answer puts the session back, and the
+      // call is not made: its client would try the same refresh again, and if
+      // the Authority did rotate the pair and only the reply was lost, the old
+      // access token is already revoked. The next call refreshes again.
+      if (refreshDue(store, now())) {
+        const refresh = await cli(['session-refresh']);
+        if (refresh.exit !== 0 && refreshFailed && refreshDue(store, now())) return refreshFailed(refresh);
+      }
     } finally {
       exclusive = null;
       release();
@@ -355,8 +361,16 @@ port.on('message', ({ data }) => {
   const timeout = new Promise<Result<unknown>>(resolve => {
     timer = setTimeout(() => { expired = true; resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[request.method]);
   });
+  // Sign-in and sign-out still run after a refresh with no answer: sign-in
+  // replaces the session, and sign-out works offline. Any other call was not
+  // made, so no write went out.
+  const refreshFailed = request.method === 'signin.begin' || request.method === 'account.logout' ? undefined
+    : (refresh: CliRun) => {
+      const failure = failureView(lastJson(refresh.stderr), 'failed', false, requestId);
+      return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);
+    };
   // Status goes through the gate too: mid-refresh the client reports signed out.
-  const work = gated(() => expired ? timeout : handle(request.method, request.params), request.method !== 'app.status')
+  const work = gated(() => expired ? timeout : handle(request.method, request.params), request.method !== 'app.status', refreshFailed)
     // A write that threw after reaching the client may have landed.
     .catch((error: unknown) => {
       if (__ECHO_TEST_HOOK__) console.error(`[client] ${request.method} threw:`, error);
