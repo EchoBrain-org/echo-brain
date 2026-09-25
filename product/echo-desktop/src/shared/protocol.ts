@@ -224,8 +224,19 @@ export interface ApprovedRecord {
   readonly rationales: RecordSection;
 }
 
-/** One audience per item: only you, one project, or everyone. */
-export type Audience = { readonly kind: 'only-me' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'team' };
+/** One audience per item: only you, one project's members, several projects' members, or everyone. */
+export type Audience =
+  | { readonly kind: 'only-me' }
+  | { readonly kind: 'project'; readonly project_id: string }
+  /** Several projects, in any order (the host sends them sorted). Capture sends a single project as `project`. */
+  | { readonly kind: 'projects'; readonly project_ids: readonly string[] }
+  | { readonly kind: 'team' };
+
+/**
+ * The most projects a capture is filed in, and the most whose members can
+ * read it: the API's own bound (PERSON_UPLOAD_PROJECT_SET_MAX).
+ */
+export const MAX_CAPTURE_PROJECTS = 20;
 
 /** Where a saved document's text extraction stands (the Authority's own states). */
 export type Extraction = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out'
@@ -311,9 +322,13 @@ export interface HostMethods {
   /** Revoke access: ends the employee's membership at once. */
   'employees.revoke': { params: { expect: Expect; email: string }; result: null };
   'projects.readContext': { params: { expect: Expect; project_id: string; context_id: string }; result: ContextContent };
-  'notes.submit': { params: { expect: Expect; request_id: string; text: string; audience: Audience; project_id?: string }; result: Receipt };
+  /** `project_ids`: the projects it is filed in, at most MAX_CAPTURE_PROJECTS, in any order. */
+  'notes.submit': { params: { expect: Expect; request_id: string; text: string; audience: Audience; project_ids: readonly string[] }; result: Receipt };
   /** The renderer names a file only by a handle main issued; main swaps in the path. */
-  'documents.upload': { params: { expect: Expect; request_id: string; file_handle: string; title: string; audience: Audience; project_id?: string }; result: Receipt };
+  'documents.upload': {
+    params: { expect: Expect; request_id: string; file_handle: string; title: string; audience: Audience; project_ids: readonly string[] };
+    result: Receipt;
+  };
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope }; result: Answer };
   /** The bar's live search, within its scope: a project, or all context. */
   'search.run': { params: { expect: Expect; query: string; scope: AskScope }; result: Matches };

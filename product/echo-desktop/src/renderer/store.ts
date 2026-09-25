@@ -6,6 +6,7 @@ import type {
   DocumentText, Employee, Expect, Extraction, Failure, FeedItem, FileHandle, Match, Member, ProjectChange, ProjectSummary, Receipt, RecordRef,
   Result, SourceEvidence,
 } from '../shared/protocol.js';
+import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { dropFile, rpc } from './api.js';
 import { moreSources, reread, type FeedSource } from './feed.js';
@@ -69,26 +70,26 @@ export interface SourcesState {
   evidence: { seq: number; index: number; read: Read<SourceEvidence> } | null;
 }
 
-/** Who can read a capture: only you, the members of its project, or everyone in the organization. */
-export type Readers = 'only-me' | 'project' | 'team';
+/** Who can read a capture: only you, the members of the projects ticked under Projects, or everyone in the organization. */
+export type Readers = 'only-me' | 'projects' | 'team';
 
 /** Capture: one page, a note or one file, and who can read it. */
 export interface ComposeState {
   seq: number;
   text: string;
   file: FileHandle | null;
-  /**
-   * The project Capture was opened for: the page's, or the row a file was
-   * dropped on. Only me and Organization keep the capture filed there.
-   */
+  /** The project Capture was opened for: the page's, or the row a file was dropped on. */
   context: ProjectSummary | null;
   /**
-   * The project the capture is filed in: the one chosen in Who can read, or
-   * else the context.
+   * The projects ticked under Projects, in the order they were ticked. The
+   * capture is filed in them whoever can read it, or in the context when
+   * none is ticked.
    */
-  project: ProjectSummary | null;
-  /** 'project' only ever with a project: that project's members. */
+  projects: ProjectSummary[];
+  /** 'projects' always has a project ticked, except while its list is open. */
   readers: Readers;
+  /** The Projects list is open: the choice it goes back to if it closes with none ticked. */
+  picking: { readers: Readers; projects: ProjectSummary[] } | null;
   /** unknown: the save may or may not have arrived; the text is locked. */
   status: 'editing' | 'sending' | 'error' | 'unknown' | 'checking';
   /** The exact request a retry resends. */
@@ -1389,7 +1390,9 @@ async function saveFile(mine: number, id: number, retrying: boolean): Promise<vo
   patchFile(mine, id, { status: 'saving', failure: undefined });
   const result = retrying
     ? await rpc('documents.retry', { expect: account, request_id: file.requestId, audience })
-    : await rpc('documents.upload', { expect: account, request_id: file.requestId, file_handle: file.handle!.handle, title: file.name, audience, project_id });
+    : await rpc('documents.upload', {
+      expect: account, request_id: file.requestId, file_handle: file.handle!.handle, title: file.name, audience, project_ids: [project_id],
+    });
   const current = newProjectSheet(mine)?.files.find(entry => entry.id === id);
   if (!current) return;
   if (!result.ok) {
@@ -2011,8 +2014,8 @@ function setCompose(compose: ComposeState | null): void {
 /** A new capture: filed in this project and readable by its members, or only yours. */
 function fresh(project: ProjectSummary | null): ComposeState {
   return {
-    seq: ++seq, text: '', file: null, context: project, project, readers: project ? 'project' : 'only-me', status: 'editing',
-    requestId: crypto.randomUUID(), kept: false, hidden: false, confirmNew: false,
+    seq: ++seq, text: '', file: null, context: project, projects: project ? [project] : [], readers: project ? 'projects' : 'only-me',
+    picking: null, status: 'editing', requestId: crypto.randomUUID(), kept: false, hidden: false, confirmNew: false,
   };
 }
 
@@ -2056,9 +2059,9 @@ export function openCapture(): void {
 
 /** Escape or Close hides the sheet and keeps the draft. */
 export function closeCompose(): void {
-  const compose = state.compose;
-  if (!compose || compose.status === 'sending' || compose.status === 'checking') return;
-  setCompose({ ...compose, hidden: true, confirmNew: false, notice: undefined });
+  if (!state.compose || state.compose.status === 'sending' || state.compose.status === 'checking') return;
+  closeProjects();
+  setCompose({ ...state.compose, hidden: true, confirmNew: false, notice: undefined });
 }
 
 function locked(compose: ComposeState): boolean {
@@ -2068,8 +2071,8 @@ function locked(compose: ComposeState): boolean {
 function editCompose(patch: Partial<ComposeState>): void {
   const compose = state.compose;
   if (!compose || locked(compose)) return;
-  // Any change to what would be saved, or for whom, makes it a new request.
-  const changesContent = 'text' in patch || 'file' in patch || 'project' in patch || 'readers' in patch;
+  // Any change to what would be saved, for whom, or where it is filed, makes it a new request.
+  const changesContent = 'text' in patch || 'file' in patch || 'projects' in patch || 'readers' in patch;
   if (changesContent) release(compose);
   setCompose({ ...compose, notice: undefined, ...patch,
     ...(changesContent ? { requestId: crypto.randomUUID(), kept: false, status: 'editing' as const, failure: undefined } : {}) });
@@ -2078,17 +2081,52 @@ function editCompose(patch: Partial<ComposeState>): void {
 export function setComposeText(text: string): void { editCompose({ text }); }
 
 /**
- * One click in Who can read. A project means its members, and the capture is
- * filed in it; Only me and Organization keep it filed in the project Capture
- * was opened for, if any.
+ * A choice in Who can read. Only me and Organization keep the projects
+ * ticked: the capture stays filed in them. Projects with none ticked is
+ * chosen only by opening its list.
  */
-export function chooseReaders(choice: 'only-me' | 'team' | ProjectSummary): void {
+export function chooseReaders(readers: Readers): void {
+  if (!state.compose || locked(state.compose)) return;
+  closeProjects();
   const compose = state.compose;
-  if (!compose) return;
-  const readers = typeof choice === 'string' ? choice : 'project';
-  const project = typeof choice === 'string' ? compose.context : choice;
-  if (readers === compose.readers && project?.project_id === compose.project?.project_id) return;
-  editCompose({ readers, project });
+  if (readers === compose.readers || (readers === 'projects' && compose.projects.length === 0)) return;
+  editCompose({ readers });
+}
+
+/**
+ * Projects: choosing it opens the list of projects to tick, and choosing it
+ * again closes the list.
+ */
+export function openProjects(): void {
+  const compose = state.compose;
+  if (!compose || locked(compose)) return;
+  if (compose.picking) { closeProjects(); return; }
+  const picking = { readers: compose.readers, projects: compose.projects };
+  if (compose.readers === 'projects') setCompose({ ...compose, picking });
+  else editCompose({ readers: 'projects', picking });
+}
+
+/** Ticks a project in the list, or unticks it. No more than the API takes. */
+export function tickProject(project: ProjectSummary): void {
+  const compose = state.compose;
+  if (!compose?.picking) return;
+  const ticked = compose.projects.some(entry => entry.project_id === project.project_id);
+  if (!ticked && compose.projects.length >= MAX_CAPTURE_PROJECTS) return;
+  editCompose({ projects: ticked ? compose.projects.filter(entry => entry.project_id !== project.project_id) : [...compose.projects, project] });
+}
+
+/** Done, a click outside or Escape: closed with none ticked, the choice goes back to what it was before. */
+export function closeProjects(): void {
+  const compose = state.compose;
+  if (!compose?.picking) return;
+  if (compose.projects.length > 0) setCompose({ ...compose, picking: null });
+  else editCompose({ picking: null, readers: compose.picking.readers, projects: compose.picking.projects });
+}
+
+/** A few project names, the short way: "tdk", "tdk and lin", "tdk, lin and 1 more". */
+export function projectNames(projects: readonly ProjectSummary[]): string {
+  const names = projects.map(project => project.name);
+  return names.length <= 2 ? names.join(' and ') : `${names[0]}, ${names[1]} and ${names.length - 2} more`;
 }
 
 export function removeFile(): void { editCompose({ file: null }); }
@@ -2103,9 +2141,23 @@ export async function attachFile(): Promise<void> {
   else if (!result.ok && state.compose && !locked(state.compose)) setCompose({ ...state.compose, notice: message(result.failure) });
 }
 
+/** Projects with none ticked: nothing to save yet. */
+export function choosingProjects(compose: ComposeState): boolean {
+  return compose.readers === 'projects' && compose.projects.length === 0;
+}
+
+/** One project's members, or several projects' (sorted, so a resend is the identical request). */
 function audienceOf(compose: ComposeState): Audience {
-  if (compose.readers === 'project' && compose.project) return { kind: 'project', project_id: compose.project.project_id };
-  return compose.readers === 'team' ? { kind: 'team' } : { kind: 'only-me' };
+  if (compose.readers === 'team') return { kind: 'team' };
+  if (compose.readers !== 'projects' || compose.projects.length === 0) return { kind: 'only-me' };
+  const ids = compose.projects.map(project => project.project_id).sort();
+  return ids.length === 1 ? { kind: 'project', project_id: ids[0]! } : { kind: 'projects', project_ids: ids };
+}
+
+/** Where it is filed: the projects ticked, or else the project Capture was opened for. */
+function filedIn(compose: ComposeState): string[] {
+  const projects = compose.projects.length > 0 ? compose.projects : compose.context ? [compose.context] : [];
+  return projects.map(project => project.project_id).sort();
 }
 
 /** A document's extraction state, in the app's own words. */
@@ -2119,7 +2171,7 @@ export const EXTRACTION: Record<Extraction, string> = {
 /** Where a confirmed save went, and for a file how its text is coming along. */
 function savedLabel(compose: ComposeState, extraction: Extraction | undefined): string {
   const where = compose.readers === 'team' ? 'Shared with your organization'
-    : compose.readers === 'project' && compose.project ? `Saved to ${compose.project.name}` : 'Saved for you';
+    : compose.readers === 'projects' && compose.projects.length > 0 ? `Saved to ${projectNames(compose.projects)}` : 'Saved for you';
   return compose.file && extraction ? `${where} · ${EXTRACTION[extraction]}` : where;
 }
 
@@ -2127,8 +2179,8 @@ function savedLabel(compose: ComposeState, extraction: Extraction | undefined): 
 function saved(compose: ComposeState, extraction: Extraction | undefined): void {
   setCompose(null);
   set({ toast: savedLabel(compose, extraction) });
-  const projectId = compose.project?.project_id;
-  if (projectId !== undefined && state.route.page === 'project' && state.route.project.project_id === projectId) void refreshFeed(projectId);
+  const shown = state.route.page === 'project' ? state.route.project.project_id : null;
+  if (shown !== null && filedIn(compose).includes(shown)) void refreshFeed(shown);
 }
 
 /** Save, or resend the exact same request after an unconfirmed outcome. */
@@ -2136,26 +2188,27 @@ export async function sendCompose(): Promise<void> {
   const account = expect();
   const compose = state.compose;
   if (!account || !compose || compose.status === 'sending' || compose.status === 'checking') return;
-  if (!compose.file && compose.text.trim() === '') return;
+  if ((!compose.file && compose.text.trim() === '') || choosingProjects(compose)) return;
   const retrying = compose.status === 'unknown';
   // Too long is said here, before anything is sent, not as a refusal.
   if (!compose.file && !retrying && new TextEncoder().encode(compose.text).length > MAX_NOTE_BYTES) {
     setCompose({ ...compose, notice: TOO_LONG });
     return;
   }
-  setCompose({ ...compose, status: 'sending', failure: undefined, confirmNew: false, notice: undefined });
+  // ⌘↩ from the Projects list saves: the list closes with what is ticked.
+  setCompose({ ...compose, status: 'sending', picking: null, failure: undefined, confirmNew: false, notice: undefined });
   const audience = audienceOf(compose);
-  const project = compose.project ? { project_id: compose.project.project_id } : {};
+  const project_ids = filedIn(compose);
   let result: Result<Receipt>;
   if (compose.file && retrying) {
     // The client kept the original: resend it, not whatever the path holds now.
     result = await rpc('documents.retry', { expect: account, request_id: compose.requestId, audience });
   } else if (compose.file) {
     result = await rpc('documents.upload', {
-      expect: account, request_id: compose.requestId, file_handle: compose.file.handle, title: compose.file.name, audience, ...project,
+      expect: account, request_id: compose.requestId, file_handle: compose.file.handle, title: compose.file.name, audience, project_ids,
     });
   } else {
-    result = await rpc('notes.submit', { expect: account, request_id: compose.requestId, text: compose.text, audience, ...project });
+    result = await rpc('notes.submit', { expect: account, request_id: compose.requestId, text: compose.text, audience, project_ids });
   }
   const current = state.compose;
   if (current?.seq !== compose.seq) return;
@@ -2197,7 +2250,7 @@ export function newCompose(): void {
   if (!compose || compose.status === 'sending' || compose.status === 'checking') return;
   if (compose.status === 'unknown' && !compose.confirmNew) { setCompose({ ...compose, confirmNew: true }); return; }
   release(compose);
-  setCompose({ ...fresh(compose.context), readers: compose.readers, project: compose.project });
+  setCompose({ ...fresh(compose.context), readers: compose.readers, projects: compose.projects });
 }
 
 export function keepUnresolved(): void {

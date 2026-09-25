@@ -15,9 +15,10 @@ import { Reader } from './screens/reader.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import {
-  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeReader, closeSheet,
-  closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, pageCovered, refreshStatus, resume, retryStart,
-  signinPhase, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, UNSAVED_FILES, useStore, windowShown, type State,
+  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeProjects, closeReader,
+  closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, pageCovered,
+  refreshStatus, resume, retryStart, signinPhase, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization,
+  UNSAVED_FILES, useStore, windowShown, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -58,7 +59,8 @@ function back(): void {
   if (state.sheet?.kind === 'new-project' && state.sheet.confirmClose) return keepNewProject();
   if (state.sheet) return closeSheet();
   if (!state.status?.signed_in) return closeSigninForm();
-  if (state.compose && !state.compose.hidden) return closeCompose();
+  // Escape closes the Projects list first, and only the list.
+  if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
   if (state.ask) return closeAsk();
   if (state.reader?.menu !== undefined && state.reader.menu !== 'closed') return toggleReaderMenu();
   if (state.reader) return closeReader();

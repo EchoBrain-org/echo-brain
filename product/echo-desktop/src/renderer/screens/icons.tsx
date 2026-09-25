@@ -47,6 +47,10 @@ export const Ellipsis = () => (
 export const Chevron = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" stroke="rgba(240,236,230,0.66)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
 );
+/** Opens a list: in the colour of the text around it. */
+export const Caret = () => (
+  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5l3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
+);
 export const Warning = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 2.8 19.5h18.4z" stroke="#e8a39a" stroke-width="1.8" stroke-linejoin="round" fill="none" /><path d="M12 10v4.5M12 17.2v.3" stroke="#e8a39a" stroke-width="1.8" stroke-linecap="round" /></svg>
 );

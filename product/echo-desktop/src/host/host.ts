@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  externalUrl, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
+  externalUrl, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
   type HostMethodName, type HostRequest, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
@@ -269,12 +269,35 @@ async function login(identity: string[], fallback: string): Promise<Result<AppSt
   return current === null ? code('unavailable') : ok(current);
 }
 
-function audienceArgs(audience: Audience, projectId: string | undefined): string[] {
-  const association = projectId === undefined ? [] : [option('association-project-ids-json', JSON.stringify([projectId]))];
+/**
+ * A set of projects as the client takes it: canonical JSON, the IDs sorted
+ * and unique, at most MAX_CAPTURE_PROJECTS. Null for anything else.
+ */
+function projectSet(value: unknown, minimum: number): string | null {
+  if (!Array.isArray(value) || value.length < minimum || value.length > MAX_CAPTURE_PROJECTS) return null;
+  if (!value.every(id => typeof id === 'string' && PROJECT_ID.test(id))) return null;
+  const sorted = [...value as string[]].sort();
+  return sorted.some((id, index) => index > 0 && id === sorted[index - 1]) ? null : JSON.stringify(sorted);
+}
+
+/**
+ * Who can read a capture, and the projects it is filed in. The two are
+ * independent: filing never widens who can read it. Null for anything the
+ * page should not have sent.
+ */
+function audienceArgs(audience: Audience | undefined, projectIds: unknown): string[] | null {
+  const filed = projectSet(projectIds ?? [], 0);
+  if (filed === null || audience === null || typeof audience !== 'object') return null;
+  const association = filed === '[]' ? [] : [option('association-project-ids-json', filed)];
   switch (audience.kind) {
     case 'only-me': return [option('audience', 'only-me'), ...association];
     case 'team': return [option('audience', 'team'), ...association];
     case 'project': return [option('audience', 'project'), option('audience-project-id', audience.project_id), ...association];
+    case 'projects': {
+      const readers = projectSet(audience.project_ids, 1);
+      return readers === null ? null : [option('audience', 'projects'), option('audience-project-ids-json', readers), ...association];
+    }
+    default: return null;
   }
 }
 
@@ -437,29 +460,31 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
         stdout => contextView(lastJson(stdout)));
     }
     case 'notes.submit': {
-      const { expect, request_id, text, audience, project_id } = params as Params<'notes.submit'>;
+      const { expect, request_id, text, audience, project_ids } = params as Params<'notes.submit'>;
       const title = noteTitle(text);
-      if (title === '' || Buffer.byteLength(text) > 8 * 1024) return code('invalid_request', true, request_id);
+      const readers = audienceArgs(audience, project_ids);
+      if (title === '' || Buffer.byteLength(text) > 8 * 1024 || readers === null) return code('invalid_request', true, request_id);
       // The client saves a file unchanged; write the exact text privately.
       const folder = mkdtempSync(join(tmpdir(), 'echo-note-'));
       const file = join(folder, 'note.txt');
       try {
         writeFileSync(file, text, { mode: 0o600 });
         return await forAccount(method, expect,
-          ['updates', 'submit-v3', option('request-id', request_id), option('title', title), option('file', file), ...audienceArgs(audience, project_id)],
+          ['updates', 'submit-v3', option('request-id', request_id), option('title', title), option('file', file), ...readers],
           stdout => receiptView(lastJson(stdout), request_id, audience), request_id);
       } finally {
         rmSync(folder, { recursive: true, force: true });
       }
     }
     case 'documents.upload': {
-      const { expect, request_id, title, audience, project_id } = params as Params<'documents.upload'>;
+      const { expect, request_id, title, audience, project_ids } = params as Params<'documents.upload'>;
       const file = (params as { file?: unknown }).file;
       const safeTitle = noteTitle(title);
-      if (typeof file !== 'string' || safeTitle === '') return code('invalid_request', true, request_id);
+      const readers = audienceArgs(audience, project_ids);
+      if (typeof file !== 'string' || safeTitle === '' || readers === null) return code('invalid_request', true, request_id);
       return forAccount(method, expect, [
         'documents', 'upload-v2', option('file', file), option('title', safeTitle), option('request-id', request_id),
-        ...audienceArgs(audience, project_id), ...expected(expect),
+        ...readers, ...expected(expect),
       ], stdout => receiptView(unwrap(lastJson(stdout)), request_id, audience), request_id);
     }
     case 'documents.retry': {
