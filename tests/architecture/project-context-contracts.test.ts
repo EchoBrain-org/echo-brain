@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   validateOrganizationApiError,
+  validateOrganizationDirectorySearchV1,
+  validateOrganizationDirectoryV1,
   validatePersonUpdateRequestId,
   validatePersonUpdateSubmitV1,
   validatePersonUpdateSubmitV2,
@@ -136,6 +138,7 @@ const requestValidators: Readonly<Record<string, (value: unknown) => unknown>> =
   'projects-create': validateProjectCreateV1,
   'projects-members': validateProjectContextBrowseV1,
   'projects-directory': validateProjectDirectorySearchV1,
+  'person-directory': validateOrganizationDirectorySearchV1,
   'projects-member-add': validateProjectMemberAddV1,
   'projects-member-set': validateProjectMemberSetV1,
   'projects-member-remove': validateProjectMemberRemoveV1,
@@ -153,6 +156,7 @@ const responseValidators: Readonly<Record<string, (value: unknown) => unknown>> 
   'projects-read': validateProjectSummaryV1,
   'projects-members': validateProjectMembersV1,
   'projects-directory': validateProjectDirectoryV1,
+  'person-directory': validateOrganizationDirectoryV1,
   'projects-member-add': validateProjectMutationReceiptV1,
   'projects-member-set': validateProjectMutationReceiptV1,
   'projects-member-remove': validateProjectMutationReceiptV1,
@@ -186,6 +190,8 @@ describe('project-context-v1 contract fixtures', () => {
       'projects-associate', 'projects-dissociate', 'projects-feed', 'projects-search',
       'projects-read-context', 'updates-submit-v2', 'updates-status-v2',
       'updates-search-v2', 'updates-read-v2',
+      // Appended: the native proof reads earlier fixtures by position.
+      'person-directory',
     ]);
     for (const operation of operations.operations) {
       expect(operation.argv.length, operation.id).toBeGreaterThanOrEqual(2);

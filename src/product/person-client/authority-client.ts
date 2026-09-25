@@ -24,6 +24,9 @@ import { Buffer } from "node:buffer";
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV1, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV1, validatePersonDocumentMetadataV2, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV1, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV1, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
 import {
+  PERSON_DIRECTORY_PATH_V1, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, type OrganizationDirectorySearchV1,
+} from '@echo-brain/organization-api';
+import {
   PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
   validateProjectPageRequestV1, validateProjectListV1, validateProjectCreateV1, validateProjectCreateReceiptV1,
   validateProjectIdV1, validateProjectSummaryV1, validateProjectContextBrowseV1, validateProjectMembersV1,
@@ -108,14 +111,41 @@ export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 
 export class PersonAuthorityClientError extends Error {
+  /** The request never left this machine: no connection was made. */
+  readonly unsent: boolean;
+
   constructor(
     public readonly code: string,
     public readonly status: number | null,
     message: string,
+    options: { readonly unsent?: boolean } = {},
   ) {
     super(message);
     this.name = "PersonAuthorityClientError";
+    this.unsent = options.unsent === true;
   }
+}
+
+/**
+ * Failures before any connection exists, judged by the step that failed: the
+ * same code from a read or write on a connected socket may follow sent bytes.
+ */
+const CONNECT_FAILURES = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENETDOWN", "EADDRNOTAVAIL"]);
+const LOOKUP_FAILURES = new Set(["ENOTFOUND", "EAI_AGAIN"]);
+
+function neverSent(error: unknown, depth = 0): boolean {
+  if (depth > 4 || typeof error !== "object" || error === null) return false;
+  const { code, syscall, cause, errors } = error as { code?: unknown; syscall?: unknown; cause?: unknown; errors?: unknown };
+  // Every address tried (an aggregate copies its first code, not its step).
+  if (Array.isArray(errors) && errors.length > 0) {
+    return errors.every((entry) => neverSent(entry, depth + 1));
+  }
+  if (code === "UND_ERR_CONNECT_TIMEOUT") return true;
+  if (typeof code === "string" && typeof syscall === "string") {
+    if (CONNECT_FAILURES.has(code)) return syscall === "connect";
+    if (LOOKUP_FAILURES.has(code)) return syscall === "getaddrinfo" || syscall.startsWith("query");
+  }
+  return neverSent(cause, depth + 1);
 }
 
 export class PersonContextMutationError extends PersonAuthorityClientError {
@@ -556,11 +586,12 @@ export class PersonAuthorityClient {
         redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
       });
-    } catch {
+    } catch (error) {
       throw new PersonAuthorityClientError(
         "transport_failed",
         null,
         "Person Authority request failed",
+        { unsent: neverSent(error) },
       );
     }
   }
@@ -949,6 +980,13 @@ export class PersonAuthorityClient {
     const request = validateProjectDirectorySearchV1(value);
     return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/directory`, body: request, validate: validateProjectDirectoryV1,
       matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
+  }
+
+  /** Active people in the signed-in person's own organization; no project needed. */
+  async organizationDirectory(accessToken: string, value: OrganizationDirectorySearchV1 = {}) {
+    const request = validateOrganizationDirectorySearchV1(value);
+    return this.contextRequest(accessToken, { path: PERSON_DIRECTORY_PATH_V1, body: request, validate: validateOrganizationDirectoryV1,
+      matches: result => result.items.length <= (request.limit ?? 10) });
   }
 
   async addProjectMember(accessToken: string, value: ProjectMemberAddV1) {

@@ -2,7 +2,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
 export interface ProjectCursorScopeV1 {
-  readonly operation: 'project_list' | 'members' | 'directory' | 'feed' | 'search' | 'feed_v2' | 'search_v2';
+  readonly operation: 'project_list' | 'members' | 'directory' | 'organization_directory' | 'feed' | 'search' | 'feed_v2' | 'search_v2';
   readonly project_id?: string;
   readonly canonical_query?: string;
   readonly limit: number;
@@ -32,7 +32,7 @@ function position(fields: readonly string[], scope: ProjectCursorScopeV1): Proje
   }
   if (fields.length !== 2) invalid();
   const [first, second] = fields as [string, string];
-  if (scope.operation === 'members' || scope.operation === 'directory') {
+  if (scope.operation === 'members' || scope.operation === 'directory' || scope.operation === 'organization_directory') {
     if (!displayName(first) || !membershipId.test(second)) invalid();
   } else if (!timestamp(first) || !(scope.operation === 'project_list' ? projectId : contextId).test(second)) invalid();
   return [first, second];

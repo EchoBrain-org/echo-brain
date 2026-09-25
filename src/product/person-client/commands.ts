@@ -102,6 +102,7 @@ const RULES: Readonly<
   "projects-read": { accepts: ["project-id"], requires: ["project-id"] },
   "projects-members": { accepts: ["project-id", "limit", "cursor"], requires: ["project-id"] },
   "projects-directory": { accepts: ["project-id", "query", "limit", "cursor"], requires: ["project-id"] },
+  directory: { accepts: ["query", "limit", "cursor"] },
   "projects-member-add": { accepts: ["request-id", "project-id", "membership-id"], requires: ["request-id", "project-id", "membership-id"] },
   "projects-member-set": { accepts: ["request-id", "project-id", "membership-id", "role"], requires: ["request-id", "project-id", "membership-id", "role"] },
   "projects-member-remove": { accepts: ["request-id", "project-id", "membership-id"], requires: ["request-id", "project-id", "membership-id"] },
@@ -182,6 +183,7 @@ Commands:
   logout      Remove the local session.
   ask         Ask a question over records you may read.
   records     List records or search the current generation.
+  directory   Find people in your organization by name.
   projects    Create projects, manage members, and browse permitted context.
   updates     Upload, search, and read original context with your chosen visibility.
   documents   Upload documents, read extracted text, and download exact originals.
@@ -215,6 +217,10 @@ Ask one question using at most 240 Unicode code points, 1–32 distinct normaliz
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
 Reads one bounded immutable source-evidence packet cited by Ask. Use the exact citation fields. The server rechecks your current access and project association before returning it; this never downloads an original file.
+`,
+  directory: `usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
+
+Lists active people in your organization by name, or narrows the list with a name search. Any signed-in member may use it; no project is needed. Shows names and membership IDs only. Pass next_cursor as --cursor with the same --query and --limit for the next page.
 `,
   records: `usage: echo-brain person records [--limit <1-100>] [--query <text>] [--record-sha256 <sha256:64hex>]
 
@@ -467,7 +473,7 @@ function uploadAudienceV3(values: Record<Option, string | boolean | undefined>) 
 }
 
 function isContextAction(action: string): boolean {
-  return action.startsWith('projects-') || action.startsWith('updates-') || action.startsWith('documents-');
+  return action === 'directory' || action.startsWith('projects-') || action.startsWith('updates-') || action.startsWith('documents-');
 }
 
 function contextCliFailure(action: string, error: unknown, values: Record<Option, string | boolean | undefined>) {
@@ -975,6 +981,9 @@ export async function runPersonClientCli(
         break;
       case 'projects-directory':
         print(stdout, await client.projectDirectory({ project_id: validateProjectIdV1(values['project-id']), ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }), ...contextPaging(values) }));
+        break;
+      case 'directory':
+        print(stdout, await client.organizationDirectory({ ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }), ...contextPaging(values) }));
         break;
       case 'projects-member-add':
         print(stdout, await client.addProjectMember(validateProjectMemberAddV1({ schema_version: 1, kind: 'echo-project-member-add-v1',

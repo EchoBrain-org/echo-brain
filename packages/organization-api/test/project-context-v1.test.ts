@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PERSON_DIRECTORY_PATH_V1,
+  validateOrganizationDirectorySearchV1,
+  validateOrganizationDirectoryV1,
   validatePersonUpdateSubmitV1,
   validatePersonUpdateSubmitV2,
   validatePersonUpdateReceiptV2,
@@ -71,6 +74,34 @@ describe('project context V1 public codecs', () => {
     expect(validateProjectDirectorySearchV1({ project_id, limit: 2 })).toEqual({ project_id, limit: 2 });
     expect(validateProjectDirectorySearchV1({ project_id, query: 'Ada', limit: 2 })).toEqual({ project_id, query: 'Ada', limit: 2 });
     expect(() => validateProjectDirectorySearchV1({ project_id, query: ' ', limit: 2 })).toThrow();
+  });
+
+  it('keeps the organization directory to query and paging, with the project directory bounds', () => {
+    expect(PERSON_DIRECTORY_PATH_V1).toBe('/v1/person/directory');
+    expect(validateOrganizationDirectorySearchV1({})).toEqual({ limit: 10 });
+    expect(validateOrganizationDirectorySearchV1({ query: 'Ada', limit: 2, cursor: 'AQ' })).toEqual({ query: 'Ada', limit: 2, cursor: 'AQ' });
+    for (const input of [
+      { query: ' ' }, { query: '' }, { limit: 0 }, { limit: 1.5 }, { limit: 11 }, { limit: '2' },
+      { cursor: 'AQ=' }, { cursor: 'A' }, { cursor: 'AB' }, { cursor: '' },
+      // The caller never names a project, organization or person.
+      { project_id }, { organization_id: 'org_untrusted' }, { membership_id }, { principal_id: 'untrusted' },
+      null, [], 'Ada',
+    ]) expect(() => validateOrganizationDirectorySearchV1(input), JSON.stringify(input)).toThrow();
+  });
+
+  it('admits one bounded organization directory page of unique names and IDs only', () => {
+    const entry = (id = membership_id) => ({ membership_id: id, display_name: 'Ada' });
+    const valid = { schema_version: 1, kind: 'echo-organization-directory-v1', items: [entry()], next_cursor: 'AQ' };
+    expect(validateOrganizationDirectoryV1(valid)).toEqual(valid);
+    expect(validateOrganizationDirectoryV1({ ...valid, items: [], next_cursor: null })).toEqual({ ...valid, items: [], next_cursor: null });
+    for (const invalid of [
+      { ...valid, items: [entry(), entry()] },
+      { ...valid, items: Array.from({ length: 11 }, (_, index) => entry(`mem_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`)) },
+      { ...valid, kind: 'echo-project-directory-v1' }, { ...valid, schema_version: 2 }, { ...valid, project_id },
+      { ...valid, items: [{ ...entry(), role: 'lead' }] }, { ...valid, items: [{ ...entry(), email: 'ada@example.test' }] },
+      { ...valid, items: [{ ...entry(), display_name: ' ' }] }, { ...valid, items: [{ membership_id: 'mem_not-a-uuid', display_name: 'Ada' }] },
+      { ...valid, next_cursor: 'AQ=' }, { schema_version: 1, kind: 'echo-organization-directory-v1', items: [entry()] },
+    ]) expect(() => validateOrganizationDirectoryV1(invalid), JSON.stringify(invalid)).toThrow();
   });
 
   it('keeps V1 closed while V2 carries a nullable association and a separate audience', () => {

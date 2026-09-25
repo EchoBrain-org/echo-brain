@@ -1,0 +1,30 @@
+{
+  "name": "echo-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ECHO desktop app (Electron) for macOS, Windows and Linux",
+  "type": "module",
+  "main": "build/main.cjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && node scripts/start.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && vitest run && playwright test",
+    "package": "node scripts/package.mjs",
+    "smoke": "dist-app/mac-arm64/ECHO.app/Contents/MacOS/ECHO --smoke"
+  },
+  "devDependencies": {
+    "@electron/fuses": "2.1.3",
+    "@playwright/test": "1.63.0",
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "preact": "10.29.8",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  },
+  "author": "EchoBrain"
+}

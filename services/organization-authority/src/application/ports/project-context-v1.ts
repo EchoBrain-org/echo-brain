@@ -11,6 +11,8 @@ import type {
   PersonUploadSearchV2,
   PersonUploadSearchResultV2,
   PersonUploadSearchResultV3,
+  OrganizationDirectorySearchV1,
+  OrganizationDirectoryV1,
   ProjectContextAssociateV1,
   ProjectContextBrowseV1,
   ProjectContextDissociateV1,
@@ -52,6 +54,12 @@ export interface ProjectContextApplicationV1 {
   listMembers(accessToken: string, request: unknown): ProjectMembersV1;
   /** Lead-only directory for selecting active organization membership targets. */
   searchDirectory(accessToken: string, request: unknown): ProjectDirectoryV1;
+  /**
+   * The same active-member rows for any active member of the caller's
+   * organization, with no project or lead grant (ADR-0016). It lets a person
+   * pick people before a project exists.
+   */
+  searchOrganizationDirectory(accessToken: string, request: unknown): OrganizationDirectoryV1;
   /** Add as a member without changing an already-active project's role. */
   addMember(accessToken: string, request: unknown): ProjectMutationReceiptV1;
   setMember(accessToken: string, request: unknown): ProjectMutationReceiptV1;
@@ -75,7 +83,7 @@ export interface ProjectContextApplicationV1 {
 }
 
 export type ProjectReadOperationV1 =
-  | 'project_list' | 'project_read' | 'members' | 'directory'
+  | 'project_list' | 'project_read' | 'members' | 'directory' | 'organization_directory'
   | 'feed' | 'search' | 'context_read' | 'feed_v2' | 'search_v2' | 'context_read_v2'
   | 'upload_status' | 'upload_read' | 'upload_search'
   | 'upload_status_v3' | 'upload_read_v3' | 'upload_search_v3';
@@ -96,6 +104,8 @@ export type ProjectAuthorizationScopeV1 =
   | { readonly operation: 'project_read' | 'members' | 'feed' | 'search' | 'feed_v2' | 'search_v2'; readonly project_id: ProjectIdV1 }
   /** Directory authorization requires the current project's lead grant. */
   | { readonly operation: 'directory'; readonly project_id: ProjectIdV1 }
+  /** Any active member of the caller's own organization; no project grant. */
+  | { readonly operation: 'organization_directory' }
   | { readonly operation: 'context_read' | 'context_read_v2'; readonly project_id: ProjectIdV1; readonly context_id: string }
   | { readonly operation: 'upload_read'; readonly context_id: string }
   | { readonly operation: 'upload_read_v3'; readonly context_id: string }
@@ -139,7 +149,7 @@ export interface ProjectReadAuditV1 {
 }
 
 export type ProjectReadResponseV1 =
-  | ProjectListV1 | ProjectSummaryV1 | ProjectMembersV1 | ProjectDirectoryV1
+  | ProjectListV1 | ProjectSummaryV1 | ProjectMembersV1 | ProjectDirectoryV1 | OrganizationDirectoryV1
   | ProjectContextFeedV1 | ProjectContextSearchResultV1 | ProjectContextReadV1
   | ProjectContextFeedV2 | ProjectContextSearchResultV2 | ProjectContextReadV2
   | PersonUpdateStatusV2 | PersonUploadContentV2 | PersonUploadSearchResultV2
@@ -159,6 +169,8 @@ export interface ProjectContextReadTransactionV1 {
   listMembers(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectMembersV1;
   /** Requires a current target-project lead grant before inspecting candidates. */
   searchDirectory(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectDirectorySearchV1): ProjectDirectoryV1;
+  /** The snapshot person's own organization only; requires active membership. */
+  searchOrganizationDirectory(snapshot: ProjectAuthorizationSnapshotV1, request: OrganizationDirectorySearchV1): OrganizationDirectoryV1;
   feed(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV1;
   feedV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV2;
   search(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextSearchV1): ProjectContextSearchResultV1;

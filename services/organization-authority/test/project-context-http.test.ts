@@ -24,6 +24,7 @@ const fixtures = (JSON.parse(readFileSync(new URL('../../../tests/fixtures/proje
 const operations: Record<string, Operation> = {
   'projects-list': 'listProjects', 'projects-create': 'createProject', 'projects-read': 'readProject',
   'projects-members': 'listMembers', 'projects-directory': 'searchDirectory',
+  'person-directory': 'searchOrganizationDirectory',
   'projects-member-add': 'addMember',
   'projects-member-set': 'setMember', 'projects-member-remove': 'removeMember',
   'projects-associate': 'associateContext', 'projects-dissociate': 'dissociateContext',
@@ -218,7 +219,7 @@ describe('frozen project/V2 HTTP transport', () => {
 
   it('reserves project and V2 route families against every provider ingress', () => {
     for (const key of ['private_approval_interaction_ingress', 'person_external_identity_link', 'person_tools']) {
-      for (const path of ['/v1/person/projects', fixture('projects-read-context').http.path, '/v2/person/updates', '/v2/person/updates/search']) {
+      for (const path of ['/v1/person/projects', fixture('projects-read-context').http.path, '/v2/person/updates', '/v2/person/updates/search', '/v1/person/directory', '/v1/person/directory/next']) {
         expect(() => createOrganizationAuthorityHttpServer({ ...options(), [key]: { routes: [{ route_id: 'collision', method: 'POST', path }], accept: async () => ({ status: 200, body: {} }) } })).toThrow('collides with Authority route');
       }
     }
@@ -240,5 +241,57 @@ describe('frozen project/V2 HTTP transport', () => {
     }
     expect((await fetch(`${origin}/v1/person/updates`, { method: 'POST', headers, body: JSON.stringify(request) })).status).toBe(202);
     expect(submitted).toBe(1); expect(calls).toEqual([]);
+  });
+});
+
+describe('organization people directory HTTP route', () => {
+  const page = { schema_version: 1, kind: 'echo-organization-directory-v1', items: [{ membership_id: 'mem_22222222-2222-4222-8222-222222222222', display_name: 'Ari' }], next_cursor: null };
+  const directory = (response: unknown = page) => fake({ searchOrganizationDirectory: (...args: unknown[]) => {
+    calls.push({ operation: 'searchOrganizationDirectory', args });
+    if (args[0] !== 'fixture-session') throw new AuthorityOperationError('unauthorized', 'private diagnostic');
+    return structuredClone(response) as never;
+  } });
+  const post = (origin: string, body: unknown, init: RequestInit = {}) =>
+    fetch(`${origin}/v1/person/directory`, { method: 'POST', headers, body: typeof body === 'string' ? body : JSON.stringify(body), ...init });
+
+  it('dispatches a search and a default first page with no project', async () => {
+    const origin = await start(directory());
+    const response = await post(origin, { query: 'ari', limit: 10 });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.text()).toBe(JSON.stringify(page));
+    expect((await post(origin, {})).status).toBe(200);
+    expect(calls).toEqual([
+      { operation: 'searchOrganizationDirectory', args: ['fixture-session', { query: 'ari', limit: 10 }] },
+      { operation: 'searchOrganizationDirectory', args: ['fixture-session', { limit: 10 }] },
+    ]);
+  });
+
+  it('rejects caller-chosen coordinates, bad bounds, a query string and other methods before the application', async () => {
+    const origin = await start(directory());
+    for (const body of [
+      { project_id: 'prj_11111111-1111-4111-8111-111111111111' }, { organization_id: 'org_other' },
+      { membership_id: 'mem_22222222-2222-4222-8222-222222222222' }, { principal_id: 'untrusted' },
+      { query: '' }, { query: ' ari' }, { limit: 0 }, { limit: 11 }, { cursor: 'AB' }, [], null, '{"query":"a","query":"b"}',
+    ]) await failure(await post(origin, body));
+    await failure(await fetch(`${origin}/v1/person/directory?limit=10`, { method: 'POST', headers, body: '{}' }));
+    await failure(await fetch(`${origin}/v1/person/directory`, { headers }), 404, 'not_found');
+    await failure(await post(origin, {}, { method: 'PUT' }), 404, 'not_found');
+    expect(calls).toEqual([]);
+  });
+
+  it('requires a current Person session and stays hidden when projects are not composed', async () => {
+    const origin = await start(directory());
+    await failure(await post(origin, {}, { headers: { 'content-type': 'application/json' } }), 401, 'unauthorized');
+    expect(calls).toEqual([]);
+    await failure(await post(origin, {}, { headers: { ...headers, authorization: 'Bearer revoked' } }), 401, 'unauthorized');
+    await failure(await post(await start(fake(), { project_context: undefined }), {}), 404, 'not_found');
+  });
+
+  it('withholds any page that is not an exact organization directory', async () => {
+    for (const output of [
+      { ...page, project_id: 'prj_11111111-1111-4111-8111-111111111111' }, { ...page, kind: 'echo-project-directory-v1' },
+      { ...page, items: [{ ...page.items[0], email: 'ari@example.test' }] }, { ...page, items: [page.items[0], page.items[0]] },
+    ]) await failure(await post(await start(directory(output)), {}), 502, 'invalid_output');
   });
 });

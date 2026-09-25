@@ -38,6 +38,7 @@ encoding implementation.
 | `projects read` | `GET /v1/person/projects/{project_id}` | none | `200` project summary |
 | `projects members` | `POST /v1/person/projects/members` | project browse | `200` members page |
 | `projects directory` | `POST /v1/person/projects/directory` | directory search | `200` directory page |
+| `directory` | `POST /v1/person/directory` | organization directory search | `200` organization directory page |
 | `projects member-set` | `POST /v1/person/projects/members/set` | member-set | `200` immutable mutation receipt |
 | `projects member-remove` | `POST /v1/person/projects/members/remove` | member-remove | `200` immutable mutation receipt |
 | `projects associate` | `POST /v1/person/projects/context/associate` | association | `200` immutable mutation receipt |
@@ -50,11 +51,21 @@ encoding implementation.
 | `updates search` | `POST /v2/person/updates/search` | V2 search | `200` V2 search result |
 | `updates read` | `GET /v2/person/updates/content/{context_id}` | none | `200` V2 original read |
 
+`projects directory` requires a lead grant on that project. `directory` (fixture
+`person-directory`) lists the same active-member names for any active member of
+the caller's own organization, with no project, per
+[ADR-0016](../../../docs/decisions/ADR-0016-organization-people-directory.md).
+Its body carries only the optional query, limit and cursor.
+
 Only `projects list` is the capability probe used by the UI. Its `not_found`
 response means **Not live yet** only at that capability-probe boundary. A
 `not_found` for an individual project or original is deliberately
 non-disclosing and must never be converted to a project list, global search,
 or an unavailable claim.
+
+`directory` is the one exception: a `not_found` there means only that this
+Authority lacks the organization directory, even when `projects list` is live.
+The UI must show people search as unavailable, never as an empty list.
 
 ## Error and retry mapping
 
@@ -79,6 +90,7 @@ echo-brain person projects create --request-id <uuid> --name <name>
 echo-brain person projects read --project-id <project-id>
 echo-brain person projects members --project-id <project-id> [--limit <1-10>] [--cursor <opaque-base64url>]
 echo-brain person projects directory --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
+echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 echo-brain person projects member-set --request-id <uuid> --project-id <project-id> --membership-id <membership-id> --role <member|lead>
 echo-brain person projects member-remove --request-id <uuid> --project-id <project-id> --membership-id <membership-id>
 echo-brain person projects associate --request-id <uuid> --project-id <project-id> --context-id <context-id>

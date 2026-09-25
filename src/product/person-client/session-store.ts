@@ -413,19 +413,23 @@ export class PersonSessionStore {
     }
   }
 
+  private ownsRefresh(claimed: PersonSessionRefreshClaim): boolean {
+    return (
+      !existsSync(this.paths.live) &&
+      existsSync(this.paths.refresh_claim) &&
+      existsSync(this.paths.refreshing) &&
+      readPrivateFile(this.paths.refresh_claim) === `${claimed.claim_id}\n` &&
+      JSON.stringify(
+        parseStoredSession(readPrivateFile(this.paths.refreshing)),
+      ) === JSON.stringify(claimed.stored)
+    );
+  }
+
   completeRefresh(
     claimed: PersonSessionRefreshClaim,
     session: OrganizationPersonSessionV2,
   ): StoredPersonClientSessionV1 {
-    if (
-      existsSync(this.paths.live) ||
-      !existsSync(this.paths.refresh_claim) ||
-      !existsSync(this.paths.refreshing) ||
-      readPrivateFile(this.paths.refresh_claim) !== `${claimed.claim_id}\n` ||
-      JSON.stringify(
-        parseStoredSession(readPrivateFile(this.paths.refreshing)),
-      ) !== JSON.stringify(claimed.stored)
-    ) {
+    if (!this.ownsRefresh(claimed)) {
       throw new PersonClientSessionUnavailableError(
         'Person session refresh claim changed; refusing a stale completion',
       );
@@ -447,8 +451,42 @@ export class PersonSessionStore {
       }
       throw error;
     }
-    this.cleanupTransitions();
+    this.releaseOwnClaim(claimed);
     return value;
+  }
+
+  /**
+   * Removes this refresh's claim and set-aside session, unless another process
+   * has claimed since: once the live session is back, a reader elsewhere may
+   * already have cleaned up and started its own refresh.
+   */
+  private releaseOwnClaim(claimed: PersonSessionRefreshClaim): void {
+    try {
+      if (readPrivateFile(this.paths.refresh_claim) !== `${claimed.claim_id}\n`) return;
+    } catch {
+      return; // Already cleaned up by a reader.
+    }
+    const removed = removeIfPresent(this.paths.refreshing);
+    if (removeIfPresent(this.paths.refresh_claim) || removed) fsyncDirectory(this.paths.directory);
+  }
+
+  /**
+   * Ends a refresh that installed nothing. With `restore`, the claimed session
+   * becomes live again; otherwise the store is left signed out. A claim that
+   * changed hands (a sign-in meanwhile) is left alone.
+   */
+  releaseRefresh(claimed: PersonSessionRefreshClaim, restore: boolean): void {
+    if (!this.ownsRefresh(claimed)) return;
+    if (restore) {
+      try {
+        // A link, not a rename: it never replaces a session installed meanwhile.
+        linkSync(this.paths.refreshing, this.paths.live);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
+        throw error;
+      }
+    }
+    this.releaseOwnClaim(claimed);
   }
 
   claimLogout(): StoredPersonClientSessionV1 {

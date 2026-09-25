@@ -16,6 +16,7 @@ import {
   type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2, type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import { validatePersonUpdateSubmitV3, validatePersonUploadSearchV3, type PersonUpdateSubmitV3, type PersonUploadSearchV3 } from '@echo-brain/organization-api';
+import { validateOrganizationDirectorySearchV1, type OrganizationDirectorySearchV1 } from '@echo-brain/organization-api';
 import { randomBytes, randomUUID } from "node:crypto";
 import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonMeetingIngestionExclusionSelectorV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 import {
@@ -204,11 +205,11 @@ function assertRefreshIdentity(
     "hard_reauthentication_at",
   ] as const) {
     if (previous[key] !== next[key]) {
-      throw new Error(`Person session refresh changed ${key}`);
+      throw new PersonClientSessionUnavailableError(`Person session refresh changed ${key}; sign in again`);
     }
   }
   if (previous.refresh_token === next.refresh_token) {
-    throw new Error("Person session refresh did not rotate its refresh token");
+    throw new PersonClientSessionUnavailableError("Person session refresh did not rotate its refresh token; sign in again");
   }
 }
 
@@ -304,18 +305,40 @@ export class PersonClient {
 
   async refresh(): Promise<PersonClientSessionSummary> {
     const claimed = this.store.claimRefresh();
-    if (
-      this.currentTime() >=
-      Date.parse(claimed.stored.session.hard_reauthentication_at)
-    ) {
-      throw new PersonClientSessionUnavailableError(
-        "Person session requires authentication again",
+    let next: OrganizationPersonSessionV2;
+    try {
+      if (
+        this.currentTime() >=
+        Date.parse(claimed.stored.session.hard_reauthentication_at)
+      ) {
+        throw new PersonClientSessionUnavailableError(
+          "Person session requires authentication again",
+        );
+      }
+      next = await this.authority(claimed.stored.authority_origin).refresh(
+        claimed.stored.session.refresh_token,
       );
+      assertRefreshIdentity(claimed.stored.session, next);
+    } catch (error) {
+      // Only a request that never left this machine (no connection at all,
+      // as when the network is not up yet) puts the claimed session back: the
+      // refresh token is certainly unused. Any other failure is ambiguous or
+      // final, and ADR-0002 never replays an ambiguous refresh: the claim is
+      // released and the store is left plainly signed out.
+      const refused =
+        error instanceof PersonAuthorityClientError &&
+        ((error.code === "unauthorized" && error.status === 401) ||
+          (error.code === "invalid_request" && error.status === 400));
+      const unsent = error instanceof PersonAuthorityClientError && error.unsent;
+      this.store.releaseRefresh(claimed, unsent);
+      if (refused) {
+        throw new PersonClientSessionUnavailableError(
+          "Person session refresh was refused; sign in again",
+          { cause: error },
+        );
+      }
+      throw error;
     }
-    const next = await this.authority(claimed.stored.authority_origin).refresh(
-      claimed.stored.session.refresh_token,
-    );
-    assertRefreshIdentity(claimed.stored.session, next);
     return summary(this.store.completeRefresh(claimed, next));
   }
 
@@ -595,6 +618,11 @@ export class PersonClient {
   async projectDirectory(value: ProjectDirectorySearchV1) {
     const request = validateProjectDirectorySearchV1(value);
     return this.withContextSession((authority, token) => authority.projectDirectory(token, request));
+  }
+
+  async organizationDirectory(value: OrganizationDirectorySearchV1 = {}) {
+    const request = validateOrganizationDirectorySearchV1(value);
+    return this.withContextSession((authority, token) => authority.organizationDirectory(token, request));
   }
 
   async addProjectMember(value: ProjectMemberAddV1) {

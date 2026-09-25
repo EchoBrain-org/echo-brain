@@ -1,9 +1,10 @@
 import {
-  PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
+  PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
   validateProjectPageRequestV1, validateProjectIdV1, validateProjectSummaryV1,
   validateProjectContextBrowseV1, validateProjectMembersV1,
   validateProjectDirectorySearchV1, validateProjectDirectoryV1,
+  validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectMutationReceiptV1,
   validateProjectContextAssociateV1, validateProjectContextDissociateV1,
   validateProjectContextFeedV1, validateProjectContextFeedV2, validateProjectContextSearchV1, validateProjectContextSearchResultV1, validateProjectContextSearchResultV2,
@@ -157,7 +158,7 @@ function providerIngressRoutes(
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
-        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2]
+        [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2]
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
         throw new Error(`provider ingress route collides with Authority route: ${key}`);
       }
@@ -546,6 +547,7 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   [PERSON_PROJECTS_PATH_V1, { operation: 'createProject', request: validateProjectCreateV1, response: validateProjectCreateReceiptV1, status: 201 }],
   [`${PERSON_PROJECTS_PATH_V1}/members`, { operation: 'listMembers', request: validateProjectContextBrowseV1, response: validateProjectMembersV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/directory`, { operation: 'searchDirectory', request: validateProjectDirectorySearchV1, response: validateProjectDirectoryV1, status: 200 }],
+  [PERSON_DIRECTORY_PATH_V1, { operation: 'searchOrganizationDirectory', request: validateOrganizationDirectorySearchV1, response: validateOrganizationDirectoryV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/members/add`, { operation: 'addMember', request: validateProjectMemberAddV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/members/set`, { operation: 'setMember', request: validateProjectMemberSetV1, response: validateProjectMutationReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/members/remove`, { operation: 'removeMember', request: validateProjectMemberRemoveV1, response: validateProjectMutationReceiptV1, status: 200 }],

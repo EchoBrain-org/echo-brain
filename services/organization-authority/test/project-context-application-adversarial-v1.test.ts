@@ -47,6 +47,7 @@ const reads: ReadonlyArray<{
   { name: 'project read', run: (app, s) => app.readProject('person', s.project.project_id) },
   { name: 'roster', run: (app, s) => app.listMembers('person', { project_id: s.project.project_id }) },
   { name: 'directory', run: (app, s) => app.searchDirectory('person', { project_id: s.project.project_id, query: 'member' }) },
+  { name: 'organization directory', run: app => app.searchOrganizationDirectory('person', { query: 'member' }) },
   { name: 'feed', run: (app, s) => app.feed('person', { project_id: s.project.project_id }) },
   { name: 'project search', run: (app, s) => app.search('person', { project_id: s.project.project_id, query: 'needle' }) },
   { name: 'project original', run: (app, s) => app.readContext('person', s.project.project_id, s.upload.context_id) },
@@ -172,6 +173,32 @@ describe('project application final release boundary', () => {
     expect(() => application.readUpload('person', state.upload.context_id))
       .toThrow(expect.objectContaining({ code: 'stale_access_state' }));
     expect(audits(state.database)).toBe(0);
+  });
+
+  it('lets a Person with no project search the organization directory, but never a project directory', () => {
+    const state = fixture();
+    state.application.removeMember('person', {
+      schema_version: 1, kind: 'echo-project-member-remove-v1', request_id: requestId(6),
+      project_id: state.project.project_id, membership_id: MEMBER.membership_id,
+    });
+    const member = createProjectContextApplicationV1({ authenticate: () => authorization(MEMBER), repository: state.repository });
+    expect(member.listProjects('person', {}).items).toEqual([]);
+    expect(member.searchOrganizationDirectory('person', {}).items).toEqual([
+      { membership_id: MEMBER.membership_id, display_name: 'Member' },
+      { membership_id: OWNER.membership_id, display_name: 'Owner' },
+    ]);
+    expect(() => member.searchDirectory('person', { project_id: state.project.project_id }))
+      .toThrow(expect.objectContaining({ code: 'not_found' }));
+    const read = vi.spyOn(state.repository, 'withReadTransaction');
+    for (const value of [{ project_id: state.project.project_id }, { organization_id: OWNER.organization_id }, { membership_id: OWNER.membership_id }, { query: '' }, { limit: 11 }]) {
+      expect(() => member.searchOrganizationDirectory('person', value)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    }
+    expect(read).not.toHaveBeenCalled();
+    const signedOut = createProjectContextApplicationV1({
+      authenticate: () => { throw new AuthorityOperationError('unauthorized', 'request failed'); }, repository: state.repository,
+    });
+    expect(() => signedOut.searchOrganizationDirectory('person', {})).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('rejects unknown caller authorization fields and accessors before opening a transaction', () => {
