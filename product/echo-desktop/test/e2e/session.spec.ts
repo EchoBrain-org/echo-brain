@@ -20,17 +20,22 @@ async function signIn(page: Page) {
   for (const secret of ['accounts.example', '127.0.0.1', 'A'.repeat(43), 'R'.repeat(43)]) expect(html).not.toContain(secret);
 }
 
-test('signing in lands on Home, and signing in again as the same person keeps the draft', async () => {
+test('signing in lands on Home, and signing in again as the same person keeps the draft but not the bar', async () => {
   run = await launch('signed-out');
   const { page, app, home } = run;
   await signIn(page);
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Half a thought');
   await page.keyboard.press('Escape');
+  await page.getByTestId('ask-field').fill('apollo');
+  await expect(page.getByTestId('match-row')).toHaveCount(2);
   // Signed out elsewhere, as the terminal's `person logout` does.
   rmSync(join(home, '.local', 'share', 'echo-brain', 'person', 'session.v1.json'));
   await emit(app, 'echo-test:shown');
   await signIn(page);
+  // Signing out is a real change of access: the bar's text went with it.
+  await expect(page.getByTestId('ask-field')).toHaveValue('');
+  await expect(page.getByTestId('matches')).toHaveCount(0);
   await emit(app, 'echo-test:capture');
   await expect(page.getByTestId('compose-body')).toHaveValue('Half a thought');
 });
