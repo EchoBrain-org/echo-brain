@@ -39,6 +39,55 @@ test('a project is one feed of notes and documents, and More reads older ones in
     .toEqual([{ schema_version: 2, kind: 'echo-person-document-search-v2', project_id: BEACON, query: '', limit: 10, cursor: null }]);
 });
 
+test('a save into the project on screen keeps the rows shown, even when reading them again fails', async () => {
+  run = await launch('long-feed-refresh-fails');
+  const { page } = run;
+  const feeds = () => run.calls().filter(call => call.path === '/v2/person/projects/context/feed').length;
+  const log = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8');
+  await page.getByTestId('project-row').nth(1).click();
+  const rows = page.getByTestId('feed-row');
+  await expect(rows).toHaveCount(10);
+  await page.getByTestId('feed-more').click();
+  await expect(rows).toHaveCount(13);
+
+  // Read again after the save, the notes fail: nothing shown goes, and no error is shown for it.
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Beacon standup');
+  await page.getByTestId('compose-send').click();
+  await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon');
+  await expect.poll(log).toMatch(/projects\.feed unavailable/);
+  await page.waitForTimeout(300);
+  await expect(rows).toHaveCount(13);
+  await expect(page.getByTestId('feed-failure')).toHaveCount(0);
+  await expect(page.getByTestId('feed-error')).toHaveCount(0);
+
+  // Read again once more, the new note leads, and the older rows More loaded stay.
+  await page.getByTestId('write-button').click();
+  await page.getByTestId('compose-body').fill('Beacon standup');
+  await page.getByTestId('compose-send').click();
+  await expect(rows.first()).toContainText('Beacon standup');
+  await expect(rows).toHaveCount(14);
+  await expect(rows.last()).toContainText('Note 12');
+  await expect(page.getByTestId('feed-more')).toHaveCount(0);
+  expect(feeds()).toBe(4);
+});
+
+test('a list that could not be read says why beside the rest, and Try again reads only it', async () => {
+  run = await launch('documents-fail-once');
+  const { page } = run;
+  const lists = () => run.calls().filter(call => call.path === '/v2/person/documents/search').length;
+  await page.getByTestId('project-row').nth(1).click();
+  await expect(page.getByTestId('feed-row')).toHaveCount(1);
+  await expect(page.getByTestId('feed-failure')).toContainText('ECHO is unavailable right now.');
+  const feeds = run.calls().filter(call => call.path === '/v2/person/projects/context/feed').length;
+  await page.getByTestId('feed-retry').click();
+  await expect(page.getByTestId('feed-row')).toHaveCount(2);
+  await expect(page.locator('[data-kind="document"]')).toContainText('Q4 hiring plan.pdf');
+  await expect(page.getByTestId('feed-failure')).toHaveCount(0);
+  expect(lists()).toBe(2);
+  expect(run.calls().filter(call => call.path === '/v2/person/projects/context/feed')).toHaveLength(feeds);
+});
+
 test('a document reads a page of text at a time, and Save original writes the checked original where main was told', async () => {
   run = await launch();
   const { page, app } = run;

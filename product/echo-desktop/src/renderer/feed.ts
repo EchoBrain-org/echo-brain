@@ -11,7 +11,7 @@ export interface FeedLists {
   readonly documentsNext: string | null;
 }
 
-type Source = 'notes' | 'documents';
+export type FeedSource = 'notes' | 'documents';
 
 function time(iso: string): number {
   const parsed = Date.parse(iso);
@@ -47,10 +47,26 @@ export function mergedFeed(lists: FeedLists): FeedEntry[] {
 }
 
 /** More reads the next page of the list (or lists) that stop the feed going further back. */
-export function moreSources(lists: FeedLists): Source[] {
+export function moreSources(lists: FeedLists): FeedSource[] {
   const line = cutoff(lists);
-  const sources: Source[] = [];
+  const sources: FeedSource[] = [];
   if (lists.notesNext !== null && reach(lists.notes) === line) sources.push('notes');
   if (lists.documentsNext !== null && reach(lists.documents) === line) sources.push('documents');
   return sources;
+}
+
+/**
+ * A list's first page read again, over what already shows: the page leads,
+ * and older rows loaded with More stay, with the cursor that reaches past
+ * them. A shown row the page should hold but does not has left the list.
+ */
+export function reread<T extends { received_at: string }>(
+  shown: { items: readonly T[]; next: string | null }, first: { items: readonly T[]; next: string | null }, key: (item: T) => string,
+): { items: T[]; next: string | null } {
+  // The page reaches the end: the list is all of it.
+  if (first.next === null) return { items: [...first.items], next: null };
+  const seen = new Set(first.items.map(key));
+  const oldest = Math.min(...first.items.map(item => time(item.received_at)));
+  const older = shown.items.filter(item => !seen.has(key(item)) && time(item.received_at) <= oldest);
+  return older.length > 0 ? { items: [...first.items, ...older], next: shown.next } : { items: [...first.items], next: first.next };
 }

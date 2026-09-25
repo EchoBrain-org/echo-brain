@@ -8,7 +8,7 @@ import type {
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { dropFile, rpc } from './api.js';
-import { moreSources } from './feed.js';
+import { moreSources, reread, type FeedSource } from './feed.js';
 import { message } from './messages.js';
 
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' };
@@ -246,6 +246,8 @@ export interface FeedState {
   notesNext: string | null;
   documents: DocumentSummary[];
   documentsNext: string | null;
+  /** The lists whose first page could not be read: Try again reads them. */
+  unread: FeedSource[];
   loading: boolean;
   failure?: Failure;
 }
@@ -623,7 +625,7 @@ export async function openProject(project: ProjectSummary): Promise<void> {
   set({
     route: { page: 'project', project }, reader: null, ask: null, sources: null, toast: null, organization: null,
     barScope: { kind: 'project', project_id: project.project_id },
-    feed: { projectId: project.project_id, notes: [], notesNext: null, documents: [], documentsNext: null, loading: true },
+    feed: { projectId: project.project_id, notes: [], notesNext: null, documents: [], documentsNext: null, unread: [], loading: true },
   });
   syncSearch();
   void loadRoster(project.project_id);
@@ -632,23 +634,47 @@ export async function openProject(project: ProjectSummary): Promise<void> {
 
 /**
  * A project's first page of notes and of documents, read side by side. A
- * list that could not be read says why; the other still shows.
+ * list read leads with its first page and keeps the older rows More loaded;
+ * a list that could not be read keeps what it showed. Opening the project,
+ * or Try again, says why a list could not be read, and the other still
+ * shows. A read the person did not ask for (quiet) fails quietly, unless
+ * the account is gone.
  */
-async function loadFeed(projectId: string): Promise<void> {
+async function loadFeed(projectId: string, sources: readonly FeedSource[] = ['notes', 'documents'], quiet = false): Promise<void> {
   const account = expect();
   if (!account) return;
   const [notes, documents] = await Promise.all([
-    rpc('projects.feed', { expect: account, project_id: projectId }),
-    rpc('documents.list', { expect: account, project_id: projectId }),
+    sources.includes('notes') ? rpc('projects.feed', { expect: account, project_id: projectId }) : null,
+    sources.includes('documents') ? rpc('documents.list', { expect: account, project_id: projectId }) : null,
   ]);
-  if (state.feed?.projectId !== projectId) return; // moved on
-  const failure = !notes.ok ? notes.failure : !documents.ok ? documents.failure : undefined;
+  const current = state.feed;
+  if (current?.projectId !== projectId) return; // moved on
+  const failure = notes && !notes.ok ? notes.failure : documents && !documents.ok ? documents.failure : undefined;
+  // A list stays unread until a read of it succeeds; a quiet read never makes one unread.
+  const unread = (['notes', 'documents'] as const).filter(source => {
+    const read = source === 'notes' ? notes : documents;
+    return read === null || (!read.ok && quiet) ? current.unread.includes(source) : !read.ok;
+  });
+  const noteRows = notes?.ok
+    ? reread({ items: current.notes, next: current.notesNext }, { items: notes.value.items, next: notes.value.next_cursor }, item => item.context_id) : null;
+  const documentRows = documents?.ok
+    ? reread({ items: current.documents, next: current.documentsNext }, { items: documents.value.items, next: documents.value.next_cursor },
+      item => item.document_id) : null;
   set({ feed: {
-    projectId, loading: false, ...(failure ? { failure } : {}),
-    notes: notes.ok ? [...notes.value.items] : [], notesNext: notes.ok ? notes.value.next_cursor : null,
-    documents: documents.ok ? [...documents.value.items] : [], documentsNext: documents.ok ? documents.value.next_cursor : null,
+    ...current, unread, loading: quiet ? current.loading : false,
+    failure: !quiet ? failure : !failure && unread.length === 0 ? undefined : current.failure,
+    ...(noteRows ? { notes: noteRows.items, notesNext: noteRows.next } : {}),
+    ...(documentRows ? { documents: documentRows.items, documentsNext: documentRows.next } : {}),
   } });
-  if (failure) accountLost(failure);
+  if (failure && (!quiet || ACCOUNT_GONE.includes(failure.code))) accountLost(failure);
+}
+
+/** Try again: the lists whose first page could not be read. */
+export async function retryFeed(): Promise<void> {
+  const feed = state.feed;
+  if (!feed || feed.loading || feed.unread.length === 0) return;
+  set({ feed: { ...feed, loading: true } });
+  await loadFeed(feed.projectId, feed.unread);
 }
 
 /** More: the next page of whichever list stops the feed from going further back. */
@@ -658,7 +684,8 @@ export async function moreFeed(): Promise<void> {
   if (!account || !feed || feed.loading) return;
   const sources = moreSources(feed);
   if (sources.length === 0) return;
-  set({ feed: { ...feed, loading: true, failure: undefined } });
+  // A list that could not be read still says why.
+  set({ feed: { ...feed, loading: true, failure: feed.unread.length > 0 ? feed.failure : undefined } });
   const [notes, documents] = await Promise.all([
     sources.includes('notes') && feed.notesNext ? rpc('projects.feed', { expect: account, project_id: feed.projectId, cursor: feed.notesNext }) : null,
     sources.includes('documents') && feed.documentsNext
@@ -680,10 +707,10 @@ export async function moreFeed(): Promise<void> {
   if (failure) accountLost(failure);
 }
 
-/** Something landed in or left the project on screen: its first pages again, nothing else moves. */
+/** Something landed in or left the project on screen: its first pages again, and what shows stays. */
 async function refreshFeed(projectId: string): Promise<void> {
   if (state.feed?.projectId !== projectId) return;
-  await loadFeed(projectId);
+  await loadFeed(projectId, ['notes', 'documents'], true);
 }
 
 /** A project's members, the first page or the next one (More, in People). */
@@ -953,6 +980,11 @@ function changed(done: ChangeState): void {
     case 'document-dissociate': {
       const id = 'context_id' in change ? change.context_id : change.document_id;
       if (reader?.id === id) closeReader();
+      // It left the project: it goes from the rows shown, older ones More loaded included.
+      const feed = state.feed;
+      if (feed?.projectId === project.project_id) {
+        set({ feed: { ...feed, notes: feed.notes.filter(item => item.context_id !== id), documents: feed.documents.filter(item => item.document_id !== id) } });
+      }
       set({ toast: `Removed from ${project.name}` });
       void refreshFeed(project.project_id);
       return;

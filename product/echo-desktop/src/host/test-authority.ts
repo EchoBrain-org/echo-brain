@@ -117,7 +117,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     ...desktop.notes.map(note => [note.context_id, note] as const),
   ]);
   const filed = new Map<string, string[]>(desktop.projects.map(project => [project.project_id, [String(feedItem[0]!.context_id)]]));
-  if (mode === 'long-feed') {
+  if (mode.startsWith('long-feed')) {
     // Twelve notes in Beacon, hours apart; its document falls between the eleventh and the twelfth.
     const beacon = desktop.projects[1]!.project_id;
     const ids = Array.from({ length: 12 }, (_, index) => `ctx_${(index + 1).toString(16).padStart(64, '0')}`);
@@ -142,6 +142,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let evidenceReads = 0;
   let asks = 0;
   let projectLists = 0;
+  let feedReads = 0;
+  let documentLists = 0;
   // Sign-in: the descriptor a new session is checked against, and the client's
   // loopback receiver for each sign-in begun, by its OIDC state.
   const signingKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey.export({ type: 'spki', format: 'der' });
@@ -281,6 +283,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return failure('unauthorized', 401);
     }
     if (method === 'POST' && path === '/v2/person/projects/context/feed') {
+      feedReads += 1;
+      // Opened, then More: the read after a save never comes back.
+      if (mode === 'long-feed-refresh-fails' && feedReads === 3) return failure('unavailable', 503);
       const projectId = String(body?.project_id);
       const notes = (filed.get(projectId) ?? []).map(id => ({ id, note: catalog.get(id)! }))
         .sort((a, b) => Date.parse(b.note.received_at) - Date.parse(a.note.received_at))
@@ -428,6 +433,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
 
     // Documents: a project's, one read a page at a time, its original, and where it is filed.
     if (method === 'POST' && path === '/v2/person/documents/search') {
+      documentLists += 1;
+      if (mode === 'documents-fail-once' && documentLists === 1) return failure('unavailable', 503);
       const projectId = typeof body?.project_id === 'string' ? body.project_id : null;
       const all = documents
         .filter(document => (projectId === null || document.association_project_ids.includes(projectId)) &&
@@ -480,6 +487,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         association_project_ids: body?.association_project_ids, state: 'received',
       };
       writeFileSync(join(home, `saved-${String(body?.request_id)}.json`), JSON.stringify(receipt));
+      // A long feed files what is saved into it, newest.
+      if (mode.startsWith('long-feed')) {
+        for (const projectId of (body?.association_project_ids ?? []) as string[]) {
+          catalog.set(receipt.context_id, { received_at: NOW, title: String(body?.title), text: String(body?.title), audience: { kind: 'project', project_id: projectId } });
+          filed.set(projectId, [...(filed.get(projectId) ?? []).filter(id => id !== receipt.context_id), receipt.context_id]);
+        }
+      }
       // Stored, but the reply never comes: the host dies or the app quits first.
       if (mode === 'write-hangs') return new Promise<Response>(() => undefined);
       return json(receipt, 202);

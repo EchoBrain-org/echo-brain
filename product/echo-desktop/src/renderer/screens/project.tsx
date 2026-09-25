@@ -2,7 +2,7 @@ import type { FeedItem, ProjectSummary } from '../../shared/protocol.js';
 import { mergedFeed, moreSources } from '../feed.js';
 import { colorFor, documentDetail, initials, when } from '../format.js';
 import { message } from '../messages.js';
-import { moreFeed, openCompose, openDocument, openItem, openPeople, openProject, type State } from '../store.js';
+import { moreFeed, openCompose, openDocument, openItem, openPeople, openProject, retryFeed, type State } from '../store.js';
 import { Globe, Lock, Note, People, Plus } from './icons.js';
 
 /** Who can read a row, when it is not the project's members. */
@@ -62,7 +62,14 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
       {more && (
         <button type="button" class="link-button more" data-testid="feed-more" disabled={feed?.loading} onClick={() => void moreFeed()}>More</button>
       )}
-      {feed?.failure && <div class="error more">{message(feed.failure)}</div>}
+      {feed?.failure && (
+        <div class="error more" data-testid="feed-failure">
+          {message(feed.failure)}
+          {feed.unread.length > 0 && (
+            <button type="button" class="link-button" data-testid="feed-retry" disabled={feed.loading} onClick={() => void retryFeed()}>Try again</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
