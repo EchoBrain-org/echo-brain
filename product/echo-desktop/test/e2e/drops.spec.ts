@@ -88,6 +88,8 @@ test('a file dropped anywhere else on the window is captured for the page: Only 
   await expect(page.getByTestId('compose-file')).toHaveText('Brief.md · 15 bytes');
   await expect(page.getByTestId('readers-project')).toHaveText('Beacon');
   await expect(page.getByTestId('readers-project')).toHaveAttribute('aria-pressed', 'true');
+  // Ready for ⌘↩.
+  await expect(page.getByTestId('compose')).toBeFocused();
   await page.keyboard.press('Meta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon · Extracting text');
   expect(uploads()).toHaveLength(1);
