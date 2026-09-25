@@ -11,15 +11,36 @@ import { message } from './messages.js';
 
 type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary };
 
-interface AskState {
-  seq: number;
+/** A question, in the scope it was asked in. */
+export interface AskQuestion {
   question: string;
   scope: AskScope;
   scopeName: string;
-  askedAt: number;
-  status: 'loading' | 'answer' | 'error';
-  answer?: Answer;
-  failure?: Failure;
+}
+
+/** One answered question of the thread. */
+export interface AskTurn extends AskQuestion {
+  id: number;
+  answer: Answer;
+}
+
+/**
+ * The Ask thread: follow-ups stack, newest at the bottom. Only the current
+ * answer has chips and sources. A question that fails or is cancelled leaves
+ * the answer before it current, as the Swift app did.
+ */
+export interface AskState {
+  /** The question on its way; a reply for any other is dropped. */
+  seq: number;
+  /** Earlier answers, oldest first: at most five. */
+  earlier: readonly AskTurn[];
+  /** The answer that was current when the question on its way was asked. */
+  previous: AskTurn | null;
+  /** The current answer. */
+  shown: AskTurn | null;
+  asking: AskQuestion | null;
+  /** The last question that could not be answered. */
+  failed: (AskQuestion & { failure: Failure }) | null;
 }
 
 /** A read the source pane waits on, has, or could not make. */
@@ -478,24 +499,51 @@ function scopeName(scope: AskScope): string {
   return state.projects.items.find(project => project.project_id === scope.project_id)?.name ?? 'Project';
 }
 
+/** Earlier answers kept in a thread. */
+const MAX_EARLIER = 5;
+
+/** The earlier answers shown: the thread's and, while a question is on its way, the answer before it. */
+export function earlierTurns(thread: AskState): readonly AskTurn[] {
+  return [...thread.earlier, ...(thread.previous ? [thread.previous] : [])].slice(-MAX_EARLIER);
+}
+
+/**
+ * Asks, as a follow-up when a thread is open. One question at a time: a
+ * second never replaces one on its way. The current answer moves up, and
+ * joins the earlier ones only once the new question is answered.
+ */
 export async function ask(question: string, scope: AskScope = state.barScope): Promise<void> {
   const account = expect();
   const text = question.trim();
-  if (!account || text === '') return;
+  const thread = state.ask;
+  if (!account || text === '' || thread?.asking) return;
   const mine = ++seq;
-  set({ ask: { seq: mine, question: text, scope, scopeName: scopeName(scope), askedAt: Date.now(), status: 'loading' }, sources: null, toast: null });
+  const asking: AskQuestion = { question: text, scope, scopeName: scopeName(scope) };
+  set({ ask: { seq: mine, earlier: thread?.earlier ?? [], previous: thread?.shown ?? null, shown: null, asking, failed: null }, sources: null, toast: null });
   const result = await rpc('ask.run', { expect: account, question: text, scope });
-  if (state.ask?.seq !== mine) return;
+  const current = state.ask;
+  if (current?.seq !== mine) return; // cancelled, or Ask was left
   if (!result.ok) {
+    set({ ask: { ...current, previous: null, shown: current.previous, asking: null, failed: { ...asking, failure: result.failure } } });
+    if (current.previous) startSources();
     accountLost(result.failure);
-    set({ ask: { ...state.ask, status: 'error', failure: result.failure } });
     return;
   }
-  set({ ask: { ...state.ask, status: 'answer', answer: result.value } });
+  const earlier = current.previous ? [...current.earlier, current.previous].slice(-MAX_EARLIER) : current.earlier;
+  set({ ask: { ...current, earlier, previous: null, shown: { id: mine, ...asking, answer: result.value }, asking: null } });
   startSources();
 }
 
-/** Leaves the answer. While asking it is Cancel: a late answer is dropped. */
+/** Cancel, while asking: the answer before comes back, or with none Ask closes. A late answer is dropped. */
+export function cancelAsk(): void {
+  const thread = state.ask;
+  if (!thread?.asking) return;
+  if (!thread.previous) { closeAsk(); return; }
+  set({ ask: { ...thread, seq: ++seq, shown: thread.previous, previous: null, asking: null } });
+  startSources();
+}
+
+/** Back or Escape: leaves the thread, and it is gone. */
 export function closeAsk(): void {
   set({ ask: null, sources: null });
   syncSearch();
@@ -508,7 +556,7 @@ export const MAX_SOURCES = 32;
 
 /** The sources of the answer on screen. */
 export function answerSources(current: State = state): readonly AnswerSource[] {
-  return current.ask?.answer?.sources.slice(0, MAX_SOURCES) ?? [];
+  return current.ask?.shown?.answer.sources.slice(0, MAX_SOURCES) ?? [];
 }
 
 /** Access-level failures: a background read reports only these. */
@@ -574,7 +622,7 @@ export function toggleSources(): void {
 /** The original's verified evidence packet, read each time it is chosen. */
 async function readEvidence(gen: number, index: number): Promise<void> {
   const account = expect();
-  const answer = state.ask?.answer;
+  const answer = state.ask?.shown?.answer;
   const source = answerSources()[index];
   const sources = sourcesAt(gen);
   if (!account || !answer || source?.kind !== 'original' || !sources) return;
@@ -674,7 +722,8 @@ function emptyBar(): void {
 /** Return, or the Ask row under the matches: asks the bar's scope, and the bar empties. */
 export function submitBar(): void {
   const text = state.barText;
-  if (text.trim() === '') return;
+  // While a question is on its way the next one waits in the bar.
+  if (text.trim() === '' || state.ask?.asking) return;
   emptyBar();
   void ask(text, state.barScope);
 }

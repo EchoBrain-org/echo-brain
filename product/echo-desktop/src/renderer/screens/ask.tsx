@@ -1,10 +1,11 @@
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { AnswerSource, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
-import { clock, marked, meetingTime, snippet, when } from '../format.js';
+import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  answerSources, ask, chipProject, chooseSource, closeAsk, matchesShown, openCompose, openMatch, retryEvidence, retryRecord, searchAgain,
-  setBarText, submitBar, toggleSources, widenScope, type SourcesState, type State,
+  answerSources, ask, cancelAsk, chipProject, chooseSource, earlierTurns, matchesShown, openCompose, openMatch, retryEvidence, retryRecord,
+  searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Plus, Up } from './icons.js';
 
@@ -80,7 +81,8 @@ export function Bar({ state }: { state: State }) {
           placeholder={`${verb} ${chip?.name ?? 'ECHO'}`}
           value={state.barText} onInput={event => setBarText((event.target as HTMLInputElement).value)}
         />
-        <button type="submit" class="circle primary" aria-label="Ask" data-testid="ask-send" disabled={state.barText.trim() === ''}><Up /></button>
+        <button type="submit" class="circle primary" aria-label="Ask" data-testid="ask-send"
+          disabled={state.barText.trim() === '' || Boolean(state.ask?.asking)}><Up /></button>
       </form>
     </div>
   );
@@ -116,40 +118,79 @@ function BasedOn({ state }: { state: State }) {
   );
 }
 
-/** The latest question, its answer, and what it was based on. */
-export function AskView({ state }: { state: State }) {
-  const current = state.ask!;
+/** An earlier question and, collapsed, two lines of its answer. A click shows or hides the rest. */
+function EarlierTurn({ turn }: { turn: AskTurn }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <button type="button" class={`earlier${open ? ' open' : ''}`} data-testid="earlier-turn" aria-expanded={open} title={turn.scopeName}
+      onClick={() => setOpen(!open)}>
+      <span class="q">{turn.question}</span>
+      <span class="a">{turn.answer.text}</span>
+    </button>
+  );
+}
+
+/** The current answer: what it was based on, and what can be done with it. */
+function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
+  const thread = state.ask!;
   const count = answerSources(state).length;
   return (
-    <section class="ask" data-testid="ask-view" aria-live="polite">
-      <div class="question selectable" data-testid="question">{current.question}</div>
-      <div class="asked">{current.scopeName} · Asked at {clock(current.askedAt)}</div>
-      {current.status === 'loading' && (
-        <div class="asking" data-testid="asking">
-          <i /><i /><i /><span>Asking</span>
-          <button type="button" class="link-button" data-testid="ask-cancel" onClick={closeAsk}>Cancel</button>
+    <div class="turn">
+      <div class="question selectable" data-testid="question">{turn.question}</div>
+      <div class="asked">{turn.scopeName}</div>
+      <div class="answer selectable" data-testid="answer">{turn.answer.text}</div>
+      <BasedOn state={state} />
+      <div class="actions">
+        {count > 0 && (
+          <button type="button" class="link-button" data-testid="sources-toggle" aria-pressed={state.sources?.open != null}
+            onClick={toggleSources}>Sources ({count})</button>
+        )}
+        {/* A question that failed below has its own Try again. */}
+        {!thread.failed && (
+          <button type="button" class="link-button" data-testid="ask-again" onClick={() => void ask(turn.question, turn.scope)}>Try again</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The Ask thread: earlier answers collapsed at the top, the current answer,
+ * then a question on its way or one that failed. Newest at the bottom.
+ */
+export function AskView({ state }: { state: State }) {
+  const thread = state.ask!;
+  const scroller = useRef<HTMLElement>(null);
+  // A new question, answer or failure scrolls to the bottom.
+  useLayoutEffect(() => {
+    if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
+  }, [thread.seq, thread.shown, thread.asking, thread.failed]);
+  const { asking, failed } = thread;
+  return (
+    <section class="ask" data-testid="ask-view" aria-live="polite" ref={scroller}>
+      {earlierTurns(thread).map(turn => <EarlierTurn key={turn.id} turn={turn} />)}
+      {thread.shown && <CurrentAnswer state={state} turn={thread.shown} />}
+      {asking && (
+        <div class="turn">
+          <div class="question selectable" data-testid="question">{asking.question}</div>
+          <div class="asked">{asking.scopeName}</div>
+          <div class="asking" data-testid="asking">
+            <i /><i /><i /><span>Thinking…</span>
+            <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
+          </div>
         </div>
       )}
-      {current.status === 'error' && current.failure && (
-        <div>
-          <div class="error" data-testid="ask-error">{message(current.failure)}</div>
-          {current.failure.retryable && (
-            <button type="button" class="link-button" onClick={() => void ask(current.question, current.scope)}>Ask again</button>
+      {failed && (
+        <div class="turn" data-testid="ask-failed">
+          <div class="question selectable">{failed.question}</div>
+          <div class="asked">{failed.scopeName}</div>
+          <div class="error" data-testid="ask-error">{message(failed.failure)}</div>
+          {failed.failure.retryable && (
+            <div class="actions">
+              <button type="button" class="link-button" data-testid="ask-retry" onClick={() => void ask(failed.question, failed.scope)}>Try again</button>
+            </div>
           )}
         </div>
-      )}
-      {current.status === 'answer' && current.answer && (
-        <>
-          <div class="answer selectable" data-testid="answer">{current.answer.text}</div>
-          <BasedOn state={state} />
-          <div class="actions">
-            {count > 0 && (
-              <button type="button" class="link-button" data-testid="sources-toggle" aria-pressed={state.sources?.open != null}
-                onClick={toggleSources}>Sources ({count})</button>
-            )}
-            <button type="button" class="link-button" onClick={() => void ask(current.question, current.scope)}>Ask again</button>
-          </div>
-        </>
       )}
     </section>
   );

@@ -88,6 +88,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let writeAttempts = 0;
   let documentAttempts = 0;
   let evidenceReads = 0;
+  let asks = 0;
   let projectLists = 0;
   // Sign-in: the descriptor a new session is checked against, and the client's
   // loopback receiver for each sign-in begun, by its OIDC state.
@@ -283,9 +284,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       });
     }
     if (method === 'POST' && path === '/v2/person/ask') {
+      asks += 1;
       if (mode === 'ask-unavailable') return failure('unavailable', 503);
       if (mode === 'ask-hangs') return new Promise<Response>(() => undefined);
       const scope = typeof body?.project_id === 'string' ? { kind: 'project', project_id: body.project_id } : { kind: 'global' };
+      // Follow-ups: the second answer comes late, and the third question fails.
+      if (mode === 'ask-follow-ups' && asks === 2) {
+        await new Promise(resolveLater => setTimeout(resolveLater, 1_500));
+        return json({ ...desktop.answer, answer: 'A late answer.', scope });
+      }
+      if (mode === 'ask-follow-ups' && asks === 3) return failure('unavailable', 503);
       return json({ ...desktop.answer, scope });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {

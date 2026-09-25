@@ -122,11 +122,20 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .matches-rule { height: 1px; flex-shrink: 0; margin: 4px 6px; background: var(--line-strong); }
 .matches-note { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; color: var(--faint); }
 
-/* Ask: the question, the answer, then where it came from. */
-.ask { width: 520px; max-width: calc(100% - 48px); height: 400px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
-.ask .question { font-size: 17px; font-weight: 600; }
-.ask .asked { font-size: 12.5px; color: var(--faint); }
+/* Ask: a thread, newest at the bottom. Earlier answers collapse to two lines. */
+.ask { align-self: stretch; width: 520px; max-width: calc(100% - 48px); overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding: 20px 0 16px; }
+.turn { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
+.ask .question { font-size: 16px; font-weight: 600; }
+.ask .asked { margin-top: -6px; font-size: 12.5px; color: var(--faint); }
 .ask .answer { font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+.earlier { flex-shrink: 0; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 0; border-radius: 10px; text-align: left; background: rgba(240, 236, 230, 0.04); }
+.earlier:hover { background: rgba(240, 236, 230, 0.07); }
+.earlier .q, .earlier .a { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.earlier .q { font-size: 13.5px; font-weight: 500; }
+.earlier .a { font-size: 13px; color: var(--faint); white-space: pre-wrap; }
+.earlier.open .q, .earlier.open .a { display: block; }
+.earlier.open .a { color: var(--muted); }
+.turn .actions { margin-left: -8px; }
 .section-label { font-size: 10.5px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--faint); }
 /* BASED ON: one chip per source; the one the pane shows is lit. */
 .based-on { display: flex; flex-direction: column; gap: 6px; }
