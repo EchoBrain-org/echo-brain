@@ -28,6 +28,18 @@ test('Back keeps the pages Home had loaded, and showing the window re-reads it',
   await expect(page.getByTestId('project-row')).toHaveCount(13);
 });
 
+test('opening ECHO again while it runs brings the window forward, as Open ECHO does', async () => {
+  run = await launch();
+  const { page, app } = run;
+  const lists = () => run.calls().filter(call => call.path === '/v1/person/projects').length;
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  const before = lists();
+  // What macOS sends when ECHO is opened from Spotlight or Finder while it runs.
+  await app.evaluate(({ app: electronApp }) => { electronApp.emit('activate', {}, false); });
+  await expect.poll(lists).toBe(before + 1);
+  await expect(page.getByTestId('ask-field')).toBeFocused();
+});
+
 test('the ask bar has the caret at launch and whenever the window comes forward', async () => {
   run = await launch();
   const { page, app } = run;

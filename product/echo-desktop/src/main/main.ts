@@ -605,6 +605,8 @@ function applicationMenu(): void {
 }
 
 app.on('second-instance', show);
+// Opening ECHO again from Spotlight or Finder while it runs: the window comes forward, as Open ECHO brings it.
+app.on('activate', () => { if (test.ECHO_DESKTOP_HIDDEN) send('window.shown', {}); else show(); });
 
 // Tests drive these with echo-test:conceal and echo-test:resume: a hidden test
 // window never follows which app the machine has in front.
