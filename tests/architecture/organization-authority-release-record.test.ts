@@ -1438,12 +1438,11 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(readFileSync(session, "utf8")).toBe("existing-private-session");
   });
 
-  it("rejects a macOS command-line kit runtime for the wrong platform before publishing", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-kit-runtime-")));
+  /** A valid release record and client artifact, so the kit builder reaches its runtime checks. */
+  function kitBuilderInputs(prefix: string) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
     roots.push(root);
-    const runtime = join(root, "node");
     const artifact = join(root, "client.tgz");
-    const output = join(root, "employee-kit.zip");
     const packageRoot = join(root, "package", "dist");
     mkdirSync(packageRoot, { recursive: true });
     writeFileSync(
@@ -1468,6 +1467,17 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
         },
       }),
     );
+    return {
+      root,
+      artifact,
+      release,
+      runtime: join(root, "node"),
+      output: join(root, "employee-kit.zip"),
+    };
+  }
+
+  it("rejects a macOS command-line kit runtime for the wrong platform before publishing", () => {
+    const { artifact, release, runtime, output } = kitBuilderInputs("echo-person-kit-runtime-");
     // A Linux x86_64 ELF header: the header check refuses it before the
     // runtime is launched or any committed source is read.
     const elf = Buffer.alloc(20);
@@ -1495,6 +1505,57 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(existsSync(output)).toBe(false);
     expect(existsSync(`${output}.sha256`)).toBe(false);
   });
+
+  const nativeKitTarget =
+    process.platform === "darwin" && process.arch === "arm64"
+      ? "darwin-arm64"
+      : process.platform === "linux" && process.arch === "x64"
+        ? "linux-x64"
+        : undefined;
+  it.skipIf(nativeKitTarget === undefined)(
+    "rejects a native runtime that reports a Node version other than 22.22.1 before publishing",
+    () => {
+      const { root, artifact, release, runtime, output } = kitBuilderInputs("echo-person-kit-version-");
+      // A copy of this machine's own Node passes the header check. A preload
+      // that runs only in that copy makes it report another version, so the
+      // builder's check of the identity the runtime reports is what refuses it.
+      copyFileSync(process.execPath, runtime);
+      chmodSync(runtime, 0o755);
+      const preload = join(root, "report-another-node-version.cjs");
+      writeFileSync(
+        preload,
+        `if (require("node:fs").realpathSync(process.execPath) === ${JSON.stringify(runtime)}) {\n` +
+          `  Object.defineProperty(process, "version", { value: "v22.21.0" });\n` +
+          `}\n`,
+      );
+      const rejected = run(
+        process.execPath,
+        [
+          ONBOARDING_KIT,
+          ...(nativeKitTarget === "darwin-arm64"
+            ? ["--target", "darwin-arm64", "--installation", "cli-kit"]
+            : ["--target", "linux-x64"]),
+          "--release",
+          release,
+          "--artifact",
+          artifact,
+          "--runtime-node",
+          runtime,
+          "--output",
+          output,
+        ],
+        { NODE_OPTIONS: `--require "${preload}"` },
+      );
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toContain(
+        nativeKitTarget === "darwin-arm64"
+          ? "Node runtime must be v22.22.1 for macOS arm64"
+          : "Node runtime must be v22.22.1 for Linux x86_64 with glibc",
+      );
+      expect(existsSync(output)).toBe(false);
+      expect(existsSync(`${output}.sha256`)).toBe(false);
+    },
+  );
 
   it("refuses the retired app-kit forms before reading any input", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-kit-usage-")));
