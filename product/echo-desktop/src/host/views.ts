@@ -2,9 +2,9 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, Extraction, Failure, FeedItem,
-  FeedPage, Match, Matches, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef,
-  WriteStatus,
+  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, DocumentPage, DocumentSummary,
+  DocumentText, Extraction, Failure, FeedItem, FeedPage, Match, Matches, Member, MemberPage, ProjectChange, ProjectPage, ProjectSummary, Receipt,
+  RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk, WriteStatus,
 } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
@@ -66,20 +66,138 @@ export function projectPageView(raw: unknown): ProjectPage {
   return { items: list(value.items).map(projectSummary), next_cursor: optionalText(value.next_cursor) ?? null };
 }
 
-export function feedView(raw: unknown): FeedPage {
+/** The project asked for, as it is now: your role in it may have changed. */
+export function projectView(raw: unknown, projectId: string): ProjectSummary {
+  const project = projectSummary(raw);
+  if (object(raw).kind !== 'echo-project-summary-v1' || project.project_id !== projectId) throw new ViewError();
+  return project;
+}
+
+/** Who can read an item: only you, everyone, or one or more projects' members. */
+function audienceMark(raw: unknown): FeedItem['audience'] {
+  const kind = object(raw).kind;
+  return kind === 'only_me' ? 'only-me' : kind === 'team' ? 'team' : 'project';
+}
+
+/** A project's notes, one page, only for the project asked for. */
+export function feedView(raw: unknown, projectId?: string): FeedPage {
   const value = object(raw);
-  if (value.kind !== 'echo-project-context-feed-v2') throw new ViewError();
+  if (value.kind !== 'echo-project-context-feed-v2' || (projectId !== undefined && value.project_id !== projectId)) throw new ViewError();
   return {
     project_id: text(value.project_id),
     items: list(value.items).map(entry => {
       const item = object(entry);
-      const kind = object(item.audience).kind;
-      const audience: FeedItem['audience'] = kind === 'only_me' ? 'only-me' : kind === 'team' ? 'team' : 'project';
       return {
-        context_id: text(item.context_id), title: text(item.title), received_at: text(item.received_at), audience,
+        context_id: text(item.context_id), title: text(item.title), received_at: text(item.received_at), audience: audienceMark(item.audience),
       };
     }),
+    next_cursor: optionalText(value.next_cursor) ?? null,
   };
+}
+
+const MEDIA: Record<string, DocumentSummary['type']> = {
+  'application/pdf': 'pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'word',
+  'text/markdown': 'markdown', 'text/plain': 'text',
+};
+
+/** A saved document's metadata (V2): its file, who can read it, and where its text stands. */
+function documentSummary(raw: unknown): DocumentSummary {
+  const value = object(raw);
+  if (value.schema_version !== 2 || value.kind !== 'echo-person-document-metadata-v2') throw new ViewError();
+  const type = MEDIA[text(value.detected_media_type)];
+  const size = value.content_length;
+  const state = text(value.extraction_state);
+  if (type === undefined || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 1 || !EXTRACTION.has(state)) throw new ViewError();
+  return {
+    document_id: text(value.document_id), title: text(value.title), filename: text(value.filename), received_at: text(value.received_at),
+    type, size, audience: audienceMark(value.audience), extraction: state as Extraction,
+    project_ids: list(value.association_project_ids).map(text),
+  };
+}
+
+/** One page of a project's documents, as `documents search-v2` lists them. */
+export function documentPageView(raw: unknown): DocumentPage {
+  const value = object(unwrap(raw));
+  if (value.schema_version !== 2 || value.kind !== 'echo-person-document-search-result-v2') throw new ViewError();
+  // A search hit carries where it matched; a list does not need it.
+  const items = list(value.documents).map(entry => {
+    const { excerpt: _excerpt, anchor: _anchor, ...metadata } = object(entry);
+    return documentSummary(metadata);
+  });
+  return { items, next_cursor: optionalText(value.next_cursor) ?? null };
+}
+
+/** The document asked for, and one page of its text, which must be of that same original. */
+export function documentTextView(raw: unknown, documentId: string): DocumentText {
+  const value = object(unwrap(raw));
+  const metadata = object(value.metadata);
+  const page = object(value.text);
+  const document = documentSummary(metadata);
+  if (document.document_id !== documentId || page.kind !== 'echo-person-document-text-v1' || page.document_id !== documentId ||
+      page.original_sha256 !== metadata.sha256) throw new ViewError();
+  const chunks: TextChunk[] = list(page.chunks).map(entry => {
+    const chunk = object(entry);
+    const start = chunk.anchor_start;
+    if ((chunk.anchor_kind !== 'page' && chunk.anchor_kind !== 'paragraph') || typeof start !== 'number' || !Number.isSafeInteger(start)) {
+      throw new ViewError();
+    }
+    return { anchor: chunk.anchor_kind, start, text: text(chunk.text) };
+  });
+  return { document, chunks, next_cursor: optionalText(page.next_cursor) ?? null };
+}
+
+/** The original was written where the person chose, checked against its digest. The path stays behind. */
+export function savedOriginalView(raw: unknown, documentId: string): null {
+  const value = object(unwrap(raw));
+  if (value.document_id !== documentId || typeof value.output_path !== 'string') throw new ViewError();
+  return null;
+}
+
+function member(raw: unknown, directory: boolean): Member {
+  const value = object(raw);
+  const role = value.role;
+  if (!directory && role !== 'lead' && role !== 'member') throw new ViewError();
+  return {
+    membership_id: text(value.membership_id), display_name: text(value.display_name),
+    ...(directory ? {} : { role: role as 'lead' | 'member' }),
+  };
+}
+
+/** One page of a project's members, or of the people its directory found, only for that project. */
+export function membersView(raw: unknown, projectId: string, directory = false): MemberPage {
+  const value = object(raw);
+  const kind = directory ? 'echo-project-directory-v1' : 'echo-project-members-v1';
+  if (value.kind !== kind || value.project_id !== projectId) throw new ViewError();
+  return { items: list(value.items).map(item => member(item, directory)), next_cursor: optionalText(value.next_cursor) ?? null };
+}
+
+/** The receipt for exactly the change that was sent: applied. */
+export function changeView(raw: unknown, requestId: string, change: ProjectChange): null {
+  const document = change.kind === 'document-associate' || change.kind === 'document-dissociate';
+  const value = object(document ? unwrap(raw) : raw);
+  if (value.state !== 'applied' || value.request_id !== requestId || value.project_id !== change.project_id) throw new ViewError();
+  switch (change.kind) {
+    case 'member-add':
+    case 'member-set':
+    case 'member-remove': {
+      const operation = change.kind === 'member-remove' ? 'member_remove' : 'member_set';
+      if (value.kind !== 'echo-project-mutation-receipt-v1' || value.operation !== operation || value.membership_id !== change.membership_id) {
+        throw new ViewError();
+      }
+      return null;
+    }
+    case 'associate':
+    case 'dissociate':
+      if (value.kind !== 'echo-project-mutation-receipt-v1' || value.operation !== change.kind || value.context_id !== change.context_id) {
+        throw new ViewError();
+      }
+      return null;
+    case 'document-associate':
+    case 'document-dissociate':
+      if (value.kind !== 'echo-person-document-association-receipt-v1' || value.operation !== change.kind.slice('document-'.length) ||
+          value.document_id !== change.document_id) throw new ViewError();
+      return null;
+  }
 }
 
 export function contextView(raw: unknown): ContextContent {

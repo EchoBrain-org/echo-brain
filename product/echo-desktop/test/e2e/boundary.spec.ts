@@ -26,6 +26,9 @@ test('the page can never name a file path', async () => {
       }),
       odd: await rpc('../../<script>', {}),
       invitation: await rpc('signin.invitation', { invitation_handle: 'made-up', invitation: '/etc/hosts' }),
+      // Save original… writes only where main's own dialog was told, and suggests only a file name.
+      save: await rpc('documents.save', { expect, document_id: `doc_${'e'.repeat(64)}`, save_handle: 'made-up', out: '/tmp/echo-anywhere.pdf' }),
+      saveName: await rpc('dialog.saveDocument', { name: '../../etc/hosts' }),
     };
   });
   expect(replies.drop).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
@@ -33,6 +36,8 @@ test('the page can never name a file path', async () => {
   expect(replies.dropObject).toMatchObject({ ok: false, failure: { code: 'unsupported_file' } });
   expect(replies.upload).toMatchObject({ ok: false, failure: { code: 'unsupported_file' } });
   expect(replies.invitation).toMatchObject({ ok: false, failure: { code: 'unsupported_invitation' } });
+  expect(replies.save).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
+  expect(replies.saveName).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
   expect(run.calls().some(call => call.path.startsWith('/v2/session/'))).toBe(false);
   expect(replies.odd).toMatchObject({ ok: false, failure: { code: 'invalid_request' } });
   expect(run.calls().some(call => call.path.includes('document'))).toBe(false);

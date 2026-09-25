@@ -61,8 +61,8 @@ if (!smoke && !app.requestSingleInstanceLock()) {
 let window: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let quitting = false;
-/** A save whose outcome is unknown, a note or a file: quitting asks first. */
-let unresolved: 'note' | 'file' | null = null;
+/** A save or a project change whose outcome is unknown: quitting asks first. */
+let unresolved: 'note' | 'file' | 'change' | null = null;
 const shortcutProblems: string[] = [];
 /** The last account status the host reported, for the Account menu. Main reads no session itself. */
 let accountStatus: AppStatus | null = null;
@@ -184,7 +184,8 @@ function onHostNotice(message: HostNotice): void {
 
 // ---- file handles (the renderer never sees a path) -------------------------
 
-type HandleKind = 'document' | 'invitation';
+/** A file to send, an invitation to read, or where Save original… writes. */
+type HandleKind = 'document' | 'invitation' | 'save';
 const handles = new Map<string, { path: string; kind: HandleKind; expires: number }>();
 
 function issueHandle(path: string, kind: HandleKind, size?: number): FileHandle {
@@ -268,9 +269,21 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
       const vetted = vetInvitation(chosen.filePaths[0]!);
       return vetted ? { ok: true, value: vetted } : refused('unsupported_invitation');
     }
+    case 'dialog.saveDocument': {
+      const { name } = params as MainMethods['dialog.saveDocument']['params'];
+      // The document's own file name, as a suggestion: never a path.
+      if (!window || typeof name !== 'string' || name === '' || name.length > 255 || /[\\/\p{Cc}]/u.test(name) || name === '.' || name === '..') {
+        return refused();
+      }
+      const chosen = await dialog.showSaveDialog(window, { defaultPath: name, properties: ['createDirectory', 'showOverwriteConfirmation'] });
+      if (chosen.canceled || !chosen.filePath) return { ok: true, value: null };
+      // The client never replaces a file: an existing one needs a new name.
+      if (!isAbsolute(chosen.filePath) || existsSync(chosen.filePath)) return refused('file_exists');
+      return { ok: true, value: issueHandle(chosen.filePath, 'save') };
+    }
     case 'app.setUnresolved': {
-      const { unresolved: open, file } = params as MainMethods['app.setUnresolved']['params'];
-      unresolved = open === true ? (file === true ? 'file' : 'note') : null;
+      const { unresolved: open, file, change } = params as MainMethods['app.setUnresolved']['params'];
+      unresolved = open === true ? (file === true ? 'file' : change === true ? 'change' : 'note') : null;
       return { ok: true, value: null };
     }
     case 'app.retryHost':
@@ -325,6 +338,13 @@ async function broker(event: IpcMainInvokeEvent, request: unknown): Promise<Resu
     const file = resolveHandle(fileHandle, 'document');
     if (!file) return refused('unsupported_file');
     return callHost(method, { ...rest, file });
+  }
+  if (method === 'documents.save') {
+    const { save_handle: saveHandle, ...rest } = value as { save_handle?: unknown };
+    const out = resolveHandle(saveHandle, 'save');
+    if (!out) return refused();
+    handles.delete(saveHandle as string); // one save per choice
+    return callHost(method, { ...rest, out });
   }
   if (method === 'signin.invitation') {
     const handle = (value as { invitation_handle?: unknown }).invitation_handle;
@@ -523,7 +543,7 @@ app.on('before-quit', event => {
   // Asked after the wait: the page stays usable during it and may start a save.
   if (unresolved && !quitting) {
     const choice = dialog.showMessageBoxSync({
-      type: 'warning', message: `A ${unresolved} may not have been sent.`,
+      type: 'warning', message: unresolved === 'change' ? 'A project change may not have finished.' : `A ${unresolved} may not have been sent.`,
       detail: 'Check or retry it before quitting, or quit anyway.', buttons: ['Quit Anyway', 'Cancel'], defaultId: 1, cancelId: 1,
     });
     if (choice !== 0) { event.preventDefault(); drained = false; show(); return; }

@@ -7,13 +7,14 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   externalUrl, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
-  type HostMethodName, type HostRequest, type Result,
+  type HostMethodName, type HostRequest, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, contextView, evidenceView, failureView, feedView, isRecordRef, noteMatchesView, noteTitle, noteView,
-  projectMatchesView, projectPageView, receiptView, recordView, statusView, toolsView, unwrap, ViewError, writeStatusView,
+  abandonView, answerView, changeView, contextView, documentPageView, documentTextView, evidenceView, failureView, feedView, isRecordRef,
+  membersView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, projectView, receiptView, recordView, savedOriginalView,
+  statusView, toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -79,7 +80,9 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
-  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000,
+  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000, 'documents.list': 45_000,
+  'documents.read': 45_000, 'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000, 'projects.directory': 45_000,
+  'projects.change': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
@@ -87,6 +90,12 @@ const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status'
 const CONTEXT_ID = /^ctx_[0-9a-f]{64}$/;
 /** A request id the client accepts: a lowercase UUID v4. */
 const REQUEST_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+const PROJECT_ID = new RegExp(`^prj_${UUID}$`);
+const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
+const DOCUMENT_ID = /^doc_[0-9a-f]{64}$/;
+/** A page cursor, as the API writes one. */
+const CURSOR = /^[A-Za-z0-9_-]{1,1024}$/;
 /** Writes this host has handed to the client and not yet heard back on. */
 const inFlight = new Set<string>();
 
@@ -259,6 +268,41 @@ function scopeArgs(scope: AskScope): string[] {
   return scope.kind === 'project' ? [option('project', scope.project_id)] : [];
 }
 
+/** Ten at a time, from where the last page ended. */
+function page(cursor: string | undefined): string[] {
+  return cursor === undefined ? ['--limit=10'] : ['--limit=10', option('cursor', cursor)];
+}
+
+/** A project, and the cursor of a page the host gave: anything else is refused before the client sees it. */
+function pageable(projectId: unknown, cursor: unknown): boolean {
+  return typeof projectId === 'string' && PROJECT_ID.test(projectId) && (cursor === undefined || (typeof cursor === 'string' && CURSOR.test(cursor)));
+}
+
+/** The command for one project change, or null for anything the page should not have sent. */
+function changeArgs(change: ProjectChange | undefined, requestId: string, expect: Expect): string[] | null {
+  if (!change || typeof change !== 'object' || typeof change.project_id !== 'string' || !PROJECT_ID.test(change.project_id)) return null;
+  const common = [option('project-id', change.project_id), option('request-id', requestId)];
+  switch (change.kind) {
+    case 'member-add':
+    case 'member-remove':
+      if (typeof change.membership_id !== 'string' || !MEMBERSHIP_ID.test(change.membership_id)) return null;
+      return ['projects', change.kind, ...common, option('membership-id', change.membership_id)];
+    case 'member-set':
+      if (typeof change.membership_id !== 'string' || !MEMBERSHIP_ID.test(change.membership_id) || !['lead', 'member'].includes(change.role)) return null;
+      return ['projects', 'member-set', ...common, option('membership-id', change.membership_id), option('role', change.role)];
+    case 'associate':
+    case 'dissociate':
+      if (typeof change.context_id !== 'string' || !CONTEXT_ID.test(change.context_id)) return null;
+      return ['projects', change.kind, ...common, option('context-id', change.context_id)];
+    case 'document-associate':
+    case 'document-dissociate':
+      if (typeof change.document_id !== 'string' || !DOCUMENT_ID.test(change.document_id)) return null;
+      return ['documents', change.kind.slice('document-'.length), ...common, option('document-id', change.document_id), ...expected(expect)];
+    default:
+      return null;
+  }
+}
+
 type Params<M extends HostMethodName> = HostMethods[M]['params'];
 
 async function handle(method: HostMethodName, params: unknown): Promise<Result<unknown>> {
@@ -283,9 +327,65 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
         stdout => projectPageView(lastJson(stdout)));
     }
     case 'projects.feed': {
-      const { expect, project_id } = params as Params<'projects.feed'>;
-      return forAccount(method, expect, ['projects', 'feed-v2', option('project-id', project_id), '--limit=10'],
-        stdout => feedView(lastJson(stdout)));
+      const { expect, project_id, cursor } = params as Params<'projects.feed'>;
+      if (!pageable(project_id, cursor)) return code('invalid_request');
+      return forAccount(method, expect, ['projects', 'feed-v2', option('project-id', project_id), ...page(cursor)],
+        stdout => feedView(lastJson(stdout), project_id));
+    }
+    case 'documents.list': {
+      // No query: the project's documents, newest first.
+      const { expect, project_id, cursor } = params as Params<'documents.list'>;
+      if (!pageable(project_id, cursor)) return code('invalid_request');
+      return forAccount(method, expect, ['documents', 'search-v2', option('project-id', project_id), ...page(cursor)],
+        stdout => documentPageView(lastJson(stdout)));
+    }
+    case 'documents.read': {
+      const { expect, document_id, project_id, cursor } = params as Params<'documents.read'>;
+      if (typeof document_id !== 'string' || !DOCUMENT_ID.test(document_id)) return code('invalid_request');
+      if (project_id !== undefined && (typeof project_id !== 'string' || !PROJECT_ID.test(project_id))) return code('invalid_request');
+      if (cursor !== undefined && (typeof cursor !== 'string' || !CURSOR.test(cursor))) return code('invalid_request');
+      return forAccount(method, expect, [
+        'documents', 'read-v2', option('document-id', document_id), ...(project_id ? [option('project-id', project_id)] : []),
+        ...(cursor ? [option('cursor', cursor)] : []),
+      ], stdout => documentTextView(lastJson(stdout), document_id));
+    }
+    case 'documents.save': {
+      // Main put the chosen file here in place of the page's handle.
+      const { expect, document_id, project_id } = params as Params<'documents.save'>;
+      const out = (params as { out?: unknown }).out;
+      if (typeof out !== 'string' || typeof document_id !== 'string' || !DOCUMENT_ID.test(document_id)) return code('invalid_request');
+      if (project_id !== undefined && (typeof project_id !== 'string' || !PROJECT_ID.test(project_id))) return code('invalid_request');
+      return forAccount(method, expect, [
+        'documents', 'download-v2', option('document-id', document_id), option('out', out),
+        ...(project_id ? [option('project-id', project_id)] : []),
+      ], stdout => savedOriginalView(lastJson(stdout), document_id));
+    }
+    case 'projects.read': {
+      const { expect, project_id } = params as Params<'projects.read'>;
+      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) return code('invalid_request');
+      return forAccount(method, expect, ['projects', 'read', option('project-id', project_id)], stdout => projectView(lastJson(stdout), project_id));
+    }
+    case 'projects.members': {
+      const { expect, project_id, cursor } = params as Params<'projects.members'>;
+      if (!pageable(project_id, cursor)) return code('invalid_request');
+      return forAccount(method, expect, ['projects', 'members', option('project-id', project_id), ...page(cursor)],
+        stdout => membersView(lastJson(stdout), project_id));
+    }
+    case 'projects.directory': {
+      const { expect, project_id, query, cursor } = params as Params<'projects.directory'>;
+      if (!pageable(project_id, cursor)) return code('invalid_request');
+      // No name: the first people the directory has.
+      const name = typeof query === 'string' ? askText(query) : '';
+      return forAccount(method, expect, [
+        'projects', 'directory', option('project-id', project_id), ...(name === '' ? [] : [option('query', name)]), ...page(cursor),
+      ], stdout => membersView(lastJson(stdout), project_id, true));
+    }
+    case 'projects.change': {
+      const { expect, request_id, change } = params as Params<'projects.change'>;
+      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id)) return code('invalid_request');
+      const argv = changeArgs(change, request_id, expect);
+      if (!argv) return code('invalid_request', true, request_id);
+      return forAccount(method, expect, argv, stdout => changeView(lastJson(stdout), request_id, change), request_id);
     }
     case 'projects.readContext': {
       const { expect, project_id, context_id } = params as Params<'projects.readContext'>;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, failureView, feedView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, receiptView,
-  recordView, statusView, toolsView, ViewError, writeStatusView,
+  abandonView, answerView, changeView, documentPageView, documentTextView, failureView, feedView, membersView, noteMatchesView, noteTitle, noteView,
+  projectMatchesView, projectPageView, projectView, receiptView, recordView, savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
 
@@ -241,5 +241,73 @@ describe('an approved record shows only what the source pane needs', () => {
     }), { ...asked, policy_id: 'restricted-reviewer-person-v2' });
     expect(restricted.visibility).toBe('approver');
     expect(restricted.approved_by).toBeUndefined();
+  });
+});
+
+describe('documents, members and project changes', () => {
+  const PROJECT = 'prj_11111111-1111-4111-8111-111111111111';
+  const DOCUMENT = `doc_${'e'.repeat(64)}`;
+  const metadata = {
+    schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: '00000000-0000-4000-8000-000000000001', filename: 'Plan.pdf',
+    title: 'Plan', content_length: 2_100_000, sha256: sha('1'), audience: { kind: 'team' }, association_project_ids: [PROJECT],
+    document_id: DOCUMENT, detected_media_type: 'application/pdf', received_at: '2026-09-20T09:00:00.000Z', state: 'saved',
+    extraction_state: 'ready', extraction_detail: 'SECRET detail', extractor: 'x', extracted_text_bytes: 10,
+  };
+
+  it('a document row keeps its name, kind, size and where it is filed, and nothing that identifies the original', () => {
+    const page = documentPageView({ ok: true, result: {
+      schema_version: 2, kind: 'echo-person-document-search-result-v2', next_cursor: 'cGFnZTI',
+      documents: [{ ...metadata, excerpt: 'SECRET excerpt', anchor: null }],
+    } });
+    expect(page).toEqual({ next_cursor: 'cGFnZTI', items: [{
+      document_id: DOCUMENT, title: 'Plan', filename: 'Plan.pdf', received_at: '2026-09-20T09:00:00.000Z', type: 'pdf', size: 2_100_000,
+      audience: 'team', extraction: 'ready', project_ids: [PROJECT],
+    }] });
+    expect(JSON.stringify(page)).not.toContain('SECRET');
+    expect(JSON.stringify(page)).not.toContain(sha('1'));
+  });
+
+  it('a text page must be of the document asked for, and of the same original', () => {
+    const reply = (text: Record<string, unknown>) => ({ ok: true, result: { metadata, text: {
+      schema_version: 1, kind: 'echo-person-document-text-v1', document_id: DOCUMENT, original_sha256: sha('1'), extractor: 'x',
+      extraction_state: 'ready', next_cursor: null, chunks: [{ ordinal: 0, anchor_kind: 'page', anchor_start: 3, text: 'Hello' }], ...text,
+    } } });
+    expect(documentTextView(reply({}), DOCUMENT).chunks).toEqual([{ anchor: 'page', start: 3, text: 'Hello' }]);
+    expect(() => documentTextView(reply({}), `doc_${'f'.repeat(64)}`)).toThrow(ViewError);
+    expect(() => documentTextView(reply({ original_sha256: sha('2') }), DOCUMENT)).toThrow(ViewError);
+  });
+
+  it('a saved original leaves its path behind', () => {
+    expect(savedOriginalView({ ok: true, result: { document_id: DOCUMENT, output_path: '/Users/someone/Plan.pdf', content_length: 1, sha256: sha('1') } },
+      DOCUMENT)).toBeNull();
+    expect(() => savedOriginalView({ ok: true, result: { document_id: `doc_${'f'.repeat(64)}`, output_path: '/x' } }, DOCUMENT)).toThrow(ViewError);
+  });
+
+  it('members and the directory are only for the project asked for, and a project read only that project', () => {
+    const members = { schema_version: 1, kind: 'echo-project-members-v1', project_id: PROJECT, next_cursor: null,
+      items: [{ membership_id: 'mem_1', display_name: 'Ari', role: 'lead' }] };
+    expect(membersView(members, PROJECT).items).toEqual([{ membership_id: 'mem_1', display_name: 'Ari', role: 'lead' }]);
+    expect(() => membersView(members, 'prj_other')).toThrow(ViewError);
+    expect(() => membersView(members, PROJECT, true)).toThrow(ViewError);
+    const directory = { schema_version: 1, kind: 'echo-project-directory-v1', project_id: PROJECT, next_cursor: null,
+      items: [{ membership_id: 'mem_2', display_name: 'Raj' }] };
+    expect(membersView(directory, PROJECT, true).items).toEqual([{ membership_id: 'mem_2', display_name: 'Raj' }]);
+    const summary = { schema_version: 1, kind: 'echo-project-summary-v1', project_id: PROJECT, name: 'Apollo', created_at: 'x', role: 'member' };
+    expect(projectView(summary, PROJECT).role).toBe('member');
+    expect(() => projectView(summary, 'prj_other')).toThrow(ViewError);
+  });
+
+  it('a change is made only by the receipt for exactly that request and change', () => {
+    const receipt = { schema_version: 1, kind: 'echo-project-mutation-receipt-v1', request_id: 'r1', project_id: PROJECT, operation: 'member_set',
+      membership_id: 'mem_2', received_at: 'x', state: 'applied' };
+    const add = { kind: 'member-add' as const, project_id: PROJECT, membership_id: 'mem_2' };
+    expect(changeView(receipt, 'r1', add)).toBeNull();
+    expect(() => changeView(receipt, 'r2', add)).toThrow(ViewError);
+    expect(() => changeView(receipt, 'r1', { ...add, membership_id: 'mem_3' })).toThrow(ViewError);
+    expect(() => changeView(receipt, 'r1', { ...add, kind: 'member-remove' })).toThrow(ViewError);
+    const link = { ok: true, result: { schema_version: 1, kind: 'echo-person-document-association-receipt-v1', request_id: 'r1', project_id: PROJECT,
+      document_id: DOCUMENT, operation: 'dissociate', received_at: 'x', state: 'applied' } };
+    expect(changeView(link, 'r1', { kind: 'document-dissociate', project_id: PROJECT, document_id: DOCUMENT })).toBeNull();
+    expect(() => changeView(link, 'r1', { kind: 'document-associate', project_id: PROJECT, document_id: DOCUMENT })).toThrow(ViewError);
   });
 });

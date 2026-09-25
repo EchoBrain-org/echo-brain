@@ -39,7 +39,66 @@ export interface FeedItem {
 export interface FeedPage {
   readonly project_id: string;
   readonly items: readonly FeedItem[];
+  readonly next_cursor: string | null;
 }
+
+/** A saved document: an original file, and the text extracted from it. */
+export interface DocumentSummary {
+  readonly document_id: string;
+  readonly title: string;
+  readonly filename: string;
+  readonly received_at: string;
+  /** What kind of file it is, from the bytes the Authority checked. */
+  readonly type: 'pdf' | 'word' | 'markdown' | 'text';
+  /** Bytes. */
+  readonly size: number;
+  readonly audience: 'only-me' | 'project' | 'team';
+  readonly extraction: Extraction;
+  /** The projects it is filed in. */
+  readonly project_ids: readonly string[];
+}
+
+export interface DocumentPage {
+  readonly items: readonly DocumentSummary[];
+  readonly next_cursor: string | null;
+}
+
+/** One piece of a document's extracted text, from a page or a paragraph. */
+export interface TextChunk {
+  readonly anchor: 'page' | 'paragraph';
+  readonly start: number;
+  readonly text: string;
+}
+
+/** A document and one page of its extracted text. */
+export interface DocumentText {
+  readonly document: DocumentSummary;
+  readonly chunks: readonly TextChunk[];
+  readonly next_cursor: string | null;
+}
+
+/** A person in a project, or one the directory found for it. */
+export interface Member {
+  readonly membership_id: string;
+  readonly display_name: string;
+  /** Absent for a directory entry. */
+  readonly role?: 'lead' | 'member';
+}
+
+export interface MemberPage {
+  readonly items: readonly Member[];
+  readonly next_cursor: string | null;
+}
+
+/**
+ * A change to a project: who is in it, or what is filed in it. Each is sent
+ * with a request id, and resending the same one never changes anything twice.
+ */
+export type ProjectChange =
+  | { readonly kind: 'member-add' | 'member-remove'; readonly project_id: string; readonly membership_id: string }
+  | { readonly kind: 'member-set'; readonly project_id: string; readonly membership_id: string; readonly role: 'lead' | 'member' }
+  | { readonly kind: 'associate' | 'dissociate'; readonly project_id: string; readonly context_id: string }
+  | { readonly kind: 'document-associate' | 'document-dissociate'; readonly project_id: string; readonly document_id: string };
 
 export interface ContextContent {
   readonly context_id: string;
@@ -194,7 +253,20 @@ export interface HostMethods {
   /** The renderer names the invitation only by a handle main issued; main swaps in the path. */
   'signin.invitation': { params: { invitation_handle: string }; result: AppStatus };
   'projects.list': { params: { expect: Expect; cursor?: string }; result: ProjectPage };
-  'projects.feed': { params: { expect: Expect; project_id: string }; result: FeedPage };
+  'projects.feed': { params: { expect: Expect; project_id: string; cursor?: string }; result: FeedPage };
+  /** A project's documents, newest first. */
+  'documents.list': { params: { expect: Expect; project_id: string; cursor?: string }; result: DocumentPage };
+  /** A document and one page of its text; read in a project when it was opened from one. */
+  'documents.read': { params: { expect: Expect; document_id: string; project_id?: string; cursor?: string }; result: DocumentText };
+  /** Save original…: the renderer names the file only by a handle main issued; main swaps in the path. */
+  'documents.save': { params: { expect: Expect; document_id: string; project_id?: string; save_handle: string }; result: null };
+  /** The project as it is now, with your role in it. */
+  'projects.read': { params: { expect: Expect; project_id: string }; result: ProjectSummary };
+  'projects.members': { params: { expect: Expect; project_id: string; cursor?: string }; result: MemberPage };
+  /** People in the organization a lead can add, by name. */
+  'projects.directory': { params: { expect: Expect; project_id: string; query?: string; cursor?: string }; result: MemberPage };
+  /** A change to a project. Only the Authority's receipt says it was made. */
+  'projects.change': { params: { expect: Expect; request_id: string; change: ProjectChange }; result: null };
   'projects.readContext': { params: { expect: Expect; project_id: string; context_id: string }; result: ContextContent };
   'notes.submit': { params: { expect: Expect; request_id: string; text: string; audience: Audience; project_id?: string }; result: Receipt };
   /** The renderer names a file only by a handle main issued; main swaps in the path. */
@@ -224,8 +296,10 @@ export interface MainMethods {
   'clipboard.writeText': { params: { text: string }; result: null };
   /** The invitation folder (or its file) the organization owner sent. */
   'dialog.openInvitation': { params: Record<string, never>; result: FileHandle | null };
-  /** A save's outcome is unknown: quitting asks first, naming a note or a file. */
-  'app.setUnresolved': { params: { unresolved: boolean; file?: boolean }; result: null };
+  /** Save original…: where to save it, chosen in main's dialog. The page gets a handle, never the path. */
+  'dialog.saveDocument': { params: { name: string }; result: FileHandle | null };
+  /** A save's or a project change's outcome is unknown: quitting asks first, naming a note, a file or a change. */
+  'app.setUnresolved': { params: { unresolved: boolean; file?: boolean; change?: boolean }; result: null };
   /** After the host gave up: start it again. */
   'app.retryHost': { params: Record<string, never>; result: null };
   /** Pops up the Account menu at a point in the window, in CSS pixels. */
@@ -239,13 +313,15 @@ export type HostMethodName = keyof HostMethods;
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
-  'account.signOut', 'account.tools', 'search.run', 'search.read',
+  'account.signOut', 'account.tools', 'search.run', 'search.read', 'documents.list', 'documents.read', 'documents.save', 'projects.read',
+  'projects.members', 'projects.directory', 'projects.change',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
+  'dialog.saveDocument',
 ];
 /** Host methods that change what the Authority stores. */
-export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry']);
+export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['notes.submit', 'documents.upload', 'documents.retry', 'projects.change']);
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);
 
