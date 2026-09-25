@@ -4668,9 +4668,6 @@
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0"
       },
-      "devDependencies": {
-        "ajv": "8.20.0"
-      },
       "engines": {
         "node": "22.22.1",
         "npm": "10.9.4"

@@ -31,6 +31,7 @@ import {
   parseLinuxMountinfo,
   verifyAuthorityRecovery,
 } from "../../tools/verify-authority-recovery.mjs";
+import { canonicalJsonForTest as canonical } from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const TOOL = join(REPO, "tools", "verify-authority-recovery.mjs");
@@ -45,16 +46,6 @@ type MountInspection = {
   readonly mount_point: string;
   readonly mount_options: readonly string[];
 };
-
-function canonical(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
-    .join(",")}}`;
-}
 
 function root(): string {
   const created = mkdtempSync(

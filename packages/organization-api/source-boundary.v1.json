@@ -32,7 +32,7 @@
       {
         "name": "Organization API contract types",
         "path": "packages/organization-api/src/contracts.ts",
-        "export": "OrganizationApiSignedIntegrityV1"
+        "export": "OrganizationPersonSessionV2"
       },
       {
         "name": "Person meeting-ingestion exclusion change contract",

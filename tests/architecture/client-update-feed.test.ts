@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { updateDigest } from '../../src/product/person-client/client-update-contract.js';
+import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const roots: string[] = [];
@@ -13,12 +14,6 @@ const TARGET = {
   linux: { platform: 'linux', architecture: 'x64', libc: 'glibc', schema_version: 2, kind: 'echo-person-onboarding-kit-v2', startSource: 'deploy/release/start-person-onboarding-kit-linux.sh' },
   macos: { platform: 'darwin', architecture: 'arm64', libc: null, schema_version: 3, kind: 'echo-person-cli-kit-v1', startSource: 'deploy/release/start-person-cli-kit-macos.sh' },
 } as const;
-
-function canonical(value: any): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
-}
 
 function fixture(targets: Target[] = ['linux']) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'echo-feed-test-'));

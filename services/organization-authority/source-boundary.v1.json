@@ -286,7 +286,6 @@
       "services/organization-authority/src/processing/adapters/meeting-sources/granola/granola-api-client.ts",
       "services/organization-authority/src/processing/adapters/shared/slack/slack-web-api-client.ts",
       "services/organization-authority/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts",
-      "services/organization-authority/src/processing/reference/reference-meeting-processing-cycle.ts",
       "services/organization-authority/src/processing/admitted-meeting-processing/approval-workflow-state-v1.ts",
       "services/organization-authority/src/processing/admitted-meeting-processing/meeting-processing-worker-lifecycle.ts",
       "services/organization-authority/src/processing/admitted-meeting-processing/serialized-meeting-processing-worker.ts",
