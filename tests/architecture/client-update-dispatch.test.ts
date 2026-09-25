@@ -5,7 +5,6 @@ import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { canonicalJson } from '../../tools/clean-v1-release.mjs';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const nativeTarget = process.version === 'v22.22.1' && (
@@ -13,6 +12,13 @@ const nativeTarget = process.version === 'v22.22.1' && (
   (process.platform === 'darwin' && process.arch === 'arm64')
 );
 const roots: string[] = [];
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+}
 
 function sha256(value: string | Buffer): string {
   return createHash('sha256').update(typeof value === 'string' ? readFileSync(value) : value).digest('hex');
