@@ -149,9 +149,23 @@ then writes `feed.json`. Through the approved publication lane, upload immutable
 `artifacts/<sha256>.zip` files first and publish the configured feed last. The
 server must serve these bytes without redirects or content encoding. Hosting,
 signer provisioning, first-seat enrollment and live document-read qualification
-are separate deployment steps. The bounded S3 publisher implements first
-publication only; later feed replacement and expiry refresh require a reviewed
-replacement operation.
+are separate deployment steps.
+
+The S3 lane has a separate reviewed replacement operation for a later approved
+release or expiry refresh. It requires a human-approved SHA-256 of the current
+raw feed, verifies that predecessor's signature with the existing pinned key and
+channel, and requires a strictly higher signed sequence. The replacement reuses
+the enrolled client's bootstrap configuration, so its feed origin, publisher
+key, channel, and installation type remain pinned at the client. Existing
+content-addressed artifacts can be reused only when
+their authenticated metadata and public bytes match the new signed digest;
+otherwise artifact creation remains conditional. The final `feed.json` write is
+the sole overwrite and is conditional on the verified predecessor ETag. A
+changed predecessor, failed condition, or lost PUT result is unconfirmed and is
+resolved only by the replacement receipt's read-only status command. There is
+no retry of an attempted write, delete, forced overwrite, signer rollover, or
+automatic rollback. The original first-publication receipt remains historical
+evidence and must not be used to poll a feed after replacement.
 
 ## Verification and recovery
 

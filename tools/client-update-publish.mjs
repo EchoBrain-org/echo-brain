@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-// First publication only: exact approved files into the dedicated S3 feed.
-// There is no infrastructure, arbitrary destination, overwrite, or delete lane.
+// Exact approved files into the dedicated S3 feed. The original first
+// publication lane never overwrites; the separate replacement lane below binds
+// the current signed feed and uses S3 If-Match for its one permitted overwrite.
 import { Buffer } from 'node:buffer';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -18,8 +19,10 @@ const ACCOUNT = '904560150024';
 const REGION = 'us-west-2';
 const STACK = 'echo-client-update-staging-s3-v1';
 const KIND = 'echo-client-update-first-publication-v1';
+const REPLACEMENT_KIND = 'echo-client-update-feed-replacement-v1';
 const SHA = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
+const ETAG = /^"[a-f0-9]{32}"$/;
 const STACK_ID = new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${STACK}/[a-f0-9-]{36}$`);
 const INVENTORY = [{ action: 'Add', logical_id: 'FeedBucket', resource_type: 'AWS::S3::Bucket' }, { action: 'Add', logical_id: 'FeedBucketPolicy', resource_type: 'AWS::S3::BucketPolicy' }];
 // Each reserve is checked after the preflight HEAD: the remaining PUT,
@@ -274,6 +277,229 @@ export async function statusClientUpdatePublish({ receipt: path }, dependencies 
   });
 }
 
+// Replacement uses a distinct receipt kind. Existing first-publication
+// receipts never acquire overwrite semantics when newer tooling reads them.
+function replacementSummary(receipt, inputs, d) {
+  const objects = [...receipt.artifacts, receipt.feed];
+  return { kind: REPLACEMENT_KIND, operation_id: receipt.operation_id, state: receipt.state,
+    manifest_sha256: receipt.hashes['manifest.json'], feed_url: receipt.hosting.feed_url,
+    release_id: receipt.release_id, verified_objects: objects.filter(item => item.verified).length,
+    object_count: objects.length, metadata_fresh: metadataFresh(inputs, d) };
+}
+function feedHeadIdentity(observed) {
+  if (observed?.absent || !Number.isSafeInteger(observed.ContentLength) || observed.ContentLength <= 0 ||
+      observed.ContentLength > UPDATE_METADATA_LIMIT || observed.ContentType !== 'application/json' ||
+      observed.CacheControl !== 'no-store' || observed.ContentEncoding || observed.WebsiteRedirectLocation ||
+      observed.ServerSideEncryption !== 'AES256' || typeof observed.VersionId !== 'string' ||
+      !observed.VersionId || observed.VersionId === 'null' || !ETAG.test(observed.ETag ?? '')) fail('predecessor_feed_metadata_mismatch');
+  return { version_id: observed.VersionId, etag: observed.ETag };
+}
+async function readPublicObject(host, key, observed, limit, d) {
+  const url = new URL(key, host.feed_url).href;
+  const response = await d.fetch(url, { redirect: 'manual', headers: { 'accept-encoding': 'identity' }, signal: AbortSignal.timeout(120_000) });
+  if (response.status !== 200 || response.redirected || (response.url && response.url !== url) ||
+      response.headers.get('content-encoding') || response.headers.get('content-length') !== String(observed.ContentLength) ||
+      response.headers.get('content-type') !== observed.ContentType || response.headers.get('cache-control') !== observed.CacheControl ||
+      response.headers.get('etag') !== observed.ETag || response.headers.get('x-amz-server-side-encryption') !== 'AES256' ||
+      response.headers.get('x-amz-version-id') !== observed.VersionId || !response.body) {
+    await response.body?.cancel(); fail('public_object_headers_mismatch');
+  }
+  const reader = response.body.getReader();
+  const parts = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) fail('public_object_size_mismatch');
+      parts.push(Buffer.from(value));
+    }
+  } catch (error) { await reader.cancel(); throw error; }
+  finally { reader.releaseLock(); }
+  if (size !== observed.ContentLength) fail('public_object_size_mismatch');
+  return Buffer.concat(parts);
+}
+function historicalEnvelopeTime(raw, d) {
+  let expiresAt;
+  try {
+    const envelope = JSON.parse(raw.toString('utf8'));
+    expiresAt = Date.parse(JSON.parse(Buffer.from(envelope.payload, 'base64').toString('utf8')).expires_at);
+  } catch { fail('predecessor_feed_invalid'); }
+  if (!Number.isFinite(expiresAt) || expiresAt <= 0) fail('predecessor_feed_invalid');
+  // Only the already-published predecessor is verified historically. The new
+  // manifest remains strictly fresh before any replacement write.
+  return Math.min(currentTime(d), expiresAt - 1);
+}
+async function observePredecessor(host, config, d) {
+  const observed = head(d.aws, host.bucket, 'feed.json');
+  const identity = feedHeadIdentity(observed);
+  const raw = await readPublicObject(host, 'feed.json', observed, UPDATE_METADATA_LIMIT, d);
+  let verified;
+  try { verified = verifyUpdateEnvelope(raw, config, historicalEnvelopeTime(raw, d)); }
+  catch { fail('predecessor_feed_invalid'); }
+  return { key: 'feed.json', sha256: digest(raw), bytes: raw.length, ...identity,
+    sequence: verified.manifest.sequence, channel: verified.manifest.channel };
+}
+function samePredecessor(left, right) {
+  return left?.key === 'feed.json' && right?.key === 'feed.json' && left.sha256 === right.sha256 &&
+    left.bytes === right.bytes && left.version_id === right.version_id && left.etag === right.etag &&
+    left.sequence === right.sequence && left.channel === right.channel;
+}
+function replacementObject(object, { reused = false, versionId = null } = {}) {
+  return { ...object, reused, attempted: false, succeeded: reused, verified: reused, version_id: versionId };
+}
+function validReplacementObject(item, { feed = false } = {}) {
+  return item && typeof item === 'object' && typeof item.key === 'string' && (!feed || item.key === 'feed.json') &&
+    SHA.test(item.sha256 ?? '') && Number.isSafeInteger(item.bytes) && item.bytes > 0 && typeof item.content_type === 'string' &&
+    typeof item.cache_control === 'string' && typeof item.reused === 'boolean' && typeof item.attempted === 'boolean' &&
+    typeof item.succeeded === 'boolean' && typeof item.verified === 'boolean' && (!feed || !item.reused) &&
+    (!item.reused || (item.succeeded && item.verified)) && (!item.succeeded || item.reused || item.attempted) &&
+    (!item.verified || item.succeeded) && (item.version_id === null || (typeof item.version_id === 'string' && item.version_id && item.version_id !== 'null'));
+}
+function readReplacementReceipt(path) {
+  const receipt = JSON.parse(read(path));
+  const predecessor = receipt?.predecessor;
+  if (receipt?.schema_version !== 1 || receipt.kind !== REPLACEMENT_KIND || !/^[a-f0-9-]{36}$/.test(receipt.operation_id ?? '') ||
+      !COMMIT.test(receipt.source_sha ?? '') || !['planned', 'publishing', 'succeeded', 'unconfirmed'].includes(receipt.state) ||
+      !Array.isArray(receipt.artifacts) || !receipt.artifacts.length || receipt.artifacts.length > 2 || receipt.artifacts.some(item => !validReplacementObject(item)) ||
+      !validReplacementObject(receipt.feed, { feed: true }) || !predecessor || predecessor.key !== 'feed.json' || !SHA.test(predecessor.sha256 ?? '') ||
+      !Number.isSafeInteger(predecessor.bytes) || predecessor.bytes <= 0 || typeof predecessor.version_id !== 'string' || !predecessor.version_id ||
+      !ETAG.test(predecessor.etag ?? '') || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(predecessor.channel ?? '') ||
+      !Number.isSafeInteger(predecessor.sequence) || predecessor.sequence <= 0) fail('replacement_receipt_invalid');
+  return receipt;
+}
+function replacementInputs(receipt, d, { allowExpired = false } = {}) {
+  if (d.runtime() !== receipt.source_sha) fail('exact_reviewed_runtime_required');
+  account(d.aws);
+  const currentHosting = hosting(receipt.hosting_receipt, d.aws, d.readTemplate);
+  if (!equal(currentHosting, receipt.hosting)) fail('hosting_receipt_changed');
+  const inputs = preparedInputs(receipt.prepared, receipt.authorization, d.validatePrepared, { now: currentTime(d), allowExpired });
+  if (inputs.config.feed_url !== currentHosting.feed_url || !equal(inputs.hashes, receipt.hashes) ||
+      inputs.manifest.release_id !== receipt.release_id || inputs.manifest.sequence <= receipt.predecessor.sequence ||
+      !equal(inputs.objects.filter(item => item.key !== 'feed.json'), receipt.artifacts.map(objectIdentity)) ||
+      !equal(inputs.objects.find(item => item.key === 'feed.json'), objectIdentity(receipt.feed))) fail('replacement_inputs_changed');
+  return inputs;
+}
+async function recheckPredecessor(receipt, inputs, d) {
+  if (!samePredecessor(await observePredecessor(receipt.hosting, inputs.config, d), receipt.predecessor)) fail('predecessor_feed_changed');
+}
+function replacementWindow(receipt, artifactIndex, inputs, d) {
+  const remainingArtifacts = receipt.artifacts.slice(artifactIndex).filter(object => !object.reused && !object.attempted).length;
+  const remainingWrites = remainingArtifacts + (receipt.feed.attempted ? 0 : 1);
+  if (Date.parse(inputs.manifest.expires_at) - currentTime(d) < remainingWrites * OBJECT_PUBLICATION_WINDOW_MS) fail('insufficient_metadata_validity');
+}
+async function matchingRemoteArtifact(host, object, d) {
+  const observed = head(d.aws, host.bucket, object.key);
+  if (observed?.absent) return null;
+  if (observed.ContentLength !== object.bytes || observed.ContentType !== object.content_type || observed.CacheControl !== object.cache_control ||
+      observed.ContentEncoding || observed.WebsiteRedirectLocation || observed.ServerSideEncryption !== 'AES256' ||
+      typeof observed.VersionId !== 'string' || !observed.VersionId || observed.VersionId === 'null') fail('immutable_artifact_mismatch');
+  const bytes = await readPublicObject(host, object.key, observed, UPDATE_ARTIFACT_LIMIT, d);
+  if (digest(bytes) !== object.sha256) fail('immutable_artifact_mismatch');
+  return observed.VersionId;
+}
+
+export async function planClientUpdateReplacement({ hostingReceipt, prepared, authorization, output, expectedPredecessor }, dependencies = {}) {
+  absolute(output);
+  if (!SHA.test(expectedPredecessor ?? '')) fail('expected_predecessor_required');
+  const d = deps(dependencies);
+  return locked(output, async () => {
+    if (existsSync(output)) fail('receipt_destination_exists');
+    const source = d.runtime();
+    if (!COMMIT.test(source)) fail('reviewed_source_unavailable');
+    account(d.aws);
+    const host = hosting(absolute(hostingReceipt), d.aws, d.readTemplate);
+    const inputs = preparedInputs(absolute(prepared), absolute(authorization), d.validatePrepared, { now: currentTime(d) });
+    if (inputs.config.feed_url !== host.feed_url) fail('publication_feed_url_mismatch');
+    const predecessor = await observePredecessor(host, inputs.config, d);
+    if (predecessor.sha256 !== expectedPredecessor) fail('unexpected_predecessor_feed');
+    if (inputs.manifest.sequence <= predecessor.sequence) fail('replacement_sequence_not_advanced');
+    const artifacts = [];
+    for (const object of inputs.objects.filter(item => item.key !== 'feed.json')) {
+      const versionId = await matchingRemoteArtifact(host, object, d);
+      artifacts.push(replacementObject(object, { reused: versionId !== null, versionId }));
+    }
+    const feed = replacementObject(inputs.objects.find(item => item.key === 'feed.json'));
+    const receipt = { schema_version: 1, kind: REPLACEMENT_KIND, operation_id: randomUUID(), source_sha: source,
+      state: 'planned', hosting_receipt: hostingReceipt, prepared, authorization, hosting: host, hashes: inputs.hashes,
+      release_id: inputs.manifest.release_id, predecessor, artifacts, feed };
+    save(output, receipt, true);
+    return replacementSummary(receipt, inputs, d);
+  });
+}
+
+export async function executeClientUpdateReplacement({ receipt: path, approveManifest }, dependencies = {}) {
+  absolute(path);
+  const d = deps(dependencies);
+  return locked(path, async () => {
+    const receipt = readReplacementReceipt(path);
+    if (!SHA.test(approveManifest ?? '') || approveManifest !== receipt.hashes['manifest.json']) fail('exact_manifest_approval_required');
+    if (receipt.state === 'unconfirmed') fail('publication_unconfirmed_use_status');
+    let inputs = replacementInputs(receipt, d);
+    if (receipt.state === 'succeeded') return replacementSummary(receipt, inputs, d);
+    try {
+      for (const [index, object] of receipt.artifacts.entries()) {
+        if (object.reused) {
+          await verifyObject(receipt, object, inputs, d); save(path, receipt); continue;
+        }
+        if (!object.attempted) {
+          await recheckPredecessor(receipt, inputs, d);
+          absent(d.aws, receipt.hosting.bucket, object.key);
+          const file = join(receipt.prepared, object.key);
+          const bytes = read(file, UPDATE_ARTIFACT_LIMIT);
+          if (bytes.length !== object.bytes || digest(bytes) !== object.sha256) fail('publication_inputs_changed');
+          replacementWindow(receipt, index, inputs, d);
+          receipt.state = 'publishing'; object.attempted = true; save(path, receipt);
+          const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', object.key, '--body', file, '--if-none-match', '*', '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', object.content_type, '--cache-control', object.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(object.sha256, 'hex').toString('base64')]);
+          if (result?.ServerSideEncryption !== 'AES256' || typeof result.VersionId !== 'string' || !result.VersionId || result.VersionId === 'null') fail('put_object_result_unconfirmed');
+          object.succeeded = true; object.version_id = result.VersionId; save(path, receipt);
+        }
+        await verifyObject(receipt, object, inputs, d); save(path, receipt);
+      }
+      if (!receipt.feed.attempted) {
+        await recheckPredecessor(receipt, inputs, d);
+        const file = join(receipt.prepared, 'feed.json');
+        const bytes = read(file, UPDATE_METADATA_LIMIT);
+        if (bytes.length !== receipt.feed.bytes || digest(bytes) !== receipt.feed.sha256) fail('publication_inputs_changed');
+        inputs = replacementInputs(receipt, d);
+        await recheckPredecessor(receipt, inputs, d);
+        replacementWindow(receipt, receipt.artifacts.length, inputs, d);
+        receipt.state = 'publishing'; receipt.feed.attempted = true; save(path, receipt);
+        const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', 'feed.json', '--body', file, '--if-match', receipt.predecessor.etag, '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', receipt.feed.content_type, '--cache-control', receipt.feed.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(receipt.feed.sha256, 'hex').toString('base64')]);
+        if (result?.ServerSideEncryption !== 'AES256' || typeof result.VersionId !== 'string' || !result.VersionId || result.VersionId === 'null') fail('put_object_result_unconfirmed');
+        receipt.feed.succeeded = true; receipt.feed.version_id = result.VersionId; save(path, receipt);
+      }
+      await verifyObject(receipt, receipt.feed, inputs, d); save(path, receipt);
+      receipt.state = 'succeeded'; save(path, receipt);
+    } catch { receipt.state = 'unconfirmed'; save(path, receipt); }
+    return replacementSummary(receipt, inputs, d);
+  });
+}
+
+export async function statusClientUpdateReplacement({ receipt: path }, dependencies = {}) {
+  absolute(path);
+  const d = deps(dependencies);
+  return locked(path, async () => {
+    const receipt = readReplacementReceipt(path);
+    const inputs = replacementInputs(receipt, d, { allowExpired: true });
+    try {
+      // Before the conditional feed write, the predecessor remains the guard
+      // for a resumable artifact-only operation. Afterwards only the exact new
+      // feed can resolve the uncertain outcome; never issue another PUT.
+      if (!receipt.feed.attempted) await recheckPredecessor(receipt, inputs, d);
+      for (const object of receipt.artifacts) {
+        if (object.reused || object.attempted) { await verifyObject(receipt, object, inputs, d, { allowExpired: true }); save(path, receipt); }
+        else absent(d.aws, receipt.hosting.bucket, object.key);
+      }
+      if (receipt.feed.attempted) { await verifyObject(receipt, receipt.feed, inputs, d, { allowExpired: true }); save(path, receipt); }
+      receipt.state = receipt.feed.verified && receipt.artifacts.every(item => item.verified) ? 'succeeded' : receipt.feed.attempted || receipt.artifacts.some(item => item.attempted) ? 'publishing' : 'planned';
+    } catch { receipt.state = 'unconfirmed'; }
+    save(path, receipt);
+    return replacementSummary(receipt, inputs, d);
+  });
+}
+
 async function main(argv) {
   const [action, ...rest] = argv;
   const values = {};
@@ -283,9 +509,12 @@ async function main(argv) {
   }
   const keys = Object.keys(values).sort();
   if (action === 'plan' && equal(keys, ['--authorization', '--hosting-receipt', '--output', '--prepared'])) return planClientUpdatePublish({ hostingReceipt: values['--hosting-receipt'], prepared: values['--prepared'], authorization: values['--authorization'], output: values['--output'] });
+  if (action === 'replace-plan' && equal(keys, ['--authorization', '--expected-predecessor', '--hosting-receipt', '--output', '--prepared'])) return planClientUpdateReplacement({ hostingReceipt: values['--hosting-receipt'], prepared: values['--prepared'], authorization: values['--authorization'], output: values['--output'], expectedPredecessor: values['--expected-predecessor'] });
   if (action === 'execute' && equal(keys, ['--approve-manifest', '--receipt'])) return executeClientUpdatePublish({ receipt: values['--receipt'], approveManifest: values['--approve-manifest'] });
+  if (action === 'replace-execute' && equal(keys, ['--approve-manifest', '--receipt'])) return executeClientUpdateReplacement({ receipt: values['--receipt'], approveManifest: values['--approve-manifest'] });
   if (action === 'status' && equal(keys, ['--receipt'])) return statusClientUpdatePublish({ receipt: values['--receipt'] });
-  fail('usage: client-update-publish.mjs plan --hosting-receipt FILE --prepared DIRECTORY --authorization FILE --output NEW_RECEIPT | execute --receipt FILE --approve-manifest SHA256 | status --receipt FILE');
+  if (action === 'replace-status' && equal(keys, ['--receipt'])) return statusClientUpdateReplacement({ receipt: values['--receipt'] });
+  fail('usage: client-update-publish.mjs plan --hosting-receipt FILE --prepared DIRECTORY --authorization FILE --output NEW_RECEIPT | execute --receipt FILE --approve-manifest SHA256 | status --receipt FILE | replace-plan --hosting-receipt FILE --prepared DIRECTORY --authorization FILE --expected-predecessor FEED_SHA256 --output NEW_RECEIPT | replace-execute --receipt FILE --approve-manifest SHA256 | replace-status --receipt FILE');
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).then(result => { process.stdout.write(`${JSON.stringify(result)}\n`); if (result.state === 'unconfirmed') process.exitCode = 1; }).catch(error => { process.stderr.write(`ECHO first publication stopped: ${/^[a-z_]+$/.test(error?.message ?? '') ? error.message : 'publication_inputs_invalid'}.\n`); process.exitCode = 1; });

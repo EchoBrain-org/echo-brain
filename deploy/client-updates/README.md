@@ -161,9 +161,63 @@ but clients still reject that expired feed. Status cannot authorize an expired
 write or renew metadata. Signing, sealing and publication remain strict about
 freshness. Receipts remain bound to their exact tooling commit; never edit an
 old receipt's source binding to run newer tooling against it.
-Subsequent feed replacement, expiry refresh, rollback and signer rotation need
-a separately implemented reviewed operation. This initial publisher does not
-provide those operations.
+## Replace an existing feed
+
+The original first-publication receipt remains historical evidence for its
+original bytes. Do not run its `status` action after replacing `feed.json`: that
+receipt intentionally pins the former feed version and would correctly report a
+different current feed as unconfirmed.
+
+Use the separate replacement lane only after a new release has passed its own
+Authority canary, authenticated record and cited Ask checks, final release
+decision, and release-bound authorization. Reuse the enrolled client's existing
+bootstrap configuration, including its `feed_url`, channel, public key, and
+`installation: "cli-kit"`. Its signed sequence must be strictly greater than
+the currently published feed. The lane adds no signer-rotation, channel-change,
+rollback, deletion, or hosting-replacement command.
+
+Obtain the expected predecessor SHA-256 from the preserved succeeded most-recent
+publication or replacement receipt's `hashes.feed.json` field. For the first
+A-to-B update this is the first-publication receipt. It is an explicit human
+review binding, not a value inferred from a mutable endpoint. From a reviewed
+clean checkout, prepare a distinct replacement receipt:
+
+```sh
+npm run client-update:publish -- replace-plan \
+  --hosting-receipt /absolute/private/feed-hosting-s3.json \
+  --prepared /absolute/private/B-feed-bundle \
+  --authorization /absolute/private/B-founder-authorization.json \
+  --expected-predecessor '<exact-64-lowercase-hex-feed-sha256>' \
+  --output /absolute/private/B-feed-replacement.json
+npm run client-update:publish -- replace-execute \
+  --receipt /absolute/private/B-feed-replacement.json \
+  --approve-manifest '<exact-reviewed-B-manifest-sha256>'
+npm run client-update:publish -- replace-status \
+  --receipt /absolute/private/B-feed-replacement.json
+```
+
+Planning verifies the predecessor's authenticated S3 metadata, public raw bytes,
+signature, pinned key, channel, sequence, VersionId, ETag, and the explicit
+predecessor SHA. It allows an expired predecessor only for this historical
+verification; the successor must still be fresh. Existing artifact keys are
+reused only after their authenticated metadata and anonymous HTTPS bytes match
+the new signed digest exactly. New artifact keys remain conditional creates.
+
+Before every new artifact write and immediately before the final feed write,
+the lane rechecks the predecessor. The one allowed `feed.json` overwrite uses
+S3 `PutObject --if-match <predecessor-ETag>`; an ETag mismatch or concurrent
+write leaves the replacement receipt unconfirmed and never triggers another
+PUT. AWS documents `If-Match` as an ETag condition that fails if the current
+ETag differs, including competing writes ([conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)).
+S3 `PutObject` has no VersionId compare-and-swap parameter, so VersionId is an
+additional preflight/audit binding; a byte-identical ABA replacement with the
+same ETag cannot be distinguished by this API.
+
+If a PUT result is lost, use only `replace-status`. It verifies the exact new
+feed and immutable artifacts without writing; it can reconcile a completed
+write, but a missing, changed, or ambiguous remote object remains unconfirmed.
+Do not create another replacement receipt, remove a lock, retry an attempted
+PUT, or use an unconditional upload to force progress.
 
 ## Enroll the Mac CLI
 
