@@ -19,8 +19,6 @@ const EXPECTED_RELEASE_OWNERSHIP = [
   ["/tsconfig.json", "@EchoBrain-org"],
   ["/tsconfig.workspaces.json", "@EchoBrain-org"],
   ["/vitest.config.ts", "@EchoBrain-org"],
-  ["/vitest.package.config.ts", "@EchoBrain-org"],
-  ["/vitest.package.serial.config.ts", "@EchoBrain-org"],
   ["/docs/operations/RB-OPERATIONS-003-protect-canonical-source-and-releases.md", "@EchoBrain-org"],
   ["/product/", "@EchoBrain-org"],
   ["/packages/", "@EchoBrain-org"],

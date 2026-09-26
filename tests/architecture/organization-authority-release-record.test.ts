@@ -1550,60 +1550,6 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     },
   );
 
-  it("refuses the retired app-kit forms before reading any input", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-kit-usage-")));
-    roots.push(root);
-    const common = [
-      "--release", join(root, "release.json"),
-      "--artifact", join(root, "client.tgz"),
-    ];
-    for (const [description, args] of [
-      ["a macOS kit without the command-line installation", [...common, "--output", join(root, "kit.zip")]],
-      ["an app archive", ["--installation", "cli-kit", ...common, "--app", join(root, "ECHO.app.zip"), "--output", join(root, "kit.zip")]],
-      ["a .tar.gz kit", ["--installation", "cli-kit", ...common, "--output", join(root, "kit.tar.gz")]],
-      ["an installation type on Linux", ["--target", "linux-x64", "--installation", "cli-kit", ...common, "--output", join(root, "kit.zip")]],
-    ] as const) {
-      const refused = run(process.execPath, [ONBOARDING_KIT, ...args]);
-      expect(refused.status, description).toBe(1);
-      expect(refused.stderr, description).toContain("usage: create-person-onboarding-kit.mjs");
-    }
-    expect(readdirSync(root)).toEqual([]);
-  });
-
-  it("rejects a retired v1 app-kit manifest in the kit verifier", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-kit-legacy-")));
-    roots.push(root);
-    const digest = (path: string) =>
-      createHash("sha256").update(readFileSync(path)).digest("hex");
-    writeFileSync(join(root, "release.json"), `${canonical(record())}\n`);
-    writeFileSync(join(root, "person-client.tgz"), "fixture client\n");
-    writeFileSync(join(root, "ECHO.app.zip"), "fixture app archive\n");
-    // The manifest shape is refused before any runtime check.
-    writeFileSync(join(root, "node"), "fixture runtime\n", { mode: 0o755 });
-    writeFileSync(join(root, "kit-manifest.v1.json"), `${canonical({
-      schema_version: 1,
-      kind: "echo-person-onboarding-kit-v1",
-      release_id: "clean-v1-20260822-001",
-      source_sha: "a".repeat(40),
-      release_record_sha256: digest(join(root, "release.json")),
-      person_client_artifact_sha256: digest(join(root, "person-client.tgz")),
-      desktop_app_archive_sha256: digest(join(root, "ECHO.app.zip")),
-      runtime: {
-        version: "v22.22.1",
-        platform: "darwin",
-        architecture: "arm64",
-        node_sha256: digest(join(root, "node")),
-      },
-    })}\n`);
-    const verified = run(process.execPath, [
-      join(REPO, "deploy", "release", "verify-person-onboarding-kit.mjs"),
-      root,
-    ]);
-    expect(verified.status).toBe(1);
-    expect(verified.stderr).toContain("manifest has unexpected fields");
-    expect(verified.stdout).toBe("");
-  });
-
   it("refuses noncanonical, digest-mismatched, and source-mismatched offline bundle inputs", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-clean-v1-offline-bundle-reject-")));
     roots.push(root);

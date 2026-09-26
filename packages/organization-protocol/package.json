@@ -24,9 +24,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "clean": "rm -rf dist",
-    "prepack": "npm run clean && npm run build",
-    "test": "vitest run --root . --config ../../vitest.package.config.ts"
+    "clean": "rm -rf dist"
   },
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0"

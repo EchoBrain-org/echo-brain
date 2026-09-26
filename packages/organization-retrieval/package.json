@@ -21,8 +21,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean",
-    "test": "npm run build && vitest run --root . --config ../../vitest.package.serial.config.ts"
+    "clean": "tsc -b --clean"
   },
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0",

@@ -634,12 +634,9 @@ manifest hash-binds the release record, client artifact, build identity and
 runtime. The signed [client update feed](../../docs/features/client-updates-v1.md)
 delivers these same ZIPs.
 
-The builder refuses anything else. A macOS build without `--installation
-cli-kit`, an `--app` archive, or an output that is not a `.zip` prints usage.
-The verifier rejects the retired v1 app-kit manifest. A kit that was already
-delivered carries its own installer and verifier, so it keeps working, and the
-update-feed publisher checks each kit's setup sources against that release's
-own source commit.
+The builder refuses anything else. A kit that was already delivered carries its
+own installer and verifier, so it keeps working, and the update-feed publisher
+checks each kit's setup sources against that release's own source commit.
 
 ### macOS arm64 command-line kit
 

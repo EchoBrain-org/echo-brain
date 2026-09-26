@@ -13,8 +13,6 @@
     "services/*/test/**/*.ts",
     "tests/**/*.ts",
     "vitest.config.ts",
-    "vitest.package.config.ts",
-    "vitest.package.serial.config.ts",
     "providers/**/test/**/*.ts"
   ]
 }
