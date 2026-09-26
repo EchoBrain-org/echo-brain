@@ -15,6 +15,10 @@ npm ci
 npm run package:linux
 ```
 
+The Linux build host needs `binutils` (the `ar` command), `tar` and `xz-utils`;
+install these through the system package manager before packaging. Running the
+app or its tests also requires a graphical session and Electron's system libraries.
+
 Packaging requires a clean committed checkout. It builds and embeds the same
 provenance-bound Person-client tarball as macOS and compiles out test fixtures.
 It never publishes a release. `npm run package` defaults to the build machine's

@@ -252,7 +252,7 @@ jobs:
       - name: Prepare the isolated runner for sandboxed Electron
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xauth dbus-x11 desktop-file-utils libgtk-3-0t64 libnss3 libasound2t64 libgbm1
+          sudo apt-get install -y binutils xvfb xauth dbus-x11 desktop-file-utils libgtk-3-0t64 libnss3 libasound2t64 libgbm1
           # Unpackaged Electron has no installed AppArmor profile. Allow its
           # user-namespace sandbox on this disposable runner; never --no-sandbox.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
