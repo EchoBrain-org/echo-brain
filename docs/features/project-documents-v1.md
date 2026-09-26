@@ -68,6 +68,8 @@ Unknown upload outcomes retain the bounded account-scoped immutable request snap
 
 Native document actions expose linking and unlinking, with a retained exact request for retry after restart. Dismissing a local reminder does not cancel a possibly completed server mutation. Every retry remains bound to the captured Authority/account; session changes conceal stale content and cannot retarget a queued request.
 
+The native recovery above was the retired Swift app's. While it runs, the desktop app offers **Check status**, **Try again** and **Start over** for an unconfirmed upload, where Start over abandons this computer's kept copy of the file, and **Try again** or **Dismiss** for an unconfirmed link change. It keeps that record in memory only, so after a quit or crash it does not offer them again, as the Swift app did after a relaunch; `pending` and `retry` above still reach the kept upload copies. See the desktop app's [known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
+
 ## Staging and validation
 
 Historical V7 SQL remains unchanged. New bootstrap uses a pinned additive V8 baseline. The founder confirmed the staging data is disposable and there are no live users, so retaining or migrating its old data is not a prerequisite for SCOUT qualification. A fresh exact V8 environment is the target through the existing operator lane; ordinary startup must never reset state implicitly.
