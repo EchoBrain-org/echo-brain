@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 const SHA256 = /^[0-9a-f]{64}$/;
 
@@ -127,6 +128,24 @@ function verifyMacCliRuntime(root, manifest) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') fail('this CLI kit supports macOS on Apple silicon only');
 }
 
+export function verifyUpdateBootstrap(value) {
+  exactKeys(value, ['automatic', 'channel', 'feed_url', 'installation', 'kind', 'minimum_sequence', 'public_key_spki', 'schema_version'], 'update bootstrap');
+  let url;
+  try { url = new URL(value.feed_url); } catch { fail('update bootstrap is invalid'); }
+  if (value.schema_version !== 1 || value.kind !== 'echo-client-update-config-v1' ||
+      typeof value.channel !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value.channel) ||
+      !Number.isSafeInteger(value.minimum_sequence) || value.minimum_sequence < 1 ||
+      value.automatic !== true || value.installation !== 'cli-kit' ||
+      typeof value.feed_url !== 'string' || value.feed_url.length > 2048 ||
+      typeof value.public_key_spki !== 'string' || !/^[A-Za-z0-9+/]{59}=$/.test(value.public_key_spki) ||
+      url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.href !== value.feed_url) fail('update bootstrap is invalid');
+  try {
+    const key = createPublicKey({ key: Buffer.from(value.public_key_spki, 'base64'), format: 'der', type: 'spki' });
+    if (key.asymmetricKeyType !== 'ed25519') fail('update bootstrap is invalid');
+  } catch { fail('update bootstrap is invalid'); }
+  return value;
+}
+
 function main() {
   const root = resolve(process.argv[2] ?? import.meta.dirname);
   const manifestPath = join(root, 'kit-manifest.v1.json');
@@ -140,6 +159,7 @@ function main() {
     [nodePath, 'Node runtime'],
   ]) regularFile(path, label);
 
+  if (lstatSync(manifestPath).size > 64 * 1024) fail('manifest is too large');
   const raw = readFileSync(manifestPath, 'utf8');
   let manifest;
   try {
@@ -161,18 +181,14 @@ function main() {
     manifest.schema_version === 3 &&
     manifest.kind === 'echo-person-cli-kit-v1'
   );
+  const manifestKeys = [
+      'kind', 'build_identity_sha256', 'person_client_artifact_sha256', 'release_id',
+      'release_record_sha256', 'runtime', 'schema_version', 'source_sha',
+      ...(linux && Object.hasOwn(manifest, 'update_bootstrap') ? ['update_bootstrap'] : []),
+  ];
   exactKeys(
     manifest,
-    [
-      'kind',
-      'build_identity_sha256',
-      'person_client_artifact_sha256',
-      'release_id',
-      'release_record_sha256',
-      'runtime',
-      'schema_version',
-      'source_sha',
-    ],
+    manifestKeys,
     'manifest',
   );
   exactKeys(
@@ -199,6 +215,7 @@ function main() {
         manifest.runtime.architecture !== 'arm64'
       ))
   ) fail('manifest identity is invalid');
+  if (linux && manifest.update_bootstrap !== undefined) verifyUpdateBootstrap(manifest.update_bootstrap);
   if (raw !== `${canonicalJson(manifest)}\n`) fail('manifest is not canonical');
   if (linux) verifyLinuxRuntime(root, manifest);
   else verifyMacCliRuntime(root, manifest);
@@ -219,6 +236,10 @@ function main() {
   verifyCliIdentity(identityPath, release, manifest, linux
     ? { platform: 'linux', architecture: 'x64' }
     : { platform: 'darwin', architecture: 'arm64' });
+  if (process.argv[3] === '--update-bootstrap') {
+    if (linux && manifest.update_bootstrap !== undefined) process.stdout.write(`${JSON.stringify(manifest.update_bootstrap)}\n`);
+    return;
+  }
   process.stdout.write(`${JSON.stringify({
     ok: true,
     release_id: manifest.release_id,
@@ -229,9 +250,11 @@ function main() {
   })}\n`);
 }
 
-try {
-  main();
-} catch (error) {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
 }

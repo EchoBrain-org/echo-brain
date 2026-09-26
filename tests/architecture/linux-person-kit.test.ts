@@ -4,10 +4,12 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { generateKeyPairSync } from "node:crypto";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -54,11 +56,12 @@ describe("Linux Person onboarding kit", () => {
     writeFileSync(preload, [
       "Object.defineProperty(process, 'platform', { value: 'linux' });",
       "Object.defineProperty(process, 'arch', { value: 'x64' });",
+      "Object.defineProperty(process, 'version', { value: 'v22.22.1' });",
       `Object.defineProperty(process, 'execPath', { value: ${JSON.stringify(runtime)} });`,
       "process.report.getReport = () => ({ header: { glibcVersionRuntime: '2.31' } });",
       "",
     ].join("\n"));
-    const writeManifest = () => writeFileSync(join(root, "kit-manifest.v1.json"), `${canonical({
+    const writeManifest = (bootstrap?: unknown) => writeFileSync(join(root, "kit-manifest.v1.json"), `${canonical({
       schema_version: 2,
       kind: "echo-person-onboarding-kit-v2",
       release_id: releaseId,
@@ -72,6 +75,7 @@ describe("Linux Person onboarding kit", () => {
         architecture: "x64",
         node_sha256: sha256(runtime),
       },
+      ...(bootstrap === undefined ? {} : { update_bootstrap: bootstrap }),
     })}\n`);
     const verify = () => run(process.execPath, [
       "--require", preload,
@@ -90,6 +94,24 @@ describe("Linux Person onboarding kit", () => {
     expect(systemNode.status).toBe(1);
     expect(systemNode.stderr).toContain("bundled Node runtime");
     expect(verify().status).toBe(0);
+
+    const bootstrap = {
+      schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture',
+      feed_url: 'https://fixture.invalid/feed.json',
+      public_key_spki: generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+      minimum_sequence: 1, automatic: true, installation: 'cli-kit',
+    };
+    writeManifest(bootstrap);
+    expect(verify().status).toBe(0);
+    for (const invalid of [null, { ...bootstrap, automatic: false }, { ...bootstrap, minimum_sequence: 0 },
+      { ...bootstrap, feed_url: 'http://fixture.invalid/feed.json' },
+      { ...bootstrap, feed_url: `https://fixture.invalid/${'a'.repeat(2048)}` },
+      { ...bootstrap, unexpected: true }, { ...bootstrap, public_key_spki: 'invalid' }]) {
+      writeManifest(invalid);
+      const rejected = verify();
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toContain('update bootstrap');
+    }
 
     elf.writeUInt16LE(3, 18);
     writeFileSync(runtime, elf);
@@ -165,12 +187,17 @@ describe("Linux Person onboarding kit", () => {
       },
     })}\n`);
     const outputZip = join(output, "echo-linux-kit.zip");
+    const { publicKey } = generateKeyPairSync('ed25519');
+    const updateConfig = join(root, 'update-config.json');
+    const bootstrap = { schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://updates.example.test/feed.json', public_key_spki: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' };
+    writeFileSync(updateConfig, JSON.stringify(bootstrap));
     const built = run(process.execPath, [
       join(releaseDirectory, "create-person-onboarding-kit.mjs"),
       "--target", "linux-x64",
       "--release", release,
       "--artifact", artifact,
       "--runtime-node", process.execPath,
+      "--update-config", updateConfig,
       "--output", outputZip,
     ], source);
     expect(built.status).toBe(0);
@@ -198,6 +225,7 @@ describe("Linux Person onboarding kit", () => {
     const verified = run(join(kit, "node"), [join(kit, "verify-person-onboarding-kit.mjs"), kit]);
     expect(verified.status).toBe(0);
     expect(JSON.parse(verified.stdout)).toMatchObject({ ok: true, platform: "linux", architecture: "x64" });
+    expect(JSON.parse(readFileSync(join(kit, 'kit-manifest.v1.json'), 'utf8')).update_bootstrap).toEqual(bootstrap);
     const systemNode = run(process.execPath, [join(kit, "verify-person-onboarding-kit.mjs"), kit]);
     expect(systemNode.status).toBe(1);
     expect(systemNode.stderr).toContain("bundled Node runtime");
@@ -223,6 +251,7 @@ describe("Linux Person onboarding kit", () => {
       "--release", release,
       "--artifact", artifact,
       "--runtime-node", badRuntime,
+      "--update-config", updateConfig,
       "--output", join(output, "bad.zip"),
     ], source);
     expect(rejected.status).toBe(1);

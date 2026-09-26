@@ -19,6 +19,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import process from 'node:process';
 import { readValidatedPersonClientReleaseArtifact, sha256File } from './release-artifact-validation.mjs';
+import { verifyUpdateBootstrap } from './verify-person-onboarding-kit.mjs';
 
 const releaseDirectory = resolve(import.meta.dirname);
 const repository = resolve(releaseDirectory, '..', '..');
@@ -162,7 +163,15 @@ function runtimeIdentity(runtimeNode, target) {
 }
 
 function usage() {
-  return 'usage: create-person-onboarding-kit.mjs ([--target darwin-arm64] --installation cli-kit | --target linux-x64) --release <canonical-release.json> --artifact <exact-client.tgz> [--runtime-node <node>] --output <new-kit.zip>';
+  return 'usage: create-person-onboarding-kit.mjs ([--target darwin-arm64] --installation cli-kit | --target linux-x64 --update-config <public-bootstrap.json>) --release <canonical-release.json> --artifact <exact-client.tgz> [--runtime-node <node>] --output <new-kit.zip>';
+}
+
+function updateBootstrap(path) {
+  regularFile(path, 'update bootstrap configuration');
+  if (lstatSync(path).size > 64 * 1024) fail('update bootstrap configuration is too large');
+  let value;
+  try { value = JSON.parse(readFileSync(path, 'utf8')); } catch { fail('update bootstrap configuration is not valid JSON'); }
+  return verifyUpdateBootstrap(value);
 }
 
 function committedSource(release, paths, description) {
@@ -203,6 +212,7 @@ function main(argv) {
   let outputPath = '';
   let target = 'darwin-arm64';
   let installation = '';
+  let updateConfigPath = '';
   while (argv.length > 0) {
     const option = argv.shift();
     const value = argv.shift();
@@ -213,12 +223,13 @@ function main(argv) {
     else if (option === '--output') outputPath = resolve(value);
     else if (option === '--target') target = value;
     else if (option === '--installation') installation = value;
+    else if (option === '--update-config') updateConfigPath = resolve(value);
     else fail(usage());
   }
   if (target !== 'darwin-arm64' && target !== 'linux-x64') fail(usage());
   const linux = target === 'linux-x64';
   // macOS builds only the command-line kit, so it must be named explicitly.
-  if (linux ? installation !== '' : installation !== 'cli-kit') fail(usage());
+  if (linux ? installation !== '' || !updateConfigPath : installation !== 'cli-kit' || updateConfigPath) fail(usage());
   if (!releasePath || !artifactPath || !outputPath || !outputPath.endsWith('.zip')) fail(usage());
   regularFile(releasePath, 'release record');
   regularFile(artifactPath, 'client artifact');
@@ -240,6 +251,7 @@ function main(argv) {
     fail,
   });
   const runtime = runtimeIdentity(runtimeNode, target);
+  const bootstrap = linux ? updateBootstrap(updateConfigPath) : undefined;
   const starterSource = linux ? 'deploy/release/start-person-onboarding-kit-linux.sh' : 'deploy/release/start-person-cli-kit-macos.sh';
   const sourceBytes = linux ? linuxSource(release) : macCliSource(release);
   const buildIdentity = {
@@ -266,6 +278,7 @@ function main(argv) {
       architecture: runtime.architecture,
       node_sha256: sha256File(runtimeNode),
     },
+    ...(bootstrap ? { update_bootstrap: bootstrap } : {}),
   };
 
   const stagingParent = mkdtempSync(join(outputParent, '.echo-person-onboarding-kit-'));
