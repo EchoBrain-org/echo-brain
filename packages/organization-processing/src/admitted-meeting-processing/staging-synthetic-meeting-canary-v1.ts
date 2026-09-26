@@ -5,15 +5,22 @@ import {
 import type { ApprovalDeliveryQuarantineReasonV1 } from "./meeting-processing-cycle-v1.js";
 import {
   createStagingSyntheticMeetingCanaryEnvelopeV1,
+  createStagingSyntheticMeetingCanaryEnvelopeV2,
+  describeStagingSyntheticMeetingCanaryEnvelope,
   isStagingSyntheticMeetingCanaryEnvelopeV1,
+  isStagingSyntheticMeetingCanaryEnvelopeV2,
   stagingSyntheticMeetingCanaryInputFromEnvelopeV1,
+  stagingSyntheticMeetingCanaryInputFromEnvelopeV2,
   stagingSyntheticMeetingCanarySourceIdentityV1 as envelopeSourceIdentity,
   type StagingSyntheticMeetingCanaryInputV1,
+  type StagingSyntheticMeetingCanaryInputV2,
 } from "@echo-brain/organization-authority-kernel/shared/staging-synthetic-meeting-canary-envelope-v1";
 
 export {
   stagingSyntheticMeetingCanaryCursorV1,
+  stagingSyntheticMeetingCanaryCursorV2,
   type StagingSyntheticMeetingCanaryInputV1,
+  type StagingSyntheticMeetingCanaryInputV2,
 } from "@echo-brain/organization-authority-kernel/shared/staging-synthetic-meeting-canary-envelope-v1";
 
 /**
@@ -76,6 +83,97 @@ export function isStagingSyntheticMeetingCanaryV1(
     assertStagingSyntheticMeetingCanaryV1(meeting);
     const input = stagingSyntheticMeetingCanaryInputFromEnvelopeV1(meeting);
     return input !== undefined && cursor === `synthetic-staging-canary:v1:${input.canary_id}`;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The V2 rehearsal has the same synthetic ownership inputs as V1, plus an
+ * exact transcript block. It is a separate immutable envelope, not a relaxed
+ * V1 validator.
+ */
+export function createStagingSyntheticMeetingCanaryV2(
+  input: StagingSyntheticMeetingCanaryInputV2,
+): MeetingDocument {
+  const meeting = createStagingSyntheticMeetingCanaryEnvelopeV2(input) as unknown as MeetingDocument;
+  assertCanonicalMeetingDocument(
+    meeting,
+    stagingSyntheticMeetingCanarySourceIdentityV1,
+  );
+  return Object.freeze(meeting);
+}
+
+export function assertStagingSyntheticMeetingCanaryV2(
+  meeting: MeetingDocument,
+  expectedInput?: StagingSyntheticMeetingCanaryInputV2,
+): void {
+  try {
+    assertCanonicalMeetingDocument(
+      meeting,
+      stagingSyntheticMeetingCanarySourceIdentityV1,
+    );
+    if (!isStagingSyntheticMeetingCanaryEnvelopeV2(meeting, expectedInput)) {
+      throw new Error("staging synthetic canary differs from its fixed envelope");
+    }
+  } catch {
+    throw new Error("meeting is not the fixed staging synthetic canary V2");
+  }
+}
+
+export function isStagingSyntheticMeetingCanaryV2(
+  meeting: MeetingDocument,
+  cursor: string,
+): boolean {
+  try {
+    assertStagingSyntheticMeetingCanaryV2(meeting);
+    const input = stagingSyntheticMeetingCanaryInputFromEnvelopeV2(meeting);
+    return input !== undefined && cursor === `synthetic-staging-canary:v2:${input.canary_id}`;
+  } catch {
+    return false;
+  }
+}
+
+/** Accepts either complete versioned canary envelope, and nothing else. */
+export function assertStagingSyntheticMeetingCanary(
+  meeting: MeetingDocument,
+  expectedInput?: StagingSyntheticMeetingCanaryInputV1,
+): void {
+  try {
+    assertCanonicalMeetingDocument(
+      meeting,
+      stagingSyntheticMeetingCanarySourceIdentityV1,
+    );
+    if (describeStagingSyntheticMeetingCanaryEnvelope(meeting, expectedInput) === undefined) {
+      throw new Error("staging synthetic canary differs from its fixed envelope");
+    }
+  } catch {
+    throw new Error("meeting is not a fixed staging synthetic canary");
+  }
+}
+
+/** Derives the only valid persisted cursor from a fully reconstructed envelope. */
+export function stagingSyntheticMeetingCanaryCursor(
+  meeting: MeetingDocument,
+  expectedInput?: StagingSyntheticMeetingCanaryInputV1,
+): string {
+  assertStagingSyntheticMeetingCanary(meeting, expectedInput);
+  const cursor = describeStagingSyntheticMeetingCanaryEnvelope(
+    meeting,
+    expectedInput,
+  )?.cursor;
+  if (cursor === undefined) {
+    throw new Error("meeting is not a fixed staging synthetic canary");
+  }
+  return cursor;
+}
+
+export function isStagingSyntheticMeetingCanary(
+  meeting: MeetingDocument,
+  cursor: string,
+): boolean {
+  try {
+    return stagingSyntheticMeetingCanaryCursor(meeting) === cursor;
   } catch {
     return false;
   }

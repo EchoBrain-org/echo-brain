@@ -52,6 +52,9 @@ describe("Person client help", () => {
     await expect(help(["ask-source", "--help"])).resolves.toContain(
       "echo-brain person ask-source --source-id <source-id>",
     );
+    await expect(help(["transcript", "--help"])).resolves.toContain(
+      "echo-brain person transcript --approval-id <id> --source-id <source-id>",
+    );
     await expect(help(["employee", "--help"])).resolves.toContain(
       "<list|invite|reissue|revoke>",
     );

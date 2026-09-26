@@ -8,7 +8,9 @@
   "package_json": "providers/slack/server/package.json",
   "entry_points": [
     "providers/slack/server/src/organization-protocol/private-slack-block-approval-record-input-v1.ts",
+    "providers/slack/server/src/organization-protocol/private-slack-block-approval-record-input-v2.ts",
     "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
+    "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.ts",
     "providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts",
     "providers/slack/server/src/person-identity/slack-person-external-identity-runtime-bundle-v1.ts",
     "providers/slack/server/src/adapters/oidc/slack-browser-identity-provider.ts",
@@ -164,6 +166,11 @@
         "name": "Private Slack Block approval policy projector",
         "path": "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.ts",
         "export": "createPrivateSlackBlockApprovalPolicyProjectorV1"
+      },
+      {
+        "name": "Private Slack Block approval policy projector V2",
+        "path": "providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.ts",
+        "export": "createPrivateSlackBlockApprovalPolicyProjectorV2"
       }
     ],
     "compatibility_entrypoints": [],

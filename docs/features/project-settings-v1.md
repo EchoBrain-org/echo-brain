@@ -10,7 +10,8 @@ project, while other sharing paths remain effective.
 Archived projects move out of the active list into Archived. Members can still
 browse, search, and Ask about retained content under its existing permissions.
 People management stays available so access can still be changed. Archived
-projects cannot receive new uploads or new file associations. A lead can
+projects cannot receive new uploads, new meeting approvals, or new file
+associations. A lead can
 unarchive the project to resume contributions.
 
 An upload accepted before archive remains saved and may finish processing.
@@ -19,7 +20,8 @@ Archive neither deletes files nor frees retained storage. There is no project
 deletion or upload withdrawal in this version.
 
 The [accepted contract](../decisions/ADR-0018-project-settings-v1.md) defines
-the API, authorization, compatibility, and migration boundaries. Installation on
-an existing V9 Authority requires the explicit V10 transition and a matching
-runtime; there is no automatic startup migration. Release actions follow the
+the API, authorization, and compatibility boundaries. These settings share one
+fresh V10 Authority schema with project meeting approval. Existing development
+data is disposable; the combined version requires fresh databases and a matching
+runtime. Startup does not automatically migrate or reset older state. Release actions follow the
 [Authority operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md).

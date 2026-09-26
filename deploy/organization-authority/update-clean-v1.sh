@@ -878,9 +878,9 @@ start_and_check() {
 # directories survive failure. Never run an older image against converted data.
 migration_kind() {
   local requested="${1:-}" found='' kind parent operation release_id
-  case "$requested" in ''|v5-to-v6|v8-to-v9|v9-to-v10) ;; *) return 1 ;; esac
+  case "$requested" in ''|v5-to-v6|v8-to-v9) ;; *) return 1 ;; esac
   release_id="$(field "$CANDIDATE_RECORD" release-id)" || return 1
-  for kind in v5-to-v6 v8-to-v9 v9-to-v10; do
+  for kind in v5-to-v6 v8-to-v9; do
     parent="$RELEASE_STATE_DIR/state-$kind"
     [[ ! -L "$parent" && ( ! -e "$parent" || -d "$parent" ) ]] || return 1
     operation="$parent/$release_id"
@@ -970,7 +970,7 @@ def move(source, target):
 
 try:
     action, raw_state, raw_release, raw_accepted, raw_candidate, runtime_identity, migration = sys.argv[1:]
-    require(migration in ('v5-to-v6', 'v8-to-v9', 'v9-to-v10'))
+    require(migration in ('v5-to-v6', 'v8-to-v9'))
     uid, gid = map(int, runtime_identity.split(':'))
     state = pathlib.Path(os.path.abspath(raw_state))
     release = pathlib.Path(raw_release)
@@ -1084,7 +1084,6 @@ stage_migrated_state() {
   case "$kind" in
     v5-to-v6) copy_function=copyAuthorityV5ToV6 ;;
     v8-to-v9) copy_function=copyAuthorityV8ToV9 ;;
-    v9-to-v10) copy_function=copyAuthorityV9ToV10 ;;
     *) return 1 ;;
   esac
   compose_clean down || return 1
@@ -1125,7 +1124,6 @@ usage:
   update-clean-v1.sh stage --release <canonical-release.json> --runtime-profile <canonical-profile.json>
   update-clean-v1.sh stage-v5-to-v6 --release <canonical-release.json> --runtime-profile <canonical-profile.json>
   update-clean-v1.sh stage-v8-to-v9 --release <canonical-release.json> --runtime-profile <canonical-profile.json>
-  update-clean-v1.sh stage-v9-to-v10 --release <canonical-release.json> --runtime-profile <canonical-profile.json>
   update-clean-v1.sh canary
   update-clean-v1.sh promote --release <canonical-release.json> --canary-passed
   update-clean-v1.sh rollback
@@ -1147,7 +1145,7 @@ if [[ -f "$CANDIDATE_RECORD" ]]; then
   esac
 fi
 case "$command" in
-  stage|stage-v5-to-v6|stage-v8-to-v9|stage-v9-to-v10)
+  stage|stage-v5-to-v6|stage-v8-to-v9)
     [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--runtime-profile' && -n "${5:-}" && $# -eq 5 ]] || usage
     candidate="$(cd "$(dirname "$3")" && pwd -P)/$(basename "$3")"
     supplied_profile="$(cd "$(dirname "$5")" && pwd -P)/$(basename "$5")"

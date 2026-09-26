@@ -90,12 +90,24 @@ existing actor-scoped request-ID/digest replay discipline. Unknown outcomes
 remain retryable with the same command. Reusing a request ID for another payload
 conflicts. Lifecycle and membership effects commit with their receipts.
 
-V10 preserves the pinned V9 baseline and admits only name/status mutation on
-project metadata. Project identity, custody, audience facts, receipts, and audit
-history remain protected. An explicit stopped-state V9-to-V10 transition copies
-existing projects as active and preserves retained data. Startup does not
-silently migrate or reset an older database. Activation and rollback remain in
-the existing Authority operator lane with matching code and state.
+The combined V10 baseline includes these settings and the meeting-approval
+changes in [ADR-0017](ADR-0017-project-meeting-approval-v1.md). It admits only
+name/status mutation on project metadata; project identity, custody, audience
+facts, receipts, and audit history remain protected. Historical V9 bytes stay
+pinned.
+
+On 2026-09-26 the founder confirmed that all existing data is disposable and
+there are no live users. The combined implementation therefore targets fresh
+Authority V10, record-log V4, retrieval facts V3, and retrieval content/lexical V2
+databases. It adds no V9-to-V10 preservation migration. Startup rejects older
+state instead of silently migrating or resetting it. Any reset or activation
+still follows the existing Authority operator lane.
+
+New meeting approvals follow the same archive admission rule as uploads:
+archived projects are excluded from offered choices, and an approval frozen
+before archive must recheck selected projects before it can create records or
+associations. Already approved records and explicitly shared transcripts retain
+their existing audience rules. Leaving revokes the corresponding project access.
 
 ## Invariant trace and verification
 
@@ -114,7 +126,7 @@ Focused coverage must prove lead-only settings changes; last-lead rejection;
 leave retry after self-revocation; active/archived cursor separation; retained
 read and Ask access after archive; note/document admission and association
 rejection on archived targets; accepted-upload replay and processing continuity;
-and migration preservation. Desktop coverage must exercise settings actions,
+and the combined fresh schema. Desktop coverage must exercise settings actions,
 Archived discovery, archived capture prevention, and navigation after leave.
 
 ## Explicit exclusions

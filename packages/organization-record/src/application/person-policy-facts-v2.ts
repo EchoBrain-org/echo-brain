@@ -1,5 +1,6 @@
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonPolicyIdV2,
   type PersonPolicyFactItemKindV2,
@@ -319,7 +320,8 @@ function action(value: unknown, label: string): PersonHumanActActionV2 {
 function policyId(value: unknown, label: string): PersonPolicyIdV2 {
   if (
     value !== RESTRICTED_REVIEWER_PERSON_POLICY_ID &&
-    value !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
+    value !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID &&
+    value !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID
   ) {
     return invalid(`${label} is unsupported`);
   }
@@ -799,6 +801,12 @@ export function projectPersonPolicyFactsV2(
           policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
           reviewer_principal_id: witness.authorization_allow.principal_id,
           reviewer_membership_id: witness.authorization_allow.membership_id,
+        });
+      }
+      if (approvedRef.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) {
+        return Object.freeze({
+          ...common,
+          policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
         });
       }
       return Object.freeze({

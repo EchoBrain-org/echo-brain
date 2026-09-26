@@ -6,7 +6,8 @@ import { applyAuthorityBaselineV5, authorityBaselineSha256V5 } from '@echo-brain
 import { copyAuthorityV5ToV6 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/authority-v5-to-v6';
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
-const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v2";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2]);
 import { persistedApprovalWorkflowFixtureV1 } from "./fixtures/persisted-approval-workflow-v1.js";
 import { createPrivateSlackApprovalWorkflowBundleV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-workflow-bundle-v1";
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../../../tests/support/telemetry-fixture-vocabulary-v1.js";
@@ -72,6 +73,7 @@ import type {
 } from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
 import { createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
+import { createPrivateSlackBlockApprovalPolicyProjectorV2 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2";
 import { createReadableSearchGenerationReconcilerV1, readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { FileOrganizationAuthoritySigner } from "../src/adapters/security/file-organization-authority-signer.js";
@@ -80,6 +82,7 @@ import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-rout
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
 import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "../../../providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v1.js";
+import { privateSlackApprovalBlockKitActionIdV2 } from "../../../providers/slack/server/src/private-approval/private-slack-approval-block-kit-card-v2.js";
 import { bootstrapOrganizationAuthorityState } from "../src/composition/organization-authority-state-bootstrap.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
 import type {
@@ -632,19 +635,37 @@ async function admittedFixture(input: {
   };
 }
 
-async function activeFixture() {
+async function activeFixture(input: {
+  readonly seed_project?: boolean;
+  readonly canary_only?: boolean;
+} = {}) {
   const fixture = await admittedFixture({
     seed_private_slack_connection: true,
   });
-  const runtime = await openOrganizationAuthorityService(fixture.config, {
+  if (input.seed_project === true) {
+    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
+    try {
+      const project_id = "prj_11111111-1111-4111-8111-111111111111";
+      authority.prepare(`INSERT INTO authority_projects_v1 (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,?,'Launch',?,?,?,'owner')`).run(project_id, fixture.initialized.organization_id, NOW, fixture.initialized.owner_principal_id, fixture.initialized.owner_membership_id);
+      authority.prepare(`INSERT INTO authority_project_memberships_v1 (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at,revoked_at) VALUES ('pgm_11111111-1111-4111-8111-111111111111',?,?,?,?,?,'lead','active',?,NULL)`).run(project_id, fixture.initialized.organization_id, fixture.initialized.owner_principal_id, fixture.initialized.owner_membership_id, "owner", NOW);
+    } finally { authority.close(); }
+  }
+  const config = input.canary_only === true
+    ? { ...fixture.config, authority_url: "https://authority-staging.echobrain.org",
+        oidc: { ...fixture.config.oidc, redirect_uri: "https://authority-staging.echobrain.org/v2/session/oidc/callback" } }
+    : fixture.config;
+  const source = input.canary_only === true ? fakeSource(fixture.source.identity, 0) : fixture.source;
+  const runtime = await openOrganizationAuthorityService(config, {
     processing_adapter_overrides: {
-      source: fixture.source,
+      source,
       processor: fakeProcessor(fixture.processorIdentity),
       private_approval_card_poster: fixture.poster,
     },
   });
   return {
     ...fixture,
+    config,
+    source,
     runtime,
   };
 }
@@ -676,7 +697,7 @@ async function approvalSeamFixture(provider: "slack" | "fixture", interruptions:
       },
       answer_composition_generation_bundle: { load: () => ({ generation: { generation_adapter_id: "fixture-generation", planner_model: "fixture-planner", answer_model: "fixture-answer", timeout_ms: 1000 },
         structured_output: { async generate() { throw new Error("fixture generation unexpected"); } } }) },
-      record_policy_fact_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), ...(provider === "slack" ? [createPrivateSlackBlockApprovalPolicyProjectorV1()] : [])]),
+      record_policy_fact_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), ...(provider === "slack" ? [createPrivateSlackBlockApprovalPolicyProjectorV1(), createPrivateSlackBlockApprovalPolicyProjectorV2()] : [])]),
     }, { api: { oidc_provider: new TestPersonOidcProvider() } });
   };
   return { fixture, contexts, open,
@@ -701,11 +722,11 @@ function cardParts(card: PublishedCard["card"]) {
   const blocks = card.blocks as ReadonlyArray<Record<string, unknown>>;
   const policy = blocks.find(
     (block) =>
-      block.type === "input" && String(block.block_id).endsWith("-policy-v1"),
+      block.type === "input" && /-policy-v[12]$/.test(String(block.block_id)),
   );
   const comment = blocks.find(
     (block) =>
-      block.type === "input" && String(block.block_id).endsWith("-comment-v1"),
+      block.type === "input" && /-comment-v[12]$/.test(String(block.block_id)),
   );
   const actions = blocks.find((block) => block.type === "actions");
   if (policy === undefined || comment === undefined || actions === undefined)
@@ -715,22 +736,22 @@ function cardParts(card: PublishedCard["card"]) {
   const elements = actions.elements as ReadonlyArray<Record<string, unknown>>;
   const identity = JSON.parse(String(elements[0]?.value)) as {
     readonly approval_id: string;
+    readonly schema_version?: number;
   };
+  const schema_version = identity.schema_version === 2 ? 2 : 1;
   const approve = elements.find(
     (element) =>
       element.action_id ===
-      privateSlackApprovalBlockKitActionIdV1(
-        identity,
-        PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve,
-      ),
+      (schema_version === 1
+        ? privateSlackApprovalBlockKitActionIdV1(identity, PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.approve)
+        : privateSlackApprovalBlockKitActionIdV2(identity, "approve")),
   );
   const reject = elements.find(
     (element) =>
       element.action_id ===
-      privateSlackApprovalBlockKitActionIdV1(
-        identity,
-        PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.reject,
-      ),
+      (schema_version === 1
+        ? privateSlackApprovalBlockKitActionIdV1(identity, PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1.reject)
+        : privateSlackApprovalBlockKitActionIdV2(identity, "reject")),
   );
   if (approve === undefined || reject === undefined)
     throw new Error("published card has no terminal buttons");
@@ -740,6 +761,7 @@ function cardParts(card: PublishedCard["card"]) {
     actions,
     policyElement,
     commentElement,
+    schema_version,
     approve,
     reject,
   };
@@ -752,7 +774,10 @@ async function clickCard(input: {
   readonly action: "approve" | "reject";
   readonly policy_id:
     | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
-    | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID;
+    | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
+    | "project-members-readable-person-v1";
+  readonly project_ids?: readonly string[];
+  readonly share_transcript?: boolean;
   readonly comment?: string;
   readonly request_timestamp?: string;
 }): Promise<Response> {
@@ -805,6 +830,34 @@ async function clickCard(input: {
             value: input.comment ?? null,
           },
         },
+        ...(parts.schema_version === 2
+          ? (() => {
+              const projectBlock = (input.card.card.blocks as readonly Record<string, unknown>[]).find(
+                (block) => block.type === "input" && String(block.block_id).endsWith("-projects-v2"),
+              );
+              const transcriptBlock = (input.card.card.blocks as readonly Record<string, unknown>[]).find(
+                (block) => block.type === "input" && String(block.block_id).endsWith("-share-transcript-v2"),
+              );
+              const projectState = projectBlock === undefined ? {} : {
+                [projectBlock.block_id as string]: {
+                  [(projectBlock.element as Record<string, unknown>).action_id as string]: {
+                    type: "multi_static_select",
+                    selected_options: (input.project_ids ?? []).map((project_id) => ({ text: { type: "plain_text", text: project_id, emoji: false }, value: project_id })),
+                  },
+                },
+              };
+              if (transcriptBlock === undefined) throw new Error("published V2 card lacks transcript control");
+              return {
+                ...projectState,
+                [transcriptBlock.block_id as string]: {
+                  [(transcriptBlock.element as Record<string, unknown>).action_id as string]: {
+                    type: "checkboxes",
+                    selected_options: input.share_transcript === true ? [{ text: { type: "plain_text", text: "Share", emoji: false }, value: "share-transcript-v1" }] : [],
+                  },
+                },
+              };
+            })()
+          : {}),
       },
     },
     actions: [
@@ -1322,7 +1375,7 @@ describe("Organization Authority runtime private approval lane", () => {
             record_input_codecs: RECORD_INPUT_CODECS,
             state_directory: fixture.initialized.state_directory, root, authority, record,
             signer: FileOrganizationAuthoritySigner.openExisting({ directory: join(fixture.initialized.state_directory, "keys"), authority_id: root.authority_id, organization_id: root.organization_id }),
-            policy_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV1()]),
+            policy_projectors: createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV1(), createPrivateSlackBlockApprovalPolicyProjectorV2()]),
             related_atom_projector: {
               profile: { generation_adapter_id: OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 },
               structured_output: { generate },
@@ -1521,6 +1574,98 @@ describe("Organization Authority runtime private approval lane", () => {
       authority.close();
       control.close();
       await fixture.runtime.close();
+    }
+  });
+
+  it("approves selected Projects with an explicit transcript release through the composed runtime", async () => {
+    const fixture = await activeFixture({ seed_project: true });
+    const record = openOrganizationRecordDatabase(join(fixture.initialized.state_directory, "record-log.sqlite"), { fileMustExist: true });
+    try {
+      await waitFor(() => fixture.errors.length > 0 || fixture.poster.published.length === 1, "project private approval card");
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      const card = fixture.poster.published[0]!;
+      const parts = cardParts(card.card);
+      expect(parts.schema_version).toBe(2);
+      expect((parts.policyElement.options as readonly { readonly value: string }[]).map((option) => option.value)).toContain("project-members-readable-person-v1");
+      expect((await clickCard({ fixture, card, action: "approve", policy_id: "project-members-readable-person-v1", project_ids: ["prj_11111111-1111-4111-8111-111111111111"], share_transcript: true })).status).toBe(200);
+      await waitFor(() => fixture.errors.length > 0 || (record.prepare("SELECT count(*) AS count FROM organization_record_log").get() as { count: number }).count === 1, "project V4 append");
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      expect(record.prepare("SELECT project_id FROM organization_record_project_members_readable_person_record_fact").all()).toEqual([{ project_id: "prj_11111111-1111-4111-8111-111111111111" }]);
+      expect(record.prepare("SELECT project_id FROM organization_record_project_association_v1").all()).toEqual([{ project_id: "prj_11111111-1111-4111-8111-111111111111" }]);
+      expect(record.prepare("SELECT source_id,revision_id FROM organization_record_meeting_transcript_grant_v1").all()).toHaveLength(1);
+    } finally { await fixture.runtime.close(); record.close(); }
+  });
+
+  it.each([false, true])("runs the single canary through custody, project approval and transcript release (share=%s)", async (shareTranscript) => {
+    const fixture = await activeFixture({ seed_project: true, canary_only: true });
+    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, "authority.sqlite"), { fileMustExist: true });
+    const record = openOrganizationRecordDatabase(join(fixture.initialized.state_directory, "record-log.sqlite"), { fileMustExist: true });
+    const projectId = "prj_11111111-1111-4111-8111-111111111111";
+    const canary = { canary_id: "project-source-canary", owner_email: "founder@example.com", observed_at: NOW };
+    const progress = () => authority.prepare("SELECT cursor,cursor_version FROM authority_live_source_progress_v2").get();
+    try {
+      await waitFor(() => fixture.source.pulls() > 0, "empty provider poll");
+      const originalProgress = progress();
+      const result = await fixture.runtime.run_staging_synthetic_private_dm_canary!(canary);
+      expect(result).toMatchObject({ kind: "staged", reused_frozen_extraction: false });
+      expect(fixture.poster.published).toHaveLength(1);
+      expect(progress()).toEqual(originalProgress);
+      const card = fixture.poster.published[0]!;
+      expect(cardParts(card.card).schema_version).toBe(2);
+      const blocks = card.card.blocks as ReadonlyArray<Record<string, unknown>>;
+      const projectPicker = blocks.find(block => /-projects-v2$/.test(String(block.block_id)));
+      expect(projectPicker).toMatchObject({ element: { options: [{ value: projectId }] } });
+      const transcriptToggle = blocks.find(block => /-transcript-v2$/.test(String(block.block_id)));
+      expect(transcriptToggle).toBeDefined();
+      expect(transcriptToggle?.element).not.toHaveProperty("initial_options");
+      expect(record.prepare("SELECT count(*) AS count FROM organization_record_log").get()).toEqual({ count: 0 });
+      const source = authority.prepare(`
+        SELECT revision.source_id,revision.revision_id,('sha256:' || revision.revision_sha256) AS source_sha256,
+               contents.content_json
+          FROM authority_source_revisions_v1 revision
+          JOIN authority_source_contents_v1 contents USING (organization_id,source_id,revision_id)
+          JOIN authority_sources_v1 source USING (organization_id,source_id)
+         WHERE source.adapter_id = 'synthetic-staging-canary'
+      `).get() as { source_id: string; revision_id: string; source_sha256: string; content_json: string };
+      const retained = JSON.parse(source.content_json) as { content: ReadonlyArray<{ kind: string; text: string }> };
+      const transcript = retained.content.find(block => block.kind === "transcript")?.text;
+      expect(transcript).toContain("Synthetic staging canary transcript.");
+      const citation = { kind: "approved_meeting_transcript", approval_id: card.approval_id,
+        source_id: source.source_id, revision_id: source.revision_id, source_sha256: source.source_sha256 };
+      const readTranscript = () => fetch(`http://127.0.0.1:${fixture.runtime.address.port}/v1/person/meeting-transcripts/read`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${fixture.owner_access_token}`, "content-type": "application/json" },
+        body: JSON.stringify({ schema_version: 1, scope: { kind: "project", project_id: projectId }, citation }),
+      });
+      expect((await readTranscript()).status).toBe(401);
+      expect((await clickCard({ fixture, card, action: "approve", policy_id: "project-members-readable-person-v1",
+        project_ids: [projectId], share_transcript: shareTranscript })).status).toBe(200);
+      await waitFor(() => fixture.errors.length > 0 || (record.prepare("SELECT count(*) AS count FROM organization_record_log").get() as { count: number }).count === 1, "canary project record append");
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      expect(record.prepare("SELECT project_id FROM organization_record_project_members_readable_person_record_fact").all()).toEqual([{ project_id: projectId }]);
+      expect(record.prepare("SELECT project_id FROM organization_record_project_association_v1").all()).toEqual([{ project_id: projectId }]);
+      expect(record.prepare("SELECT source_id,revision_id,source_sha256 FROM organization_record_meeting_transcript_grant_v1").all()).toEqual(
+        shareTranscript ? [{ source_id: source.source_id, revision_id: source.revision_id, source_sha256: source.source_sha256 }] : [],
+      );
+      const released = await readTranscript();
+      expect(released.status).toBe(shareTranscript ? 200 : 401);
+      if (shareTranscript) expect(await released.json()).toMatchObject({ text: transcript, next_offset: null, citation });
+
+      const replay = await fixture.runtime.run_staging_synthetic_private_dm_canary!({ ...canary, observed_at: "2026-08-22T12:01:00.000Z" });
+      expect(replay).toMatchObject({ kind: "staged", reused_frozen_extraction: true, approval_id: card.approval_id });
+      expect(fixture.poster.published).toHaveLength(1);
+      expect(authority.prepare("SELECT count(*) AS count FROM authority_source_revisions_v1").get()).toEqual({ count: 1 });
+      expect(record.prepare("SELECT count(*) AS count FROM organization_record_log").get()).toEqual({ count: 1 });
+      expect(progress()).toEqual(originalProgress);
+      if (shareTranscript) {
+        authority.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=?")
+          .run("2026-08-22T12:02:00.000Z", projectId);
+        expect((await readTranscript()).status).toBe(401);
+      }
+    } finally {
+      await fixture.runtime.close();
+      record.close();
+      authority.close();
     }
   });
 

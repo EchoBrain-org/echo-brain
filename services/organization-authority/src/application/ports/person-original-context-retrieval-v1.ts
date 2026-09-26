@@ -1,4 +1,5 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
+import type { PersonMeetingTranscriptCitationV1 } from "@echo-brain/organization-api";
 import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-authority-kernel/shared/released-source-context-v1";
 
 /** The caller-selected boundary; global is still limited to the actor's ACL. */
@@ -31,6 +32,45 @@ export interface OriginalContextRetrievalResultV1 {
 }
 
 /**
+ * Structural view of the record package's immutable witness. It contains no
+ * source bytes; Authority applies its policy inside the current authorization
+ * fence before opening existing source custody.
+ */
+export interface ApprovedMeetingTranscriptGrantV1 {
+  readonly approval_id: string;
+  readonly record_position: number;
+  readonly record_sha256: Sha256Digest;
+  readonly policy_id:
+    | "restricted-reviewer-person-v2"
+    | "organization-member-readable-person-v2"
+    | "project-members-readable-person-v1";
+  readonly policy_contract_sha256: Sha256Digest;
+  readonly source_id: string;
+  readonly revision_id: string;
+  readonly source_sha256: Sha256Digest;
+  readonly reviewer_principal_id: string | null;
+  readonly reviewer_membership_id: string | null;
+  readonly audience_project_ids: readonly string[];
+  readonly association_project_ids: readonly string[];
+}
+
+export interface ApprovedMeetingTranscriptGrantReaderV1 {
+  find(input: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly approval_id: string;
+  }): ApprovedMeetingTranscriptGrantV1 | null;
+}
+
+export interface ApprovedMeetingTranscriptReadV1 {
+  readonly scope: PersonAskScopeV2;
+  readonly citation: PersonMeetingTranscriptCitationV1;
+  readonly text: string;
+  readonly next_offset: number | null;
+}
+
+/**
  * Layer-3 port for immutable Person-upload originals. Implementations release
  * only content that is readable at retrieval time and revalidate every atom
  * before Layer 4 can return an answer.
@@ -52,6 +92,16 @@ export interface PersonOriginalContextRetrievalPortV1 {
     readonly scope: PersonAskScopeV2;
     readonly citation: OriginalContextCitationV1;
   }): { readonly scope: PersonAskScopeV2; readonly atom: ReleasedSourceContextAtomV1 };
+  /**
+   * Explicit, approved, page-bounded raw-meeting release. This does not add
+   * meetings to `retrieve`, so Ask remains unable to discover transcripts.
+   */
+  readApprovedMeetingTranscript(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+    readonly citation: PersonMeetingTranscriptCitationV1;
+    readonly offset?: number;
+  }): ApprovedMeetingTranscriptReadV1;
 }
 
 /** A source citation omits evidence text and presentation-only labels. */

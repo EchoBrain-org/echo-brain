@@ -4,7 +4,7 @@ import { validateProjectContextAudienceV1, validatePersonDocumentSearchV1, valid
 import { readUpdateFile } from './update-file.js';
 import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validatePersonUploadAudienceV2, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1, validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
-import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
+import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolCommandV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -52,6 +52,8 @@ const OPTIONS = {
   "source-id": { type: "string" },
   "revision-id": { type: "string" },
   "source-sha256": { type: "string" },
+  "approval-id": { type: "string" },
+  offset: { type: "string" },
   "representation-sha256": { type: "string" },
   "anchor-sha256": { type: "string" },
   "audience-project-id": { type: "string" },
@@ -143,6 +145,10 @@ const RULES: Readonly<
     accepts: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256", "document-id", "project"],
     requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
   },
+  transcript: {
+    accepts: ["approval-id", "source-id", "revision-id", "source-sha256", "project", "offset"],
+    requires: ["approval-id", "source-id", "revision-id", "source-sha256"],
+  },
   records: { accepts: ["limit", "query", "record-sha256"] },
   exclusions: {
     accepts: ["source-adapter-id", "source-instance-id"],
@@ -184,6 +190,7 @@ Commands:
   status      Show client build identity and sign-in state.
   logout      Remove the local session.
   ask         Ask a question over records you may read.
+  transcript  Read an explicitly approved meeting transcript page.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
   projects    Create projects, manage members, and browse permitted context.
@@ -215,6 +222,10 @@ Ask one question using at most 240 Unicode code points, 1–32 distinct normaliz
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
 Reads one bounded immutable source-evidence packet cited by Ask. Use the exact citation fields. The server rechecks your current access and project association before returning it; this never downloads an original file.
+`,
+  transcript: `usage: echo-brain person transcript --approval-id <id> --source-id <source-id> --revision-id <id> --source-sha256 <sha256:64hex> [--project <project-id>] [--offset <code-point>]
+
+Reads one bounded page from an explicitly approved meeting transcript. The meeting is not searched by Ask and source custody alone never grants this read. Use the approval's exact source coordinates; follow next_offset with --offset when present.
 `,
   directory: `usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
 
@@ -1197,6 +1208,28 @@ export async function runPersonClientCli(
               anchor_sha256: requiredText(values, "anchor-sha256"),
               ...(values["document-id"] === undefined ? {} : { document_id: requiredText(values, "document-id") }),
             },
+          })),
+        });
+        break;
+      }
+      case "transcript": {
+        const project_id = values.project === undefined
+          ? undefined
+          : validateProjectIdV1(requiredText(values, "project"));
+        const offset = values.offset === undefined ? undefined : Number(values.offset);
+        print(stdout, {
+          ok: true,
+          result: await client.readMeetingTranscript(validatePersonMeetingTranscriptReadRequestV1({
+            schema_version: 1,
+            scope: project_id === undefined ? { kind: "global" } : { kind: "project", project_id },
+            citation: {
+              kind: "approved_meeting_transcript",
+              approval_id: requiredText(values, "approval-id"),
+              source_id: requiredText(values, "source-id"),
+              revision_id: requiredText(values, "revision-id"),
+              source_sha256: requiredText(values, "source-sha256"),
+            },
+            ...(offset === undefined ? {} : { offset }),
           })),
         });
         break;

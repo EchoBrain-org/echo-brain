@@ -15,9 +15,10 @@ decision_ids:
   - ADR-0007
   - ADR-0010
   - ADR-0015
+  - ADR-0017
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Clean V1 current-Person Layer 1 listing and Layer 2 exact-generation search release, the ADR-0010 rebuild-time related-atom projection boundary, plus the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -78,6 +79,14 @@ Project scope additionally checks current membership and actual association
 without widening audience. Revalidate all evidence supplied to the answerer,
 including uncited sources, before response release. A revision or representation
 reference is provenance, not continuing permission to read it.
+
+ADR-0017 extends this same boundary to approved meeting transcripts only when
+the exact human approval explicitly grants transcript release. The retained
+source revision digest must match that grant, and its committed content hash
+must verify before release. Current audience and,
+when requested, project association are checked before content access and again
+at release; a missing, disabled or mismatched grant releases no content. This
+does not admit generic meeting snapshots into original-context search or Ask.
 
 ## Verification and change procedure
 

@@ -1,7 +1,7 @@
--- Authority baseline V10: project context plus raw Person uploads and optional
--- search enrichment. Fresh initialization only; existing V9 custody uses the
--- explicit offline V9-to-V10 transition, and this file is never an in-place
--- upgrade.
+-- Authority baseline V10: project settings and frozen private approval cards,
+-- plus project context, raw Person uploads, and optional search enrichment.
+-- Fresh initialization only; no V9-to-V10 transition or backfill exists, and
+-- this file is never an in-place upgrade.
 
 CREATE TABLE authority_metadata (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -584,6 +584,7 @@ CREATE TABLE authority_live_approval_outbox_v2 (
   state TEXT NOT NULL CHECK (state IN ('queued', 'posting', 'posted', 'staged', 'superseded')),
   provider_message_ts TEXT UNIQUE,
   frozen_card_sha256 TEXT CHECK (frozen_card_sha256 LIKE 'sha256:%'),
+  private_approval_card_v2_json TEXT CHECK (private_approval_card_v2_json IS NULL OR (json_valid(private_approval_card_v2_json) AND json_type(private_approval_card_v2_json) = 'object')),
   approved_snapshot_json TEXT CHECK (approved_snapshot_json IS NULL OR (json_valid(approved_snapshot_json) AND json_type(approved_snapshot_json) = 'object')),
   approved_snapshot_sha256 TEXT CHECK (approved_snapshot_sha256 LIKE 'sha256:%'),
   post_started_at TEXT CHECK (post_started_at IS NULL OR unixepoch(post_started_at) IS NOT NULL),
@@ -1260,7 +1261,11 @@ BEFORE UPDATE ON authority_live_approval_outbox_v2
 WHEN NEW.candidate_id != OLD.candidate_id
   OR NEW.approval_id != OLD.approval_id
   OR NEW.stage_command_id != OLD.stage_command_id
-  OR (OLD.state = 'queued' AND NEW.state NOT IN ('posting', 'superseded'))
+  OR (OLD.state = 'queued' AND NOT (
+    NEW.state IN ('posting', 'superseded') OR
+    (NEW.state = 'queued' AND OLD.private_approval_card_v2_json IS NULL
+      AND NEW.private_approval_card_v2_json IS NOT NULL)
+  ))
   OR (OLD.state = 'posting' AND NEW.state NOT IN ('queued', 'posted', 'superseded'))
   OR (OLD.state = 'posted' AND NEW.state NOT IN ('staged', 'superseded'))
   OR (OLD.state = 'staged' AND NEW.state NOT IN ('superseded'))
@@ -1745,6 +1750,12 @@ BEGIN
      SET revision = revision + 1
    WHERE organization_id = NEW.organization_id;
 END;
+
+CREATE TRIGGER authority_live_approval_outbox_v2_private_card_v2_immutable
+BEFORE UPDATE OF private_approval_card_v2_json ON authority_live_approval_outbox_v2
+WHEN OLD.private_approval_card_v2_json IS NOT NULL
+  AND NEW.private_approval_card_v2_json IS NOT OLD.private_approval_card_v2_json
+BEGIN SELECT RAISE(ABORT, 'authority outbox V2 private approval card is immutable'); END;
 CREATE TRIGGER authority_project_auth_revision_project_membership_insert
 AFTER INSERT ON authority_project_memberships_v1
 BEGIN

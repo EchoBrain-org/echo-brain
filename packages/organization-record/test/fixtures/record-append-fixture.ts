@@ -21,6 +21,7 @@ import {
   buildHumanActRecordInputV1,
   validateApprovedDecisionSnapshotV2,
   type HumanActEventV1,
+  type PersonContentPolicyIdV2,
 } from "../../../organization-protocol/src/human-act-record-input-v1.js";
 import {
   createOrganizationRecordReceiptV2,
@@ -58,6 +59,7 @@ import {
 import { openOrganizationRecordDatabase } from "../../src/persistence/open-organization-record-database.js";
 import {
   applyOrganizationRecordLogBaselineV3,
+  applyOrganizationRecordLogBaselineV4,
 } from "../../src/persistence/record-log-baseline.js";
 
 export const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1]);
@@ -113,6 +115,18 @@ export function protocolAuthority(): ProtocolAuthority {
 export function database(): ReturnType<typeof openOrganizationRecordDatabase> {
   const value = openOrganizationRecordDatabase(":memory:");
   applyOrganizationRecordLogBaselineV3(value);
+  initializeMetadata(value);
+  return value;
+}
+
+export function databaseV4(): ReturnType<typeof openOrganizationRecordDatabase> {
+  const value = openOrganizationRecordDatabase(":memory:");
+  applyOrganizationRecordLogBaselineV4(value);
+  initializeMetadata(value);
+  return value;
+}
+
+function initializeMetadata(value: ReturnType<typeof openOrganizationRecordDatabase>): void {
   value
     .prepare(
       `INSERT INTO organization_record_log_metadata (
@@ -125,7 +139,6 @@ export function database(): ReturnType<typeof openOrganizationRecordDatabase> {
       COORDINATES.state_lineage_id,
       "2026-08-21T12:00:00.000Z",
     );
-  return value;
 }
 
 export function policy(policy_id: PersonPolicyIdV2) {
@@ -149,7 +162,7 @@ export function policy(policy_id: PersonPolicyIdV2) {
 export function humanAct(
   approval_id: string,
   action: PersonHumanActActionV2,
-  policy_id: PersonPolicyIdV2,
+  policy_id: PersonContentPolicyIdV2,
   signal_count: number,
   signal_counts?: {
     readonly decisions?: number;
@@ -472,7 +485,7 @@ export function appendInput(input: {
   readonly authority: ProtocolAuthority;
   readonly approval_id?: string;
   readonly action?: PersonHumanActActionV2;
-  readonly policy_id?: PersonPolicyIdV2;
+  readonly policy_id?: PersonContentPolicyIdV2;
   readonly signal_count?: number;
   readonly signal_counts?: {
     readonly decisions?: number;

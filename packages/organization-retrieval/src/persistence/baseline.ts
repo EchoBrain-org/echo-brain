@@ -20,6 +20,7 @@ import {
  */
 export const READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1 = 1;
 export const READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2 = 2;
+export const READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3 = 3;
 
 export interface ReadableSearchPlaneBaselineV1 {
   readonly plane: ReadableSearchPlane;
@@ -31,10 +32,20 @@ export interface ReadableSearchPlaneBaselineV2
   extends ReadableSearchPlaneBaselineV1 {
   readonly schema_version: 2;
 }
+export interface ReadableSearchPlaneBaselineV3
+  extends ReadableSearchPlaneBaselineV1 {
+  readonly schema_version: 3;
+}
 
 export type ReadableSearchPlaneBaseline =
   | ReadableSearchPlaneBaselineV1
-  | ReadableSearchPlaneBaselineV2;
+  | ReadableSearchPlaneBaselineV2
+  | ReadableSearchPlaneBaselineV3;
+export const READABLE_SEARCH_FACTS_BASELINE_V3: ReadableSearchPlaneBaselineV3 = {
+  plane: 'facts', application_id: READABLE_SEARCH_FACTS_DATABASE.application_id,
+  schema_version: 3,
+  baseline_sql_url: new URL('../../baselines/readable-search-facts-baseline-v3.sql', import.meta.url),
+};
 
 /**
  * Facts-plane v2 adds only the disposable, segment-local related-atom pairs.
@@ -59,6 +70,11 @@ export const READABLE_SEARCH_CONTENT_BASELINE_V1: ReadableSearchPlaneBaselineV1 
     import.meta.url,
   ),
 };
+export const READABLE_SEARCH_CONTENT_BASELINE_V2: ReadableSearchPlaneBaselineV2 = {
+  plane: 'content', application_id: READABLE_SEARCH_CONTENT_DATABASE.application_id,
+  schema_version: 2,
+  baseline_sql_url: new URL('../../baselines/readable-search-content-baseline-v2.sql', import.meta.url),
+};
 
 export const READABLE_SEARCH_LEXICAL_BASELINE_V1: ReadableSearchPlaneBaselineV1 = {
   plane: 'lexical',
@@ -67,6 +83,11 @@ export const READABLE_SEARCH_LEXICAL_BASELINE_V1: ReadableSearchPlaneBaselineV1 
     '../../baselines/readable-search-lexical-baseline-v1.sql',
     import.meta.url,
   ),
+};
+export const READABLE_SEARCH_LEXICAL_BASELINE_V2: ReadableSearchPlaneBaselineV2 = {
+  plane: 'lexical', application_id: READABLE_SEARCH_LEXICAL_DATABASE.application_id,
+  schema_version: 2,
+  baseline_sql_url: new URL('../../baselines/readable-search-lexical-baseline-v2.sql', import.meta.url),
 };
 
 export function readableSearchPlaneBaselineSql(

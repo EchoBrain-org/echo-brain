@@ -145,16 +145,6 @@ class HostProtocol(unittest.TestCase):
         with self.assertRaises(host.Refused):
             host.validate_request(legacy)
 
-    def test_v9_to_v10_dispatch_keeps_the_bounded_stage_arguments(self):
-        self.install()
-        request = self.request('stage-v9-to-v10')
-        for name in host.TOOLS:
-            del request['files'][name]['base64']
-        result = self.execute(request)
-        self.assertTrue(result['ok'], result)
-        self.assertEqual(self.calls[-1][0], 'stage-v9-to-v10')
-        self.assertEqual(self.calls[-1][1::2], ['--release', '--runtime-profile'])
-
     def test_v4_install_cannot_omit_changed_or_candidate_bytes(self):
         for name in ('update-clean-v1.sh', 'candidate.json', 'runtime-profile.json'):
             request = self.request('install')

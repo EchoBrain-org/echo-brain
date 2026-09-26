@@ -132,10 +132,6 @@
     "./adapters/persistence/sqlite/authority-v8-to-v9": {
       "types": "./dist/adapters/persistence/sqlite/authority-v8-to-v9.d.ts",
       "import": "./dist/adapters/persistence/sqlite/authority-v8-to-v9.js"
-    },
-    "./adapters/persistence/sqlite/authority-v9-to-v10": {
-      "types": "./dist/adapters/persistence/sqlite/authority-v9-to-v10.d.ts",
-      "import": "./dist/adapters/persistence/sqlite/authority-v9-to-v10.js"
     }
   },
   "files": [

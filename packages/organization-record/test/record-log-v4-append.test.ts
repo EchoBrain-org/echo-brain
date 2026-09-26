@@ -17,6 +17,7 @@ import {
 } from "../../../packages/organization-protocol/src/record-envelope-v4.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID
 } from "../src/application/person-policy-fact-contracts-v2.js";
 import {
@@ -29,13 +30,73 @@ import {
   type V4RecordEnvelopeView
 } from "../src/log/record-log-v4-append.js";
 import { PersonRecordReaderV1 } from "../src/retrieve/person-record-reader-v1.js";
+import { ApprovedMeetingTranscriptGrantReaderV1 } from "../src/retrieve/approved-meeting-transcript-grant-reader-v1.js";
 import {
   RecordRetrievalSourceSnapshotPortV1,
   type RecordRetrievalSourceVerifiedEnvelopeV1,
 } from "../src/retrieve/record-retrieval-source-snapshot-v1.js";
-import { COORDINATES, RECORD_INPUT_CODECS, appendInput, database, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
+import { COORDINATES, RECORD_INPUT_CODECS, appendInput, database, databaseV4, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
 
 describe("V4 organization-record append", () => {
+  it("append-atomically stores project audience, association, and exact transcript grant facts", async () => {
+    const db = databaseV4();
+    try {
+      const semantic = sha256Digest("project-facts-semantic-key");
+      const source_sha256 = sha256Digest("project-facts-source");
+      const envelope: V4RecordEnvelopeView & JsonObject = {
+        record_sha256: sha256Digest("project-facts-record"),
+        body: {
+          schema_version: 4, kind: "echo-organization-record-envelope-v4",
+          envelope_id: "envelope-project-facts", ...COORDINATES,
+          semantic_idempotency_key: semantic, predecessor_position: null,
+          predecessor_record_sha256: null,
+          human_act_resolution_ref: {
+            ...COORDINATES, approval_id: "approval-project-facts", action: "approve",
+            policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
+            policy_contract_sha256: sha256Digest("project-policy-contract"),
+            audience_project_ids: ["prj_alpha", "prj_beta"],
+            association_project_ids: ["prj_alpha", "prj_beta"],
+            share_transcript: true,
+            transcript_source: { source_id: "source-1", revision_id: "revision-1", source_sha256 },
+            audit_event_id: "audit-project-facts", audit_sequence: 1,
+            audit_entry_sha256: sha256Digest("audit-project-facts"),
+            provider_action_kind: "test-project-action-v1", provider_action_schema_version: 1,
+            provider_action_sha256: sha256Digest("action-project-facts"),
+            authorization_proof_sha256: sha256Digest("proof-project-facts"),
+          },
+          event: { kind: "approved", approved_snapshot: { approved_payload: { brief: { decisions: [], actions: [], rationales: [] } } } },
+        },
+      } as V4RecordEnvelopeView & JsonObject;
+      const projectors = createRecordPolicyFactProjectorRegistryV1([{
+        id: "test-project-action-v1",
+        matches: () => true,
+        project: () => ({ facts: [], policy_fact_outcome: { kind: "appended", policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID } }),
+        policyBinding: () => ({ policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, policy_contract_sha256: sha256Digest("project-policy-contract") }),
+      }]);
+      const app = new OrganizationRecordAppenderV4(db, COORDINATES, projectors);
+      await app.append({
+        approval_id: "approval-project-facts", action: "approve", semantic_idempotency_key: semantic,
+        receipt_issued_at: "2026-08-21T12:02:00.000Z", authorization_witness: {},
+        envelope_factory: { create: async () => envelope, verify: () => envelope },
+        receipt_factory: {
+          createSeed: ({ envelope: receiptEnvelope, position, issued_at }) => ({ schema_version: 2, kind: "echo-organization-record-receipt-v2", ...COORDINATES, envelope_id: receiptEnvelope.body.envelope_id, semantic_idempotency_key: semantic, event_kind: "approved", record_position: position, record_sha256: receiptEnvelope.record_sha256, predecessor_record_sha256: null, record_head_position: position, record_head_sha256: receiptEnvelope.record_sha256, issued_at }),
+          sign: async ({ receipt_seed }) => ({ body: receipt_seed as JsonObject }), verify: ({ receipt }) => receipt as JsonObject,
+        },
+      });
+      expect(db.prepare("SELECT project_id FROM organization_record_project_members_readable_person_record_fact ORDER BY project_id").all()).toEqual([{ project_id: "prj_alpha" }, { project_id: "prj_beta" }]);
+      expect(db.prepare("SELECT project_id FROM organization_record_project_association_v1 ORDER BY project_id").all()).toEqual([{ project_id: "prj_alpha" }, { project_id: "prj_beta" }]);
+      expect(
+        new PersonRecordReaderV1(db).list({
+          ...COORDINATES,
+          principal_id: "principal-current",
+          membership_id: "membership-current",
+          project_ids: ["prj_alpha", ...Array.from({ length: 20 }, (_, index) => `prj_other_${index}`)],
+        }),
+      ).toHaveLength(1);
+      expect(new ApprovedMeetingTranscriptGrantReaderV1(db).find({ ...COORDINATES, approval_id: "approval-project-facts" })).toMatchObject({ source_id: "source-1", revision_id: "revision-1", source_sha256, audience_project_ids: ["prj_alpha", "prj_beta"], association_project_ids: ["prj_alpha", "prj_beta"] });
+    } finally { db.close(); }
+  });
+
   it("uses the same append and retrieval-source path with a non-Slack policy projector", async () => {
     const db = database();
     try {

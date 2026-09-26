@@ -594,11 +594,15 @@ describe("workspace source boundaries", () => {
       ],
       "packages/organization-record": [
         "organization-record-log-baseline-v3.sql",
+        "organization-record-log-baseline-v4.sql",
       ],
       "packages/organization-retrieval": [
         "readable-search-content-baseline-v1.sql",
+        "readable-search-content-baseline-v2.sql",
         "readable-search-facts-baseline-v2.sql",
+        "readable-search-facts-baseline-v3.sql",
         "readable-search-lexical-baseline-v1.sql",
+        "readable-search-lexical-baseline-v2.sql",
       ],
     };
 

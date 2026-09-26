@@ -9,11 +9,11 @@ import {
   expandReadableSearchRelatedAtomsV1,
   READABLE_SEARCH_ADMISSION_BUDGET_V1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V2,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_V3,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
   readableSearchPlaneBaselineSha256,
-  readableSearchPlaneBaselineSha256V1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
   searchReadableSearchGenerationV1,
   warmReadableSearchActiveGenerationV1,
@@ -35,7 +35,7 @@ function input(
   const plane = (
     role: string,
     schema_sha256: `sha256:${string}`,
-    database_schema_version: 1 | 2 = 1,
+    database_schema_version: 1 | 2 | 3 = 1,
   ) => {
     const manifest_json = canonicalJson({
       schema_version: 1,
@@ -65,20 +65,16 @@ function input(
       planes: {
         facts: plane(
           "retrieval-facts",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V2),
-          2,
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V3),
+          3,
         ),
         content: plane(
           "retrieval-content",
-          readableSearchPlaneBaselineSha256V1(
-            READABLE_SEARCH_CONTENT_BASELINE_V1,
-          ),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_CONTENT_BASELINE_V2), 2,
         ),
         lexical: plane(
           "retrieval-lexical",
-          readableSearchPlaneBaselineSha256V1(
-            READABLE_SEARCH_LEXICAL_BASELINE_V1,
-          ),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_LEXICAL_BASELINE_V2), 2,
         ),
       },
     },
@@ -160,6 +156,64 @@ function relatedPair(
 }
 
 describe("immutable readable-search generation v1", () => {
+  it("admits a project audience union, then narrows scores and adjacency by the authoritative project scope", () => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      const projectPolicy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
+      const alpha = {
+        ...atom("project-alpha", projectPolicy),
+        text: "alpha roadmap",
+        text_sha256: digest("alpha roadmap"),
+        audience_project_ids: ["prj_alpha", "prj_beta"],
+        association_project_ids: ["prj_alpha"],
+      };
+      const beta = {
+        ...atom("project-beta", projectPolicy),
+        atom_order: 1,
+        text: "beta roadmap",
+        text_sha256: digest("beta roadmap"),
+        audience_project_ids: ["prj_alpha", "prj_beta"],
+        association_project_ids: ["prj_beta"],
+      };
+      const pair = [alpha, beta]
+        .map((value) => value.atom_id)
+        .sort() as [`sha256:${string}`, `sha256:${string}`];
+      const built = buildReadableSearchGenerationV1({
+        ...input(directory, [alpha, beta]),
+        project_members_policy_contract_sha256: digest(`policy-${projectPolicy}`),
+        related_atom_pairs: [{ left_atom_id: pair[0], right_atom_id: pair[1] }],
+      });
+      const active = {
+        generation_id: built.manifest.generation_id,
+        manifest_sha256: built.manifest_sha256,
+        retrieval_contract_sha256: built.manifest.retrieval_contract_sha256,
+        exact_head: built.manifest.exact_head,
+      };
+      warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation: active });
+      const alphaReader = { principal_id: "prn_alpha", membership_id: "mem_alpha", project_ids: ["prj_alpha"] };
+      expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: alphaReader, query: "roadmap" }).items.map((item) => item.text)).toEqual(["alpha roadmap", "beta roadmap"]);
+      expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: alphaReader, project_id: "prj_alpha", query: "roadmap" }).items.map((item) => item.text)).toEqual(["alpha roadmap"]);
+      expect(() => searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: alphaReader, project_id: "prj_beta", query: "roadmap" })).toThrow("project scope");
+      expect(() => searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: { ...alphaReader, project_ids: [] }, query: "roadmap" })).not.toThrow();
+      expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: { ...alphaReader, project_ids: [] }, query: "roadmap" }).items).toEqual([]);
+      expect(expandReadableSearchRelatedAtomsV1({ state_directory: directory, active_generation: active, reader: alphaReader, project_id: "prj_alpha", anchor_atom_ids: [alpha.atom_id] }).items).toEqual([]);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it("fails closed when a project-policy atom lacks the frozen audience or association facts", () => {
+    const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+    try {
+      const projectPolicy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
+      const incomplete = {
+        ...atom("project-incomplete", projectPolicy),
+        audience_project_ids: ["prj_alpha"],
+      };
+      expect(() => buildReadableSearchGenerationV1({
+        ...input(directory, [incomplete]),
+        project_members_policy_contract_sha256: digest(`policy-${projectPolicy}`),
+      })).toThrow("association_project_ids");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
   it("batches each segment's plane writes in one transaction", () => {
     const directory = mkdtempSync(
       join(tmpdir(), "echo-readable-search-generation-"),

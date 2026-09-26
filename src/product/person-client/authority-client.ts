@@ -5,14 +5,19 @@ import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/orga
 import {
   PERSON_ANSWER_PATH_V2,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
+  PERSON_MEETING_TRANSCRIPT_PATH_V1,
   validatePersonAnswerRequestV2,
   validatePersonAnswerResponseV3,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
+  validatePersonMeetingTranscriptReadRequestV1,
+  validatePersonMeetingTranscriptV1,
   type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
   type PersonAnswerResponseV3 as OrganizationPersonAnswerV3,
   type PersonSourceEvidenceReadRequestV1,
   type PersonSourceEvidenceV1,
+  type PersonMeetingTranscriptReadRequestV1,
+  type PersonMeetingTranscriptV1,
   type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import {
@@ -105,13 +110,15 @@ export interface PersonRecordSearchItemV1 {
   readonly text: string;
   readonly policy_id:
     | "organization-member-readable-person-v2"
-    | "restricted-reviewer-person-v2";
+    | "restricted-reviewer-person-v2"
+    | "project-members-readable-person-v1";
 }
 
 /** Current global-or-project Ask response. V1 remains available for old installed clients. */
 export type PersonAnswerV3 = OrganizationPersonAnswerV3;
 export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
+export type PersonMeetingTranscriptReadV1 = PersonMeetingTranscriptV1;
 
 export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
@@ -457,7 +464,8 @@ function validatePersonRecordSearch(
       item.text.length === 0 ||
       item.text !== item.text.normalize("NFC") ||
       (item.policy_id !== "organization-member-readable-person-v2" &&
-        item.policy_id !== "restricted-reviewer-person-v2")
+        item.policy_id !== "restricted-reviewer-person-v2" &&
+        item.policy_id !== "project-members-readable-person-v1")
     ) {
       throw new Error("record search item is invalid");
     }
@@ -1369,6 +1377,23 @@ export class PersonAuthorityClient {
       canonicalJson(citation) !== canonicalJson(request.citation)
     ) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different source evidence coordinates');
+    }
+    return response;
+  }
+
+  async readMeetingTranscript(accessToken: string, value: PersonMeetingTranscriptReadRequestV1): Promise<PersonMeetingTranscriptV1> {
+    const request = validatePersonMeetingTranscriptReadRequestV1(value);
+    const response = await this.json({
+      path: PERSON_MEETING_TRANSCRIPT_PATH_V1,
+      body: request,
+      validate_request: validatePersonMeetingTranscriptReadRequestV1,
+      validate_response: validatePersonMeetingTranscriptV1,
+      access_token: accessToken,
+      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+      timeout_ms: DEFAULT_TIMEOUT_MS,
+    });
+    if (canonicalJson(response.scope) !== canonicalJson(request.scope) || canonicalJson(response.citation) !== canonicalJson(request.citation)) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different meeting transcript coordinates');
     }
     return response;
   }

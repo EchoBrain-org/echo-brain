@@ -6,9 +6,10 @@
  * fence proves only the server-owned Authority commitments in one SQLite
  * transaction before policy resolution is allowed.
  */
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import { PRIVATE_APPROVAL_AUTHORIZATION_ALLOW_KIND, type ApprovalContractSha256 } from "../organization-control-plane/slack-approval-integration-v1.js";
 import { validatePendingPrivateApprovalV1, type PendingPrivateApprovalV1, type PrivateApprovalAuthorizationAllowV1 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
+import { validatePendingPrivateApprovalV2, type PendingPrivateApprovalV2, type PrivateApprovalAuthorizationAllowV2 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import { validatePrivateApprovalSlackCardBindingV1, type PrivateApprovalAuthorityFenceV1, type PrivateApprovalSlackCardBindingV1, type StablePrivateApprovalAuthorityFenceV1 } from "../organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import type Database from "better-sqlite3";
 
@@ -74,6 +75,9 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
         currentMembership: (
           input: Parameters<PrivateApprovalAuthorityFenceV1["currentMembership"]>[0],
         ) => this.currentMembership(input),
+        currentProjectMemberships: (input: {
+          readonly principal_id: string; readonly membership_id: string; readonly project_ids: readonly string[];
+        }) => this.currentProjectMemberships(input),
         revalidatePrivateApprovalAuthorization: (
           input: Parameters<
             PrivateApprovalAuthorityFenceV1["revalidatePrivateApprovalAuthorization"]
@@ -140,17 +144,19 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
   }
 
   private revalidatePrivateApprovalAuthorization(input: {
-    readonly pending: PendingPrivateApprovalV1;
+    readonly pending: PendingPrivateApprovalV1 | PendingPrivateApprovalV2;
     readonly card_binding: PrivateApprovalSlackCardBindingV1;
     readonly lookup: unknown;
-  }): PrivateApprovalAuthorizationAllowV1 | undefined {
+  }): PrivateApprovalAuthorizationAllowV1 | PrivateApprovalAuthorizationAllowV2 | undefined {
     // Provider lookup values are intentionally unused here. They are only
     // independently revalidated by the Control Plane's Slack presentation fence.
     void input.lookup;
-    let pending: PendingPrivateApprovalV1;
+    let pending: PendingPrivateApprovalV1 | PendingPrivateApprovalV2;
     let card: PrivateApprovalSlackCardBindingV1;
     try {
-      pending = validatePendingPrivateApprovalV1(input.pending);
+      pending = input.pending.schema_version === 2
+        ? validatePendingPrivateApprovalV2(input.pending)
+        : validatePendingPrivateApprovalV1(input.pending);
       card = validatePrivateApprovalSlackCardBindingV1(input.card_binding);
     } catch {
       return undefined;
@@ -191,9 +197,16 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
     const active = this.currentMembership(pending.assigned_owner);
     if (active === undefined) return undefined;
 
+    if (pending.schema_version === 2) {
+      const delivery = this.database.prepare(`SELECT private_approval_card_v2_json
+        FROM authority_live_approval_outbox_v2 WHERE approval_id=? AND candidate_id=?`)
+        .get(pending.approval_id, candidate.candidate_id) as { readonly private_approval_card_v2_json: string | null } | undefined;
+      if (delivery?.private_approval_card_v2_json !== canonicalJson(pending)) return undefined;
+    }
+
     const proof = canonicalSha256({
-      schema_version: 1,
-      kind: AUTHORIZATION_PROOF_KIND,
+      schema_version: pending.schema_version,
+      kind: pending.schema_version === 2 ? "echo-private-approval-authority-fence-proof-v2" : AUTHORIZATION_PROOF_KIND,
       authority_id: metadata.authority_id,
       organization_id: metadata.organization_id,
       candidate: Object.freeze({
@@ -227,9 +240,7 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
       card_binding: card,
       active_membership: active,
     }) as ApprovalContractSha256;
-    return Object.freeze({
-      schema_version: 1,
-      kind: PRIVATE_APPROVAL_AUTHORIZATION_ALLOW_KIND,
+    const common = {
       approval_id: pending.approval_id,
       organization_id: metadata.organization_id,
       candidate_sha256: pending.candidate_sha256,
@@ -238,7 +249,37 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
       authorized_assignee: active,
       current_slack_identity_link: pending.assigned_owner_slack_identity_link,
       authorization_proof_sha256: proof,
-    });
+    };
+    return pending.schema_version === 2
+      ? Object.freeze({ schema_version: 2, kind: "echo-private-approval-authorization-allow-v2", ...common })
+      : Object.freeze({ schema_version: 1, kind: PRIVATE_APPROVAL_AUTHORIZATION_ALLOW_KIND, ...common });
+  }
+
+  private currentProjectMemberships(input: {
+    readonly principal_id: string;
+    readonly membership_id: string;
+    readonly project_ids: readonly string[];
+  }): readonly { readonly project_id: string; readonly project_membership_id: string }[] | undefined {
+    if (this.currentMembership(input) === undefined || input.project_ids.length > 20 ||
+        input.project_ids.some((id, index) => !/^prj_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) ||
+          index > 0 && input.project_ids[index - 1]! >= id)) return undefined;
+    const grants: { readonly project_id: string; readonly project_membership_id: string }[] = [];
+    for (const projectId of input.project_ids) {
+      const grant = this.database.prepare(`SELECT grant.project_id, grant.project_membership_id
+        FROM authority_project_memberships_v1 AS grant
+        JOIN authority_projects_v1 AS project ON project.organization_id=grant.organization_id
+          AND project.project_id=grant.project_id
+        JOIN authority_metadata AS metadata ON metadata.singleton=1 AND metadata.organization_id=grant.organization_id
+        JOIN authority_memberships AS membership ON membership.organization_id=grant.organization_id
+          AND membership.principal_id=grant.principal_id AND membership.membership_id=grant.membership_id
+          AND membership.membership_type=grant.membership_type
+        WHERE grant.project_id=? AND grant.principal_id=? AND grant.membership_id=?
+          AND grant.status='active' AND membership.status='active' AND project.status='active'`)
+        .get(projectId, input.principal_id, input.membership_id) as { readonly project_id: string; readonly project_membership_id: string } | undefined;
+      if (grant === undefined) return undefined;
+      grants.push(Object.freeze({ ...grant }));
+    }
+    return Object.freeze(grants);
   }
 
   private currentCandidate(
@@ -287,7 +328,7 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
 
   private assignmentMatches(
     assignment: AssignmentRow,
-    pending: PendingPrivateApprovalV1,
+    pending: PendingPrivateApprovalV1 | PendingPrivateApprovalV2,
     card: PrivateApprovalSlackCardBindingV1,
   ): boolean {
     return (

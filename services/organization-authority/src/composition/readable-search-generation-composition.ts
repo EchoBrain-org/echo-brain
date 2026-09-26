@@ -12,6 +12,7 @@ import {
   organizationAuthorityPinSha256,
   organizationMemberReadablePersonPolicyContractSha256,
   restrictedReviewerPersonPolicyContractSha256,
+  projectMembersReadablePersonPolicyContractSha256,
   verifyOrganizationAuthorityPin,
   verifyOrganizationRecordEnvelopeV4,
 } from "@echo-brain/organization-protocol";
@@ -25,17 +26,16 @@ import {
   clearReadableSearchActiveGenerationV1,
   READABLE_SEARCH_ADMISSION_BUDGET_V1,
   READABLE_SEARCH_READER_BEHAVIOR_V1,
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V2,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_V3,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
   READABLE_SEARCH_BM25_B,
   READABLE_SEARCH_BM25_K1,
   READABLE_SEARCH_SCORE_SCALE,
   READABLE_SEARCH_SCORER_ID,
   readableSearchPlaneBaselineSha256,
-  readableSearchPlaneBaselineSha256V1,
   warmReadableSearchActiveGenerationV1,
   type ReadableSearchAtomV1,
   type ReadableSearchLineagePlaneV1,
@@ -159,6 +159,7 @@ export interface ReadableSearchGenerationContractV1 {
   readonly retrieval_contract_sha256: Sha256Digest;
   readonly organization_member_policy_contract_sha256: Sha256Digest;
   readonly restricted_reviewer_policy_contract_sha256: Sha256Digest;
+  readonly project_members_policy_contract_sha256: Sha256Digest;
   readonly analyzer: {
     readonly analyzer_contract_sha256: Sha256Digest;
     readonly analyzer_source_sha256: Sha256Digest;
@@ -179,6 +180,7 @@ export function readableSearchGenerationContractV1(input: Readonly<{
     organizationMemberReadablePersonPolicyContractSha256();
   const restrictedReviewerPolicy =
     restrictedReviewerPersonPolicyContractSha256();
+  const projectMembersPolicy = projectMembersReadablePersonPolicyContractSha256();
   const analyzerSource = sha256Digest(
     canonicalJson(READABLE_SEARCH_ANALYZER_RELEASE_V4),
   );
@@ -213,6 +215,12 @@ export function readableSearchGenerationContractV1(input: Readonly<{
       kind: "echo-clean-permission-aware-readable-search-contract-v1",
       analyzer,
       policies: [
+        {
+          policy_id: "project-members-readable-person-v1",
+          policy_contract_sha256: projectMembersPolicy,
+          reader: "current-active-member-of-any-audience-project",
+          scope: "selected-project-requires-current-membership-and-record-association",
+        },
         {
           policy_id: "organization-member-readable-person-v2",
           policy_contract_sha256: organizationMemberPolicy,
@@ -249,6 +257,7 @@ export function readableSearchGenerationContractV1(input: Readonly<{
     }),
     organization_member_policy_contract_sha256: organizationMemberPolicy,
     restricted_reviewer_policy_contract_sha256: restrictedReviewerPolicy,
+    project_members_policy_contract_sha256: projectMembersPolicy,
     analyzer,
     source_revision: READABLE_SEARCH_SOURCE_REVISION_V1,
     builder_artifact_sha256: sha256Digest(
@@ -281,6 +290,7 @@ function visibilitySegmentKey(atom: RecordRetrievalSourceSnapshotV1["atoms"][num
     policy_contract_sha256: atom.policy_contract_sha256,
     reviewer_principal_id: atom.reviewer_principal_id,
     reviewer_membership_id: atom.reviewer_membership_id,
+    ...("audience_project_ids" in atom ? { audience_project_ids: atom.audience_project_ids } : {}),
   });
 }
 
@@ -445,7 +455,7 @@ function lineagePlane(
     "retrieval-facts" | "retrieval-content" | "retrieval-lexical"
   >,
   schemaSha256: Sha256Digest,
-  databaseSchemaVersion: 1 | 2 =
+  databaseSchemaVersion: 1 | 2 | 3 =
     READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
 ): ReadableSearchLineagePlaneV1 {
   const body = validateStateLineageDatabaseManifestV1({
@@ -501,22 +511,24 @@ export function createReadableSearchGenerationReconcilerV1(input: {
   const facts = lineagePlane(
     input.root,
     "retrieval-facts",
-    readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V2),
-    READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
+    readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V3),
+    READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
   );
   const content = lineagePlane(
     input.root,
     "retrieval-content",
-    readableSearchPlaneBaselineSha256V1(
-      READABLE_SEARCH_CONTENT_BASELINE_V1,
+    readableSearchPlaneBaselineSha256(
+      READABLE_SEARCH_CONTENT_BASELINE_V2,
     ),
+    READABLE_SEARCH_CONTENT_BASELINE_V2.schema_version,
   );
   const lexical = lineagePlane(
     input.root,
     "retrieval-lexical",
-    readableSearchPlaneBaselineSha256V1(
-      READABLE_SEARCH_LEXICAL_BASELINE_V1,
+    readableSearchPlaneBaselineSha256(
+      READABLE_SEARCH_LEXICAL_BASELINE_V2,
     ),
+    READABLE_SEARCH_LEXICAL_BASELINE_V2.schema_version,
   );
   const sqliteVersion = (
     input.record.prepare("SELECT sqlite_version() AS version").get() as {
@@ -607,6 +619,8 @@ export function createReadableSearchGenerationReconcilerV1(input: {
             authorization_proof_sha256: atom.authorization_proof_sha256,
             reviewer_principal_id: atom.reviewer_principal_id,
             reviewer_membership_id: atom.reviewer_membership_id,
+            ...(atom.audience_project_ids === undefined ? {} : { audience_project_ids: atom.audience_project_ids }),
+            ...(atom.association_project_ids === undefined ? {} : { association_project_ids: atom.association_project_ids }),
           });
         },
       );
@@ -629,6 +643,7 @@ export function createReadableSearchGenerationReconcilerV1(input: {
           contract.organization_member_policy_contract_sha256,
         restricted_reviewer_policy_contract_sha256:
           contract.restricted_reviewer_policy_contract_sha256,
+        project_members_policy_contract_sha256: contract.project_members_policy_contract_sha256,
         analyzer: contract.analyzer,
         source_revision: contract.source_revision,
         builder_artifact_sha256: contract.builder_artifact_sha256,

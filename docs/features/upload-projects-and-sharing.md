@@ -99,13 +99,15 @@ admission checks to the exact V10 baseline while preserving those upload facts.
 
 The explicit offline V8-to-V9 copier validates exact V8 source custody and creates
 a separate V9 snapshot, preserving original bytes, legacy payload hashes, source
-identities and existing associations. Current staging uses the reviewed
+identities and existing associations. Historical V9 candidates use the reviewed
 `stage-v8-to-v9` lane with the host stopped for conversion and verification.
 Ordinary stage does not silently migrate data. Rollback restores the retained V8
 snapshot before its matching image. Follow the
 [Authority operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md)
 for the candidate's exact release approval and checks.
 
-The subsequent explicit V9-to-V10 transition preserves those originals and
-initializes all existing projects as active. It adds project rename and archive
-state, not a new upload audience or a content-deletion operation.
+The combined project-settings and meeting-approval release uses fresh Authority
+V10, record-log V4 and current retrieval databases. Existing development data is
+disposable and there are no live users, so this version adds no V9-to-V10
+preservation migration. New projects begin active. Archive is reversible and
+does not delete uploaded content or change its audience.

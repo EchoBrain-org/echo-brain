@@ -2,21 +2,23 @@
 
 This directory contains the small release boundary used after the first live
 organization release. It selects exact artifacts and provides explicit, state-preserving
-V9-to-V10, V8-to-V9 and historical V5-to-V6 staging transitions. It does not manage client fleets.
+historical V8-to-V9 and V5-to-V6 staging transitions. It does not manage client fleets.
 
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current Authority V10, private-approval control-plane V3, record-log V3, and
-six-role V2 root lineage. For populated state, `stage` pulls the immutable
+current Authority V10, private-approval control-plane V3, record-log V4,
+retrieval facts V3, retrieval content/lexical V2, and six-role V2 root lineage.
+For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
 mutation. The named [V5-to-V6 staging migration](#state-preserving-v5-to-v6-staging-migration)
 preserves an accepted V5 organization only for a historical V6 candidate. It
 cannot prepare state for V10. The explicit [V8-to-V9 staging migration](#state-preserving-v8-to-v9-staging-migration)
-preserves an accepted V8 organization for the multi-project upload release.
-The [V9-to-V10 staging migration](#state-preserving-v9-to-v10-staging-migration)
-preserves that organization while adding rename and reversible project archive.
+preserves an accepted V8 organization for a historical V9 multi-project upload release.
+Neither operation prepares the combined project-settings and meeting-approval
+V10 release. This combined version uses fresh databases: the founder confirmed
+that existing development data is disposable and there are no live users.
 The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
 as described in the [PC-01 handoff](../../docs/product/2026-09-21-project-context-pc01-persistence.md).
 Other incompatible baselines require an
@@ -244,37 +246,10 @@ recovery as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. A change that needs a schema
 migration requires a separately named operation. The supported transitions
-are the named V9-to-V10 and V8-to-V9 migrations and historical V5-to-V6 migration below.
-If persisted state lacks the candidate's exact V10/V3/V3 databases and
+are the historical V8-to-V9 and V5-to-V6 migrations below.
+If persisted state lacks the candidate's exact V10/V3/V4 databases, current retrieval schemas, and
 V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
-
-### State-preserving V9-to-V10 staging migration
-
-Use `plan --action stage-v9-to-v10` through the reviewed release CLI after
-installing merged tooling. This requires an accepted, healthy V9 staging host
-and the exact V10 project-settings candidate. Use the same accepted release,
-candidate release, runtime-profile, and receipt inputs as `stage`.
-
-The existing stopped-state migration wrapper invokes `copyAuthorityV9ToV10`
-inside the candidate image with a read-only V9 source and empty destination.
-Every existing project begins `active`. Original bytes, audiences, associations,
-memberships, receipts, and audit history are preserved; only the Authority schema
-and its lineage digest advance. The other five storage roles remain unchanged.
-Ordinary `stage` refuses an older schema and performs no implicit conversion.
-
-This uses the same copy bounds, locks, ownership checks, validation, human gates,
-and recovery rules described for V8-to-V9 below. Its release-bound journal and
-retained original snapshot live under
-`clean-data/release/state-v9-to-v10/<candidate-release-id>/`. Conflicting migration
-journals for one candidate are refused. Rollback restores the original V9 state
-and matching accepted runtime; candidate-period writes remain in `failed-state`
-and are not merged back. Exclude ordinary user traffic until qualification.
-
-The transition is bound to the candidate's exact schema digest, not just the
-number V10. Other development changes that independently introduce a V10 schema
-must be reconciled into one reviewed baseline before a combined release.
-This code path is not authorization to deploy or promote a candidate.
 
 ### State-preserving V8-to-V9 staging migration
 
@@ -567,7 +542,6 @@ is installed; the new installed tools must match the executing reviewed source.
 | `inspect-install` | Checks the actual install guards and old-or-new reviewed tooling hashes without replacing tools or invoking runtime behavior. Returns a strictly allowlisted readiness/refusal diagnostic. |
 | `status` | Fresh installed-wrapper runtime check, not a cached polling receipt. |
 | `stage` | No staged candidate; uses exact candidate/profile. A drifted environment returns `environment_drift`. |
-| `stage-v9-to-v10` | Explicit stopped-state copy for project settings on the accepted V9 staging host; existing projects begin active and original state is retained for rollback. Same inputs as `stage`. |
 | `stage-v8-to-v9` | Explicit stopped-state copy and migration on the accepted V8 staging host; retains original state for rollback. Same inputs as `stage`. |
 | `stage-v5-to-v6` | Explicit stopped-state copy and migration on the accepted V5 staging host; retains original state for rollback. Same inputs as `stage`. |
 | `canary` | Requires the exact staged candidate; stops for the human to approve its private Slack card. `delivery_pending` is safe to retry with a new canary operation after the first invocation has definitively completed. |

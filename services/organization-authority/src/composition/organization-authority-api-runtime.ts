@@ -5,6 +5,7 @@ import { createPersonDocumentUploadStagingV1 } from '../adapters/files/document-
 import { startPersonDocumentProcessingV1 } from './person-document-processing-v1.js';
 import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
+import { createRecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
 import { createPersonToolsHttpApplicationV3 } from '../presentation/person-tools-http-application-v3.js';
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { once } from "node:events";
@@ -12,10 +13,16 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   PersonRecordReaderV1,
+  ApprovedMeetingTranscriptGrantReaderV1,
   openOrganizationRecordDatabase,
   type RecordApproverProjectorV1,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { expandReadableSearchRelatedAtomsV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
+import {
+  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256,
+  RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
+} from "@echo-brain/organization-control-plane/record-visibility-policy-contracts-v1";
 import type { AddressInfo } from "node:net";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
@@ -40,7 +47,7 @@ import {
   createPersonAnswerRouteV1,
   type AnswerCompositionFailureEventV1,
 } from "./person-answer-route.js";
-import { createPersonAnswerV2Route } from "./person-answer-v2-route.js";
+import { createPersonAnswerV2Route, createPersonMeetingTranscriptReadRouteV1 } from "./person-answer-v2-route.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import type { AnswerCompositionGenerationBindingV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
@@ -197,6 +204,9 @@ export async function startOrganizationAuthorityApiRuntime(
       },
     });
     const readAudit = new SqlitePersonRecordReadAuditV1(database);
+    const transcriptGrants = new ApprovedMeetingTranscriptGrantReaderV1(recordDatabase);
+    const projectRepository = new SqliteProjectContextRepositoryV1(database);
+    const captureProjects = createRecordProjectAuthorizationV1(projectRepository);
     const recordSearch = createPersonRecordSearchRouteV1({
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
@@ -209,9 +219,25 @@ export async function startOrganizationAuthorityApiRuntime(
       authority: database,
       record: recordDatabase,
       audit: readAudit,
+      capture_projects: captureProjects,
       expand_related_atoms: expandReadableSearchRelatedAtomsV1,
     });
     const documents = new SqlitePersonDocumentRepositoryV1(database);
+    const originals = new SqlitePersonOriginalContextRetrievalV1(
+      database,
+      sessions,
+      metadata.organization_id,
+      {
+        authority_id: metadata.authority_id,
+        state_lineage_id: lineage.root.state_lineage_id,
+        grants: transcriptGrants,
+        is_expected_policy_contract: grant => (
+          (grant.policy_id === "organization-member-readable-person-v2" && grant.policy_contract_sha256 === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256) ||
+          (grant.policy_id === "restricted-reviewer-person-v2" && grant.policy_contract_sha256 === RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256) ||
+          (grant.policy_id === "project-members-readable-person-v1" && grant.policy_contract_sha256 === PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256)
+        ),
+      },
+    );
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
       on_failure: dependencies.person_source_failure ?? (event => console.error(JSON.stringify(event))),
     });
@@ -229,6 +255,7 @@ export async function startOrganizationAuthorityApiRuntime(
         state_lineage_id: lineage.root.state_lineage_id,
         sessions,
         records: new PersonRecordReaderV1(recordDatabase),
+        capture_projects: captureProjects,
         record_approver: dependencies.record_approver,
         memberships: {
           membership: (id) => repository.read((transaction) => transaction.membership(id)),
@@ -236,6 +263,7 @@ export async function startOrganizationAuthorityApiRuntime(
         audit: readAudit,
       }),
       person_record_search: recordSearch,
+      person_meeting_transcript: createPersonMeetingTranscriptReadRouteV1({ originals }),
       ...(dependencies.answer_composition_generation === undefined
         ? {}
         : {
@@ -262,11 +290,7 @@ export async function startOrganizationAuthorityApiRuntime(
               organization_id: metadata.organization_id,
               state_lineage_id: lineage.root.state_lineage_id,
               records: recordSearch,
-              originals: new SqlitePersonOriginalContextRetrievalV1(
-                database,
-                sessions,
-                metadata.organization_id,
-              ),
+              originals,
               model: dependencies.answer_composition_generation.structured_output,
               generation: dependencies.answer_composition_generation.generation,
               audit: new SqlitePersonAnswerCompositionAuditV1(database),
@@ -282,7 +306,7 @@ export async function startOrganizationAuthorityApiRuntime(
       document_upload_staging: createPersonDocumentUploadStagingV1(),
       project_context: createProjectContextApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
-        repository: new SqliteProjectContextRepositoryV1(database),
+        repository: projectRepository,
       }),
       person_employees: createPersonEmployeeHttpApplication(
         new PersonEmployeeLifecycleApplication(sessions, {

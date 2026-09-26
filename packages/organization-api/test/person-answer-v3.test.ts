@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   PERSON_ANSWER_PATH_V2,
+  PERSON_MEETING_TRANSCRIPT_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   validatePersonAnswerRequestV2,
   validatePersonAnswerResponseV3,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
+  validatePersonMeetingTranscriptReadRequestV1,
+  validatePersonMeetingTranscriptV1,
 } from '../src/index.js';
 
 const project_id = 'prj_00000000-0000-4000-8000-000000000001';
@@ -74,6 +77,29 @@ describe('Person Ask V3 public contract', () => {
       citation: { ...citation, label: 'MRD' },
       text: 'MRD\n\nReview before launch.',
     })).toMatchObject({ citation: { label: 'MRD' }, text: 'MRD\n\nReview before launch.' });
+  });
+
+  it('validates the explicit, page-bounded approved-meeting transcript contract', () => {
+    const citation = {
+      kind: 'approved_meeting_transcript' as const,
+      approval_id: 'apr_approval_fixture',
+      source_id,
+      revision_id: 'r1',
+      source_sha256,
+    };
+    expect(PERSON_MEETING_TRANSCRIPT_PATH_V1).toBe('/v1/person/meeting-transcripts/read');
+    expect(validatePersonMeetingTranscriptReadRequestV1({ schema_version: 1, scope: { kind: 'project', project_id }, citation, offset: 4 }))
+      .toEqual({ schema_version: 1, scope: { kind: 'project', project_id }, citation, offset: 4 });
+    expect(validatePersonMeetingTranscriptV1({
+      schema_version: 1,
+      kind: 'echo-person-meeting-transcript-v1',
+      scope: { kind: 'project', project_id },
+      citation,
+      text: 'Approved transcript page.',
+      next_offset: 27,
+    })).toMatchObject({ citation, next_offset: 27 });
+    expect(() => validatePersonMeetingTranscriptReadRequestV1({ schema_version: 1, scope: { kind: 'global' }, citation, unknown: true })).toThrow();
+    expect(() => validatePersonMeetingTranscriptV1({ schema_version: 1, kind: 'echo-person-meeting-transcript-v1', scope: { kind: 'global' }, citation, text: 'Page', next_offset: 0, extra: true })).toThrow();
   });
 
   it.each([

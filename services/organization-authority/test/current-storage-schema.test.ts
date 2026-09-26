@@ -7,16 +7,16 @@ import { bootstrapOrganizationAuthorityState } from "../src/composition/organiza
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { authorityBaselineSha256V9, authorityBaselineSha256V10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { organizationControlBaselineSha256V3 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
-import { organizationRecordLogBaselineSha256V3 } from "@echo-brain/organization-record/organization-record-api-v1";
+import { organizationRecordLogBaselineSha256V4 } from "@echo-brain/organization-record/organization-record-api-v1";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 it("pins the current baseline bytes", () => {
   expect(authorityBaselineSha256V9()).toBe("sha256:16da0d9d4f7cdd33c6f30001ec460644d8144d35bf4faa1062504ee037d1d163");
-  expect(authorityBaselineSha256V10()).toBe("sha256:200a6db1f0bfd91bf464c1b2868c680f3dca4363bc4d6a42dabd5416cb3f903a");
+  expect(authorityBaselineSha256V10()).toBe("sha256:5a4054e97453f8b0abef844a1eda569b22ff54f2fbd8e4c41acda2ede1a2be76");
   expect(organizationControlBaselineSha256V3()).toBe("sha256:9aa161419d77355058151d2dd41283594802fe6da62f62f4aa92dbce01029c69");
-  expect(organizationRecordLogBaselineSha256V3()).toBe("sha256:af089bff08b84aef53d4323084264d06d4620e9e0dc28a505f30ca4d7324221b");
+  expect(organizationRecordLogBaselineSha256V4()).toBe("sha256:b98091c9073ca1d1146d9f2b6d6b0cb7c950e829dbf26c7c431485370c76e52a");
 });
 
 it("initializes only the active storage roles and tables", () => {
@@ -31,7 +31,7 @@ it("initializes only the active storage roles and tables", () => {
   expect(verification.root.schema_version).toBe(2);
   expect(verification.root.databases).toHaveLength(6);
   expect(existsSync(join(state, "record-derived.sqlite"))).toBe(false);
-  for (const [file, count, version] of [["authority.sqlite", 49, 10], ["integrations.sqlite", 11, 3], ["record-log.sqlite", 5, 3]] as const) {
+  for (const [file, count, version] of [["authority.sqlite", 49, 10], ["integrations.sqlite", 11, 3], ["record-log.sqlite", 9, 4]] as const) {
     const db = new Database(join(state, file), { readonly: true, fileMustExist: true });
     try {
       expect(db.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'echo_state_lineage_manifest'").get()).toEqual({ n: count });

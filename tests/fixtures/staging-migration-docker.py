@@ -32,7 +32,7 @@ if args[0] == 'run':
     assert args[args.index('--user') + 1] == f'{os.getuid()}:{os.getgid()}'
     mounts = dict((parts['dst'], parts) for value in [args[i + 1] for i, item in enumerate(args) if item == '--mount'] for parts in [dict(item.split('=', 1) if '=' in item else (item, True) for item in value.split(','))])
     script = args[-1]
-    if 'copyAuthorityV5ToV6' in script or 'copyAuthorityV8ToV9' in script or 'copyAuthorityV9ToV10' in script:
+    if 'copyAuthorityV5ToV6' in script or 'copyAuthorityV8ToV9' in script:
         assert stopped.exists(), 'conversion requires stopped services'
         assert mounts['/source']['readonly'] is True and 'readonly' not in mounts['/candidate']
         if (root / 'fail-conversion').exists(): raise SystemExit(1)
@@ -43,18 +43,13 @@ if args[0] == 'run':
         image = args[args.index('--input-type=module') - 1]
         accepted = image == os.environ['ECHO_TEST_ACCEPTED_IMAGE']
         if not accepted and (root / 'fail-candidate-verify').exists(): raise SystemExit(1)
-        # This fixture rehearses historical V5 -> V6 and V8 -> V9 images,
-        # plus the current V9 -> V10 transition. Only the V10 candidate uses
-        # the current verifier unchanged; the historical V9 candidate gets
-        # its exact V9 pin below.
-        if os.environ.get('ECHO_TEST_MIGRATION_FROM') == '9' and not accepted:
-            # The V10 candidate executes the complete verifier and immutable
-            # processor-admission check without replacing any pin.
-            script = script.replace('/echo-clean/state', state)
-            raise SystemExit(execute_node(script))
+        # Rehearse only the historical Authority V5 -> V6 and V8 -> V9
+        # file transitions. Other fixture planes stay on current baselines.
+        # Substitute the historical Authority pin in this fixture verifier;
+        # never relax the current product verifier. This does not establish
+        # an upgrade path to the combined fresh V10 schema.
         source = pathlib.Path('packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js').resolve()
-        previous = os.environ.get('ECHO_TEST_MIGRATION_FROM', '5')
-        historical_version = previous if accepted else ('9' if previous == '8' else '6')
+        historical_version = os.environ.get('ECHO_TEST_MIGRATION_FROM', '5') if accepted else os.environ.get('ECHO_TEST_MIGRATION_CANDIDATE_VERSION', '6')
         script, replacements = re.subn(
             r'\b(AUTHORITY_BASELINE_SCHEMA_VERSION_V|authorityBaselineSha256V)\d+\b',
             lambda match: match.group(1) + historical_version,

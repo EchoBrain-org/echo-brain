@@ -66,10 +66,12 @@ import {
 import {
   PERSON_ANSWER_PATH_V2,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
+  PERSON_MEETING_TRANSCRIPT_PATH_V1,
   validatePersonAnswerRequestV2,
   validatePersonSourceEvidenceReadRequestV1,
+  validatePersonMeetingTranscriptReadRequestV1,
 } from "@echo-brain/organization-api";
-import type { PersonAnswerV2HttpApplication } from "./person-answer-v2-http-application.js";
+import type { PersonAnswerV2HttpApplication, PersonMeetingTranscriptHttpApplicationV1 } from "./person-answer-v2-http-application.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
@@ -98,6 +100,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_ANSWER_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V2}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
+  `POST ${PERSON_MEETING_TRANSCRIPT_PATH_V1}`,
 ]);
 
 function routeKey(method: string, path: string): string {
@@ -130,6 +133,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_answer?: PersonAnswerHttpApplicationV1;
   /** V2 keeps scope and typed source provenance inside the Authority boundary. */
   readonly person_answer_v2?: PersonAnswerV2HttpApplication;
+  /** Explicit transcript release uses the same originals gate but no Ask model. */
+  readonly person_meeting_transcript?: PersonMeetingTranscriptHttpApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
   readonly project_context?: ProjectContextApplicationV1;
   readonly person_documents?: PersonDocumentApplicationV1;
@@ -1016,6 +1021,27 @@ export function createOrganizationAuthorityHttpServer(
           throw new AuthorityOperationError("invalid_request", "request is invalid");
         }
         json(response, 200, options.person_answer_v2.readSource({
+          access_token: accessToken(request.headers.authorization),
+          request: requestBody,
+        }));
+        return;
+      }
+      if (
+        method === "POST" &&
+        url.pathname === PERSON_MEETING_TRANSCRIPT_PATH_V1 &&
+        url.search === ""
+      ) {
+        if (options.person_meeting_transcript === undefined) {
+          fail(response, 503, "unavailable");
+          return;
+        }
+        let requestBody;
+        try {
+          requestBody = validatePersonMeetingTranscriptReadRequestV1(await body(request));
+        } catch {
+          throw new AuthorityOperationError("invalid_request", "request is invalid");
+        }
+        json(response, 200, options.person_meeting_transcript.readTranscript({
           access_token: accessToken(request.headers.authorization),
           request: requestBody,
         }));
