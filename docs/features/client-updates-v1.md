@@ -34,9 +34,17 @@ echo-brain update --status
 echo-brain update --check
 echo-brain update
 echo-brain update --if-due
+echo-brain update --status --json
 ```
 
-`--status` reads local installation/update metadata. `--check` verifies the feed
+Terminal output uses plain-language messages with the installed release, the
+available release when relevant, and the next action. Piped or redirected output
+keeps the existing JSON format; add `--json` to request that format explicitly,
+including in a terminal. `echo-brain update --help` explains each command.
+
+`--status` reads saved local installation/update metadata without contacting the
+feed. Its last result and last-check time describe the saved observation, not a
+fresh availability check. `--check` verifies the feed
 without installing. The default applies the approved update. `--if-due` performs
 the same bounded automatic check used before Person commands. Automatic
 diagnostics go to stderr, preserving the requested command's stdout contract.

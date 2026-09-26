@@ -235,6 +235,11 @@ remain outside this CLI update channel.
 "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" update --status
 ```
 
+These commands show readable messages in a terminal. Scripts can request the
+existing structured result with `update --check --json` or `update --status --json`;
+piped output also remains JSON. `--status` shows saved state, while `--check`
+contacts the feed without installing an update.
+
 When the installed client already matches the first published release,
 `current` proves feed retrieval, signature verification and release matching.
 It does not prove installation of a different release. Preserve the existing
