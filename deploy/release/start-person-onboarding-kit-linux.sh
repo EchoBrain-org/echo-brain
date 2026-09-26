@@ -136,7 +136,7 @@ done
 
 # Check the ELF header before launching a potentially wrong-architecture runtime.
 # The owner's authenticated archive checksum establishes the kit's origin.
-"$NODE" "$VERIFY" "$SCRIPT_DIR" >/dev/null || fail 'the onboarding kit verification failed; re-extract the approved kit and verify the owner-provided archive checksum'
+verified_bootstrap="$("$NODE" "$VERIFY" "$SCRIPT_DIR" --update-bootstrap)" || fail 'the onboarding kit verification failed; re-extract the approved kit and verify the owner-provided archive checksum'
 "$NODE" "$RELEASE_TOOL" validate "$SCRIPT_DIR/release.json" >/dev/null || \
   fail 'the release record verification failed'
 
@@ -159,10 +159,17 @@ install_lock="$root/.installer-lock"
 mkdir -m 0700 "$install_lock" 2>/dev/null || fail 'another or interrupted ECHO setup owns the installer lock'
 staging=''
 pending_wrapper=''
+pending_config=''
+update_lock=''
+new_config=''
+wrapper_activated=0
 cleanup() {
   [[ -z "$staging" || ! -d "$staging" ]] || rm -rf -- "$staging"
   [[ -z "$pending_wrapper" || ! -f "$pending_wrapper" ]] || rm -f -- "$pending_wrapper"
-  rmdir "$install_lock" 2>/dev/null || true
+  [[ -z "$pending_config" || ! -f "$pending_config" ]] || rm -f -- "$pending_config"
+  if [[ "$wrapper_activated" == 0 && -n "$new_config" ]]; then rm -f -- "$new_config"; fi
+  [[ -z "$update_lock" ]] || rmdir "$update_lock" 2>/dev/null || true
+  [[ -z "$install_lock" ]] || rmdir "$install_lock" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -232,7 +239,49 @@ pending_wrapper="$(mktemp "$bin_root/.echo-brain.XXXXXXXX")"
 printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' \
   "$release_root/node" "$release_root/package/dist/main.js" > "$pending_wrapper"
 chmod 0700 "$pending_wrapper"
+
+# Bootstrap bytes come from the successful kit verification. Keep the update
+# lock through activation so failure can undo only this install's new config.
+# Existing enrollment is immutable here, including during a signed update
+# whose parent process already owns the updater lock.
+updater_root="$root/updater"
+if [[ -e "$updater_root" || -L "$updater_root" ]]; then
+  require_private_directory "$updater_root" 'the ECHO updater directory'
+elif [[ -n "$verified_bootstrap" ]]; then
+  mkdir -m 0700 "$updater_root"
+fi
+config_path="$updater_root/config.json"
+validate_existing_config() {
+  require_safe_regular_file "$config_path" 'the existing ECHO update configuration'
+  [[ "$(stat -c '%u' "$config_path")" == "$(id -u)" && "$(stat -c '%a' "$config_path")" == 600 ]] || \
+    fail 'the existing ECHO update configuration must be current-user-owned mode 0600'
+}
+if [[ -e "$config_path" || -L "$config_path" ]]; then
+  validate_existing_config
+elif [[ -n "$verified_bootstrap" ]]; then
+  [[ -z "$expected_wrapper_sha256" ]] || fail 'the active updater configuration is missing; restore the existing enrollment before updating'
+  mkdir -m 0700 "$updater_root/.lock" 2>/dev/null || fail 'another ECHO update is already running'
+  update_lock="$updater_root/.lock"
+  # A manual configure may have completed immediately before lock acquisition.
+  if [[ -e "$config_path" || -L "$config_path" ]]; then
+    validate_existing_config
+  else
+    [[ ! -e "$updater_root/state.json" && ! -L "$updater_root/state.json" ]] || \
+      fail 'existing updater state has no configuration; restore the existing enrollment before installing'
+    pending_config="$(mktemp "$updater_root/.config.XXXXXXXX")"
+    chmod 0600 "$pending_config"
+    printf '%s\n' "$verified_bootstrap" > "$pending_config"
+    mv "$pending_config" "$config_path" || fail 'the update configuration could not be installed'
+    new_config="$config_path"
+  fi
+fi
+
 mv "$pending_wrapper" "$wrapper" || fail 'the ECHO command could not be activated'
+wrapper_activated=1
+if [[ -n "$update_lock" ]]; then rmdir "$update_lock"; update_lock=''; fi
+# The first Person command can now perform an automatic update of its own.
+rmdir "$install_lock"
+install_lock=''
 
 trap - ERR
 printf 'Bundled Node: %s\n' "$runtime_version"
