@@ -5,10 +5,18 @@ export const RESTRICTED_REVIEWER_PERSON_POLICY_ID =
   'restricted-reviewer-person-v2' as const;
 export const ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID =
   'organization-member-readable-person-v2' as const;
+/**
+ * Approved records whose readers are the current members of one or more
+ * immutable project-audience facts.  The project identifiers themselves are
+ * stored in the record-log baseline, never expanded to people at append time.
+ */
+export const PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID =
+  'project-members-readable-person-v1' as const;
 
 export type PersonPolicyIdV2 =
   | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
-  | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID;
+  | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
+  | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
 
 export type PersonPolicyFactItemKindV2 =
   | 'decision'
@@ -48,9 +56,15 @@ export interface RestrictedReviewerPersonPolicyFactRowV2
   readonly reviewer_membership_id: string;
 }
 
+export interface ProjectMembersReadablePersonPolicyFactRowV2
+  extends PersonPolicyFactRowV2Common {
+  readonly policy_id: typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
+}
+
 export type PersonPolicyFactRowV2 =
   | OrganizationMemberReadablePersonPolicyFactRowV2
-  | RestrictedReviewerPersonPolicyFactRowV2;
+  | RestrictedReviewerPersonPolicyFactRowV2
+  | ProjectMembersReadablePersonPolicyFactRowV2;
 
 export type PersonPolicyFactOutcomeV2 =
   | { readonly kind: 'none' }
@@ -63,4 +77,3 @@ export interface PersonPolicyFactProjectionV2 {
   readonly facts: readonly PersonPolicyFactRowV2[];
   readonly policy_fact_outcome: PersonPolicyFactOutcomeV2;
 }
-

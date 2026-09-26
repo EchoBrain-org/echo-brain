@@ -38,6 +38,7 @@ separately.
 | [ADR-0014](ADR-0014-unified-source-ingestion-and-document-custody.md) | Unified source ingestion and project-owned document processing | accepted |
 | [ADR-0015](ADR-0015-global-and-project-scoped-person-ask.md) | Global and project-scoped Person Ask over authorized evidence | accepted |
 | [ADR-0016](ADR-0016-organization-people-directory.md) | Organization people directory for any active member | accepted |
+| [ADR-0017](ADR-0017-project-meeting-approval-v1.md) | Project audiences and explicit transcript release for meeting approval | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

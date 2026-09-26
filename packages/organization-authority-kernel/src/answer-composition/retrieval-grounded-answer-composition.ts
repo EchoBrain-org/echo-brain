@@ -26,6 +26,7 @@ const CITATION_ID = /^a[1-9][0-9]*$/;
 const POLICY_IDS = new Set([
   "organization-member-readable-person-v2",
   "restricted-reviewer-person-v2",
+  "project-members-readable-person-v1",
 ]);
 
 export class RetrievalGroundedAnswerCompositionError extends Error {

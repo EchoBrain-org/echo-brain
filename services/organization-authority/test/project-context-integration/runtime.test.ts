@@ -78,6 +78,26 @@ it('uses default API composition and real Person session checks through CLI, inc
       authority_url: 'https://authority.example', oidc, client_authentication: { method: 'none' as const }, pkce_sealing_key: key };
     // No project_context injection: this must exercise PC-03's real factory.
     runtime = await startOrganizationAuthorityApiRuntime(config, { oidc_provider: provider });
+    const transcriptWithoutGrant = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/meeting-transcripts/read`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema_version: 1,
+        scope: { kind: 'global' },
+        citation: {
+          kind: 'approved_meeting_transcript', approval_id: 'apr_fixture',
+          source_id: `source:${'a'.repeat(64)}`, revision_id: 'meeting-revision-1', source_sha256: `sha256:${'b'.repeat(64)}`,
+        },
+      }),
+    });
+    // This runtime has no answer model. The direct path is nevertheless
+    // composed and reaches its approval gate instead of returning 503.
+    expect(transcriptWithoutGrant.status).toBe(401);
+    const askWithoutModel = await fetch(`http://127.0.0.1:${runtime.address.port}/v2/person/ask`, {
+      method: 'POST', headers: { authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ schema_version: 2, question: 'What changed?' }),
+    });
+    expect(askWithoutModel.status).toBe(503);
     const home = join(root, 'person'); mkdirSync(home, { mode: 0o700 });
     new PersonSessionStore(home).install('https://authority.example', initialized.authority_id, session);
     const cli = async (argv: string[]) => {

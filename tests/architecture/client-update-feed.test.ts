@@ -29,6 +29,8 @@ function fixture(targets: Target[] = ['linux']) {
   const release = { schema_version: 1, kind: 'echo-clean-v1-release', release_id: 'clean-v1-update-fixture', source_sha: sourceSha, released_at: '2026-09-24T00:00:00Z', baseline_compatibility_class: 'clean-v1', authority_image: { reference: `registry.example.test/authority@sha256:${'a'.repeat(64)}` }, person_client: { artifact_sha256: clientHash, artifact_url: 'https://fixture.invalid/client.tgz', package: '@echo-brain/person-client', version: '0.1.1' }, runtime_profile: { artifact_sha256: 'b'.repeat(64), artifact_url: 'https://fixture.invalid/profile.json', profile_version: 'clean-v1-profile-1' } };
   const releasePath = join(root, 'release.json');
   writeFileSync(releasePath, canonical(release) + '\n');
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const config = { schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://fixture.invalid/feed.json', public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' };
   const kits = {} as Record<Target, { directory: string; zip: string; zipKit: () => void }>;
   for (const targetName of targets) {
     const target = TARGET[targetName];
@@ -42,14 +44,12 @@ function fixture(targets: Target[] = ['linux']) {
     writeFileSync(join(kit, 'build-identity.v1.json'), JSON.stringify({ schema_version: 1, kind: 'echo-person-onboarding-kit-identity-v1', product_version: release.person_client.version, source_sha: sourceSha, platform: target.platform, architecture: target.architecture, release_id: release.release_id }));
     writeFileSync(join(kit, 'node'), `synthetic ${targetName} runtime bytes`);
     const digest = (name: string) => updateDigest(readFileSync(join(kit, name)));
-    writeFileSync(join(kit, 'kit-manifest.v1.json'), JSON.stringify({ schema_version: target.schema_version, kind: target.kind, release_id: release.release_id, source_sha: sourceSha, release_record_sha256: digest('release.json'), person_client_artifact_sha256: clientHash, build_identity_sha256: digest('build-identity.v1.json'), runtime: { platform: target.platform, architecture: target.architecture, version: 'v22.22.1', node_sha256: digest('node') } }));
+    writeFileSync(join(kit, 'kit-manifest.v1.json'), JSON.stringify({ schema_version: target.schema_version, kind: target.kind, release_id: release.release_id, source_sha: sourceSha, release_record_sha256: digest('release.json'), person_client_artifact_sha256: clientHash, build_identity_sha256: digest('build-identity.v1.json'), runtime: { platform: target.platform, architecture: target.architecture, version: 'v22.22.1', node_sha256: digest('node') }, ...(targetName === 'linux' ? { update_bootstrap: config } : {}) }));
     const zip = join(root, `${targetName}-kit.zip`);
     const zipKit = () => { rmSync(zip, { force: true }); execFileSync('zip', ['-qr', zip, 'echo-person-onboarding-kit'], { cwd: join(root, targetName) }); };
     zipKit();
     kits[targetName] = { directory: kit, zip, zipKit };
   }
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
-  const config = { schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://fixture.invalid/feed.json', public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' };
   const configPath = join(root, 'config.json');
   writeFileSync(configPath, JSON.stringify(config));
   const output = join(root, 'prepared');
@@ -69,6 +69,31 @@ function fixture(targets: Target[] = ['linux']) {
 afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe('approved update feed publisher', () => {
+  it('rejects a kit enrolled to a different feed configuration', () => {
+    const f = fixture();
+    const path = join(f.kits.linux.directory, 'kit-manifest.v1.json');
+    const manifest = JSON.parse(readFileSync(path, 'utf8'));
+    manifest.update_bootstrap.feed_url = 'https://fixture.invalid/different-feed.json';
+    writeFileSync(path, JSON.stringify(manifest));
+    f.kits.linux.zipKit();
+    expect(f.prepare().status).toBe(1);
+    expect(existsSync(f.output)).toBe(false);
+  });
+
+  it('retains preparation and audit support for legacy Linux kits without bootstrap metadata', () => {
+    const f = fixture();
+    const path = join(f.kits.linux.directory, 'kit-manifest.v1.json');
+    const manifest = JSON.parse(readFileSync(path, 'utf8'));
+    delete manifest.update_bootstrap;
+    writeFileSync(path, JSON.stringify(manifest));
+    f.kits.linux.zipKit();
+    const prepared = f.prepare();
+    expect(prepared.status, prepared.stderr).toBe(0);
+    f.authorize();
+    expect(f.seal().status).toBe(0);
+    expect(f.validateSealed().status).toBe(0);
+  });
+
   it.each([[['linux'] as Target[]], [['macos'] as Target[]]])('prepares a %s-only CLI feed', (targets) => {
     const f = fixture(targets);
     expect(f.prepare().status).toBe(0);

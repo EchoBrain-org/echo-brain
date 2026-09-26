@@ -64,6 +64,26 @@ async function seedOwner(initialized) {
   return { pkce_key_file: credentials.pkce_sealing_key_reference.slice(5), invitationPath };
 }
 
+async function seedCanaryProject(initialized) {
+  const { openAuthorityDatabase } = await import(pathToFileURL(join(REPO, 'packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js')));
+  const db = openAuthorityDatabase(join(state, 'authority.sqlite'), { fileMustExist: true });
+  const project_id = 'prj_00000000-0000-4000-8000-000000000001';
+  try {
+    db.prepare(`INSERT OR IGNORE INTO authority_project_authorization_state_v1
+      (organization_id, revision, updated_at) VALUES (?, 0, ?)`)
+      .run(initialized.organization_id, NOW);
+    db.prepare(`INSERT INTO authority_projects_v1
+      (project_id, organization_id, name, created_at, creator_principal_id, creator_membership_id, creator_membership_type)
+      VALUES (?, ?, 'Synthetic canary project', ?, ?, ?, 'owner')`)
+      .run(project_id, initialized.organization_id, NOW, initialized.owner_principal_id, initialized.owner_membership_id);
+    db.prepare(`INSERT INTO authority_project_memberships_v1
+      (project_membership_id, project_id, organization_id, principal_id, membership_id, membership_type, role, status, granted_at, revoked_at)
+      VALUES ('pgm_00000000-0000-4000-8000-000000000001', ?, ?, ?, ?, 'owner', 'lead', 'active', ?, NULL)`)
+      .run(project_id, initialized.organization_id, initialized.owner_principal_id, initialized.owner_membership_id, NOW);
+  } finally { db.close(); }
+  return project_id;
+}
+
 async function seedSlack(initialized, connectionId) {
   const { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, buildExternalHumanIdentityLinkContractV2 } = await import(pathToFileURL(join(REPO, 'providers/slack/server/dist/organization-control-plane/application/organization-tool-connection-contracts-v2.js')));
   const coordinates = { authority_id: initialized.authority_id, organization_id: initialized.organization_id, state_lineage_id: initialized.state_lineage_id };
@@ -85,6 +105,7 @@ if (mode === 'init') {
   const { bootstrapOrganizationAuthorityState } = await product('composition/organization-authority-state-bootstrap.js');
   const initialized = bootstrapOrganizationAuthorityState({ state_directory: state, organization_display_name: 'Synthetic staging rehearsal', owner_display_name: 'Synthetic founder', created_at: NOW, creating_artifact_revision: 'staging-journey-fixture' });
   const owner = await seedOwner(initialized);
+  const canary_project_id = await seedCanaryProject(initialized);
   const granola = write(join(root, 'granola.fixture'), `grn_${'a'.repeat(32)}`);
   const email = write(join(root, 'owner.fixture'), OWNER);
   const llm = write(join(root, 'llm.fixture'), 'synthetic-not-a-provider-credential-000000');
@@ -100,7 +121,7 @@ if (mode === 'init') {
   write(join(state, 'onboarding/clean-founder-v1.json'), manifest);
   // Explicit canary calls drive this test. Keep periodic provider retries out
   // of its fault-injection window even on a slow CI host.
-  write(metadataPath, { initialized, admitted, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, slack_signing_secret_file: signing, slack_connection_id: connectionId, slack_identity_link_channel_id: 'C012JOURNEY', granola_credential_file: granola, granola_owner_email_file: email, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
+  write(metadataPath, { initialized, admitted, canary_project_id, config: { state_directory: state, host: '127.0.0.1', port: await port(), authority_url: ORIGIN, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: owner.pkce_key_file, slack_signing_secret_file: signing, slack_connection_id: connectionId, slack_identity_link_channel_id: 'C012JOURNEY', granola_credential_file: granola, granola_owner_email_file: email, openrouter_credential_file: llm, worker_interval_ms: 3_600_000 } });
   write(evidencePath, { extraction_calls: 0, source_pulls: 0, requests: [], messages: [], publish_failures_remaining: 0, worker_errors: [] });
 } else if (mode === 'serve') {
   const metadata = read(metadataPath);

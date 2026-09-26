@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV6 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "../../../../src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.js";
 import { OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 import { createGranolaPostCutoffCursor } from "../../../../../../granola/src/source/meeting-source-adapter.js";
@@ -13,6 +13,7 @@ import {
   createStagingSyntheticMeetingCanaryV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
 import { granolaAdmittedMeetingSourceCursorPolicyV1 } from "../../../../../../granola/src/granola-admitted-meeting-source-cursor-policy-v1.js";
+import { legacyRestrictedReviewerReviewPolicySnapshotV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/review-lineage-semantics";
 import type {
   ApprovalWorkflowStageInputV1,
   ApprovalWorkflowStagerV1,
@@ -20,6 +21,7 @@ import type {
 import { SqliteAuthorityMeetingProcessingStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1";
 import { openMeetingApprovalJourneyStateV1 } from "../../../../../../../services/organization-authority/src/composition/meeting-approval-journey-state-v1.js";
 import { openMeetingApprovalJourneyTelemetryV1 } from "../../../../../../../services/organization-authority/src/composition/meeting-approval-journey-telemetry-v1.js";
+import { SqliteSourceAdmissionStoreV1 } from "../../../../../../../services/organization-authority/src/adapters/persistence/sqlite/source-admission-v1.js";
 import type { JourneyTelemetryEventV1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import type {
   DecisionProcessorAdapter,
@@ -34,7 +36,7 @@ const telemetryRoots: string[] = [];
 
 function database(): Database.Database {
   const value = new Database(":memory:");
-  applyAuthorityBaselineV6(value);
+  applyAuthorityBaselineV10(value);
   value.prepare(
     `INSERT INTO authority_metadata VALUES (1, 'oau_test', 'org_test', 'Test', '{}', ?, ?)`,
   ).run(NOW, NOW);
@@ -76,9 +78,17 @@ class SyntheticCanaryProcessor implements DecisionProcessorAdapter {
     version: OPENROUTER_DECISION_PROCESSOR_RUNTIME_VERSION_V1,
   };
   calls = 0;
+  constructor(protected readonly custodyDatabase?: Database.Database) {}
   validateConfig() { return { ok: true, errors: [] }; }
   async healthCheck() { return { status: "healthy" as const, checked_at: NOW }; }
   async extract(meeting: MeetingDocument): Promise<DecisionSet> {
+    if (this.custodyDatabase !== undefined) {
+      // The common source store must retain the whole source before any model
+      // sees its contents. This is a real Authority V10 fixture, not a mock.
+      expect(this.custodyDatabase.prepare(
+        "SELECT count(*) FROM authority_source_contents_v1",
+      ).pluck().get()).toBe(1);
+    }
     this.calls += 1;
     return {
       schema_version: 1,
@@ -97,6 +107,32 @@ class SyntheticCanaryProcessor implements DecisionProcessorAdapter {
       }],
     };
   }
+}
+
+class FailsAfterCustodyOnceProcessor extends SyntheticCanaryProcessor {
+  attempts = 0;
+  override async extract(meeting: MeetingDocument): Promise<DecisionSet> {
+    this.attempts += 1;
+    if (this.attempts === 1) {
+      expect(this.custodyDatabase?.prepare(
+        "SELECT count(*) FROM authority_source_contents_v1",
+      ).pluck().get()).toBe(1);
+      throw new Error("synthetic extraction interruption after custody");
+    }
+    return super.extract(meeting);
+  }
+}
+
+function sourceIngestion(value: Database.Database) {
+  return {
+    store: new SqliteSourceAdmissionStoreV1(value),
+    scope: {
+      organization_id: "org_test",
+      custody_ref: "organization:org_test",
+      access_policy_ref: "meeting-admission:synthetic-staging-canary:staging",
+      analysis_policy: "automatic" as const,
+    },
+  } as const;
 }
 
 class RecordingStager implements ApprovalWorkflowStagerV1 {
@@ -207,7 +243,7 @@ describe("staging synthetic private-DM canary", () => {
       "llm",
       () => NOW,
     );
-    const processor = new SyntheticCanaryProcessor();
+    const processor = new SyntheticCanaryProcessor(value);
     const stager = new RecordingStager(state);
     const input = {
       authority_url: "https://authority-staging.echobrain.org",
@@ -217,6 +253,7 @@ describe("staging synthetic private-DM canary", () => {
         observed_at: NOW,
       },
       state,
+      source_ingestion: sourceIngestion(value),
       processor,
       stager,
     } as const;
@@ -233,6 +270,7 @@ describe("staging synthetic private-DM canary", () => {
     expect(stager.inputs[0]!.meeting.title).toContain("SYNTHETIC STAGING CANARY");
     expect(stager.inputs[0]!.meeting.title).toContain("private-dm");
     expect(stager.inputs[0]!.meeting.content[0]!.text).toContain("private-dm");
+    expect(stager.inputs[0]!.meeting.content.some((item) => item.kind === "transcript")).toBe(true);
     expect(stager.inputs[0]!.meeting.provenance.source.adapter_id).toBe(
       "synthetic-staging-canary",
     );
@@ -242,6 +280,79 @@ describe("staging synthetic private-DM canary", () => {
     expect(
       value.prepare("SELECT cursor FROM authority_live_source_progress_v2").pluck().get(),
     ).toBe(createGranolaPostCutoffCursor(NOW));
+    expect(value.prepare("SELECT count(*) FROM authority_sources_v1").pluck().get()).toBe(1);
+    expect(value.prepare("SELECT count(*) FROM authority_source_revisions_v1").pluck().get()).toBe(1);
+    expect(value.prepare("SELECT count(*) FROM authority_source_contents_v1").pluck().get()).toBe(1);
+  });
+
+  it("reuses V2 custody after extraction fails and the later observation changes", async () => {
+    const value = database();
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
+      value,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
+      "llm",
+      () => NOW,
+    );
+    const processor = new FailsAfterCustodyOnceProcessor(value);
+    const stager = new RecordingStager(state);
+    const initial = {
+      authority_url: "https://authority-staging.echobrain.org",
+      canary: canaryInput,
+      state,
+      source_ingestion: sourceIngestion(value),
+      processor,
+      stager,
+    } as const;
+
+    await expect(runStagingSyntheticPrivateDmCanaryV1(initial)).rejects
+      .toThrow("synthetic extraction interruption after custody");
+    expect(value.prepare("SELECT count(*) FROM authority_sources_v1").pluck().get()).toBe(1);
+    expect(value.prepare("SELECT count(*) FROM authority_source_revisions_v1").pluck().get()).toBe(1);
+    expect(value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2").pluck().get()).toBe(0);
+
+    await expect(runStagingSyntheticPrivateDmCanaryV1({
+      ...initial,
+      canary: { ...canaryInput, observed_at: "2026-08-30T12:01:00.000Z" },
+    })).resolves.toMatchObject({ kind: "staged", reused_frozen_extraction: false });
+    expect(processor.attempts).toBe(2);
+    expect(stager.inputs).toHaveLength(1);
+    expect(value.prepare("SELECT count(*) FROM authority_sources_v1").pluck().get()).toBe(1);
+    expect(value.prepare("SELECT count(*) FROM authority_source_revisions_v1").pluck().get()).toBe(1);
+    expect(value.prepare("SELECT count(*) FROM authority_source_contents_v1").pluck().get()).toBe(1);
+    expect(value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2").pluck().get()).toBe(1);
+  });
+
+  it("recovers an existing V1 canary without rewriting it as V2", async () => {
+    const value = database();
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
+      value,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
+      "llm",
+      () => NOW,
+    );
+    const seedProcessor = new SyntheticCanaryProcessor();
+    const legacy = canary();
+    await state.stageSyntheticCanaryCandidate({
+      admission: await state.readAdmission(),
+      meeting: legacy,
+      decisions: await seedProcessor.extract(legacy),
+      review_policy: legacyRestrictedReviewerReviewPolicySnapshotV1,
+    }, canaryInput);
+    const processor = new SyntheticCanaryProcessor(value);
+    const stager = new RecordingStager(state);
+
+    await expect(runStagingSyntheticPrivateDmCanaryV1({
+      authority_url: "https://authority-staging.echobrain.org",
+      canary: canaryInput,
+      state,
+      source_ingestion: sourceIngestion(value),
+      processor,
+      stager,
+    })).resolves.toMatchObject({ kind: "staged", reused_frozen_extraction: true });
+    expect(processor.calls).toBe(0);
+    expect(stager.inputs).toHaveLength(1);
+    expect(stager.inputs[0]!.meeting.content.some((item) => item.kind === "transcript")).toBe(false);
+    expect(value.prepare("SELECT count(*) FROM authority_source_contents_v1").pluck().get()).toBe(1);
   });
 
   it("correlates the synthetic path and repairs staged human-wait telemetry from the durable outbox", async () => {
@@ -259,6 +370,7 @@ describe("staging synthetic private-DM canary", () => {
       authority_url: "https://authority-staging.echobrain.org",
       canary: canaryInput,
       state,
+      source_ingestion: sourceIngestion(value),
       processor,
       stager,
       journey_telemetry: telemetry,
@@ -308,6 +420,7 @@ describe("staging synthetic private-DM canary", () => {
       authority_url: "https://authority-staging.echobrain.org",
       canary: canaryInput,
       state,
+      source_ingestion: sourceIngestion(value),
       processor,
       stager,
     } as const;
@@ -343,6 +456,7 @@ describe("staging synthetic private-DM canary", () => {
       authority_url: "https://authority-staging.echobrain.org",
       canary: canaryInput,
       state,
+      source_ingestion: sourceIngestion(value),
       processor,
       stager,
     } as const;
@@ -382,10 +496,35 @@ describe("staging synthetic private-DM canary", () => {
       authority_url: "https://authority.echobrain.org",
       canary: { canary_id: "private-dm", owner_email: "founder@example.com", observed_at: NOW },
       state,
+      source_ingestion: sourceIngestion(value),
       processor,
       stager: new RecordingStager(state),
     })).rejects.toThrow("staging-only");
     expect(processor.calls).toBe(0);
+  });
+
+  it.each([
+    "https://authority-staging.echobrain.org:443",
+    "https://operator@authority-staging.echobrain.org",
+  ])("rejects a staging URL with extra authority components before custody: %s", async (authority_url) => {
+    const value = database();
+    const state = new SqliteAuthorityMeetingProcessingStateV1(
+      value,
+      granolaAdmittedMeetingSourceCursorPolicyV1,
+      "llm",
+      () => NOW,
+    );
+    const processor = new SyntheticCanaryProcessor(value);
+    await expect(runStagingSyntheticPrivateDmCanaryV1({
+      authority_url,
+      canary: canaryInput,
+      state,
+      source_ingestion: sourceIngestion(value),
+      processor,
+      stager: new RecordingStager(state),
+    })).rejects.toThrow("staging-only");
+    expect(processor.calls).toBe(0);
+    expect(value.prepare("SELECT count(*) FROM authority_source_contents_v1").pluck().get()).toBe(0);
   });
 
   it("does not invoke the stager for an already-aborted frozen candidate", async () => {
@@ -410,6 +549,7 @@ describe("staging synthetic private-DM canary", () => {
       authority_url: "https://authority-staging.echobrain.org",
       canary: canaryInput,
       state,
+      source_ingestion: sourceIngestion(value),
       processor,
       stager,
     } as const;

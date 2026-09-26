@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import Database from "better-sqlite3";
 import { applyAuthorityBaselineV5, authorityBaselineSha256V5, applyAuthorityBaselineV8, authorityBaselineSha256V8 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { afterEach, describe, expect, it } from "vitest";
@@ -328,7 +328,7 @@ function migrationFixture(from: 5 | 8 = 5) {
   const candidatePath = writeRecord(candidate); chmodSync(candidatePath, 0o600);
   const docker = join(f.root, 'bin/docker'); renameSync(docker, join(f.root, 'bin/docker-fallback'));
   copyFileSync(join(REPO, 'tests/fixtures/staging-migration-docker.py'), docker); chmodSync(docker, 0o755);
-  const env = { ...f.environment, ECHO_CLEAN_STATE_DIR: state, ECHO_TEST_MIGRATION_ROOT: f.root, ECHO_TEST_ACCEPTED_IMAGE: f.accepted.authority_image.reference, ECHO_TEST_MIGRATION_FROM: String(from) };
+  const env = { ...f.environment, ECHO_CLEAN_STATE_DIR: state, ECHO_TEST_MIGRATION_ROOT: f.root, ECHO_TEST_ACCEPTED_IMAGE: f.accepted.authority_image.reference, ECHO_TEST_MIGRATION_FROM: String(from), ...(from === 8 ? { ECHO_TEST_MIGRATION_CANDIDATE_VERSION: '9' } : {}) };
   const execute = (...args: string[]) => run('bash', [UPDATE, ...args], env);
   const stage = (action = `stage-${migration}`) => execute(action, '--release', candidatePath, '--runtime-profile', f.profile);
   return { ...f, stateDirectory: state, before, snapshot, candidate, candidatePath, execute, stage, operation: join(f.state, `state-${migration}`, candidate.release_id) };
@@ -1509,6 +1509,17 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     "rejects a native runtime that reports a Node version other than 22.22.1 before publishing",
     () => {
       const { root, artifact, release, runtime, output } = kitBuilderInputs("echo-person-kit-version-");
+      const updateConfig = join(root, "update-config.json");
+      if (nativeKitTarget === "linux-x64") writeFileSync(updateConfig, JSON.stringify({
+        schema_version: 1,
+        kind: "echo-client-update-config-v1",
+        channel: "fixture",
+        feed_url: "https://fixture.invalid/feed.json",
+        public_key_spki: generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "der" }).toString("base64"),
+        minimum_sequence: 1,
+        automatic: true,
+        installation: "cli-kit",
+      }));
       // A copy of this machine's own Node passes the header check. A preload
       // that runs only in that copy makes it report another version, so the
       // builder's check of the identity the runtime reports is what refuses it.
@@ -1527,7 +1538,7 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
           ONBOARDING_KIT,
           ...(nativeKitTarget === "darwin-arm64"
             ? ["--target", "darwin-arm64", "--installation", "cli-kit"]
-            : ["--target", "linux-x64"]),
+            : ["--target", "linux-x64", "--update-config", updateConfig]),
           "--release",
           release,
           "--artifact",

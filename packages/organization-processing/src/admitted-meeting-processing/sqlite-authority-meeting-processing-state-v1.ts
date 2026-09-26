@@ -28,9 +28,9 @@ import type {
   AuthorityMeetingProcessingStateV1,
 } from "./meeting-processing-cycle-v1.js";
 import {
-  assertStagingSyntheticMeetingCanaryV1,
-  isStagingSyntheticMeetingCanaryV1,
-  stagingSyntheticMeetingCanaryCursorV1,
+  assertStagingSyntheticMeetingCanary,
+  isStagingSyntheticMeetingCanary,
+  stagingSyntheticMeetingCanaryCursor,
   type StagingSyntheticMeetingCanaryInputV1,
 } from "./staging-synthetic-meeting-canary-v1.js";
 
@@ -246,14 +246,10 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     input: MeetingProcessingCandidateSnapshotInputV1,
     canary: StagingSyntheticMeetingCanaryInputV1,
   ): Promise<MeetingProcessingCandidateV1> {
-    assertStagingSyntheticMeetingCanaryV1(input.meeting, canary);
-    const canaryId = input.meeting.provenance.metadata?.["canary_id"];
-    if (typeof canaryId !== "string") {
-      throw new Error("staging synthetic canary has no canary id");
-    }
+    assertStagingSyntheticMeetingCanary(input.meeting, canary);
     return this.stageCandidateInternal(
       input,
-      stagingSyntheticMeetingCanaryCursorV1(canaryId),
+      stagingSyntheticMeetingCanaryCursor(input.meeting, canary),
     );
   }
 
@@ -298,7 +294,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
           version: current.source.version,
         });
       } else {
-        assertStagingSyntheticMeetingCanaryV1(input.meeting);
+        assertStagingSyntheticMeetingCanary(input.meeting);
       }
       assertCanonicalDecisionSet(input.decisions, input.meeting, {
         kind: "decision-processor",
@@ -829,7 +825,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
     ) {
       throw new Error("frozen candidate snapshot digest is invalid");
     }
-    const syntheticCanary = isStagingSyntheticMeetingCanaryV1(
+    const syntheticCanary = isStagingSyntheticMeetingCanary(
       meeting,
       row.source_cursor,
     );
@@ -855,7 +851,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
       },
     };
     if (syntheticCanary) {
-      assertStagingSyntheticMeetingCanaryV1(meeting);
+      assertStagingSyntheticMeetingCanary(meeting);
       if (admission.processor.adapter_id !== this.expectedProcessorAdapterId) {
         throw new Error("admission processor differs from its configured processor");
       }

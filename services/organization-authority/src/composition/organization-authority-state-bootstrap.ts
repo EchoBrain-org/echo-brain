@@ -17,24 +17,22 @@ import {
   organizationControlBaselineSha256V3,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  applyOrganizationRecordLogBaselineV3,
+  applyOrganizationRecordLogBaselineV4,
   openOrganizationRecordDatabase,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
-  organizationRecordLogBaselineSha256V3,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
+  organizationRecordLogBaselineSha256V4,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V2,
-  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
-  READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_V3,
+  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
   readableSearchPlaneBaselineSha256,
-  readableSearchPlaneBaselineSha256V1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  applyAuthorityBaselineV9,
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V9,
-  authorityBaselineSha256V9,
+  applyAuthorityBaselineV10,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
+  authorityBaselineSha256V10,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organization-authority-signer.js";
@@ -347,8 +345,8 @@ export function bootstrapOrganizationAuthorityState(
     creating_artifact_revision: input.creating_artifact_revision,
     schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V9,
-        schema_sha256: authorityBaselineSha256V9(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
+        schema_sha256: authorityBaselineSha256V10(),
       },
       "control-plane": {
         database_schema_version:
@@ -357,35 +355,33 @@ export function bootstrapOrganizationAuthorityState(
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: organizationRecordLogBaselineSha256V3(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: organizationRecordLogBaselineSha256V4(),
       },
       "retrieval-facts": {
         database_schema_version:
-          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
+          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
         schema_sha256: readableSearchPlaneBaselineSha256(
-          READABLE_SEARCH_FACTS_BASELINE_V2,
+          READABLE_SEARCH_FACTS_BASELINE_V3,
         ),
       },
       "retrieval-lexical": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_LEXICAL_BASELINE_V1,
+        database_schema_version: READABLE_SEARCH_LEXICAL_BASELINE_V2.schema_version,
+        schema_sha256: readableSearchPlaneBaselineSha256(
+          READABLE_SEARCH_LEXICAL_BASELINE_V2,
         ),
       },
       "retrieval-content": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_CONTENT_BASELINE_V1,
+        database_schema_version: READABLE_SEARCH_CONTENT_BASELINE_V2.schema_version,
+        schema_sha256: readableSearchPlaneBaselineSha256(
+          READABLE_SEARCH_CONTENT_BASELINE_V2,
         ),
       },
     },
     top_level_appliers: {
-      authority: { apply: applyAuthorityBaselineV9 },
+      authority: { apply: applyAuthorityBaselineV10 },
       "control-plane": { apply: applyOrganizationControlBaselineV3 },
-      "record-log": { apply: applyOrganizationRecordLogBaselineV3 },
+      "record-log": { apply: applyOrganizationRecordLogBaselineV4 },
     },
     open_writable_database: (path, role) => {
       if (role === "authority") return openAuthorityDatabase(path);

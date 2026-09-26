@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import { createPersonAnswerV2Route } from '../src/composition/person-answer-v2-route.js';
+import { createPersonAnswerV2Route, createPersonMeetingTranscriptReadRouteV1 } from '../src/composition/person-answer-v2-route.js';
 import type { AskJourneyTelemetryFactoryV1 } from '../src/composition/ask-journey-telemetry-v1.js';
 
 const digest = (character: string) => `sha256:${character.repeat(64)}` as `sha256:${string}`;
@@ -72,13 +72,14 @@ function originals(
 function records(
   items = [] as ReturnType<typeof record>[],
   query_hit_counts = [items.length],
+  revalidate?: () => void,
 ) : RecordFixturePort {
   const release = Object.freeze({ initial_authorization: authorization, current_authorization: authorization,
     active_pointer: Object.freeze({ generation_id: digest('1'), manifest_sha256: digest('2'), retrieval_contract_sha256: digest('3'), record_head: Object.freeze({ position: 0, record_sha256: null }) }),
     record_read_audit_row_sha256: digest('4') });
   return {
     searchBatch: () => Object.freeze({ response: Object.freeze({ schema_version: 2, kind: 'echo-clean-person-record-search-v2', items: Object.freeze(items) }), release, query_hit_counts: Object.freeze(query_hit_counts) }),
-    revalidateBatchRelease: () => authorization,
+    revalidateBatchRelease: () => { revalidate?.(); return authorization; },
   };
 }
 
@@ -116,6 +117,34 @@ function telemetryStages() {
 const request = { schema_version: 2 as const, question: 'What is ready?' };
 
 describe('V2 global/project Ask composition', () => {
+  it('keeps transcript reads inside the original-context release gate', () => {
+    const port = originals();
+    const app = createPersonMeetingTranscriptReadRouteV1({
+      originals: {
+        ...port,
+        readApprovedMeetingTranscript: () => {
+          throw new AuthorityOperationError('unauthorized', 'transcript policy denied');
+        },
+      } as never,
+    });
+    try {
+      app.readTranscript({
+        access_token: 'token',
+        request: {
+          schema_version: 1,
+          scope: { kind: 'global' },
+          citation: {
+            kind: 'approved_meeting_transcript', approval_id: 'apr_fixture',
+            source_id: `source:${'a'.repeat(64)}`, revision_id: 'r1', source_sha256: digest('b'),
+          },
+        },
+      });
+      throw new Error('expected transcript release denial');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'unauthorized' });
+    }
+  });
+
   it('retrieves before the only model call, eliminating planner-shape failures', async () => {
     const events: string[] = [];
     const app = route({
@@ -192,6 +221,17 @@ describe('V2 global/project Ask composition', () => {
     expect(audited).toBe(0);
   });
 
+  it('withholds an answer when the project-record release changes after the model sees an uncited record', async () => {
+    let audited = 0;
+    const app = route({
+      records: records([record(0), record(1)], [2], () => { throw new AuthorityOperationError('unauthorized', 'project grant changed'); }),
+      generate: () => ({ answer: { text: 'Only the first record.', citations: ['a1'] } }),
+      append: () => { audited += 1; },
+    });
+    await expect(app.ask({ access_token: 'token', request })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(audited).toBe(0);
+  });
+
   it('port ordering: does not invoke the answerer when source retrieval fails', async () => {
     let generates = 0;
     const app = route({
@@ -230,7 +270,7 @@ describe('V2 global/project Ask composition', () => {
     expect(answerPrompt).not.toContain('source evidence 5');
   });
 
-  it('keeps selected project scope and never searches unassociated approved records', async () => {
+  it('passes the selected project scope to approved-record retrieval', async () => {
     const project_id = 'prj_00000000-0000-4000-8000-000000000001';
     const scopes: unknown[] = [];
     let recordSearches = 0;
@@ -250,8 +290,9 @@ describe('V2 global/project Ask composition', () => {
       } as never,
       records: {
         ...recordPort,
-        searchBatch() {
+        searchBatch(input: { readonly project_id?: string }) {
           recordSearches += 1;
+          expect(input.project_id).toBe(project_id);
           return recordPort.searchBatch();
         },
       } as never,
@@ -263,7 +304,7 @@ describe('V2 global/project Ask composition', () => {
       request: { schema_version: 2, question: 'What is ready?', project_id },
     })).resolves.toMatchObject({ scope: { kind: 'project', project_id } });
     expect(scopes).toEqual([{ kind: 'project', project_id }]);
-    expect(recordSearches).toBe(0);
+    expect(recordSearches).toBe(1);
   });
 
   it('does not fall back to originals when the valid approved-record generation cannot be read', async () => {

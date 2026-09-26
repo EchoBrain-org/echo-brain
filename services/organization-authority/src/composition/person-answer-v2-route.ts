@@ -11,12 +11,12 @@ import {
 } from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
-import type { PersonAnswerRequestV2, PersonAnswerResponseV3, PersonSourceEvidenceReadRequestV1, PersonSourceEvidenceV1 } from "@echo-brain/organization-api";
-import { validatePersonAnswerResponseV3, validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
+import type { PersonAnswerRequestV2, PersonAnswerResponseV3, PersonSourceEvidenceReadRequestV1, PersonSourceEvidenceV1, PersonMeetingTranscriptReadRequestV1, PersonMeetingTranscriptV1 } from "@echo-brain/organization-api";
+import { validatePersonAnswerResponseV3, validatePersonSourceEvidenceV1, validatePersonMeetingTranscriptV1 } from "@echo-brain/organization-api";
 import type { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import type { PersonOriginalContextRetrievalPortV1, PersonAskScopeV2 } from "../application/ports/person-original-context-retrieval-v1.js";
 import type { PersonRecordSearchBatchApplicationV1, PersonRecordSearchBatchReleaseV1 } from "./person-record-search-route.js";
-import type { PersonAnswerV2HttpApplication } from "../presentation/person-answer-v2-http-application.js";
+import type { PersonAnswerV2HttpApplication, PersonMeetingTranscriptHttpApplicationV1 } from "../presentation/person-answer-v2-http-application.js";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { classifyAskJourneyFailureV1, type AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
 import { randomUUID } from "node:crypto";
@@ -96,10 +96,37 @@ function publicResponse(
   });
 }
 
+/** Reuses the Layer-3 originals port without selecting an answer model. */
+export function createPersonMeetingTranscriptReadRouteV1(input: {
+  readonly originals: PersonOriginalContextRetrievalPortV1;
+}): PersonMeetingTranscriptHttpApplicationV1 {
+  return Object.freeze({
+    readTranscript(request: { readonly access_token: string; readonly request: PersonMeetingTranscriptReadRequestV1 }): PersonMeetingTranscriptV1 {
+      const scope: PersonAskScopeV2 = request.request.scope.kind === "global"
+        ? Object.freeze({ kind: "global" })
+        : Object.freeze({ kind: "project", project_id: request.request.scope.project_id });
+      const proof = input.originals.readApprovedMeetingTranscript({
+        access_token: request.access_token,
+        scope,
+        citation: request.request.citation,
+        ...(request.request.offset === undefined ? {} : { offset: request.request.offset }),
+      });
+      return validatePersonMeetingTranscriptV1({
+        schema_version: 1,
+        kind: "echo-person-meeting-transcript-v1",
+        scope: proof.scope,
+        citation: proof.citation,
+        text: proof.text,
+        next_offset: proof.next_offset,
+      });
+    },
+  });
+}
+
 /**
  * V2 composes records and Person-upload originals only through released ports.
- * Project scope intentionally excludes approved records until records carry an
- * authoritative project association.
+ * Project scope requires authoritative record associations and the same current
+ * membership and audience checks as original evidence.
  */
 export function createPersonAnswerV2Route(
   options: CreatePersonAnswerV2RouteOptions,
@@ -151,15 +178,16 @@ export function createPersonAnswerV2Route(
             }
             originalRelease = originals.release;
             let records: ReturnType<PersonRecordSearchBatchApplicationV1["searchBatch"]> | undefined;
-            // Existing records have no project provenance. Do not infer it from
-            // lexical text or an unrelated source association.
-            if (scope.kind === "global") {
+            // The record release port filters by explicit association before
+            // scoring. Historical unassociated records remain global-only.
+            {
               records = options.records.searchBatch({
                 access_token: input.access_token,
                 queries: request.queries,
+                ...(scope.kind === "project" ? { project_id: scope.project_id } : {}),
                 ...(request.exact_release_id === undefined ? {} : { exact_release_id: request.exact_release_id }),
                 // Keep combined record/original hits within the core's per-query
-                // audit budget. Related expansion is not project-provenanced.
+                // audit budget. Both ports enforce the selected project scope.
                 limit: 5,
               });
               recordRelease = records.release;

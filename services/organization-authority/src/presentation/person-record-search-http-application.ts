@@ -3,7 +3,8 @@ export const PERSON_RECORD_SEARCH_PATH_V1 = "/v1/person/records";
 export type PersonRecordSearchDigestV1 = `sha256:${string}`;
 export type PersonRecordSearchPolicyV1 =
   | "organization-member-readable-person-v2"
-  | "restricted-reviewer-person-v2";
+  | "restricted-reviewer-person-v2"
+  | "project-members-readable-person-v1";
 
 export interface PersonRecordSearchResponseV2 {
   readonly schema_version: 2;

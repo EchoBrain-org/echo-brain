@@ -4,7 +4,7 @@ import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots,
 import { validatePersonUploadContextId } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { validatePersonQueryText } from '@echo-brain/organization-api';
-import { validatePersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
+import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1, type PersonSourceEvidenceReadRequestV1, type PersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import {
   validateProjectPageRequestV1, validateProjectCreateV1, validateProjectIdV1,
@@ -28,6 +28,7 @@ import {
   type EmployeeRosterV1,
   type PersonAnswerV3,
   type PersonAskSourceEvidenceV1,
+  type PersonMeetingTranscriptReadV1,
   type PersonRecordListV1,
   type PersonRecordSearchV2,
 } from "./authority-client.js";
@@ -762,6 +763,17 @@ export class PersonClient {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
     const stored = await this.accessSession();
     const result = await this.authority(stored.authority_origin).askSourceEvidence(
+      stored.session.access_token,
+      request,
+    );
+    this.assertCurrentSession(stored);
+    return result;
+  }
+
+  async readMeetingTranscript(value: PersonMeetingTranscriptReadRequestV1): Promise<PersonMeetingTranscriptReadV1> {
+    const request = validatePersonMeetingTranscriptReadRequestV1(value);
+    const stored = await this.accessSession();
+    const result = await this.authority(stored.authority_origin).readMeetingTranscript(
       stored.session.access_token,
       request,
     );

@@ -21,9 +21,9 @@ import {
 } from "@echo-brain/federation-protocol";
 import {
   buildReadableSearchGenerationV1,
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V2,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_V3,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
   readableSearchPlaneBaselineSha256,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
@@ -39,7 +39,10 @@ import {bootstrapOrganizationAuthorityState } from "../src/composition/organizat
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { readableSearchGenerationContractV1 } from "../src/composition/readable-search-generation-composition.js";
-import { createStagingSyntheticMeetingCanaryV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
+import {
+  createStagingSyntheticMeetingCanaryV1,
+  createStagingSyntheticMeetingCanaryV2,
+} from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
 
 const temporaryDirectories: string[] = [];
 const syntheticFixtureDirectory = fileURLToPath(
@@ -169,9 +172,11 @@ interface DurableCanaryFixtureOptions {
   readonly layer2_result_count?: number | null;
   readonly layer1_owner_tuple?: "owner" | "other";
   readonly layer2_owner_tuple?: "owner" | "other";
-readonly synthetic_staging_release_id?: string;
+  readonly synthetic_staging_release_id?: string;
+  readonly synthetic_staging_canary_version?: 1 | 2;
   readonly synthetic_staging_corruption?:
-    "partial" | "wrong_owner" | "wrong_digest" | "noncanonical";}
+    "partial" | "wrong_owner" | "wrong_digest" | "noncanonical" | "wrong_cursor";
+}
 
 function buildInputForCanary(
   state: string,
@@ -193,7 +198,7 @@ function buildInputForCanary(
   const plane = (
     role: string,
     schemaSha256: Sha256Digest,
-    databaseSchemaVersion: 1 | 2 = 1,
+    databaseSchemaVersion: 1 | 2 | 3 = 1,
   ) => {
     const manifestJson = canonicalJson({
       schema_version: 1,
@@ -223,16 +228,18 @@ function buildInputForCanary(
       planes: {
         facts: plane(
           "retrieval-facts",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V2),
-          2,
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V3),
+          3,
         ),
         content: plane(
           "retrieval-content",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_CONTENT_BASELINE_V1,),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_CONTENT_BASELINE_V2),
+          2,
         ),
         lexical: plane(
           "retrieval-lexical",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_LEXICAL_BASELINE_V1,),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_LEXICAL_BASELINE_V2),
+          2,
         ),
       },
     },
@@ -429,20 +436,20 @@ function installDurableCanaryFixture(
     );
   if (options.synthetic_staging_release_id !== undefined) {
       const releaseId = options.synthetic_staging_release_id;
-      const meeting = createStagingSyntheticMeetingCanaryV1({
+      const canaryInput = {
         canary_id: releaseId,
         owner_email: "founder@example.com",
         observed_at: issuedAt,
-      });
+      } as const;
+      const createCanary = options.synthetic_staging_canary_version === 2
+        ? createStagingSyntheticMeetingCanaryV2
+        : createStagingSyntheticMeetingCanaryV1;
+      const meeting = createCanary(canaryInput);
       const storedMeeting =
         options.synthetic_staging_corruption === "partial"
           ? { ...meeting, content: [] }
           : options.synthetic_staging_corruption === "wrong_owner"
-            ? createStagingSyntheticMeetingCanaryV1({
-                canary_id: releaseId,
-                owner_email: "other@example.com",
-                observed_at: issuedAt,
-              })
+            ? createCanary({ ...canaryInput, owner_email: "other@example.com" })
             : meeting;
       const storedMeetingJson =
         options.synthetic_staging_corruption === "noncanonical"
@@ -477,7 +484,9 @@ function installDurableCanaryFixture(
           sha256Digest("staging-policy"),
           "staging canary",
           sha256Digest("staging-consequence"),
-          `synthetic-staging-canary:v1:${releaseId}`,
+          `synthetic-staging-canary:v${options.synthetic_staging_corruption === "wrong_cursor"
+            ? (options.synthetic_staging_canary_version === 2 ? 1 : 2)
+            : (options.synthetic_staging_canary_version ?? 1)}:${releaseId}`,
           storedMeetingSha256,
           storedMeetingJson,
           sha256Digest("staging-decisions"),
@@ -1906,7 +1915,7 @@ describe("Organization Authority setup coordinator", () => {
     },
   );
 
-it("accepts an approved release-bound synthetic canary only on staging", async () => {
+  it.each([1, 2] as const)("accepts an approved release-bound synthetic canary V%s only on staging", async (version) => {
     const releaseId = "clean-v1-staging-synthetic-canary";
     const originalReleaseId = process.env.ECHO_CLEAN_RELEASE_ID;
     const originalHost = process.env.ECHO_CLEAN_AUTHORITY_HOST;
@@ -1933,8 +1942,10 @@ it("accepts an approved release-bound synthetic canary only on staging", async (
       ).toBe(0);
       installDurableCanaryFixture(staging, {
         cursor_version: 0,
-        synthetic_staging_release_id: releaseId,});
-let stagingOutput = "";
+        synthetic_staging_release_id: releaseId,
+        synthetic_staging_canary_version: version,
+      });
+      let stagingOutput = "";
       expect(
         await runOrganizationAuthoritySetupCli(
           ["status", "--state-dir", staging],
@@ -1953,6 +1964,7 @@ let stagingOutput = "";
         "wrong_owner",
         "wrong_digest",
         "noncanonical",
+        "wrong_cursor",
       ] as const) {
         const corrupt = stateDirectory(
           "https://authority-staging.echobrain.org",
@@ -1967,6 +1979,7 @@ let stagingOutput = "";
         installDurableCanaryFixture(corrupt, {
           cursor_version: 0,
           synthetic_staging_release_id: releaseId,
+          synthetic_staging_canary_version: version,
           synthetic_staging_corruption: corruption,
         });
         let corruptOutput = "";
@@ -1995,6 +2008,7 @@ let stagingOutput = "";
       installDurableCanaryFixture(production, {
         cursor_version: 0,
         synthetic_staging_release_id: releaseId,
+        synthetic_staging_canary_version: version,
       });
       let productionOutput = "";
       expect(

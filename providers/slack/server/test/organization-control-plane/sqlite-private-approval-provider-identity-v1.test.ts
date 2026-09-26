@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { canonicalJson, canonicalSha256 } from "../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
 import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2 } from "../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { PRIVATE_APPROVAL_PENDING_KIND, type PendingPrivateApprovalV1 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
-import { PrivateApprovalFinalizationConflictError, PrivateApprovalFinalizationDeniedError, SqliteSlackDmApprovalPersistenceV1, type PrivateApprovalSignedTerminalActionV1, type PrivateApprovalSlackCardBindingV1, type StagePrivateApprovalPendingV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
+import { PrivateApprovalFinalizationConflictError, PrivateApprovalFinalizationDeniedError, PrivateApprovalSignedActionConflictError, SqliteSlackDmApprovalPersistenceV1, type PrivateApprovalSignedTerminalActionV1, type PrivateApprovalSlackCardBindingV1, type StagePrivateApprovalPendingV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 
 const databases: Database.Database[] = [];
 const sha = (letter: string) => `sha256:${letter.repeat(64)}` as const;
@@ -159,5 +159,43 @@ describe("private approval provider identity fence", () => {
       PrivateApprovalFinalizationConflictError,
     );
     expect(database.prepare(`SELECT count(*) AS count FROM organization_private_approval_terminal_evidence_v2`).get()).toEqual({ count: 1 });
+  });
+
+  it("persists and replays a V2 project approval, but denies a changed selected grant", async () => {
+    const { database, pending: v1, card } = setup();
+    const project = "prj_00000000-0000-4000-8000-000000000001";
+    const grant = { project_id: project, project_membership_id: "pgm_00000000-0000-4000-8000-000000000001" };
+    const pending = {
+      ...v1, schema_version: 2 as const, kind: "echo-private-approval-pending-v2" as const,
+      eligible_projects: [{ ...grant, name: "Project" }],
+      transcript_source: { source_id: "src_00000000-0000-4000-8000-000000000001", revision_id: "rev_00000000-0000-4000-8000-000000000001", source_sha256: sha("f") },
+    };
+    let grants: readonly typeof grant[] | undefined = [grant];
+    const store = new SqliteSlackDmApprovalPersistenceV1({ database, now, authority_fence: {
+      withStablePrivateApprovalFence: async (commit) => {
+        const result = commit({
+        approvalIsCurrent: () => true, currentMembership: () => pending.assigned_owner,
+        currentProjectMemberships: () => grants,
+        revalidatePrivateApprovalAuthorization: () => ({ schema_version: 2 as const, kind: "echo-private-approval-authorization-allow-v2" as const, approval_id: pending.approval_id, organization_id: pending.organization_id, candidate_sha256: pending.candidate_sha256, frozen_card_sha256: pending.frozen_card_sha256, approved_snapshot_sha256: pending.approved_snapshot_sha256, authorized_assignee: pending.assigned_owner, current_slack_identity_link: pending.assigned_owner_slack_identity_link, authorization_proof_sha256: sha("e") }),
+      });
+        expect(result).not.toHaveProperty("then");
+        return result;
+      },
+    } });
+    store.stageV2({ stage_command_id: "pas_00000000-0000-4000-8000-000000000002", authority_id: "oau_00000000-0000-4000-8000-000000000001", candidate_id: "cnd_00000000-0000-4000-8000-000000000002", pending, card_binding: card });
+    const receipt = { schema_version: 2 as const, kind: "echo-private-approval-signed-block-action-receipt-v2" as const, provider_action_key_sha256: sha("6"), request: { request_timestamp: "1800000000", signature_version: "v0" as const, signature_sha256: sha("8"), raw_body_sha256: sha("6") }, approval_id: pending.approval_id, action_id: "echo-private-approval-v2-action", action: "approve" as const, selected_policy_id: "project-members-readable-person-v1" as const, selected_project_ids: [project], share_transcript: true, comment: null, lookup: { api_app_id: "A01234567", workspace_id: card.slack_workspace_id, enterprise_id: null, slack_user_id: card.slack_subject_id, channel_id: card.dm_channel_id, message_ts: card.provider_message_ts, message_user_id: "U09876543", message_app_id: "A01234567", message_bot_id: "B01234567" }, received_at: now(), verified_at: now() };
+    expect(store.enqueueV2(receipt)).toMatchObject({ idempotent: false });
+    expect(store.enqueueV2({ ...receipt, received_at: "2026-08-28T00:01:00.000Z", verified_at: "2026-08-28T00:01:00.000Z" })).toMatchObject({ idempotent: true });
+    expect(() => store.enqueueV2({ ...receipt, share_transcript: false })).toThrow(PrivateApprovalSignedActionConflictError);
+    grants = [{ project_id: project, project_membership_id: "pgm_00000000-0000-4000-8000-000000000099" }];
+    await expect(store.finalize(receipt.provider_action_key_sha256)).rejects.toBeInstanceOf(PrivateApprovalFinalizationDeniedError);
+    grants = undefined;
+    await expect(store.finalize(receipt.provider_action_key_sha256)).rejects.toBeInstanceOf(PrivateApprovalFinalizationDeniedError);
+    grants = [grant];
+    const terminal = await store.finalize(receipt.provider_action_key_sha256);
+    expect(terminal).toMatchObject({ resolution: { schema_version: 2, selected_project_ids: [project], share_transcript: true } });
+    grants = undefined;
+    await expect(store.finalize(receipt.provider_action_key_sha256)).resolves.toMatchObject({ resolution: { schema_version: 2 } });
+    expect(store.listTerminals()).toHaveLength(1);
   });
 });

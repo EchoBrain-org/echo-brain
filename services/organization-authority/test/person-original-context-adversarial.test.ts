@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { validatePersonAnswerResponseV3, validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
+import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID } from "@echo-brain/organization-record/organization-record-api-v1";
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
@@ -197,7 +198,20 @@ describe("adversarial original-context retrieval", () => {
       const app = createPersonAnswerV2Route({
         authority_id: "oau_original_context", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
         originals: f.retrieval,
-        records: { searchBatch: () => { throw new Error("Project Ask must not retrieve global records"); } } as never,
+        records: {
+          searchBatch: (input: { readonly project_id?: string; readonly queries: readonly string[] }) => {
+            expect(input.project_id).toBe(PROJECT_ALPHA);
+            return {
+              response: { items: [] }, query_hit_counts: input.queries.map(() => 0),
+              release: {
+                current_authorization: authorization(MEMBER),
+                active_pointer: { generation_id: canonicalSha256("empty project records"), record_head: { position: 0, record_sha256: null } },
+                record_read_audit_row_sha256: canonicalSha256("empty record release"),
+              },
+            };
+          },
+          revalidateBatchRelease: () => authorization(MEMBER),
+        } as never,
         model: { async generate(input) {
           calls += 1;
           const prompt = JSON.parse(input.user_prompt) as { sources: { citation_id: string; text: string }[] };
@@ -338,6 +352,85 @@ describe("adversarial original-context retrieval", () => {
     const raw = f.retrieval.retrieve({ access_token: "member", queries: ["rawmeetingsecretmarker"], scope: { kind: "global" } });
     expect(raw.query_hit_counts).toEqual([0]);
     expect(texts(raw).join(" ")).not.toContain("rawmeetingsecretmarker");
+  });
+
+  it("releases an explicitly approved transcript only under its current project policy and exact retained revision", async () => {
+    const f = fixture();
+    const meeting = {
+      schema_version: 1 as const, id: "meeting-transcript-1",
+      provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-transcript-1", canonical_revision: "revision-1", observed_at: PROJECT_CONTEXT_NOW, normalizer_version: "1" },
+      capture: { state: "complete" as const, components: [{ kind: "transcript" as const, state: "available" as const }] }, participants: [], artifacts: [],
+      content: [{ id: "transcript-1", kind: "transcript" as const, text: "approved transcript marker is never Ask evidence" }],
+    };
+    const bridge = new MeetingSourceBridgeV1({
+      identity: meeting.provenance.source,
+      validateConfig: () => ({ ok: true, errors: [] }),
+      healthCheck: async () => ({ status: "healthy" as const, checked_at: PROJECT_CONTEXT_NOW }),
+      pull: async () => ({ meetings: [meeting], next_cursor: "meeting-transcript-next" }),
+    });
+    await pullAndAdmitSourceBatchV1({
+      source: bridge, request: { limit: 1 },
+      admission: { store: new SqliteSourceAdmissionStoreV1(f.database), scope: { organization_id: OWNER.organization_id, custody_ref: `organization:${OWNER.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
+    });
+    const source = f.database.prepare("SELECT source_id,revision_id,('sha256:' || revision_sha256) AS source_sha256 FROM authority_source_revisions_v1").get() as { source_id: `source:${string}`; revision_id: string; source_sha256: `sha256:${string}` };
+    let enabled = true;
+    const policy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
+    let validPolicyContract = true;
+    let revokeAtFinalFence = false;
+    let armedGrantLookups = 0;
+    const retrieval = new SqlitePersonOriginalContextRetrievalV1(f.database, {
+      authenticateAccess: ({ access_token }) => authorization(access_token === "member" ? MEMBER : OWNER),
+    }, OWNER.organization_id, {
+      authority_id: "oau_original_context", state_lineage_id: "lineage_fixture",
+      is_expected_policy_contract: () => validPolicyContract,
+      grants: { find: () => {
+        if (revokeAtFinalFence && ++armedGrantLookups === 2) {
+          f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")
+            .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+          grant(f.database, PROJECT_ALPHA, MEMBER, "member");
+        }
+        return enabled ? {
+        approval_id: "apr_transcript_fixture", record_position: 1,
+        record_sha256: sha256Digest("transcript-record"),
+        policy_id: policy,
+        policy_contract_sha256: sha256Digest("transcript-contract"),
+        source_id: source.source_id, revision_id: source.revision_id, source_sha256: source.source_sha256,
+        reviewer_principal_id: null, reviewer_membership_id: null,
+        audience_project_ids: policy === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID ? [PROJECT_ALPHA, PROJECT_BETA] : [], association_project_ids: [PROJECT_ALPHA, PROJECT_BETA],
+        } : null;
+      } },
+    });
+    const citation = { kind: "approved_meeting_transcript" as const, approval_id: "apr_transcript_fixture", ...source };
+    expect(retrieval.retrieve({ access_token: "member", queries: ["approved transcript marker"], scope: { kind: "global" } }).query_hit_counts).toEqual([0]);
+    const released = retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation });
+    expect(released.text).toContain("approved transcript marker");
+    const transcriptAudit = (f.database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1").all() as Array<{ body_json: string }>)
+      .map(row => JSON.parse(row.body_json) as Record<string, unknown>)
+      .find(row => row.kind === "echo-person-approved-meeting-transcript-read-audit-v1");
+    expect(transcriptAudit).toMatchObject({
+      page_sha256: canonicalSha256(released.text),
+      response_sha256: canonicalSha256({ schema_version: 1, kind: "echo-person-meeting-transcript-v1", ...released }),
+    });
+    expect(() => retrieval.readApprovedMeetingTranscript({
+      access_token: "member", scope: { kind: "global" },
+      citation: { ...citation, revision_id: "a-different-retained-revision" },
+    })).toThrow();
+    validPolicyContract = false;
+    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation })).toThrow();
+    validPolicyContract = true;
+    expect(retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation }).text).toContain("approved transcript marker");
+    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_BETA }, citation })).toThrow();
+    revokeAtFinalFence = true;
+    const auditsBeforeFinalFence = f.database.prepare("SELECT COUNT(*) AS count FROM authority_person_upload_read_audit_v1 WHERE body_json LIKE '%echo-person-approved-meeting-transcript-read-audit-v1%'").get() as { count: number };
+    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation })).toThrow();
+    const auditsAfterFinalFence = f.database.prepare("SELECT COUNT(*) AS count FROM authority_person_upload_read_audit_v1 WHERE body_json LIKE '%echo-person-approved-meeting-transcript-read-audit-v1%'").get() as { count: number };
+    expect(auditsAfterFinalFence.count).toBe(auditsBeforeFinalFence.count);
+    revokeAtFinalFence = false;
+    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
+      .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation })).toThrow();
+    enabled = false;
+    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "owner", scope: { kind: "global" }, citation })).toThrow();
   });
 
   it("enforces audience separately from project association in global and project-scoped reads", () => {

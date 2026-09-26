@@ -35,7 +35,8 @@ export type PersonAnswerCitationV3 =
       readonly record_sha256: `sha256:${string}`;
       readonly policy_id:
         | 'organization-member-readable-person-v2'
-        | 'restricted-reviewer-person-v2';
+        | 'restricted-reviewer-person-v2'
+        | 'project-members-readable-person-v1';
     }
   | {
       readonly kind: 'source_revision';
@@ -171,7 +172,8 @@ function citation(value: unknown): PersonAnswerCitationV3 {
     assertDigest(input.record_sha256, 'Ask approved-record citation record_sha256');
     if (
       input.policy_id !== 'organization-member-readable-person-v2' &&
-      input.policy_id !== 'restricted-reviewer-person-v2'
+      input.policy_id !== 'restricted-reviewer-person-v2' &&
+      input.policy_id !== 'project-members-readable-person-v1'
     ) {
       fail('Ask approved-record citation policy_id is invalid');
     }

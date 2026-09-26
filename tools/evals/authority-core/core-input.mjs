@@ -1,6 +1,7 @@
 /** Core-stage deterministic meeting input. Provider admission is fixture setup only. */
 import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import { assertCanonicalDecisionSet, assertCanonicalMeetingDocument } from "../../../packages/organization-processing/dist/core/index.js";
+import { SqliteSourceAdmissionStoreV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/source-admission-v1.js";
 
 const SOURCE = Object.freeze({ kind: "meeting-source", adapter_id: "core-input", instance_id: "core-input-v1", version: "1.0.0" });
 const PROCESSOR = Object.freeze({ kind: "decision-processor", adapter_id: "core-input", instance_id: "core-processor-v1", version: "1.0.0" });
@@ -129,6 +130,28 @@ export function createCoreInput({ authority, coordinates: { organization_id }, o
       offered.push(Object.freeze({ meeting: meetingSnapshot, decisions: immutableSnapshot(decisions), meeting_sha256: canonicalSha256(meetingSnapshot) }));
       return Object.freeze({ cursor: cursor(offered.length - 1), next_cursor: cursor(offered.length) });
     },
+  });
+}
+
+/**
+ * Bind the fixture source to the same current-admission fence used by the
+ * Authority runtime. Keeping this beside the source avoids a core evaluator
+ * silently processing a meeting that was never retained in source custody.
+ */
+export function createCoreSourceIngestion({ authority, organization_id, state, source }) {
+  if (authority === null || typeof authority?.prepare !== "function") throw new TypeError("authority is required");
+  if (typeof organization_id !== "string" || organization_id.length === 0) throw new TypeError("organization_id is required");
+  if (state === null || typeof state?.assertCurrentSourceAdmission !== "function") throw new TypeError("state must provide the current source-admission fence");
+  if (source === null || typeof source?.identity !== "object") throw new TypeError("source identity is required");
+  const identity = source.identity;
+  return Object.freeze({
+    store: new SqliteSourceAdmissionStoreV1(authority, () => state.assertCurrentSourceAdmission(identity)),
+    scope: Object.freeze({
+      organization_id,
+      custody_ref: `organization:${organization_id}`,
+      access_policy_ref: `meeting-admission:${identity.adapter_id}:${identity.instance_id}`,
+      analysis_policy: "automatic",
+    }),
   });
 }
 

@@ -37,7 +37,7 @@ function sameTarget(left, right) {
     left.libc === right.libc && left.installation === right.installation;
 }
 
-function validateKit(archive, directory, manifest, release, target) {
+function validateKit(archive, directory, manifest, release, target, config) {
   const temporary = mkdtempSync(join(directory, '.verify-'));
   const kit = join(temporary, 'kit');
   try {
@@ -55,6 +55,11 @@ function validateKit(archive, directory, manifest, release, target) {
         m.runtime?.node_sha256 !== updateDigest(read(join(kit, 'node'), UPDATE_ARTIFACT_LIMIT)) ||
         m.person_client_artifact_sha256 !== updateDigest(read(join(kit, 'person-client.tgz'), UPDATE_ARTIFACT_LIMIT)) ||
         m.build_identity_sha256 !== updateDigest(read(join(kit, 'build-identity.v1.json')))) fail('kit_identity_mismatch');
+    // Older signed kits must remain auditable and usable for deliberate rollback.
+    if (target.platform === 'linux' && Object.hasOwn(m, 'update_bootstrap')) {
+      const bootstrap = parseUpdateConfig(m.update_bootstrap);
+      if (!bootstrap.automatic || canonicalJson(bootstrap) !== canonicalJson(config)) fail('kit_bootstrap_mismatch');
+    }
     const buildIdentityBytes = read(join(kit, 'build-identity.v1.json'));
     const buildIdentity = json(join(kit, 'build-identity.v1.json'));
     if (buildIdentity.schema_version !== 1 || buildIdentity.kind !== 'echo-person-onboarding-kit-identity-v1' ||
@@ -101,7 +106,7 @@ export function prepareClientUpdateFeed({ configPath, releasePath, linuxKit, mac
   if (sequence < config.minimum_sequence) fail('sequence_before_bootstrap');
   mkdirSync(output, { mode: 0o700 });
   try {
-    for (const artifact of artifacts) validateKit(artifact.path, output, manifest, release, artifact.target);
+    for (const artifact of artifacts) validateKit(artifact.path, output, manifest, release, artifact.target, config);
     mkdirSync(join(output, 'artifacts'), { mode: 0o700 });
     for (const artifact of artifacts) writeFileSync(join(output, 'artifacts', `${artifact.sha256}.zip`), artifact.bytes, { mode: 0o600, flag: 'wx' });
     save(join(output, 'manifest.json'), manifest);
@@ -151,7 +156,7 @@ export function validatePreparedClientUpdateFeed({ prepared, authorizationPath, 
     const path = join(prepared, 'artifacts', `${artifact.sha256}.zip`);
     const bytes = read(path, UPDATE_ARTIFACT_LIMIT);
     if (bytes.length !== artifact.bytes || updateDigest(bytes) !== artifact.sha256) fail('artifact_mismatch');
-    validateKit(path, prepared, manifest, release, target);
+    validateKit(path, prepared, manifest, release, target, config);
   }
   return { config, manifest, payload, release };
 }

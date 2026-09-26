@@ -2,7 +2,7 @@ import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/sou
 import { createPersonUpdateProcessingV1, type PersonUpdateProcessingBindingV1 } from './person-update-processing-v1.js';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../adapters/persistence/sqlite/project-upload-enrichment-v1.js';
-import { AdapterError } from '@echo-brain/organization-processing/core';
+import { AdapterError, meetingFromSourceEnvelopeV1, type MeetingSourceContentV1, type SourceAdmissionBindingV1, type SourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
 import type { RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -49,9 +49,11 @@ import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
 import type { MeetingProcessingWorkerPhaseRunnerV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
-import type {
-  StagingSyntheticMeetingCanaryInputV1,
-  StagingSyntheticMeetingCanaryResultV1,
+import {
+  assertStagingSyntheticMeetingCanary,
+  stagingSyntheticMeetingCanarySourceIdentityV1,
+  type StagingSyntheticMeetingCanaryInputV1,
+  type StagingSyntheticMeetingCanaryResultV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
 import {
   openMeetingApprovalJourneyTelemetryV1,
@@ -114,6 +116,7 @@ export interface OrganizationAuthorityRuntimeConfig {
       readonly authority_url: string;
       readonly canary: StagingSyntheticMeetingCanaryInputV1;
       readonly state: SqliteAuthorityMeetingProcessingStateV1;
+      readonly source_ingestion: SourceAdmissionBindingV1<MeetingSourceContentV1>;
       readonly processor: DecisionProcessorAdapter;
       readonly stager: Awaited<ReturnType<ApprovalWorkflowBundleV1["load"]>>["stager"];
       readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
@@ -512,6 +515,24 @@ export async function openOrganizationAuthorityRuntime(
                   authority_url: config.authority_url,
                   canary,
                   state: sourceState,
+                  source_ingestion: {
+                    store: new SqliteSourceAdmissionStoreV1(authority, (retained) => {
+                      // The same current source/owner fence protects both paths.
+                      // Only this exact staging fixture may use the synthetic identity.
+                      sourceState.assertCurrentSourceAdmission(source.identity);
+                      const meeting = meetingFromSourceEnvelopeV1(retained as SourceEnvelopeV1<MeetingSourceContentV1>);
+                      assertStagingSyntheticMeetingCanary(meeting, {
+                        ...canary,
+                        observed_at: meeting.provenance.observed_at,
+                      });
+                    }),
+                    scope: {
+                      organization_id: lineage.root.organization_id,
+                      custody_ref: `organization:${lineage.root.organization_id}`,
+                      access_policy_ref: `meeting-admission:${stagingSyntheticMeetingCanarySourceIdentityV1.adapter_id}:${stagingSyntheticMeetingCanarySourceIdentityV1.instance_id}`,
+                      analysis_policy: "automatic",
+                    },
+                  },
                   processor,
                   stager: approvals.stager,
                   ...(meetingApprovalJourneyTelemetry === undefined

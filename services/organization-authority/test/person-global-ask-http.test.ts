@@ -7,9 +7,11 @@ import type {
   PersonSourceEvidenceCitationV1,
   PersonSourceEvidenceReadRequestV1,
   PersonSourceEvidenceV1,
+  PersonMeetingTranscriptReadRequestV1,
+  PersonMeetingTranscriptV1,
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import type { PersonAnswerV2HttpApplication } from '../src/presentation/person-answer-v2-http-application.js';
+import type { PersonAnswerV2HttpApplication, PersonMeetingTranscriptHttpApplicationV1 } from '../src/presentation/person-answer-v2-http-application.js';
 import {
   createOrganizationAuthorityHttpServer,
   type OrganizationAuthorityHttpServerOptions,
@@ -52,6 +54,14 @@ const evidence: PersonSourceEvidenceV1 = {
   citation: { ...source, label: 'MRD' },
   text: 'MRD\n\nExact bounded source packet.',
 };
+const transcriptCitation = {
+  kind: 'approved_meeting_transcript' as const,
+  approval_id: 'apr_fixture', source_id: sourceId('9'), revision_id: 'meeting-revision-1', source_sha256: sha256('8'),
+};
+const transcript: PersonMeetingTranscriptV1 = {
+  schema_version: 1, kind: 'echo-person-meeting-transcript-v1', scope: { kind: 'global' },
+  citation: transcriptCitation, text: 'Approved transcript page.', next_offset: null,
+};
 
 const servers: ReturnType<typeof createOrganizationAuthorityHttpServer>[] = [];
 afterEach(async () => {
@@ -63,18 +73,19 @@ afterEach(async () => {
   }
 });
 
-function options(application: PersonAnswerV2HttpApplication): OrganizationAuthorityHttpServerOptions {
+function options(application: PersonAnswerV2HttpApplication | undefined, transcriptApplication?: PersonMeetingTranscriptHttpApplicationV1): OrganizationAuthorityHttpServerOptions {
   return {
     descriptor: {} as never,
     sessions: {} as never,
     oidc_provider: {} as never,
     expected_issuer: 'https://issuer.example',
-    person_answer_v2: application,
+    ...(application === undefined ? {} : { person_answer_v2: application }),
+    ...(transcriptApplication === undefined ? {} : { person_meeting_transcript: transcriptApplication }),
   };
 }
 
-async function start(application: PersonAnswerV2HttpApplication): Promise<string> {
-  const server = createOrganizationAuthorityHttpServer(options(application));
+async function start(application: PersonAnswerV2HttpApplication | undefined, transcriptApplication?: PersonMeetingTranscriptHttpApplicationV1): Promise<string> {
+  const server = createOrganizationAuthorityHttpServer(options(application, transcriptApplication));
   servers.push(server);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -129,6 +140,33 @@ describe('global/project Ask HTTP transport', () => {
     expect(result.citation).not.toHaveProperty('text');
     expect(result.text).toBe('MRD\n\nExact bounded source packet.');
     expect(calls).toEqual([{ access_token: 'fixture-token', request: body }]);
+  });
+
+  it('validates and dispatches the explicit transcript endpoint separately from Ask', async () => {
+    const calls: unknown[] = [];
+    const app = {
+      ask() { throw new Error('not reached'); },
+      readSource() { throw new Error('not reached'); },
+    } satisfies PersonAnswerV2HttpApplication;
+    const transcriptApp = { readTranscript(input: { readonly access_token: string; readonly request: PersonMeetingTranscriptReadRequestV1 }) { calls.push(input); return transcript; } } satisfies PersonMeetingTranscriptHttpApplicationV1;
+    const origin = await start(app, transcriptApp);
+    const body: PersonMeetingTranscriptReadRequestV1 = {
+      schema_version: 1, scope: { kind: 'global' }, citation: transcriptCitation,
+    };
+    const response = await request(origin, '/v1/person/meeting-transcripts/read', body);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(transcript);
+    expect(calls).toEqual([{ access_token: 'fixture-token', request: body }]);
+    await failure(await request(origin, '/v1/person/meeting-transcripts/read', { ...body, unknown: true }), 400, 'invalid_request');
+  });
+
+  it('keeps direct transcript release available when Ask is not composed', async () => {
+    const origin = await start(undefined, { readTranscript: () => transcript });
+    const response = await request(origin, '/v1/person/meeting-transcripts/read', {
+      schema_version: 1, scope: { kind: 'global' }, citation: transcriptCitation,
+    });
+    expect(response.status).toBe(200);
+    await failure(await request(origin, '/v2/person/ask', { schema_version: 2, question: 'What happened?' }), 503, 'unavailable');
   });
 
   it('rejects invalid source fields and caller-controlled scope extensions before dispatch', async () => {

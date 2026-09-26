@@ -5,21 +5,19 @@ import {
   ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  organizationRecordLogBaselineSha256V3,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
+  organizationRecordLogBaselineSha256V4,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
   readableSearchPlaneBaselineSha256,
-  readableSearchPlaneBaselineSha256V1,
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V2,
-  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
-  READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_V3,
+  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import {
-  AUTHORITY_BASELINE_SCHEMA_VERSION_V9,
-  authorityBaselineSha256V9,
+  AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
+  authorityBaselineSha256V10,
 } from "../adapters/persistence/sqlite/baseline.js";
 import { StateLineagePreopenRefusal, verifyStateLineageBeforeOpen } from "../state-lineage/state-lineage-preopen-guard.js";
 import { validateStateLineageRootManifestV2 } from "../state-lineage/state-lineage-manifest-v1.js";
@@ -52,8 +50,8 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
     },
     expected_schemas: {
       authority: {
-        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V9,
-        schema_sha256: authorityBaselineSha256V9(),
+        database_schema_version: AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
+        schema_sha256: authorityBaselineSha256V10(),
       },
       "control-plane": {
         database_schema_version:
@@ -62,28 +60,26 @@ export function verifyAuthorityStateLineage(stateDirectory: string) {
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: organizationRecordLogBaselineSha256V3(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: organizationRecordLogBaselineSha256V4(),
       },
       "retrieval-facts": {
         database_schema_version:
-          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
+          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
         schema_sha256: readableSearchPlaneBaselineSha256(
-          READABLE_SEARCH_FACTS_BASELINE_V2,
+          READABLE_SEARCH_FACTS_BASELINE_V3,
         ),
       },
       "retrieval-lexical": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_LEXICAL_BASELINE_V1,
+        database_schema_version: READABLE_SEARCH_LEXICAL_BASELINE_V2.schema_version,
+        schema_sha256: readableSearchPlaneBaselineSha256(
+          READABLE_SEARCH_LEXICAL_BASELINE_V2,
         ),
       },
       "retrieval-content": {
-        database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_CONTENT_BASELINE_V1,
+        database_schema_version: READABLE_SEARCH_CONTENT_BASELINE_V2.schema_version,
+        schema_sha256: readableSearchPlaneBaselineSha256(
+          READABLE_SEARCH_CONTENT_BASELINE_V2,
         ),
       },
     },
