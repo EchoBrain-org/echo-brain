@@ -74,6 +74,9 @@ export {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   restrictedReviewerPersonConsequenceSha256,
   restrictedReviewerPersonPolicyContractSha256,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
+  projectMembersReadablePersonPolicyContract,
+  projectMembersReadablePersonPolicyContractSha256,
 } from "./person-content-policy-v2.js";
 
 export { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, HUMAN_ACT_RECORD_INPUT_CODECS_V4, type RecordInputCodecV4, type RecordInputCodecRegistryV4, type RecordResolutionRefV4, type RecordHumanActEventV4, type ValidatedRecordInputV4 } from "./record-input-codec-v4.js";

@@ -18,6 +18,10 @@ export interface PersonRecordReaderV1Input {
   readonly state_lineage_id: string;
   readonly principal_id: string;
   readonly membership_id: string;
+  /** Current active project grants, resolved by Authority in the same read fence. */
+  readonly project_ids?: readonly string[];
+  /** A project Ask scope requires an immutable association as well as audience access. */
+  readonly project_id?: string;
   readonly limit?: number;
   readonly record_sha256?: Sha256Digest;
 }
@@ -64,6 +68,10 @@ export class PersonRecordReaderV1 {
     );
     requiredText(input.principal_id, "Person record principal_id");
     requiredText(input.membership_id, "Person record membership_id");
+    const projectIds = normalizedProjectIds(input.project_ids);
+    if (input.project_id !== undefined) {
+      requiredText(input.project_id, "Person record project_id");
+    }
     const limit = input.limit ?? DEFAULT_LIMIT;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
       throw new Error(
@@ -83,6 +91,29 @@ export class PersonRecordReaderV1 {
       input.record_sha256 === undefined
         ? ""
         : "\n            AND record.record_sha256 = ?";
+    const projectAudienceClause = projectIds.length === 0
+      ? ""
+      : `
+              OR EXISTS (
+                SELECT 1
+                  FROM organization_record_project_members_readable_person_record_fact AS project_fact
+                 WHERE project_fact.record_position = record.position
+                   AND project_fact.record_sha256 = record.record_sha256
+                   AND project_fact.authority_id = ?
+                   AND project_fact.organization_id = ?
+                   AND project_fact.state_lineage_id = ?
+                   AND project_fact.project_id IN (${projectIds.map(() => "?").join(", ")})
+              )`;
+    const scopedAssociationWhere = input.project_id === undefined
+      ? ""
+      : `
+            AND EXISTS (
+              SELECT 1
+                FROM organization_record_project_association_v1 AS association
+               WHERE association.record_position = record.position
+                 AND association.record_sha256 = record.record_sha256
+                 AND association.project_id = ?
+            )`;
     const rows = this.database
       .prepare(
         `SELECT record.position, record.approval_id, record.record_sha256,
@@ -111,7 +142,9 @@ export class PersonRecordReaderV1 {
                    AND reviewer_fact.reviewer_principal_id = ?
                    AND reviewer_fact.reviewer_membership_id = ?
               )
+              ${projectAudienceClause}
             )
+            ${scopedAssociationWhere}
           ORDER BY record.position DESC
           LIMIT ?`,
       )
@@ -125,6 +158,15 @@ export class PersonRecordReaderV1 {
         input.state_lineage_id,
         input.principal_id,
         input.membership_id,
+        ...(projectIds.length === 0
+          ? []
+          : [
+              input.authority_id,
+              input.organization_id,
+              input.state_lineage_id,
+              ...projectIds,
+            ]),
+        ...(input.project_id === undefined ? [] : [input.project_id]),
         input.record_sha256 === undefined ? limit : 1,
       ) as Array<{
       readonly position: number;
@@ -154,4 +196,16 @@ export class PersonRecordReaderV1 {
       }),
     );
   }
+}
+
+function normalizedProjectIds(value: readonly string[] | undefined): readonly string[] {
+  if (value === undefined) return Object.freeze([]);
+  const ids = value.map((id) => {
+    requiredText(id, "Person record project ID");
+    return id;
+  });
+  if (new Set(ids).size !== ids.length) {
+    throw new Error("Person record project_ids must be unique");
+  }
+  return Object.freeze(ids);
 }

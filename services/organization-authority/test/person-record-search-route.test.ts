@@ -17,12 +17,12 @@ import {
   searchReadableSearchGenerationV1,
   expandReadableSearchRelatedAtomsV1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V2,
-  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_V3,
+  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
   readableSearchPlaneBaselineSha256,
-  readableSearchPlaneBaselineSha256V1,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
   warmReadableSearchActiveGenerationV1,
   type BuildReadableSearchGenerationV1Input,
@@ -110,7 +110,7 @@ function realGenerationInput(
   const plane = (
     role: string,
     schema_sha256: Sha256Digest,
-    database_schema_version: 1 | 2 = 1,
+    database_schema_version: 1 | 2 | 3 = 1,
   ) => {
     const manifest_json = canonicalJson({
       schema_version: 1,
@@ -140,20 +140,16 @@ function realGenerationInput(
       planes: {
         facts: plane(
           "retrieval-facts",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V2),
-          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V3),
+          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
         ),
         content: plane(
           "retrieval-content",
-          readableSearchPlaneBaselineSha256V1(
-            READABLE_SEARCH_CONTENT_BASELINE_V1,
-          ),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_CONTENT_BASELINE_V2), 2,
         ),
         lexical: plane(
           "retrieval-lexical",
-          readableSearchPlaneBaselineSha256V1(
-            READABLE_SEARCH_LEXICAL_BASELINE_V1,
-          ),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_LEXICAL_BASELINE_V2), 2,
         ),
       },
     },
@@ -290,6 +286,39 @@ function setup(pointer = true) {
 }
 
 describe("Person Layer 2 route", () => {
+  it("uses trusted project grants for union visibility, association scope, and the final release fence", () => {
+    const value = setup(false);
+    const record = new Database(":memory:");
+    record.exec("CREATE TABLE organization_record_log (position INTEGER PRIMARY KEY, record_sha256 TEXT NOT NULL)");
+    const policy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
+    const alphaId = "prj_00000000-0000-4000-8000-000000000001";
+    const betaId = "prj_00000000-0000-4000-8000-000000000002";
+    const alpha = { ...policyAtom({ id: "member", policy_id: policy }), policy_contract_sha256: sha256Digest("project-policy"), text: "alpha launch", text_sha256: sha256Digest("alpha launch"), audience_project_ids: [alphaId, betaId], association_project_ids: [alphaId] };
+    const beta = { ...policyAtom({ id: "restricted", policy_id: policy }), policy_contract_sha256: sha256Digest("project-policy"), record_position: 2, text: "beta launch", text_sha256: sha256Digest("beta launch"), audience_project_ids: [alphaId, betaId], association_project_ids: [betaId] };
+    const generation = realGenerationInput(value.state_directory, [alpha, beta]);
+    const exact_head = { ...generation.exact_head, position: 2, record_sha256: beta.record_sha256 };
+    record.prepare("INSERT INTO organization_record_log VALUES (?, ?)").run(2, beta.record_sha256);
+    const built = buildReadableSearchGenerationV1({ ...generation, exact_head, project_members_policy_contract_sha256: sha256Digest("project-policy") });
+    const active = { generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256, retrieval_contract_sha256: RETRIEVAL_CONTRACT, exact_head };
+    warmReadableSearchActiveGenerationV1({ state_directory: value.state_directory, active_generation: active });
+    value.authority.prepare(`INSERT INTO authority_readable_search_active_generation (singleton,organization_id,generation_id,manifest_sha256,retrieval_contract_sha256,record_head_position,record_head_hash,published_at) VALUES (1,?,?,?,?,?,?,?)`).run("org_clean", active.generation_id, active.manifest_sha256, RETRIEVAL_CONTRACT, 2, beta.record_sha256, "2026-09-26T00:00:00.000Z");
+    let grants = [
+      alphaId,
+      ...Array.from({ length: 21 }, (_, index) =>
+        `prj_00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}`,
+      ),
+    ].sort();
+    const reader = authorization();
+    const route = createPersonRecordSearchRouteV1({ state_directory: value.state_directory, authority_id: "oau_clean", organization_id: "org_clean", state_lineage_id: "lineage_clean", retrieval_contract_sha256: RETRIEVAL_CONTRACT, sessions: { authenticateAccess: () => reader }, authority: value.authority, record, audit: new SqlitePersonRecordReadAuditV1(value.authority), capture_projects: () => ({ project_ids: grants, grants_sha256: canonicalSha256(grants) }) });
+    expect(route.searchBatch({ access_token: "reader", queries: ["launch"], project_id: alphaId }).response.items.map(item => item.text)).toEqual(["alpha launch"]);
+    expect(() => route.searchBatch({ access_token: "reader", queries: ["launch"], project_id: betaId })).toThrow("authentication failed");
+    const revokeAfterSearch = createPersonRecordSearchRouteV1({ state_directory: value.state_directory, authority_id: "oau_clean", organization_id: "org_clean", state_lineage_id: "lineage_clean", retrieval_contract_sha256: RETRIEVAL_CONTRACT, sessions: { authenticateAccess: () => reader }, authority: value.authority, record, audit: new SqlitePersonRecordReadAuditV1(value.authority), capture_projects: () => ({ project_ids: grants, grants_sha256: canonicalSha256(grants) }), search_generation: (input) => { const result = searchReadableSearchGenerationV1(input); grants = []; return result; } });
+    expect(() => revokeAfterSearch.searchBatch({ access_token: "reader", queries: ["launch"], project_id: alphaId })).toThrow("person authentication failed");
+    grants = [alphaId];
+    grants = [];
+    expect(route.searchBatch({ access_token: "reader", queries: ["launch"] }).response.items).toEqual([]);
+    record.close(); value.record.close(); value.authority.close();
+  });
   it.each(["owner", "employee", "other-owner"] as const)("preserves independent lexical facts through a full expansion packet for %s", async (actor) => {
     const value = setup(false);
     const record = new Database(":memory:");

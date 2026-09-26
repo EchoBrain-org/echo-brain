@@ -7,6 +7,7 @@ import type Database from "better-sqlite3";
 import { ORGANIZATION_RECORD_LOG_DATABASE } from "./database-definition.js";
 
 export const ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3 = 3;
+export const ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4 = 4;
 
 export function organizationRecordLogBaselineSqlV3(): string {
   return readFileSync(new URL("../../baselines/organization-record-log-baseline-v3.sql", import.meta.url), "utf8");
@@ -28,6 +29,34 @@ export function applyOrganizationRecordLogBaselineV3(database: Database.Database
     database.exec(sql);
     database.pragma(`application_id = ${ORGANIZATION_RECORD_LOG_DATABASE.application_id}`);
     database.pragma(`user_version = ${ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3}`);
+    database.exec("COMMIT");
+  } catch (error) {
+    try { database.exec("ROLLBACK"); } catch {}
+    throw error;
+  }
+}
+
+export function organizationRecordLogBaselineSqlV4(): string {
+  return readFileSync(new URL("../../baselines/organization-record-log-baseline-v4.sql", import.meta.url), "utf8");
+}
+
+export function organizationRecordLogBaselineSha256V4(): Sha256Digest {
+  return sha256Digest(organizationRecordLogBaselineSqlV4());
+}
+
+/** Fresh V4 lineage only.  Existing V3 state is intentionally never relabelled. */
+export function applyOrganizationRecordLogBaselineV4(database: Database.Database): void {
+  const sql = organizationRecordLogBaselineSqlV4();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    if (database.pragma("user_version", { simple: true }) !== 0 ||
+        database.pragma("application_id", { simple: true }) !== 0 ||
+        database.prepare("SELECT count(*) FROM sqlite_master").pluck().get() !== 0) {
+      throw new Error("organization record log baseline requires a completely empty database");
+    }
+    database.exec(sql);
+    database.pragma(`application_id = ${ORGANIZATION_RECORD_LOG_DATABASE.application_id}`);
+    database.pragma(`user_version = ${ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4}`);
     database.exec("COMMIT");
   } catch (error) {
     try { database.exec("ROLLBACK"); } catch {}

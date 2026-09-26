@@ -25,6 +25,7 @@ decision_ids:
   - ADR-0014
   - ADR-0015
   - ADR-0016
+  - ADR-0017
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002

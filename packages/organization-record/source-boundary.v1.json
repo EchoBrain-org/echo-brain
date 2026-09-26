@@ -26,7 +26,8 @@
     "path"
   ],
   "runtime_assets": [
-    "packages/organization-record/baselines/organization-record-log-baseline-v3.sql"
+    "packages/organization-record/baselines/organization-record-log-baseline-v3.sql",
+    "packages/organization-record/baselines/organization-record-log-baseline-v4.sql"
   ],
   "component_index_contract": {
     "canonical_components": [

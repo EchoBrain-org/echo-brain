@@ -85,6 +85,15 @@ export function applyAuthorityBaselineV9(database: Database.Database): void {
   applyEmptyAuthorityBaseline(database, authorityBaselineSqlV9(), AUTHORITY_BASELINE_SCHEMA_VERSION_V9);
 }
 
+export const AUTHORITY_BASELINE_SCHEMA_VERSION_V10 = 10;
+export function authorityBaselineSqlV10(): string {
+  return readFileSync(new URL("../../../../baselines/authority-baseline-v10.sql", import.meta.url), "utf8");
+}
+export function authorityBaselineSha256V10(): Sha256Digest { return sha256Digest(authorityBaselineSqlV10()); }
+export function applyAuthorityBaselineV10(database: Database.Database): void {
+  applyEmptyAuthorityBaseline(database, authorityBaselineSqlV10(), AUTHORITY_BASELINE_SCHEMA_VERSION_V10);
+}
+
 /**
  * Applies one pinned baseline to a completely empty Authority database and
  * stamps its application id and schema version in the same transaction.

@@ -18,6 +18,7 @@ import type { PinnedOrganizationAuthority } from "./authority-descriptor.js";
 import type { PersonContentPolicyIdV2 } from "./human-act-record-input-v1.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "./person-content-policy-v2.js";
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "./record-payload.js";
@@ -93,7 +94,7 @@ export interface NoPolicyFactOutcomeV2 {
 
 export interface AppendedPolicyFactOutcomeV2 {
   readonly kind: "appended";
-  readonly policy_id: PersonContentPolicyIdV2;
+  readonly policy_id: PersonContentPolicyIdV2 | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
 }
 
 export type OrganizationRecordPolicyFactOutcomeV2 =
@@ -155,10 +156,11 @@ function assertNullableDigest(
 function assertPolicyId(
   value: unknown,
   label: string,
-): asserts value is PersonContentPolicyIdV2 {
+): asserts value is PersonContentPolicyIdV2 | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID {
   if (
     value !== RESTRICTED_REVIEWER_PERSON_POLICY_ID &&
-    value !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
+    value !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID &&
+    value !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID
   ) {
     fail(`${label} has an unsupported Person policy`);
   }

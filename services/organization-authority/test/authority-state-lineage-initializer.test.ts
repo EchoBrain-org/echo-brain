@@ -20,14 +20,12 @@ import {
   openOrganizationControlDatabase, applyOrganizationControlBaselineV3, ORGANIZATION_CONTROL_BASELINE_SCHEMA_VERSION_V3, organizationControlBaselineSha256V3,
 } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import {
-  openOrganizationRecordDatabase, applyOrganizationRecordLogBaselineV3, ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3, organizationRecordLogBaselineSha256V3,
+  openOrganizationRecordDatabase, applyOrganizationRecordLogBaselineV4, ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4, organizationRecordLogBaselineSha256V4,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import {
-  READABLE_SEARCH_FACTS_BASELINE_V2, READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2, readableSearchPlaneBaselineSha256,
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
-  READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-  readableSearchPlaneBaselineSha256V1,
+  READABLE_SEARCH_FACTS_BASELINE_V3, readableSearchPlaneBaselineSha256,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 
 const roots: string[] = [];
@@ -128,35 +126,35 @@ function realBaselineInput(
       },
       "record-log": {
         database_schema_version:
-          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
-        schema_sha256: organizationRecordLogBaselineSha256V3(),
+          ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
+        schema_sha256: organizationRecordLogBaselineSha256V4(),
       },
       "retrieval-facts": {
         database_schema_version:
-          READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
+          READABLE_SEARCH_FACTS_BASELINE_V3.schema_version,
         schema_sha256: readableSearchPlaneBaselineSha256(
-          READABLE_SEARCH_FACTS_BASELINE_V2,
+          READABLE_SEARCH_FACTS_BASELINE_V3,
         ),
       },
       "retrieval-lexical": {
         database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_LEXICAL_BASELINE_V1,
+          READABLE_SEARCH_LEXICAL_BASELINE_V2.schema_version,
+        schema_sha256: readableSearchPlaneBaselineSha256(
+          READABLE_SEARCH_LEXICAL_BASELINE_V2,
         ),
       },
       "retrieval-content": {
         database_schema_version:
-          READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
-        schema_sha256: readableSearchPlaneBaselineSha256V1(
-          READABLE_SEARCH_CONTENT_BASELINE_V1,
+          READABLE_SEARCH_CONTENT_BASELINE_V2.schema_version,
+        schema_sha256: readableSearchPlaneBaselineSha256(
+          READABLE_SEARCH_CONTENT_BASELINE_V2,
         ),
       },
     },
     top_level_appliers: {
       authority: { apply: applyAuthorityBaselineV5 },
       "control-plane": { apply: applyOrganizationControlBaselineV3 },
-      "record-log": { apply: applyOrganizationRecordLogBaselineV3 },
+      "record-log": { apply: applyOrganizationRecordLogBaselineV4 },
     },
     open_writable_database: (path, role) => {
       if (role === "authority") return openAuthorityDatabase(path);

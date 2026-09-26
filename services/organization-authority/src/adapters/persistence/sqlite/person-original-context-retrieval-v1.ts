@@ -5,7 +5,12 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-authority-kernel/shared/released-source-context-v1";
 import type Database from "better-sqlite3";
 import { canonicalSourceContentV1, sourceContentSha256V1 } from "@echo-brain/organization-processing/core";
+import { assertCanonicalMeetingDocument, type MeetingDocument } from "@echo-brain/organization-processing/core";
+import type { PersonMeetingTranscriptCitationV1 } from "@echo-brain/organization-api";
 import type {
+  ApprovedMeetingTranscriptGrantReaderV1,
+  ApprovedMeetingTranscriptGrantV1,
+  ApprovedMeetingTranscriptReadV1,
   OriginalContextReleaseV1,
   OriginalContextCitationV1,
   PersonAskScopeV2,
@@ -55,6 +60,15 @@ type DocumentRow = {
   readonly detected_media_type: string;
   readonly received_at: string;
   readonly lexical_score: number;
+};
+type MeetingSourceRow = {
+  readonly source_id: string;
+  readonly revision_id: string;
+  readonly source_sha256: Sha256Digest;
+  readonly source_content_sha256: string;
+  readonly manifest_json: string;
+  readonly source_content_json: string;
+  readonly analysis_policy: string;
 };
 
 interface Sessions {
@@ -141,6 +155,23 @@ function matchingPacket(title: string, body: string, terms: readonly string[]): 
   return Object.freeze({ index, text: values[index]! });
 }
 
+/** A transcript page is bounded by UTF-8 bytes and never splits a code point. */
+function transcriptPage(body: string, offset: number): { readonly text: string; readonly next_offset: number | null } {
+  const points = [...body.normalize("NFC")];
+  if (offset >= points.length) denied();
+  let end = offset;
+  let bytes = 0;
+  while (end < points.length) {
+    const point = points[end]!;
+    const size = Buffer.byteLength(point, "utf8");
+    if (bytes + size > MAXIMUM_PACKET_BYTES) break;
+    bytes += size;
+    end += 1;
+  }
+  if (end === offset) unavailable();
+  return Object.freeze({ text: points.slice(offset, end).join(""), next_offset: end === points.length ? null : end });
+}
+
 /** Labels cross the public API boundary; evidence retains the full filename. */
 function presentationLabel(value: string): string {
   // Upload filenames deliberately permit a broader set of Unicode than Ask
@@ -163,6 +194,13 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     private readonly database: Database.Database,
     private readonly sessions: Sessions,
     private readonly organizationId: string,
+    private readonly transcriptOptions?: Readonly<{
+      readonly authority_id: string;
+      readonly state_lineage_id: string;
+      readonly grants: ApprovedMeetingTranscriptGrantReaderV1;
+      /** Bound by composition to the versioned policy contract registry. */
+      readonly is_expected_policy_contract: (grant: ApprovedMeetingTranscriptGrantV1) => boolean;
+    }>,
   ) {
     // The query parameter is a bound, adapter-created JSON array of validated terms.
     database.function("echo_original_context_score_v1", { deterministic: true }, (title, text, query) =>
@@ -273,6 +311,68 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return Object.freeze({ scope: Object.freeze({ ...input.scope }), atom });
   }
 
+  readApprovedMeetingTranscript(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+    readonly citation: PersonMeetingTranscriptCitationV1;
+    readonly offset?: number;
+  }): ApprovedMeetingTranscriptReadV1 {
+    if (this.transcriptOptions === undefined) unavailable();
+    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
+    this.assertOrganization(actor);
+    this.assertScope(actor, input.scope);
+    const offset = input.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10_000_000) unavailable();
+    const grant = this.transcriptOptions.grants.find({
+      authority_id: this.transcriptOptions.authority_id,
+      organization_id: this.organizationId,
+      state_lineage_id: this.transcriptOptions.state_lineage_id,
+      approval_id: input.citation.approval_id,
+    });
+    if (grant === null || !this.matchesTranscriptGrant(grant, input.citation) ||
+      !this.transcriptOptions.is_expected_policy_contract(grant) ||
+      !this.readableTranscriptGrant(actor, input.scope, grant)) denied();
+    const initialProjectGrantSnapshot = this.projectGrantSnapshot(actor, input.scope, grant);
+    const row = this.meetingSource(input.citation);
+    if (row === undefined) denied();
+    const meeting = this.meetingContent(row);
+    const body = meeting.content.filter(block => block.kind === "transcript").map(block => block.text).join("\n\n");
+    if (body.length === 0) denied();
+    const page = transcriptPage(body, offset);
+    // The policy record is immutable, but the current actor/project grants and
+    // exact retained revision are intentionally re-evaluated immediately
+    // before both audit and byte release.
+    const current = this.transcriptOptions.grants.find({
+      authority_id: this.transcriptOptions.authority_id,
+      organization_id: this.organizationId,
+      state_lineage_id: this.transcriptOptions.state_lineage_id,
+      approval_id: input.citation.approval_id,
+    });
+    const currentActor = this.sessions.authenticateAccess({ access_token: input.access_token });
+    this.assertOrganization(currentActor);
+    if (currentActor.organization_id !== actor.organization_id ||
+      currentActor.principal_id !== actor.principal_id ||
+      currentActor.membership_id !== actor.membership_id ||
+      currentActor.membership_type !== actor.membership_type ||
+      currentActor.identity_binding_id !== actor.identity_binding_id ||
+      currentActor.session_family_id !== actor.session_family_id ||
+      currentActor.access_credential_sha256 !== actor.access_credential_sha256 ||
+      currentActor.person_state_sha256 !== actor.person_state_sha256 ||
+      currentActor.session_state_sha256 !== actor.session_state_sha256) denied();
+    this.assertScope(currentActor, input.scope);
+    if (current === null || !this.sameTranscriptGrant(grant, current) ||
+      !this.matchesTranscriptGrant(current, input.citation) ||
+      !this.transcriptOptions.is_expected_policy_contract(current) ||
+      !this.readableTranscriptGrant(currentActor, input.scope, current) ||
+      this.projectGrantSnapshot(currentActor, input.scope, current) !== initialProjectGrantSnapshot) denied();
+    const currentRow = this.meetingSource(input.citation);
+    if (currentRow === undefined) denied();
+    this.meetingContent(currentRow);
+    const response = Object.freeze({ scope: Object.freeze({ ...input.scope }), citation: Object.freeze({ ...input.citation }), text: page.text, next_offset: page.next_offset });
+    this.auditTranscriptRead(currentActor, response);
+    return response;
+  }
+
   private assertOrganization(actor: PersonAccessAuthorization): void {
     if (actor.organization_id !== this.organizationId ||
       !this.database.prepare("SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active'").get(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type)) denied();
@@ -290,6 +390,84 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private assertScope(actor: PersonAccessAuthorization, scope: PersonAskScopeV2): void {
     if (scope.kind === "project" && !this.projectGrant(actor, scope.project_id)) denied();
+  }
+
+  private matchesTranscriptGrant(grant: ApprovedMeetingTranscriptGrantV1, citation: PersonMeetingTranscriptCitationV1): boolean {
+    return grant.approval_id === citation.approval_id && grant.source_id === citation.source_id &&
+      grant.revision_id === citation.revision_id && grant.source_sha256 === citation.source_sha256;
+  }
+
+  private sameTranscriptGrant(left: ApprovedMeetingTranscriptGrantV1, right: ApprovedMeetingTranscriptGrantV1): boolean {
+    return canonicalJson({
+      approval_id: left.approval_id, record_position: left.record_position, record_sha256: left.record_sha256,
+      policy_id: left.policy_id, policy_contract_sha256: left.policy_contract_sha256,
+      source_id: left.source_id, revision_id: left.revision_id, source_sha256: left.source_sha256,
+      reviewer_principal_id: left.reviewer_principal_id, reviewer_membership_id: left.reviewer_membership_id,
+      audience_project_ids: left.audience_project_ids, association_project_ids: left.association_project_ids,
+    }) === canonicalJson({
+      approval_id: right.approval_id, record_position: right.record_position, record_sha256: right.record_sha256,
+      policy_id: right.policy_id, policy_contract_sha256: right.policy_contract_sha256,
+      source_id: right.source_id, revision_id: right.revision_id, source_sha256: right.source_sha256,
+      reviewer_principal_id: right.reviewer_principal_id, reviewer_membership_id: right.reviewer_membership_id,
+      audience_project_ids: right.audience_project_ids, association_project_ids: right.association_project_ids,
+    });
+  }
+
+  private projectGrantSnapshot(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, grant: ApprovedMeetingTranscriptGrantV1): Sha256Digest {
+    const activeGrant = (projectId: string): Record<string, unknown> | undefined => this.database.prepare(
+      "SELECT project_membership_id,project_id,principal_id,membership_id,membership_type,role,granted_at FROM authority_project_memberships_v1 WHERE organization_id=? AND project_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active'",
+    ).get(actor.organization_id, projectId, actor.principal_id, actor.membership_id, actor.membership_type) as Record<string, unknown> | undefined;
+    // A project-policy audience is a union: retaining any selected project is
+    // sufficient. Snapshot only the grants that currently authorize this
+    // caller, while scope remains an independently required grant.
+    const scope_grant = scope.kind === "project" ? activeGrant(scope.project_id) : null;
+    if (scope.kind === "project" && scope_grant === undefined) denied();
+    const audience_grants = grant.policy_id !== "project-members-readable-person-v1"
+      ? []
+      : grant.audience_project_ids.map(activeGrant).filter((row): row is Record<string, unknown> => row !== undefined)
+        .sort((left, right) => String(left.project_id).localeCompare(String(right.project_id)));
+    if (grant.policy_id === "project-members-readable-person-v1" && audience_grants.length === 0) denied();
+    return canonicalSha256({ scope_grant, audience_grants });
+  }
+
+  private readableTranscriptGrant(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, grant: ApprovedMeetingTranscriptGrantV1): boolean {
+    if (scope.kind === "project" && (!grant.association_project_ids.includes(scope.project_id) || !this.projectGrant(actor, scope.project_id))) return false;
+    if (grant.policy_id === "organization-member-readable-person-v2") return true;
+    if (grant.policy_id === "restricted-reviewer-person-v2") {
+      return actor.principal_id === grant.reviewer_principal_id && actor.membership_id === grant.reviewer_membership_id;
+    }
+    if (grant.policy_id === "project-members-readable-person-v1") {
+      return grant.audience_project_ids.some(projectId => this.projectGrant(actor, projectId));
+    }
+    return false;
+  }
+
+  private meetingSource(citation: PersonMeetingTranscriptCitationV1): MeetingSourceRow | undefined {
+    const row = this.database.prepare(`SELECT source.source_id,revision.revision_id,('sha256:' || revision.revision_sha256) AS source_sha256,revision.content_sha256 AS source_content_sha256,revision.manifest_json,content.content_json AS source_content_json,source.analysis_policy
+      FROM authority_sources_v1 source
+      JOIN authority_source_revisions_v1 revision ON revision.organization_id=source.organization_id AND revision.source_id=source.source_id
+      JOIN authority_source_contents_v1 content ON content.organization_id=revision.organization_id AND content.source_id=revision.source_id AND content.revision_id=revision.revision_id
+      WHERE source.organization_id=? AND source.source_id=? AND revision.revision_id=? AND source.analysis_policy='automatic'`).get(this.organizationId, citation.source_id, citation.revision_id) as MeetingSourceRow | undefined;
+    if (row === undefined || row.source_sha256 !== citation.source_sha256 || !SOURCE_ID.test(row.source_id) || !SHA256.test(row.source_sha256)) return undefined;
+    return row;
+  }
+
+  private meetingContent(row: MeetingSourceRow): MeetingDocument {
+    const content = this.assertRevisionEnvelope(row as Pick<SourceRow, "source_sha256" | "source_content_sha256" | "manifest_json" | "source_content_json">);
+    try {
+      const manifest = JSON.parse(row.manifest_json) as { readonly captured_at?: unknown };
+      if (typeof manifest.captured_at !== "string" || content === null || typeof content !== "object" || Array.isArray(content)) unavailable();
+      const sourceContent = content as { readonly provenance?: unknown };
+      if (sourceContent.provenance === null || typeof sourceContent.provenance !== "object" || Array.isArray(sourceContent.provenance)) unavailable();
+      const meeting = { ...sourceContent, provenance: { ...(sourceContent.provenance as Record<string, unknown>), observed_at: manifest.captured_at } };
+      assertCanonicalMeetingDocument(meeting);
+      return meeting;
+    } catch { unavailable(); }
+  }
+
+  private auditTranscriptRead(actor: PersonAccessAuthorization, response: ApprovedMeetingTranscriptReadV1): void {
+    const body = { schema_version: 1, kind: "echo-person-approved-meeting-transcript-read-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope: response.scope, approval_id: response.citation.approval_id, source_id: response.citation.source_id, revision_id: response.citation.revision_id, source_sha256: response.citation.source_sha256, page_sha256: canonicalSha256(response.text), response_sha256: canonicalSha256({ schema_version: 1, kind: "echo-person-meeting-transcript-v1", ...response }), checked_at: actor.checked_at };
+    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(canonicalSha256(body), canonicalJson(body), actor.checked_at);
   }
 
   private acl(actor: PersonAccessAuthorization, prefix: "u" | "d"): { readonly sql: string; readonly args: readonly string[] } {

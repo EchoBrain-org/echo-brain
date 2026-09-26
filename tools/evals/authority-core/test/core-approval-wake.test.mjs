@@ -1,4 +1,5 @@
 import { createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
+import { createPrivateSlackBlockApprovalPolicyProjectorV2 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
@@ -20,12 +21,17 @@ import { AdmittedMeetingProcessingCycleV1 } from "../../../../packages/organizat
 import { SqliteAuthorityMeetingProcessingStateV1 } from "../../../../packages/organization-processing/dist/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.js";
 import { createCoreApproval } from "../core-approval.mjs";
 import { createCoreIdentity } from "../core-identity.mjs";
-import { createCoreInput } from "../core-input.mjs";
+import { createCoreInput, createCoreSourceIngestion } from "../core-input.mjs";
 
 const POLICY = "organization-member-readable-person-v2";
 
 function queuedReceiptCount(control) {
   return control.prepare("SELECT count(*) FROM organization_private_approval_signed_action_receipts_v2").pluck().get();
+}
+
+function queuedReceiptSchemaVersion(control) {
+  const receipt = control.prepare("SELECT normalized_receipt_json FROM organization_private_approval_signed_action_receipts_v2").pluck().get();
+  return JSON.parse(receipt).schema_version;
 }
 
 function fixtureInput(identities) {
@@ -93,7 +99,10 @@ async function createFixture(on_terminal_action_queued) {
     const input = createCoreInput({ authority, coordinates, owner: identity.owner, sessions: identity.sessions });
     const state = new SqliteAuthorityMeetingProcessingStateV1(authority, input.source_cursor_policy, input.processor.identity.adapter_id);
     const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(initialized.state_directory, "keys"), ...coordinates });
-    const projectors = createRecordPolicyFactProjectorRegistryV1([createPrivateSlackBlockApprovalPolicyProjectorV1()]);
+    const projectors = createRecordPolicyFactProjectorRegistryV1([
+      createPrivateSlackBlockApprovalPolicyProjectorV1(),
+      createPrivateSlackBlockApprovalPolicyProjectorV2(),
+    ]);
     const approvals = await createCoreApproval({
       context: {
         state,
@@ -113,12 +122,24 @@ async function createFixture(on_terminal_action_queued) {
     input.offer(offered);
     const cycle = new AdmittedMeetingProcessingCycleV1({
       source: input.source,
+      source_ingestion: createCoreSourceIngestion({
+        authority,
+        organization_id: coordinates.organization_id,
+        state,
+        source: input.source,
+      }),
       processor: input.processor,
       state,
       stager: approvals.stager,
       source_cursor_policy: input.source_cursor_policy,
     });
-    await cycle.runOnce(new AbortController().signal);
+    const staged = await cycle.runOnce(new AbortController().signal);
+    assert.equal(staged.kind, "staged", "the current source-custody path must stage the approval");
+    assert.equal(
+      authority.prepare("SELECT count(*) FROM authority_source_revisions_v1").pluck().get(),
+      1,
+      "the staged approval must retain its source revision in Authority custody",
+    );
     const frozen = await state.readFrozenCandidateForSourceRevision({
       external_id: offered.meeting.provenance.external_id,
       canonical_revision: offered.meeting.provenance.canonical_revision,
@@ -164,6 +185,7 @@ test("approval-port wake follows the persisted receipt", async () => {
     await fixture.approval("wake-after-durable");
     assert.equal(observedReceiptCount, 1);
     assert.equal(queuedReceiptCount(fixture.control), 1);
+    assert.equal(queuedReceiptSchemaVersion(fixture.control), 2, "fresh V2 card must retain its V2 verified receipt");
   } finally {
     fixture?.close();
   }

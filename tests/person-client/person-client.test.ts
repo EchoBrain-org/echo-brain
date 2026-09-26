@@ -704,6 +704,37 @@ describe("Person client", () => {
     });
   });
 
+  it("reads an explicitly approved meeting transcript through the gated endpoint", async () => {
+    await withHome(async home => {
+      const sourceId = `source:${"a".repeat(64)}`;
+      const sourceSha = `sha256:${"b".repeat(64)}`;
+      await new PersonClient({ home_directory: home, now: () => NOW, fetch: async () => json({ authority_descriptor: authorityDescriptor() }) })
+        .installSession("https://authority.example", ROTATED_SESSION);
+      const { code: status, stdout } = await runCli([
+        "transcript", "--approval-id", "apr_fixture", "--source-id", sourceId,
+        "--revision-id", "meeting-revision-1", "--source-sha256", sourceSha,
+      ], {
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input, init) => {
+          expect(new URL(String(input)).pathname).toBe("/v1/person/meeting-transcripts/read");
+          expect(JSON.parse(String(init?.body))).toEqual({
+            schema_version: 1,
+            scope: { kind: "global" },
+            citation: { kind: "approved_meeting_transcript", approval_id: "apr_fixture", source_id: sourceId, revision_id: "meeting-revision-1", source_sha256: sourceSha },
+          });
+          return json({
+            schema_version: 1, kind: "echo-person-meeting-transcript-v1", scope: { kind: "global" },
+            citation: { kind: "approved_meeting_transcript", approval_id: "apr_fixture", source_id: sourceId, revision_id: "meeting-revision-1", source_sha256: sourceSha },
+            text: "Approved meeting transcript.", next_offset: null,
+          });
+        },
+      });
+      expect(status).toBe(0);
+      expect(JSON.parse(stdout)).toMatchObject({ ok: true, result: { text: "Approved meeting transcript.", next_offset: null } });
+    });
+  });
+
   it("rejects Ask scope or source evidence coordinates changed by the response", async () => {
     await withHome(async home => {
       const projectId = "prj_00000000-0000-4000-8000-000000000019" as `prj_${string}`;

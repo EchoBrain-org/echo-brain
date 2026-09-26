@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   PERSON_CONTENT_POLICY_CONTRACT_KIND,
   PERSON_CONTENT_POLICY_READER_AUTHENTICATION,
   RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
@@ -10,6 +11,8 @@ import {
   organizationMemberReadablePersonConsequenceSha256,
   organizationMemberReadablePersonPolicyContract,
   organizationMemberReadablePersonPolicyContractSha256,
+  projectMembersReadablePersonPolicyContract,
+  projectMembersReadablePersonPolicyContractSha256,
   restrictedReviewerPersonConsequenceSha256,
   restrictedReviewerPersonPolicyContract,
   restrictedReviewerPersonPolicyContractSha256,
@@ -92,5 +95,25 @@ describe("Person content policy v2", () => {
         reader_selector: reviewer.reader_selector,
       }),
     ).not.toBe(organizationMemberReadablePersonPolicyContractSha256());
+  });
+
+  it("freezes the project-member selector without freezing a reader snapshot", () => {
+    expect(projectMembersReadablePersonPolicyContract()).toEqual({
+      schema_version: 2,
+      kind: PERSON_CONTENT_POLICY_CONTRACT_KIND,
+      policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
+      reader_authentication: PERSON_CONTENT_POLICY_READER_AUTHENTICATION,
+      reader_selector: {
+        kind: "current-active-project-members-v1",
+        membership_state: "active",
+        membership_scope: "same-organization-as-record",
+        project_selector: "approval-consequence-audience-project-ids-v1",
+        later_members: "included",
+      },
+      readable_item_kinds: ["decision", "action", "rationale"],
+    });
+    expect(projectMembersReadablePersonPolicyContractSha256()).toBe(
+      "sha256:35f00fe4f6d01a5b80ed3f1278c3def4dcb3a01993530e0d837957e3af3505a2",
+    );
   });
 });

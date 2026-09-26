@@ -6,6 +6,7 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
 } from "../../src/organization-control-plane/slack-approval-integration-v1.js";
 import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "../../src/private-approval/private-slack-approval-block-kit-card-v1.js";
+import { privateSlackApprovalBlockKitActionIdV2 } from "../../src/private-approval/private-slack-approval-block-kit-card-v2.js";
 import { createPrivateSlackApprovalInteractionHandlerV1 } from "../../src/private-approval/private-slack-approval-interaction-handler-v1.js";
 import { createPrivateSlackApprovalHttpAdapterV1 } from "../../src/private-approval/private-slack-approval-http-adapter-v1.js";
 import { startOrganizationAuthorityServiceLifecycle } from "../../../../../services/organization-authority/src/composition/organization-authority-service-lifecycle.js";
@@ -153,7 +154,91 @@ function request(body: Uint8Array, secret = SECRET) {
   };
 }
 
+function rawV2(input?: {
+  readonly reject?: boolean;
+  readonly projects?: readonly unknown[];
+  readonly policy_id?: "project-members-readable-person-v1" | "organization-member-readable-person-v2" | "restricted-reviewer-person-v2";
+}): Uint8Array {
+  const policy = privateSlackApprovalBlockKitActionIdV2(CARD, "policy");
+  const projects = privateSlackApprovalBlockKitActionIdV2(CARD, "projects");
+  const transcript = privateSlackApprovalBlockKitActionIdV2(CARD, "share-transcript");
+  const comment = privateSlackApprovalBlockKitActionIdV2(CARD, "comment");
+  const terminal = privateSlackApprovalBlockKitActionIdV2(CARD, input?.reject === true ? "reject" : "approve");
+  const policyId = input?.policy_id ?? "project-members-readable-person-v1";
+  const policyText = policyId === "project-members-readable-person-v1"
+    ? "Projects"
+    : policyId === "organization-member-readable-person-v2"
+      ? "Team"
+      : "Only me";
+  const payload = {
+    type: "block_actions", user: { id: "U012ABCDEF", team_id: "T012ABCDEF" }, api_app_id: "A012ABCDEF",
+    trigger_id: "1234567890.1234567890.abcdefghijklmnopqrstuvwxyzABCD",
+    container: { type: "message", channel_id: "D012ABCDEF", message_ts: "1712345678.123456", is_ephemeral: false },
+    team: { id: "T012ABCDEF", domain: "echo" }, enterprise: null, is_enterprise_install: false,
+    channel: { id: "D012ABCDEF", name: "directmessage" },
+    message: { type: "message", user: "U098BOTAPP", ts: "1712345678.123456", app_id: "A012ABCDEF", bot_id: "B012ABCDEF", blocks: [] },
+    state: { values: {
+      policy: { [policy]: { type: "static_select", selected_option: { text: { type: "plain_text", text: policyText, emoji: false }, value: policyId } } },
+      projects: { [projects]: { type: "multi_static_select", selected_options: input?.projects ?? [{ text: { type: "plain_text", text: "Launch", emoji: false }, value: "prj_11111111-1111-4111-8111-111111111111" }] } },
+      transcript: { [transcript]: { type: "checkboxes", selected_options: [{ text: { type: "plain_text", text: "Share", emoji: false }, value: "share-transcript-v1" }] } },
+      comment: { [comment]: { type: "plain_text_input", value: "Project release." } },
+    } },
+    actions: [{ type: "button", action_id: terminal, block_id: "actions", value: JSON.stringify({ schema_version: 2, ...CARD }), action_ts: "1712345680.123456" }],
+  };
+  return new TextEncoder().encode(new URLSearchParams({ payload: JSON.stringify(payload) }).toString());
+}
+
 describe("private Slack interactions application V1", () => {
+  it("durably dispatches V2 project and transcript choices through the V2 receipt API", async () => {
+    const enqueueV2 = vi.fn(() => ({ disposition: "resolution" as const, receipt: {} as never, receipt_sha256: `sha256:${"d".repeat(64)}` as const, idempotent: false }));
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: SECRET,
+      persistence: { enqueue: vi.fn(), enqueueV2 },
+      now_unix_seconds: () => NOW,
+      now: () => "2026-08-28T22:00:00.000Z",
+    });
+    await expect(application.accept(request(rawV2()))).resolves.toBe("accepted");
+    expect(enqueueV2).toHaveBeenCalledWith(expect.objectContaining({
+      schema_version: 2,
+      action: "approve",
+      selected_policy_id: "project-members-readable-person-v1",
+      selected_project_ids: ["prj_11111111-1111-4111-8111-111111111111"],
+      share_transcript: true,
+      comment: "Project release.",
+    }));
+  });
+
+  it("allows rejection after selecting Projects without a project selection", async () => {
+    const enqueueV2 = vi.fn(() => ({ disposition: "resolution" as const, receipt: {} as never, receipt_sha256: `sha256:${"d".repeat(64)}` as const, idempotent: false }));
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+    await expect(application.accept(request(rawV2({ reject: true, projects: [] })))).resolves.toBe("accepted");
+    expect(enqueueV2).toHaveBeenCalledWith(expect.objectContaining({ action: "reject", selected_policy_id: null, selected_project_ids: [], share_transcript: false }));
+  });
+
+  it.each([
+    "organization-member-readable-person-v2",
+    "restricted-reviewer-person-v2",
+  ] as const)("clears dormant project selections when %s is approved", async (policy_id) => {
+    const enqueueV2 = vi.fn(() => ({ disposition: "resolution" as const, receipt: {} as never, receipt_sha256: `sha256:${"d".repeat(64)}` as const, idempotent: false }));
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+
+    await expect(application.accept(request(rawV2({ policy_id })))).resolves.toBe("accepted");
+    expect(enqueueV2).toHaveBeenCalledWith(expect.objectContaining({
+      action: "approve",
+      selected_policy_id: policy_id,
+      selected_project_ids: [],
+    }));
+  });
+
+  it("still rejects Projects approval without a selected project", async () => {
+    const enqueueV2 = vi.fn();
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+
+    await expect(application.accept(request(rawV2({ projects: [] })))).rejects.toMatchObject({
+      code: "invalid_request",
+    });
+    expect(enqueueV2).not.toHaveBeenCalled();
+  });
   it("durably writes a digest-only verified terminal receipt before accepting it", async () => {
     const enqueue = vi.fn(() => ({
       disposition: "resolution" as const,

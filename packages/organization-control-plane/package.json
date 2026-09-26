@@ -29,6 +29,10 @@
       "types": "./dist/application/private-approval-policy-resolution-core-v1.d.ts",
       "import": "./dist/application/private-approval-policy-resolution-core-v1.js"
     },
+    "./application/private-approval-policy-resolution-core-v2": {
+      "types": "./dist/application/private-approval-policy-resolution-core-v2.d.ts",
+      "import": "./dist/application/private-approval-policy-resolution-core-v2.js"
+    },
     "./application/organization-secret-store-contracts": {
       "types": "./dist/application/organization-secret-store-contracts.d.ts",
       "import": "./dist/application/organization-secret-store-contracts.js"

@@ -10,6 +10,7 @@ import {
 } from "../application/person-policy-facts-v2.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   type PersonPolicyFactProjectionV2,
 } from "../application/person-policy-fact-contracts-v2.js";
@@ -21,6 +22,51 @@ import {
 
 type Action = "approve" | "reject";
 type EventKind = "approved" | "rejected";
+
+interface ApprovedTranscriptSourceCoordinateV1 {
+  readonly source_id: string;
+  readonly revision_id: string;
+  readonly source_sha256: Sha256Digest;
+}
+
+function requiredText(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${label} must be non-empty text`);
+  }
+  return value;
+}
+
+function projectIds(value: unknown, required: boolean, label: string): readonly string[] {
+  if (value === undefined && !required) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > 20 || (required && value.length < 1)) {
+    throw new Error(`${label} must contain ${required ? "1 to 20" : "0 to 20"} projects`);
+  }
+  const ids = value.map((item) => requiredText(item, "record selected project ID"));
+  if (new Set(ids).size !== ids.length || [...ids].sort().some((id, index) => id !== ids[index])) {
+    throw new Error(`${label} must be sorted and unique`);
+  }
+  return Object.freeze(ids);
+}
+
+function sourceCoordinate(value: unknown): ApprovedTranscriptSourceCoordinateV1 {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("record transcript source must be an object");
+  }
+  const source = value as Record<string, unknown>;
+  const keys = Object.keys(source).sort();
+  if (keys.join(",") !== "revision_id,source_id,source_sha256") {
+    throw new Error("record transcript source is invalid");
+  }
+  const source_sha256 = requiredText(source.source_sha256, "record transcript source_sha256");
+  if (!/^sha256:[0-9a-f]{64}$/.test(source_sha256)) {
+    throw new Error("record transcript source_sha256 must be a sha256 digest");
+  }
+  return Object.freeze({
+    source_id: requiredText(source.source_id, "record transcript source_id"),
+    revision_id: requiredText(source.revision_id, "record transcript revision_id"),
+    source_sha256: source_sha256 as Sha256Digest,
+  });
+}
 
 export type V4RecordEnvelopeView = RecordPolicyFactEnvelopeV1;
 
@@ -47,7 +93,8 @@ export interface V4ReceiptFactory {
           readonly kind: "appended";
           readonly policy_id:
             | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID
-            | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID;
+            | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
+            | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
         };
   }): JsonObject;
   /** Signs a Receipt V2 wrapper for the exact committed seed. */
@@ -254,6 +301,7 @@ export class OrganizationRecordAppenderV4 {
         predecessor_record_sha256,
         receipt_payload,
       });
+      this.insertApprovedRecordAudienceFacts(envelope, position, projected.facts);
       this.insertFacts(projected.facts);
       this.database.exec("COMMIT");
       return await this.withReceipt(
@@ -394,7 +442,7 @@ export class OrganizationRecordAppenderV4 {
             fact.reviewer_principal_id,
             fact.reviewer_membership_id,
           );
-      } else {
+      } else if (fact.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID) {
         this.database
           .prepare(
             `INSERT INTO organization_record_member_readable_person_fact (
@@ -406,8 +454,122 @@ export class OrganizationRecordAppenderV4 {
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(...common);
+      } else {
+        this.database
+          .prepare(
+            `INSERT INTO organization_record_project_members_readable_person_fact (
+             authority_id, organization_id, state_lineage_id, approval_id, action,
+             policy_id, policy_contract_sha256, record_position, record_sha256,
+             atom_order, signal_id_sha256, atom_id, item_kind, audit_event_id,
+             audit_sequence, audit_entry_sha256, provider_action_sha256,
+             authorization_proof_sha256
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(...common);
       }
     }
+  }
+
+  /**
+   * These are append-atomic immutable facts about a whole approved record,
+   * rather than a cache of the people who may read it.  The protocol verifier
+   * has already bound this resolution reference into the canonical envelope;
+   * we only accept the deliberately narrow V1 extension here.
+   */
+  private insertApprovedRecordAudienceFacts(
+    envelope: V4RecordEnvelopeView,
+    recordPosition: number,
+    facts: PersonPolicyFactProjectionV2["facts"],
+  ): void {
+    if (envelope.body.event.kind !== "approved") return;
+    const binding = this.policyProjectors.policyBinding(envelope);
+    const reference = envelope.body.human_act_resolution_ref as RecordPolicyFactEnvelopeV1["body"]["human_act_resolution_ref"] & {
+      readonly audience_project_ids?: unknown;
+      readonly association_project_ids?: unknown;
+      readonly share_transcript?: unknown;
+      readonly transcript_source?: unknown;
+    };
+    const audienceProjectIds = projectIds(
+      reference.audience_project_ids,
+      binding.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
+      "record audience_project_ids",
+    );
+    const associationProjectIds = projectIds(
+      reference.association_project_ids,
+      binding.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
+      "record association_project_ids",
+    );
+    if (binding.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) {
+      if (
+        audienceProjectIds.length !== associationProjectIds.length ||
+        audienceProjectIds.some((projectId, index) => projectId !== associationProjectIds[index])
+      ) {
+        throw new Error("project-readable record audience and association must match in lean V1");
+      }
+      for (const project_id of audienceProjectIds) {
+        this.database.prepare(
+          `INSERT INTO organization_record_project_members_readable_person_record_fact (
+             authority_id, organization_id, state_lineage_id, approval_id, action,
+             policy_id, policy_contract_sha256, record_position, record_sha256,
+             project_id, audit_event_id, audit_sequence, audit_entry_sha256,
+             provider_action_sha256, authorization_proof_sha256
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          envelope.body.authority_id, envelope.body.organization_id, envelope.body.state_lineage_id,
+          reference.approval_id, reference.action, binding.policy_id,
+          binding.policy_contract_sha256, recordPosition, envelope.record_sha256,
+          project_id, reference.audit_event_id, reference.audit_sequence,
+          reference.audit_entry_sha256, reference.provider_action_sha256,
+          reference.authorization_proof_sha256,
+        );
+        this.database.prepare(
+          `INSERT INTO organization_record_project_association_v1 (
+             record_position, record_sha256, project_id
+           ) VALUES (?, ?, ?)`,
+        ).run(recordPosition, envelope.record_sha256, project_id);
+      }
+    } else if (audienceProjectIds.length !== 0 || associationProjectIds.length !== 0) {
+      throw new Error("non-project record approval cannot select projects");
+    }
+
+    if (reference.share_transcript !== true) {
+      if (reference.share_transcript !== undefined && reference.share_transcript !== false) {
+        throw new Error("record transcript share flag is invalid");
+      }
+      return;
+    }
+    const source = sourceCoordinate(reference.transcript_source);
+    const reviewer = facts.find(
+      (fact) => fact.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+    );
+    if (
+      binding.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID &&
+      (reviewer === undefined || reviewer.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID)
+    ) {
+      // The immutable reviewer tuple is the only record-side witness for this
+      // audience.  An empty approved brief therefore cannot silently widen a
+      // transcript share to a generic policy.
+      throw new Error("restricted transcript grant has no reviewer witness");
+    }
+    this.database.prepare(
+      `INSERT INTO organization_record_meeting_transcript_grant_v1 (
+         authority_id, organization_id, state_lineage_id, approval_id,
+         record_position, record_sha256, policy_id, policy_contract_sha256,
+         source_id, revision_id, source_sha256,
+         reviewer_principal_id, reviewer_membership_id,
+         audit_event_id, audit_sequence, audit_entry_sha256,
+         provider_action_sha256, authorization_proof_sha256
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      envelope.body.authority_id, envelope.body.organization_id, envelope.body.state_lineage_id,
+      reference.approval_id, recordPosition, envelope.record_sha256,
+      binding.policy_id, binding.policy_contract_sha256,
+      source.source_id, source.revision_id, source.source_sha256,
+      reviewer?.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID ? reviewer.reviewer_principal_id : null,
+      reviewer?.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID ? reviewer.reviewer_membership_id : null,
+      reference.audit_event_id, reference.audit_sequence, reference.audit_entry_sha256,
+      reference.provider_action_sha256, reference.authorization_proof_sha256,
+    );
   }
 
   private async withReceipt(

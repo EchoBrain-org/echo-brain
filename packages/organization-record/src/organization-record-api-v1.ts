@@ -1,8 +1,11 @@
 /** Public API for record storage and retrieval-source composition. */
 export {
   applyOrganizationRecordLogBaselineV3,
+  applyOrganizationRecordLogBaselineV4,
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
   organizationRecordLogBaselineSha256V3,
+  organizationRecordLogBaselineSha256V4,
 } from "./persistence/record-log-baseline.js";
 export { openOrganizationRecordDatabase } from "./persistence/open-organization-record-database.js";
 export {
@@ -38,7 +41,13 @@ export {
 export {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID,
 } from "./application/person-policy-fact-contracts-v2.js";
+export {
+  ApprovedMeetingTranscriptGrantReaderV1,
+  type ApprovedMeetingTranscriptGrantLookupV1,
+  type ApprovedMeetingTranscriptGrantV1,
+} from "./retrieve/approved-meeting-transcript-grant-reader-v1.js";
 
 
 export {

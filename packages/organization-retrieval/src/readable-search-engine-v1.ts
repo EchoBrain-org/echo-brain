@@ -29,9 +29,9 @@ import {
   type ReadableSearchCorpusStatistics,
 } from "./application/analyzer.js";
 import {
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V2,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_V3,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
   applyReadableSearchPlaneBaseline,
   readableSearchPlaneBaselineSha256,
   type ReadableSearchPlaneBaseline,
@@ -43,11 +43,18 @@ export const ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 =
   "organization-member-readable-person-v2" as const;
 export const RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 =
   "restricted-reviewer-person-v2" as const;
+/**
+ * A record selected for one or more projects.  The selected IDs are immutable
+ * policy facts; the reader's current project grants are supplied by Layer 3.
+ */
+export const PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 =
+  "project-members-readable-person-v1" as const;
 export type ReadableSearchPolicyIdV1 =
   | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2
-  | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
+  | typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
+  | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
 type Plane = "facts" | "content" | "lexical";
-type SegmentKind = "organization-member" | "reviewer";
+type SegmentKind = "organization-member" | "reviewer" | "project-members";
 
 /**
  * Lean V1 admission ceiling. The values leave room for roughly one thousand
@@ -71,7 +78,7 @@ export const READABLE_SEARCH_READER_BEHAVIOR_V1 = Object.freeze({
 });
 
 export interface ReadableSearchLineagePlaneV1 {
-  readonly database_schema_version: 1 | 2;
+  readonly database_schema_version: 1 | 2 | 3;
   readonly schema_sha256: Sha256Digest;
   /** Canonical state-lineage database manifest for this exact plane role. */
   readonly manifest_json: string;
@@ -118,6 +125,10 @@ export interface ReadableSearchAtomV1 {
   readonly authorization_proof_sha256: Sha256Digest;
   readonly reviewer_principal_id: string | null;
   readonly reviewer_membership_id: string | null;
+  /** Frozen approved audience; required only by the project-members policy. */
+  readonly audience_project_ids?: readonly string[];
+  /** Immutable placement facts; never returned to a reader. */
+  readonly association_project_ids?: readonly string[];
 }
 /** One canonical, undirected link proposed by the disposable Layer 2 projector. */
 export interface ReadableSearchRelatedAtomPairV1 {
@@ -139,6 +150,8 @@ export interface BuildReadableSearchGenerationV1Input {
   /** Exact current policy contracts, committed even when a segment is empty. */
   readonly organization_member_policy_contract_sha256: Sha256Digest;
   readonly restricted_reviewer_policy_contract_sha256: Sha256Digest;
+  /** Optional only so historical two-policy builds retain their exact shape. */
+  readonly project_members_policy_contract_sha256?: Sha256Digest;
   readonly analyzer: ReadableSearchAnalyzerV1;
   readonly source_revision: string;
   readonly builder_artifact_sha256: Sha256Digest;
@@ -156,6 +169,7 @@ export interface ReadableSearchSegmentManifestV1 {
   readonly policy_contract_sha256: Sha256Digest;
   readonly reviewer_principal_id: string | null;
   readonly reviewer_membership_id: string | null;
+  readonly audience_project_ids?: readonly string[];
   readonly facts_root: Sha256Digest;
   readonly content_root: Sha256Digest;
   readonly lexical_root: Sha256Digest;
@@ -174,16 +188,11 @@ export interface ReadableSearchGenerationManifestV1 {
   readonly state_lineage_id: string;
   readonly exact_head: ReadableSearchExactHeadV1;
   readonly retrieval_contract_sha256: Sha256Digest;
-  readonly policies: readonly [
-    Readonly<{
-      policy_id: typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2;
-      policy_contract_sha256: Sha256Digest;
-    }>,
-    Readonly<{
-      policy_id: typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
-      policy_contract_sha256: Sha256Digest;
-    }>,
-  ];
+  /** Two-policy generations are legacy; new project generations carry three. */
+  readonly policies: readonly Readonly<{
+    policy_id: ReadableSearchPolicyIdV1;
+    policy_contract_sha256: Sha256Digest;
+  }>[];
   readonly input_root: Sha256Digest;
   readonly source_revision: string;
   readonly builder_artifact_sha256: Sha256Digest;
@@ -237,6 +246,40 @@ function nonNegative(value: unknown, label: string): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0)
     throw new Error(`${label} must be a non-negative safe integer`);
 }
+function canonicalProjectIds(
+  value: unknown,
+  label: string,
+  required: boolean,
+): readonly string[] {
+  if (value === undefined && !required) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > 20 || (required && value.length < 1))
+    throw new Error(`${label} must be a non-empty bounded project-id array`);
+  const ids = value.map((id) => {
+    if (typeof id !== "string" || id.length < 1 || id.length > 512)
+      throw new Error(`${label} contains an invalid project id`);
+    return id;
+  });
+  if (
+    ids.some((id, index) => index > 0 && ids[index - 1]! >= id) ||
+    canonicalJson(ids) !== canonicalJson(value as string[])
+  )
+    throw new Error(`${label} must be sorted and unique`);
+  return Object.freeze(ids);
+}
+function projectAudience(atom: ReadableSearchAtomV1): readonly string[] {
+  return canonicalProjectIds(
+    atom.audience_project_ids,
+    "audience_project_ids",
+    atom.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
+  );
+}
+function projectAssociations(atom: ReadableSearchAtomV1): readonly string[] {
+  return canonicalProjectIds(
+    atom.association_project_ids,
+    "association_project_ids",
+    atom.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
+  );
+}
 function ensurePrivateDirectory(path: string, label: string): void {
   if (!existsSync(path)) mkdirSync(path, { recursive: true, mode: 0o700 });
   const state = lstatSync(path);
@@ -286,12 +329,12 @@ function syncDirectory(path: string): void {
   }
 }
 function baselineFor(plane: Plane): ReadableSearchPlaneBaseline {
-  if (plane === "facts") return READABLE_SEARCH_FACTS_BASELINE_V2;
-  if (plane === "content") return READABLE_SEARCH_CONTENT_BASELINE_V1;
-  return READABLE_SEARCH_LEXICAL_BASELINE_V1;
+  if (plane === "facts") return READABLE_SEARCH_FACTS_BASELINE_V3;
+  if (plane === "content") return READABLE_SEARCH_CONTENT_BASELINE_V2;
+  return READABLE_SEARCH_LEXICAL_BASELINE_V2;
 }
 
-function baselineSchemaVersion(plane: Plane): 1 | 2 {
+function baselineSchemaVersion(plane: Plane): 1 | 2 | 3 {
   const baseline = baselineFor(plane);
   return "schema_version" in baseline ? baseline.schema_version : 1;
 }
@@ -309,6 +352,16 @@ function policyBranch(atom: ReadableSearchAtomV1): SegmentKind {
     text(atom.reviewer_principal_id, "reviewer_principal_id");
     text(atom.reviewer_membership_id, "reviewer_membership_id");
     return "reviewer";
+  }
+  if (atom.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1) {
+    if (
+      atom.reviewer_principal_id !== null ||
+      atom.reviewer_membership_id !== null
+    )
+      throw new Error("project atom must not carry a reviewer tuple");
+    projectAudience(atom);
+    projectAssociations(atom);
+    return "project-members";
   }
   throw new Error("readable-search engine atom policy is unsupported");
 }
@@ -355,7 +408,11 @@ function assertAtom(
   const expected =
     branch === "organization-member"
       ? input.organization_member_policy_contract_sha256
-      : input.restricted_reviewer_policy_contract_sha256;
+      : branch === "reviewer"
+        ? input.restricted_reviewer_policy_contract_sha256
+        : input.project_members_policy_contract_sha256;
+  if (expected === undefined)
+    throw new Error("readable-search project policy contract is absent");
   if (atom.policy_contract_sha256 !== expected)
     throw new Error(
       "readable-search engine atom policy contract disagrees with current policy",
@@ -367,11 +424,14 @@ function segmentIdentity(
   policy_contract_sha256: Sha256Digest,
   reviewer_principal_id: string | null,
   reviewer_membership_id: string | null,
+  audience_project_ids: readonly string[] = [],
 ): { segment_id: Sha256Digest; segment_kind: SegmentKind } {
   const segment_kind =
     policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2
       ? "organization-member"
-      : "reviewer";
+      : policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
+        ? "reviewer"
+        : "project-members";
   return {
     segment_kind,
     segment_id: canonicalSha256({
@@ -385,6 +445,7 @@ function segmentIdentity(
       policy_contract_sha256,
       reviewer_principal_id,
       reviewer_membership_id,
+      audience_project_ids,
     }),
   };
 }
@@ -426,6 +487,8 @@ function provenanceBinding(atom: ReadableSearchAtomV1): Sha256Digest {
     authorization_proof_sha256: atom.authorization_proof_sha256,
     reviewer_principal_id: atom.reviewer_principal_id,
     reviewer_membership_id: atom.reviewer_membership_id,
+    audience_project_ids: projectAudience(atom),
+    association_project_ids: projectAssociations(atom),
   });
 }
 function stampLineageManifest(
@@ -475,6 +538,7 @@ function initializePlane(
   policy_contract_sha256: Sha256Digest,
   reviewer_principal_id: string | null,
   reviewer_membership_id: string | null,
+  audience_project_ids: readonly string[],
   lineage: ReadableSearchLineageV1,
   analyzer: ReadableSearchAnalyzerV1,
 ): void {
@@ -482,7 +546,7 @@ function initializePlane(
   stampLineageManifest(database, plane, lineage);
   database
     .prepare(
-      `INSERT INTO retrieval_plane_metadata (singleton, schema_version, plane, organization_id, segment_id, segment_kind, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, analyzer_contract_sha256, finalized) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      `INSERT INTO retrieval_plane_metadata (singleton, schema_version, plane, organization_id, segment_id, segment_kind, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, audience_project_ids_json, analyzer_contract_sha256, finalized) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     )
     .run(
       baselineSchemaVersion(plane),
@@ -494,6 +558,7 @@ function initializePlane(
       policy_contract_sha256,
       reviewer_principal_id,
       reviewer_membership_id,
+      canonicalJson(audience_project_ids),
       analyzer.analyzer_contract_sha256,
     );
 }
@@ -536,6 +601,7 @@ function relatedPairsBySegment(
       left.policy_contract_sha256,
       left.reviewer_principal_id,
       left.reviewer_membership_id,
+      projectAudience(left),
     ).segment_id;
     const rightSegment = segmentIdentity(
       input.lineage,
@@ -543,6 +609,7 @@ function relatedPairsBySegment(
       right.policy_contract_sha256,
       right.reviewer_principal_id,
       right.reviewer_membership_id,
+      projectAudience(right),
     ).segment_id;
     if (leftSegment !== rightSegment)
       throw new Error("related atom pair crosses policy segments");
@@ -569,6 +636,7 @@ function buildSegment(
   policy_contract_sha256: Sha256Digest,
   reviewer_principal_id: string | null,
   reviewer_membership_id: string | null,
+  audience_project_ids: readonly string[],
   atoms: readonly ReadableSearchAtomV1[],
   relatedAtomPairs: readonly ReadableSearchRelatedAtomPairV1[],
 ): ReadableSearchGenerationManifestV1["segments"][number] {
@@ -578,6 +646,7 @@ function buildSegment(
     policy_contract_sha256,
     reviewer_principal_id,
     reviewer_membership_id,
+    audience_project_ids,
   );
   const directory = join(staging, SEGMENTS_DIRECTORY, identity.segment_id);
   ensurePrivateDirectory(directory, "readable-search engine segment directory");
@@ -596,6 +665,7 @@ function buildSegment(
         policy_contract_sha256,
         reviewer_principal_id,
         reviewer_membership_id,
+        audience_project_ids,
         lineage,
         analyzer,
       );
@@ -609,7 +679,7 @@ function buildSegment(
       provenance_binding_sha256: provenanceBinding(atom),
     }));
     const insertFact = facts.prepare(
-      `INSERT INTO retrieval_permission_fact (atom_id, authority_id, organization_id, state_lineage_id, envelope_sha256, log_position, record_hash, atom_order, signal_id_sha256, item_kind, approval_id, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, authorization_audit_event_id, authorization_audit_sequence, authorization_audit_entry_sha256, provider_action_sha256, authorization_proof_sha256, content_binding_sha256, provenance_binding_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO retrieval_permission_fact (atom_id, authority_id, organization_id, state_lineage_id, envelope_sha256, log_position, record_hash, atom_order, signal_id_sha256, item_kind, approval_id, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, audience_project_ids_json, association_project_ids_json, authorization_audit_event_id, authorization_audit_sequence, authorization_audit_entry_sha256, provider_action_sha256, authorization_proof_sha256, content_binding_sha256, provenance_binding_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     const insertRelatedAtomPair = facts.prepare(
       "INSERT INTO retrieval_related_atom_pair (left_atom_id, right_atom_id) VALUES (?, ?)",
@@ -638,9 +708,11 @@ function buildSegment(
           atom.item_kind,
           atom.approval_id,
           atom.policy_id,
-          atom.policy_contract_sha256,
-          atom.reviewer_principal_id,
-          atom.reviewer_membership_id,
+      atom.policy_contract_sha256,
+      atom.reviewer_principal_id,
+      atom.reviewer_membership_id,
+          canonicalJson(projectAudience(atom)),
+          canonicalJson(projectAssociations(atom)),
           atom.authorization_audit_event_id,
           atom.authorization_audit_sequence,
           atom.authorization_audit_entry_sha256,
@@ -732,6 +804,7 @@ function buildSegment(
       policy_contract_sha256,
       reviewer_principal_id,
       reviewer_membership_id,
+      audience_project_ids,
       facts_root,
       content_root,
       lexical_root,
@@ -799,6 +872,7 @@ function assertWithinAdmissionBudget(
       input.organization_member_policy_contract_sha256,
       null,
       null,
+      [],
     ).segment_id,
   );
   let postings = 0;
@@ -817,6 +891,7 @@ function assertWithinAdmissionBudget(
         atom.policy_contract_sha256,
         atom.reviewer_principal_id,
         atom.reviewer_membership_id,
+        projectAudience(atom),
       ).segment_id,
     );
     postings += analyzeReadableSearchDocument(atom.text, atom.item_kind).size;
@@ -865,6 +940,11 @@ export function buildReadableSearchGenerationV1(
     input.restricted_reviewer_policy_contract_sha256,
     "restricted_reviewer_policy_contract_sha256",
   );
+  if (input.project_members_policy_contract_sha256 !== undefined)
+    validDigest(
+      input.project_members_policy_contract_sha256,
+      "project_members_policy_contract_sha256",
+    );
   validDigest(input.builder_artifact_sha256, "builder_artifact_sha256");
   validDigest(
     input.analyzer.analyzer_contract_sha256,
@@ -911,7 +991,8 @@ export function buildReadableSearchGenerationV1(
         policy_id: ReadableSearchPolicyIdV1;
         policy_contract_sha256: Sha256Digest;
         reviewer_principal_id: string | null;
-        reviewer_membership_id: string | null;
+      reviewer_membership_id: string | null;
+        audience_project_ids: readonly string[];
         atoms: ReadableSearchAtomV1[];
       }
     >();
@@ -922,12 +1003,14 @@ export function buildReadableSearchGenerationV1(
       memberContract,
       null,
       null,
+      [],
     );
     groups.set(member.segment_id, {
       policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
       policy_contract_sha256: memberContract,
       reviewer_principal_id: null,
       reviewer_membership_id: null,
+      audience_project_ids: [],
       atoms: [],
     });
     for (const atom of input.atoms) {
@@ -937,6 +1020,7 @@ export function buildReadableSearchGenerationV1(
         atom.policy_contract_sha256,
         atom.reviewer_principal_id,
         atom.reviewer_membership_id,
+        projectAudience(atom),
       );
       const group = groups.get(identity.segment_id);
       if (group === undefined)
@@ -945,6 +1029,7 @@ export function buildReadableSearchGenerationV1(
           policy_contract_sha256: atom.policy_contract_sha256,
           reviewer_principal_id: atom.reviewer_principal_id,
           reviewer_membership_id: atom.reviewer_membership_id,
+          audience_project_ids: projectAudience(atom),
           atoms: [atom],
         });
       else group.atoms.push(atom);
@@ -958,6 +1043,7 @@ export function buildReadableSearchGenerationV1(
             left.policy_contract_sha256,
             left.reviewer_principal_id,
             left.reviewer_membership_id,
+            left.audience_project_ids,
           ).segment_id,
         ),
         Buffer.from(
@@ -967,6 +1053,7 @@ export function buildReadableSearchGenerationV1(
             right.policy_contract_sha256,
             right.reviewer_principal_id,
             right.reviewer_membership_id,
+            right.audience_project_ids,
           ).segment_id,
         ),
       ),
@@ -980,6 +1067,7 @@ export function buildReadableSearchGenerationV1(
         group.policy_contract_sha256,
         group.reviewer_principal_id,
         group.reviewer_membership_id,
+        group.audience_project_ids,
         group.atoms,
         relatedAtomPairs.get(
           segmentIdentity(
@@ -988,6 +1076,7 @@ export function buildReadableSearchGenerationV1(
             group.policy_contract_sha256,
             group.reviewer_principal_id,
             group.reviewer_membership_id,
+            group.audience_project_ids,
           ).segment_id,
         ) ?? [],
       ),
@@ -1020,6 +1109,12 @@ export function buildReadableSearchGenerationV1(
         policy_contract_sha256:
           input.restricted_reviewer_policy_contract_sha256,
       },
+      ...(input.project_members_policy_contract_sha256 === undefined
+        ? []
+        : [{
+            policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
+            policy_contract_sha256: input.project_members_policy_contract_sha256,
+          }]),
     ];
     const withoutIdentity = {
       schema_version: 1 as const,
@@ -1098,6 +1193,8 @@ export interface ReadableSearchActiveGenerationV1 {
 export interface ReadableSearchReaderV1 {
   readonly principal_id: string;
   readonly membership_id: string;
+  /** Trusted current project grants derived by Authority; never client input. */
+  readonly project_ids?: readonly string[];
 }
 
 export interface ReadableSearchResultItemV1 {
@@ -1121,6 +1218,8 @@ export interface SearchReadableSearchGenerationV1Input {
   readonly active_generation: ReadableSearchActiveGenerationV1;
   readonly reader: ReadableSearchReaderV1;
   readonly query: string;
+  /** Authority-authorized project scope. It narrows association only. */
+  readonly project_id?: string;
   /** Defaults to 10 and is deliberately bounded to the V1 response ceiling. */
   readonly limit?: number;
 }
@@ -1131,6 +1230,8 @@ export interface ExpandReadableSearchRelatedAtomsV1Input {
   readonly active_generation: ReadableSearchActiveGenerationV1;
   readonly reader: ReadableSearchReaderV1;
   readonly anchor_atom_ids: readonly Sha256Digest[];
+  /** Authority-authorized project scope. It narrows association only. */
+  readonly project_id?: string;
   /** Layer 4 packet: include approved source-record siblings, balanced across anchors. */
   readonly include_anchor_records?: true;
   /** Defaults to 16 and bounds the entire expansion, not each anchor. */
@@ -1153,6 +1254,8 @@ interface ReadableSearchFactRow {
   readonly policy_contract_sha256: Sha256Digest;
   readonly reviewer_principal_id: string | null;
   readonly reviewer_membership_id: string | null;
+  readonly audience_project_ids_json: string;
+  readonly association_project_ids_json: string;
   readonly authorization_audit_event_id: string;
   readonly authorization_audit_sequence: number;
   readonly authorization_audit_entry_sha256: Sha256Digest;
@@ -1226,6 +1329,76 @@ function unionStatistics(
     }
   }
   return { document_count, total_term_count, document_frequency };
+}
+
+function readerProjectIds(reader: ReadableSearchReaderV1): readonly string[] {
+  const value = reader.project_ids;
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value))
+    throw new Error("reader project_ids must be a canonical project-id array");
+  const ids = value.map((id) => {
+    if (typeof id !== "string" || id.length < 1 || id.length > 512)
+      throw new Error("reader project_ids contains an invalid project id");
+    return id;
+  });
+  if (ids.some((id, index) => index > 0 && ids[index - 1]! >= id))
+    throw new Error("reader project_ids must be sorted and unique");
+  return Object.freeze(ids);
+}
+function factProjectIds(
+  fact: ReadableSearchFactRow,
+  field: "audience_project_ids_json" | "association_project_ids_json",
+): readonly string[] {
+  return canonicalProjectIds(
+    JSON.parse(fact[field]),
+    field,
+    fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
+  );
+}
+function admittedSegment(
+  segment: ReadableSearchSegmentRows,
+  reader: ReadableSearchReaderV1,
+): boolean {
+  if (segment.manifest.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)
+    return true;
+  if (segment.manifest.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)
+    return segment.manifest.reviewer_principal_id === reader.principal_id &&
+      segment.manifest.reviewer_membership_id === reader.membership_id;
+  const grants = new Set(readerProjectIds(reader));
+  return (segment.manifest.audience_project_ids ?? []).some((id) => grants.has(id));
+}
+function scopedSegments(
+  admitted: readonly ReadableSearchSegmentRows[],
+  reader: ReadableSearchReaderV1,
+  project_id: string | undefined,
+): readonly ReadableSearchSegmentRows[] {
+  if (project_id === undefined) return admitted;
+  if (!readerProjectIds(reader).includes(project_id))
+    throw new Error("readable-search project scope is not currently granted");
+  return admitted.map((segment) => {
+    const facts = segment.facts.filter((fact) =>
+      factProjectIds(fact, "association_project_ids_json").includes(project_id),
+    );
+    const atomIds = new Set(facts.map((fact) => fact.atom_id));
+    const postings = segment.postings.filter((posting) => atomIds.has(posting.atom_id));
+    const document_frequency = new Map<string, number>();
+    const length_by_atom = new Map<Sha256Digest, number>();
+    let total_term_count = 0;
+    for (const posting of postings) {
+      document_frequency.set(posting.term, (document_frequency.get(posting.term) ?? 0) + 1);
+      length_by_atom.set(posting.atom_id, (length_by_atom.get(posting.atom_id) ?? 0) + posting.term_frequency);
+      total_term_count += posting.term_frequency;
+    }
+    return {
+      ...segment,
+      facts,
+      facts_by_atom: new Map(facts.map((fact) => [fact.atom_id, fact])),
+      postings,
+      related_atom_pairs: segment.related_atom_pairs.filter((pair) => atomIds.has(pair.left_atom_id) && atomIds.has(pair.right_atom_id)),
+      statistics: { document_count: facts.length, total_term_count, document_frequency },
+      length_by_atom,
+    };
+  });
 }
 
 /**
@@ -1376,9 +1549,9 @@ function assertReadableSearchGenerationManifest(
   validDigest(manifest.retrieval_contract_sha256, "retrieval_contract_sha256");
   validDigest(manifest.input_root, "generation input_root");
   validDigest(manifest.builder_artifact_sha256, "builder_artifact_sha256");
-  if (!Array.isArray(manifest.policies) || manifest.policies.length !== 2)
+  if (!Array.isArray(manifest.policies) || (manifest.policies.length !== 2 && manifest.policies.length !== 3))
     throw new Error("readable-search generation policies are invalid");
-  const [member, reviewer] = manifest.policies;
+  const [member, reviewer, project] = manifest.policies;
   if (
     member?.policy_id !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
     reviewer?.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2
@@ -1386,6 +1559,12 @@ function assertReadableSearchGenerationManifest(
     throw new Error("readable-search generation policy order is invalid");
   validDigest(member.policy_contract_sha256, "member policy contract");
   validDigest(reviewer.policy_contract_sha256, "reviewer policy contract");
+  if (
+    project !== undefined &&
+    (project.policy_id !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 ||
+      !/^sha256:[0-9a-f]{64}$/.test(project.policy_contract_sha256))
+  )
+    throw new Error("readable-search generation project policy is invalid");
   if (
     manifest.analyzer === undefined ||
     manifest.analyzer.analyzer_contract_sha256 === undefined ||
@@ -1433,9 +1612,11 @@ function assertSegmentManifest(
     manifest.schema_version !== 1 ||
     manifest.kind !== "clean-readable-search-segment-manifest-v1" ||
     (manifest.segment_kind !== "organization-member" &&
-      manifest.segment_kind !== "reviewer") ||
+      manifest.segment_kind !== "reviewer" &&
+      manifest.segment_kind !== "project-members") ||
     (manifest.policy_id !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 &&
-      manifest.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2)
+      manifest.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
+      manifest.policy_id !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1)
   )
     throw new Error("readable-search engine segment manifest is invalid");
   validDigest(manifest.segment_id, "segment_id");
@@ -1460,7 +1641,12 @@ function assertSegmentManifest(
     (manifest.segment_kind === "reviewer" &&
       (manifest.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 ||
         typeof manifest.reviewer_principal_id !== "string" ||
-        typeof manifest.reviewer_membership_id !== "string"))
+        typeof manifest.reviewer_membership_id !== "string")) ||
+    (manifest.segment_kind === "project-members" &&
+      (manifest.policy_id !== PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 ||
+        manifest.reviewer_principal_id !== null ||
+        manifest.reviewer_membership_id !== null ||
+        canonicalProjectIds(manifest.audience_project_ids, "segment audience_project_ids", true).length === 0))
   )
     throw new Error("readable-search engine segment policy and tuple disagree");
 }
@@ -1515,6 +1701,8 @@ function readableSearchProvenanceBindingFromFact(fact: ReadableSearchFactRow): S
     authorization_proof_sha256: fact.authorization_proof_sha256,
     reviewer_principal_id: fact.reviewer_principal_id,
     reviewer_membership_id: fact.reviewer_membership_id,
+    audience_project_ids: JSON.parse(fact.audience_project_ids_json),
+    association_project_ids: JSON.parse(fact.association_project_ids_json),
   });
 }
 
@@ -1574,7 +1762,7 @@ function validateReadableSearchPlaneLineage(
     );
   const metadata = database
     .prepare(
-      "SELECT schema_version, plane, organization_id, segment_id, segment_kind, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, analyzer_contract_sha256, finalized FROM retrieval_plane_metadata WHERE singleton = 1",
+      "SELECT schema_version, plane, organization_id, segment_id, segment_kind, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, audience_project_ids_json, analyzer_contract_sha256, finalized FROM retrieval_plane_metadata WHERE singleton = 1",
     )
     .get() as Record<string, unknown> | undefined;
   if (
@@ -1588,6 +1776,7 @@ function validateReadableSearchPlaneLineage(
     metadata.policy_contract_sha256 !== segment.policy_contract_sha256 ||
     metadata.reviewer_principal_id !== segment.reviewer_principal_id ||
     metadata.reviewer_membership_id !== segment.reviewer_membership_id ||
+    metadata.audience_project_ids_json !== canonicalJson(segment.audience_project_ids ?? []) ||
     metadata.analyzer_contract_sha256 !==
       manifest.analyzer.analyzer_contract_sha256 ||
     metadata.finalized !== 1
@@ -1682,6 +1871,7 @@ function readAndValidateReadableSearchSegment(
     policy_contract_sha256: segment.policy_contract_sha256,
     reviewer_principal_id: segment.reviewer_principal_id,
     reviewer_membership_id: segment.reviewer_membership_id,
+    audience_project_ids: segment.audience_project_ids ?? [],
   });
   if (expectedSegmentId !== segment.segment_id)
     throw new Error("readable-search engine segment identity is invalid");
@@ -1762,6 +1952,8 @@ function readAndValidateReadableSearchSegment(
         fact.policy_contract_sha256 !== segment.policy_contract_sha256 ||
         fact.reviewer_principal_id !== segment.reviewer_principal_id ||
         fact.reviewer_membership_id !== segment.reviewer_membership_id ||
+        canonicalJson(canonicalProjectIds(JSON.parse(fact.audience_project_ids_json), "fact audience_project_ids", fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1)) !== canonicalJson(segment.audience_project_ids ?? []) ||
+        canonicalProjectIds(JSON.parse(fact.association_project_ids_json), "fact association_project_ids", fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1).length !== (fact.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 ? canonicalProjectIds(JSON.parse(fact.association_project_ids_json), "fact association_project_ids", true).length : 0) ||
         item.log_position !== fact.log_position ||
         item.record_hash !== fact.record_hash ||
         item.atom_order !== fact.atom_order ||
@@ -1843,6 +2035,7 @@ function validateAndWarmReadableSearchGenerationV1(
   assertExactHead(active.exact_head, "active exact_head");
   text(input.reader.principal_id, "reader principal_id");
   text(input.reader.membership_id, "reader membership_id");
+  readerProjectIds(input.reader);
   const limit = input.limit ?? 10;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
     throw new Error(
@@ -1947,13 +2140,7 @@ function validateAndWarmReadableSearchGenerationV1(
         throw new Error("readable-search generation repeats an atom");
       seenAtoms.add(fact.atom_id);
     }
-    if (
-      segment.manifest.policy_id ===
-        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
-      (segment.manifest.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
-        segment.manifest.reviewer_principal_id === input.reader.principal_id &&
-        segment.manifest.reviewer_membership_id === input.reader.membership_id)
-    )
+    if (admittedSegment(segment, input.reader))
       admitted.push(segment);
   }
   const memberContract = manifest.policies[0].policy_contract_sha256;
@@ -1968,6 +2155,7 @@ function validateAndWarmReadableSearchGenerationV1(
     policy_contract_sha256: memberContract,
     reviewer_principal_id: null,
     reviewer_membership_id: null,
+    audience_project_ids: [],
   });
   if (!seenSegments.has(memberSegmentId))
     throw new Error("readable-search generation omits its member segment");
@@ -2061,6 +2249,7 @@ export function expandReadableSearchRelatedAtomsV1(
 ): ReadableSearchResultV1 {
   text(input.reader.principal_id, "reader principal_id");
   text(input.reader.membership_id, "reader membership_id");
+  readerProjectIds(input.reader);
   if (
     !Array.isArray(input.anchor_atom_ids) ||
     input.anchor_atom_ids.length < 1 ||
@@ -2083,13 +2272,10 @@ export function expandReadableSearchRelatedAtomsV1(
     handle.key !== activeGenerationKey(input.active_generation)
   )
     throw new Error("readable-search engine active-generation handle is unavailable");
-  const admitted = handle.segments.filter(
-    (segment) =>
-      segment.manifest.policy_id ===
-        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
-      (segment.manifest.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
-        segment.manifest.reviewer_principal_id === input.reader.principal_id &&
-        segment.manifest.reviewer_membership_id === input.reader.membership_id),
+  const admitted = scopedSegments(
+    handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
+    input.reader,
+    input.project_id,
   );
   const segmentsByAnchor = new Map<Sha256Digest, ReadableSearchSegmentRows>();
   for (const segment of admitted)
@@ -2189,6 +2375,7 @@ export function searchReadableSearchGenerationV1(
 ): ReadableSearchResultV1 {
   text(input.reader.principal_id, "reader principal_id");
   text(input.reader.membership_id, "reader membership_id");
+  readerProjectIds(input.reader);
   const limit = input.limit ?? 10;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
     throw new Error(
@@ -2201,13 +2388,10 @@ export function searchReadableSearchGenerationV1(
   )
     throw new Error("readable-search engine active-generation handle is unavailable");
   const terms = analyzeReadableSearchQuery(input.query);
-  const admitted = handle.segments.filter(
-    (segment) =>
-      segment.manifest.policy_id ===
-        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
-      (segment.manifest.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
-        segment.manifest.reviewer_principal_id === input.reader.principal_id &&
-        segment.manifest.reviewer_membership_id === input.reader.membership_id),
+  const admitted = scopedSegments(
+    handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
+    input.reader,
+    input.project_id,
   );
   const candidates = scoreAdmittedCandidates(admitted, terms);
   candidates.sort((left, right) =>
@@ -2247,9 +2431,13 @@ export function searchReadableSearchGenerationV1(
 
 export {
   READABLE_SEARCH_CONTENT_BASELINE_V1,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
   READABLE_SEARCH_FACTS_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_V3,
   READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
   READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
+  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
   READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
   readableSearchPlaneBaselineSha256,
   readableSearchPlaneBaselineSha256V1,

@@ -60,8 +60,11 @@ import {
 import { reissueLegacyPersonOnboardingInvitation } from "./person-onboarding-service.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import {
-  isStagingSyntheticMeetingCanaryEnvelopeV1,
-  stagingSyntheticMeetingCanaryInputFromEnvelopeV1,
+  isStagingSyntheticMeetingCanaryEnvelope,
+  stagingSyntheticMeetingCanaryCursorFromEnvelope,
+  stagingSyntheticMeetingCanaryCursorV1,
+  stagingSyntheticMeetingCanaryCursorV2,
+  stagingSyntheticMeetingCanaryInputFromEnvelope,
 } from "@echo-brain/organization-authority-kernel/shared/staging-synthetic-meeting-canary-envelope-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { syntheticFixtureApprovalEvidence, isSyntheticDemoSetupAdmissionV1 } from '@echo-brain/provider-synthetic-demo/synthetic-demo-setup-evidence-v1';
@@ -1265,26 +1268,31 @@ function stagingSyntheticCanaryObserved(
   ) {
     return false;
   }
-  const cursor = `synthetic-staging-canary:v1:${releaseId}`;
+  const cursors = [
+    stagingSyntheticMeetingCanaryCursorV1(releaseId),
+    stagingSyntheticMeetingCanaryCursorV2(releaseId),
+  ];
   const candidates = authority
     .prepare(
-      `SELECT candidate.meeting_json, candidate.meeting_sha256, outbox.approval_id
+      `SELECT candidate.meeting_json, candidate.meeting_sha256,
+              candidate.source_cursor, outbox.approval_id
          FROM authority_live_source_candidates_v2 AS candidate
          JOIN authority_live_approval_outbox_v2 AS outbox
            ON outbox.candidate_id = candidate.candidate_id
         WHERE candidate.disposition = 'actionable'
-          AND candidate.source_cursor = ?
+          AND candidate.source_cursor IN (?, ?)
           AND outbox.state = 'staged'`,
     )
-    .all(cursor) as readonly {
+    .all(...cursors) as readonly {
     readonly meeting_json: string;
     readonly meeting_sha256: string;
+    readonly source_cursor: string;
     readonly approval_id: string;
   }[];
   for (const candidate of candidates) {
     try {
       const meeting = JSON.parse(candidate.meeting_json) as unknown;
-      const input = stagingSyntheticMeetingCanaryInputFromEnvelopeV1(meeting);
+      const input = stagingSyntheticMeetingCanaryInputFromEnvelope(meeting);
       // Verify the immutable bytes and digest before the neutral contract
       // rebuilds the complete envelope from release, owner, and observation.
       if (
@@ -1293,7 +1301,9 @@ function stagingSyntheticCanaryObserved(
         input.owner_email !== manifest.owner_email ||
         canonicalJson(meeting as never) !== candidate.meeting_json ||
         canonicalSha256(meeting as never) !== candidate.meeting_sha256 ||
-        !isStagingSyntheticMeetingCanaryEnvelopeV1(meeting, input)
+        !isStagingSyntheticMeetingCanaryEnvelope(meeting, input) ||
+        stagingSyntheticMeetingCanaryCursorFromEnvelope(meeting, input) !==
+          candidate.source_cursor
       ) {
         continue;
       }

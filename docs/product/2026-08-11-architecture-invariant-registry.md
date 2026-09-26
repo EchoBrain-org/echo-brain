@@ -220,6 +220,13 @@ Job A implements only its approved narrow reviewer-policy approval mode.
 
 ## Revalidation rule
 
+The accepted [ADR-0017](../decisions/ADR-0017-project-meeting-approval-v1.md)
+extends the existing approval/policy-fact/release machinery to project audiences,
+approved-record project associations and explicit exact-revision transcript reads.
+Its invariant trace and compatibility rules are additive; historical implementation
+claims above remain pinned to their original baselines. Implementation and live
+qualification must be established for the new contract independently.
+
 Update this registry whenever any of these change:
 
 - an envelope, policy, Person/effect, or retrieval-generation schema version;

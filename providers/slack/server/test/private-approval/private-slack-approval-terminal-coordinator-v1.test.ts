@@ -3,6 +3,7 @@ import { RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_
 import { PrivateApprovalFinalizationConflictError, PrivateApprovalFinalizationDeniedError, type DurablePrivateApprovalTerminalV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import { describe, expect, it } from "vitest";
 import { PrivateSlackApprovalTerminalCoordinatorV1, type PrivateSlackApprovalTerminalAuthorityV1, type PrivateSlackApprovalTerminalFrozenCandidateV1 } from "../../src/private-approval/private-slack-approval-terminal-coordinator-v1.js";
+import type { PrivateApprovalResolutionV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import type {
   MeetingApprovalJourneyStageAttemptV1,
   MeetingApprovalJourneyTelemetryPortV1,
@@ -80,7 +81,9 @@ function frozen(): PrivateSlackApprovalTerminalFrozenCandidateV1 {
   } as PrivateSlackApprovalTerminalFrozenCandidateV1;
 }
 
-function authorityHarness(value: DurablePrivateApprovalTerminalV1): {
+function authorityHarness(value: Omit<DurablePrivateApprovalTerminalV1, "resolution"> & {
+  readonly resolution: DurablePrivateApprovalTerminalV1["resolution"] | PrivateApprovalResolutionV2;
+}): {
   readonly authority: PrivateSlackApprovalTerminalAuthorityV1;
   readonly records: Array<Record<string, unknown>>;
   readonly marks: string[];
@@ -178,6 +181,63 @@ function throwingTelemetry(): MeetingApprovalJourneyTelemetryPortV1 {
 }
 
 describe("private Slack approval terminal coordinator v1", () => {
+  it("recovers a V2 project approval through its versioned writer exactly once", async () => {
+    const v1 = terminal("approved");
+    const value = {
+      ...v1,
+      resolution: {
+        ...v1.resolution,
+        schema_version: 2,
+        kind: "echo-private-approval-resolution-v2",
+        selected_project_ids: ["prj_00000000-0000-4000-8000-000000000001"],
+        share_transcript: true,
+        canonical_record_policy: {
+          ...v1.resolution.canonical_record_policy!,
+          policy_id: "project-members-readable-person-v1",
+          restricted_reader: null,
+          audience_project_ids: ["prj_00000000-0000-4000-8000-000000000001"],
+          association_project_ids: ["prj_00000000-0000-4000-8000-000000000001"],
+          share_transcript: true,
+          transcript_source: { source_id: "meeting", revision_id: "revision", source_sha256: digest("source") },
+        },
+      } as PrivateApprovalResolutionV2,
+    };
+    const harness = authorityHarness(value);
+    const renders: unknown[] = [];
+    let v2Appends = 0;
+    const baseOptions = {
+      control_plane: {
+        listQueued: () => [], listDenied: () => [], listTerminals: () => [value],
+        finalize: async () => value, recordDenied: () => undefined,
+      },
+      authority: harness.authority,
+      poster: { renderTerminal: async (input: unknown) => {
+        renders.push(input);
+        return { kind: "done" as const };
+      } },
+    };
+    const legacyWriter = { appendApproved: async () => { throw new Error("V2 cannot use V1 writer"); } };
+    await expect(new PrivateSlackApprovalTerminalCoordinatorV1({
+      ...baseOptions, record_writer: legacyWriter,
+    }).recoverV4Appends(new AbortController().signal)).rejects.toThrow("versioned record writer");
+    expect(harness.records).toHaveLength(0);
+    const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
+      ...baseOptions,
+      record_writer: {
+        ...legacyWriter,
+        appendApprovedV2: async (input: unknown) => {
+          expect(input).toEqual(value);
+          v2Appends += 1;
+          return { receipt: { body: {}, receipt_sha256: digest("receipt"), signing_key_descriptor: {}, signature: "signature" } };
+        },
+      } as never,
+    });
+    await coordinator.appendFinalizedApprovalsToV4(new AbortController().signal);
+    await coordinator.recoverV4Appends(new AbortController().signal);
+    expect(v2Appends).toBe(1);
+    expect(harness.records[0]?.resolution).toEqual(value.resolution);
+    expect(renders).toEqual([expect.objectContaining({ outcome: "approved", policy_label: "Projects" })]);
+  });
   it("durably consumes finalization denials and competing terminal clicks", async () => {
     const denied: Array<readonly [string, string]> = [];
     const queued = [

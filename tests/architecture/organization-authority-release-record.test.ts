@@ -328,7 +328,7 @@ function migrationFixture(from: 5 | 8 = 5) {
   const candidatePath = writeRecord(candidate); chmodSync(candidatePath, 0o600);
   const docker = join(f.root, 'bin/docker'); renameSync(docker, join(f.root, 'bin/docker-fallback'));
   copyFileSync(join(REPO, 'tests/fixtures/staging-migration-docker.py'), docker); chmodSync(docker, 0o755);
-  const env = { ...f.environment, ECHO_CLEAN_STATE_DIR: state, ECHO_TEST_MIGRATION_ROOT: f.root, ECHO_TEST_ACCEPTED_IMAGE: f.accepted.authority_image.reference, ECHO_TEST_MIGRATION_FROM: String(from) };
+  const env = { ...f.environment, ECHO_CLEAN_STATE_DIR: state, ECHO_TEST_MIGRATION_ROOT: f.root, ECHO_TEST_ACCEPTED_IMAGE: f.accepted.authority_image.reference, ECHO_TEST_MIGRATION_FROM: String(from), ...(from === 8 ? { ECHO_TEST_MIGRATION_CANDIDATE_VERSION: '9' } : {}) };
   const execute = (...args: string[]) => run('bash', [UPDATE, ...args], env);
   const stage = (action = `stage-${migration}`) => execute(action, '--release', candidatePath, '--runtime-profile', f.profile);
   return { ...f, stateDirectory: state, before, snapshot, candidate, candidatePath, execute, stage, operation: join(f.state, `state-${migration}`, candidate.release_id) };

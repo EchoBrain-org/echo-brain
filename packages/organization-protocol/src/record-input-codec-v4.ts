@@ -23,7 +23,23 @@ export interface RecordResolutionRefV4 {
   readonly provider_action_sha256: Sha256Digest;
   readonly authorization_proof_sha256: Sha256Digest;
 }
-export type RecordHumanActEventV4 = ApprovedHumanActEventV1 | RejectedHumanActEventV1 | { readonly kind: "rejected" };
+/**
+ * Provider codecs may add a versioned approval consequence while retaining the
+ * common V4 envelope joins. The envelope only needs the approved snapshot and
+ * selected policy; each codec validates its richer event before this point.
+ */
+export type RecordHumanActEventV4 =
+  | ApprovedHumanActEventV1
+  | {
+      readonly kind: "approved";
+      readonly approved_snapshot: ApprovedHumanActEventV1["approved_snapshot"];
+      readonly approved_snapshot_sha256: Sha256Digest;
+      readonly policy_id: string;
+      readonly policy_contract_sha256: Sha256Digest;
+      readonly policy_consequence_sha256: Sha256Digest;
+    }
+  | RejectedHumanActEventV1
+  | { readonly kind: "rejected" };
 export interface ValidatedRecordInputV4 {
   readonly human_act_resolution_ref: RecordResolutionRefV4;
   readonly event: RecordHumanActEventV4;

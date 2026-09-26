@@ -18,7 +18,12 @@ permission-filtered envelope. Unknown references and generic HumanAct
 references without an actor have no optional approver metadata. Derived
 metadata never changes canonical records.
 
-Fresh logs use the byte-pinned V3 baseline, applied only to an empty database.
+Fresh logs use the byte-pinned V4 baseline, applied only to an empty database.
+V4 adds immutable project-audience and project-association facts plus an exact
+approved meeting-source grant. Those facts hold project IDs and source
+coordinates, never resolved reader identities or transcript text. The grant
+reader returns only that witness; Layer 3 still resolves current policy and
+membership before releasing the retained source.
 Person reads and search generation use the canonical log and permission facts.
 The V2 state-lineage root has six roles: Authority, control plane, record log,
 and the facts, lexical, and content retrieval planes. Current runtime rejects

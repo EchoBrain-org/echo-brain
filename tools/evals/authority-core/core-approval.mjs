@@ -180,7 +180,7 @@ class DeterministicCoreApprovalPoster {
   }
 }
 
-function receipt({ approval_id, actor: person, policy_id, offer_id, connection, presentation }) {
+function receipt({ approval_id, actor: person, policy_id, offer_id, connection, presentation, delivery }) {
   const offered = identifier(offer_id, "offer_id");
   const policy = policy_id === "restricted-reviewer-person-v2" || policy_id === "organization-member-readable-person-v2"
     ? policy_id : (() => { throw new TypeError("policy_id is unsupported"); })();
@@ -195,7 +195,7 @@ function receipt({ approval_id, actor: person, policy_id, offer_id, connection, 
   // These hashes identify the verified-action envelope after its transport
   // verification. They are commitments, not stand-ins for an HMAC or raw
   // Block Kit payload, which is intentionally outside the core benchmark.
-  return Object.freeze({
+  const base = {
     schema_version: 1,
     kind: "echo-private-approval-signed-block-action-receipt-v1",
     provider_action_key_sha256: canonicalSha256({ kind: "echo-core-verified-action-key-v1", transport }),
@@ -223,7 +223,19 @@ function receipt({ approval_id, actor: person, policy_id, offer_id, connection, 
     }),
     received_at: at,
     verified_at: at,
-  });
+  };
+  // Fresh cards freeze the V2 delivery contract. Preserve every V2 command
+  // field through the durable queue; V1 remains available only for a frozen
+  // pre-V2 delivery recovered from Authority state.
+  return delivery === undefined
+    ? Object.freeze(base)
+    : Object.freeze({
+        ...base,
+        schema_version: 2,
+        kind: "echo-private-approval-signed-block-action-receipt-v2",
+        selected_project_ids: Object.freeze([]),
+        share_transcript: false,
+      });
 }
 
 /**
@@ -303,14 +315,17 @@ export async function createCoreApproval({ context, owner, employee, sessions } 
       if (prior !== undefined && prior.semantic !== semantic) {
         throw new Error("offer_id was already bound to another verified action");
       }
+      const delivery = assignments.readDeliveryV2(approval_id);
       const normalized = prior?.receipt ?? receipt({
-        approval_id, actor: person, policy_id, offer_id: offer, connection, presentation,
+        approval_id, actor: person, policy_id, offer_id: offer, connection, presentation, delivery,
       });
       if (prior === undefined) offered.set(offer, Object.freeze({ semantic, receipt: normalized }));
       // Replays enqueue the byte-for-byte original verified receipt. This map
       // caches ingress evidence only; it never caches an authorization allow,
       // terminal, record, or search result.
-      const result = await control_plane.enqueue({ disposition: "resolution", receipt: normalized });
+      const result = delivery === undefined
+        ? await control_plane.enqueue({ disposition: "resolution", receipt: normalized })
+        : await control_plane.enqueueV2(normalized);
       try {
         context.on_terminal_action_queued?.();
       } catch {
