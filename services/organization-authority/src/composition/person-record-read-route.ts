@@ -11,6 +11,7 @@ import type {
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import { captureRecordProjectsV1, type CaptureRecordProjectsV1 } from "./person-record-project-scope-v1.js";
 import type {
   PersonRecordReadHttpApplicationV1,
   PersonRecordReadResponseV1,
@@ -36,6 +37,7 @@ export interface CreatePersonRecordReadRouteV1Options {
   readonly sessions: CurrentPersonSessions;
   readonly records: PersonRecordReader;
   readonly audit: SqlitePersonRecordReadAuditV1;
+  readonly capture_projects?: CaptureRecordProjectsV1;
   readonly record_approver?: RecordApproverProjectorV1;
   /** Resolves only the actor named by a record already released to this reader. */
   readonly memberships?: {
@@ -144,6 +146,7 @@ export function createPersonRecordReadRouteV1(
         access_token: input.access_token,
       });
       assertExpectedOrganization(admitted, options.organization_id);
+      const projects = captureRecordProjectsV1(options.capture_projects, admitted);
 
       const initialRows = options.records.list({
         authority_id: options.authority_id,
@@ -151,6 +154,7 @@ export function createPersonRecordReadRouteV1(
         state_lineage_id: options.state_lineage_id,
         principal_id: admitted.principal_id,
         membership_id: admitted.membership_id,
+        ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
         ...(input.record_sha256 === undefined
           ? {}
@@ -164,6 +168,7 @@ export function createPersonRecordReadRouteV1(
       });
       if (
         !sameReleaseAuthorization(admitted, released) ||
+        captureRecordProjectsV1(options.capture_projects, released).grants_sha256 !== projects.grants_sha256 ||
         released.organization_id !== options.organization_id
       ) {
         throw new AuthorityOperationError(

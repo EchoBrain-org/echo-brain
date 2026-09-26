@@ -39,7 +39,7 @@ export type PrivateSlackApprovalUpdateOutcomeV1 =
 export interface PrivateSlackApprovalTerminalPresentationV1 {
   readonly approval_id: string;
   readonly outcome: "approved" | "rejected";
-  readonly policy_label: "Only me" | "Team" | null;
+  readonly policy_label: "Only me" | "Team" | "Projects" | null;
 }
 
 function marker(approvalId: string): string {

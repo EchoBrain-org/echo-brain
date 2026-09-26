@@ -1,9 +1,11 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_PERSON_POLICY_ID } from "../../src/organization-control-plane/slack-approval-integration-v1.js";
 import { type PrivateApprovalResolutionV1 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
+import type { PendingPrivateApprovalV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import { describe, expect, it } from "vitest";
 import {
   applyAuthorityBaselineV5,
+  applyAuthorityBaselineV10,
 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "../../src/private-approval/resolve-private-slack-approval-reviewer-target-v1.js";
@@ -20,9 +22,9 @@ const CONNECTION_CONTRACT_SHA256 = canonicalSha256({ connection: "contract" });
 const CONNECTION_STATE_SHA256 = canonicalSha256({ connection: "state" });
 const LINK_CONTRACT_SHA256 = canonicalSha256({ link: "contract" });
 
-function fixture() {
+function fixture(version: 5 | 10 = 5) {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV5(database);
+  (version === 10 ? applyAuthorityBaselineV10 : applyAuthorityBaselineV5)(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(
@@ -63,6 +65,12 @@ function fixture() {
        VALUES ('rli_private', ?, ?)`,
     )
     .run(CANDIDATE_ID, NOW);
+  if (version === 10) {
+    database.prepare(`INSERT INTO authority_live_approval_outbox_v2
+      (candidate_id,approval_id,stage_command_id,state,updated_at) VALUES (?, ?, 'pas_private', 'queued', ?)` )
+      .run(CANDIDATE_ID, APPROVAL_ID, NOW);
+    return database;
+  }
   database
     .prepare(
       `INSERT INTO authority_live_approval_outbox_v2
@@ -238,6 +246,44 @@ function approvedReceipt(): CanonicalPrivateApprovalV4ReceiptV1 {
 }
 
 describe("SQLite private approval assignment state v1", () => {
+  it("freezes V2 delivery before posting and retains exactly the original choices on restart", () => {
+    const database = fixture(10);
+    try {
+      const state = new SqlitePrivateSlackApprovalAssignmentStateV1(database, () => NOW);
+      const contract: PendingPrivateApprovalV2 = {
+        schema_version: 2, kind: "echo-private-approval-pending-v2",
+        approval_id: APPROVAL_ID, organization_id: ORGANIZATION_ID,
+        candidate_sha256: CANDIDATE_SHA256, frozen_card_sha256: FROZEN_CARD_SHA256,
+        approved_snapshot_sha256: SNAPSHOT_SHA256,
+        assigned_owner: { principal_id: "prn_owner", membership_id: "mem_owner" },
+        assigned_owner_slack_identity_link: input().reviewer_target.slack_target.current_slack_identity_link,
+        eligible_projects: [{ project_id: "prj_00000000-0000-4000-8000-000000000001", project_membership_id: "pgm_00000000-0000-4000-8000-000000000001", name: "Frozen project" }],
+        transcript_source: { source_id: "source", revision_id: "revision", source_sha256: canonicalSha256({ source: 1 }) },
+      };
+      const freeze = { approval_id: APPROVAL_ID, candidate_id: CANDIDATE_ID, candidate_sha256: CANDIDATE_SHA256, contract };
+      expect(state.freezeDeliveryV2(freeze)).toEqual(contract);
+      const restarted = new SqlitePrivateSlackApprovalAssignmentStateV1(database, () => NOW);
+      expect(restarted.readDeliveryV2(APPROVAL_ID)).toEqual(contract);
+      expect(restarted.freezeDeliveryV2(freeze)).toEqual(contract);
+      expect(() => restarted.freezeDeliveryV2({ ...freeze, contract: { ...contract, eligible_projects: [] } })).toThrow("conflicts");
+      expect(restarted.readDeliveryV2(APPROVAL_ID)).toEqual(contract);
+    } finally { database.close(); }
+  });
+
+  it("persists and replays a V2 rejection without turning it into V1", () => {
+    const database = fixture();
+    try {
+      const state = new SqlitePrivateSlackApprovalAssignmentStateV1(database, () => NOW);
+      state.stage(input());
+      const resolution = { ...rejection(), schema_version: 2 as const, kind: "echo-private-approval-resolution-v2" as const,
+        selected_project_ids: [], share_transcript: false, canonical_record_policy: null };
+      const first = state.recordTerminal({ candidate_id: CANDIDATE_ID, resolution });
+      expect(first.resolution).toEqual(resolution);
+      expect(new SqlitePrivateSlackApprovalAssignmentStateV1(database).readTerminal(APPROVAL_ID)?.resolution).toEqual(resolution);
+      expect(state.recordTerminal({ candidate_id: CANDIDATE_ID, resolution })).toEqual(first);
+    } finally { database.close(); }
+  });
+
   it("stages one immutable current-owner assignment and replays only exact input", () => {
     const database = fixture();
     try {

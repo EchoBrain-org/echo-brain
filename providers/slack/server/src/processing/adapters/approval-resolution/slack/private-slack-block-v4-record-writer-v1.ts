@@ -1,8 +1,9 @@
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v1.js";
-const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]);
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, privateSlackBlockApprovalConsequenceV2Sha256, buildPrivateSlackBlockApprovalRecordInputV2 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v2.js";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2]);
 import { canonicalSha256, type JsonObject, type Sha256Digest } from "@echo-brain/federation-protocol";
-import { ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT, RESTRICTED_REVIEWER_PERSON_POLICY_ID, createOrganizationRecordEnvelopeV4, createOrganizationRecordReceiptV2, organizationAuthorityPinSha256, validateDecisionProcessorProvenanceV1, validateMeetingSourceProvenanceV1, verifyOrganizationAuthorityPin, verifyOrganizationRecordEnvelopeV4, verifyOrganizationRecordReceiptV2, validateOrganizationRecordReceiptBodyV2 } from "@echo-brain/organization-protocol";
+import { ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT, RESTRICTED_REVIEWER_PERSON_POLICY_ID, createOrganizationRecordEnvelopeV4, createOrganizationRecordReceiptV2, organizationAuthorityPinSha256, validateDecisionProcessorProvenanceV1, validateMeetingSourceProvenanceV1, verifyOrganizationAuthorityPin, verifyOrganizationRecordEnvelopeV4, verifyOrganizationRecordReceiptV2, validateOrganizationRecordReceiptBodyV2 } from "@echo-brain/organization-protocol";
 import { buildPrivateSlackBlockApprovalRecordInputV1 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v1.js";
 import type {
   DecisionProcessorProvenanceV1,
@@ -67,6 +68,25 @@ export interface PrivateSlackBlockApprovalTerminalV1 {
     readonly approval_id: string;
     readonly outcome: "approved" | "rejected";
   };
+}
+
+/** V2 terminal keeps project audience/association distinct and binds an exact optional transcript grant. */
+export interface PrivateSlackBlockApprovalTerminalV2 {
+  readonly outcome: "approved" | "rejected";
+  readonly signed_action_receipt_sha256: Sha256Digest;
+  readonly resolution: Omit<PrivateSlackBlockApprovalTerminalV1["resolution"], "canonical_record_policy"> & {
+    readonly canonical_record_policy: {
+      readonly policy_id: typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
+      readonly policy_contract_sha256: Sha256Digest;
+      readonly policy_consequence_sha256: Sha256Digest;
+      readonly restricted_reader: { readonly principal_id: string; readonly membership_id: string } | null;
+      readonly audience_project_ids: readonly string[];
+      readonly association_project_ids: readonly string[];
+      readonly share_transcript: boolean;
+      readonly transcript_source: { readonly source_id: string; readonly revision_id: string; readonly source_sha256: Sha256Digest };
+    } | null;
+  };
+  readonly audit: PrivateSlackBlockApprovalTerminalV1["audit"];
 }
 
 export interface PrivateSlackBlockV4RecordWriterV1Options {
@@ -243,6 +263,99 @@ export class PrivateSlackBlockV4RecordWriterV1 {
       }),
       receipt_factory: this.receiptFactory(),
     });
+  }
+
+  /**
+   * The V2 append branch is intentionally separate from appendApproved(): a
+   * historical V1 terminal can never acquire a project or transcript grant.
+   */
+  async appendApprovedV2(
+    terminal: PrivateSlackBlockApprovalTerminalV2,
+    candidate: FrozenPrivateSlackApprovalCandidateV1,
+  ): Promise<AppendedV4Record> {
+    const resolution = terminal.resolution;
+    const policy = resolution.canonical_record_policy;
+    if (terminal.outcome !== "approved" || resolution.action !== "approve" || policy === null) {
+      throw new Error("private V2 rejection must not append a V4 record");
+    }
+    if (candidate.state_lineage_id !== this.options.state_lineage_id || candidate.approval_id !== resolution.approval_id ||
+        candidate.organization_id !== resolution.organization_id || candidate.candidate_sha256 !== resolution.candidate_sha256 ||
+        candidate.frozen_card_sha256 !== resolution.frozen_card_sha256 || candidate.approved_snapshot_sha256 !== resolution.approved_snapshot_sha256 ||
+        canonicalSha256(candidate.approved_snapshot) !== candidate.approved_snapshot_sha256) {
+      throw new Error("private V2 terminal does not match the frozen Authority candidate");
+    }
+    const source = validateMeetingSourceProvenanceV1(candidate.source_provenance);
+    const processor = validateDecisionProcessorProvenanceV1(candidate.processor_provenance);
+    const consequence = {
+      schema_version: 2 as const,
+      kind: PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND,
+      policy_id: policy.policy_id,
+      audience_project_ids: policy.audience_project_ids,
+      association_project_ids: policy.association_project_ids,
+      share_transcript: policy.share_transcript,
+      transcript_source: policy.transcript_source,
+    };
+    const consequenceSha256 = privateSlackBlockApprovalConsequenceV2Sha256(consequence);
+    if (consequenceSha256 !== policy.policy_consequence_sha256) {
+      throw new Error("private V2 terminal policy consequence does not match its selected projects and transcript choice");
+    }
+    // V2 policy projection verifies this exact, provider-action-bound audit
+    // witness. The durable terminal summary has a different shape.
+    const auditEntry = {
+      authority_id: candidate.authority_id,
+      organization_id: candidate.organization_id,
+      state_lineage_id: candidate.state_lineage_id,
+      audit_event_id: terminal.audit.audit_event_id,
+      audit_sequence: terminal.audit.audit_sequence,
+      actor_class: "provider_human" as const,
+      principal_id: resolution.final_approver.principal_id,
+      membership_id: resolution.final_approver.membership_id,
+      action: "approve" as const,
+      subject_kind: "approval" as const,
+      subject_id: resolution.approval_id,
+      detail_digest: resolution.authorization_proof_sha256,
+      provider_action_sha256: terminal.signed_action_receipt_sha256,
+    };
+    const auditEntrySha256 = canonicalSha256(auditEntry);
+    const human = buildPrivateSlackBlockApprovalRecordInputV2({
+      private_slack_block_approval_resolution_ref_v2: {
+        schema_version: 2, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND,
+        authority_id: candidate.authority_id, organization_id: candidate.organization_id, state_lineage_id: candidate.state_lineage_id,
+        command_id: resolution.command_id, approval_id: resolution.approval_id,
+        candidate_sha256: resolution.candidate_sha256, frozen_card_sha256: resolution.frozen_card_sha256,
+        approved_snapshot_sha256: resolution.approved_snapshot_sha256, final_approver: resolution.final_approver,
+        current_slack_identity_link: resolution.current_slack_identity_link, action: "approve",
+        selected_policy_id: policy.policy_id, policy_contract_sha256: policy.policy_contract_sha256,
+        policy_consequence_sha256: consequenceSha256, comment: resolution.comment,
+        audit_event_id: terminal.audit.audit_event_id, audit_sequence: terminal.audit.audit_sequence,
+        audit_entry_sha256: auditEntrySha256, provider_action_kind: "echo-signed-slack-block-action-v1",
+        provider_action_schema_version: 1, provider_action_sha256: terminal.signed_action_receipt_sha256,
+        authorization_proof_sha256: resolution.authorization_proof_sha256,
+        audience_project_ids: policy.audience_project_ids, association_project_ids: policy.association_project_ids,
+        share_transcript: policy.share_transcript, transcript_source: policy.transcript_source,
+      },
+      event: { kind: "approved", approved_snapshot: candidate.approved_snapshot as never,
+        approved_snapshot_sha256: candidate.approved_snapshot_sha256, policy_id: policy.policy_id,
+        policy_contract_sha256: policy.policy_contract_sha256, policy_consequence: consequence,
+        policy_consequence_sha256: consequenceSha256 },
+    });
+    const authorizationWitness = {
+      authorization_allow: {
+        authority_id: candidate.authority_id, organization_id: candidate.organization_id, state_lineage_id: candidate.state_lineage_id,
+        approval_id: resolution.approval_id, action: "approve", final_approver: resolution.final_approver,
+        selected_policy_id: policy.policy_id, policy_contract_sha256: policy.policy_contract_sha256,
+        policy_consequence_sha256: consequenceSha256, audience_project_ids: policy.audience_project_ids,
+        association_project_ids: policy.association_project_ids, share_transcript: policy.share_transcript,
+        transcript_source: policy.transcript_source, provider_action_sha256: terminal.signed_action_receipt_sha256, decision: "allow",
+      }, authorization_proof_sha256: resolution.authorization_proof_sha256,
+      provider_action_kind: "echo-signed-slack-block-action-v1", provider_action_schema_version: 1,
+      audit_entry: auditEntry,
+      audit_entry_sha256: auditEntrySha256,
+    };
+    const issuedAt = this.options.now(); timestamp(issuedAt);
+    return this.options.append.append({ approval_id: resolution.approval_id, action: "approve", semantic_idempotency_key: human.semantic_idempotency_key,
+      receipt_issued_at: issuedAt, authorization_witness: authorizationWitness,
+      envelope_factory: this.envelopeFactory({ human_act_record_input: { private_slack_block_approval_resolution_ref_v2: human.private_slack_block_approval_resolution_ref_v2, event: human.event }, source_provenance: source, processor_provenance: processor, issued_at: issuedAt }), receipt_factory: this.receiptFactory() });
   }
 
   private envelopeFactory(input: {

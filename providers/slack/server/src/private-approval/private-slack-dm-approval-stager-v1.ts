@@ -9,13 +9,25 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { type ApprovalContractSha256 } from "../organization-control-plane/slack-approval-integration-v1.js";
 import { type PendingPrivateApprovalV1 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
+import { type PendingPrivateApprovalV2 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import { type PrivateApprovalSlackCardBindingV1, type StagePrivateApprovalPendingV1, type StagedPrivateApprovalPendingV1 } from "../organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import { type SlackDmApprovalReviewerTargetCoordinatesV1 } from "../organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
 import type Database from "better-sqlite3";
 import { buildPrivateSlackApprovalBlockKitCardV1, type PrivateSlackApprovalActionItemV1, type PrivateSlackApprovalDecisionGroupV1, type PrivateSlackApprovalReviewItemV1 } from "./private-slack-approval-block-kit-card-v1.js";
+import {
+  buildPrivateSlackApprovalBlockKitCardV2,
+  type PrivateSlackApprovalBlockKitCardV2,
+  type PrivateSlackApprovalEligibleProjectV2,
+} from "./private-slack-approval-block-kit-card-v2.js";
+import type { PrivateApprovalTranscriptSourceV1 } from "@echo-brain/organization-control-plane/application/private-approval-policy-resolution-core-v2";
 import { type PrivateSlackApprovalReviewerTargetResolverInputV1, type PrivateSlackApprovalReviewerTargetResolverV1, type PrivateSlackApprovalReviewerTargetV1 } from "./resolve-private-slack-approval-reviewer-target-v1.js";
 import { SqlitePrivateSlackApprovalAssignmentStateV1, type PrivateApprovalAssignmentStateV1 } from "./sqlite-private-slack-approval-assignment-state-v1.js";
+import { listPrivateSlackApprovalEligibleProjectsV2 } from "./private-slack-approval-project-eligibility-v2.js";
 import { compileDecisionBrief } from "@echo-brain/organization-processing/core/processing/brief";
+import {
+  meetingSourceEnvelopeV1,
+  sourceContentSha256V1,
+} from "@echo-brain/organization-processing/core";
 import { PrivateSlackApprovalCardPosterV1, type PrivateSlackApprovalCardPresentationV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import {
   APPROVAL_DELIVERY_QUARANTINE_REASON_V1,
@@ -26,6 +38,7 @@ import {
 import type { ApprovalWorkflowOutboxV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
 import { ApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
 import type { MeetingApprovalJourneyTelemetryPortV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
+import { isStagingSyntheticMeetingCanaryV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
 
 type Digest = ApprovalContractSha256;
 type CompiledDecisionBrief = ReturnType<typeof compileDecisionBrief>;
@@ -43,6 +56,13 @@ export interface PrivateSlackDmApprovalStagerV1Options {
   readonly assignments: SqlitePrivateSlackApprovalAssignmentStateV1;
   readonly control_plane: {
     stage(input: StagePrivateApprovalPendingV1): StagedPrivateApprovalPendingV1;
+    stageV2?(input: {
+      readonly stage_command_id: string;
+      readonly authority_id: string;
+      readonly candidate_id: string;
+      readonly pending: PendingPrivateApprovalV2;
+      readonly card_binding: PrivateApprovalSlackCardBindingV1;
+    }): { readonly pending_sha256: Digest };
   };
   readonly poster: Pick<
     PrivateSlackApprovalCardPosterV1,
@@ -65,6 +85,15 @@ interface PrivateCardAndSnapshotV1 {
   readonly frozen_card_sha256: Digest;
   readonly approved_snapshot: Readonly<Record<string, unknown>>;
   readonly approved_snapshot_sha256: Digest;
+}
+
+interface PrivateCardAndSnapshotV2 {
+  readonly card: PrivateSlackApprovalBlockKitCardV2;
+  readonly frozen_card_sha256: Digest;
+  readonly approved_snapshot: Readonly<Record<string, unknown>>;
+  readonly approved_snapshot_sha256: Digest;
+  readonly eligible_projects: readonly PrivateSlackApprovalEligibleProjectV2[];
+  readonly transcript_source: PrivateApprovalTranscriptSourceV1;
 }
 
 /**
@@ -260,9 +289,117 @@ function buildCardAndSnapshot(
   });
 }
 
+/**
+ * V2 freezes the choices displayed to the reviewer and the exact retained
+ * source revision into the pre-post card commitment.  The source hash comes
+ * from Authority's revision manifest, never a meeting object reconstructed
+ * by this delivery adapter.
+ */
+function buildCardAndSnapshotV2(
+  input: ApprovalWorkflowStageInputV1,
+  sha256: (value: unknown) => Digest,
+  eligibility: readonly PrivateSlackApprovalEligibleProjectV2[],
+  transcriptSource: PrivateApprovalTranscriptSourceV1,
+): PrivateCardAndSnapshotV2 | undefined {
+  const brief = compileDecisionBrief(
+    `brf_${input.candidate.candidate_semantic_sha256.slice("sha256:".length)}`,
+    input.meeting,
+    input.decisions,
+  );
+  const payload = Object.freeze({
+    brief,
+    source: Object.freeze({
+      adapter_id: input.meeting.provenance.source.adapter_id,
+      instance_id: input.meeting.provenance.source.instance_id,
+      external_id: input.meeting.provenance.external_id,
+    }),
+    alternatives: Object.freeze([]),
+    links: null,
+    reviewed_at: input.decisions.generated_at,
+    surface: "slack-private-owner-dm" as const,
+  });
+  const approved_snapshot = Object.freeze({
+    schema_version: 2 as const,
+    kind: "echo-approved-decision-snapshot-v2" as const,
+    approval_id: input.candidate.approval_id,
+    staged_content_sha256: sha256({ meeting: input.meeting, decisions: input.decisions }),
+    final_content_sha256: sha256(payload),
+    payload_contract_id: "organization-record-approval-payload-v1" as const,
+    approved_payload: payload,
+  });
+  const review = frozenReview(brief);
+  if (review === undefined) return undefined;
+  let card: PrivateSlackApprovalBlockKitCardV2;
+  try {
+    card = buildPrivateSlackApprovalBlockKitCardV2({
+      schema_version: 2,
+      approval_id: input.candidate.approval_id,
+      meeting_title: legacyMeetingTitle(input.meeting.title),
+      eligible_projects: eligibility,
+      ...review,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("private approval Block Kit card v2 ")) return undefined;
+    throw error;
+  }
+  const approved_snapshot_sha256 = sha256(approved_snapshot);
+  const frozen_card_sha256 = sha256({
+    schema_version: 2,
+    kind: "echo-private-owner-dm-approval-card-v2",
+    card,
+    eligible_projects: eligibility,
+    transcript_source: transcriptSource,
+    approved_snapshot_sha256,
+  });
+  return Object.freeze({
+    card,
+    frozen_card_sha256,
+    approved_snapshot,
+    approved_snapshot_sha256,
+    eligible_projects: Object.freeze([...eligibility]),
+    transcript_source: Object.freeze({ ...transcriptSource }),
+  });
+}
+
+function retainedTranscriptSourceV2(
+  database: Database.Database,
+  organizationId: string,
+  meeting: ApprovalWorkflowStageInputV1["meeting"],
+): PrivateApprovalTranscriptSourceV1 | undefined {
+  const source = meetingSourceEnvelopeV1(meeting);
+  const row = database.prepare(`SELECT revision_sha256
+    FROM authority_source_revisions_v1
+    WHERE organization_id=? AND source_id=? AND revision_id=?`).get(
+    organizationId,
+    source.item.source_id,
+    source.revision.revision_id,
+  ) as { readonly revision_sha256?: unknown } | undefined;
+  if (
+    row === undefined ||
+    typeof row.revision_sha256 !== "string" ||
+    !/^[0-9a-f]{64}$/.test(row.revision_sha256) ||
+    row.revision_sha256 !== sourceContentSha256V1(
+      (({ captured_at: _capturedAt, ...immutable }) => immutable)(source.revision),
+    )
+  ) return undefined;
+  return Object.freeze({
+    source_id: source.item.source_id,
+    revision_id: source.revision.revision_id,
+    source_sha256: `sha256:${row.revision_sha256}` as Digest,
+  });
+}
+
+/** V10 stores an immutable V2 delivery contract. Earlier authority files keep V1 exact. */
+function supportsPrivateApprovalDeliveryV2(database: Database.Database): boolean {
+  return database.prepare(
+    `SELECT 1 FROM pragma_table_info('authority_live_approval_outbox_v2')
+     WHERE name='private_approval_card_v2_json'`,
+  ).get() !== undefined;
+}
+
 function candidateCommitment(
   outbox: ApprovalWorkflowOutboxV1,
-  card: PrivateCardAndSnapshotV1,
+  card: Pick<PrivateCardAndSnapshotV1 | PrivateCardAndSnapshotV2, "frozen_card_sha256" | "approved_snapshot_sha256">,
 ) {
   return Object.freeze({
     approval_id: outbox.approval_id,
@@ -399,22 +536,6 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
     }
     if (outbox.state === "superseded") return { kind: "state_drift" };
 
-    const frozen = buildCardAndSnapshot(
-      input,
-      this.sha256,
-    );
-    if (frozen === undefined) {
-      const quarantine = this.options.authority.quarantineApprovalDelivery({
-        candidate_id: outbox.candidate_id,
-        reason_code: APPROVAL_DELIVERY_QUARANTINE_REASON_V1,
-      });
-      return { kind: "quarantined", reason_code: quarantine.reason_code };
-    }
-
-    // This read-only proof has no external side effect. Resolve it before
-    // freezing a post attempt so a missing/deactivated owner leaves the
-    // already-durable candidate queued, rather than creating a `posting`
-    // recovery record without a deliverable target.
     const targetInput: PrivateSlackApprovalReviewerTargetResolverInputV1 = {
       meeting: input.meeting,
       authority_database: this.options.authority_database,
@@ -422,11 +543,139 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       coordinates: this.options.coordinates,
       connection_id: this.options.connection_id,
     } as const;
-    const target = this.resolveReviewerTarget(targetInput);
-    // An owner identity can arrive after the meeting itself. The candidate is
-    // already durable, so this is a recoverable delivery dependency: preserve
-    // it for reconciliation and let source intake advance past this meeting.
+    let target: PrivateSlackApprovalReviewerTargetV1 | undefined;
+    let pendingV2: PendingPrivateApprovalV2 | undefined;
+    let frozen: PrivateCardAndSnapshotV1 | PrivateCardAndSnapshotV2;
+    // Test and historical V1 adapters lack this capability. The production
+    // assignment adapter always has it, so every newly queued production
+    // candidate enters V2 while pre-V2 recoveries retain their exact path.
+    const deliveryV2 = this.options.assignments as unknown as {
+      readonly readDeliveryV2?: (approvalId: string) => PendingPrivateApprovalV2 | undefined;
+      readonly freezeDeliveryV2?: (input: {
+        readonly approval_id: string;
+        readonly candidate_id: string;
+        readonly candidate_sha256: Digest;
+        readonly contract: PendingPrivateApprovalV2;
+      }) => PendingPrivateApprovalV2;
+    };
+    const v2DeliverySupported =
+      (deliveryV2.readDeliveryV2 !== undefined ||
+        deliveryV2.freezeDeliveryV2 !== undefined) &&
+      supportsPrivateApprovalDeliveryV2(this.options.authority_database);
+    // The exact synthetic canary has no admitted source custody. Preserve its
+    // existing V1 rehearsal; real meetings must prove custody before V2 staging.
+    const syntheticCanary = isStagingSyntheticMeetingCanaryV1(
+      input.meeting,
+      input.admission.source.cursor,
+    );
+    const existingV2 = v2DeliverySupported
+      ? deliveryV2.readDeliveryV2?.(outbox.approval_id)
+      : undefined;
+    if (existingV2 !== undefined || (v2DeliverySupported && !syntheticCanary && outbox.state === "queued" && deliveryV2.freezeDeliveryV2 !== undefined)) {
+      // This read-only proof precedes the only V2 delivery write. A missing
+      // owner leaves the durable candidate queued without freezing a card.
+      target = this.resolveReviewerTarget(targetInput);
+      if (target === undefined) return { kind: "delivery_pending" };
+      if (existingV2 !== undefined) {
+        pendingV2 = existingV2;
+        const rebuilt = buildCardAndSnapshotV2(
+          input,
+          this.sha256,
+          pendingV2.eligible_projects,
+          pendingV2.transcript_source,
+        );
+        if (
+          rebuilt === undefined ||
+          rebuilt.frozen_card_sha256 !== pendingV2.frozen_card_sha256 ||
+          rebuilt.approved_snapshot_sha256 !== pendingV2.approved_snapshot_sha256
+        ) return { kind: "state_drift" };
+        frozen = rebuilt;
+      } else {
+        const transcriptSource = retainedTranscriptSourceV2(
+          this.options.authority_database,
+          target.slack_target.connection.body.organization_id,
+          input.meeting,
+        );
+        if (transcriptSource === undefined) return { kind: "state_drift" };
+        const eligibility = listPrivateSlackApprovalEligibleProjectsV2({
+          database: this.options.authority_database,
+          organization_id: target.slack_target.connection.body.organization_id,
+          reviewer: target.reviewer,
+        });
+        const initial = buildCardAndSnapshotV2(
+          input,
+          this.sha256,
+          eligibility,
+          transcriptSource,
+        );
+        if (initial === undefined) {
+          const quarantine = this.options.authority.quarantineApprovalDelivery({
+            candidate_id: outbox.candidate_id,
+            reason_code: APPROVAL_DELIVERY_QUARANTINE_REASON_V1,
+          });
+          return { kind: "quarantined", reason_code: quarantine.reason_code };
+        }
+        if (deliveryV2.freezeDeliveryV2 === undefined) return { kind: "state_drift" };
+        pendingV2 = deliveryV2.freezeDeliveryV2({
+          approval_id: outbox.approval_id,
+          candidate_id: outbox.candidate_id,
+          candidate_sha256: outbox.candidate_semantic_sha256 as Digest,
+          contract: Object.freeze({
+            schema_version: 2,
+            kind: "echo-private-approval-pending-v2",
+            approval_id: outbox.approval_id,
+            organization_id: target.slack_target.connection.body.organization_id,
+            candidate_sha256: outbox.candidate_semantic_sha256 as Digest,
+            frozen_card_sha256: initial.frozen_card_sha256,
+            approved_snapshot_sha256: initial.approved_snapshot_sha256,
+            assigned_owner: Object.freeze({
+              principal_id: target.reviewer.principal_id,
+              membership_id: target.reviewer.membership_id,
+            }),
+            assigned_owner_slack_identity_link:
+              target.slack_target.current_slack_identity_link,
+            eligible_projects: initial.eligible_projects,
+            transcript_source: initial.transcript_source,
+          }),
+        });
+        const rebuilt = buildCardAndSnapshotV2(
+          input,
+          this.sha256,
+          pendingV2.eligible_projects,
+          pendingV2.transcript_source,
+        );
+        if (
+          rebuilt === undefined ||
+          rebuilt.frozen_card_sha256 !== pendingV2.frozen_card_sha256 ||
+          rebuilt.approved_snapshot_sha256 !== pendingV2.approved_snapshot_sha256
+        ) return { kind: "state_drift" };
+        frozen = rebuilt;
+      }
+    } else {
+      // Retain exact V1 delivery behavior for every pre-V2 pending outbox.
+      const legacy = buildCardAndSnapshot(input, this.sha256);
+      if (legacy === undefined) {
+        const quarantine = this.options.authority.quarantineApprovalDelivery({
+          candidate_id: outbox.candidate_id,
+          reason_code: APPROVAL_DELIVERY_QUARANTINE_REASON_V1,
+        });
+        return { kind: "quarantined", reason_code: quarantine.reason_code };
+      }
+      frozen = legacy;
+      target = this.resolveReviewerTarget(targetInput);
+      if (target === undefined) return { kind: "delivery_pending" };
+    }
+    // Both branches prove a current private target before any Slack side effect.
     if (target === undefined) return { kind: "delivery_pending" };
+    if (
+      pendingV2 !== undefined && (
+        pendingV2.assigned_owner.principal_id !== target.reviewer.principal_id ||
+        pendingV2.assigned_owner.membership_id !== target.reviewer.membership_id ||
+        pendingV2.assigned_owner_slack_identity_link.external_identity_link_id !== target.slack_target.current_slack_identity_link.external_identity_link_id ||
+        pendingV2.assigned_owner_slack_identity_link.external_identity_link_contract_sha256 !== target.slack_target.current_slack_identity_link.external_identity_link_contract_sha256 ||
+        pendingV2.assigned_owner_slack_identity_link.provider_subject_id !== target.slack_target.current_slack_identity_link.provider_subject_id
+      )
+    ) return { kind: "state_drift" };
     const prepared = this.options.authority.prepareApprovalPost({
       candidate_id: outbox.candidate_id,
       frozen_card_sha256: frozen.frozen_card_sha256,
@@ -503,7 +752,7 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       return { kind: "state_drift" };
     }
 
-    const pending: PendingPrivateApprovalV1 = Object.freeze({
+    const pending: PendingPrivateApprovalV1 | PendingPrivateApprovalV2 = pendingV2 ?? Object.freeze({
       schema_version: 1,
       kind: "echo-private-approval-pending-v1",
       approval_id: outbox.approval_id,
@@ -515,6 +764,20 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       assigned_owner_slack_identity_link:
         assignment.assigned_owner_slack_identity_link,
     });
+    if (
+      pending.schema_version === 2 && (
+        pending.organization_id !== assignment.organization_id ||
+        pending.approval_id !== outbox.approval_id ||
+        pending.candidate_sha256 !== commitment.candidate_sha256 ||
+        pending.frozen_card_sha256 !== outbox.frozen_card_sha256 ||
+        pending.approved_snapshot_sha256 !== outbox.approved_snapshot_sha256 ||
+        pending.assigned_owner.principal_id !== assignment.assigned_owner.principal_id ||
+        pending.assigned_owner.membership_id !== assignment.assigned_owner.membership_id ||
+        pending.assigned_owner_slack_identity_link.external_identity_link_id !== assignment.assigned_owner_slack_identity_link.external_identity_link_id ||
+        pending.assigned_owner_slack_identity_link.external_identity_link_contract_sha256 !== assignment.assigned_owner_slack_identity_link.external_identity_link_contract_sha256 ||
+        pending.assigned_owner_slack_identity_link.provider_subject_id !== assignment.assigned_owner_slack_identity_link.provider_subject_id
+      )
+    ) return { kind: "state_drift" };
     const cardBinding: PrivateApprovalSlackCardBindingV1 = Object.freeze({
       schema_version: 1,
       kind: "echo-private-approval-slack-card-binding-v1",
@@ -530,13 +793,26 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       provider_message_ts: outbox.presentation_external_id,
       card_sha256: outbox.frozen_card_sha256 as Digest,
     });
-    const staged = this.options.control_plane.stage({
-      stage_command_id: outbox.stage_command_id,
-      authority_id: this.options.coordinates.authority_id,
-      candidate_id: outbox.candidate_id,
-      pending,
-      card_binding: cardBinding,
-    });
+    const staged = pending.schema_version === 1
+      ? this.options.control_plane.stage({
+          stage_command_id: outbox.stage_command_id,
+          authority_id: this.options.coordinates.authority_id,
+          candidate_id: outbox.candidate_id,
+          pending,
+          card_binding: cardBinding,
+        })
+      : (() => {
+          if (this.options.control_plane.stageV2 === undefined) {
+            throw new Error("private approval V2 staging persistence is not configured");
+          }
+          return this.options.control_plane.stageV2({
+            stage_command_id: outbox.stage_command_id,
+            authority_id: this.options.coordinates.authority_id,
+            candidate_id: outbox.candidate_id,
+            pending,
+            card_binding: cardBinding,
+          });
+        })();
 
     const refreshed = this.options.authority.readCandidateByApprovalId(outbox.approval_id);
     if (refreshed === undefined || refreshed.candidate_id !== outbox.candidate_id) return { kind: "state_drift" };

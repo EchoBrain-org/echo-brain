@@ -80,6 +80,22 @@ function setup(
 }
 
 describe("Person V4 record read route", () => {
+  it("binds current project grants to selection and denies a grant change before release", () => {
+    const project_id = "prj_00000000-0000-4000-8000-000000000001";
+    let captures = 0;
+    const value = setup(undefined, {
+      capture_projects: () => {
+        captures += 1;
+        return { project_ids: [project_id], grants_sha256: digest(captures === 1 ? "grant-before" : "grant-after-rejoin") };
+      },
+    });
+    try {
+      expect(() => value.route.list({ access_token: "fixture" })).toThrow("person authentication failed");
+      expect(value.inputs).toEqual([expect.objectContaining({ project_ids: [project_id] })]);
+      expect(value.authority.prepare("SELECT count(*) n FROM authority_person_read_decision_audit_v2").get()).toEqual({ n: 0 });
+    } finally { value.authority.close(); }
+  });
+
   const approver = {
     organization_id: "org_clean", principal_id: "principal_approver",
     membership_id: "membership_approver", display_name: "Maya Chen",

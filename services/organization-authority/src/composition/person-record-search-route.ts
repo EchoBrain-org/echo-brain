@@ -13,6 +13,7 @@ import {
   type ReadableSearchResultV1,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import type Database from "better-sqlite3";
+import { captureRecordProjectsV1, type CaptureRecordProjectsV1, type RecordProjectAuthorizationV1 } from "./person-record-project-scope-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import {
   containsCanonicalReleaseId,
@@ -57,6 +58,7 @@ export interface ExpandReadableSearchRelatedAtomsV1Input {
   readonly state_directory: string;
   readonly active_generation: ReadableSearchActiveGenerationV1;
   readonly reader: ReadableSearchReaderV1;
+  readonly project_id?: string;
   readonly anchor_atom_ids: readonly Sha256Digest[];
   readonly include_anchor_records?: true;
   readonly limit: number;
@@ -74,6 +76,8 @@ export type ExpandReadableSearchRelatedAtomsV1 = (
 export interface PersonRecordSearchBatchInputV1 {
   readonly access_token: string;
   readonly queries: readonly string[];
+  /** Authority-checked project scope; association never replaces audience. */
+  readonly project_id?: string;
   /**
    * A canonical release named by the answer question. Layer 3 applies it only
    * after normal authorization has admitted the merged evidence.
@@ -113,6 +117,8 @@ export interface PersonRecordSearchBatchReleaseV1 {
   readonly current_authorization: PersonRecordSearchReleaseAuthorizationV1;
   readonly active_pointer: PersonRecordSearchReleasePointerV1;
   readonly record_read_audit_row_sha256: Sha256Digest;
+  readonly project_authorization?: RecordProjectAuthorizationV1;
+  readonly project_id?: string;
 }
 
 export interface PersonRecordSearchBatchResultV1 {
@@ -146,6 +152,7 @@ export interface CreatePersonRecordSearchRouteV1Options {
   readonly authority: Database.Database;
   readonly record: Database.Database;
   readonly audit: SqlitePersonRecordReadAuditV1;
+  readonly capture_projects?: CaptureRecordProjectsV1;
   readonly search_generation?: SearchGeneration;
   /** Optional until the Layer 2 related-atom projector is installed. */
   readonly expand_related_atoms?: ExpandReadableSearchRelatedAtomsV1;
@@ -351,6 +358,7 @@ export function createPersonRecordSearchRouteV1(
       access_token: input.access_token,
     });
     assertExpectedOrganization(authorization);
+    const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
     try {
       input.on_authorized?.();
     } catch {
@@ -388,7 +396,9 @@ export function createPersonRecordSearchRouteV1(
         reader: {
           principal_id: authorization.principal_id,
           membership_id: authorization.membership_id,
+          ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
         },
+        ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
         query,
         ...(input.limit === undefined ? {} : { limit: input.limit }),
         }),
@@ -480,7 +490,9 @@ export function createPersonRecordSearchRouteV1(
             reader: {
               principal_id: authorization.principal_id,
               membership_id: authorization.membership_id,
+              ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
             },
+            ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
             anchor_atom_ids: anchors.map((item) => item.atom_id),
             limit: relatedLimit,
             include_anchor_records: true,
@@ -539,6 +551,7 @@ export function createPersonRecordSearchRouteV1(
     }
     if (
       !sameReleaseAuthorization(authorization, released) ||
+      captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 ||
       released.organization_id !== options.organization_id
     ) {
       throw new AuthorityOperationError(
@@ -590,6 +603,8 @@ export function createPersonRecordSearchRouteV1(
         }),
       }),
       record_read_audit_row_sha256: recordReadAuditRowSha256,
+      project_authorization: projects,
+      ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
     });
     releaseWitnesses.add(release);
     return Object.freeze({
@@ -628,6 +643,7 @@ export function createPersonRecordSearchRouteV1(
       const pointer = activeGeneration(options.authority);
       const head = recordHead(options.record);
       if (
+        captureRecordProjectsV1(options.capture_projects, current, input.release.project_id).grants_sha256 !== input.release.project_authorization?.grants_sha256 ||
         !sameReleaseAuthorization(
           current,
           input.release.initial_authorization,

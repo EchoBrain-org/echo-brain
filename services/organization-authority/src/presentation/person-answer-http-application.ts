@@ -3,7 +3,8 @@ export const PERSON_ANSWER_PATH_V1 = "/v1/person/ask";
 export type PersonAnswerDigestV1 = `sha256:${string}`;
 export type PersonAnswerPolicyV1 =
   | "organization-member-readable-person-v2"
-  | "restricted-reviewer-person-v2";
+  | "restricted-reviewer-person-v2"
+  | "project-members-readable-person-v1";
 export type PersonAnswerOutcomeV1 = "authorship_unsupported";
 
 export interface PersonAnswerResponseV2 {

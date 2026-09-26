@@ -47,13 +47,8 @@ if args[0] == 'run':
         # product initializes its current schema and rejects both old versions.
         # Execute the complete verifier with each historical image's baseline
         # pin; never relax the current product verifier for these test images.
-        if os.environ.get('ECHO_TEST_MIGRATION_FROM') == '8' and not accepted:
-            # The V9 candidate executes its actual complete verifier and
-            # immutable processor-admission check, without replacing any pin.
-            script = script.replace('/echo-clean/state', state)
-            raise SystemExit(execute_node(script))
         source = pathlib.Path('packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js').resolve()
-        historical_version = os.environ.get('ECHO_TEST_MIGRATION_FROM', '5') if accepted else '6'
+        historical_version = os.environ.get('ECHO_TEST_MIGRATION_FROM', '5') if accepted else os.environ.get('ECHO_TEST_MIGRATION_CANDIDATE_VERSION', '6')
         script, replacements = re.subn(
             r'\b(AUTHORITY_BASELINE_SCHEMA_VERSION_V|authorityBaselineSha256V)\d+\b',
             lambda match: match.group(1) + historical_version,

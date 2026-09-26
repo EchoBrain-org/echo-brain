@@ -112,6 +112,10 @@ export interface RecordRetrievalSourceAtomV1 {
   readonly authorization_proof_sha256: Sha256Digest;
   readonly reviewer_principal_id: string | null;
   readonly reviewer_membership_id: string | null;
+  /** Immutable project audience facts; effective readers are resolved later. */
+  readonly audience_project_ids: readonly string[];
+  /** Immutable project associations for a caller's explicit project scope. */
+  readonly association_project_ids: readonly string[];
 }
 
 export interface RecordRetrievalSourceSnapshotV1 {
@@ -143,7 +147,7 @@ interface StoredRecordRow {
 }
 
 interface StoredFactRow {
-  readonly fact_family: "member" | "reviewer";
+  readonly fact_family: "member" | "reviewer" | "project";
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -176,6 +180,14 @@ interface MaterializedSnapshot {
     | undefined;
   readonly records: readonly StoredRecordRow[];
   readonly facts: readonly StoredFactRow[];
+  readonly projectAudiences: readonly {
+    readonly record_position: number;
+    readonly project_id: string;
+  }[];
+  readonly projectAssociations: readonly {
+    readonly record_position: number;
+    readonly project_id: string;
+  }[];
 }
 
 function invalid(message: string): never {
@@ -265,6 +277,9 @@ function materialize(database: Database.Database): MaterializedSnapshot {
            FROM organization_record_log ORDER BY position ASC`,
       )
       .all() as StoredRecordRow[];
+    const hasProjectFacts = database.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'organization_record_project_members_readable_person_fact'",
+    ).get() !== undefined;
     const facts = database
       .prepare(
         `SELECT 'member' AS fact_family,
@@ -284,11 +299,34 @@ function materialize(database: Database.Database): MaterializedSnapshot {
                 provider_action_sha256, authorization_proof_sha256,
                 reviewer_principal_id, reviewer_membership_id
            FROM organization_record_restricted_reviewer_person_fact
+           ${hasProjectFacts ? `UNION ALL
+         SELECT 'project' AS fact_family,
+                authority_id, organization_id, state_lineage_id, approval_id,
+                action, policy_id, policy_contract_sha256, record_position,
+                record_sha256, atom_order, signal_id_sha256, atom_id, item_kind,
+                audit_event_id, audit_sequence, audit_entry_sha256,
+                provider_action_sha256, authorization_proof_sha256,
+                NULL AS reviewer_principal_id, NULL AS reviewer_membership_id
+           FROM organization_record_project_members_readable_person_fact` : ""}
          ORDER BY record_position ASC, atom_order ASC, fact_family ASC`,
       )
       .all() as StoredFactRow[];
+    const projectAudiences = hasProjectFacts
+      ? database.prepare(
+          `SELECT record_position, project_id
+             FROM organization_record_project_members_readable_person_record_fact
+            ORDER BY record_position ASC, project_id ASC`,
+        ).all() as MaterializedSnapshot["projectAudiences"]
+      : [];
+    const projectAssociations = hasProjectFacts
+      ? database.prepare(
+          `SELECT record_position, project_id
+             FROM organization_record_project_association_v1
+            ORDER BY record_position ASC, project_id ASC`,
+        ).all() as MaterializedSnapshot["projectAssociations"]
+      : [];
     database.exec("COMMIT");
-    return { metadata, records, facts };
+    return { metadata, records, facts, projectAudiences, projectAssociations };
   } catch (error) {
     try {
       database.exec("ROLLBACK");
@@ -350,6 +388,8 @@ export class RecordRetrievalSourceSnapshotPortV1 {
       group.push(fact);
       factsByPosition.set(fact.record_position, group);
     }
+    const audienceProjectsByPosition = groupedProjectIds(source.projectAudiences);
+    const associationProjectsByPosition = groupedProjectIds(source.projectAssociations);
 
     const atoms: RecordRetrievalSourceAtomV1[] = [];
     const rows: RecordRetrievalSourceRowV1[] = [];
@@ -496,7 +536,18 @@ export class RecordRetrievalSourceSnapshotPortV1 {
       const expectedFamily =
         binding.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID
           ? "reviewer"
-          : "member";
+          : binding.policy_id === "project-members-readable-person-v1"
+            ? "project"
+            : "member";
+      const audience_project_ids = audienceProjectsByPosition.get(position) ?? Object.freeze([]);
+      const association_project_ids = associationProjectsByPosition.get(position) ?? Object.freeze([]);
+      if (expectedFamily === "project") {
+        if (audience_project_ids.length === 0 || association_project_ids.length === 0) {
+          invalid("project-readable record lacks immutable audience or association facts");
+        }
+      } else if (audience_project_ids.length !== 0 || association_project_ids.length !== 0) {
+        invalid("non-project record has project audience or association facts");
+      }
       let reviewerPrincipal: string | null = null;
       let reviewerMembership: string | null = null;
       for (const [atomOrder, signal] of signals.entries()) {
@@ -639,6 +690,8 @@ export class RecordRetrievalSourceSnapshotPortV1 {
             authorization_proof_sha256: reference.authorization_proof_sha256,
             reviewer_principal_id: reviewerPrincipal,
             reviewer_membership_id: reviewerMembership,
+            audience_project_ids,
+            association_project_ids,
           }),
         );
       }
@@ -705,4 +758,19 @@ export class RecordRetrievalSourceSnapshotPortV1 {
       atoms: frozenAtoms,
     });
   }
+}
+
+function groupedProjectIds(
+  rows: readonly { readonly record_position: number; readonly project_id: string }[],
+): ReadonlyMap<number, readonly string[]> {
+  const values = new Map<number, string[]>();
+  for (const row of rows) {
+    requiredPositiveInteger(row.record_position, "project fact record position");
+    requiredText(row.project_id, "project fact project_id");
+    const ids = values.get(row.record_position) ?? [];
+    if (ids.includes(row.project_id)) invalid("project facts duplicate a project ID");
+    ids.push(row.project_id);
+    values.set(row.record_position, ids);
+  }
+  return new Map([...values].map(([position, ids]) => [position, Object.freeze(ids)]));
 }

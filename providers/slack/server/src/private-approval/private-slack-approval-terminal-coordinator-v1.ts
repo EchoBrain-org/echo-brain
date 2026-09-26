@@ -15,9 +15,11 @@ import { annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "@echo-brain/organiz
  * frozen Authority tuple; no new terminal can be created after supersession.
  */
 import { type ApprovalContractSha256 } from "../organization-control-plane/slack-approval-integration-v1.js";
-import { PrivateApprovalFinalizationConflictError, PrivateApprovalFinalizationDeniedError, type DeniedPrivateApprovalRecoveryV1, type DurablePrivateApprovalTerminalV1, type PrivateApprovalDeniedReceiptReasonV1, type QueuedPrivateApprovalSignedActionV1 } from "../organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
+import { PrivateApprovalFinalizationConflictError, PrivateApprovalFinalizationDeniedError, type DeniedPrivateApprovalRecoveryV1, type DurablePrivateApprovalTerminalV1, type PrivateApprovalDeniedReceiptReasonV1, type QueuedPrivateApprovalSignedAction } from "../organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import type { CanonicalPrivateApprovalV4ReceiptV1, PrivateApprovalPresentationRecoveryV1, PrivateApprovalTerminalReceiptV1, RecordPrivateApprovalTerminalReceiptInputV1 } from "./sqlite-private-slack-approval-assignment-state-v1.js";
 import type { FrozenPrivateSlackApprovalCandidateV1, PrivateSlackBlockApprovalTerminalV1, PrivateSlackBlockV4RecordWriterV1 } from "../processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js";
+import type { PrivateSlackBlockApprovalTerminalV2 } from "../processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js";
+import type { PrivateApprovalResolutionV2 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import type {
   MeetingApprovalJourneyStageAttemptV1,
@@ -25,15 +27,18 @@ import type {
 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
 
 type Awaitable<T> = T | Promise<T>;
+type DurablePrivateApprovalTerminal = Omit<DurablePrivateApprovalTerminalV1, "resolution"> & {
+  readonly resolution: DurablePrivateApprovalTerminalV1["resolution"] | PrivateApprovalResolutionV2;
+};
 
 /** The strictly minimal durable Control Plane worker port. */
 export interface PrivateSlackApprovalTerminalControlPlaneV1 {
-  listQueued(): readonly QueuedPrivateApprovalSignedActionV1[];
+  listQueued(): readonly QueuedPrivateApprovalSignedAction[];
   listDenied(): readonly DeniedPrivateApprovalRecoveryV1[];
-  listTerminals(): readonly DurablePrivateApprovalTerminalV1[];
+  listTerminals(): readonly DurablePrivateApprovalTerminal[];
   finalize(
     providerActionKeySha256: ApprovalContractSha256,
-  ): Promise<DurablePrivateApprovalTerminalV1>;
+  ): Promise<DurablePrivateApprovalTerminal>;
   recordDenied(
     providerActionKeySha256: ApprovalContractSha256,
     reasonCode: PrivateApprovalDeniedReceiptReasonV1,
@@ -75,7 +80,7 @@ export interface PrivateSlackApprovalTerminalCoordinatorV1Options {
   readonly record_writer: Pick<
     PrivateSlackBlockV4RecordWriterV1,
     "appendApproved"
-  >;
+  > & Partial<Pick<PrivateSlackBlockV4RecordWriterV1, "appendApprovedV2">>;
   readonly poster: Pick<PrivateSlackApprovalCardPosterV1, "renderTerminal">;
   /** Optional staging telemetry. It is deliberately fail-open. */
   readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
@@ -170,7 +175,7 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
   }
 
   private async materializeTerminal(
-    terminal: DurablePrivateApprovalTerminalV1,
+    terminal: DurablePrivateApprovalTerminal,
   ): Promise<PrivateApprovalTerminalReceiptV1> {
     const approvalId = terminal.resolution.approval_id;
     const existing = await this.options.authority.readTerminal(approvalId);
@@ -210,10 +215,14 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     const appendAttempt = this.beginStageForApproval(approvalId, "meeting_record_append");
     let appended: Awaited<ReturnType<PrivateSlackBlockV4RecordWriterV1["appendApproved"]>>;
     try {
-      appended = await this.options.record_writer.appendApproved(
-        terminal as PrivateSlackBlockApprovalTerminalV1,
-        candidate,
-      );
+      if (terminal.resolution.schema_version === 2) {
+        if (this.options.record_writer.appendApprovedV2 === undefined) {
+          throw new Error("private V2 terminal requires its versioned record writer");
+        }
+        appended = await this.options.record_writer.appendApprovedV2(terminal as PrivateSlackBlockApprovalTerminalV2, candidate);
+      } else {
+        appended = await this.options.record_writer.appendApproved(terminal as PrivateSlackBlockApprovalTerminalV1, candidate);
+      }
     } catch (error) {
       this.failStage(appendAttempt, error);
       throw error;
@@ -278,14 +287,14 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     }
   }
 
-  private observedDurableDecision(approvalId: string): DurablePrivateApprovalTerminalV1 | null {
+  private observedDurableDecision(approvalId: string): DurablePrivateApprovalTerminal | null {
     if (!this.options.journey_telemetry) return null;
     try { return this.options.control_plane.listTerminals().find((terminal) => terminal.resolution.approval_id === approvalId) ?? null; }
     catch { return null; }
   }
 
   private synthesizeTerminalSuccessIfMissing(
-    terminal: DurablePrivateApprovalTerminalV1,
+    terminal: DurablePrivateApprovalTerminal,
   ): void {
     const approvalId = terminal.resolution.approval_id;
     if (this.hasTerminalStage(approvalId, "meeting_terminal_persist")) return;
@@ -417,12 +426,13 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
 
 function policyLabelFromResolution(
   terminal: PrivateApprovalTerminalReceiptV1,
-): "Only me" | "Team" {
+): "Only me" | "Team" | "Projects" {
   const policy = terminal.resolution.canonical_record_policy;
   if (policy === null) {
     throw new Error("approved Authority terminal has no policy binding");
   }
   if (policy.policy_id === "restricted-reviewer-person-v2") return "Only me";
   if (policy.policy_id === "organization-member-readable-person-v2") return "Team";
+  if (policy.policy_id === "project-members-readable-person-v1") return "Projects";
   throw new Error("approved Authority terminal has an unsupported policy");
 }

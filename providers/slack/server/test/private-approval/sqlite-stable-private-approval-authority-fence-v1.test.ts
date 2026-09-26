@@ -3,7 +3,8 @@ import { PRIVATE_APPROVAL_PENDING_KIND } from "../../src/organization-control-pl
 import { type PendingPrivateApprovalV1 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
 import { type PrivateApprovalSlackCardBindingV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import { describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5, applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import type { PendingPrivateApprovalV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "../../src/private-approval/resolve-private-slack-approval-reviewer-target-v1.js";
 import { SqlitePrivateSlackApprovalAssignmentStateV1, type PrivateApprovalCandidateCommitmentV1 } from "../../src/private-approval/sqlite-private-slack-approval-assignment-state-v1.js";
@@ -33,13 +34,13 @@ function candidate(): PrivateApprovalCandidateCommitmentV1 {
   };
 }
 
-function fixture(): {
+function fixture(version: 5 | 10 = 5, delivery?: (pending: PendingPrivateApprovalV1) => PendingPrivateApprovalV2): {
   readonly database: ReturnType<typeof openAuthorityDatabase>;
   readonly pending: PendingPrivateApprovalV1;
   readonly card: PrivateApprovalSlackCardBindingV1;
 } {
   const database = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV5(database);
+  (version === 10 ? applyAuthorityBaselineV10 : applyAuthorityBaselineV5)(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(
@@ -138,6 +139,21 @@ function fixture(): {
       channel_id: "DPRIVATE",
     },
   });
+  const pending: PendingPrivateApprovalV1 = {
+    schema_version: 1,
+    kind: PRIVATE_APPROVAL_PENDING_KIND,
+    approval_id: APPROVAL_ID,
+    organization_id: ORGANIZATION_ID,
+    candidate_sha256: CANDIDATE_SHA256,
+    frozen_card_sha256: FROZEN_CARD_SHA256,
+    approved_snapshot_sha256: SNAPSHOT_SHA256,
+    assigned_owner: staged.assignment.assigned_owner,
+    assigned_owner_slack_identity_link:
+      staged.assignment.assigned_owner_slack_identity_link,
+  };
+  if (delivery !== undefined) {
+    assignments.freezeDeliveryV2({ approval_id: APPROVAL_ID, candidate_id: CANDIDATE_ID, candidate_sha256: CANDIDATE_SHA256, contract: delivery(pending) });
+  }
   database
     .prepare(
       `UPDATE authority_live_approval_outbox_v2
@@ -154,18 +170,6 @@ function fixture(): {
         WHERE approval_id = ?`,
     )
     .run(MESSAGE_TS, APPROVAL_ID);
-  const pending: PendingPrivateApprovalV1 = {
-    schema_version: 1,
-    kind: PRIVATE_APPROVAL_PENDING_KIND,
-    approval_id: APPROVAL_ID,
-    organization_id: ORGANIZATION_ID,
-    candidate_sha256: CANDIDATE_SHA256,
-    frozen_card_sha256: FROZEN_CARD_SHA256,
-    approved_snapshot_sha256: SNAPSHOT_SHA256,
-    assigned_owner: staged.assignment.assigned_owner,
-    assigned_owner_slack_identity_link:
-      staged.assignment.assigned_owner_slack_identity_link,
-  };
   const card: PrivateApprovalSlackCardBindingV1 = {
     schema_version: 1,
     kind: "echo-private-approval-slack-card-binding-v1",
@@ -198,6 +202,38 @@ function lookup() {
 }
 
 describe("SQLite stable private approval Authority fence v1", () => {
+  it("binds V2 delivery and returns exact current project grant tenures inside the fence", async () => {
+    const project = "prj_00000000-0000-4000-8000-000000000001";
+    const grant = "pgm_00000000-0000-4000-8000-000000000001";
+    const delivery = (legacy: PendingPrivateApprovalV1): PendingPrivateApprovalV2 => ({ ...legacy, schema_version: 2, kind: "echo-private-approval-pending-v2",
+      eligible_projects: [{ project_id: project, project_membership_id: grant, name: "Original name" }],
+      transcript_source: { source_id: "source", revision_id: "revision", source_sha256: canonicalSha256({ source: 1 }) } });
+    const { database, pending: legacy, card } = fixture(10, delivery);
+    try {
+      const replacement = "pgm_00000000-0000-4000-8000-000000000002";
+      database.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,
+        principal_id,membership_id,membership_type,role,status,granted_at) VALUES(?,?,?,'prn_owner','mem_owner','owner','member','active',?)`)
+        .run(grant, project, ORGANIZATION_ID, NOW);
+      const pending = delivery(legacy);
+      const fence = new SqliteStablePrivateApprovalAuthorityFenceV1(database);
+      await fence.withStablePrivateApprovalFence(stable => {
+        expect(stable.revalidatePrivateApprovalAuthorization({ pending, card_binding: card, lookup: lookup() })).toMatchObject({ schema_version: 2 });
+        expect(stable.revalidatePrivateApprovalAuthorization({ pending: { ...pending, eligible_projects: [] }, card_binding: card, lookup: lookup() })).toBeUndefined();
+        expect(stable.currentProjectMemberships?.({ principal_id: "prn_owner", membership_id: "mem_owner", project_ids: [project] }))
+          .toEqual([{ project_id: project, project_membership_id: grant }]);
+      });
+      database.prepare(`UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_membership_id=?`).run(NOW, grant);
+      database.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,
+        principal_id,membership_id,membership_type,role,status,granted_at) VALUES(?,?,?,'prn_owner','mem_owner','owner','member','active',?)`)
+        .run(replacement, project, ORGANIZATION_ID, NOW);
+      await fence.withStablePrivateApprovalFence(stable => {
+        expect(stable.currentProjectMemberships?.({ principal_id: "prn_owner", membership_id: "mem_owner", project_ids: [project] }))
+          .toEqual([{ project_id: project, project_membership_id: replacement }]);
+        expect(stable.currentProjectMemberships?.({ principal_id: "prn_owner", membership_id: "mem_other", project_ids: [project] })).toBeUndefined();
+      });
+    } finally { database.close(); }
+  });
+
   it("revalidates all Authority-owned commitments under one stable transaction", async () => {
     const { database, pending, card } = fixture();
     try {

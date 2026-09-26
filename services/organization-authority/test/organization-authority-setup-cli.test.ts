@@ -21,9 +21,9 @@ import {
 } from "@echo-brain/federation-protocol";
 import {
   buildReadableSearchGenerationV1,
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
-  READABLE_SEARCH_FACTS_BASELINE_V2,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  READABLE_SEARCH_CONTENT_BASELINE_V2,
+  READABLE_SEARCH_FACTS_BASELINE_V3,
+  READABLE_SEARCH_LEXICAL_BASELINE_V2,
   readableSearchPlaneBaselineSha256,
 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
@@ -193,7 +193,7 @@ function buildInputForCanary(
   const plane = (
     role: string,
     schemaSha256: Sha256Digest,
-    databaseSchemaVersion: 1 | 2 = 1,
+    databaseSchemaVersion: 1 | 2 | 3 = 1,
   ) => {
     const manifestJson = canonicalJson({
       schema_version: 1,
@@ -223,16 +223,18 @@ function buildInputForCanary(
       planes: {
         facts: plane(
           "retrieval-facts",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V2),
-          2,
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_FACTS_BASELINE_V3),
+          3,
         ),
         content: plane(
           "retrieval-content",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_CONTENT_BASELINE_V1,),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_CONTENT_BASELINE_V2),
+          2,
         ),
         lexical: plane(
           "retrieval-lexical",
-          readableSearchPlaneBaselineSha256(READABLE_SEARCH_LEXICAL_BASELINE_V1,),
+          readableSearchPlaneBaselineSha256(READABLE_SEARCH_LEXICAL_BASELINE_V2),
+          2,
         ),
       },
     },

@@ -8,6 +8,7 @@ import {
 } from "@echo-brain/organization-protocol";
 import { type ApprovalContractSha256, type PrivateApprovalAssigneeV1 } from "../organization-control-plane/slack-approval-integration-v1.js";
 import { validatePrivateApprovalResolutionV1, type PrivateApprovalResolutionV1, type PrivateApprovalSlackIdentityLinkV1 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
+import { validatePendingPrivateApprovalV2, validatePrivateApprovalResolutionV2, type PendingPrivateApprovalV2, type PrivateApprovalResolutionV2 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import type Database from "better-sqlite3";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "./resolve-private-slack-approval-reviewer-target-v1.js";
 
@@ -26,6 +27,13 @@ const SLACK_MESSAGE_TIMESTAMP = /^[0-9]{1,16}\.[0-9]{1,9}$/;
 
 type Digest = ApprovalContractSha256;
 type UnknownRecord = Record<string, unknown>;
+type PrivateApprovalResolution = PrivateApprovalResolutionV1 | PrivateApprovalResolutionV2;
+
+function validateTerminalResolution(value: unknown): PrivateApprovalResolution {
+  return value !== null && typeof value === "object" && "schema_version" in value && value.schema_version === 2
+    ? validatePrivateApprovalResolutionV2(value)
+    : validatePrivateApprovalResolutionV1(value);
+}
 
 /**
  * The Authority never signs or verifies a V4 receipt. It persists the exact
@@ -93,7 +101,7 @@ export interface PrivateApprovalPresentationRecoveryV1 {
 
 export interface RecordPrivateApprovalTerminalReceiptInputV1 {
   readonly candidate_id: string;
-  readonly resolution: PrivateApprovalResolutionV1;
+  readonly resolution: PrivateApprovalResolution;
   /** Mandatory for approval, forbidden for rejection. */
   readonly v4_receipt?: CanonicalPrivateApprovalV4ReceiptV1;
 }
@@ -102,7 +110,7 @@ export interface PrivateApprovalTerminalReceiptV1 {
   readonly approval_id: string;
   readonly candidate_id: string;
   readonly outcome: "approved" | "rejected";
-  readonly resolution: PrivateApprovalResolutionV1;
+  readonly resolution: PrivateApprovalResolution;
   readonly resolution_sha256: Digest;
   readonly v4_receipt: CanonicalPrivateApprovalV4ReceiptV1 | null;
   readonly v4_receipt_sha256: Digest | null;
@@ -464,6 +472,51 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
     private readonly now: () => string = () => new Date().toISOString(),
   ) {}
 
+  /** Freeze delivery choices before the first provider operation. */
+  freezeDeliveryV2(input: {
+    readonly approval_id: string;
+    readonly candidate_id: string;
+    readonly candidate_sha256: Digest;
+    readonly contract: PendingPrivateApprovalV2;
+  }): PendingPrivateApprovalV2 {
+    return this.database.transaction(() => {
+      const contract = validatePendingPrivateApprovalV2(input.contract);
+      if (contract.organization_id !== metadataOrganizationId(this.database) ||
+          contract.approval_id !== input.approval_id || contract.candidate_sha256 !== input.candidate_sha256) {
+        fail("delivery V2 commitment does not match its candidate");
+      }
+      const row = this.database.prepare(`SELECT outbox.state, outbox.private_approval_card_v2_json
+        FROM authority_live_approval_outbox_v2 AS outbox
+        JOIN authority_live_source_candidates_v2 AS candidate ON candidate.candidate_id=outbox.candidate_id
+        JOIN authority_live_source_review_lineage_heads_v2 AS head ON head.candidate_id=candidate.candidate_id
+        WHERE outbox.approval_id=? AND outbox.candidate_id=? AND candidate.candidate_semantic_sha256=?
+          AND candidate.disposition='actionable'`).get(input.approval_id, input.candidate_id, input.candidate_sha256) as
+        { readonly state: string; readonly private_approval_card_v2_json: string | null } | undefined;
+      if (row === undefined || row.state === "superseded") fail("delivery V2 candidate is no longer current");
+      const encoded = canonicalJson(contract);
+      if (row.private_approval_card_v2_json !== null) {
+        if (row.private_approval_card_v2_json !== encoded) fail("delivery V2 frozen contract conflicts");
+        return validatePendingPrivateApprovalV2(JSON.parse(row.private_approval_card_v2_json));
+      }
+      if (row.state !== "queued") fail("delivery V2 cannot reinterpret an existing V1 card");
+      this.database.prepare(`UPDATE authority_live_approval_outbox_v2 SET private_approval_card_v2_json=?
+        WHERE approval_id=? AND candidate_id=? AND private_approval_card_v2_json IS NULL`).run(encoded, input.approval_id, input.candidate_id);
+      return contract;
+    }).immediate();
+  }
+
+  /** Recovery reads the frozen contract, never today's eligible project list. */
+  readDeliveryV2(approvalId: string): PendingPrivateApprovalV2 | undefined {
+    assertIdentifier(approvalId, "delivery approval id");
+    const row = this.database.prepare(`SELECT private_approval_card_v2_json FROM authority_live_approval_outbox_v2 WHERE approval_id=?`)
+      .get(approvalId) as { readonly private_approval_card_v2_json: string | null } | undefined;
+    if (row === undefined || row.private_approval_card_v2_json === null) return undefined;
+    const contract = validatePendingPrivateApprovalV2(JSON.parse(row.private_approval_card_v2_json));
+    if (contract.approval_id !== approvalId || contract.organization_id !== metadataOrganizationId(this.database) ||
+        canonicalJson(contract) !== row.private_approval_card_v2_json) fail("delivery V2 stored contract is invalid");
+    return contract;
+  }
+
   stage(
     input: StagePrivateApprovalAssignmentInputV1,
   ): StagedPrivateApprovalAssignmentV1 {
@@ -637,7 +690,7 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
   ): PrivateApprovalTerminalReceiptV1 {
     return this.database.transaction(() => {
       assertIdentifier(input.candidate_id, "terminal candidate id");
-      const resolution = validatePrivateApprovalResolutionV1(input.resolution);
+      const resolution = validateTerminalResolution(input.resolution);
       const assignmentRow = this.rowByApprovalId(resolution.approval_id);
       if (
         assignmentRow === undefined ||
@@ -823,7 +876,7 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
 
   private commitmentFromResolution(
     row: AssignmentRow,
-    resolution: PrivateApprovalResolutionV1,
+    resolution: PrivateApprovalResolution,
   ): PrivateApprovalCandidateCommitmentV1 {
     const commitment: PrivateApprovalCandidateCommitmentV1 = Object.freeze({
       approval_id: resolution.approval_id,
@@ -861,7 +914,7 @@ export class SqlitePrivateSlackApprovalAssignmentStateV1 {
     if (row.outcome !== "approved" && row.outcome !== "rejected") {
       fail("stored terminal outcome is invalid");
     }
-    const resolution = validatePrivateApprovalResolutionV1(
+    const resolution = validateTerminalResolution(
       parseCanonical(row.resolution_json, "stored terminal resolution"),
     );
     assertDigest(row.resolution_sha256, "stored terminal resolution digest");
