@@ -416,7 +416,10 @@ environment files, tokens, invitations, or credential material. URL metadata
 with userinfo, query or fragment is refused. The profile's four files must match
 the candidate's committed source exactly.
 
-Plan one named action. For `install`, supply the full source SHA corresponding
+Plan one named action. Before installing this tooling over older tooling,
+confirm that `clean-data/release/environment-repair.pending.json` is absent on
+the host; the updater no longer checks for it. If it is present, stop and leave
+it to the human host operator. For `install`, supply the full source SHA corresponding
 to the independently reviewed *currently installed* tooling. Unknown installed
 bytes stop instead of being overwritten. Replacing tooling saves private old
 copies and hashes; it never edits the accepted release or environment.
@@ -563,11 +566,14 @@ digest before invoking the runner. Compression uses the existing operator
 Python 3 standard-library `lzma` module with preset 6; only a bundle that otherwise exceeds the command
 cap retries preset 6 with extreme search and zero position bits for unaligned
 text, retaining the same dictionary size.
-Previously valid receipt encodings stay unchanged. Decoding is bounded
-by both output size and memory. No third-party package or manual courier is
-needed. The 60-KiB command cap is unchanged. The CLI and host runner accept
-only version 4, so receipts saved from earlier request versions can no longer
-be polled. Reconcile any unfinished command before planning a new operation.
+Decoding is bounded by both output size and memory. No third-party package or
+manual courier is needed. The 60-KiB command cap is unchanged. The CLI and host
+runner accept only the current version-4 request, which has no
+`content_telemetry` field. Receipts planned by earlier tooling, including
+earlier version-4 receipts, can no longer be polled with this CLI: before
+switching to it, finish or poll every `planned`, `submitting`, `submitted` or
+`unconfirmed` receipt with the commit that planned it. Reconcile any unfinished
+command before planning a new operation.
 
 Host-side request/result journals live under
 `clean-data/release/remote-operations/<operation-id>/`. A duplicate exact request

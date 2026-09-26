@@ -109,6 +109,16 @@ PY
         write(root / name, base64.b64decode(files[name]['base64']), 0o755)
     print('PASS: complete hash-only inventory with real UID/GID; unsafe files have no digest; unknown bytes remain refused')
 
+    before = {name: (root / name).stat().st_ino for name in host.TOOLS}
+    install = {**request, 'action': 'install', 'operation_id': str(uuid.uuid4())}
+    result = host.execute_request(install, host.sha(host.canonical(install)), root=root, identity=lambda *_: None)
+    assert result['ok'] and result['code'] == 'installed', result
+    for name in host.TOOLS:
+        published = (root / name).stat()
+        assert published.st_ino != before[name] and published.st_uid == 0 and published.st_mode & 0o777 == 0o755
+        assert host.sha((root / name).read_bytes()) == files[name]['sha256']
+    print('PASS: install publishes root-owned mode-0755 reviewed tools')
+
     def invoke(deploy, operation, args):
         attack = '''import os,pathlib,sys
 root=pathlib.Path(sys.argv[1])

@@ -159,7 +159,10 @@ Use the [release guide](../../deploy/release/README.md#automated-current-host-st
 for `inspect-install` and its hash inventory. [Environment drift](../../deploy/release/README.md#environment-drift-before-staging)
 blocks staging: stop and leave the investigation to the human host operator.
 Never edit environment files by hand; preserving observability takes precedence
-over making a status check pass.
+over making a status check pass. Before installing the current release tooling,
+confirm that `clean-data/release/environment-repair.pending.json` is absent; if
+it is present, stop for the human host operator. Finish or poll every unfinished
+release receipt with the commit that planned it before switching tooling.
 
 One operator controls the slot. Coding agents do not start interactive SSM sessions.
 Agents use only the reviewed repository CLIs for bounded remote actions, never
