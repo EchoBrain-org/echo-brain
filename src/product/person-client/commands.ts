@@ -125,10 +125,6 @@ const RULES: Readonly<
   login: {
     accepts: ["invitation", "authority-url", "open-browser"],
   },
-  start: {
-    accepts: ["invitation"],
-    requires: ["invitation"],
-  },
   status: {},
   "session-refresh": {},
   logout: {},
@@ -177,7 +173,6 @@ const HELP: Readonly<Record<string, string>> = {
   person: `${usage()}
 
 Commands:
-  start       Complete invitation sign-in and verify that ECHO is ready.
   login       Sign in with an invitation or existing Authority identity.
   status      Show client build identity and sign-in state.
   logout      Remove the local session.
@@ -191,10 +186,6 @@ Commands:
   tools       Read organization tools and your current link status.
 
 Run \`echo-brain person <command> --help\` for command options.
-`,
-  start: `usage: echo-brain person start --invitation <path>
-
-Installs the invited identity, opens Google sign-in, verifies one permission-aware read, and reports ready.
 `,
   login: `usage: echo-brain person login (--invitation <path> | --authority-url <url>) [--open-browser]
 
@@ -1089,52 +1080,6 @@ export async function runPersonClientCli(
                 },
               }
             : {}),
-        });
-        break;
-      }
-      case "start": {
-        const invitation = readPersonOnboardingInvitation(
-          requiredText(values, "invitation"),
-        );
-        requireSignedOut(client);
-        await completePersonLogin({
-          client,
-          authority_url: invitation.authority_url,
-          login_grant: invitation.login_grant,
-          invitation_expires_at: invitation.expires_at,
-          expected_email: invitation.expected_email,
-          stdout,
-          ...(dependencies.random_bytes === undefined
-            ? {}
-            : { random_bytes: dependencies.random_bytes }),
-          open_browser:
-            dependencies.open_authorization_url ?? openAuthorizationUrl,
-        });
-        const session = client.sessionSummary();
-        try {
-          await client.records(1);
-        } catch (error) {
-          // `completePersonLogin` has persisted a session, but `start` is not
-          // complete until the Authority proves that session can read. Roll
-          // back only the session installed by this attempt so the same
-          // one-use invitation can recover through existing-identity login.
-          // `logout` always removes the local credential; a failed remote
-          // revocation must not hide the original readiness failure.
-          try {
-            await client.logout();
-          } catch {
-            // Preserve the readiness error reported to the person.
-          }
-          throw error;
-        }
-        const identity = readPackagedPersonClientBuildIdentity();
-        print(stdout, {
-          ok: true,
-          phase: "ready",
-          installed_version: identity.product_version,
-          membership_type: session.membership_type,
-          connected_authority: session.authority_origin,
-          permission_aware_read: "passed",
         });
         break;
       }

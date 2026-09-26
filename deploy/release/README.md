@@ -774,8 +774,8 @@ Then sign in with the installed command:
 ```
 
 An existing member uses `person login --authority-url <url> --open-browser`
-instead. `person start --invitation <path>` signs in and then checks one
-permission-aware read before it reports ready. Owners issue, reissue, list and
+instead. After sign-in, `person records --limit 20` checks one
+permission-aware read. Owners issue, reissue, list and
 revoke invitations with `person employee invite|reissue|list|revoke`. The
 Person session stays at `~/.local/share/echo-brain/person`. Installing or
 updating the CLI never moves it. Enrolling the installed command in the signed

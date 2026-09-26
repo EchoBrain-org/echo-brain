@@ -54,7 +54,7 @@ references and approved-record policy projectors.
 
 - [Meeting processing core and adapters](../architecture/meeting-processing-core-and-adapters.md)
 - Source: [`packages/organization-processing/src/core/`](../../packages/organization-processing/src/core)
-- Core tests: [`services/organization-authority/test/processing/core/`](../../services/organization-authority/test/processing/core)
+- Core tests: [`packages/organization-processing/test/core/`](../../packages/organization-processing/test/core)
 
 ## Durable records
 

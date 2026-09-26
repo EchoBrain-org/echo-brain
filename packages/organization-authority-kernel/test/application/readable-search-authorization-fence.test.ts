@@ -5,7 +5,6 @@ import {
   ReadableSearchAuthorizationFenceCancelledError,
   ReadableSearchAuthorizationFenceMisuseError,
   ReadableSearchAuthorizationFenceTimeoutError,
-  readableSearchFenceFailureClassification,
 } from "../../src/application/readable-search-authorization-fence.js";
 
 interface Deferred<T> {
@@ -192,15 +191,9 @@ describe('ReadableSearchAuthorizationFence', () => {
       failure = error;
     }
     expect(failure).toBeInstanceOf(ReadableSearchAuthorizationFenceTimeoutError);
-    expect(readableSearchFenceFailureClassification(failure)).toBe(
-      READABLE_SEARCH_FENCE_TIMEOUT_CLASSIFICATION,
-    );
-    expect(readableSearchFenceFailureClassification(new Error('other'))).toBeNull();
-    expect(
-      readableSearchFenceFailureClassification(
-        new ReadableSearchAuthorizationFenceCancelledError(),
-      ),
-    ).toBeNull();
+    expect(failure).toMatchObject({
+      classification: READABLE_SEARCH_FENCE_TIMEOUT_CLASSIFICATION,
+    });
     expect(fence.pendingCount()).toBe(0);
     writer.release();
   });

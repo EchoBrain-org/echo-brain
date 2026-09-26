@@ -101,8 +101,5 @@
   "engines": {
     "node": "22.22.1",
     "npm": "10.9.4"
-  },
-  "bin": {
-    "echo-organization-control-plane-connect-slack": "dist/organization-control-plane/clean-slack-connect-main.js"
   }
 }

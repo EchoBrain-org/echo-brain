@@ -19,12 +19,6 @@ export interface OrganizationAuthorityDescriptorV1 {
 
 
 /**
- * `correction` is reserved so a later tombstoning family cannot reuse a name
- * that already means something else. The V1 validators reject it.
- */
-export type OrganizationRecordEventTypeV1 = "approval" | "rejection";
-
-/**
  * A typed pointer back to the member-local source. Raw custody stays local:
  * only this locator and the bounded evidence spans already inside the approved
  * brief cross the wire.

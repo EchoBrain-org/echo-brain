@@ -41,7 +41,7 @@ const DEFAULT_DEPENDENCIES: SlackConnectionSetupCliDependencies = {
 };
 
 const USAGE =
-  "usage: echo-organization-control-plane-connect-slack " +
+  "usage: slack connection setup " +
   "--state-dir <absolute-path> --approval-channel-id <slack-channel-id> " +
   "[--connection-id <public-connection-id>] < bot-token";
 

@@ -6,11 +6,8 @@ import { describe, expect, it } from "vitest";
 const REPO = resolve(import.meta.dirname, "../..");
 const CLEAN_ENTRIES = [
   "services/organization-authority/src/clean-reset-main.ts",
-  "services/organization-authority/src/clean-person-main.ts",
   "services/organization-authority/src/clean-live-main.ts",
-  "services/organization-authority/src/clean-granola-source-main.ts",
   "services/organization-authority/src/clean-founder-main.ts",
-  "providers/slack/server/src/organization-control-plane/clean-slack-connect-main.ts",
 ] as const;
 
 interface WorkspaceExport {

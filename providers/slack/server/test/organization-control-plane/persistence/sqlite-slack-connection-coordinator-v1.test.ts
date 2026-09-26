@@ -8,7 +8,7 @@ import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES, type VerifiedSlackChannel, typ
 import { canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
 import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../../../../../../packages/organization-control-plane/src/persistence/open-organization-control-database.js";
-import { SlackConnectionConflictError, connectSlackConnectionV1, runSlackConnectionSetupCommandV1, type SlackConnectionVerifierV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
+import { SlackConnectionConflictError, connectSlackConnectionV1, type SlackConnectionVerifierV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
 import { FileOrganizationSecretStore } from "../../../../../../packages/organization-control-plane/src/security/file-secret-store.js";
 
 const directories: string[] = [];
@@ -195,25 +195,6 @@ describe("stopped-state Slack connection v1", () => {
     expect(secrets.listReferences()).toHaveLength(1);
     expect(slack.verifyConnection).toHaveBeenCalledTimes(1);
     expect(slack.verifyChannel).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the private token behind the stopped-state command's injected reader", async () => {
-    const state = setup();
-    const secrets = new FileOrganizationSecretStore(
-      join(state.directory, "secrets"),
-    );
-    const readSlackBotToken = vi.fn(() => "xoxb-test-token-only");
-    const result = await runSlackConnectionSetupCommandV1({
-      ...COORDINATES,
-      database: state.database,
-      secrets,
-      verifier: verifier(),
-      now: () => "2026-08-22T00:00:00.000Z",
-      read_slack_bot_token: readSlackBotToken,
-    });
-
-    expect(result.idempotent).toBe(false);
-    expect(readSlackBotToken).toHaveBeenCalledOnce();
   });
 
   it("rejects a different public command once a Slack connection is active", async () => {

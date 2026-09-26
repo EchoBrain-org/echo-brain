@@ -1,5 +1,4 @@
 import {
-  canonicalJsonBytes,
   sha256Digest,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
@@ -232,20 +231,4 @@ export function validateOrganizationPersonSlackIdentityLinkResult(
     fail(`${label} identity_link_created must be a boolean`);
   }
   return record as unknown as OrganizationPersonSlackIdentityLinkResultV2;
-}
-
-export function canonicalOrganizationPersonSlackIdentityLinkBeginRequestBytes(
-  value: unknown,
-): Uint8Array {
-  return canonicalJsonBytes(
-    validateOrganizationPersonSlackIdentityLinkBeginRequest(value),
-  );
-}
-
-export function canonicalOrganizationPersonSlackIdentityLinkCompleteRequestBytes(
-  value: unknown,
-): Uint8Array {
-  return canonicalJsonBytes(
-    validateOrganizationPersonSlackIdentityLinkCompleteRequest(value),
-  );
 }

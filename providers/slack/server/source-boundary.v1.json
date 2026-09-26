@@ -141,8 +141,8 @@
         "export": "SqliteSlackDmApprovalPersistenceV1"
       },
       {
-        "name": "Slack external-identity integration API",
-        "path": "providers/slack/server/src/organization-control-plane/slack-external-identity-integration-v1.ts",
+        "name": "Slack web identity provider",
+        "path": "providers/slack/server/src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.ts",
         "export": "SlackWebIdentityProviderV1"
       },
       {
@@ -166,14 +166,10 @@
         "export": "createPrivateSlackBlockApprovalPolicyProjectorV1"
       }
     ],
-    "compatibility_entrypoints": [
-      {
-        "path": "providers/slack/server/src/organization-control-plane/clean-slack-connect-main.ts",
-        "targets": [
-          "providers/slack/server/src/organization-control-plane/composition/slack-connection-setup-cli.ts"
-        ]
-      }
-    ],
-    "retired_source_paths": []
+    "compatibility_entrypoints": [],
+    "retired_source_paths": [
+      "providers/slack/server/src/organization-control-plane/clean-slack-connect-main.ts",
+      "providers/slack/server/src/organization-control-plane/slack-external-identity-integration-v1.ts"
+    ]
   }
 }

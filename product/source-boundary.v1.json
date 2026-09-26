@@ -29,7 +29,6 @@
       "providers/synthetic-demo"
     ],
     "bootstrap_entrypoints": [
-      "services/organization-authority/src/clean-person-main.ts",
       "services/organization-authority/src/clean-live-main.ts",
       "services/organization-authority/src/clean-founder-main.ts",
       "services/organization-authority/src/composition/organization-authority-composition-root.ts",
@@ -38,7 +37,6 @@
       "services/organization-authority/src/composition/organization-authority-setup-cli.ts",
       "services/organization-authority/src/composition/organization-authority-service-cli.ts",
       "services/organization-authority/src/synthetic-demo-main.ts",
-      "services/organization-authority/src/clean-granola-source-main.ts",
       "services/organization-authority/src/composition/admit-granola-meeting-source-cli-v1.ts",
       "services/organization-authority/src/composition/synthetic-demo-pre-slack-evaluator-cli-v1.ts",
       "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts",

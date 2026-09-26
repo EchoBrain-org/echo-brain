@@ -11,8 +11,9 @@ Tests live at the narrowest active boundary they exercise:
 
 Use `npm test` for the complete active suite. Focused commands include
 `npm run test:person`, `npm run test:authority`, `npm run test:protocols`,
-`npm run test:meeting-processing-core`, and `npm run test:architecture`.
-The active durable meeting-processing pipeline is covered by
+and `npm run test:architecture`.
+The provider-neutral processing core and the active durable meeting-processing
+pipeline are covered by `packages/organization-processing/test/core/` and
 `packages/organization-processing/test/admitted-meeting-processing/` in the
 root `npm test` suite.
 

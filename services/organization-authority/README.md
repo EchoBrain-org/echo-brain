@@ -64,15 +64,17 @@ Use these responsibility-named commands for new automation:
 
 - `echo-organization-authority-state-bootstrap`
 - `echo-organization-authority-setup`
-- `echo-organization-authority-person-admin`
 - `echo-organization-authority-serve`
-- `echo-organization-authority-admit-granola-meeting-source`
 
 The older `echo-organization-authority-init-clean-state`, `-clean-founder`,
 `-clean-person`, `-clean-live`, `-synthetic-quality`, and
 `-admit-clean-granola-source` alias binaries were retired on 2026-09-06. The
 checked-in deploy scripts, container entrypoint, and harnesses already call the
-names above; automation outside this repository must use them too.
+names above; automation outside this repository must use them too. The
+standalone `echo-organization-authority-person-admin` and
+`echo-organization-authority-admit-granola-meeting-source` developer binaries
+were retired later: `echo-organization-authority-setup` runs Person credential
+setup, the initial-owner invitation and Granola source admission in-process.
 
 Use absolute canonical paths. Private credential and invitation directories
 must be current-user `0700`; private input and invitation files must be
@@ -248,42 +250,6 @@ echo-brain person status
 echo-brain person session-refresh
 echo-brain person logout
 ```
-
-### Person administration developer commands
-
-`clean-live serve` is the legacy name of the normal runtime entrypoint. For focused local
-development, the lower-level Person administration entrypoint has only these forms:
-
-```sh
-echo-organization-authority-person-admin credentials-init \
-  --state-dir /absolute/clean-state
-
-echo-organization-authority-person-admin invite \
-  --state-dir /absolute/clean-state \
-  --oidc-config /absolute/private/oidc-config.json \
-  --pkce-key-file /absolute/private/person-session-pkce-sealing-key \
-  --membership-id mem_<id> \
-  --expected-email person@example.com \
-  --authority-url https://authority.example.com \
-  --out /absolute/private/invitation.json
-
-echo-organization-authority-person-admin serve \
-  --state-dir /absolute/clean-state \
-  --host 127.0.0.1 \
-  --port 39479 \
-  --authority-url https://authority.example.com \
-  --oidc-config /absolute/private/oidc-config.json \
-  --pkce-key-file /absolute/private/person-session-pkce-sealing-key
-```
-
-The Person `serve` form additionally accepts
-`--client-secret-file <absolute-path>` when its OIDC configuration uses a
-client-secret authentication method, and an optional
-`--slack-approval-channel-id <channel-id>` to expose the temporary public
-initial-owner identity-link channel. Do not use
-the low-level invitation form for the initial-owner or employee product flow:
-initial-owner setup and the owner-facing Person client keep membership IDs
-internal.
 
 ### 3. Install credentials and finalize while stopped
 

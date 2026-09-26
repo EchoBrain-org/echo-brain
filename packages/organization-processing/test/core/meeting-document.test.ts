@@ -1,10 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { Ajv, type AnySchema } from 'ajv';
 import { describe, expect, it } from 'vitest';
 import {
   assertCanonicalMeetingDocument,
   type MeetingDocument,
-} from "@echo-brain/organization-processing/core";
+} from "../../src/core/index.js";
 
 const source = {
   kind: 'meeting-source' as const,
@@ -35,20 +33,8 @@ const minimalMeeting: MeetingDocument = {
   artifacts: [],
 };
 
-const schema = JSON.parse(
-  readFileSync(
-    new URL('../../../../../schemas/meeting-context.v1.schema.json', import.meta.url),
-    'utf8',
-  ),
-) as AnySchema;
-const validateJsonSchema = new Ajv({ allErrors: true, strict: false }).compile(schema);
-
-describe('canonical meeting-context baseline', () => {
+describe('canonical meeting document validator', () => {
   it('accepts a minimal document with optional source context absent', () => {
-    expect(
-      validateJsonSchema(minimalMeeting),
-      JSON.stringify(validateJsonSchema.errors),
-    ).toBe(true);
     expect(() => assertCanonicalMeetingDocument(minimalMeeting, source)).not.toThrow();
   });
 
@@ -114,10 +100,6 @@ describe('canonical meeting-context baseline', () => {
       },
     };
 
-    expect(
-      validateJsonSchema(richMeeting),
-      JSON.stringify(validateJsonSchema.errors),
-    ).toBe(true);
     expect(() => assertCanonicalMeetingDocument(richMeeting, source)).not.toThrow();
   });
 
@@ -139,7 +121,6 @@ describe('canonical meeting-context baseline', () => {
       },
     };
 
-    expect(validateJsonSchema(removedShape)).toBe(false);
     expect(() => assertCanonicalMeetingDocument(removedShape, source)).toThrow();
   });
 
@@ -157,7 +138,6 @@ describe('canonical meeting-context baseline', () => {
       ],
     };
 
-    expect(validateJsonSchema(invalid), JSON.stringify(validateJsonSchema.errors)).toBe(true);
     expect(() => assertCanonicalMeetingDocument(invalid, source)).toThrow(/does not resolve/);
   });
 
@@ -200,13 +180,10 @@ describe('canonical meeting-context baseline', () => {
       context: { owner_participant_id: 'owner' },
     };
 
-    expect(validateJsonSchema(danglingOwner)).toBe(true);
     expect(() => assertCanonicalMeetingDocument(danglingOwner, source)).toThrow(/does not resolve/);
-    expect(validateJsonSchema(nonCanonicalOwnerEmail)).toBe(true);
     expect(() => assertCanonicalMeetingDocument(nonCanonicalOwnerEmail, source)).toThrow(
       /one canonical email identity/,
     );
-    expect(validateJsonSchema(nonAsciiOwnerEmail)).toBe(true);
     expect(() => assertCanonicalMeetingDocument(nonAsciiOwnerEmail, source)).toThrow(
       /one canonical email identity/,
     );

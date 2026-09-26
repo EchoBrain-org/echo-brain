@@ -1,7 +1,5 @@
-import { Buffer } from 'node:buffer';
-import { canonicalJson } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
-import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, canonicalOrganizationPersonSlackIdentityLinkBeginRequestBytes, canonicalOrganizationPersonSlackIdentityLinkCompleteRequestBytes, validateOrganizationPersonSlackIdentityLinkBeginRequest, validateOrganizationPersonSlackIdentityLinkBeginResponse, validateOrganizationPersonSlackIdentityLinkCompleteRequest, validateOrganizationPersonSlackIdentityLinkResult } from "../../src/organization-api/person-slack-identity-link.js";
+import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, validateOrganizationPersonSlackIdentityLinkBeginRequest, validateOrganizationPersonSlackIdentityLinkBeginResponse, validateOrganizationPersonSlackIdentityLinkCompleteRequest, validateOrganizationPersonSlackIdentityLinkResult } from "../../src/organization-api/person-slack-identity-link.js";
 import { validateOrganizationPersonTools, validateOrganizationPersonSlackDisconnectRequest } from "../../src/organization-api/person-tools.js";
 import { validateOrganizationPersonSlackBrowserLinkAttemptRequest, validateOrganizationPersonSlackBrowserLinkBeginRequest, validateOrganizationPersonSlackBrowserLinkBeginResponse, validateOrganizationPersonSlackBrowserLinkStatusResponse } from "../../src/organization-api/person-slack-browser-link.js";
 
@@ -45,14 +43,6 @@ describe('organization Person Slack identity link', () => {
     expect(validateOrganizationPersonSlackIdentityLinkCompleteRequest(COMPLETE)).toEqual(
       COMPLETE,
     );
-    expect(
-      Buffer.from(canonicalOrganizationPersonSlackIdentityLinkBeginRequestBytes(BEGIN)).toString(),
-    ).toBe(canonicalJson(BEGIN));
-    expect(
-      Buffer.from(
-        canonicalOrganizationPersonSlackIdentityLinkCompleteRequestBytes(COMPLETE),
-      ).toString(),
-    ).toBe(canonicalJson(COMPLETE));
   });
 
   it('rejects every removed identity and route envelope field', () => {

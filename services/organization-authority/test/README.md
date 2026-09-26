@@ -2,12 +2,8 @@
 
 Tests live beside the narrowest active component they exercise:
 
-- `processing/core/` covers the provider-neutral canonical meeting-context
-  contract.
 - `processing/adapters/` covers concrete meeting-source, decision-processor,
   approval, delivery, and provider transport adapters.
-- `processing/admitted-meeting-processing/` covers the durable serialized
-  production cycle and its worker lifecycle.
 - `composition/` covers concrete implementation selection, lifecycle wiring,
   onboarding, and bounded staging tools.
 - `presentation/` and the `person-*-route` suites cover authenticated HTTP
@@ -15,5 +11,6 @@ Tests live beside the narrowest active component they exercise:
 - state-lineage, record, retrieval, and private Slack approval suites cover
   their named cross-component Authority boundaries.
 
-Use `npm run test:authority` for the workspace,
-`npm run test:meeting-processing-core` for the provider-neutral core.
+Use `npm run test:authority` for the workspace. The provider-neutral
+processing core, including the canonical meeting document validator, and the
+durable meeting-processing cycle are tested in `packages/organization-processing/test/`.

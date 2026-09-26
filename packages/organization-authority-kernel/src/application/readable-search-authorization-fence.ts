@@ -48,19 +48,6 @@ export class ReadableSearchAuthorizationFenceMisuseError extends Error {
   }
 }
 
-/**
- * The narrow classification seam used by the future route adapter. It maps
- * only a bounded lock deadline to the route's fixed unavailable response;
- * cancellation and misuse must not be mistaken for authorization failures.
- */
-export function readableSearchFenceFailureClassification(
-  error: unknown,
-): typeof READABLE_SEARCH_FENCE_TIMEOUT_CLASSIFICATION | null {
-  return error instanceof ReadableSearchAuthorizationFenceTimeoutError
-    ? READABLE_SEARCH_FENCE_TIMEOUT_CLASSIFICATION
-    : null;
-}
-
 export interface ReadableSearchAuthorizationFenceLease {
   readonly mode: ReadableSearchAuthorizationFenceMode;
   release(): void;

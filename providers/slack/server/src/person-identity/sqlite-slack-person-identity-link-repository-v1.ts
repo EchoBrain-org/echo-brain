@@ -4,7 +4,7 @@ import {
   canonicalJson,
   canonicalSha256,
 } from "@echo-brain/federation-protocol";
-import { AUTHORITY_FILE_SECRET_BACKEND, type OrganizationSecretReference, type OrganizationSecretStore } from "../organization-control-plane/slack-external-identity-integration-v1.js";
+import { AUTHORITY_FILE_SECRET_BACKEND, type OrganizationSecretReference, type OrganizationSecretStore } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 import { SLACK_DEFAULT_APPROVE_REACTION, SLACK_DEFAULT_REJECT_REACTION, type ActiveSlackOrganizationTool, type BeginPersonSlackIdentityLinkChallengeInput, type BegunSlackIdentityLinkChallenge, type CompletePersonSlackIdentityLinkChallengeInput, type CompletedPersonSlackIdentityLink, type PendingPersonSlackIdentityLinkChallenge, type PersonSlackIdentityLinkSession } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { buildExternalHumanIdentityLinkContractV2, validateExternalHumanIdentityLinkContractV2, validateOrganizationToolConnectionContractV2, validateOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
