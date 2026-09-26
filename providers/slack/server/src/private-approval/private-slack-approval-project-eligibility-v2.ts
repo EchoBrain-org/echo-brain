@@ -42,4 +42,3 @@ export function listPrivateSlackApprovalEligibleProjectsV2(
     name: row.name,
   })));
 }
-
