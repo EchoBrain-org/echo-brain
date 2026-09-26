@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { emit, launch, type Launched } from './launch.js';
 
@@ -115,7 +115,8 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await expect(page.getByTestId('ask-failed')).toHaveCount(0);
   expect(questions()).toEqual(['First?', 'Second?', 'Third?', 'Third?']);
 
-  // The second answer arrived after it was cancelled, and never showed.
+  // Deliver the second answer only after cancellation and the successful retry.
+  writeFileSync(join(run.home, 'release-follow-up'), '');
   const answered = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/ask\.run ok/g)?.length ?? 0;
   await expect.poll(answered).toBe(3);
   // One more round trip through main: the late reply reached the page before it.

@@ -64,7 +64,7 @@ test('Who can read is Only me, Projects and Organization on one row: arrow keys 
   await expect(projects(page)).toBeFocused();
   await expect(projects(page)).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByTestId('compose-readers')).toHaveText('Choose one or more projects.');
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('compose')).toBeVisible();
   await expect(list(page)).toHaveCount(0);
   expect(notes()).toHaveLength(0);
@@ -103,7 +103,7 @@ test('Who can read is Only me, Projects and Organization on one row: arrow keys 
   await expect(page.getByTestId('compose-attach')).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await expect(projects(page)).toBeFocused();
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo');
   expect(notes()).toHaveLength(1);
   expect(notes()[0]!.body?.audience).toEqual({ kind: 'project', project_id: APOLLO });
@@ -124,7 +124,7 @@ test('Projects holds several: the list closes with nothing ticked back to what i
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Projects');
   await expect(page.getByTestId('compose-send')).toBeDisabled();
   // Nothing ticked is nothing to save: ⌘↩ waits.
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('compose')).toBeVisible();
   expect(notes()).toHaveLength(0);
   // A click outside closes it, and with nothing ticked the choice is Only me again.
@@ -148,7 +148,7 @@ test('Projects holds several: the list closes with nothing ticked back to what i
   await projects(page).click();
   await expect(list(page)).toHaveCount(0);
 
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon and Apollo');
   expect(notes()).toHaveLength(1);
   // Sorted, as the API takes them.
@@ -185,7 +185,7 @@ test('projects unticked in the list stay unticked when Only me or Organization i
   await expect(list(page)).toHaveCount(0);
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Only me');
   await expect(projects(page)).toHaveText('Projects');
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   expect(notes()[0]!.body?.audience).toEqual({ kind: 'only_me' });
   expect(notes()[0]!.body?.association_project_ids).toEqual([]);
@@ -295,7 +295,7 @@ test('at most twenty projects: past eight a field finds one, More projects reads
   await expect(tick(page, 'Project 22')).toBeDisabled();
 
   // ⌘↩ from the list saves.
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved to Project 7, Project 2 and 18 more');
   const ids = Array.from({ length: 20 }, (_, index) => `prj_${String(index + 2).padStart(8, '0')}-3333-4333-8333-333333333333`);
   expect(notes()[0]!.body?.audience).toEqual({ kind: 'projects', project_ids: ids });

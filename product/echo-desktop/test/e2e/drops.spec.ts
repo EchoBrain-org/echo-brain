@@ -37,7 +37,7 @@ test('a file dropped on a sidebar project, with another app in front, is capture
   // Ready for ⌘↩ once ECHO is in front.
   await expect(page.getByTestId('compose')).toBeFocused();
   await emit(app, 'echo-test:resume');
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon · Extracting text');
   expect(uploads()).toHaveLength(1);
   expect(uploads()[0]!.body).toMatchObject({
@@ -86,7 +86,7 @@ test('a file dropped anywhere else on the window is captured for the page: Only 
   await expect(page.getByRole('radio', { checked: true })).toHaveText('Beacon');
   // Ready for ⌘↩.
   await expect(page.getByTestId('compose')).toBeFocused();
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon · Extracting text');
   expect(uploads()).toHaveLength(1);
   expect(uploads()[0]!.body).toMatchObject({ title: 'Brief.md', audience: { kind: 'project', project_id: BEACON }, association_project_ids: [BEACON] });

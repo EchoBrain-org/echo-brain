@@ -92,7 +92,8 @@ person out cleanly, as ADR-0002 §4 requires.
 
 | Gap | What happens today | Fix when needed |
 | --- | --- | --- |
-| macOS arm64 only, ad-hoc signed | It is not notarized, and there are no Windows or Linux builds. | Phases 5–7 of `2026-09-24-electron-desktop-v1.md`. |
+| Platform distribution | macOS arm64 is ad-hoc signed. Linux x64 has deb/tar.gz packaging and an X11 CI job; Windows has no build. | See [desktop build instructions](../../product/echo-desktop/README.md); Windows and signing remain in phases 6–7 of `2026-09-24-electron-desktop-v1.md`. |
+| Linux desktop qualification | Headless X11 coverage does not verify GNOME/KDE Wayland portals, tray visibility or focus on a real desktop. | Run the desktop checks listed in the build instructions before qualifying a Wayland desktop. |
 | Default Electron icon | Finder and About show Electron's icon. The Swift app had none either. | Add an `.icns`. |
 | Shortcut conflicts are not detected | If another app holds ⌘E or ⌘⇧E, both apps respond. This mattered only while Swift ECHO ran. When registering does fail, only the tray says so ("⌘⇧E is used by another app"): the sidebar's Capture row still shows ⌘⇧E, where the Swift app hid it. | Detect the known holder, or register one alternative chord. Tell the page whether ⌘⇧E was registered, and show the hint only then. |
 | A tiny exit window | Electron could still show its main-process error box if a late macOS notice lands in the last 10–20 ms of exit. It was never seen in more than 300 runs after the quit fix. | Install an error handler for the exit period if it is ever seen. |
@@ -114,4 +115,6 @@ person out cleanly, as ADR-0002 §4 requires.
   verifies the packaged app's code signature and runs its `--smoke`, which
   must pass every check and report a build of the commit from a clean tree.
   It then asserts that packaging left the checkout clean. `CI required
-  checks` needs the job to succeed.
+  checks` needs the job to succeed. The required `desktop-linux` job also runs
+  the desktop suite on Ubuntu 24.04 x64 under Xvfb, builds deb/tar.gz packages,
+  verifies release fuses, and installs and smokes the deb.
