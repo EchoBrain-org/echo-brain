@@ -4,18 +4,22 @@ Status: implementation candidate; exact release acceptance is separate.
 
 ## User flow
 
-The upload composer has two pages. The first contains text or one attached file
-and a single optional **Projects** selector. No selection means the original is
-outside project context. One or several selections link the same original to
-those projects. Opening upload inside a project preselects it; opening from Home
-starts with no projects. The picker has its own paginated project list.
+In the desktop app, **Capture** is one sheet: a note or one attached file, then
+**Who can read** on one row: **Only me**, **Projects** or **Organization**.
+**Projects** opens a list of the person's projects, where one or several can be
+ticked; with it chosen, the members of the ticked projects can read the capture.
+Whatever is chosen, the capture is filed in the ticked projects or, with none
+ticked, in the project Capture was opened on. No project means the original is
+outside project context. Opened on a project page, Capture starts with that
+project ticked under **Projects**; opened with ⌘⇧E, it starts on **Only me**
+with no project. A line under the choices says who can read it, and **Save**
+submits it once. Escape or Close puts the draft away until Capture opens again;
+a save in flight cannot be dismissed.
 
-**Next: Sharing** opens the second page without submitting anything. Sharing
-starts at **Only me** on every new upload. The other choices are **Members of
-selected projects**, available when projects are selected, and **Everyone in
-organization**. The page summarizes the selected scope before **Upload** saves it.
-Back preserves text, attachment, selected projects and sharing. Existing discard
-confirmation and in-flight mutation protection apply to both pages.
+The retired Swift app split the same choices over two pages, the second opened
+with **Next: Sharing**. The request contract below did not change. Where the
+desktop app differs from that app is listed in its
+[known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
 
 ## Scope and access
 
@@ -35,8 +39,8 @@ Global Ask retrieves authorized context across scopes. Project Ask additionally
 requires current project membership and an explicit association with that
 project. It does not fall back to global context. Association changes do not
 change the immutable audience, and an association need not equal an audience
-project. The first upload screen uses the same selected set for both only when
-the person chooses to share with those projects on the second screen.
+project. Capture uses the ticked projects for both only when **Projects** is
+chosen under **Who can read**.
 
 ## Admission and recovery
 
@@ -71,7 +75,7 @@ The CLI exposes `person updates submit-v3|status-v3|read-v3|search-v3` and
 Project content uses `person projects feed-v2|search-v2|read-context-v2`. New admission commands accept
 `--association-project-ids-json`; a projects audience also uses
 `--audience-project-ids-json`. Document retry selects the retained snapshot's
-version automatically. Only the final Upload action submits the request.
+version automatically. In the desktop app, only **Save** submits the request.
 
 Existing capacity limits remain **100 retained originals per membership** and
 **1,000 per organization**, shared by notes and files. Linking one original to

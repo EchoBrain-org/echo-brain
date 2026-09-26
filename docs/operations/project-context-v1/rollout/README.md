@@ -59,9 +59,11 @@ directory and embedded source identity to that candidate. Never substitute
 another worktree's dependencies, outputs or archives.
 
 The private candidate receipt must bind server image digest, runtime-profile
-digest, release-record digest, Person-client package/archive digest and native
-client/CLI source identity. Require a matching supported tuple and reject or
-quarantine mismatches. Rebuilding changes exact-artifact qualification. No
+digest, release-record digest, Person-client package/archive digest and the
+desktop app's source identity: the source SHA its packaged `--smoke` reports for
+a clean build. A packaged desktop app carries the Person client package and runs
+its commands in process, so the archive digest also binds the CLI. Require a
+matching supported tuple and reject or quarantine mismatches. Rebuilding changes exact-artifact qualification. No
 release candidate artifact has been built or installed in this PC-06
 preparation. Repository tests may package and unpack temporary fixture clients;
 those bytes are not release candidates or installed-product evidence.

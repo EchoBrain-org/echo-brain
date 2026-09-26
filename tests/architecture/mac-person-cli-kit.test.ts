@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -133,6 +133,92 @@ describe.skipIf(!nativeMac)("macOS arm64 Person CLI kit", () => {
     const result = spawnSync(join(root, "node"), [join(root, "verify-person-onboarding-kit.mjs"), root], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, platform: "darwin", architecture: "arm64" });
+  });
+
+  it("builds a flat schema-3 CLI kit from clean committed source and verifies it with the bundled runtime", () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "echo-mac-cli-build-"));
+    roots.push(root);
+    const source = join(root, "source");
+    const output = join(root, "output");
+    mkdirSync(output, { mode: 0o700 });
+    for (const path of [
+      "deploy/release/create-person-onboarding-kit.mjs",
+      "deploy/release/verify-person-onboarding-kit.mjs",
+      "deploy/release/release-artifact-validation.mjs",
+      "deploy/release/start-person-cli-kit-macos.sh",
+      "tools/clean-v1-release.mjs",
+    ]) {
+      mkdirSync(join(source, path, ".."), { recursive: true });
+      copyFileSync(join(REPO, path), join(source, path));
+    }
+    chmodSync(join(source, "deploy/release/start-person-cli-kit-macos.sh"), 0o755);
+    execFileSync("git", ["init", "-q", source]);
+    execFileSync("git", ["-C", source, "add", "."]);
+    execFileSync("git", ["-C", source, "-c", "user.name=Mac Kit Test", "-c", "user.email=mac-kit@example.test", "commit", "-qm", "fixture"]);
+    const sourceSha = execFileSync("git", ["-C", source, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+    const version = "0.1.0-internal.1";
+    const packageRoot = join(root, "package", "dist");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "main.js"), "process.stdout.write('fixture\\n');\n");
+    writeFileSync(join(packageRoot, "build-identity.v1.json"), JSON.stringify({
+      schema_version: 1, kind: "echo-packaged-build-identity", product_version: version, source_sha: sourceSha, source_kind: "materialized-commit",
+    }));
+    const artifact = join(root, "person-client.tgz");
+    execFileSync("tar", ["-czf", artifact, "-C", root, "package"]);
+    const release = join(root, "release.json");
+    writeFileSync(release, `${canonical({
+      schema_version: 1,
+      kind: "echo-clean-v1-release",
+      release_id: "clean-v1-macos-cli-kit",
+      released_at: "2026-09-25T00:00:00Z",
+      baseline_compatibility_class: "clean-v1",
+      source_sha: sourceSha,
+      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"a".repeat(64)}` },
+      person_client: { package: "@echo-brain/person-client", version, artifact_url: "https://downloads.example.test/person-client.tgz", artifact_sha256: digest(artifact) },
+      runtime_profile: { artifact_url: "https://downloads.example.test/runtime-profile.json", artifact_sha256: "b".repeat(64), profile_version: "clean-v1-profile-1" },
+    })}\n`);
+
+    const outputZip = join(output, "ECHO-cli-macos-arm64.zip");
+    const built = spawnSync(process.execPath, [
+      join(source, "deploy/release/create-person-onboarding-kit.mjs"),
+      "--target", "darwin-arm64", "--installation", "cli-kit",
+      "--release", release, "--artifact", artifact,
+      "--runtime-node", process.execPath, "--output", outputZip,
+    ], { cwd: source, encoding: "utf8" });
+    expect(built.status, built.stderr).toBe(0);
+    const receipt = JSON.parse(built.stdout);
+    expect(receipt).toMatchObject({ release_id: "clean-v1-macos-cli-kit", source_sha: sourceSha, platform: "darwin", architecture: "arm64", node_version: "v22.22.1" });
+    expect(readFileSync(`${outputZip}.sha256`, "utf8")).toBe(`${receipt.kit_sha256}  ECHO-cli-macos-arm64.zip\n`);
+    const files = ["Start-ECHO.sh", "node", "kit-manifest.v1.json", "release.json", "person-client.tgz", "verify-person-onboarding-kit.mjs", "clean-v1-release.mjs", "build-identity.v1.json"];
+    expect(receipt.contents).toEqual(files.map((file) => `echo-person-onboarding-kit/${file}`));
+    const listed = execFileSync("unzip", ["-Z1", outputZip], { encoding: "utf8" }).split("\n").filter(Boolean);
+    expect(listed.sort()).toEqual(["echo-person-onboarding-kit/", ...files.map((file) => `echo-person-onboarding-kit/${file}`)].sort());
+
+    const extracted = join(root, "extracted");
+    mkdirSync(extracted);
+    execFileSync("unzip", ["-q", outputZip, "-d", extracted]);
+    const kit = join(extracted, "echo-person-onboarding-kit");
+    const manifest = JSON.parse(readFileSync(join(kit, "kit-manifest.v1.json"), "utf8"));
+    expect(manifest).toMatchObject({ schema_version: 3, kind: "echo-person-cli-kit-v1", release_id: "clean-v1-macos-cli-kit", source_sha: sourceSha });
+    expect(Object.keys(manifest).sort()).toEqual(["build_identity_sha256", "kind", "person_client_artifact_sha256", "release_id", "release_record_sha256", "runtime", "schema_version", "source_sha"]);
+    expect(readFileSync(join(kit, "Start-ECHO.sh"))).toEqual(readFileSync(INSTALLER));
+    const verified = spawnSync(join(kit, "node"), [join(kit, "verify-person-onboarding-kit.mjs"), kit], { encoding: "utf8" });
+    expect(verified.status, verified.stderr).toBe(0);
+    expect(JSON.parse(verified.stdout)).toMatchObject({ ok: true, release_id: "clean-v1-macos-cli-kit", platform: "darwin", architecture: "arm64" });
+    const systemNode = spawnSync(process.execPath, [join(kit, "verify-person-onboarding-kit.mjs"), kit], { encoding: "utf8" });
+    expect(systemNode.status).toBe(1);
+    expect(systemNode.stderr).toContain("must run with the bundled Node runtime");
+
+    writeFileSync(join(source, "deploy/release/start-person-cli-kit-macos.sh"), "#!/usr/bin/env bash\n# uncommitted\n");
+    const dirty = spawnSync(process.execPath, [
+      join(source, "deploy/release/create-person-onboarding-kit.mjs"),
+      "--installation", "cli-kit", "--release", release, "--artifact", artifact,
+      "--runtime-node", process.execPath, "--output", join(output, "dirty.zip"),
+    ], { cwd: source, encoding: "utf8" });
+    expect(dirty.status).toBe(1);
+    expect(dirty.stderr).toContain("macOS CLI kit requires clean committed source matching the release");
+    expect(existsSync(join(output, "dirty.zip"))).toBe(false);
   });
 });
 

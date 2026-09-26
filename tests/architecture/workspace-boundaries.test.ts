@@ -1204,22 +1204,30 @@ describe("workspace source boundaries", () => {
     expect(runBoundary(fixture).status).toBe(0);
   });
 
-  it("checks provider assets and native assembly ownership through the same gate", () => {
+  it("checks provider assets and source assembly ownership through the same gate", () => {
     const fixture = fixtureRepository();
     const entry = join(fixture, "packages/federation-protocol/src/asset-probe.ts");
     writeFileSync(entry, "export const asset = new URL('../../../providers/openrouter/assets/telemetry-vocabulary.v1.json', import.meta.url);\n");
     expect(runBoundary(fixture).stdout).toContain("neutral module reaches provider");
     rmSync(entry);
-    const orphan = join(fixture, "product/echo-overlay/unregistered.swift");
+    const orphan = join(fixture, "product/unregistered.swift");
     writeFileSync(orphan, "struct Unregistered {}\n");
-    expect(runBoundary(fixture).stdout).toContain("Swift source has no assembly owner");
+    expect(runBoundary(fixture).stdout).toContain("Swift source is retired and has no builder");
     rmSync(orphan);
-    const assemblyPath = "product/echo-overlay/source-assembly.v1.json";
-    const assembly = readFixtureJson<{ neutral_sources: string[]; provider_sources: string[] }>(fixture, assemblyPath);
-    assembly.neutral_sources.push(...assembly.provider_sources);
-    assembly.provider_sources = [];
-    writeFixtureJson(fixture, assemblyPath, assembly);
-    expect(runBoundary(fixture).stdout).toContain("assembly input has the wrong provider owner");
+    const assemblyPath = "deploy/organization-authority/journey-explorer-assembly.v1.json";
+    const assembly = readFixtureJson<{ neutral_sources: string[]; provider_assets: string[] }>(fixture, assemblyPath);
+    const neutralAsset = "deploy/organization-authority/authority-staging-v1.example.json";
+    writeFixtureJson(fixture, assemblyPath, { ...assembly, provider_assets: [...assembly.provider_assets, neutralAsset] });
+    expect(runBoundary(fixture).stdout).toContain(`assembly input has the wrong provider owner: ${neutralAsset}`);
+    // The dangerous direction: provider code listed as a neutral source.
+    // Neutral sources must be .mjs, so the probe is a provider-owned module.
+    const providerModule = "providers/openrouter/src/assembly-probe.mjs";
+    writeFileSync(join(fixture, providerModule), "export const probe = 1;\n");
+    writeFixtureJson(fixture, assemblyPath, { ...assembly, neutral_sources: [...assembly.neutral_sources, providerModule] });
+    const smuggled = runBoundary(fixture);
+    expect(smuggled.status).not.toBe(0);
+    expect(smuggled.stdout).toContain(`assembly input has the wrong provider owner: ${providerModule}`);
+    expect(smuggled.stdout).toContain(`neutral assembly input escapes its owner: ${providerModule}`);
   });
 
   it("builds neutral packages with no provider, Person or service workspace available", () => {

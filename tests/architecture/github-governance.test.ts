@@ -49,7 +49,8 @@ describe("GitHub release governance", () => {
     const paths = [
       "product/source-boundary.v1.json",
       "providers/slack/server/src/setup/initial-owner-slack-setup-v1.ts",
-      "providers/slack/client/swift/slack-connected-tools.swift",
+      "providers/slack/client/src/person/slack-commands.ts",
+      "product/echo-desktop/package.json",
       "packages/organization-processing/src/core/contracts",
       "packages/organization-processing/src/ports/approval-workflow-bundle-v1.ts",
       "docs/invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md",

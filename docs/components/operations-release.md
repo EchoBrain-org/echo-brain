@@ -56,12 +56,13 @@ Primary roots are `.github/`, `tools/`, and `deploy/`. The Person artifact has
 no lifecycle daemon or fleet updater; the Authority uses the server deployment
 and rollback procedure.
 
-The release-owned setup surface in `product/echo-onboarding/` embeds the exact
-offline Person kit in a native application. It invokes the existing installer
-and Person commands through a bounded bridge, checks real read access before
-ready, and hands off to the separately installed Ask ECHO overlay. It does not
-own membership, process meetings, or introduce an update service. See the
-[lean employee onboarding scope](../product/2026-09-07-lean-employee-onboarding-v1.md).
+The release-owned Person kits are command-line only: a macOS arm64 kit and a
+Linux x64 kit, each with a pinned Node runtime, the exact Person client, and
+its own installer and verifier. The graphical setup application and the app
+kit that carried the native overlay are retired, and the Swift app's sources
+and builder are deleted; the Electron desktop app in `product/echo-desktop`
+replaces it. See the
+[release procedure](../../deploy/release/README.md#person-command-line-kits).
 
 Release readers accept the onboarding writer's literal environment format,
 including a final row without a newline, while retaining the exact accepted

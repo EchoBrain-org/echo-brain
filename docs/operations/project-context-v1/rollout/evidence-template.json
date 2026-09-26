@@ -17,7 +17,7 @@
     "runtime_profile_digest": null,
     "release_record_digest": null,
     "person_client_archive_digest": null,
-    "native_client_source_sha": null
+    "desktop_app_source_sha": null
   },
   "checks": {
     "fresh_v7_lineage": "not_run",

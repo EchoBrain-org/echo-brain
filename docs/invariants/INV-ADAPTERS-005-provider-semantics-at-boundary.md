@@ -11,7 +11,7 @@ reviewed_at: 2026-09-07
 reviewed_ref: 52652d26dab3d753333ce489f866e1e7d0d1f4aa
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Complete production module ownership, inward workspace edges, explicit bootstrap modules, and shared Swift/deployment source assemblies
+enforcement_scope: Complete production module ownership, inward workspace edges, explicit bootstrap modules, and shared deployment source assemblies
 failure_pattern_ids:
   - FP-ADAPTERS-005
 ---
@@ -67,12 +67,8 @@ workspace cycles are rejected.
 The single architecture gate traverses whole modules, including type imports
 and inline import types, side effects, namespaces, unused barrel exports and
 literal dynamic imports. Runtime assets follow the same ownership direction.
-All production Swift files belong to a source assembly shared by the native
-builder and gate. Native builders also typecheck neutral inputs alone, then
-neutral inputs plus one provider at a time, without bootstrap sources or other
-providers. The existing macOS CI job runs these compiler checks and adversarial
-symbol-reference probes. The cross-platform gate checks Swift ownership only.
-The Explorer's assembly binds the exact bundled modules, provider-owned
+The native Swift app is retired, and the gate rejects any Swift source under
+`product/` or `providers/`. The Explorer's assembly binds the exact bundled modules, provider-owned
 historical vocabulary assets, and exact external/builtin import allowlists.
 Both its builder and the gate reject computed imports and loader acquisition.
 Checks inspect source instead of stale emitted code. Architecture mutation tests cover each mechanism with

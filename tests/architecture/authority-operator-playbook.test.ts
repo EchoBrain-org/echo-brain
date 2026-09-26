@@ -30,13 +30,18 @@ describe("Authority operator playbook", () => {
   });
 
   it("keeps onboarding release-bound and staging synthetic", () => {
-    expect(PLAYBOOK).toContain("<release-matched-kit>/Start ECHO.command");
+    expect(PLAYBOOK).toContain('`"<release-matched-kit>/Start-ECHO.sh" --install-only`');
+    expect(PLAYBOOK).toContain(
+      '`"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser`',
+    );
+    expect(PLAYBOOK).not.toContain('runs `"<release-matched-kit>/Start ECHO.command"');
+    expect(PLAYBOOK).not.toContain('Library/Application Support/ECHO/bin/echo-brain" person');
     expect(PLAYBOOK).toContain("person slack-link");
     expect(PLAYBOOK).toContain("./update-clean-v1.sh canary");
     expect(PLAYBOOK).toContain("Do not create a live Granola note for this flow.");
     expect(PLAYBOOK).toContain("local operator on the designated owner Mac");
     expect(PLAYBOOK).toContain("verifies the kit-installed client against the accepted release");
-    expect(PLAYBOOK).toContain('Library/Application Support/ECHO/bin/echo-brain" person records');
+    expect(PLAYBOOK).toContain('Library/Application Support/ECHO/cli/bin/echo-brain" person records');
     expect(PLAYBOOK).toContain("above applies to the reads only, never the Slack approval or host commands");
     expect(PLAYBOOK).not.toContain("Granola note and Approve DM");
     expect(PLAYBOOK).not.toContain("Google / `echo-brain person login`");

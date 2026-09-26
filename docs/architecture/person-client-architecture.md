@@ -25,9 +25,23 @@ service manager.
 The opt-in [client updater](../features/client-updates-v1.md) runs a bounded
 release check before command dispatch. Its public publisher trust and local
 release checkpoint are separate from Person authorization state. macOS arm64
-and Linux x64 CLI-kit activation reuse their platform installers; desktop app
-activation belongs to its packaging adapter. The standalone Mac CLI root is
-separate from the legacy app/CLI pair. This adds no background runtime or automatic Person-request replay.
+and Linux x64 CLI-kit activation reuse their platform installers; the desktop
+app's updates belong to its own packaging. The standalone Mac CLI root is
+separate from the retired Swift app's paired CLI. This adds no background
+runtime or automatic Person-request replay.
+
+## Desktop app
+
+The Electron app in `product/echo-desktop` is the graphical interface on
+macOS; it replaced the retired Swift app. Its person host, an Electron utility
+process, loads this client's `composition.js` and runs the same commands in
+process, as the terminal CLI would. The host is the only process that reads the
+session or holds a token. It sends the app window token-free view models and
+failure codes, never a sign-in URL, grant, or provider body. Each
+account-scoped call is fenced: the host reads status before and after the
+command and refuses the result if the account changed, reporting a write's
+outcome as unknown. A packaged app carries the Person client package produced
+by `tools/pack-person-client.mjs`.
 
 ## Local state authority
 
@@ -59,19 +73,20 @@ identity mode and no installation client ships in the product.
 
 ## Owner People interface
 
-The same `ECHO.app` serves owners and employees. Its menu bar exposes
-**Organization → People** when the installed Person client's current status
-identifies an owner. The native window lists employee membership and invitation
-status, creates employee invitations, replaces pending or expired invitations,
-and revokes employee access. Owners are identified in the window header;
-the employee roster does not list owner memberships.
+The same desktop app serves owners and employees. When the Person client's
+current status identifies an owner, the app shows **People & invites** under
+Organization, in its sidebar and in the menu bar icon's menu. The page lists
+employee membership and invitation status, creates employee invitations,
+replaces pending or expired invitations, and revokes employee access. The
+employee roster does not list owner memberships.
 
-`product/echo-overlay/people.swift` invokes the exact release-installed CLI with
-literal arguments. It adds no browser service, alternate session store, role
-assignment endpoint, or server polling loop. Opening/refocusing the window and
-**Refresh** fetch current data. Invitation files are written by the existing CLI
-into a newly created private folder and handed to the employee separately from
-the shared setup package. The panel never renders invitation contents.
+The desktop host runs the existing `person employee` commands with literal
+arguments. It adds no browser service, alternate session store, role
+assignment endpoint, or server polling loop. Opening the page and **Refresh**
+fetch current data. The owner chooses where an invitation is saved; the app
+creates a new private folder there and the client writes the invitation into
+it, to be handed to the employee separately. The page never renders invitation
+contents.
 
 Local role information controls presentation only. Every list, invite, reissue,
 and revoke request reaches the existing `/v1/person/employees` API, where the
@@ -98,36 +113,32 @@ approved-record-only contract. The source-card behavior below describes approved
 records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
-The installed app's **Account** menu and graphical setup use the same Person
-CLI and session store. An existing member can sign in through Google without
-another invitation; a new member chooses the private invitation file. Sign-out
-and switching accounts are explicit actions. The app remembers the organization
-address for returning sign-in, but does not store another copy of credentials.
-Account readiness requires a successful permission-aware record read after
-login. A local status response alone is not proof of organization access.
+The desktop app's **Account** menu uses the same Person client and session
+store. An existing member can sign in through Google without another
+invitation; a new member chooses the private invitation file. Sign-out and
+switching accounts are explicit actions that the app asks to confirm. The app
+does not store another copy of credentials. A local status response alone is
+not proof of organization access; every account-scoped read is authorized by
+the Authority.
 
-Account changes cancel pending answer/source reads and clear the displayed
-conversation. People mutations block a simultaneous account transition while
-their outcome is pending. Browser login can be cancelled from the Account menu.
+Account changes clear account-scoped pages, answers and sources. A save,
+project change or People change that is still running, or whose outcome is
+unknown, holds sign-out until it settles.
 
 Ask distinguishes invalid generated output (`invalid_output`, HTTP 502) from
 availability failures (`unavailable`, HTTP 503). Both use the existing sanitized
-error envelope. The CLI preserves code/status, exits nonzero, and gives the
-native app a fixed message for invalid output; it never displays model or
-provider bodies. A valid model `answer: null` remains a successful canonical
-insufficient-evidence response. Malformed output is never converted to null or
-retried automatically.
+error envelope. The CLI preserves code/status and exits nonzero; the desktop app
+receives only the failure code and shows a fixed message for invalid output. It
+never displays model or provider bodies. A valid model `answer: null` remains a
+successful canonical insufficient-evidence response. Malformed output is never
+converted to null or retried automatically.
 
 Ask retains validated citations, groups them by record digest, and loads source
-cards through `person records --record-sha256 <digest>` while the panel has focus.
-Each readable card appears as its sequential read completes; a failed read does
-not discard other readable cards. The **Based on** chips acquire meeting titles and
-available dates after their reads complete. Selecting a chip opens its approved record alongside the answer;
-when another source read is still pending, a selected unread chip restarts the
-remaining sequence with that record first. On narrow displays the source pane
-occupies the panel until **Back to answer**.
-Escape closes the source pane before hiding the panel. A missing source does not
-prevent other readable cards from loading.
+cards through `person records --record-sha256 <digest>` while the app is shown.
+Each readable card appears as its read completes; a failed or missing read does
+not discard other readable cards. The **Based on** chips acquire meeting titles
+after their reads complete. Selecting a chip opens its approved record alongside
+the answer.
 
 Cards show decisions, actions, rationale, and approved evidence excerpts beside
 the statement each excerpt supports. Meeting dates, excerpt timestamps,
@@ -154,19 +165,18 @@ changes and reloaded on return. Runtime processing and telemetry are unchanged.
 
 ## Connected tools
 
-**Account → Connected tools** reads the organization's supported tools and the
-signed-in person's connection status from the Authority. Slack is supported
-today. Each connected tool offers **Disconnect**; an unconnected tool offers
-**Connect**. Slack connection opens the browser, and the app checks completion
-automatically through the installed Person client.
+The desktop app's **Account → Connected tools…** reads the organization's
+supported tools and the signed-in person's connection status from the
+Authority through `person tools`. Slack is supported today. The page shows
+status only. Connecting uses the Person CLI: `person slack-connect-begin` opens
+the browser and `person slack-connect-status` checks completion.
 
-**Disconnect Slack** removes only the current person's Slack identity link.
+`person slack-disconnect` removes only the current person's Slack identity link.
 It keeps the organization's Slack installation, Person membership, and approved
 records. Ask and Sources continue to use the Person session. The server resolves
 the caller rather than accepting a target membership, revokes the current link,
 and invalidates pending linking attempts so they cannot restore it later.
-The app refreshes server state after the operation; connecting again requires
-a new browser sign-in.
+Connecting again requires a new browser sign-in.
 
 ## Artifact boundary
 
@@ -195,10 +205,10 @@ every current or future machine interface.
 The repository root is workspace orchestration only. It is private and has no
 runtime export or executable.
 
-The neutral client and account shell use `/v3/person/tools`, a bounded generic
-status contract. Provider commands and native actions are composed at explicit
-entrypoints. Supported v2 routes remain in the Slack provider for existing
-clients; the native disconnect action decodes that retained response there.
+The neutral client uses `/v3/person/tools`, a bounded generic status contract.
+Provider commands are composed at explicit entrypoints. Supported v2 routes
+remain in the Slack provider for existing clients; the disconnect command
+decodes that retained response there.
 
 ## Deliberate context uploads
 
@@ -211,40 +221,32 @@ before returning. Unknown submissions require the same request ID and exact
 file, title, and visibility on retry; no local queue or automatic upload exists.
 
 The current bounded text carrier does not decide the context taxonomy. Optional
-LLM search hints remain derived metadata. Existing records/Ask/native Sources
+LLM search hints remain derived metadata. Existing records/Ask/Sources
 continue to use approved decision records; connecting uploads to those surfaces
 requires a separately qualified retrieval/evidence contract. Shared source
 admission alone does not enable those reads. See the
 [historical upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
-The native menu bar's **Uploads…** window wraps these four commands through
-the release-installed Person client. Owners and employees can choose a file,
-enter its title, select Only me or Team, and explicitly upload it. Search results
-open through a fresh permission-aware `read`, and **Check upload status** shows
-whether the original is saved and optional metadata is ready. The window states
-that Ask currently uses approved records.
+In the desktop app, **Capture** wraps these commands through the Person
+client. Owners and employees write a note or choose a file, choose who can read
+it, and explicitly save it. Search results open through a fresh
+permission-aware read. The document extension below adds persistent, bounded
+original snapshots and recovery commands. Neither path silently uploads files
+or runs a background uploader.
 
-The legacy text-upload window snapshots its selected input for explicit retries
-and keeps an account-bound last-attempt locator for status. The document
-extension below adds persistent, bounded original snapshots and recovery
-commands; the earlier temporary-file-only description does not govern those
-document requests. Neither path silently uploads files or runs a background
-uploader.
-
-Each operation checks the exact membership and Authority before and after the
-CLI call. Account changes and deactivation clear fetched content and invalidate
-read callbacks. A submitted upload finishes while the window is hidden, with its
-outcome retained, and blocks simultaneous in-app account switching. Provider
-diagnostics and credentials never enter the native upload window.
+Each operation passes the host's account fence before and after the client
+call. Account changes clear fetched content. A save that is still running, or
+whose outcome is unknown, holds sign-out until it settles. Provider diagnostics
+and credentials never reach the app window.
 
 ## 2026-09-23 document recovery extension
 
-The refined native project interface invokes the installed
-`person documents` CLI for text/Markdown, PDF and Word `.docx` files up to
-25 MiB. Audience and project association are selected independently. Explicit
-multi-file selection is a bounded foreground interaction; the native queue is
-not a durable background processing service. Authority retains accepted
-originals and performs extraction through the shared Person source adapter.
+The desktop app's project pages and Capture invoke the Person client's
+`person documents` commands for text/Markdown, PDF and Word `.docx` files up to
+25 MiB. Audience and project association are selected independently. Choosing
+several files is a bounded foreground interaction, not a durable background
+processing service. Authority retains accepted originals and performs
+extraction through the shared Person source adapter.
 
 Before a document submission, the CLI retains an immutable private copy with
 the exact request metadata, scoped to the captured Authority and membership.
@@ -255,17 +257,17 @@ receipt resolves the local attempt. A minimal receipt confirms admission after
 project access is lost without returning document content or access coordinates.
 
 `documents abandon --request-id` explicitly removes only local retry material.
-It cannot cancel or delete a possibly completed Authority upload. The native
-recovery flow exposes status, retry and explicit abandonment when starting
-another upload. A user must check status/search before creating a replacement
-request if the earlier outcome remains unknown. Known input/quota/snapshot
-rejections are presented as known non-submissions, not uncertain saves.
+It cannot cancel or delete a possibly completed Authority upload. The desktop
+app offers retry and explicit abandonment of a retained upload. A user must
+check status/search before creating a replacement request if the earlier outcome
+remains unknown. Known input/quota/snapshot rejections are presented as known
+non-submissions, not uncertain saves.
 
-Document linking and unlinking retain their exact account-bound request for an
-uncertain retry after restart. Dismissing the local reminder does not cancel a
-server mutation. Reader refresh tolerates extraction completing between its
-metadata/text requests only while immutable original identity and session
-fences still match. No fetched search corpus, decision model or approval state
-is made authoritative on the client. See
+Document linking and unlinking keep their exact account-bound request ID, so an
+uncertain change is retried as the same request. Dismissing the local reminder
+does not cancel a server mutation. Reader refresh tolerates extraction
+completing between its metadata/text requests only while immutable original
+identity and session fences still match. No fetched search corpus, decision
+model or approval state is made authoritative on the client. See
 [project documents](../features/project-documents-v1.md) and
 [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md).

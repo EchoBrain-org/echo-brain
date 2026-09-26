@@ -71,10 +71,11 @@ describe("CI workflow", () => {
 
     expect(source).toMatch(/required-checks:\s*\n\s+name: CI required checks/);
     expect(source).toMatch(
-      /needs: \[check, person-client-package, authority-container, authority-recovery-infrastructure\]/,
+      /needs: \[check, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure\]/,
     );
     expect(source).toContain('test "$CHECK_RESULT" = success');
     expect(source).toContain('test "$PERSON_CLIENT_PACKAGE_RESULT" = success');
+    expect(source).toContain('test "$DESKTOP_APP_RESULT" = success');
     expect(source).toContain('test "$AUTHORITY_CONTAINER_RESULT" = success');
     expect(source).toContain(
       'test "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" = success',
@@ -167,7 +168,7 @@ describe("CI workflow", () => {
     );
   });
 
-  it("runs the native Projects proof in the macOS Person-client job", () => {
+  it("runs the macOS-only CLI-kit and update-dispatch proofs in the macOS Person-client job", () => {
     const source = workflow();
     const personClientJob = source.slice(
       source.indexOf("  person-client-package:"),
@@ -175,7 +176,75 @@ describe("CI workflow", () => {
     );
 
     expect(personClientJob).toContain(
-      "tests/architecture/echo-projects.test.ts",
+      "tests/architecture/mac-person-cli-kit.test.ts",
+    );
+    expect(personClientJob).toContain(
+      "tests/architecture/client-update-dispatch.test.ts",
+    );
+    expect(source).not.toMatch(/swift|echo-overlay|echo-onboarding/i);
+  });
+
+  it("builds, verifies, and installs only the macOS command-line kit in the macOS Person-client job", () => {
+    const source = workflow();
+    const personClientJob = source.slice(
+      source.indexOf("  person-client-package:"),
+      source.indexOf("  authority-container:"),
+    );
+    const build = personClientJob.indexOf("npm run kit:person-onboarding --");
+    const verify = personClientJob.indexOf(
+      '"$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"',
+    );
+    const smoke = personClientJob.indexOf(
+      'node tests/fixtures/person-onboarding-smoke.mjs --kit-root "$kit_root"',
+    );
+
+    expect(personClientJob).toContain("--target darwin-arm64");
+    expect(personClientJob).toContain("--installation cli-kit");
+    expect(personClientJob).toContain('test -x "$kit_root/Start-ECHO.sh"');
+    expect(build).toBeGreaterThan(0);
+    expect(verify).toBeGreaterThan(build);
+    expect(smoke).toBeGreaterThan(verify);
+    expect(personClientJob).not.toMatch(
+      /--app\b|build:echo-overlay|person-onboarding-ui|ECHO Setup|Start ECHO\.command/,
+    );
+  });
+
+  it("tests, packages from a clean checkout, and smokes the desktop app on macOS", () => {
+    const source = workflow();
+    const desktopJob = source.slice(
+      source.indexOf("  desktop-app:"),
+      source.indexOf("  authority-container:"),
+    );
+    const steps = [
+      "- run: npm ci",
+      "run: node tools/build.mjs --person-client",
+      "working-directory: product/echo-desktop\n        run: npm ci",
+      "run: npx --no install-electron",
+      "run: npm run typecheck",
+      "run: npx vitest run",
+      "run: npm run build",
+      "run: npx playwright test",
+      "run: node scripts/build.mjs --release",
+      "run: node scripts/package.mjs",
+      '"$app/Contents/MacOS/ECHO" --smoke',
+      'test -z "$(git status --porcelain=v1 --untracked-files=all)"',
+    ].map((step) => [step, desktopJob.indexOf(step)] as const);
+
+    expect(desktopJob).toContain("name: macOS arm64 desktop app");
+    expect(desktopJob).toContain("runs-on: macos-15");
+    expect(desktopJob).toMatch(/^    timeout-minutes: 20$/m);
+    expect(desktopJob).toContain("node-version: ${{ env.PRODUCT_NODE_VERSION }}");
+    expect(desktopJob).toContain("product/echo-desktop/package-lock.json");
+    for (const [index, [step, position]] of steps.entries()) {
+      expect(position, step).toBeGreaterThan(index === 0 ? 0 : steps[index - 1]![1]);
+    }
+    expect(desktopJob).toContain(
+      "result.build?.source_sha !== process.env.GITHUB_SHA",
+    );
+    // A skipped step still leaves the job, and so the aggregate, a success:
+    // no step or the job itself may carry a condition.
+    expect(desktopJob).not.toMatch(
+      /secrets\.|upload-artifact|--allow-dirty|continue-on-error|--publish always|\bif:/,
     );
   });
 });

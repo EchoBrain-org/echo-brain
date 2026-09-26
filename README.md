@@ -12,7 +12,11 @@ login session and sends authenticated requests to that Authority.
 ### Person machine
 
 The only shipped machine product is `@echo-brain/person-client` in
-`src/product/person-client`.
+`src/product/person-client`. The Electron desktop app in `product/echo-desktop`
+is its graphical interface on macOS: it runs this same client in process and
+keeps no other session (see
+[Person client architecture](docs/architecture/person-client-architecture.md)).
+The native Swift app is retired.
 
 It can:
 
@@ -57,6 +61,7 @@ packages/organization-control-plane/ Linked Authority control-plane module
 packages/organization-record/        Linked Authority record module
 packages/organization-retrieval/     Linked Authority retrieval module
 src/product/person-client/       Standalone Person CLI package
+product/echo-desktop/            Electron desktop app over the Person client
 deploy/organization-authority/   Container and EC2 deployment assets
 tests/                            Cross-workspace architecture and Person tests
 ```

@@ -58,6 +58,7 @@ toast has no Undo, and the Organization choice warns inline instead.
 | Ask leaves out some Swift details | A question sent while another is on its way waits in the bar with send disabled, and nothing says why. The Swift app said "ECHO is still answering your earlier question." Cancel shows no "Cancelled" line. Chips name the meeting without the Swift app's date ("1  Tuesday sync", not "· Sep 15, 2026"). A failed question offers Try again only when trying again can help; the Swift app offered Retry after every failure. An original's evidence is read again each time its chip is chosen; the Swift app kept it for the answer while the window had focus. The source pane always sits beside the answer and narrows with the window, so Escape or Back leaves the whole thread; below 1,000 px the Swift app covered the answer with the pane, and Back closed the pane first. | Add the status lines, the date or the evidence cache if people miss them. |
 | Live matches stop at 10 | The bar shows the first 10 matches, with no More. In all context those are your newest saved notes (V3) first, then older ones (V2); each version is searched on its own. The Swift app paged a project's search with "More results". | Add More with the search cursor when someone misses a match. |
 | No clear button in the bar | Escape empties the bar's text and its matches. The Swift app also showed a small × (Clear search) while the bar had text. | Add the × if people look for one. |
+| Back is Escape only | Escape steps back one level, and the reader has its own Back button. ⌘[ and a mouse's Back button do nothing. The Swift app went back with both. | Send ⌘[ and the mouse Back button to the same one-level Back, if people reach for them. |
 | No "Not live yet" | An Authority without the projects API refuses the list, and Home shows a failure with Try again. The Swift app read that 404 as "Projects · Not live yet" and turned New project off. The founder's Authority has projects. | Give a not-found project list its own state, if an older Authority is ever used again. |
 
 Two ideas from the proposed direction were not built here, nor on the Swift
@@ -71,7 +72,7 @@ click on a project in the sidebar narrows it).
 | --- | --- | --- |
 | An employee change whose outcome is unknown | Invite, reissue and revoke carry no request id, so Try again could issue a second invitation or cancel the first. As in the Swift app, People & invites empties its list and says what may have happened; Refresh, or coming back to ECHO, reads the list again and settles it. An invitation that did land is in the folder the owner chose. | Request ids for employee changes in the API, then Try again. |
 | Reissue is confirmed in the save dialog | Reissue invitation… opens the save dialog, whose message says the previous invitation stops working; Cancel there changes nothing. The Swift app asked "Replace invitation for …?" before its folder picker. | Ask first as well, if an owner reissues by mistake. |
-| Connected tools only reads | Connected tools… lists the organization's tools and whether your own account is linked, as the Swift window did, but it has no Connect Slack or Disconnect Slack. That needs the Slack browser link flow (`slack-connect-begin`, polling `slack-connect-status`, `slack-connect-cancel`) and a confirmed `slack-disconnect`. | Port the Swift Slack controller's flow when someone needs to link Slack from the app; the terminal commands work meanwhile. |
+| Connected tools only reads | Connected tools… lists the organization's tools and whether your own account is linked, as the Swift window did, but it has no Connect Slack or Disconnect Slack. That needs the Slack browser link flow (`slack-connect-begin`, polling `slack-connect-status`, `slack-connect-cancel`) and a confirmed `slack-disconnect`. | Port the retired Swift view's flow (`providers/slack/client/swift/slack-connected-tools.swift`, now only in git history) when someone needs to link Slack from the app; the terminal commands work meanwhile. |
 | An invitation file that is not private | Open invitation… needs the owner's file as exported: owned by you, mode 0600, unchanged. A copy that lost its permissions on the way (some transfers do) is refused with "Sign-in did not finish. Try again, or ask your organization owner for a new invitation." The client's own advice (`chmod 600`) is client text, which the page never shows. | Give the client's refusal a code and say how to fix it, or have main copy the file privately first. |
 | A sign-out that cannot reach the Authority | The session is removed from this computer and the window shows sign-in, but nothing says the Authority did not end it there. The refresh token is gone from this computer, so it expires unused. The Swift app said "Account status was not verified." | Report the client's failed revocation on the signed-out page. |
 | No Cancel while waiting for the browser | A closed sign-in tab means up to 10 minutes before "Sign-in did not finish." The Swift Account menu had Cancel sign-in. | Add Cancel. The client's loopback wait must be made abortable. |
@@ -98,10 +99,19 @@ person out cleanly, as ADR-0002 §4 requires.
 
 ## Retirement and release
 
-- **Swift retirement in code.** Deleting `product/echo-overlay` and
-  `product/echo-onboarding`, making the onboarding kit CLI-only, and adding a
-  desktop CI job all wait for the founder's explicit go-ahead. The installed
-  Swift app was retired from the founder's Mac on 2026-09-24, and its bundle
-  is in the Trash.
-- **Unmerged branch.** The branch is not pushed or merged. It needs a PR, and
-  the Electron app needs a CI job before main runs its tests.
+- **Swift is retired.** On the founder's go-ahead, `product/echo-overlay`
+  (the Swift app) and `product/echo-onboarding` (its setup app) are deleted,
+  with their build tooling, their proof tests and the Slack Swift view. The
+  installed Swift app was retired from the founder's Mac on 2026-09-24. The
+  desktop app reached main in PR #221.
+- **The onboarding kit is command-line only.** The person kit builds only the
+  macOS arm64 command-line kit (`--installation cli-kit`) and the Linux x64
+  kit. Neither carries an app or a graphical setup.
+- **CI runs the desktop app.** The `desktop-app` job (macOS arm64, on
+  `macos-15`) builds the Person client the app loads, then runs the
+  typecheck, the vitest suite, the full Playwright suite, the release build
+  that proves the bundles carry no test code, and `scripts/package.mjs`. It
+  verifies the packaged app's code signature and runs its `--smoke`, which
+  must pass every check and report a build of the commit from a clean tree.
+  It then asserts that packaging left the checkout clean. `CI required
+  checks` needs the job to succeed.

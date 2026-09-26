@@ -10,7 +10,7 @@ This readiness assessment refers to the reviewed candidate. Installed client and
 
 ## Decisions to preserve
 
-1. Start with one project, SCOUT, an AI-assisted indoor courier robot. The user is the human PM using the refined ECHO app on this Mac. Hardware, Software and QA use their own authenticated ECHO accounts. Four distinct accounts are the initial working team; the earlier 10–20-person ambition is a later scale step.
+1. Start with one project, SCOUT, an AI-assisted indoor courier robot. The user is the human PM using the ECHO desktop app on this Mac. Hardware, Software and QA use their own authenticated ECHO accounts. Four distinct accounts are the initial working team; the earlier 10–20-person ambition is a later scale step.
 2. Project-shared context has a project lifecycle. Removing a contributor revokes that person's access without removing shared history or stopping already accepted project-owned processing. A new authorized member can retrieve shared historical context. Personal-only content is not silently shared.
 3. One Person source adapter handles different submission forms. Text, PDF, DOCX, links and video are formats/capabilities, not separate source identities. Text/Markdown, PDF and DOCX are the initial implementation scope; link capture and video processing can follow.
 4. Context source adapters converge on one versioned source port and common admission/lifecycle rules inside Authority. Processing, approval and delivery remain separate typed capabilities. Shared rules do not require one global queue or a single serial worker.

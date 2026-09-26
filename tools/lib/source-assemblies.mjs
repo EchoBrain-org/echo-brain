@@ -2,7 +2,6 @@ import ts from 'typescript';
 import { isBuiltin } from 'node:module';
 import { collectModuleReferences } from './module-references.mjs';
 import { posix } from 'node:path';
-import { swiftSourceAssemblyV1 } from './swift-source-assembly.mjs';
 import { textFile } from './repository-files.mjs';
 
 export function javascriptSourceAssemblyV1(value) {
@@ -55,7 +54,7 @@ export function assertJavaScriptAssemblyImportsV1(assembly, readSource, resolveI
   }
 }
 
-/** Native and deployment builders share these exact, finite inputs with the single boundary gate. */
+/** Deployment builders share these exact, finite inputs with the single boundary gate. */
 export function sourceAssemblyOwners(tree, paths, providerRoots, manifests, errors, resolveImport) {
   const owners = new Map();
   if (!Array.isArray(paths) || new Set(paths).size !== paths.length) {
@@ -64,13 +63,9 @@ export function sourceAssemblyOwners(tree, paths, providerRoots, manifests, erro
   }
   for (const path of paths) {
     try {
-      const value = JSON.parse(textFile(tree, path));
-      const swift = value?.kind === 'echo-swift-source-assembly';
-      const assembly = swift ? swiftSourceAssemblyV1(value) : javascriptSourceAssemblyV1(value);
-      if (!swift) assertJavaScriptAssemblyImportsV1(assembly, source => textFile(tree, source), resolveImport);
-      const roles = swift ? [
-        ['bootstrap', assembly.bootstrap_sources], ['neutral', assembly.neutral_sources], ['provider', assembly.provider_sources],
-      ] : [['bootstrap', [assembly.entrypoint]], ['neutral', assembly.neutral_sources], ['provider', assembly.provider_assets]];
+      const assembly = javascriptSourceAssemblyV1(JSON.parse(textFile(tree, path)));
+      assertJavaScriptAssemblyImportsV1(assembly, source => textFile(tree, source), resolveImport);
+      const roles = [['bootstrap', [assembly.entrypoint]], ['neutral', assembly.neutral_sources], ['provider', assembly.provider_assets]];
       for (const [kind, sources] of roles) for (const source of sources) {
         if (!tree.has(source)) errors.push(`assembly input is missing: ${source}`);
         const provider = providerRoots.find(root => source.startsWith(`${root}/`));
@@ -80,7 +75,7 @@ export function sourceAssemblyOwners(tree, paths, providerRoots, manifests, erro
         }
         const previous = owners.get(source);
         if (previous && (previous.kind !== kind || previous.provider !== provider)) errors.push(`assembly input has conflicting owners: ${source}`);
-        if (kind === 'provider' && !swift && !manifests.some(manifest => manifest.runtime_assets?.includes(source))) {
+        if (kind === 'provider' && !manifests.some(manifest => manifest.runtime_assets?.includes(source))) {
           errors.push(`provider assembly asset is not a declared runtime asset: ${source}`);
         }
         owners.set(source, { kind, provider, manifest: { name: path, boundary_root: posix.dirname(path) } });
@@ -88,8 +83,10 @@ export function sourceAssemblyOwners(tree, paths, providerRoots, manifests, erro
     } catch (error) { errors.push(`invalid source assembly ${path}: ${error.message}`); }
   }
   for (const path of tree.keys()) {
-    if ((path.startsWith('product/') || path.startsWith('providers/')) && path.endsWith('.swift') && !owners.has(path)) {
-      errors.push(`Swift source has no assembly owner: ${path}`);
+    // The Swift app is retired and no assembly can own Swift, so any Swift
+    // source under product/ or providers/ is unbuilt and unchecked.
+    if ((path.startsWith('product/') || path.startsWith('providers/')) && path.endsWith('.swift')) {
+      errors.push(`Swift source is retired and has no builder: ${path}`);
     }
     if (path.endsWith('-assembly.v1.json') && !paths.includes(path)) errors.push(`source assembly is not registered: ${path}`);
   }

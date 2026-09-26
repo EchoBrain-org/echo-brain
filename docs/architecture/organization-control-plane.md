@@ -137,10 +137,10 @@ organization connection and the current member's external identity link. No
 configured tool returns an empty list; an unavailable connection returns an
 unavailable row. An active Slack tool reports its workspace separately from
 the member's unlinked, linked, or revoked status. Failed reads return an
-error, never an inferred link status. The native Account > Connected tools
-screen clears state when the membership changes, including two employees with
-the same display name. Ask and Sources retain their existing Authority
-permissions without a Slack link.
+error, never an inferred link status. The desktop app's Account > Connected
+tools page is bound to the signed-in membership and clears when it changes,
+including between two employees with the same display name. Ask and Sources
+retain their existing Authority permissions without a Slack link.
 
 Disconnect always targets the authenticated Person. It revokes that member's
 current link and returns the updated tool list; it does not touch the

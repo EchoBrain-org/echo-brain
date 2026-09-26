@@ -1,10 +1,14 @@
 # Project context V1 integration evidence
 
 Status: synthetic checkpoint and local real-layer integration are implemented,
-including default API composition with real Person sessions and native clients
-calling the real CLI. This reconciliation candidate retains the latest committed
-PC-05 native robustness and CLI assertions, PC-06's real CLI/HTTP proof, and
-PC-04's service-owned transport proof. The integrated checkpoint `5f8501c` passed the full local check (206 files,
+including default API composition with real Person sessions. This
+reconciliation candidate retains PC-06's real CLI/HTTP proof and PC-04's
+service-owned transport proof. When it was recorded it also had native clients
+calling the real CLI and retained the latest committed PC-05 native robustness
+and CLI assertions. The Swift app, its native clients and every PC-05 native
+proof were removed on 2026-09-25, and the Electron desktop app in
+`product/echo-desktop` is the GUI client now. Native statements below record the
+candidate as it was, not the current tree. The integrated checkpoint `5f8501c` passed the full local check (206 files,
 2,547 tests passed and one skipped) and all CI jobs. Final review added durable
 project-mutation recovery and fair V1/V2 enrichment scheduling; PR #204 records
 the final candidate SHA and complete verification results. Live capability
@@ -126,19 +130,20 @@ OIDC is synthetic; current session resolution, authorization and application
 selection are real. This gate remains enabled; an injected application cannot
 substitute for its result.
 
-The native subprocess case compiles
-[`native-cli-proof.swift`](../../../tests/fixtures/project-context-integration/native-cli-proof.swift)
-with the real `ProjectSession`, `ProjectClient`, `ProjectCLI` and `UploadClient`.
-Its executable runs this worktree's built CLI, including real account status,
+A native subprocess case compiled `native-cli-proof.swift` with the real
+`ProjectSession`, `ProjectClient`, `ProjectCLI` and `UploadClient`. Its
+executable ran this worktree's built CLI, including real account status,
 request parsing and response decoding, against the loopback server. Alice and
-Carol exercise overlapping/disjoint discovery, feed/search/roster/original
+Carol exercised overlapping/disjoint discovery, feed/search/roster/original
 read, project audience different from destination, inaccessible-read clearing,
-account-change clearing and unsupported-list handling. No canned CLI JSON is
-returned. The native UI control/disabled-Ask assertions remain in PC-05's
-compiled controller fixtures. These include both canned CLI responses and,
+account-change clearing and unsupported-list handling. No canned CLI JSON was
+returned. The native UI control/disabled-Ask assertions were in PC-05's
+compiled controller fixtures. These included both canned CLI responses and,
 after `fc84419`, real CLI execution with controlled fixture HTTP responses.
-Together these prove bounded local cross-layer behavior, not a GUI-to-live-host
-rehearsal or real provider/model execution.
+Together these proved bounded local cross-layer behavior, not a GUI-to-live-host
+rehearsal or real provider/model execution. That case, `native-cli-proof.swift`
+and the PC-05 controller fixtures were removed with the Swift app on
+2026-09-25; the CLI/HTTP transport and worker cases above remain.
 
 After adding that case, `cli-http.test.ts` passed all 7 tests on macOS.
 

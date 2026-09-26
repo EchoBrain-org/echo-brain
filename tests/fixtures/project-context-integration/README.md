@@ -27,13 +27,12 @@ scheduling, record/Ask dispatch, HTTP release, CLI outcome handling and native
 UI availability require the committed PC-02 through PC-05 integrations.
 
 Those integrations now have separate application, CLI/HTTP and default-runtime
-test files. `native-cli-proof.swift` compiles the real native session and upload
-clients, then invokes this worktree's real built CLI subprocesses against the
-loopback HTTP server. Person authentication/model seams in the CLI suite are
-fixtures; the default-runtime test uses real Person session state with synthetic
-OIDC. The native test runs only on macOS and does not install a product.
-The evidence ledger distinguishes these layers from the original synthetic
-checkpoint and from unexecuted live qualification.
+test files. The CLI/HTTP suite runs the real Person CLI against the loopback
+HTTP server. Person authentication/model seams in the CLI suite are fixtures;
+the default-runtime test uses real Person session state with synthetic OIDC.
+The macOS-only Swift proof that compiled the native session and upload clients
+was removed with the Swift app. The evidence ledger distinguishes these layers
+from the original synthetic checkpoint and from unexecuted live qualification.
 
 This directory adds fixtures without changing the shared PC-00/PC-01 fixtures.
 See the [evidence ledger](../../../docs/operations/project-context-v1/README.md).

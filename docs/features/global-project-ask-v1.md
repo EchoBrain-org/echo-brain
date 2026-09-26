@@ -16,9 +16,10 @@ associated with that project. This is the initial definition of related personal
 context. Other people's private material, unassociated personal context, and
 unrelated organization or other-project material remain excluded.
 
-The separate Find saved context and Organization people sidebar entries are
-removed. File browsing is not a prerequisite for asking. Owner administration
-remains under the menu-bar Organization → People entry. Project leads can browse
+The separate Find saved context entry is removed. File browsing is not a
+prerequisite for asking. Owner administration is **People & invites**, under
+Organization in the desktop app's sidebar and its menu bar icon's menu, and
+shown to owners only. Project leads can browse
 and search a paginated organization directory inside the project people picker;
 rows show names only. Add preserves the role of anyone already in the project.
 Any active member can search the same names with no project through
@@ -32,21 +33,22 @@ Invalid input remains editable. A second submission must not silently replace
 a running request. This is one question and answer at a time; it does not add
 persistent chat history or conversational memory.
 
-Pages name their Back destination at the top left. Back, Escape, Command-[,
-and the mouse Back button return to that destination; a Sources pane covering
-an answer returns to the answer first. Returning from project Ask preserves
-its project scope. Returning from a project reader restores the loaded feed
-pages and scroll position through fresh authorized reads. Sheets use a
-consistent close control, and closing an unsent note or attached-file draft asks before
-discarding it. Saves and membership changes in flight cannot be dismissed.
+In the desktop app, Escape steps back one level: a sheet, then Capture, then
+the answer with the source beside it, then the reader, then the project or
+People & invites, then Home. The reader names where its Back goes. Back from
+an original or an answer returns to the place the project feed was scrolled
+to. Escape or Close puts an unsent note or attached file away until Capture
+opens again, and a save in flight cannot be dismissed. The retired Swift app
+also went back with Command-[ and the mouse Back button, covered a narrow
+answer with its Sources pane, and asked before discarding a draft; see the
+desktop app's [known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
 
-Global Write, Capture, and file drop use the same two-step composer as a
-project. The first page holds the content and one optional **Projects** selector.
-It accepts no project, one project, or several projects. Opening inside a project
-preselects that project. **Next: Sharing** opens a second page, with **Only me**
-selected initially. The person may instead choose **Members of selected projects**
-or **Everyone in organization**. **Upload** commits the original and selected
-links once. Back preserves the draft, attachment and choices. See
+Capture, and a file dropped on the window, a project row or the Capture sheet,
+use one sheet: a note or one file, the projects it is filed in, and **Who can
+read** (**Only me**, **Projects** or **Organization**). Opened on a project
+page, or by a file dropped on a project's row, it starts with that project
+ticked under **Projects**. **Save** commits
+the original and its project links once. See
 [Upload projects and sharing](upload-projects-and-sharing.md) for the full contract.
 
 ## Evidence and permission boundaries

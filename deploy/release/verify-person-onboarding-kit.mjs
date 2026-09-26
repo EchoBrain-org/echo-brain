@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -41,12 +40,6 @@ function regularFile(path, label) {
 
 function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
-}
-
-function command(command, args, label) {
-  const result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 1024 * 1024 });
-  if (result.status !== 0) fail(`${label}: ${(result.stderr || result.stdout || 'command failed').trim()}`);
-  return result.stdout;
 }
 
 function assertLinuxX64Elf(path) {
@@ -134,54 +127,6 @@ function verifyMacCliRuntime(root, manifest) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') fail('this CLI kit supports macOS on Apple silicon only');
 }
 
-function verifyOverlayArchive(path, release, manifest) {
-  if (
-    release === null ||
-    typeof release !== 'object' ||
-    Array.isArray(release) ||
-    typeof release.source_sha !== 'string' ||
-    release.person_client === null ||
-    typeof release.person_client !== 'object' ||
-    Array.isArray(release.person_client) ||
-    typeof release.person_client.version !== 'string'
-  ) fail('release record identity is invalid');
-  const identityPath = 'ECHO.app/Contents/Resources/build-identity.v1.json';
-  const entries = command('unzip', ['-Z1', path], 'desktop app archive cannot be read')
-    .split('\n')
-    .filter(Boolean);
-  if (
-    entries.length === 0 ||
-    entries.some((entry) =>
-      entry.startsWith('/') ||
-      entry.split('/').some((part) => part === '..') ||
-      (!entry.startsWith('ECHO.app/') && entry !== 'ECHO.app')
-    ) ||
-    !entries.includes('ECHO.app/Contents/MacOS/ECHO') ||
-    !entries.includes('ECHO.app/Contents/Info.plist') ||
-    !entries.includes(identityPath)
-  ) fail('desktop app archive layout is invalid');
-  let identity;
-  try {
-    identity = JSON.parse(command('unzip', ['-p', path, identityPath], 'desktop app identity cannot be read'));
-  } catch {
-    fail('desktop app identity is invalid JSON');
-  }
-  exactKeys(
-    identity,
-    ['architecture', 'kind', 'platform', 'product_version', 'schema_version', 'source_sha'],
-    'desktop app identity',
-  );
-  if (
-    identity.schema_version !== 1 ||
-    identity.kind !== 'echo-overlay-build-identity-v1' ||
-    identity.source_sha !== manifest.source_sha ||
-    identity.source_sha !== release.source_sha ||
-    identity.product_version !== release.person_client?.version ||
-    identity.platform !== 'darwin' ||
-    identity.architecture !== 'arm64'
-  ) fail('desktop app identity does not match the release record');
-}
-
 function main() {
   const root = resolve(process.argv[2] ?? import.meta.dirname);
   const manifestPath = join(root, 'kit-manifest.v1.json');
@@ -220,7 +165,7 @@ function main() {
     manifest,
     [
       'kind',
-      linux || macCli ? 'build_identity_sha256' : 'desktop_app_archive_sha256',
+      'build_identity_sha256',
       'person_client_artifact_sha256',
       'release_id',
       'release_record_sha256',
@@ -242,33 +187,21 @@ function main() {
     !SHA256.test(manifest.person_client_artifact_sha256) ||
     !SHA256.test(manifest.runtime.node_sha256) ||
     manifest.runtime.version !== 'v22.22.1' ||
+    !SHA256.test(manifest.build_identity_sha256) ||
     (linux
       ? (
-        !SHA256.test(manifest.build_identity_sha256) ||
         manifest.runtime.platform !== 'linux' ||
         manifest.runtime.architecture !== 'x64'
       )
-      : macCli
-        ? (
-          !SHA256.test(manifest.build_identity_sha256) ||
-          manifest.runtime.platform !== 'darwin' ||
-          manifest.runtime.architecture !== 'arm64'
-        )
-        : (
-        manifest.schema_version !== 1 ||
-        manifest.kind !== 'echo-person-onboarding-kit-v1' ||
-        !SHA256.test(manifest.desktop_app_archive_sha256) ||
+      : (
+        !macCli ||
         manifest.runtime.platform !== 'darwin' ||
         manifest.runtime.architecture !== 'arm64'
       ))
   ) fail('manifest identity is invalid');
   if (raw !== `${canonicalJson(manifest)}\n`) fail('manifest is not canonical');
   if (linux) verifyLinuxRuntime(root, manifest);
-  else if (macCli) verifyMacCliRuntime(root, manifest);
-  else if (process.version !== manifest.runtime.version) fail('Node runtime version does not match the kit');
-  else if (process.platform !== manifest.runtime.platform || process.arch !== manifest.runtime.architecture) {
-    fail('this kit supports macOS on Apple silicon only');
-  }
+  else verifyMacCliRuntime(root, manifest);
   if (sha256(releasePath) !== manifest.release_record_sha256) fail('release record digest does not match');
   if (sha256(clientPath) !== manifest.person_client_artifact_sha256) fail('Person-client digest does not match');
   if (sha256(nodePath) !== manifest.runtime.node_sha256) fail('Node runtime digest does not match');
@@ -278,21 +211,14 @@ function main() {
   } catch {
     fail('release record is not valid JSON');
   }
-  if (linux || macCli) {
-    const identityPath = join(root, 'build-identity.v1.json');
-    regularFile(identityPath, 'kit build identity');
-    if (sha256(identityPath) !== manifest.build_identity_sha256) fail('kit build identity digest does not match');
-    if (linux) assertLinuxX64Elf(nodePath);
-    else assertDarwinArm64MachO(nodePath);
-    verifyCliIdentity(identityPath, release, manifest, linux
-      ? { platform: 'linux', architecture: 'x64' }
-      : { platform: 'darwin', architecture: 'arm64' });
-  } else {
-    const appPath = join(root, 'ECHO.app.zip');
-    regularFile(appPath, 'desktop app archive');
-    if (sha256(appPath) !== manifest.desktop_app_archive_sha256) fail('desktop app digest does not match');
-    verifyOverlayArchive(appPath, release, manifest);
-  }
+  const identityPath = join(root, 'build-identity.v1.json');
+  regularFile(identityPath, 'kit build identity');
+  if (sha256(identityPath) !== manifest.build_identity_sha256) fail('kit build identity digest does not match');
+  if (linux) assertLinuxX64Elf(nodePath);
+  else assertDarwinArm64MachO(nodePath);
+  verifyCliIdentity(identityPath, release, manifest, linux
+    ? { platform: 'linux', architecture: 'x64' }
+    : { platform: 'darwin', architecture: 'arm64' });
   process.stdout.write(`${JSON.stringify({
     ok: true,
     release_id: manifest.release_id,

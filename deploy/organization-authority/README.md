@@ -478,11 +478,14 @@ key, and prints paths only. For `export_pending_retry_same_receipt`, repeat
 unconfirmed submission, failed command, changed target, candidate or busy host
 guard stops this lane; never create a second request to bypass the refusal.
 
-With the already verified release-matched kit, run:
+With the already verified release-matched command-line kit, install it and sign
+in with the command it installs:
 
 ```sh
-"<release-matched-kit>/Start ECHO.command" \
-  /absolute/private/initial-owner-handoff/founder-person-invitation.json
+"<release-matched-kit>/Start-ECHO.sh" --install-only
+"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login \
+  --invitation /absolute/private/initial-owner-handoff/founder-person-invitation.json \
+  --open-browser
 ```
 
 Browser login, identity changes, Slack approval and host wrapper actions remain

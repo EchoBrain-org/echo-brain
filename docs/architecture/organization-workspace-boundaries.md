@@ -36,14 +36,12 @@ The registry is
 [`tools/workspace-source-boundaries.v1.json`](../../tools/workspace-source-boundaries.v1.json).
 Every production module has an owner. The gate follows whole modules, including
 unused re-exports, namespace/side-effect imports, type queries and literal dynamic
-imports. Runtime asset references obey the same direction. Native Swift and the
-Explorer deployment have explicit source assemblies shared by their builders
-and the same architecture gate. Native builds typecheck the neutral sources
-alone and each provider with neutral sources only, before composing the full app.
-The macOS job also runs adversarial symbol-reference probes. The cross-platform
-gate checks Swift ownership; it does not parse Swift dependencies. Deployment
-JavaScript has exact external and builtin import allowlists shared by the gate
-and builder, with computed imports and loader acquisition rejected.
+imports. Runtime asset references obey the same direction. The Explorer
+deployment has an explicit source assembly shared by its builder and the same
+architecture gate. Deployment JavaScript has exact external and builtin import
+allowlists shared by the gate and builder, with computed imports and loader
+acquisition rejected. The native Swift app and its assemblies are retired; the
+gate rejects any Swift source under `product/` or `providers/`.
 There is no provider-name registry, symbol-based
 traversal or exception mechanism.
 
@@ -53,13 +51,19 @@ The Person tarball contains the client, federation/protocol/API and the Slack
 client fragment. It includes public versioned data exports and contains no
 Authority, processing, server provider or SQLite dependency. Its dedicated build
 compiles these five workspaces. The Authority image contains its fourteen-workspace
-dependency closure and the required frozen SQL/provider assets.
+dependency closure and the required frozen SQL/provider assets. The Electron
+desktop app in `product/echo-desktop` is not a root workspace and imports no
+workspace source; it loads the built Person client package at run time.
 
 The architecture suite compiles all eight neutral packages in an isolated tree
 with no provider, Person, service or prebuilt workspace output available.
 External dependencies remain installed; workspace symlinks point only into the
-isolated tree. Full source tests and the existing native/offline artifact checks
-exercise the composed products. No additional CI job is needed.
+isolated tree. This isolated compile runs inside the architecture suite and
+needs no CI job of its own. Full source tests and the offline kit and artifact
+checks exercise the Person tarball and the Authority image. The root suite does
+not reach `product/echo-desktop`; the separate "macOS arm64 desktop app" CI job
+runs its typecheck, unit tests, Playwright suite, release leak check, packaging
+and packaged smoke.
 
 Neutral package tests may import neutral workspace code, their own test
 fixtures, and shared neutral test support. The test-layer architecture check
@@ -70,8 +74,8 @@ Authority transports live with the composing service. Generic processing and
 record tests retain independent fixture implementations and signed protocol
 helpers without importing a provider or application workspace.
 
-The native account shell consumes generic v3 tool status and an injected UI
-interface. Slack owns its actions and retained v2 disconnect decoder. The v2
+The Person client consumes generic v3 tool status. Slack owns its commands and
+retained v2 disconnect decoder. The v2
 HTTP contract remains provider-owned for installed clients; v3 admits up to
 32 independently identified tools without imposing a provider's identity grammar.
 

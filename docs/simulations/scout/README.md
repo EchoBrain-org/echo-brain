@@ -14,11 +14,11 @@ Use the full v0.1 pair for the document-capable kickoff. The current text-only p
 
 The [MRD v0.2](SCOUT-MRD-v0.2.md) and [PRD v0.2](SCOUT-PRD-v0.2.md) are condensed alternatives prepared for the old limit. They retain the scope and requirement IDs, but are not a substitute for proving full-document support. Record the actual chosen version consistently if using them for an interim rehearsal.
 
-## Start in the refined ECHO app on this Mac
+## Start in the ECHO desktop app on this Mac
 
 1. The human PM reads the MRD and PRD and makes any desired changes before uploading them.
 2. Confirm the app is connected to the intended staging environment and PM account. Choose **New project**, name it **SCOUT**, and add the Hardware, Software and QA participants using their individual accounts.
-3. In SCOUT, choose **Add files** and select `SCOUT-MRD-v0.1.md` and `SCOUT-PRD-v0.1.md`, or verified PDF/Word exports of those same versions. Confirm **To: SCOUT**: this establishes both project audience and project association, making them eligible for project retrieval by its members.
+3. On the same page, choose **Add files…** and select `SCOUT-MRD-v0.1.md` and `SCOUT-PRD-v0.1.md`, or verified PDF/Word exports of those same versions, then choose **Create**. Each file added there is saved to SCOUT for its members: this establishes both project audience and project association, making them eligible for project retrieval by its members.
 4. Verify both files were actually saved to SCOUT with the expected filenames and contents; a selected attachment alone is not proof of saving. Capture the successful project and original references.
 5. Add those references to the kickoff message, then post it to the existing group chat. Each agent verifies retrieval using its own account before reviewing.
 6. Collect one requirements review per role and any brief cross-team clarification replies. Record access or service failures separately from review quality.
