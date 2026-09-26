@@ -22,9 +22,7 @@
   "allowed_node_builtins": [
     "buffer"
   ],
-  "runtime_assets": [
-    "packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json"
-  ],
+  "runtime_assets": [],
   "component_index_contract": {
     "canonical_components": [
       {

@@ -15,9 +15,6 @@
     "packages/organization-processing/src/llm/llm-decision-processor.ts",
     "packages/organization-processing/src/core/contracts/validation.ts",
     "packages/organization-processing/src/core/index.ts",
-    "packages/organization-processing/src/core/approval/approval-gate.ts",
-    "packages/organization-processing/src/core/delivery/envelope.ts",
-    "packages/organization-processing/src/core/storage/meeting-processing-state-store.ts",
     "packages/organization-processing/src/llm/llm-provider.ts"
   ],
   "owned_source_paths": [
@@ -122,6 +119,10 @@
       }
     ],
     "compatibility_entrypoints": [],
-    "retired_source_paths": []
+    "retired_source_paths": [
+      "packages/organization-processing/src/core/approval/approval-gate.ts",
+      "packages/organization-processing/src/core/delivery/envelope.ts",
+      "packages/organization-processing/src/core/storage/meeting-processing-state-store.ts"
+    ]
   }
 }

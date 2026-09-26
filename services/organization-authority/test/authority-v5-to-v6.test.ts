@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { applyAuthorityBaselineV5, applyAuthorityBaselineV6, authorityBaselineSha256V5, authorityBaselineSha256V6 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { copyAuthorityV5ToV6 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/authority-v5-to-v6';
-import { SqlitePersonUpdateInboxV1 } from '../src/adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { database, databases, decisions, meeting, fixtureCursorPolicy, REVIEW_POLICY, nextCursor, ADMITTED_AT, SHA } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
 
@@ -26,7 +25,6 @@ it('copies the exact V5 admission/cursor/frozen/ambiguous state without changing
   previous.close();
   const before = createHash('sha256').update(readFileSync(path)).digest('hex');
   const input = new Database(path, { readonly: true }); const output = new Database(join(root, 'v6.sqlite')); databases.push(input, output);
-  expect(() => new SqlitePersonUpdateInboxV1(input)).toThrow('require Authority V6 through V9 state');
   copyAuthorityV5ToV6(input, output);
   expect(createHash('sha256').update(readFileSync(path)).digest('hex')).toBe(before);
   for (const [name, snapshot] of rows) expect(output.prepare(`SELECT * FROM ${name}`).all(), name).toEqual(snapshot);

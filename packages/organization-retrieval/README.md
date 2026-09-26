@@ -2,8 +2,8 @@
 
 `readable-search-engine-v1` is the canonical and only package entrypoint; the
 `new-lineage-v1` compatibility re-export was retired on 2026-09-06.
-`application/readable-search-contracts` owns the builder's named read-model
-contracts.
+`application/readable-search-contracts` names the storage planes and the
+validation error shared by the analyzer and persistence layers.
 
 ## Readable-search capacity budget
 

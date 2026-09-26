@@ -140,14 +140,6 @@ export interface ProjectAuthorizationSnapshotV1 {
   readonly grants: readonly ProjectMembershipGrantV1[];
 }
 
-/** No bearer, query, source/model body or resolved audience-member list. */
-export interface ProjectReadAuditV1 {
-  readonly operation: ProjectReadOperationV1;
-  readonly response_sha256: Sha256Digest;
-  readonly authorization_sha256: Sha256Digest;
-  readonly released_count: number;
-}
-
 export type ProjectReadResponseV1 =
   | ProjectListV1 | ProjectSummaryV1 | ProjectMembersV1 | ProjectDirectoryV1 | OrganizationDirectoryV1
   | ProjectContextFeedV1 | ProjectContextSearchResultV1 | ProjectContextReadV1

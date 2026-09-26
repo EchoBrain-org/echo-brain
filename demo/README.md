@@ -59,24 +59,25 @@ demo/
 └── test/                     # demo harness tests
 ```
 
-Runtime code stays in the normal service layers rather than creating a parallel
-demo application:
+Runtime code stays in the normal provider and service layers rather than
+creating a parallel demo application:
 
 ```text
+providers/synthetic-demo/src/
+├── source/synthetic-demo-meeting-source-v1.ts
+├── synthetic-demo-admitted-meeting-source-cursor-policy-v1.ts
+├── synthetic-demo-meeting-source-admission.ts
+├── synthetic-demo-meeting-source-bundle-v1.ts
+├── synthetic-demo-pre-slack-evaluator-v1.ts
+└── synthetic-demo-setup-evidence-v1.ts
+
 services/organization-authority/src/
-├── processing/adapters/meeting-sources/synthetic-demo/
-│   └── synthetic-demo-meeting-source-v1.ts
-├── composition/providers/synthetic-demo/
-│   ├── synthetic-demo-admitted-meeting-source-cursor-policy-v1.ts
-│   ├── synthetic-demo-meeting-source-admission.ts
-│   ├── synthetic-demo-meeting-source-bundle-v1.ts
-│   └── synthetic-demo-pre-slack-evaluator-v1.ts
 ├── composition/synthetic-demo-organization-authority-cli.ts
 ├── composition/synthetic-demo-organization-authority-composition-root-v1.ts
 └── synthetic-demo-main.ts
 ```
 
-Tests mirror those service-layer paths. The synthetic source changes the input
+Tests mirror those paths. The synthetic source changes the input
 and composition, not the product pipeline, extraction configuration, or Slack
 presentation.
 

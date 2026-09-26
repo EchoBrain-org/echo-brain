@@ -36,18 +36,6 @@ export interface ConnectSlackConnectionInputV1 extends SlackConnectionSetupInput
   readonly signal?: AbortSignal;
 }
 
-/**
- * The later CLI supplies public flags separately from the private token read.
- * Keeping this adapter free of process I/O makes it safe to test with a fake
- * provider and prevents a caller from accidentally echoing its stdin bytes.
- */
-export interface RunSlackConnectionSetupCommandV1Input extends Omit<
-  ConnectSlackConnectionInputV1,
-  "slack_bot_token"
-> {
-  readonly read_slack_bot_token: () => Promise<string> | string;
-}
-
 export interface ConnectedSlackConnectionV1 {
   readonly connection: OrganizationToolConnectionContractV2;
   readonly state: OrganizationToolConnectionStateV2;
@@ -341,12 +329,4 @@ export async function connectSlackConnectionV1(
       input.secrets.remove(createdSecret);
     }
   }
-}
-
-/** A stopped-state `slack connect` command seam for a future CLI. */
-export async function runSlackConnectionSetupCommandV1(
-  input: RunSlackConnectionSetupCommandV1Input,
-): Promise<ConnectedSlackConnectionV1> {
-  const slackBotToken = await input.read_slack_bot_token();
-  return connectSlackConnectionV1({ ...input, slack_bot_token: slackBotToken });
 }

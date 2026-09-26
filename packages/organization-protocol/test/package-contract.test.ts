@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 interface PackageJson {
@@ -12,30 +12,16 @@ const packageJson = JSON.parse(
   readFileSync(new URL("package.json", packageRoot), "utf8"),
 ) as PackageJson;
 
-const assetExports = [
-  "./schemas/organization-authority-descriptor.v1.schema.json",
-  "./fixtures/organization-record-payload-conformance.v1.json",
-] as const;
-
 describe("organization protocol package contract", () => {
-  it("publishes only the code entry point and exact versioned assets", () => {
+  it("publishes only the code entry points", () => {
     expect(Object.keys(packageJson.exports).sort()).toEqual(
-      [".", "./record-codec-support-v4", ...assetExports].sort(),
+      [".", "./record-codec-support-v4"].sort(),
     );
-    for (const subpath of assetExports) {
-      const target = packageJson.exports[subpath];
-      expect(target).toBe(subpath);
-      expect(existsSync(new URL(subpath.slice(2), packageRoot)), subpath).toBe(
-        true,
-      );
-    }
     expect(packageJson.files).toEqual([
       "dist/**/*.js",
       "dist/**/*.js.map",
       "dist/**/*.d.ts",
       "dist/**/*.d.ts.map",
-      "schemas/*.schema.json",
-      "fixtures/**",
     ]);
     expect(packageJson.files).not.toContain("dist/.tsbuildinfo");
   });
@@ -44,16 +30,5 @@ describe("organization protocol package contract", () => {
     expect(packageJson.dependencies).toEqual({
       "@echo-brain/federation-protocol": "0.0.0-dev.0",
     });
-  });
-
-  it("ships no private key or bearer grant in its fixtures", () => {
-    for (const name of [
-      "fixtures/organization-record-payload-conformance.v1.json",
-    ]) {
-      const fixture = readFileSync(new URL(name, packageRoot), "utf8");
-      expect(fixture, name).not.toMatch(/private[_ -]?key/i);
-      expect(fixture, name).not.toMatch(/enrollment_grant_base64/i);
-      expect(fixture, name).not.toMatch(/enrollment_grant_bytes/i);
-    }
   });
 });

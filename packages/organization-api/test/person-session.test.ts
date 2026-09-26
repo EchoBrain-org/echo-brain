@@ -30,9 +30,39 @@ describe('Person session HTTP DTOs', () => {
   it('exports the expected-email boundary rule', () => {
     expect(isExpectedPersonEmail('founder@example.com')).toBe(true);
     expect(isExpectedPersonEmail('Founder@example.com')).toBe(false);
+    for (const email of [
+      ' founder@example.com',
+      'founder@example.com ',
+      'founder"quote@example.com',
+      'founder name@example.com',
+      '.founder@example.com',
+      'founder.@example.com',
+      'founder@example..com',
+      'founder@example-.com',
+      'founder@example.c',
+    ]) {
+      expect(isExpectedPersonEmail(email)).toBe(false);
+    }
+  });
+
+  it('bounds the expected-email mailbox parts', () => {
+    const labels = (last: number) =>
+      ['a'.repeat(63), 'b'.repeat(63), 'c'.repeat(63), 'd'.repeat(last)].join('.');
+    expect(isExpectedPersonEmail(`${'a'.repeat(64)}@example.com`)).toBe(true);
+    expect(isExpectedPersonEmail(`a@${labels(60)}`)).toBe(true);
+    // The full mailbox has a 254-byte cap, so a 253-byte domain cannot coexist
+    // with even the shortest local part.
+    expect(isExpectedPersonEmail(`a@${labels(61)}`)).toBe(false);
   });
 
   it('keeps durable canonical identities broader than expected-email boundaries', () => {
+    for (const email of [
+      'jane.doe+staging@example.co.uk',
+      'a_b-c%tag@sub-domain.example.org',
+      'user@example',
+    ]) {
+      expect(isCanonicalPersonEmail(email)).toBe(true);
+    }
     expect(isCanonicalPersonEmail('alice@localhost')).toBe(true);
     expect(isExpectedPersonEmail('alice@localhost')).toBe(false);
     expect(isCanonicalPersonEmail('Alice@localhost')).toBe(false);

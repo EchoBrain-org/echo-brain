@@ -51,8 +51,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean",
-    "test": "npm run build && vitest run --root . --config ../../vitest.package.serial.config.ts"
+    "clean": "tsc -b --clean"
   },
   "dependencies": {
     "better-sqlite3": "12.10.0"

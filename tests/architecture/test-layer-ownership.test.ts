@@ -60,10 +60,9 @@ const rules: readonly TestLayerRule[] = [
     allows: (path) => neutralPackages.has(path) || path.startsWith('tests/support/'),
   },
   {
-    root: 'services/organization-authority/test/processing/core',
+    root: 'packages/organization-processing/test/core',
     allows: (path) =>
       path.startsWith('packages/organization-processing/src/core/') ||
-      path === 'workspace:@echo-brain/organization-processing' ||
       path.startsWith('tests/support/'),
   },
   {

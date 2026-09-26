@@ -9,8 +9,10 @@ Slack adapters under `providers/slack/server/src/organization-control-plane`:
 
 | Entry point | Responsibility |
 | --- | --- |
-| Slack provider `composition/slack-connection-setup-cli` | The owner-attributed Slack connection ceremony and its CLI |
-| Slack provider `slack-external-identity-integration-v1` | Slack identity provider, external human-link contracts, and the secret store |
+| Slack provider `composition/slack-connection-setup-cli` | The owner-attributed Slack connection ceremony, which initial-owner setup runs in-process |
+| Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack identity provider |
+| Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
+| `security/file-secret-store` | The private secret store for the Slack bot credential |
 | Slack provider `slack-approval-integration-v1` | Private DM approval policy resolution, reviewer targeting, and approval persistence |
 | `organization-control-database-v1` | Opening the control database and applying the current V3 baseline |
 | `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy contracts consumed by approval resolution |

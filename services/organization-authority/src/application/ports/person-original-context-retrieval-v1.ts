@@ -54,13 +54,6 @@ export interface PersonOriginalContextRetrievalPortV1 {
   }): { readonly scope: PersonAskScopeV2; readonly atom: ReleasedSourceContextAtomV1 };
 }
 
-/** Audit-safe identity digest for a combined original/record release. */
-export interface OriginalContextReleaseAuditV1 {
-  readonly scope: PersonAskScopeV2;
-  readonly authorization_revision: number;
-  readonly released_atoms_sha256: Sha256Digest;
-}
-
 /** A source citation omits evidence text and presentation-only labels. */
 export interface OriginalContextCitationV1 {
   readonly kind: "source_revision";

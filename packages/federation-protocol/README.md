@@ -14,10 +14,9 @@ Authority and protocol workspaces:
 
 The Node 22 API is deliberately OS-, deployment-, and key-provider-neutral; it
 does not claim browser portability. This package never loads or stores a
-private key. The frozen fixture exported at
-`@echo-brain/federation-protocol/fixtures/signed-document-p256-rfc8785.v1.json`
-fixes the canonical bytes, digests, key ID, and signature encoding shared by
-every consumer.
+private key. The frozen test fixture
+`fixtures/signed-document-p256-rfc8785.v1.json` fixes the canonical bytes,
+digests, key ID, and signature encoding.
 
 `organization-protocol` owns signed receipt and record-envelope documents
 built on these primitives; each protocol validates its own document schema.

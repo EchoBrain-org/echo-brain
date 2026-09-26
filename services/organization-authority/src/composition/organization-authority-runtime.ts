@@ -1,4 +1,3 @@
-import { SqlitePersonUpdateInboxV1 } from '../adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { createPersonUpdateProcessingV1, type PersonUpdateProcessingBindingV1 } from './person-update-processing-v1.js';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
@@ -403,7 +402,6 @@ export async function openOrganizationAuthorityRuntime(
     // periodic cycle still publishes anything queued in that window.
     let requestApprovalPublication: (() => void) | undefined;
     const recordAppend = new OrganizationRecordAppenderV4(record, coordinates, config.record_policy_fact_projectors);
-    const inbox = new SqlitePersonUpdateInboxV1(authority);
     const approvalContext = Object.freeze({
       on_terminal_action_queued: () => requestApprovalPublication?.(),
       state: bindApprovalWorkflowStateV1(sourceState, () => {
@@ -468,7 +466,7 @@ export async function openOrganizationAuthorityRuntime(
           approvals.processing,
           readableSearch,
           createPersonUpdateProcessingV1(
-            inbox, answerGeneration,
+            answerGeneration,
             new SqlitePersonUpdateEnrichmentWorkV2(authority, new SqliteProjectUploadEnrichmentAuthorizationV1(authority)),
           ),
           meetingApprovalJourneyTelemetry,

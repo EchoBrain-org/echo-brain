@@ -21,7 +21,6 @@ describe("Person client help", () => {
     );
     await expect(help(["--help"])).resolves.toContain("employee");
     await expect(help(["--help"])).resolves.toContain("ask");
-    await expect(help(["--help"])).resolves.toContain("start");
     await expect(help(["--help"])).resolves.toContain("directory   Find people in your organization by name.");
   });
 
@@ -35,9 +34,6 @@ describe("Person client help", () => {
   it("documents sign-in, reads, session commands, and nested employee commands", async () => {
     await expect(help(["tools", "--help"])).resolves.toContain("echo-brain person tools");
     await expect(help(["slack-link", "--help"])).resolves.toContain("echo-brain person slack-link");
-    await expect(help(["start", "--help"])).resolves.toContain(
-      "echo-brain person start --invitation <path>",
-    );
     await expect(help(["login", "--help"])).resolves.toContain(
       "--invitation <path> | --authority-url <url>",
     );

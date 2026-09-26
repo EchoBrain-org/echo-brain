@@ -13,7 +13,6 @@ import {
   restrictedReviewerPersonConsequenceSha256,
   restrictedReviewerPersonPolicyContract,
   restrictedReviewerPersonPolicyContractSha256,
-  validatePersonContentPolicyContract,
 } from "../src/person-content-policy-v2.js";
 
 describe("Person content policy v2", () => {
@@ -93,76 +92,5 @@ describe("Person content policy v2", () => {
         reader_selector: reviewer.reader_selector,
       }),
     ).not.toBe(organizationMemberReadablePersonPolicyContractSha256());
-  });
-
-  it.each([
-    [
-      "extra field",
-      () => ({ ...restrictedReviewerPersonPolicyContract(), extra: true }),
-    ],
-    [
-      "missing field",
-      () => {
-        const { readable_item_kinds: _, ...rest } =
-          restrictedReviewerPersonPolicyContract();
-        return rest;
-      },
-    ],
-    [
-      "v1 policy id",
-      () => ({
-        ...restrictedReviewerPersonPolicyContract(),
-        policy_id: "restricted-reviewer-v1",
-      }),
-    ],
-    [
-      "changed consequence digest",
-      () => ({
-        ...restrictedReviewerPersonPolicyContract(),
-        policy_consequence_sha256:
-          "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      }),
-    ],
-    [
-      "selector swap",
-      () => ({
-        ...restrictedReviewerPersonPolicyContract(),
-        reader_selector:
-          organizationMemberReadablePersonPolicyContract().reader_selector,
-      }),
-    ],
-    [
-      "item order",
-      () => ({
-        ...organizationMemberReadablePersonPolicyContract(),
-        readable_item_kinds: ["action", "decision", "rationale"],
-      }),
-    ],
-    [
-      "membership type order",
-      () => ({
-        ...organizationMemberReadablePersonPolicyContract(),
-        reader_selector: {
-          ...organizationMemberReadablePersonPolicyContract().reader_selector,
-          eligible_membership_types: ["owner", "employee"],
-        },
-      }),
-    ],
-  ])("rejects %s", (_label, candidate) => {
-    expect(() => validatePersonContentPolicyContract(candidate())).toThrowError(
-      expect.objectContaining({
-        name: "OrganizationProtocolValidationError",
-      }),
-    );
-  });
-
-  it("returns canonical snapshots for both exact variants", () => {
-    for (const contract of [
-      restrictedReviewerPersonPolicyContract(),
-      organizationMemberReadablePersonPolicyContract(),
-    ]) {
-      const validated = validatePersonContentPolicyContract(contract);
-      expect(validated).toEqual(contract);
-    }
   });
 });

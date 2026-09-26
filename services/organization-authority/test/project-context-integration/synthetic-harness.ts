@@ -19,8 +19,7 @@ import type {
 import { addMembership, authorization, PROJECT_CONTEXT_NOW } from '../fixtures/project-context-sqlite.js';
 import { PEOPLE, SCENARIO } from '../../../../tests/fixtures/project-context-integration/scenario.js';
 
-export { PEOPLE, SCENARIO };
-export const missingContext = `ctx_${'f'.repeat(64)}`;
+export { PEOPLE };
 
 function scenarioDatabase(path: string): Database.Database {
   const database = new Database(path);
@@ -76,20 +75,6 @@ export class SyntheticProjectHarness {
     )).project_id;
   }
 
-  member(project_id: ProjectIdV1, member: AuthorityPersonMembershipBinding, role: 'lead' | 'member' = 'member', actor = PEOPLE.alice) {
-    const request = { schema_version: 1 as const, kind: 'echo-project-member-set-v1' as const, request_id: this.requestId(), project_id, membership_id: member.membership_id, role };
-    return this.repository.withWriteTransaction(tx => tx.setMember(
-      tx.captureAuthorization(authorization(actor), { operation: 'member_set', request }), request,
-    ));
-  }
-
-  remove(project_id: ProjectIdV1, member: AuthorityPersonMembershipBinding, actor = PEOPLE.alice) {
-    const request = { schema_version: 1 as const, kind: 'echo-project-member-remove-v1' as const, request_id: this.requestId(), project_id, membership_id: member.membership_id };
-    return this.repository.withWriteTransaction(tx => tx.removeMember(
-      tx.captureAuthorization(authorization(actor), { operation: 'member_remove', request }), request,
-    ));
-  }
-
   draft(project_id: ProjectIdV1 | null, audience: PersonUploadAudienceV2, original = SCENARIO.originals.team as { title: string; text: string }): PersonUpdateSubmitV2 {
     return validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: this.requestId(), ...original, project_id, audience });
   }
@@ -116,34 +101,10 @@ export class SyntheticProjectHarness {
     });
   }
 
-  feed(actor: AuthorityPersonMembershipBinding, project_id: ProjectIdV1, limit = 10, cursor?: string) {
-    return this.read(actor, { operation: 'feed', project_id }, (tx, scope) => tx.feed(scope, { project_id, limit, ...(cursor ? { cursor } : {}) }));
-  }
-
-  search(actor: AuthorityPersonMembershipBinding, project_id: ProjectIdV1, query = 'meridian', limit = 10, cursor?: string) {
-    return this.read(actor, { operation: 'search', project_id }, (tx, scope) => tx.search(scope, { project_id, query, limit, ...(cursor ? { cursor } : {}) }));
-  }
-
   original(actor: AuthorityPersonMembershipBinding, context_id: string, project_id?: ProjectIdV1) {
     return project_id === undefined
       ? this.read(actor, { operation: 'upload_read', context_id }, (tx, scope) => tx.readUpload(scope, context_id))
       : this.read(actor, { operation: 'context_read', context_id, project_id }, (tx, scope) => tx.readContext(scope, project_id, context_id));
-  }
-
-  status(request_id: string, actor = PEOPLE.alice) {
-    return this.read(actor, { operation: 'upload_status', request_id }, (tx, scope) => tx.uploadStatus(scope, request_id));
-  }
-
-  seed() {
-    const alpha = this.create('Synthetic Alpha');
-    const beta = this.create('Synthetic Beta');
-    this.member(alpha, PEOPLE.bob);
-    this.member(beta, PEOPLE.carol);
-    const privateNote = this.submit(this.draft(alpha, { kind: 'only_me' }, SCENARIO.originals.private));
-    const team = this.submit(this.draft(alpha, { kind: 'team' }));
-    const project = this.submit(this.draft(alpha, { kind: 'project', project_id: alpha }, SCENARIO.originals.alpha));
-    const cross = this.submit(this.draft(beta, { kind: 'project', project_id: alpha }, SCENARIO.originals.cross));
-    return { alpha, beta, privateNote, team, project, cross };
   }
 
   /** Fault seam only: models PC-02's future atomic eligibility/commit binding. */

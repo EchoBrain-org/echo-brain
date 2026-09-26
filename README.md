@@ -81,7 +81,7 @@ Choose the smallest check that covers the change while iterating:
 | --- | --- | --- |
 | Editing the runtime | `npm run test:authority` | Authority service tests |
 | Editing one workspace | `npm run test:person`, `test:protocols`, `test:record`, or `test:control-plane` | That client or package's tests |
-| Editing deterministic meeting processing | `npm run test:meeting-processing-core` | Core processing tests |
+| Editing deterministic meeting processing | `npm run build:workspaces`, then `npx vitest run --config vitest.config.ts packages/organization-processing/test` | Core and durable meeting-processing tests |
 | Editing workspace dependencies or deployment tooling | `npm run test:architecture` | Cross-workspace and tooling behavior |
 | Checking dependency boundaries quickly | `npm run check:architecture-boundaries` | Forbidden imports and package boundaries |
 | Editing docs and evidence references | `npm run check:docs` | Documentation structure and Git proof references |
@@ -102,9 +102,7 @@ CI also runs both core evaluation commands above. The full suite uses at most
 two isolated test workers; mutable Git and packaging fixtures use temporary
 checkouts.
 
-The shorter `check:boundary`, `profile:clean-v1-runtime`, and
-`check:authority-infrastructure` names are compatibility aliases for existing
-commands, not additional workflows. For operational tools, start with the
+For operational tools, start with the
 [Authority operator playbook](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
 
 ## Person client artifact

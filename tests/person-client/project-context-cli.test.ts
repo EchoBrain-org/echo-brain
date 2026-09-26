@@ -7,7 +7,10 @@ import { runPersonClientCli } from '../../src/product/person-client/composition.
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
-import { validatePersonUpdateSubmitV2 } from '@echo-brain/organization-api';
+import {
+  validatePersonUpdateSubmitV1, validatePersonUpdateSubmitV2, validateProjectContextBrowseV1,
+  validateProjectContextFeedV1, validateProjectContextSearchV1, validateProjectCreateV1, validateProjectMemberSetV1,
+} from '@echo-brain/organization-api';
 
 interface Operation {
   id: string;
@@ -16,7 +19,17 @@ interface Operation {
 }
 const fixtures = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/operations.json', import.meta.url), 'utf8')) as { operations: Operation[] };
 const failures = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/invalid.json', import.meta.url), 'utf8')) as {
+  cases: { id: string; validator: string; value: unknown }[];
   errors: { id: string; http_status: number; http: unknown; cli: { action: string; [key: string]: unknown } }[];
+};
+const invalidValidators: Readonly<Record<string, (value: unknown) => unknown>> = {
+  'person-update-v1-submit': validatePersonUpdateSubmitV1,
+  'person-update-v2-submit': validatePersonUpdateSubmitV2,
+  'project-create': validateProjectCreateV1,
+  'project-member-set': validateProjectMemberSetV1,
+  'project-browse': validateProjectContextBrowseV1,
+  'project-search': validateProjectContextSearchV1,
+  'project-feed': validateProjectContextFeedV1,
 };
 const visibility = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/visibility.json', import.meta.url), 'utf8')) as {
   submits: { id: string; cli: string[]; body: Record<string, unknown> }[];
@@ -249,6 +262,11 @@ describe('frozen project context CLI contract', () => {
       return json(operation('projects-list').http.response);
     } });
     await expect(client.projects()).rejects.toMatchObject({ code: 'stale_access_state' });
+  });
+
+  it.each(failures.cases)('$id is rejected by its public codec', testCase => {
+    expect(invalidValidators[testCase.validator], testCase.id).toBeTypeOf('function');
+    expect(() => invalidValidators[testCase.validator]!(testCase.value)).toThrow();
   });
 
   it.each(failures.errors)('$id preserves the exact sanitized failure contract', async failure => {

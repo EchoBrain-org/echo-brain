@@ -1,6 +1,6 @@
 # ECHO desktop on Electron: migration plan (2026-09-24)
 
-Proposed home: `docs/product/2026-09-24-electron-desktop-v1.md`. This is a new dated doc. It replaces two lines in `deploy/release/README.md`: `:931` ("Windows … outside this scope") and `:1018` ("There is no Linux desktop app"). Older design docs stay as they are. Where this doc and `docs/product/2026-09-23-next-round-ui-refinements.md` disagree, the 2026-09-23 doc wins. That doc removes the organization People entry from the sidebar (§3), so parity row H14 is dropped.
+Proposed home: `docs/product/2026-09-24-electron-desktop-v1.md`. This is a new dated doc. It replaces two lines in `deploy/release/README.md`: `:931` ("Windows … outside this scope") and `:1018` ("There is no Linux desktop app"). Older design docs stay as they are. Where this doc and [ADR-0015](../decisions/ADR-0015-global-and-project-scoped-person-ask.md) disagree, the ADR wins. It removes the organization People sidebar row, so parity row H14 is dropped. (The 2026-09-23 UI refinements doc it records was removed; see Git history.)
 
 Parity reference: `.worktrees/overlay-refine-int` at `07a7ce8`. That tree is `main` (`658b233`) plus changes to 9 Swift and proof files. Every repo citation below points at that tree.
 
@@ -570,7 +570,7 @@ The operator kit keeps the Linux kit's existing manifest kinds.
 | 1 (slice) | H1, H3, AK1, AK4, C1, C3, C4, C10 (text, Only me) |
 | 2 (P0 plus pulls) | H1–H5, H7–H13, H16–H18; PP1–PP6, PP8–PP12; SR1–SR3, SR5–SR11; AK1–AK16; C1–C17; AP2–AP6; AC1 (minimal); tray skeleton |
 | 3 (P1) | H6, H15; PP7, PP13; SR4; PS1–PS8; NP1–NP8; AC1 (full)–AC7; OP1–OP6; SL1–SL4; OB2–OB6 (OB1 waived); AP1, AP7–AP9 |
-| Dropped | H14 (per `2026-09-23-next-round-ui-refinements.md` §3; `projects.swift:4241-4244`) |
+| Dropped | H14 (per [ADR-0015](../decisions/ADR-0015-global-and-project-scoped-person-ask.md); `projects.swift:4241-4244`) |
 | 4 | R1 (via `build-echo-desktop.mjs`), R3 (per-OS architecture check in `--smoke`). R2 replaced by the OS installer plus `desktop-release.v1.json`, and R4 has no separate Setup; both waived with reason |
 | 5, 6 | Phase 2 and 3 specs re-run on the Linux and Windows legs; §0b exceptions apply |
 

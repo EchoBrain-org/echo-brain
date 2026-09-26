@@ -8,7 +8,6 @@ import {
 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { decodeProjectCursorV1 } from "../src/adapters/persistence/sqlite/project-context-cursor-v1.js";
 import type { PersonUpdateSubmitV2, PersonUploadAudienceV2, ProjectIdV1 } from "@echo-brain/organization-api";
-import { SqlitePersonUpdateInboxV1 } from "../src/adapters/persistence/sqlite/person-update-inbox-v1.js";
 import type {
   ProjectAuthorizationScopeV1,
   ProjectContextReadTransactionV1,
@@ -23,6 +22,7 @@ import {
   RETURNED_MEMBER,
   addMembership,
   authorization,
+  insertLegacyTextV1,
   projectContextDatabase,
   revokeMembership,
 } from "./fixtures/project-context-sqlite.js";
@@ -291,33 +291,6 @@ describe("SQLite project context V1", () => {
     });
   });
 
-  it("retains V1 custody in fresh V7 without letting V1 searches discover V2 project context", () => {
-    const { database, repository } = open();
-    const v1 = new SqlitePersonUpdateInboxV1(database, () => PROJECT_CONTEXT_NOW);
-    const privateV1 = v1.submit(OWNER, {
-      schema_version: 1,
-      kind: "echo-person-update-submit-v1",
-      request_id: requestId(7),
-      title: "V1 private",
-      text: "v1 private needle",
-    });
-    const teamV1 = v1.submit(OWNER, {
-      schema_version: 1,
-      kind: "echo-person-update-submit-v1",
-      request_id: requestId(8),
-      title: "V1 team",
-      text: "v1 team needle",
-      visibility: "team",
-    });
-    const project = createProject(repository, OWNER, 9);
-    const v2 = submit(repository, project.project_id, { kind: "project", project_id: project.project_id }, 10);
-    expect(v1.content(OWNER, privateV1.context_id).text).toContain("private needle");
-    expect(() => v1.content(MEMBER, privateV1.context_id)).toThrow(expect.objectContaining({ code: "not_found" }));
-    const visibleToMember = v1.search(MEMBER, { query: "needle" });
-    expect(visibleToMember.results.map(row => row.context_id)).toEqual([teamV1.context_id]);
-    expect(visibleToMember.results.map(row => row.context_id)).not.toContain(v2.context_id);
-  });
-
   it("is replay-safe across restart and never restores a lost project grant", () => {
     const root = mkdtempSync(join(tmpdir(), "project-context-replay-"));
     roots.push(root);
@@ -576,22 +549,16 @@ describe("SQLite project context V1", () => {
 
   it("shares the 100-item retained-corpus limit across V1 and V2, while exact retry wins before capacity", () => {
     const first = open();
-    const v1 = new SqlitePersonUpdateInboxV1(first.database, () => PROJECT_CONTEXT_NOW);
-    for (let index = 0; index < 99; index += 1) v1.submit(OWNER, {
-      schema_version: 1, kind: "echo-person-update-submit-v1", request_id: requestId(1000 + index),
-      title: `V1 ${index}`, text: "shared capacity",
+    for (let index = 0; index < 99; index += 1) insertLegacyTextV1(first.database, OWNER, {
+      request_id: requestId(1000 + index), title: `V1 ${index}`, text: "shared capacity",
     });
     const v2Receipt = submit(first.repository, null, { kind: "only_me" }, 1100);
     expect(submit(first.repository, null, { kind: "only_me" }, 1100)).toEqual(v2Receipt);
-    expect(() => v1.submit(OWNER, {
-      schema_version: 1, kind: "echo-person-update-submit-v1", request_id: requestId(1101), title: "Overflow", text: "shared capacity",
-    })).toThrow(expect.objectContaining({ code: "rate_limited" }));
+    expect(() => submit(first.repository, null, { kind: "only_me" }, 1101)).toThrow(expect.objectContaining({ code: "rate_limited" }));
 
     const second = open();
-    const secondV1 = new SqlitePersonUpdateInboxV1(second.database, () => PROJECT_CONTEXT_NOW);
-    for (let index = 0; index < 100; index += 1) secondV1.submit(OWNER, {
-      schema_version: 1, kind: "echo-person-update-submit-v1", request_id: requestId(1200 + index),
-      title: `V1 ${index}`, text: "shared capacity",
+    for (let index = 0; index < 100; index += 1) insertLegacyTextV1(second.database, OWNER, {
+      request_id: requestId(1200 + index), title: `V1 ${index}`, text: "shared capacity",
     });
     expect(() => submit(second.repository, null, { kind: "only_me" }, 1300)).toThrow(expect.objectContaining({ code: "rate_limited" }));
   });

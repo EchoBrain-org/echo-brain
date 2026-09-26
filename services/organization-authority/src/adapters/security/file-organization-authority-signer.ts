@@ -293,15 +293,6 @@ export class FileOrganizationAuthoritySigner implements OrganizationAuthoritySig
     );
   }
 
-  /** @deprecated Use initialize or openExisting to make mutation explicit. */
-  static open(options: {
-    directory: string;
-    authority_id: string;
-    organization_id: string;
-  }): FileOrganizationAuthoritySigner {
-    return FileOrganizationAuthoritySigner.initialize(options);
-  }
-
   /** Synchronous counterpart for private stopped-state initialization only. */
   inspectSync(): OrganizationAuthorityDescriptorV1 {
     const current = readKeyFile(this.keyPath);

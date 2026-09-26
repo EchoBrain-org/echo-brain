@@ -5,14 +5,13 @@ contracts
 
 This package owns the canonical documents and validation rules shared across
 the organization Authority, approval surfaces, record service, and record
-readers. Its public entry point exposes five responsibility groups:
+readers. Its public entry point exposes four responsibility groups:
 
 - an unsigned organization-authority descriptor and a process-local proof that
   the descriptor matched an independently trusted pin;
 - the approval and rejection payload shapes that carry exactly the meeting
   facts a person reviewed;
-- restricted-reviewer and organization-member-readable content policies;
-- the private Slack Block Kit approval witness; and
+- restricted-reviewer and organization-member-readable content policies; and
 - authority-signed organization record envelopes and append receipts.
 
 The package does not own enrollment, access leases, user sessions, HTTP
@@ -42,9 +41,9 @@ The consequence text and its digest are contract bytes, not editable UI copy.
 The selected policy is committed by the approved or rejected human action and
 carried into the signed record.
 
-The private Slack Block Kit flow has its own signed action witness in
-`private-slack-block-approval-record-input-v1.ts`. Raw Slack request bodies and
-response URLs never enter the record contract.
+The private Slack Block Kit flow's signed action witness lives with the Slack
+provider in `providers/slack/server/src/organization-protocol/`. Raw Slack
+request bodies and response URLs never enter the record contract.
 
 ## Organization record contract
 
@@ -56,9 +55,10 @@ response URLs never enter the record contract.
 - meeting-source and decision-processor provenance; and
 - the Authority signing key and canonical record digest.
 
-The envelope accepts either the provider-neutral human-action input or the
-private Slack Block Kit approval witness. Validation recomputes every joined
-digest and rejects mismatched provenance, event, policy, or predecessor facts.
+The envelope accepts the provider-neutral human-action input, plus any input
+codec the caller registers, such as the Slack provider's Block Kit approval
+witness. Validation recomputes every joined digest and rejects mismatched
+provenance, event, policy, or predecessor facts.
 
 `organization-record-receipt-v2.ts` acknowledges the exact envelope, appended
 position, resulting record head, event outcome, and any appended content-policy
@@ -67,9 +67,9 @@ receipt commitments before accepting the signature.
 
 Record payloads may be up to `MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES` because
 approved evidence can exceed the package's ordinary document limit. The
-`fixtures/organization-record-payload-conformance.v1.json` fixture pins the
-restated decision-brief contract against the core validator without creating a
-runtime dependency between the two components.
+test-only `test/fixtures/organization-record-payload-conformance.v1.json`
+fixture holds accepted and rejected decision briefs for the approval payload
+validator.
 
 The package depends only on `@echo-brain/federation-protocol`. It owns no
 transport implementation, persistence, hash-chain storage, key provider, or

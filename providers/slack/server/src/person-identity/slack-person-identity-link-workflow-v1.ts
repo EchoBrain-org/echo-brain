@@ -5,7 +5,7 @@ import {
 } from "@echo-brain/federation-protocol";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256, validateOrganizationPersonSlackIdentityLinkBeginRequest, validateOrganizationPersonSlackIdentityLinkBeginResponse, validateOrganizationPersonSlackIdentityLinkCompleteRequest, validateOrganizationPersonSlackIdentityLinkResult, type OrganizationPersonSlackIdentityLinkBeginRequestV2, type OrganizationPersonSlackIdentityLinkBeginResponseV2, type OrganizationPersonSlackIdentityLinkCompleteRequestV2, type OrganizationPersonSlackIdentityLinkResultV2 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { validateOrganizationPersonTools, type OrganizationPersonToolV2, validateOrganizationPersonSlackDisconnectRequest } from "@echo-brain/provider-slack-client/organization-api/person-tools";
-import type { OrganizationSecretStore } from "../organization-control-plane/slack-external-identity-integration-v1.js";
+import type { OrganizationSecretStore } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 import type { ActiveSlackOrganizationTool, BeginPersonSlackIdentityLinkChallengeInput, BegunSlackIdentityLinkChallenge, CompletePersonSlackIdentityLinkChallengeInput, CompletedPersonSlackIdentityLink, PendingPersonSlackIdentityLinkChallenge } from "../organization-control-plane/application/slack-integration-contracts.js";
 import type { SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../organization-control-plane/application/slack-integration-contracts.js";
@@ -162,25 +162,7 @@ type SlackProviderFailureCode =
 function slackProviderFailureCode(
   error: unknown,
 ): SlackProviderFailureCode | null {
-  if (error instanceof SlackIdentityProviderErrorV1) return error.code;
-  // A retained compatibility composition can supply the original provider.
-  // Preserve its public error mapping without importing it here.
-  const legacy = error as unknown as { readonly code?: unknown };
-  if (
-    error instanceof Error &&
-    error.name === "SlackIntegrationProviderError" &&
-    typeof legacy.code === "string" &&
-    [
-      "unauthorized",
-      "identity_mismatch",
-      "unavailable",
-      "invalid_response",
-      "not_observed",
-    ].includes(legacy.code)
-  ) {
-    return legacy.code as SlackProviderFailureCode;
-  }
-  return null;
+  return error instanceof SlackIdentityProviderErrorV1 ? error.code : null;
 }
 
 function providerFailure(error: unknown): never {

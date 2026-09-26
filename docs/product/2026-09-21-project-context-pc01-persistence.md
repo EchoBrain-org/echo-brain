@@ -106,6 +106,5 @@ The pre-parallel adversarial round reproduced partial writes after caught
 database errors and read-input validation bypasses before fixing them.
 Dedicated storage, query and authorization adversarial tests cover these
 cases, hidden corrupt private rows, separate audience/association grants,
-and forged snapshots. Follow the
-[parallel implementation handoff](2026-09-21-project-context-parallel-handoff.md)
-for lane ownership and integration order.
+and forged snapshots. The parallel implementation handoff (removed after merge; see Git history)
+set lane ownership and integration order.

@@ -532,7 +532,7 @@ export class PersonClient {
         if (metadata.document_id !== text.document_id || metadata.sha256 !== text.original_sha256) throw new PersonAuthorityClientError('invalid_response', 200, 'Document text provenance did not match its original.');
         if (metadata.extractor === text.extractor && metadata.extraction_state === text.extraction_state) return { metadata, text };
         // Extraction can finish between the two reads. Refresh the metadata under the
-        // same current session instead of returning a pair native clients must reject.
+        // same current session instead of returning a mismatched pair.
         const refreshed = await authority.documentMetadata(token, documentId, projectId);
         if (refreshed.document_id !== metadata.document_id || refreshed.sha256 !== metadata.sha256 ||
             refreshed.request_id !== metadata.request_id || refreshed.content_length !== metadata.content_length) {

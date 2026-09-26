@@ -11,8 +11,9 @@ Tests live at the narrowest active boundary they exercise:
 
 Use `npm test` for the complete active suite. Focused commands include
 `npm run test:person`, `npm run test:authority`, `npm run test:protocols`,
-`npm run test:meeting-processing-core`, and `npm run test:architecture`.
-The active durable meeting-processing pipeline is covered by
+and `npm run test:architecture`.
+The provider-neutral processing core and the active durable meeting-processing
+pipeline are covered by `packages/organization-processing/test/core/` and
 `packages/organization-processing/test/admitted-meeting-processing/` in the
 root `npm test` suite.
 
@@ -21,10 +22,5 @@ distinct failure and recovery assertions when consolidating setup. Expected
 release bytes use the independent serializer in `tests/support/test-canonical-json.ts`.
 Mutable Git fixtures use `tests/fixtures/coherent-worktree.ts` to give each case
 an isolated checkout of the original dirty and untracked inputs.
-The four stateful workspace suites share `vitest.package.serial.config.ts` and
-retain serial execution.
-
-Tests for the retired LaunchAgent machine runtime, local product database,
-installation enrollment client, JSONL outbox, and fleet updater were deleted
-with that production code. Historical qualification evidence remains in
-`docs/qualification/`.
+Every suite, including the stateful workspace suites, runs under the root
+`vitest.config.ts`. The focused `test:*` commands pass it a path filter.

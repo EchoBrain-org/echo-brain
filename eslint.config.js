@@ -15,7 +15,6 @@ export default [
       'services/*/test/**/*.ts',
       'providers/**/*.ts',
       'vitest.config.ts',
-      'vitest.package.config.ts',
     ],
     languageOptions: {
       parser: tsParser,

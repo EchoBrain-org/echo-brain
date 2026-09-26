@@ -1,20 +1,16 @@
 # Adapters
 
-This directory contains Organization Authority implementations of application
-ports and infrastructure boundaries:
+Organization Authority implementations of application ports:
 
-- `persistence/` owns Authority SQLite repositories and database opening;
-- `oidc/` owns OIDC transport and protocol integration;
-- `answer-composition/` owns provider-specific structured-generation adapters;
-- `system/` owns host-system adapters such as the Authority clock; and
-- `security/` owns private-file credentials, session cryptography, and the
-  file-backed Organization Authority signer.
+- `documents/` extracts bounded document text (see its README);
+- `files/` stages document uploads and writes private onboarding invitations;
+- `oidc/` owns OIDC Person-session transport;
+- `persistence/sqlite/` owns the service's SQLite repositories;
+- `security/` owns session cryptography and the file-backed Authority signer;
+- `sources/` exposes Person documents to the processing source port; and
+- `system/` owns the Authority clock.
 
-`security/file-organization-authority-signer.ts` names the component by its
-storage responsibility. Its persisted V1 key filename remains
-`authority-development-key.v1.json` for compatibility; that filename is not
-the component identity.
-
-Meeting-source, decision-processor, and delivery-provider adapters live under
-`processing/adapters/`. Provider-specific composition belongs in a named
-runtime bundle under `composition/`, never in a provider-neutral runtime root.
+The signer keeps its V1 key filename `authority-development-key.v1.json` for
+compatibility; that filename is not the component identity. Authority database
+opening and migrations live in `packages/organization-authority-kernel`, and
+provider adapters live in the `providers/` workspaces.

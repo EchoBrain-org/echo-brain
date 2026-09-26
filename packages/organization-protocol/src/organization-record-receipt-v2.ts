@@ -31,8 +31,10 @@ import type {
 import {
   assertDigest,
   assertPositiveSafeInteger,
+  assertText,
   assertTimestamp,
   canonicalSnapshot,
+  exactObject,
   validateP256SigningKey,
 } from "./validation-support.js";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
@@ -143,108 +145,6 @@ function fail(message: string, cause?: unknown): never {
   return organizationProtocolValidationFailure(message, cause);
 }
 
-/** Reject every value that cannot be represented as inert, plain JSON data. */
-function assertPlainJsonData(
-  value: unknown,
-  label: string,
-  seen: Set<object> = new Set<object>(),
-): void {
-  if (value === null) return;
-  if (typeof value !== "object") {
-    if (
-      typeof value !== "string" &&
-      typeof value !== "boolean" &&
-      (typeof value !== "number" || !Number.isFinite(value))
-    ) {
-      fail(`${label} must contain only finite JSON data`);
-    }
-    return;
-  }
-  if (seen.has(value)) fail(`${label} must not contain a cycle`);
-  seen.add(value);
-  try {
-    if (Object.getOwnPropertySymbols(value).length !== 0) {
-      fail(`${label} must not contain symbol properties`);
-    }
-    if (Array.isArray(value)) {
-      if (Object.getPrototypeOf(value) !== Array.prototype) {
-        fail(`${label} must be a plain array`);
-      }
-      const names = Object.getOwnPropertyNames(value);
-      if (names.length !== value.length + 1 || !names.includes("length")) {
-        fail(`${label} must be a dense plain array`);
-      }
-      for (let index = 0; index < value.length; index += 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-        if (
-          descriptor === undefined ||
-          !("value" in descriptor) ||
-          descriptor.enumerable !== true
-        ) {
-          fail(`${label} must contain only enumerable data properties`);
-        }
-        assertPlainJsonData(descriptor.value, label, seen);
-      }
-      return;
-    }
-    if (Object.getPrototypeOf(value) !== Object.prototype) {
-      fail(`${label} must be a plain object`);
-    }
-    for (const descriptor of Object.values(
-      Object.getOwnPropertyDescriptors(value),
-    )) {
-      if (!("value" in descriptor) || descriptor.enumerable !== true) {
-        fail(`${label} must contain only enumerable data properties`);
-      }
-      assertPlainJsonData(descriptor.value, label, seen);
-    }
-  } finally {
-    seen.delete(value);
-  }
-}
-
-function exactObject(
-  value: unknown,
-  keys: readonly string[],
-  label: string,
-): Record<string, unknown> {
-  assertPlainJsonData(value, label);
-  const snapshot = canonicalSnapshot(
-    value,
-    label,
-    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
-  );
-  if (
-    snapshot === null ||
-    typeof snapshot !== "object" ||
-    Array.isArray(snapshot)
-  ) {
-    fail(`${label} must be a plain object`);
-  }
-  const record = snapshot as Record<string, unknown>;
-  const actual = Object.keys(record).sort();
-  const expected = [...keys].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((key, index) => key !== expected[index])
-  ) {
-    fail(`${label} has an unexpected shape`);
-  }
-  return record;
-}
-
-function assertText(value: unknown, label: string): asserts value is string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > 256 ||
-    value.trim() !== value ||
-    value.includes("\0")
-  ) {
-    fail(`${label} must be a bounded non-empty string`);
-  }
-}
-
 function assertNullableDigest(
   value: unknown,
   label: string,
@@ -279,6 +179,7 @@ function validatePolicyFactOutcome(
       value,
       NO_POLICY_FACT_OUTCOME_KEYS,
       "Record receipt v2 no-policy-fact outcome",
+      MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
     );
     if (eventKind !== "rejected") {
       fail("Record receipt v2 approval must append policy facts");
@@ -289,6 +190,7 @@ function validatePolicyFactOutcome(
     value,
     APPENDED_POLICY_FACT_OUTCOME_KEYS,
     "Record receipt v2 appended-policy-fact outcome",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
   );
   if (outcome.kind !== "appended") {
     fail("Record receipt v2 policy fact outcome kind is unsupported");
@@ -324,7 +226,7 @@ function decodeSignature(value: unknown): Buffer {
 export function validateOrganizationRecordReceiptBodyV2(
   value: unknown,
 ): OrganizationRecordReceiptBodyV2 {
-  const body = exactObject(value, RECEIPT_BODY_KEYS, "Record receipt body v2");
+  const body = exactObject(value, RECEIPT_BODY_KEYS, "Record receipt body v2", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   if (
     body.schema_version !== 2 ||
     body.kind !== ORGANIZATION_RECORD_RECEIPT_V2_KIND
@@ -412,6 +314,7 @@ export function validateOrganizationRecordReceiptSignatureInputV2(
     value,
     RECEIPT_SIGNATURE_INPUT_KEYS,
     "Record receipt signature input v2",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
   );
   if (
     input.schema_version !== 2 ||
@@ -468,7 +371,7 @@ export function organizationRecordReceiptSignatureInputV2Bytes(
 export function validateOrganizationRecordReceiptV2(
   value: unknown,
 ): OrganizationRecordReceiptV2 {
-  const wrapper = exactObject(value, RECEIPT_WRAPPER_KEYS, "Record receipt v2");
+  const wrapper = exactObject(value, RECEIPT_WRAPPER_KEYS, "Record receipt v2", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   const body = validateOrganizationRecordReceiptBodyV2(wrapper.body);
   assertDigest(wrapper.receipt_sha256, "Record receipt v2 receipt_sha256");
   if (wrapper.receipt_sha256 !== organizationRecordReceiptBodyV2Sha256(body)) {
@@ -608,7 +511,7 @@ export async function createOrganizationRecordReceiptV2(
   sign: AuthorityDetachedSigner,
   codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): Promise<OrganizationRecordReceiptV2> {
-  const input = exactObject(value, CREATE_INPUT_KEYS, "Create record receipt v2 input");
+  const input = exactObject(value, CREATE_INPUT_KEYS, "Create record receipt v2 input", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   const envelope = verifyOrganizationRecordEnvelopeV4(
     input.envelope,
     pinnedAuthority,

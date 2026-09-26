@@ -3,15 +3,15 @@
 `organization-authority` is the Organization Authority service. It owns state
 initialization, Person OIDC sessions, initial-owner Slack identity linking,
 admitted meeting processing, approval finalization, immutable V4 records, and
-permission-aware Person reads and answer composition. Authority V7 also owns the
-durable original-text upload store, explicit visibility, audited read/search, and
-optional search enrichment. Uploads do not require Slack approval. V7 adds the
-[PC-01 project persistence foundation](../../docs/product/2026-09-21-project-context-pc01-persistence.md);
-project routes and client operations are not live yet. Runtime opening never
-migrates state. The historical
-[offline V5-to-V6 compatibility copy](../../docs/product/2026-09-21-person-update-inbox-v1.md#compatibility-and-custody)
-preserves an exact stopped V5 snapshot for a V6 artifact. The current V7
-artifact requires fresh state and refuses V5/V6 databases.
+permission-aware Person reads and answer composition. It also owns durable
+Person document and upload custody, projects with their association and
+audience, audited read/search, and optional search enrichment. Uploads do not
+require Slack approval. The current artifact is Authority V9, and the project
+routes and Person-client project operations are live. Runtime opening never
+migrates state. The reviewed
+[V8-to-V9 staging migration](../../deploy/release/README.md#state-preserving-v8-to-v9-staging-migration)
+preserves an accepted V8 organization; other baselines require an explicit
+migration or an authorized reset.
 
 For any deployed staging initial-owner setup, do not run the lower-level setup
 commands in this service reference. Start with the
@@ -30,17 +30,19 @@ defines the supported operator and employee flow.
 - `organization-authority-setup-cli.ts` coordinates organization setup.
 - `organization-authority-state-bootstrap.ts` bootstraps a new absent-state lineage.
 - `meeting-source-bundle-v1.ts`, `decision-processor-bundle-v1.ts`, and
-  `approval-workflow-bundle-v1.ts` define provider-neutral composition seams.
-- `providers/granola/granola-meeting-source-bundle-v1.ts`,
-  `providers/openrouter/openrouter-decision-processor-bundle-v1.ts`, and
-  `providers/slack/private-approval/private-slack-approval-workflow-bundle-v1.ts`
+  `approval-workflow-bundle-v1.ts` in `packages/organization-processing/src/ports/`
+  define provider-neutral composition seams.
+- `providers/granola/src/granola-meeting-source-bundle-v1.ts`,
+  `providers/openrouter/src/openrouter-decision-processor-bundle-v1.ts`, and
+  `providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts`
   own the selected providers. Slack Person identity composition is under
-  `providers/slack/person-identity/`; the Slack private-DM staging canary is
-  under `staging/slack-private-approval/`.
+  `providers/slack/server/src/person-identity/`; the Slack private-DM staging
+  canary is under `providers/slack/server/src/composition/staging/slack-private-approval/`.
 - Private Slack interactions are separated into protocol, handler, HTTP adapter,
   and presentation-port components.
 - Identity and approval callbacks share the application-owned
-  `application/ports/provider-http-application-v1.ts` contract. The host mounts
+  `provider-http-application-v1.ts` contract in
+  `packages/organization-authority-kernel/src/application/ports/`. The host mounts
   exact routes, preserves raw request bytes, permits queries only by opt-in,
   and owns response headers and limits: 64 KiB request/response bodies, 8 KiB
   query strings, and 16 KiB fixed HTML pages. Providers select JSON, bounded
@@ -64,15 +66,17 @@ Use these responsibility-named commands for new automation:
 
 - `echo-organization-authority-state-bootstrap`
 - `echo-organization-authority-setup`
-- `echo-organization-authority-person-admin`
 - `echo-organization-authority-serve`
-- `echo-organization-authority-admit-granola-meeting-source`
 
 The older `echo-organization-authority-init-clean-state`, `-clean-founder`,
 `-clean-person`, `-clean-live`, `-synthetic-quality`, and
 `-admit-clean-granola-source` alias binaries were retired on 2026-09-06. The
 checked-in deploy scripts, container entrypoint, and harnesses already call the
-names above; automation outside this repository must use them too.
+names above; automation outside this repository must use them too. The
+standalone `echo-organization-authority-person-admin` and
+`echo-organization-authority-admit-granola-meeting-source` developer binaries
+were retired later: `echo-organization-authority-setup` runs Person credential
+setup, the initial-owner invitation and Granola source admission in-process.
 
 Use absolute canonical paths. Private credential and invitation directories
 must be current-user `0700`; private input and invitation files must be
@@ -249,42 +253,6 @@ echo-brain person session-refresh
 echo-brain person logout
 ```
 
-### Person administration developer commands
-
-`clean-live serve` is the legacy name of the normal runtime entrypoint. For focused local
-development, the lower-level Person administration entrypoint has only these forms:
-
-```sh
-echo-organization-authority-person-admin credentials-init \
-  --state-dir /absolute/clean-state
-
-echo-organization-authority-person-admin invite \
-  --state-dir /absolute/clean-state \
-  --oidc-config /absolute/private/oidc-config.json \
-  --pkce-key-file /absolute/private/person-session-pkce-sealing-key \
-  --membership-id mem_<id> \
-  --expected-email person@example.com \
-  --authority-url https://authority.example.com \
-  --out /absolute/private/invitation.json
-
-echo-organization-authority-person-admin serve \
-  --state-dir /absolute/clean-state \
-  --host 127.0.0.1 \
-  --port 39479 \
-  --authority-url https://authority.example.com \
-  --oidc-config /absolute/private/oidc-config.json \
-  --pkce-key-file /absolute/private/person-session-pkce-sealing-key
-```
-
-The Person `serve` form additionally accepts
-`--client-secret-file <absolute-path>` when its OIDC configuration uses a
-client-secret authentication method, and an optional
-`--slack-approval-channel-id <channel-id>` to expose the temporary public
-initial-owner identity-link channel. Do not use
-the low-level invitation form for the initial-owner or employee product flow:
-initial-owner setup and the owner-facing Person client keep membership IDs
-internal.
-
 ### 3. Install credentials and finalize while stopped
 
 Stop the Organization Authority service. Each source file must contain exactly its value, without
@@ -366,7 +334,7 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses Authority V7, control-plane V3, record-log V3, retrieval
+Current state uses Authority V9, control-plane V3, record-log V3, retrieval
 facts V2, and retrieval lexical/content V1. The V2 root binds exactly these six
 roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
@@ -377,20 +345,17 @@ The immutable approval-delivery quarantine fences unrepresentable approval
 packages before any provider post and retains them for audit. A temporarily
 missing reviewer identity leaves its durable outbox queued for reconciliation.
 
-The checkout also retains the exact pinned Authority V5 and V6 baselines and the
-explicit [offline V5-to-V6 copier](../../tools/copy-authority-v5-to-v6.mjs).
-It reads a stopped V5 snapshot and writes a separate V6 database, preserving
-existing rows and updating only the Authority database's schema binding.
-It does not activate a release or replace live state, and does not produce V7
-state. PC-06 owns the explicit reset/reseed and matched-artifact qualification
-for the project sprint. Earlier historical
+The checkout also retains the pinned Authority V5 to V8 baselines and the
+explicit offline [V5-to-V6](../../tools/copy-authority-v5-to-v6.mjs) and
+[V7-to-V8](../../tools/copy-authority-v7-to-v8.mjs) copiers. Each copier reads a
+stopped snapshot and writes a separate database, preserving existing rows.
+Neither activates a release or replaces live state. Earlier historical
 baselines and converters remain in Git history.
 
 Routine releases use baseline-preserving image replacements through the
 [release procedure](../../deploy/release/README.md); that updater refuses
-schema changes. A V5 installation requires a separately coordinated stopped
-snapshot, conversion, verification, and activation under the
-[upload compatibility contract](../../docs/product/2026-09-21-person-update-inbox-v1.md#compatibility-and-custody).
+schema changes. An accepted V8 installation moves to V9 only through the
+reviewed `stage-v8-to-v9` lane, which retains the original state for rollback.
 Rollback must restore the complete matching code/state snapshot; image rollback
 alone cannot reverse the schema change.
 

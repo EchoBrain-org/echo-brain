@@ -615,11 +615,10 @@ Authority.
 
 ### Current-host recovery floor
 
-For environment drift that prevents staging, follow the release loop's
-[secret-safe diagnosis and guarded repair](../release/README.md#environment-drift-before-staging).
-The current-host wrapper can recover accepted-only staging content-telemetry
-drift without inventing a candidate. Unknown changes remain blocked; never
-overwrite an accepted snapshot to make the equality check pass.
+[Environment drift](../release/README.md#environment-drift-before-staging)
+blocks staging. The wrapper has no automatic repair: investigate the change on
+the host, and never overwrite an accepted snapshot to make the equality check
+pass.
 
 The release recovery unit above restores accepted deployment configuration. It
 does not reconstruct `clean-data/` if the Authority root volume is lost or
@@ -633,10 +632,8 @@ scheduled AWS Backup protection, and rehearse one quiesced recovery point. The
 host bundle/bootstrap now includes the exact reviewed
 `backup-authority-maintenance.sh` at
 `/srv/echo-authority-clean-v1/backup-authority-maintenance.sh`, owned by root
-with mode `0755`. Existing recognized legacy staging hosts use the
-[named tooling migration](../release/README.md#live-operator-boundary); otherwise
-the release installation procedure must install it and verify its SHA-256
-against the private review receipt.
+with mode `0755`. On an existing host, the release installation procedure must
+install it and verify its SHA-256 against the private review receipt.
 Application release rollback does not replace this host tool. The
 template cannot itself inspect source-volume encryption. EBS recovery points
 inherit the source-volume encryption and are not independently re-encrypted by

@@ -7,10 +7,8 @@
   "bin": {
     "echo-organization-authority-state-bootstrap": "dist/clean-reset-main.js",
     "echo-organization-authority-setup": "dist/clean-founder-main.js",
-    "echo-organization-authority-person-admin": "dist/clean-person-main.js",
     "echo-organization-authority-serve": "dist/clean-live-main.js",
-    "echo-synthetic-demo": "dist/synthetic-demo-main.js",
-    "echo-organization-authority-admit-granola-meeting-source": "dist/clean-granola-source-main.js"
+    "echo-synthetic-demo": "dist/synthetic-demo-main.js"
   },
   "files": [
     "dist/**/*.js",
@@ -20,8 +18,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean",
-    "test": "npm run build && vitest run --root . --config ../../vitest.package.serial.config.ts"
+    "clean": "tsc -b --clean"
   },
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
@@ -43,8 +40,7 @@
     "yauzl": "3.4.0"
   },
   "devDependencies": {
-    "@types/yauzl": "3.4.0",
-    "ajv": "8.20.0"
+    "@types/yauzl": "3.4.0"
   },
   "engines": {
     "node": "22.22.1",

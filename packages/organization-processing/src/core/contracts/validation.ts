@@ -1,8 +1,6 @@
-import type { ApprovalDecision } from "../approval/approval-gate.js";
 import { isCanonicalPersonEmail } from "@echo-brain/organization-authority-kernel/shared/person-email-rules";
 import type { AdapterIdentity } from "./adapter.js";
 import type { DecisionSet, ExtractedSignal } from "./decision.js";
-import type { DecisionBrief } from "./delivery.js";
 import type {
   MeetingBatch,
   MeetingDocument,
@@ -14,38 +12,6 @@ function object(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
-}
-
-function structurallyEqualJson(left: unknown, right: unknown): boolean {
-  if (left === right) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((value, index) => structurallyEqualJson(value, right[index]))
-    );
-  }
-  if (
-    left === null ||
-    right === null ||
-    typeof left !== 'object' ||
-    typeof right !== 'object'
-  ) {
-    return false;
-  }
-  const leftRecord = left as Record<string, unknown>;
-  const rightRecord = right as Record<string, unknown>;
-  const leftKeys = Object.keys(leftRecord).sort();
-  const rightKeys = Object.keys(rightRecord).sort();
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every(
-      (key, index) =>
-        key === rightKeys[index] &&
-        structurallyEqualJson(leftRecord[key], rightRecord[key]),
-    )
-  );
 }
 
 function onlyKeys(
@@ -756,7 +722,6 @@ export function assertCanonicalMeetingBatch(
 interface SignalValidationContext {
   meetingId: string;
   meeting?: MeetingDocument;
-  expectedKind?: ExtractedSignal['kind'];
 }
 
 function assertSignalArray(
@@ -797,9 +762,6 @@ function assertSignalArray(
       ],
       `${label}[${index}]`,
     );
-    if (context.expectedKind !== undefined && signal['kind'] !== context.expectedKind) {
-      throw new Error(`${label}[${index}] is in the wrong signal collection`);
-    }
     nonEmptyString(signal['text'], `${label}[${index}].text`);
     if (!(signal['subject'] === null || typeof signal['subject'] === 'string')) {
       throw new Error(`${label}[${index}].subject must be a string or null`);
@@ -932,165 +894,4 @@ export function assertCanonicalDecisionSet(
     meeting,
   }, ids);
   assertRationaleLinks(signals);
-}
-
-export interface DecisionBriefValidationContext {
-  meeting?: MeetingDocument;
-  processor?: AdapterIdentity & { kind: 'decision-processor' };
-  decisions?: DecisionSet;
-}
-
-export function assertCanonicalDecisionBrief(
-  value: unknown,
-  context: DecisionBriefValidationContext = {},
-): asserts value is DecisionBrief {
-  const brief = object(value, 'decision_brief');
-  onlyKeys(
-    brief,
-    [
-      'schema_version',
-      'id',
-      'meeting',
-      'decisions',
-      'actions',
-      'rationales',
-      'provenance',
-    ],
-    'decision_brief',
-  );
-  if (brief['schema_version'] !== 1) throw new Error('decision_brief.schema_version must be 1');
-  nonEmptyString(brief['id'], 'decision_brief.id');
-  const meeting = object(brief['meeting'], 'decision_brief.meeting');
-  onlyKeys(
-    meeting,
-    ['id', 'title', 'time', 'participants'],
-    'decision_brief.meeting',
-  );
-  nonEmptyString(meeting['id'], 'decision_brief.meeting.id');
-  optionalNonEmptyString(meeting['title'], 'decision_brief.meeting.title');
-  if (meeting['time'] !== undefined) {
-    validateMeetingTime({ ...object(meeting['time'], 'decision_brief.meeting.time') });
-  }
-  const briefParticipants = array(
-    meeting['participants'],
-    'decision_brief.meeting.participants',
-    10_000,
-  );
-  briefParticipants.forEach((item, index) =>
-    participant(item, `decision_brief.meeting.participants[${index}]`),
-  );
-  if (
-    context.meeting !== undefined &&
-    (meeting['id'] !== context.meeting.id ||
-      meeting['title'] !== context.meeting.title ||
-      !structurallyEqualJson(meeting['time'], context.meeting.time) ||
-      !structurallyEqualJson(
-        meeting['participants'],
-        context.meeting.participants,
-      ))
-  ) {
-    throw new Error('approved brief meeting snapshot does not match its source meeting');
-  }
-  const provenance = object(brief['provenance'], 'decision_brief.provenance');
-  onlyKeys(
-    provenance,
-    ['meeting_revision', 'processor', 'generated_at'],
-    'decision_brief.provenance',
-  );
-  nonEmptyString(provenance['meeting_revision'], 'decision_brief.provenance.meeting_revision');
-  timestamp(provenance['generated_at'], 'decision_brief.provenance.generated_at');
-  const processor = object(provenance['processor'], 'decision_brief.provenance.processor');
-  onlyKeys(
-    processor,
-    ['kind', 'adapter_id', 'instance_id', 'version'],
-    'decision_brief.provenance.processor',
-  );
-  nonEmptyString(processor['adapter_id'], 'decision_brief.provenance.processor.adapter_id');
-  nonEmptyString(processor['instance_id'], 'decision_brief.provenance.processor.instance_id');
-  nonEmptyString(processor['version'], 'decision_brief.provenance.processor.version');
-  if (processor['kind'] !== 'decision-processor') {
-    throw new Error('decision_brief.provenance.processor is invalid');
-  }
-  if (
-    context.meeting !== undefined &&
-    provenance['meeting_revision'] !== context.meeting.provenance.canonical_revision
-  ) {
-    throw new Error('approved brief revision does not match its source meeting');
-  }
-  if (
-    context.processor !== undefined &&
-    (processor['adapter_id'] !== context.processor.adapter_id ||
-      processor['instance_id'] !== context.processor.instance_id ||
-      processor['version'] !== context.processor.version)
-  ) {
-    throw new Error('approved brief processor does not match the configured adapter');
-  }
-  if (
-    context.decisions !== undefined &&
-    provenance['generated_at'] !== context.decisions.generated_at
-  ) {
-    throw new Error('approved brief provenance does not match its decision set');
-  }
-  const ids = new Set<string>();
-  const signalContext = {
-    meetingId: meeting['id'],
-    ...(context.meeting === undefined ? {} : { meeting: context.meeting }),
-  };
-  const signals = [
-    ...assertSignalArray(brief['decisions'], 'decision_brief.decisions', {
-      ...signalContext,
-      expectedKind: 'decision',
-    }, ids),
-    ...assertSignalArray(brief['actions'], 'decision_brief.actions', {
-      ...signalContext,
-      expectedKind: 'action',
-    }, ids),
-    ...assertSignalArray(brief['rationales'], 'decision_brief.rationales', {
-      ...signalContext,
-      expectedKind: 'rationale',
-    }, ids),
-  ];
-  assertRationaleLinks(signals);
-}
-
-export function assertCanonicalApprovalDecision(
-  value: unknown,
-  briefContext: DecisionBriefValidationContext = {},
-): asserts value is ApprovalDecision {
-  const approval = object(value, 'approval');
-  onlyKeys(
-    approval,
-    [
-      'status',
-      'reviewed_at',
-      'reviewed_by',
-      'reason',
-      'approved_brief',
-    ],
-    'approval',
-  );
-  if (!['pending', 'approved', 'rejected'].includes(String(approval['status']))) {
-    throw new Error('approval.status is invalid');
-  }
-  if (approval['status'] === 'pending') {
-    if (
-      approval['reviewed_at'] !== null ||
-      approval['reviewed_by'] !== null ||
-      approval['reason'] !== null ||
-      approval['approved_brief'] !== null
-    ) {
-      throw new Error('pending approval contains resolved fields');
-    }
-    return;
-  }
-  timestamp(approval['reviewed_at'], 'approval.reviewed_at');
-  nonEmptyString(approval['reviewed_by'], 'approval.reviewed_by');
-  if (!(approval['reason'] === null || typeof approval['reason'] === 'string')) {
-    throw new Error('approval.reason must be a string or null');
-  }
-  if (approval['status'] === 'approved') {
-    assertCanonicalDecisionBrief(approval['approved_brief'], briefContext);
-  } else if (approval['approved_brief'] !== null) {
-    throw new Error('rejected approval cannot contain an approved brief');
-  }
 }

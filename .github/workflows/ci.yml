@@ -113,7 +113,7 @@ jobs:
 
           artifact_sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
           runtime_profile="$RUNNER_TEMP/echo-clean-v1-runtime-profile.json"
-          npm run profile:clean-v1-runtime -- \
+          npm run profile:authority-deployment -- \
             "$GITHUB_WORKSPACE/deploy/organization-authority" "$runtime_profile"
           node tools/clean-v1-runtime-profile.mjs validate "$runtime_profile" >/dev/null
           runtime_profile_sha="$(node tools/clean-v1-runtime-profile.mjs digest "$runtime_profile")"
@@ -315,7 +315,7 @@ jobs:
           test "$authority_node_version" = "v$PRODUCT_NODE_VERSION"
 
           runtime_profile="$RUNNER_TEMP/echo-clean-v1-runtime-profile.json"
-          npm run profile:clean-v1-runtime -- "$deployment" "$runtime_profile"
+          npm run profile:authority-deployment -- "$deployment" "$runtime_profile"
           node tools/clean-v1-runtime-profile.mjs validate "$runtime_profile" >/dev/null
           runtime_profile_sha="$(node tools/clean-v1-runtime-profile.mjs digest "$runtime_profile")"
           export ECHO_CLEAN_RELEASE_ID="clean-v1-ci-${GITHUB_SHA:0:12}"

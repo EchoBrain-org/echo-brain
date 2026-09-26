@@ -1,6 +1,5 @@
 export {
   organizationAuthorityPinSha256,
-  organizationAuthorityPublicKey,
   validateOrganizationAuthorityDescriptor,
   verifyOrganizationAuthorityPin,
 } from "./authority-descriptor.js";
@@ -19,7 +18,6 @@ export type {
   OrganizationRecordDecisionBriefV1,
   OrganizationRecordDecisionLinksV1,
   OrganizationRecordDecisionSignalV1,
-  OrganizationRecordEventTypeV1,
   OrganizationRecordEvidenceSpanV1,
   OrganizationRecordMeetingTimeV1,
   OrganizationRecordParticipantIdentityV1,

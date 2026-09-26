@@ -30,7 +30,7 @@ export interface AskTurn extends AskQuestion {
 /**
  * The Ask thread: follow-ups stack, newest at the bottom. Only the current
  * answer has chips and sources. A question that fails or is cancelled leaves
- * the answer before it current, as the Swift app did.
+ * the answer before it current.
  */
 export interface AskState {
   /** The question on its way; a reply for any other is dropped. */
@@ -1199,7 +1199,7 @@ export function confirmMemberChange(): void {
 
 // ---- new project -----------------------------------------------------------------
 
-/** New project takes up to 20 files, as the Swift app did. */
+/** New project takes up to 20 files. */
 export const MAX_PROJECT_FILES = 20;
 const TOO_MANY_FILES = 'Add up to 20 files.';
 /** Said when New project closes after Create with files that may not have been saved, people who may not have been added, or both. */
@@ -1752,7 +1752,7 @@ export function shownEmployees(page: OrganizationState): readonly Employee[] {
     (email === '' || employee.email.includes(email)));
 }
 
-/** A new employee's email as the Authority takes it, the Swift app's rule. */
+/** A new employee's email as the Authority takes it. */
 function invitationEmail(value: string): string | null {
   const email = value.trim().toLowerCase();
   const [local, domain, ...rest] = email.split('@');

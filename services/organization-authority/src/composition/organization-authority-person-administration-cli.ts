@@ -1,24 +1,16 @@
-import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { readFileSync } from "node:fs";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
-import {
-  readPrivateAuthorityOidcClientSecret,
-  readPrivateAuthorityPersonSessionPkceKey,
-} from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
+import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import {
   initializePersonSessionCredentials,
   issuePersonOnboardingInvitation,
 } from "./person-onboarding-service.js";
-import { startOrganizationAuthorityApiRuntime } from "./organization-authority-api-runtime.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 
 const USAGE = `usage:
-  echo-organization-authority-person-admin credentials-init --state-dir <absolute-path>
-  echo-organization-authority-person-admin invite --state-dir <absolute-path> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> --membership-id <mem-id> --expected-email <email> --authority-url <https-origin> --out <absolute-path>
-  echo-organization-authority-person-admin serve --state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> --authority-url <https-origin> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> [--client-secret-file <absolute-path>] [--slack-approval-channel-id <channel-id>]`;
+  credentials-init --state-dir <absolute-path>
+  invite --state-dir <absolute-path> --oidc-config <absolute-json-path> --pkce-key-file <absolute-path> --membership-id <mem-id> --expected-email <email> --authority-url <https-origin> --out <absolute-path>`;
 
 interface OrganizationAuthorityPersonAdministrationCliIo {
   stdout(value: string): void;
@@ -160,76 +152,6 @@ export async function runOrganizationAuthorityPersonAdministrationCli(
     io.stdout(
       `${canonicalJson({ schema_version: 1, kind: "echo-clean-person-invitation-issued-v1", ...result } as never)}\n`,
     );
-    return 0;
-  }
-  if (command === "serve") {
-    const parsed = flags(argv.slice(1), [
-      "--state-dir",
-      "--host",
-      "--port",
-      "--authority-url",
-      "--oidc-config",
-      "--pkce-key-file",
-      "--client-secret-file",
-      "--slack-approval-channel-id",
-    ]);
-    const configured = readPersonOidcConfiguration(
-      required(parsed, "--oidc-config"),
-    );
-    const authorityUrl = required(parsed, "--authority-url");
-    assertPersonAuthorityCallback(authorityUrl, configured.configuration);
-    const secretFile = parsed["--client-secret-file"];
-    if (
-      (configured.client_authentication === "none") !==
-      (secretFile === undefined)
-    )
-      throw new Error(
-        "Person OIDC client-secret flags do not match config",
-      );
-    const port = Number(required(parsed, "--port"));
-    const host = required(parsed, "--host");
-    const stateDirectory = required(parsed, "--state-dir");
-    const runtime = await startOrganizationAuthorityApiRuntime({
-      state_directory: stateDirectory,
-      host:
-        host === "127.0.0.1" || host === "::1"
-          ? host
-          : (() => {
-              throw new Error(USAGE);
-            })(),
-      port,
-      authority_url: authorityUrl,
-      oidc: configured.configuration,
-      client_authentication:
-        configured.client_authentication === "none"
-          ? { method: "none" }
-          : {
-              method: configured.client_authentication,
-              client_secret: readPrivateAuthorityOidcClientSecret(
-                privateReference(secretFile!),
-              ),
-            },
-      pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
-        privateReference(required(parsed, "--pkce-key-file")),
-      ),
-    }, {
-      record_approver: projectPrivateSlackBlockApprovalApproverV1,
-      external_identity_runtime_bundle:
-        composePersonExternalIdentityRuntimeBundlesV1([createSlackPersonExternalIdentityRuntimeBundleV1({
-          // The public V1 flag keeps its compatibility-bound legacy name.
-          identity_link_channel_id: parsed["--slack-approval-channel-id"],
-        })]),
-    });
-    io.stderr(
-      `${canonicalJson({ schema_version: 1, kind: "echo-clean-person-runtime-ready-v1", host: runtime.address.address, port: runtime.address.port } as never)}\n`,
-    );
-    await new Promise<void>((resolve) => {
-      const close = () => {
-        void runtime.close().finally(resolve);
-      };
-      process.once("SIGINT", close);
-      process.once("SIGTERM", close);
-    });
     return 0;
   }
   throw new Error(USAGE);

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { canonicalJson } from '@echo-brain/federation-protocol';
@@ -12,8 +12,6 @@ import { planStagingRelease, executeStagingRelease } from '../../tools/authority
 
 const REPO = resolve(import.meta.dirname, '../..');
 const COMMIT = 'a'.repeat(40);
-const OLD = 'be71eef5d3678957ef5f086a2ed42baeeb548687';
-const RESTORE = '2b2a1b25647e5bc0e3b58ed4d5e1bb8f461ad19a';
 const INSTANCE = 'i-0123456789abcdef0';
 const VOLUME = 'vol-0123456789abcdef0';
 const STACK = 'arn:aws:cloudformation:us-west-2:904560150024:stack/echo-authority-staging-v1/12345678-1234-1234-1234-123456789012';
@@ -31,8 +29,10 @@ const write = (path, value, mode = 0o600) => {
   writeFileSync(path, typeof value === 'string' || Buffer.isBuffer(value) ? value : canonicalJson(value) + '\n', { mode });
   chmodSync(path, mode);
 };
-const gitSource = (commit, path) => execFileSync('git', ['show', `${commit}:${path}`], { cwd: REPO, env });
-const readSource = (commit, path) => commit === COMMIT ? readFileSync(join(REPO, path)) : gitSource(commit, path);
+const readSource = (commit, path) => {
+  assert.equal(commit, COMMIT);
+  return readFileSync(join(REPO, path));
+};
 const run = (file, args) => {
   const result = spawnSync(file, args, { cwd: REPO, env, encoding: 'utf8', timeout: 90_000, maxBuffer: 1024 * 1024 });
   assert.equal(result.status, 0, `${file} failed: ${result.stderr}\n${result.stdout}`);
@@ -78,15 +78,13 @@ try {
     ECHO_CLEAN_AUTHORITY_HOST: 'authority-staging.echobrain.org', ECHO_CLEAN_AUTHORITY_UID: '999', ECHO_CLEAN_AUTHORITY_GID: '988',
     ECHO_CLEAN_AUTHORITY_IMAGE: accepted.authority_image.reference, ECHO_CLEAN_RELEASE_ID: accepted.release_id,
     ECHO_CLEAN_RELEASE_SOURCE_SHA: COMMIT, ECHO_CLEAN_RUNTIME_PROFILE_SHA256: profileSha, ECHO_CLEAN_RUNTIME_PROFILE_VERSION: 'clean-v1-profile-1',
-    PRIVATE_FIXTURE: 'synthetic-never-publish-value',
+    PRIVATE_FIXTURE: 'synthetic-never-publish-value', ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: 'true',
   };
   const acceptedEnv = Object.entries(acceptedEnvironment).map(([key, value]) => `${key}=${value}\n`).join('');
   write(join(release, 'runtime-environments', accepted.release_id + '.env'), acceptedEnv);
-  write(join(host, '.env.clean-v1'), acceptedEnv + 'ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n');
-  for (const name of ['update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh']) write(join(host, name), gitSource(name.startsWith('restore') ? RESTORE : OLD, 'deploy/organization-authority/' + name), 0o755);
+  write(join(host, '.env.clean-v1'), acceptedEnv);
+  for (const name of ['update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh']) write(join(host, name), readFileSync(join(REPO, 'deploy/organization-authority', name)), 0o755);
   for (const name of ['clean-v1-release.py', 'clean-v1-runtime-profile.py']) write(join(host, 'release', name), readFileSync(join(REPO, 'deploy/release', name)), 0o755);
-  assert.equal(digest(readFileSync(join(host, 'update-clean-v1.sh'))), 'db04aaacad63d71e6e74c3d90d1c521fc2f85f177013de8869eff0cbedd398d4');
-  assert.equal(existsSync(join(host, 'backup-authority-maintenance.sh')), false);
   const materialized = join(root, 'materialized-profile');
   run(python, ['-B', join(host, 'release/clean-v1-runtime-profile.py'), 'materialize', join(root, 'profile.json'), materialized]);
   for (const name of Object.keys(profile.files)) write(join(host, name), readFileSync(join(materialized, name)), 0o644);
@@ -142,45 +140,17 @@ try {
     assert.deepEqual(rows('record-log.sqlite', 'SELECT * FROM organization_record_log'), []);
   };
   const noEngineCalls = () => existsSync(join(root, 'engine-calls.jsonl')) ? readFileSync(join(root, 'engine-calls.jsonl'), 'utf8') : '';
-  const legacy = action('inspect-install');
-  assert.equal(legacy.state, 'failed');
-  assert.equal(legacy.outcome.diagnostic.inventory['backup-authority-maintenance.sh'].state, 'missing');
-  success(action('inspect-install', { toolingMigration: 'legacy-staging-host-v1' }));
-  // Expected backup absence must not hide a later unknown validator.
+  success(action('inspect-install'));
   const validator = join(host, 'release/clean-v1-release.py');
   const validatorBytes = readFileSync(validator);
   write(validator, 'unrecognized synthetic validator\n', 0o755);
-  const refused = action('inspect-install', { toolingMigration: 'legacy-staging-host-v1' });
+  const refused = action('inspect-install');
   assert.equal(refused.outcome.diagnostic.tool, 'release/clean-v1-release.py');
-  assert.equal(action('install', { toolingMigration: 'legacy-staging-host-v1' }).state, 'failed');
-  assert.equal(digest(readFileSync(join(host, 'update-clean-v1.sh'))), 'db04aaacad63d71e6e74c3d90d1c521fc2f85f177013de8869eff0cbedd398d4');
+  assert.equal(action('install').state, 'failed');
   write(validator, validatorBytes, 0o755);
-  success(action('install', { toolingMigration: 'legacy-staging-host-v1' }));
-  const installReceipt = read(output);
-  const installEvidence = join(release, 'remote-operations', installReceipt.request.operation_id);
-  assert.equal(read(join(installEvidence, 'tooling-before.json'))['backup-authority-maintenance.sh'], null);
-  assert.equal(readFileSync(join(installEvidence, 'tool-3.absent'), 'utf8'), 'absent\n');
+  success(action('install'));
   assert.equal(noEngineCalls(), '', 'inspection/install must never invoke container actions');
-  const drifted = readFileSync(join(host, '.env.clean-v1'), 'utf8');
-  write(join(host, '.env.clean-v1'), drifted + 'UNRELATED_FIXTURE=changed\n');
-  const ineligible = action('diagnose'); success(ineligible);
-  assert.equal(ineligible.outcome.diagnostic.repair_eligible, false);
-  assert.equal(action('repair').state, 'failed');
-  assert.equal(noEngineCalls(), '', 'unknown drift must not start runtime repair');
-  assert.equal(readFileSync(join(host, '.env.clean-v1'), 'utf8'), drifted + 'UNRELATED_FIXTURE=changed\n');
-  write(join(host, '.env.clean-v1'), drifted);
-  const diagnosis = action('diagnose'); success(diagnosis);
-  assert.equal(diagnosis.outcome.diagnostic.repair_eligible, true);
-  const manifestPath = join(host, 'clean-data/state/onboarding/clean-founder-v1.json');
-  const savedManifest = join(root, 'saved-manifest.json');
-  renameSync(manifestPath, savedManifest);
-  assert.equal(JSON.parse(run(process.execPath, [runtimeFixture, 'setup-status', root])).runtime_status, 'not_ready');
-  assert.equal(action('repair').state, 'failed', 'exit-zero not_ready setup must not complete runtime repair');
-  assert.equal(existsSync(join(release, 'environment-repair.pending.json')), true);
-  renameSync(savedManifest, manifestPath);
-  success(action('repair'));
-  assert.equal(readFileSync(join(host, '.env.clean-v1'), 'utf8'), acceptedEnv);
-  success(action('stage', { contentTelemetry: 'true' }));
+  success(action('stage'));
   const beforeFailure = read(join(root, 'provider-evidence.json'));
   write(join(root, 'provider-evidence.json'), { ...beforeFailure, publish_failures_remaining: 1 });
   const pending = action('canary');
@@ -226,7 +196,6 @@ try {
   assert.equal(contracts[0].card_sha256, outbox[0].frozen_card_sha256);
   noApproval();
   assert.equal(readFileSync(join(release, 'runtime-environments', accepted.release_id + '.env'), 'utf8'), acceptedEnv);
-  assert.equal(existsSync(join(release, 'environment-repair.pending.json')), false);
   assert.equal(existsSync(join(host, '.staging-release-guard')), false);
   process.stdout.write(JSON.stringify({ result: 'awaiting_human_slack_approval', simulated_boundaries: ['AWS/SSM', 'container engine and identity', 'public TLS routing', 'OIDC/Granola/LLM/Slack HTTP'] }) + '\n');
 } catch (error) {

@@ -3,14 +3,6 @@ import {
   sha256Digest,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
-import {
-  asRecord,
-  assertDigest,
-  assertExactKeys,
-  assertLiteral,
-  canonicalSnapshot,
-} from "./validation-support.js";
-import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 export const PERSON_CONTENT_POLICY_CONTRACT_KIND =
   "echo-person-content-policy-contract-v2" as const;
@@ -65,10 +57,6 @@ export interface OrganizationMemberReadablePersonPolicyContractV2 {
   readonly readable_item_kinds: typeof PERSON_CONTENT_POLICY_READABLE_ITEM_KINDS;
 }
 
-export type PersonContentPolicyContractV2 =
-  | RestrictedReviewerPersonPolicyContractV2
-  | OrganizationMemberReadablePersonPolicyContractV2;
-
 export function restrictedReviewerPersonConsequenceSha256(): Sha256Digest {
   return sha256Digest(RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT);
 }
@@ -119,144 +107,4 @@ export function restrictedReviewerPersonPolicyContractSha256(): Sha256Digest {
 
 export function organizationMemberReadablePersonPolicyContractSha256(): Sha256Digest {
   return canonicalSha256(organizationMemberReadablePersonPolicyContract());
-}
-
-const POLICY_KEYS = Object.freeze([
-  "schema_version",
-  "kind",
-  "policy_id",
-  "policy_consequence_sha256",
-  "reader_authentication",
-  "reader_selector",
-  "readable_item_kinds",
-] as const);
-
-function assertReadableItemKinds(value: unknown, label: string): void {
-  if (
-    !Array.isArray(value) ||
-    value.length !== PERSON_CONTENT_POLICY_READABLE_ITEM_KINDS.length ||
-    value.some(
-      (item, index) => item !== PERSON_CONTENT_POLICY_READABLE_ITEM_KINDS[index],
-    )
-  ) {
-    organizationProtocolValidationFailure(
-      `${label} must contain decision, action, rationale in order`,
-    );
-  }
-}
-
-export function validatePersonContentPolicyContract(
-  value: unknown,
-): PersonContentPolicyContractV2 {
-  const contract = asRecord(value, "Person content policy contract");
-  assertExactKeys(contract, POLICY_KEYS, "Person content policy contract");
-  assertLiteral(
-    contract.schema_version,
-    PERSON_CONTENT_POLICY_SCHEMA_VERSION,
-    "Person content policy contract schema_version",
-  );
-  assertLiteral(
-    contract.kind,
-    PERSON_CONTENT_POLICY_CONTRACT_KIND,
-    "Person content policy contract kind",
-  );
-  assertLiteral(
-    contract.reader_authentication,
-    PERSON_CONTENT_POLICY_READER_AUTHENTICATION,
-    "Person content policy contract reader_authentication",
-  );
-  assertDigest(
-    contract.policy_consequence_sha256,
-    "Person content policy contract consequence digest",
-  );
-  assertReadableItemKinds(
-    contract.readable_item_kinds,
-    "Person content policy contract readable_item_kinds",
-  );
-
-  const selector = asRecord(
-    contract.reader_selector,
-    "Person content policy contract reader_selector",
-  );
-  if (contract.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID) {
-    assertLiteral(
-      contract.policy_consequence_sha256,
-      restrictedReviewerPersonConsequenceSha256(),
-      "restricted-reviewer consequence digest",
-    );
-    assertExactKeys(
-      selector,
-      ["kind", "membership_state", "membership_scope", "frozen_tuple"],
-      "restricted-reviewer selector",
-    );
-    assertLiteral(
-      selector.kind,
-      "exact-frozen-approver-tenure-v1",
-      "restricted-reviewer selector kind",
-    );
-    assertLiteral(
-      selector.frozen_tuple,
-      "approval-principal-id-and-membership-id",
-      "restricted-reviewer selector frozen_tuple",
-    );
-  } else if (
-    contract.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
-  ) {
-    assertLiteral(
-      contract.policy_consequence_sha256,
-      organizationMemberReadablePersonConsequenceSha256(),
-      "organization-member consequence digest",
-    );
-    assertExactKeys(
-      selector,
-      [
-        "kind",
-        "membership_state",
-        "membership_scope",
-        "eligible_membership_types",
-        "later_members",
-      ],
-      "organization-member selector",
-    );
-    assertLiteral(
-      selector.kind,
-      "current-active-organization-members-v1",
-      "organization-member selector kind",
-    );
-    const membershipTypes = selector.eligible_membership_types;
-    if (
-      !Array.isArray(membershipTypes) ||
-      membershipTypes.length !== 2 ||
-      membershipTypes[0] !== "employee" ||
-      membershipTypes[1] !== "owner"
-    ) {
-      organizationProtocolValidationFailure(
-        "organization-member selector membership types must be employee, owner in order",
-      );
-    }
-    assertLiteral(
-      selector.later_members,
-      "included",
-      "organization-member selector later_members",
-    );
-  } else {
-    organizationProtocolValidationFailure(
-      "Person content policy contract policy_id is unsupported",
-    );
-  }
-  assertLiteral(
-    selector.membership_state,
-    "active",
-    "Person content policy contract membership_state",
-  );
-  assertLiteral(
-    selector.membership_scope,
-    "same-organization-as-record",
-    "Person content policy contract membership_scope",
-  );
-
-  return canonicalSnapshot(
-    contract as unknown as PersonContentPolicyContractV2,
-    "Person content policy contract",
-  );
 }

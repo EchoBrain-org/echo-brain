@@ -113,22 +113,6 @@ export interface IssuedPersonSession extends AuthorityPersonMembershipBinding {
 
 type SynchronousResult<T> = T extends PromiseLike<unknown> ? never : T;
 
-/**
- * A deliberately separate authenticated transaction for employee
- * lifecycle mutations. It cannot reach the legacy Authority transaction.
- */
-export interface PersonAuthenticatedMembershipWritePort {
-  withAuthenticatedMembershipWrite<T>(input: {
-    access_token: string;
-    commit: (
-      authorization: PersonAccessAuthorization,
-      transaction: PersonMembershipWriteTransaction &
-        PersonSessionWriteTransaction,
-      observed_at: string,
-    ) => SynchronousResult<T>;
-  }): SynchronousResult<T>;
-}
-
 interface SessionCredentialCandidate {
   access_credential_id: string;
   access_token: string;

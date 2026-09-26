@@ -8,7 +8,7 @@ implementation-selected mechanics needed to make them concrete. This document
 does not rewrite an accepted ADR.
 
 Related scope: [project-context sprint](2026-09-21-project-context-sprint-v1.md),
-[CLI wiring and gaps](2026-09-21-projects-cli-wiring-and-contract-gaps.md), and
+CLI wiring and gaps (removed; see Git history), and
 [original-upload contract](2026-09-21-person-update-inbox-v1.md).
 
 ## Boundary

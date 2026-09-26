@@ -40,10 +40,6 @@ export function when(iso: string, now = Date.now()): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-export function clock(time: number): string {
-  return new Date(time).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-}
-
 /** A file's size the way Finder shows it: 15 bytes, 340 KB, 2.1 MB. */
 export function bytes(size: number): string {
   if (size < 1000) return `${size} bytes`;
