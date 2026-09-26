@@ -107,7 +107,7 @@ test('New project is one page: name, people and files before Create, then the pr
   expect(creates().map(call => call.body)).toEqual([
     { schema_version: 1, kind: 'echo-project-create-v1', request_id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: 'Cedar' },
   ]);
-  const project = String(run.calls().find(call => call.path.startsWith('/v1/person/projects/prj_'))!.path.split('/').pop());
+  const project = String(run.calls().find(call => call.method === 'GET' && call.path.startsWith('/v2/person/projects/prj_'))!.path.split('/').pop());
   expect(adds()).toEqual([
     expect.objectContaining({ project_id: project, membership_id: RAJ }), expect.objectContaining({ project_id: project, membership_id: MAYA }),
   ]);
@@ -262,7 +262,7 @@ test('an Authority without the organization directory: people are added after Cr
   await expect(page.getByTestId('people-added')).toContainText('Added Raj Kumar.');
   await expect(page.getByTestId('member-row')).toHaveCount(2);
   expect(directory()).toEqual([{ limit: 10 }]);
-  const project = String(run.calls().find(call => call.path.startsWith('/v1/person/projects/prj_'))!.path.split('/').pop());
+  const project = String(run.calls().find(call => call.method === 'GET' && call.path.startsWith('/v2/person/projects/prj_'))!.path.split('/').pop());
   expect(run.calls().filter(call => call.path === '/v1/person/projects/directory').at(-1)!.body).toMatchObject({ project_id: project, query: 'raj' });
   expect(adds()).toEqual([expect.objectContaining({ project_id: project, membership_id: RAJ })]);
   await page.getByTestId('new-project-done').click();

@@ -9,11 +9,12 @@ import { acceptDrop, canDrop } from '../store.js';
  */
 export function useDropTarget(on: ProjectSummary | 'sheet') {
   const [over, setOver] = useState(false);
+  const archived = on !== 'sheet' && on.status === 'archived';
   return {
     over,
     handlers: {
       onDragOver: (event: DragEvent) => {
-        if (!canDrop(event)) return;
+        if (archived || !canDrop(event)) return;
         event.preventDefault();
         event.stopPropagation();
         if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
@@ -26,7 +27,7 @@ export function useDropTarget(on: ProjectSummary | 'sheet') {
         setOver(false);
         // Text and links drop as usual, into the note or the bar.
         const files = event.dataTransfer?.files;
-        if (!files || files.length === 0) return;
+        if (!files || files.length === 0 || archived) return;
         event.preventDefault();
         event.stopPropagation();
         if (files.length === 1) void acceptDrop(files[0]!, on);

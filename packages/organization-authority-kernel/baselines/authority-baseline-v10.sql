@@ -1,6 +1,7 @@
--- Authority baseline V7: project context plus raw Person uploads and optional
--- search enrichment. Fresh initialization only; no V6-to-V7 transition or
--- backfill exists, and this file is never an in-place upgrade.
+-- Authority baseline V10: project settings and frozen private approval cards,
+-- plus project context, raw Person uploads, and optional search enrichment.
+-- Fresh initialization only; no V9-to-V10 transition or backfill exists, and
+-- this file is never an in-place upgrade.
 
 CREATE TABLE authority_metadata (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -1473,6 +1474,7 @@ CREATE TABLE authority_projects_v1 (
   ),
   organization_id TEXT NOT NULL REFERENCES authority_metadata(organization_id),
   name TEXT NOT NULL CHECK (length(CAST(name AS BLOB)) BETWEEN 1 AND 200),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
   created_at TEXT NOT NULL CHECK (unixepoch(created_at) IS NOT NULL),
   creator_principal_id TEXT NOT NULL,
   creator_membership_id TEXT NOT NULL,
@@ -1626,12 +1628,26 @@ CREATE TABLE authority_project_command_receipts_v1 (
   membership_id TEXT NOT NULL,
   membership_type TEXT NOT NULL CHECK (membership_type IN ('owner', 'employee')),
   request_id TEXT NOT NULL,
-  operation TEXT NOT NULL CHECK (operation IN ('create', 'member_set', 'member_remove', 'associate', 'dissociate', 'upload_submit', 'upload_submit_v3')),
+  operation TEXT NOT NULL CHECK (operation IN ('create', 'member_set', 'member_remove', 'associate', 'dissociate', 'upload_submit', 'upload_submit_v3', 'rename', 'archive', 'leave')),
   command_sha256 TEXT NOT NULL CHECK (command_sha256 LIKE 'sha256:%'),
   receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json)),
   receipt_sha256 TEXT NOT NULL CHECK (receipt_sha256 LIKE 'sha256:%'),
   committed_at TEXT NOT NULL CHECK (unixepoch(committed_at) IS NOT NULL),
   PRIMARY KEY (organization_id, membership_id, request_id),
+  CHECK (
+    operation NOT IN ('rename', 'archive', 'leave') OR COALESCE((
+      json_type(receipt_json) = 'object' AND
+      json_type(receipt_json, '$.schema_version') = 'integer' AND
+      json_extract(receipt_json, '$.schema_version') = 1 AND
+      json_extract(receipt_json, '$.kind') = 'echo-project-settings-receipt-v1' AND
+      json_extract(receipt_json, '$.request_id') = request_id AND
+      json_type(receipt_json, '$.project_id') = 'text' AND
+      json_extract(receipt_json, '$.operation') = operation AND
+      json_type(receipt_json, '$.received_at') = 'text' AND
+      unixepoch(json_extract(receipt_json, '$.received_at')) IS NOT NULL AND
+      json_extract(receipt_json, '$.state') = 'applied'
+    ), 0)
+  ),
   FOREIGN KEY (membership_id, organization_id, principal_id, membership_type)
     REFERENCES authority_memberships(membership_id, organization_id, principal_id, membership_type)
 ) STRICT;
@@ -1682,9 +1698,15 @@ CREATE TRIGGER authority_project_authorization_state_v1_delete_denied
 BEFORE DELETE ON authority_project_authorization_state_v1
 BEGIN SELECT RAISE(ABORT, 'project authorization state cannot be deleted'); END;
 
-CREATE TRIGGER authority_projects_v1_immutable
+CREATE TRIGGER authority_projects_v1_guarded_update
 BEFORE UPDATE ON authority_projects_v1
-BEGIN SELECT RAISE(ABORT, 'project metadata is immutable'); END;
+WHEN NEW.project_id != OLD.project_id
+  OR NEW.organization_id != OLD.organization_id
+  OR NEW.created_at != OLD.created_at
+  OR NEW.creator_principal_id != OLD.creator_principal_id
+  OR NEW.creator_membership_id != OLD.creator_membership_id
+  OR NEW.creator_membership_type != OLD.creator_membership_type
+BEGIN SELECT RAISE(ABORT, 'project identity is immutable'); END;
 CREATE TRIGGER authority_projects_v1_delete_denied
 BEFORE DELETE ON authority_projects_v1
 BEGIN SELECT RAISE(ABORT, 'project cannot be deleted'); END;
@@ -1718,6 +1740,14 @@ BEGIN
   UPDATE authority_project_authorization_state_v1
      SET revision = revision + 1,
          updated_at = CASE WHEN unixepoch(NEW.created_at) >= unixepoch(updated_at) THEN NEW.created_at ELSE updated_at END
+   WHERE organization_id = NEW.organization_id;
+END;
+CREATE TRIGGER authority_project_auth_revision_project_update
+AFTER UPDATE OF name, status ON authority_projects_v1
+WHEN NEW.name != OLD.name OR NEW.status != OLD.status
+BEGIN
+  UPDATE authority_project_authorization_state_v1
+     SET revision = revision + 1
    WHERE organization_id = NEW.organization_id;
 END;
 

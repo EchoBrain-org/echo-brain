@@ -1978,8 +1978,8 @@ it('transitions a stopped V5 fixture with sessions, signed records, pending and 
     expect(readFileSync(recordPath)).toEqual(recordBefore); expect(readFileSync(controlPath)).toEqual(controlBefore);
     // The offline V5-to-V6 copier remains a frozen compatibility proof, but a
     // current runtime must never accept its historical output as active state.
-    // Exercise the strict V9 pre-open gate before restoring the live V9 file.
-    const preservedCurrentPath = join(root(), 'v9.sqlite');
+    // Exercise the strict V10 pre-open gate before restoring the live V10 file.
+    const preservedCurrentPath = join(root(), 'v10.sqlite');
     renameSync(path, preservedCurrentPath);
     try {
       renameSync(nextPath, path); chmodSync(path, 0o600);

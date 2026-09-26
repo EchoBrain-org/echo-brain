@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,12 +39,18 @@ import {
   ANSWER_COMPOSITION_MAX_CONTEXT_UTF8_BYTES,
   type StructuredGenerationInput,
 } from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
-import { applyAuthorityBaselineV5 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV5, applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
+import { createPersonAnswerV2Route } from "../src/composition/person-answer-v2-route.js";
+import { createRecordProjectAuthorizationV1 } from "../src/composition/person-record-project-scope-v1.js";
+import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
+import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
+import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
+import { addMembership } from "./fixtures/project-context-sqlite.js";
 
 import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
@@ -246,9 +253,9 @@ afterEach(() => {
   }
 });
 
-function setup(pointer = true) {
+function setup(pointer = true, version: 5 | 10 = 5) {
   const authority = openAuthorityDatabase(":memory:");
-  applyAuthorityBaselineV5(authority);
+  (version === 10 ? applyAuthorityBaselineV10 : applyAuthorityBaselineV5)(authority);
   authority
     .prepare(
       `INSERT INTO authority_metadata
@@ -286,6 +293,61 @@ function setup(pointer = true) {
 }
 
 describe("Person Layer 2 route", () => {
+  it("keeps approved project records searchable and Askable after archive, then removes their scope on leave", async () => {
+    const value = setup(false, 10);
+    const record = new Database(":memory:");
+    record.exec("CREATE TABLE organization_record_log (position INTEGER PRIMARY KEY, record_sha256 TEXT NOT NULL)");
+    const reader = authorization();
+    const lead = readerAuthorization({ principal_id: "principal_owner", membership_id: "membership_owner", membership_type: "owner" });
+    addMembership(value.authority, reader, "Reader", "reader@example.test");
+    addMembership(value.authority, lead, "Lead", null);
+    value.authority.prepare("INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)").run(reader.organization_id, reader.checked_at);
+    const repository = new SqliteProjectContextRepositoryV1(value.authority, () => reader.checked_at);
+    const projects = createProjectContextApplicationV1({ repository, authenticate: token => token === "lead" ? lead : reader });
+    const created = projects.createProject("lead", { schema_version: 1, kind: "echo-project-create-v1", request_id: randomUUID(), name: "Launch" });
+    const projectId = created.project_id;
+    value.authority.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at)
+      VALUES(?,?,?,?,?,?,'member','active',?)`).run(`pgm_${randomUUID()}`, projectId, reader.organization_id, reader.principal_id, reader.membership_id, reader.membership_type, reader.checked_at);
+    const text = "Approved launch remains scheduled for Monday.";
+    const atom = { ...policyAtom({ id: "member", policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 }), policy_contract_sha256: sha256Digest("project-policy"), text, text_sha256: sha256Digest(text), audience_project_ids: [projectId], association_project_ids: [projectId] };
+    const generation = realGenerationInput(value.state_directory, [atom]);
+    const exact_head = { ...generation.exact_head, position: 1, record_sha256: atom.record_sha256 };
+    record.prepare("INSERT INTO organization_record_log VALUES (?, ?)").run(1, atom.record_sha256);
+    try {
+      const built = buildReadableSearchGenerationV1({ ...generation, exact_head, project_members_policy_contract_sha256: sha256Digest("project-policy") });
+      const active = { generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256, retrieval_contract_sha256: RETRIEVAL_CONTRACT, exact_head };
+      warmReadableSearchActiveGenerationV1({ state_directory: value.state_directory, active_generation: active });
+      value.authority.prepare(`INSERT INTO authority_readable_search_active_generation(singleton,organization_id,generation_id,manifest_sha256,retrieval_contract_sha256,record_head_position,record_head_hash,published_at) VALUES(1,?,?,?,?,?,?,?)`).run(reader.organization_id, active.generation_id, active.manifest_sha256, RETRIEVAL_CONTRACT, 1, atom.record_sha256, reader.checked_at);
+      let checkedMilliseconds = Date.parse(reader.checked_at);
+      const sessions = { authenticateAccess: () => ({ ...reader, checked_at: new Date(checkedMilliseconds += 1000).toISOString() }) };
+      const route = createPersonRecordSearchRouteV1({ state_directory: value.state_directory, authority_id: "oau_clean", organization_id: reader.organization_id, state_lineage_id: "lineage_clean", retrieval_contract_sha256: RETRIEVAL_CONTRACT, sessions, authority: value.authority, record, audit: new SqlitePersonRecordReadAuditV1(value.authority), capture_projects: createRecordProjectAuthorizationV1(repository) });
+      const search = () => route.searchBatch({ access_token: "reader", queries: ["launch"], project_id: projectId });
+      expect(search().response.items.map(item => item.text)).toEqual([text]);
+      projects.archiveProject("lead", { schema_version: 1, kind: "echo-project-archive-v1", request_id: randomUUID(), project_id: projectId, archived: true });
+      const archived = search();
+      expect(archived.response.items.map(item => item.text)).toEqual([text]);
+      expect(route.searchBatch({ access_token: "reader", queries: ["launch"] }).response.items.map(item => item.text)).toEqual([text]);
+      const ask = createPersonAnswerV2Route({
+        authority_id: "oau_clean", organization_id: reader.organization_id, state_lineage_id: "lineage_clean", records: route,
+        originals: new SqlitePersonOriginalContextRetrievalV1(value.authority, sessions, reader.organization_id),
+        model: { async generate(input) {
+          const prompt = JSON.parse(input.user_prompt) as { sources?: { citation_id: string; text: string }[] };
+          if (prompt.sources === undefined) return { queries: ["launch Monday"] };
+          expect(prompt.sources.map(source => source.text)).toContain(text);
+          return { answer: { text: "Launch remains scheduled for Monday.", citations: [prompt.sources[0]!.citation_id] } };
+        } },
+        generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1000 },
+        audit: new SqlitePersonAnswerCompositionAuditV1(value.authority),
+      });
+      const answer = await ask.ask({ access_token: "reader", request: { schema_version: 2, question: "When is launch scheduled?", project_id: projectId } });
+      expect(answer.citations).toEqual([expect.objectContaining({ record_sha256: atom.record_sha256, policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 })]);
+      projects.leaveProject("reader", { schema_version: 1, kind: "echo-project-leave-v1", request_id: randomUUID(), project_id: projectId });
+      expect(search).toThrow("person authentication failed");
+      expect(() => route.revalidateBatchRelease({ access_token: "reader", release: archived.release })).toThrow("person authentication failed");
+      expect(route.searchBatch({ access_token: "reader", queries: ["launch"] }).response.items).toEqual([]);
+      await expect(ask.ask({ access_token: "reader", request: { schema_version: 2, question: "When is launch scheduled?", project_id: projectId } })).rejects.toThrow();
+    } finally { record.close(); value.record.close(); value.authority.close(); }
+  });
   it("uses trusted project grants for union visibility, association scope, and the final release fence", () => {
     const value = setup(false);
     const record = new Database(":memory:");

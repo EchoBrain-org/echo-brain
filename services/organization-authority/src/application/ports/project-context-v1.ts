@@ -25,6 +25,10 @@ import type {
   ProjectContextSearchResultV2,
   ProjectCreateReceiptV1,
   ProjectCreateV1,
+  ProjectArchiveV1,
+  ProjectLeaveV1,
+  ProjectRenameV1,
+  ProjectSettingsReceiptV1,
   ProjectMemberAddV1,
   ProjectDirectorySearchV1,
   ProjectDirectoryV1,
@@ -35,8 +39,11 @@ import type {
   ProjectMemberSetV1,
   ProjectMutationReceiptV1,
   ProjectPageRequestV1,
+  ProjectPageRequestV2,
   ProjectRoleV1,
   ProjectSummaryV1,
+  ProjectSummaryV2,
+  ProjectListV2,
 } from '@echo-brain/organization-api';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
@@ -49,7 +56,9 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 export interface ProjectContextApplicationV1 {
   createProject(accessToken: string, request: unknown): ProjectCreateReceiptV1;
   listProjects(accessToken: string, request: unknown): ProjectListV1;
+  listProjectsV2(accessToken: string, request: unknown): ProjectListV2;
   readProject(accessToken: string, projectId: unknown): ProjectSummaryV1;
+  readProjectV2(accessToken: string, projectId: unknown): ProjectSummaryV2;
   /** Current project members may see their project's active roster. */
   listMembers(accessToken: string, request: unknown): ProjectMembersV1;
   /** Lead-only directory for selecting active organization membership targets. */
@@ -66,6 +75,9 @@ export interface ProjectContextApplicationV1 {
   removeMember(accessToken: string, request: unknown): ProjectMutationReceiptV1;
   associateContext(accessToken: string, request: unknown): ProjectMutationReceiptV1;
   dissociateContext(accessToken: string, request: unknown): ProjectMutationReceiptV1;
+  renameProject(accessToken: string, request: unknown): ProjectSettingsReceiptV1;
+  archiveProject(accessToken: string, request: unknown): ProjectSettingsReceiptV1;
+  leaveProject(accessToken: string, request: unknown): ProjectSettingsReceiptV1;
   feed(accessToken: string, request: unknown): ProjectContextFeedV1;
   feedV2(accessToken: string, request: unknown): ProjectContextFeedV2;
   search(accessToken: string, request: unknown): ProjectContextSearchResultV1;
@@ -83,7 +95,7 @@ export interface ProjectContextApplicationV1 {
 }
 
 export type ProjectReadOperationV1 =
-  | 'project_list' | 'project_read' | 'members' | 'directory' | 'organization_directory'
+  | 'project_list' | 'project_list_v2' | 'project_read' | 'project_read_v2' | 'members' | 'directory' | 'organization_directory'
   | 'feed' | 'search' | 'context_read' | 'feed_v2' | 'search_v2' | 'context_read_v2'
   | 'upload_status' | 'upload_read' | 'upload_search'
   | 'upload_status_v3' | 'upload_read_v3' | 'upload_search_v3';
@@ -94,14 +106,17 @@ export type ProjectMutationV1 =
   | { readonly operation: 'member_remove'; readonly request: ProjectMemberRemoveV1 }
   | { readonly operation: 'associate'; readonly request: ProjectContextAssociateV1 }
   | { readonly operation: 'dissociate'; readonly request: ProjectContextDissociateV1 }
+  | { readonly operation: 'rename'; readonly request: ProjectRenameV1 }
+  | { readonly operation: 'archive'; readonly request: ProjectArchiveV1 }
+  | { readonly operation: 'leave'; readonly request: ProjectLeaveV1 }
   | { readonly operation: 'upload_submit'; readonly request: PersonUpdateSubmitV2 }
   | { readonly operation: 'upload_submit_v3'; readonly request: PersonUpdateSubmitV3 };
 
 /** Trusted application input. Never decoded from a Person's JSON or session. */
 export type ProjectAuthorizationScopeV1 =
-  | { readonly operation: 'project_list' | 'upload_search' }
+  | { readonly operation: 'project_list' | 'project_list_v2' | 'upload_search' }
   | { readonly operation: 'upload_search_v3' }
-  | { readonly operation: 'project_read' | 'members' | 'feed' | 'search' | 'feed_v2' | 'search_v2'; readonly project_id: ProjectIdV1 }
+  | { readonly operation: 'project_read' | 'project_read_v2' | 'members' | 'feed' | 'search' | 'feed_v2' | 'search_v2'; readonly project_id: ProjectIdV1 }
   /** Directory authorization requires the current project's lead grant. */
   | { readonly operation: 'directory'; readonly project_id: ProjectIdV1 }
   /** Any active member of the caller's own organization; no project grant. */
@@ -141,7 +156,7 @@ export interface ProjectAuthorizationSnapshotV1 {
 }
 
 export type ProjectReadResponseV1 =
-  | ProjectListV1 | ProjectSummaryV1 | ProjectMembersV1 | ProjectDirectoryV1 | OrganizationDirectoryV1
+  | ProjectListV1 | ProjectListV2 | ProjectSummaryV1 | ProjectSummaryV2 | ProjectMembersV1 | ProjectDirectoryV1 | OrganizationDirectoryV1
   | ProjectContextFeedV1 | ProjectContextSearchResultV1 | ProjectContextReadV1
   | ProjectContextFeedV2 | ProjectContextSearchResultV2 | ProjectContextReadV2
   | PersonUpdateStatusV2 | PersonUploadContentV2 | PersonUploadSearchResultV2
@@ -156,7 +171,9 @@ export type ProjectReadResponseV1 =
 export interface ProjectContextReadTransactionV1 {
   captureAuthorization(actor: PersonAccessAuthorization, scope: ProjectAuthorizationScopeV1): ProjectAuthorizationSnapshotV1;
   listProjects(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectPageRequestV1): ProjectListV1;
+  listProjectsV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectPageRequestV2): ProjectListV2;
   readProject(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1): ProjectSummaryV1;
+  readProjectV2(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1): ProjectSummaryV2;
   /** Member-readable active project roster; no revoked grants. */
   listMembers(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectMembersV1;
   /** Requires a current target-project lead grant before inspecting candidates. */
@@ -203,6 +220,9 @@ export interface ProjectContextWriteTransactionV1 extends ProjectContextReadTran
   removeMember(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectMemberRemoveV1): ProjectMutationReceiptV1;
   associateContext(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextAssociateV1): ProjectMutationReceiptV1;
   dissociateContext(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextDissociateV1): ProjectMutationReceiptV1;
+  renameProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectRenameV1): ProjectSettingsReceiptV1;
+  archiveProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectArchiveV1): ProjectSettingsReceiptV1;
+  leaveProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectLeaveV1): ProjectSettingsReceiptV1;
   /** Atomically commits exact original, initial coordinates, receipt and work. */
   submitUpload(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUpdateSubmitV2): PersonUpdateReceiptV2;
   submitUploadV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUpdateSubmitV3): PersonUpdateReceiptV3;

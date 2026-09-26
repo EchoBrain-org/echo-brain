@@ -73,6 +73,36 @@ function isMutation(item: Operation) { return item.http.body?.request_id !== und
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
 
 describe('frozen project context CLI contract', () => {
+  it('sends V2 lifecycle reads and each project settings command on their exact paths', async () => {
+    const request_id = '00000000-0000-4000-8000-000000000001';
+    const created_at = '2026-09-21T00:00:00.000Z';
+    const summary = { schema_version: 2, kind: 'echo-project-summary-v2', project_id: projectId, name: 'Archive', created_at, role: 'lead', status: 'archived' };
+    const cases: readonly [string[], string, Record<string, unknown>, number][] = [
+      [['projects', 'list-v2', '--status', 'archived'], '/v2/person/projects?limit=10&status=archived', { schema_version: 2, kind: 'echo-project-list-v2', items: [summary], next_cursor: null }, 200],
+      [['projects', 'read-v2', '--project-id', projectId], `/v2/person/projects/${projectId}`, summary, 200],
+      [['projects', 'rename', '--request-id', request_id, '--project-id', projectId, '--name', 'Renamed'], '/v1/person/projects/rename', { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id, project_id: projectId, operation: 'rename', received_at: created_at, state: 'applied' }, 200],
+      [['projects', 'archive', '--request-id', request_id, '--project-id', projectId], '/v1/person/projects/archive', { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id, project_id: projectId, operation: 'archive', received_at: created_at, state: 'applied' }, 200],
+      [['projects', 'unarchive', '--request-id', request_id, '--project-id', projectId], '/v1/person/projects/archive', { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id, project_id: projectId, operation: 'archive', received_at: created_at, state: 'applied' }, 200],
+      [['projects', 'leave', '--request-id', request_id, '--project-id', projectId], '/v1/person/projects/leave', { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id, project_id: projectId, operation: 'leave', received_at: created_at, state: 'applied' }, 200],
+    ];
+    for (const [argv, path, response, status] of cases) {
+      let sentUrl = ''; let sentBody: unknown;
+      const network = vi.fn<typeof fetch>(async (url, init) => {
+        sentUrl = new URL(String(url)).pathname + new URL(String(url)).search;
+        sentBody = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+        return json(response, status);
+      });
+      const result = await run({ id: 'project-settings-v1', argv, http: { method: 'GET', path, status, response } }, network);
+      expect(sentUrl).toBe(path);
+      expect(result.code, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual(response);
+      if (argv[1] === 'rename') expect(sentBody).toMatchObject({ kind: 'echo-project-rename-v1', project_id: projectId, name: 'Renamed' });
+      if (argv[1] === 'archive') expect(sentBody).toMatchObject({ kind: 'echo-project-archive-v1', archived: true });
+      if (argv[1] === 'unarchive') expect(sentBody).toMatchObject({ kind: 'echo-project-archive-v1', archived: false });
+      if (argv[1] === 'leave') expect(sentBody).toMatchObject({ kind: 'echo-project-leave-v1', project_id: projectId });
+    }
+  });
+
   it.each(visibility.submits)('$id keeps audience and association independent', async example => {
     const item: Operation = { id: example.id, argv: example.cli, http: { ...upload.http,
       body: { ...example.body, text: 'We agreed to ship.\n' }, response: { ...upload.http.response,

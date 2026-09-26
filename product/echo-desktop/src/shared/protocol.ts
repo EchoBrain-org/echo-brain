@@ -21,11 +21,20 @@ export interface ProjectSummary {
   readonly name: string;
   readonly role: 'lead' | 'member';
   readonly created_at: string;
+  /** Archived projects remain readable, but do not accept new material. */
+  readonly status: 'active' | 'archived';
 }
 
 export interface ProjectPage {
   readonly items: readonly ProjectSummary[];
   readonly next_cursor: string | null;
+}
+
+/** The receipt that settles a rename, archive or leave operation. */
+export interface ProjectSettingsReceipt {
+  readonly request_id: string;
+  readonly project_id: string;
+  readonly operation: 'rename' | 'archive' | 'leave';
 }
 
 export interface FeedItem {
@@ -294,7 +303,7 @@ export interface HostMethods {
   'signin.begin': { params: { authority_url: string }; result: AppStatus };
   /** The renderer names the invitation only by a handle main issued; main swaps in the path. */
   'signin.invitation': { params: { invitation_handle: string }; result: AppStatus };
-  'projects.list': { params: { expect: Expect; cursor?: string }; result: ProjectPage };
+  'projects.list': { params: { expect: Expect; status?: 'active' | 'archived'; cursor?: string }; result: ProjectPage };
   'projects.feed': { params: { expect: Expect; project_id: string; cursor?: string }; result: FeedPage };
   /** A project's documents, newest first. */
   'documents.list': { params: { expect: Expect; project_id: string; cursor?: string }; result: DocumentPage };
@@ -317,6 +326,9 @@ export interface HostMethods {
   'projects.change': { params: { expect: Expect; request_id: string; change: ProjectChange }; result: null };
   /** New project: made once per request id, and only the receipt says it was made. */
   'projects.create': { params: { expect: Expect; request_id: string; name: string }; result: CreatedProject };
+  'projects.rename': { params: { expect: Expect; request_id: string; project_id: string; name: string }; result: ProjectSettingsReceipt };
+  'projects.archive': { params: { expect: Expect; request_id: string; project_id: string; archived: boolean }; result: ProjectSettingsReceipt };
+  'projects.leave': { params: { expect: Expect; request_id: string; project_id: string }; result: ProjectSettingsReceipt };
   /** People & invites (owners only): everyone the organization invited, and where each stands. */
   'employees.list': { params: { expect: Expect }; result: Employees };
   /**
@@ -387,7 +399,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'search.read', 'documents.list', 'documents.read', 'documents.save', 'projects.read',
-  'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'employees.list', 'employees.invite',
+  'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
   'employees.reissue', 'employees.revoke',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
@@ -396,7 +408,7 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
-  'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'employees.invite', 'employees.reissue',
+  'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
   'employees.revoke',
 ]);
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */

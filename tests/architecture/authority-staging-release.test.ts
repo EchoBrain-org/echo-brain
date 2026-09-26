@@ -134,7 +134,7 @@ describe('bounded staging release operator', () => {
     expect(new Set(rendered)).toEqual(new Set([rendered[0]]));
   });
 
-  it.each(['shell', 'onboard', 'restore', 'down', 'stage-v7-to-v9', 'stage-v8-to-v10'])('rejects unsupported action %s before AWS', action => {
+  it.each(['shell', 'onboard', 'restore', 'down', 'stage-v7-to-v9', 'stage-v8-to-v10', 'stage-v9-to-v10'])('rejects unsupported action %s before AWS', action => {
     const f = fixture();
     // @ts-expect-error Untrusted JS/CLI callers still require runtime rejection.
     expect(() => planStagingRelease({ ...f.options, action }, f.dependencies)).toThrow('action_invalid');

@@ -75,6 +75,10 @@ to the answer model and again before returning the answer, including uncited
 model context. Shared context survives its contributor's departure; removed
 readers lose access, while newly authorized project members can access history.
 
+[Archiving a project](project-settings-v1.md) preserves this read and Ask
+authorization. Leaving a project revokes that caller's project grant, and cited
+evidence still requires current access when opened.
+
 ## Current limits
 
 - Approved records currently have no authoritative project association. They

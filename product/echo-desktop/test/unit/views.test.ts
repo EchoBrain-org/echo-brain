@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   abandonView, answerView, changeView, contextView, createdView, directoryView, documentPageView, documentTextView, employeesView, failureView, feedView,
   invitationView, membersView, noteMatchesView, noteTitle, noteView, revokedView,
-  NotReadable, projectMatchesView, projectPageView, projectView, receiptView, recordView, savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
+  NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView, savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
 
@@ -311,9 +311,10 @@ describe('documents, members and project changes', () => {
     const directory = { schema_version: 1, kind: 'echo-project-directory-v1', project_id: PROJECT, next_cursor: null,
       items: [{ membership_id: 'mem_2', display_name: 'Raj' }] };
     expect(membersView(directory, PROJECT, true).items).toEqual([{ membership_id: 'mem_2', display_name: 'Raj' }]);
-    const summary = { schema_version: 1, kind: 'echo-project-summary-v1', project_id: PROJECT, name: 'Apollo', created_at: 'x', role: 'member' };
+    const summary = { schema_version: 2, kind: 'echo-project-summary-v2', project_id: PROJECT, name: 'Apollo', created_at: 'x', role: 'member', status: 'active' };
     expect(projectView(summary, PROJECT).role).toBe('member');
     expect(() => projectView(summary, 'prj_other')).toThrow(ViewError);
+    expect(() => projectView({ ...summary, status: 'gone' }, PROJECT)).toThrow(ViewError);
   });
 
   it('the organization directory names no project, and only a name and a membership id cross', () => {
@@ -347,6 +348,15 @@ describe('documents, members and project changes', () => {
     expect(createdView(receipt, 'r1')).toEqual({ project_id: PROJECT });
     expect(() => createdView(receipt, 'r2')).toThrow(ViewError);
     expect(() => createdView({ ...receipt, state: 'pending' }, 'r1')).toThrow(ViewError);
+  });
+
+  it('a project setting is made only by its matching V1 receipt', () => {
+    const receipt = { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id: 'r1', project_id: PROJECT,
+      operation: 'archive', received_at: 'x', state: 'applied' };
+    expect(projectSettingsView(receipt, 'r1', PROJECT, 'archive')).toEqual({ request_id: 'r1', project_id: PROJECT, operation: 'archive' });
+    expect(() => projectSettingsView(receipt, 'r2', PROJECT, 'archive')).toThrow(ViewError);
+    expect(() => projectSettingsView({ ...receipt, operation: 'leave' }, 'r1', PROJECT, 'archive')).toThrow(ViewError);
+    expect(() => projectSettingsView({ ...receipt, state: 'pending' }, 'r1', PROJECT, 'archive')).toThrow(ViewError);
   });
 
   it('employees keep their name, email and standing; an invitation says only when it expires, and only for the file asked for', () => {

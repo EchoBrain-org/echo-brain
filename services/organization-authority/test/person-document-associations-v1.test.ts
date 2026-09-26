@@ -21,7 +21,7 @@ afterEach(async () => {
 });
 function setup() {
   const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys=ON');
-  db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v9.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v10.sql', import.meta.url), 'utf8'));
   db.prepare(`INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES (1,'oau_associations',?,'Associations','{}',?,?)`).run(OWNER.organization_id, PROJECT_CONTEXT_NOW, PROJECT_CONTEXT_NOW);
   db.prepare('INSERT INTO authority_project_authorization_state_v1(organization_id,revision,updated_at) VALUES (?,0,?)').run(OWNER.organization_id, PROJECT_CONTEXT_NOW);
   addMembership(db, OWNER, 'Owner', null); addMembership(db, MEMBER, 'Member', 'member@example.test');
@@ -53,11 +53,11 @@ function search(project_id: typeof PROJECT_ALPHA | typeof PROJECT_BETA) {
 }
 
 describe('document project associations', () => {
-  it('refuses V8 at both current runtime adapters before attempting V9 queries', () => {
+  it('refuses V8 at both current runtime adapters before attempting V10 queries', () => {
     const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys=ON');
     db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v8.sql', import.meta.url), 'utf8'));
-    expect(() => new SqlitePersonDocumentRepositoryV1(db)).toThrow('Documents require Authority V9');
-    expect(() => new SqliteProjectContextRepositoryV1(db)).toThrow('Project context requires Authority V9');
+    expect(() => new SqlitePersonDocumentRepositoryV1(db)).toThrow('Documents require Authority V10');
+    expect(() => new SqliteProjectContextRepositoryV1(db)).toThrow('Project context requires Authority V10');
   });
 
   it('keeps independent modern project links, immutable audience and exact replay while removing only the requested link', () => {

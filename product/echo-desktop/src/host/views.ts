@@ -4,7 +4,7 @@
 import type {
   Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, CreatedProject, DocumentPage,
   DocumentSummary, DocumentText, Employee, Employees, Extraction, Failure, FeedItem, FeedPage, InvitationSaved, Match, Matches, Member, MemberPage,
-  ProjectChange, ProjectPage, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
+  ProjectChange, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   WriteStatus,
 } from '../shared/protocol.js';
 
@@ -63,20 +63,30 @@ function projectSummary(raw: unknown): ProjectSummary {
   const value = object(raw);
   const role = value.role;
   if (role !== 'lead' && role !== 'member') throw new ViewError();
-  return { project_id: text(value.project_id), name: text(value.name), role, created_at: text(value.created_at) };
+  const status = value.status;
+  if (status !== 'active' && status !== 'archived') throw new ViewError();
+  return { project_id: text(value.project_id), name: text(value.name), role, created_at: text(value.created_at), status };
 }
 
 export function projectPageView(raw: unknown): ProjectPage {
   const value = object(raw);
-  if (value.kind !== 'echo-project-list-v1') throw new ViewError();
+  if (value.kind !== 'echo-project-list-v2') throw new ViewError();
   return { items: list(value.items).map(projectSummary), next_cursor: optionalText(value.next_cursor) ?? null };
 }
 
 /** The project asked for, as it is now: your role in it may have changed. */
 export function projectView(raw: unknown, projectId: string): ProjectSummary {
   const project = projectSummary(raw);
-  if (object(raw).kind !== 'echo-project-summary-v1' || project.project_id !== projectId) throw new ViewError();
+  if (object(raw).kind !== 'echo-project-summary-v2' || project.project_id !== projectId) throw new ViewError();
   return project;
+}
+
+/** A rename, archive/unarchive, or leave receipt, checked against exactly the request we sent. */
+export function projectSettingsView(raw: unknown, requestId: string, projectId: string, operation: ProjectSettingsReceipt['operation']): ProjectSettingsReceipt {
+  const value = object(raw);
+  if (value.schema_version !== 1 || value.kind !== 'echo-project-settings-receipt-v1' || value.state !== 'applied' ||
+      value.request_id !== requestId || value.project_id !== projectId || value.operation !== operation) throw new ViewError();
+  return { request_id: requestId, project_id: projectId, operation };
 }
 
 /** Who can read an item: only you, everyone, or one or more projects' members. */

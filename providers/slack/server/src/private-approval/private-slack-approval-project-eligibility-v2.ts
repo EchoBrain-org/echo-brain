@@ -28,7 +28,7 @@ export function listPrivateSlackApprovalEligibleProjectsV2(
      AND membership.membership_id=grant.membership_id
      AND membership.membership_type=grant.membership_type
     WHERE grant.organization_id=? AND grant.principal_id=? AND grant.membership_id=? AND grant.membership_type=?
-      AND grant.status='active' AND membership.status='active'
+      AND grant.status='active' AND membership.status='active' AND project.status='active'
     ORDER BY grant.project_id ASC, grant.project_membership_id ASC
     LIMIT 101`).all(
     input.organization_id,

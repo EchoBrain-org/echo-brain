@@ -2,19 +2,23 @@
 
 This directory contains the small release boundary used after the first live
 organization release. It selects exact artifacts and provides explicit, state-preserving
-V8-to-V9 and historical V5-to-V6 staging transitions. It does not manage client fleets.
+historical V8-to-V9 and V5-to-V6 staging transitions. It does not manage client fleets.
 
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
-current Authority V9, private-approval control-plane V3, record-log V3, and
-six-role V2 root lineage. For populated state, `stage` pulls the immutable
+current Authority V10, private-approval control-plane V3, record-log V4,
+retrieval facts V3, retrieval content/lexical V2, and six-role V2 root lineage.
+For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
 mutation. The named [V5-to-V6 staging migration](#state-preserving-v5-to-v6-staging-migration)
 preserves an accepted V5 organization only for a historical V6 candidate. It
-cannot prepare state for V9. The explicit [V8-to-V9 staging migration](#state-preserving-v8-to-v9-staging-migration)
-preserves an accepted V8 organization for the multi-project upload release.
+cannot prepare state for V10. The explicit [V8-to-V9 staging migration](#state-preserving-v8-to-v9-staging-migration)
+preserves an accepted V8 organization for a historical V9 multi-project upload release.
+Neither operation prepares the combined project-settings and meeting-approval
+V10 release. This combined version uses fresh databases: the founder confirmed
+that existing development data is disposable and there are no live users.
 The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
 as described in the [PC-01 handoff](../../docs/product/2026-09-21-project-context-pc01-persistence.md).
 Other incompatible baselines require an
@@ -242,8 +246,8 @@ recovery as unconfirmed.
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
 does not query SQLite or print credentials. A change that needs a schema
 migration requires a separately named operation. The supported transitions
-are the named V8-to-V9 migration and historical V5-to-V6 migration below.
-If persisted state lacks the candidate's exact V9/V3/V3 databases and
+are the historical V8-to-V9 and V5-to-V6 migrations below.
+If persisted state lacks the candidate's exact V10/V3/V4 databases, current retrieval schemas, and
 V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
 

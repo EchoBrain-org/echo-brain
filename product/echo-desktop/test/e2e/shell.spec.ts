@@ -38,7 +38,8 @@ test('the sidebar lists your projects, and one click switches project from any p
 test('the sidebar pages with More, sharing the list Home loaded', async () => {
   run = await launch('many-projects');
   const { page } = run;
-  const lists = () => run.calls().filter(call => call.path === '/v1/person/projects').length;
+  const lists = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v2/person/projects' &&
+    new URLSearchParams(call.query).get('status') === 'active').length;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(10);
   await page.getByTestId('sidebar-more').click();
   await expect(page.getByTestId('sidebar-project')).toHaveCount(13);

@@ -1,6 +1,8 @@
 import {
-  PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
+  PERSON_DIRECTORY_PATH_V1, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS,
   validateProjectCreateV1, validateProjectCreateReceiptV1, validateProjectListV1,
+  validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1, validateProjectSettingsReceiptV1,
+  validateProjectListV2, validateProjectPageRequestV2, validateProjectSummaryV2,
   validateProjectPageRequestV1, validateProjectIdV1, validateProjectSummaryV1,
   validateProjectContextBrowseV1, validateProjectMembersV1,
   validateProjectDirectorySearchV1, validateProjectDirectoryV1,
@@ -527,6 +529,20 @@ function projectPage(url: URL): unknown {
   return projectInput(validateProjectPageRequestV1, page);
 }
 
+function projectPageV2(url: URL): unknown {
+  const page: Record<string, unknown> = {};
+  for (const [key, value] of url.searchParams) {
+    if ((key !== 'limit' && key !== 'cursor' && key !== 'status') || Object.hasOwn(page, key)) {
+      throw new AuthorityOperationError('invalid_request', 'request failed');
+    }
+    if (key === 'limit' && !/^(?:[1-9]|10)$/.test(value)) {
+      throw new AuthorityOperationError('invalid_request', 'request failed');
+    }
+    page[key] = key === 'limit' ? Number(value) : value;
+  }
+  return projectInput(validateProjectPageRequestV2, page);
+}
+
 function projectResponse(response: ServerResponse, status: number, value: unknown, validate: (value: unknown) => unknown): void {
   try {
     validate(value);
@@ -540,7 +556,7 @@ function projectResponse(response: ServerResponse, status: number, value: unknow
 }
 
 type ProjectBodyOperation = Exclude<keyof ProjectContextApplicationV1,
-  'listProjects' | 'readProject' | 'readContext' | 'readContextV2' | 'uploadStatus' | 'readUpload'>;
+  'listProjects' | 'listProjectsV2' | 'readProject' | 'readProjectV2' | 'readContext' | 'readContextV2' | 'uploadStatus' | 'readUpload'>;
 const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   readonly operation: ProjectBodyOperation;
   readonly request: (value: unknown) => unknown;
@@ -548,6 +564,9 @@ const PROJECT_BODY_ROUTES: ReadonlyMap<string, {
   readonly status: number;
 }> = new Map([
   [PERSON_PROJECTS_PATH_V1, { operation: 'createProject', request: validateProjectCreateV1, response: validateProjectCreateReceiptV1, status: 201 }],
+  [PERSON_PROJECT_RENAME_PATH_V1, { operation: 'renameProject', request: validateProjectRenameV1, response: validateProjectSettingsReceiptV1, status: 200 }],
+  [PERSON_PROJECT_ARCHIVE_PATH_V1, { operation: 'archiveProject', request: validateProjectArchiveV1, response: validateProjectSettingsReceiptV1, status: 200 }],
+  [PERSON_PROJECT_LEAVE_PATH_V1, { operation: 'leaveProject', request: validateProjectLeaveV1, response: validateProjectSettingsReceiptV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/members`, { operation: 'listMembers', request: validateProjectContextBrowseV1, response: validateProjectMembersV1, status: 200 }],
   [`${PERSON_PROJECTS_PATH_V1}/directory`, { operation: 'searchDirectory', request: validateProjectDirectorySearchV1, response: validateProjectDirectoryV1, status: 200 }],
   [PERSON_DIRECTORY_PATH_V1, { operation: 'searchOrganizationDirectory', request: validateOrganizationDirectorySearchV1, response: validateOrganizationDirectoryV1, status: 200 }],
@@ -581,14 +600,14 @@ async function projectRoute(
   if (method !== 'GET') return undefined;
   // Static POST paths cannot be misinterpreted as project/request identifiers.
   if (route !== undefined && url.pathname !== PERSON_PROJECTS_PATH_V1) return undefined;
-  const projectBase = url.pathname.startsWith(`${PERSON_PROJECTS_PATH_V2}/`) ? PERSON_PROJECTS_PATH_V2 : PERSON_PROJECTS_PATH_V1;
+  const projectBase = url.pathname === PERSON_PROJECTS_PATH_V2 || url.pathname.startsWith(`${PERSON_PROJECTS_PATH_V2}/`) ? PERSON_PROJECTS_PATH_V2 : PERSON_PROJECTS_PATH_V1;
   const projectPath = url.pathname.startsWith(`${projectBase}/`)
     ? url.pathname.slice(projectBase.length + 1).split('/') : [];
   const uploadBase = url.pathname.startsWith(`${PERSON_UPDATES_PATH_V3}/`) ? PERSON_UPDATES_PATH_V3 : PERSON_UPDATES_PATH_V2;
   const uploadPath = url.pathname.startsWith(`${uploadBase}/`)
     ? url.pathname.slice(uploadBase.length + 1).split('/') : [];
-  const list = url.pathname === PERSON_PROJECTS_PATH_V1;
-  const readProject = projectBase === PERSON_PROJECTS_PATH_V1 && projectPath.length === 1;
+  const list = url.pathname === PERSON_PROJECTS_PATH_V1 || url.pathname === PERSON_PROJECTS_PATH_V2;
+  const readProject = projectPath.length === 1;
   const readContext = projectPath.length === 3 && projectPath[1] === 'context';
   const status = uploadPath.length === 1;
   const readUpload = uploadPath.length === 2 && uploadPath[0] === 'content';
@@ -598,8 +617,10 @@ async function projectRoute(
     throw new AuthorityOperationError('invalid_request', 'request failed');
   }
   if (list) {
-    const page = projectPage(url);
-    return response => projectResponse(response, 200, application.listProjects(token, page), validateProjectListV1);
+    const page = projectBase === PERSON_PROJECTS_PATH_V2 ? projectPageV2(url) : projectPage(url);
+    return response => projectBase === PERSON_PROJECTS_PATH_V2
+      ? projectResponse(response, 200, application.listProjectsV2(token, page), validateProjectListV2)
+      : projectResponse(response, 200, application.listProjects(token, page), validateProjectListV1);
   }
   if (readProject || readContext) {
     const project = projectInput(validateProjectIdV1, projectPath[0]);
@@ -609,7 +630,9 @@ async function projectRoute(
         ? projectResponse(response, 200, application.readContextV2(token, project, context), validateProjectContextReadV2)
         : projectResponse(response, 200, application.readContext(token, project, context), validateProjectContextReadV1);
     }
-    return response => projectResponse(response, 200, application.readProject(token, project), validateProjectSummaryV1);
+    return response => projectBase === PERSON_PROJECTS_PATH_V2
+      ? projectResponse(response, 200, application.readProjectV2(token, project), validateProjectSummaryV2)
+      : projectResponse(response, 200, application.readProject(token, project), validateProjectSummaryV1);
   }
   if (readUpload) {
     const context = projectInput(validatePersonUploadContextId, uploadPath[1]);

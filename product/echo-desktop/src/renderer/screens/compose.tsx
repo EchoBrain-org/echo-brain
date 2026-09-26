@@ -53,7 +53,7 @@ function projectChoices(compose: ComposeState, listed: readonly ProjectSummary[]
   };
   add(compose.context);
   compose.projects.filter(ticked => !listed.some(project => project.project_id === ticked.project_id)).forEach(add);
-  listed.forEach(add);
+  listed.filter(project => project.status === 'active').forEach(add);
   return choices;
 }
 

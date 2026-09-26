@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { applyAuthorityBaselineV8, applyAuthorityBaselineV9 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaselineV8, applyAuthorityBaselineV10 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1, sourceContentSha256V1, type MeetingDocument } from '@echo-brain/organization-processing/core';
 import { SqliteSourceAdmissionStoreV1 } from '../src/adapters/persistence/sqlite/source-admission-v1.js';
 import { PersonSourceAdapterV1 } from '../src/adapters/sources/person-source-v1.js';
@@ -29,7 +29,7 @@ function meeting(): MeetingDocument {
 
 describe('durable common source admission',()=>{
   it('admits a departed contributor V3 projects note with a project-set custody commitment', async () => {
-    const db = new Database(':memory:'); dbs.push(db); db.pragma('foreign_keys=ON'); applyAuthorityBaselineV9(db);
+    const db = new Database(':memory:'); dbs.push(db); db.pragma('foreign_keys=ON'); applyAuthorityBaselineV10(db);
     const actor={organization_id:'org_fixture',principal_id:'prn_pm',membership_id:'mem_11111111-1111-4111-8111-111111111111',membership_type:'owner'} as const;
     const first='prj_11111111-1111-4111-8111-111111111111'; const second='prj_22222222-2222-4222-8222-222222222222';
     db.prepare("INSERT INTO authority_metadata VALUES (1,'oau_fixture','org_fixture','Fixture','{}',?,?)").run(at,at);

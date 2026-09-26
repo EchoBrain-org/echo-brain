@@ -267,12 +267,14 @@ export class SqliteStablePrivateApprovalAuthorityFenceV1
     for (const projectId of input.project_ids) {
       const grant = this.database.prepare(`SELECT grant.project_id, grant.project_membership_id
         FROM authority_project_memberships_v1 AS grant
+        JOIN authority_projects_v1 AS project ON project.organization_id=grant.organization_id
+          AND project.project_id=grant.project_id
         JOIN authority_metadata AS metadata ON metadata.singleton=1 AND metadata.organization_id=grant.organization_id
         JOIN authority_memberships AS membership ON membership.organization_id=grant.organization_id
           AND membership.principal_id=grant.principal_id AND membership.membership_id=grant.membership_id
           AND membership.membership_type=grant.membership_type
         WHERE grant.project_id=? AND grant.principal_id=? AND grant.membership_id=?
-          AND grant.status='active' AND membership.status='active'`)
+          AND grant.status='active' AND membership.status='active' AND project.status='active'`)
         .get(projectId, input.principal_id, input.membership_id) as { readonly project_id: string; readonly project_membership_id: string } | undefined;
       if (grant === undefined) return undefined;
       grants.push(Object.freeze({ ...grant }));
