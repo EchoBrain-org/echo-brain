@@ -1,7 +1,7 @@
 // Real packaged-client proof on the native kit target; all installs use disposable user state.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { appendFileSync, chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -71,8 +71,15 @@ try {
       },
     })}\n`, { mode: 0o600 });
     const archive = join(root, linux ? 'ECHO-linux-x64.zip' : 'ECHO-cli-macos-arm64.zip');
+    const updateConfig = join(root, 'update-config.json');
+    if (linux) writeFileSync(updateConfig, JSON.stringify({
+      schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'offline-smoke',
+      feed_url: 'https://rehearsal.invalid/feed.json',
+      public_key_spki: generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
+      minimum_sequence: 1, automatic: true, installation: 'cli-kit',
+    }), { mode: 0o600 });
     const receipt = JSON.parse(node('deploy/release/create-person-onboarding-kit.mjs',
-      ...(linux ? ['--target', 'linux-x64'] : ['--target', 'darwin-arm64', '--installation', 'cli-kit']),
+      ...(linux ? ['--target', 'linux-x64', '--update-config', updateConfig] : ['--target', 'darwin-arm64', '--installation', 'cli-kit']),
       '--release', release, '--artifact', packed.artifact_path,
       '--runtime-node', process.execPath, '--output', archive));
     assert.equal(receipt.kit_sha256, sha(archive));
@@ -94,10 +101,13 @@ try {
   for (const command of ['bash', 'dirname', 'uname', 'getconf', 'od', 'stat', 'id', 'mkdir', 'chmod', 'install', 'cmp', 'diff', 'mktemp', 'tar', 'gzip', 'find', 'mv', 'rm', 'rmdir', 'realpath', 'cat', ...(linux ? [] : ['sw_vers', 'unzip', 'wc', 'tr'])]) {
     symlinkSync(run('/bin/sh', ['-c', `command -v ${command}`]), join(path, command));
   }
-  const env = { HOME: home, XDG_DATA_HOME: join(home, 'custom data'), PATH: path, LANG: 'en_US.UTF-8', DEVELOPER_DIR: join(root, 'no-developer-tools') };
+  // This smoke is strictly offline; signed network dispatch has its own fixture.
+  const env = { HOME: home, XDG_DATA_HOME: join(home, 'custom data'), PATH: path, LANG: 'en_US.UTF-8', DEVELOPER_DIR: join(root, 'no-developer-tools'), ECHO_CLIENT_UPDATE_DISPATCH: '1' };
   run('/bin/bash', ['-c', 'for tool in node npm cc clang swiftc python3 curl; do if command -v "$tool"; then exit 1; fi; done'], env);
   const start = join(kit, 'Start-ECHO.sh');
   run('/bin/bash', [start, '--install-only'], env);
+  const embeddedBootstrap = JSON.parse(readFileSync(join(kit, 'kit-manifest.v1.json'))).update_bootstrap;
+  if (linux && embeddedBootstrap) assert.deepEqual(JSON.parse(readFileSync(join(env.XDG_DATA_HOME, 'echo/person/updater/config.json'))), embeddedBootstrap);
   const cli = linux ? join(env.XDG_DATA_HOME, 'echo/person/bin/echo-brain') : join(home, 'Library/Application Support/ECHO/cli/bin/echo-brain');
   assert.equal(run(cli, ['--version'], env), packed.version);
   const status = JSON.parse(run(cli, ['person', 'status'], env));

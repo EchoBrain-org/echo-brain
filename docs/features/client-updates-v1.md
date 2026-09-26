@@ -54,9 +54,37 @@ keeps the working installation and records a bounded error code locally.
 
 ## Trusted bootstrap
 
-Existing ZIP-delivered clients need one updater-capable kit installation.
-Configure that installed client using a public configuration file delivered
-through the same authenticated operator channel:
+New Linux kits enroll updates during the normal `Start-ECHO.sh` installation.
+The release operator supplies the reviewed public configuration while building
+the kit; the user runs no additional update command:
+
+```sh
+npm run kit:person-onboarding -- \
+  --target linux-x64 \
+  --update-config /absolute/path/to/bootstrap-config.json \
+  --release /absolute/path/to/accepted-release.json \
+  --artifact /absolute/path/to/person-client.tgz \
+  --runtime-node /absolute/path/to/node-v22.22.1-linux-x64/bin/node \
+  --output /absolute/path/to/ECHO-linux-x64.zip
+```
+
+The configuration must have `automatic: true` and `installation: "cli-kit"`.
+It is embedded in the authenticated canonical kit manifest, so changing it
+changes the kit checksum. It contains only a public key and public HTTPS feed
+location, never signing material. Reinstall and signed update installation
+preserve existing configuration, including a user's `automatic: false` choice,
+and preserve the highest verified sequence in updater state.
+
+For an existing Linux installation, deliver one trusted kit built with
+`--update-config` and run its `Start-ECHO.sh --install-only`. This one-time bridge
+installation preserves the Person session and enrolls updates. The next normal
+Person command checks the approved feed without another setup command or login.
+
+Older kits cannot self-bootstrap: their installer bytes contain no trusted
+publisher or feed. They remain usable and, if updater-capable, report
+`not_configured`. As an alternative recovery path for an updater-capable client,
+configure it using a public configuration file delivered through the same
+authenticated operator channel:
 
 ```sh
 echo-brain update configure --file /absolute/path/to/bootstrap-config.json
@@ -104,7 +132,7 @@ directory, separate from Person sessions and upload retry material. A trusted
 reconfiguration may toggle `automatic` without resetting the freshness
 checkpoint. Changing the publisher, feed, channel, installation type or sequence
 floor requires a separately reviewed bootstrap; feed contents cannot change
-those settings. The updater is opt-in and adds no daemon or scheduler.
+those settings. The Mac CLI and legacy Linux recovery remain opt-in. Configured Linux kits add no daemon or scheduler; checks run only before Person commands.
 
 ## Preparing an approved feed
 
