@@ -66,7 +66,7 @@ PY
     for name, content in (('candidate.json', candidate), ('runtime-profile.json', profile)):
         files[name] = {'sha256': host.sha(content), 'base64': base64.b64encode(content).decode()}
     now = int(time.time())
-    request = {'schema_version': 2, 'kind': 'echo-staging-release-request-v2', 'operation_id': str(uuid.uuid4()), 'action': 'stage', 'created_at': now, 'expires_at': now + 1800, 'target': {'account': '904560150024', 'region': 'us-west-2', 'stack_id': 'arn:aws:cloudformation:us-west-2:904560150024:stack/echo-authority-staging-v1/11111111-1111-4111-8111-111111111111', 'instance_id': 'i-0123456789abcdef0', 'volume_id': 'vol-0123456789abcdef0'}, 'tooling_source': 'a' * 40, 'previous_tooling_source': 'b' * 40, 'accepted': {'release_id': 'clean-v1-accepted-fixture', 'sha256': host.sha(accepted)}, 'candidate': {'release_id': 'clean-v1-candidate-fixture', 'sha256': host.sha(candidate), 'person_client_sha256': 'c' * 64}, 'files': files, 'old_tool_hashes': old_hashes, 'content_telemetry': None, 'approval': None}
+    request = {'schema_version': 4, 'kind': 'echo-staging-release-request-v4', 'operation_id': str(uuid.uuid4()), 'action': 'stage', 'created_at': now, 'expires_at': now + 1800, 'target': {'account': '904560150024', 'region': 'us-west-2', 'stack_id': 'arn:aws:cloudformation:us-west-2:904560150024:stack/echo-authority-staging-v1/11111111-1111-4111-8111-111111111111', 'instance_id': 'i-0123456789abcdef0', 'volume_id': 'vol-0123456789abcdef0'}, 'tooling_source': 'a' * 40, 'previous_tooling_source': 'b' * 40, 'accepted': {'release_id': 'clean-v1-accepted-fixture', 'sha256': host.sha(accepted)}, 'candidate': {'release_id': 'clean-v1-candidate-fixture', 'sha256': host.sha(candidate), 'person_client_sha256': 'c' * 64}, 'files': files, 'old_tool_hashes': old_hashes, 'content_telemetry': None, 'approval': None}
 
     # Only the shared /tmp ancestors are exempted. All fixture inode owner,
     # group, mode, descriptor, and subprocess checks are real kernel checks.
@@ -108,18 +108,6 @@ PY
         (root / name).unlink(missing_ok=True)
         write(root / name, base64.b64decode(files[name]['base64']), 0o755)
     print('PASS: complete hash-only inventory with real UID/GID; unsafe files have no digest; unknown bytes remain refused')
-
-    # The named migration retains real no-follow/owner/mode checks and records
-    # the one expected absence; it must not grant a generic missing-file bypass.
-    backup = root / 'backup-authority-maintenance.sh'
-    backup.unlink()
-    assert not inspect_inventory()['ok']
-    migration = {**request, 'schema_version': 3, 'kind': 'echo-staging-release-request-v3', 'tooling_migration': 'legacy-staging-host-v1', 'action': 'install', 'operation_id': str(uuid.uuid4())}
-    result = host.execute_request(migration, host.sha(host.canonical(migration)), root=root, identity=lambda *_: None)
-    assert result['ok'] and result['code'] == 'installed'
-    assert backup.stat().st_uid == 0 and backup.stat().st_mode & 0o777 == 0o755
-    assert (root / 'clean-data/release/remote-operations' / migration['operation_id'] / 'tool-3.absent').read_bytes() == b'absent\n'
-    print('PASS: named missing-helper migration publishes root-owned tools and preserves absence evidence')
 
     def invoke(deploy, operation, args):
         attack = '''import os,pathlib,sys

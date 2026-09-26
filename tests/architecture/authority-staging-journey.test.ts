@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const REPO = resolve(import.meta.dirname, '../..');
 
 describe('connected offline staging journey', () => {
-  it('migrates captured legacy tooling and reaches a real durable card awaiting human approval', () => {
+  it('installs reviewed tooling and reaches a real durable card awaiting human approval', () => {
     const result = spawnSync(process.execPath, ['tests/fixtures/staging-release-journey.mjs'], {
       cwd: REPO,
       encoding: 'utf8',

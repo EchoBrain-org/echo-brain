@@ -12,8 +12,6 @@ import { planStagingRelease, executeStagingRelease } from '../../tools/authority
 
 const REPO = resolve(import.meta.dirname, '../..');
 const COMMIT = 'a'.repeat(40);
-const OLD = 'be71eef5d3678957ef5f086a2ed42baeeb548687';
-const RESTORE = '2b2a1b25647e5bc0e3b58ed4d5e1bb8f461ad19a';
 const INSTANCE = 'i-0123456789abcdef0';
 const VOLUME = 'vol-0123456789abcdef0';
 const STACK = 'arn:aws:cloudformation:us-west-2:904560150024:stack/echo-authority-staging-v1/12345678-1234-1234-1234-123456789012';
@@ -31,8 +29,10 @@ const write = (path, value, mode = 0o600) => {
   writeFileSync(path, typeof value === 'string' || Buffer.isBuffer(value) ? value : canonicalJson(value) + '\n', { mode });
   chmodSync(path, mode);
 };
-const gitSource = (commit, path) => execFileSync('git', ['show', `${commit}:${path}`], { cwd: REPO, env });
-const readSource = (commit, path) => commit === COMMIT ? readFileSync(join(REPO, path)) : gitSource(commit, path);
+const readSource = (commit, path) => {
+  assert.equal(commit, COMMIT);
+  return readFileSync(join(REPO, path));
+};
 const run = (file, args) => {
   const result = spawnSync(file, args, { cwd: REPO, env, encoding: 'utf8', timeout: 90_000, maxBuffer: 1024 * 1024 });
   assert.equal(result.status, 0, `${file} failed: ${result.stderr}\n${result.stdout}`);
@@ -83,10 +83,8 @@ try {
   const acceptedEnv = Object.entries(acceptedEnvironment).map(([key, value]) => `${key}=${value}\n`).join('');
   write(join(release, 'runtime-environments', accepted.release_id + '.env'), acceptedEnv);
   write(join(host, '.env.clean-v1'), acceptedEnv + 'ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n');
-  for (const name of ['update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh']) write(join(host, name), gitSource(name.startsWith('restore') ? RESTORE : OLD, 'deploy/organization-authority/' + name), 0o755);
+  for (const name of ['update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh']) write(join(host, name), readFileSync(join(REPO, 'deploy/organization-authority', name)), 0o755);
   for (const name of ['clean-v1-release.py', 'clean-v1-runtime-profile.py']) write(join(host, 'release', name), readFileSync(join(REPO, 'deploy/release', name)), 0o755);
-  assert.equal(digest(readFileSync(join(host, 'update-clean-v1.sh'))), 'db04aaacad63d71e6e74c3d90d1c521fc2f85f177013de8869eff0cbedd398d4');
-  assert.equal(existsSync(join(host, 'backup-authority-maintenance.sh')), false);
   const materialized = join(root, 'materialized-profile');
   run(python, ['-B', join(host, 'release/clean-v1-runtime-profile.py'), 'materialize', join(root, 'profile.json'), materialized]);
   for (const name of Object.keys(profile.files)) write(join(host, name), readFileSync(join(materialized, name)), 0o644);
@@ -142,24 +140,15 @@ try {
     assert.deepEqual(rows('record-log.sqlite', 'SELECT * FROM organization_record_log'), []);
   };
   const noEngineCalls = () => existsSync(join(root, 'engine-calls.jsonl')) ? readFileSync(join(root, 'engine-calls.jsonl'), 'utf8') : '';
-  const legacy = action('inspect-install');
-  assert.equal(legacy.state, 'failed');
-  assert.equal(legacy.outcome.diagnostic.inventory['backup-authority-maintenance.sh'].state, 'missing');
-  success(action('inspect-install', { toolingMigration: 'legacy-staging-host-v1' }));
-  // Expected backup absence must not hide a later unknown validator.
+  success(action('inspect-install'));
   const validator = join(host, 'release/clean-v1-release.py');
   const validatorBytes = readFileSync(validator);
   write(validator, 'unrecognized synthetic validator\n', 0o755);
-  const refused = action('inspect-install', { toolingMigration: 'legacy-staging-host-v1' });
+  const refused = action('inspect-install');
   assert.equal(refused.outcome.diagnostic.tool, 'release/clean-v1-release.py');
-  assert.equal(action('install', { toolingMigration: 'legacy-staging-host-v1' }).state, 'failed');
-  assert.equal(digest(readFileSync(join(host, 'update-clean-v1.sh'))), 'db04aaacad63d71e6e74c3d90d1c521fc2f85f177013de8869eff0cbedd398d4');
+  assert.equal(action('install').state, 'failed');
   write(validator, validatorBytes, 0o755);
-  success(action('install', { toolingMigration: 'legacy-staging-host-v1' }));
-  const installReceipt = read(output);
-  const installEvidence = join(release, 'remote-operations', installReceipt.request.operation_id);
-  assert.equal(read(join(installEvidence, 'tooling-before.json'))['backup-authority-maintenance.sh'], null);
-  assert.equal(readFileSync(join(installEvidence, 'tool-3.absent'), 'utf8'), 'absent\n');
+  success(action('install'));
   assert.equal(noEngineCalls(), '', 'inspection/install must never invoke container actions');
   const drifted = readFileSync(join(host, '.env.clean-v1'), 'utf8');
   write(join(host, '.env.clean-v1'), drifted + 'UNRELATED_FIXTURE=changed\n');

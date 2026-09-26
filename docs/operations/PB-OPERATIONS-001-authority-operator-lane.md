@@ -156,8 +156,7 @@ running/healthy/image/profile checks and live telemetry for runtime proof.
 ## Exceptions and recovery
 
 Use the [release guide](../../deploy/release/README.md#automated-current-host-staging-lane)
-for `inspect-install`, the fixed `legacy-staging-host-v1` migration, and their
-hash inventories. Use its [environment-drift procedure](../../deploy/release/README.md#environment-drift-before-staging)
+for `inspect-install` and its hash inventory. Use its [environment-drift procedure](../../deploy/release/README.md#environment-drift-before-staging)
 for `diagnose` and eligible accepted-only `repair`. Never edit environment files
 by hand. Check whether repair would reduce intended telemetry; preserving
 observability takes precedence over making a status check pass.

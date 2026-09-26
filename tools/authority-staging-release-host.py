@@ -122,16 +122,11 @@ def make_directory(path):
 
 
 def validate_request(request):
-    compact = request.get('schema_version') == 4
-    migration = request.get('schema_version') == 3 or (compact and 'tooling_migration' in request)
-    expected = {'schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval'} | ({'tooling_migration'} if migration else set())
+    expected = {'schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval'}
     require(set(request) == expected)
-    require(request['schema_version'] in (2, 3, 4) and request['kind'] == f"echo-staging-release-request-v{request['schema_version']}")
-    if migration:
-        require(request['tooling_migration'] == 'legacy-staging-host-v1' and request['action'] in ('install', 'inspect-install'))
+    require(request['schema_version'] == 4 and request['kind'] == 'echo-staging-release-request-v4')
     require(re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', request['operation_id']) is not None)
     require(request['action'] in ACTIONS)
-    require(request['action'] not in ('stage-v5-to-v6', 'stage-v8-to-v9') or compact)
     require(type(request['created_at']) is int and request['expires_at'] == request['created_at'] + 1800)
     target = request['target']
     require(set(target) == {'account', 'region', 'stack_id', 'instance_id', 'volume_id'})
@@ -146,8 +141,8 @@ def validate_request(request):
     files = {}
     for name, artifact in request['files'].items():
         require(re.fullmatch(r'[a-f0-9]{64}', artifact['sha256']) is not None)
-        if compact and name in TOOLS and set(artifact) == {'sha256'}:
-            require(request['action'] != 'install' or (request['old_tool_hashes'][name] == artifact['sha256'] and not (migration and name == 'backup-authority-maintenance.sh')))
+        if name in TOOLS and set(artifact) == {'sha256'}:
+            require(request['action'] != 'install' or request['old_tool_hashes'][name] == artifact['sha256'])
             files[name] = None
             continue
         require(set(artifact) == {'sha256', 'base64'})
@@ -413,15 +408,9 @@ def tooling_state(request, name, digest):
     return 'old' if digest == request['old_tool_hashes'][name] else 'unknown'
 
 
-def migration_absence_allowed(request, name):
-    return request.get('tooling_migration') == 'legacy-staging-host-v1' and name == 'backup-authority-maintenance.sh'
-
-
-def inventory_problem(inventory, request):
+def inventory_problem(inventory):
     categories = {'missing': 'tool_missing', 'invalid': 'tool_file_invalid', 'unknown': 'tool_hash_unknown'}
     for name in TOOLS:
-        if inventory[name]['state'] == 'missing' and migration_absence_allowed(request, name):
-            continue
         if inventory[name]['state'] in categories:
             return categories[inventory[name]['state']], name
     return None, None
@@ -442,7 +431,7 @@ def valid_inventory(request, inventory, category, tool):
                     return False
             elif type(digest) is not str or re.fullmatch(r'[a-f0-9]{64}', digest) is None or entry['state'] != tooling_state(request, name, digest):
                 return False
-        problem = inventory_problem(inventory, request)
+        problem = inventory_problem(inventory)
         if category in ('ready', 'repair_pending'):
             return problem == (None, None)
         return category in TOOL_CATEGORIES and problem == (category, tool)
@@ -509,7 +498,7 @@ def installer_preconditions(request, root):
     old_hashes, inventory = {}, None
     if request['action'] == 'inspect-install':
         inventory = read_tooling_inventory(request, root)
-        problem, tool = inventory_problem(inventory, request)
+        problem, tool = inventory_problem(inventory)
         if problem is not None:
             raise Refused(problem, tool, inventory)
         old_hashes = {name: entry['sha256'] for name, entry in inventory.items()}
@@ -518,9 +507,6 @@ def installer_preconditions(request, root):
             try:
                 old_hashes[name] = sha(regular(root / name))
             except FileNotFoundError:
-                if migration_absence_allowed(request, name):
-                    old_hashes[name] = None
-                    continue
                 raise Refused('tool_missing', name)
             except Exception:
                 raise Refused('tool_file_invalid', name)
@@ -664,12 +650,7 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
             # Preflight all existing tools before replacing any one of them.
             immutable(operation / 'tooling-before.json', canonical(old_hashes))
             for index, name in enumerate(TOOLS):
-                try:
-                    original = regular(root / name)
-                    immutable(operation / f'tool-{index}.before', original)
-                except FileNotFoundError:
-                    require(migration_absence_allowed(request, name) and old_hashes[name] is None)
-                    immutable(operation / f'tool-{index}.absent', b'absent\n')
+                immutable(operation / f'tool-{index}.before', regular(root / name))
                 if files[name] is None:
                     require(old_hashes[name] == request['files'][name]['sha256'])
                     continue

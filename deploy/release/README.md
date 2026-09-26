@@ -432,10 +432,10 @@ release-tooling PR. Iterate on that branch until this connected rehearsal and
 the focused regressions pass, then run `npm run check` and review the complete
 change once. Local tests do not require a merge or permission to deploy.
 
-The rehearsal starts with the exact reviewed legacy wrapper bytes and absent
-backup helper, executes the real release planner, host runner and updater, and
-connects their canary to a real local Authority, SQLite state, private socket,
-card builder and Slack delivery adapter. It proves unknown-tool/drift refusal,
+The rehearsal starts with the reviewed tooling installed, executes the real
+release planner, host runner and updater, and connects their canary to a real
+local Authority, SQLite state, private socket, card builder and Slack delivery
+adapter. It proves unknown-tool/drift refusal,
 eligible repair, affirmative setup readiness, candidate staging, failed-card
 publication followed by restart-safe retry, and a durable pending approval
 bound to one published card. It never clicks approval, appends an approved
@@ -481,24 +481,6 @@ to the independently reviewed *currently installed* tooling. Unknown installed
 bytes stop instead of being overwritten. Replacing tooling saves private old
 copies and hashes; it never edits the accepted release or environment.
 
-The one supported mixed-version migration is explicitly selected with
-`--tooling-migration legacy-staging-host-v1` on an `install` or `inspect-install`
-plan. It pins updater/onboarding bytes from `be71eef5d3678957ef5f086a2ed42baeeb548687`,
-restore bytes from `2b2a1b25647e5bc0e3b58ed4d5e1bb8f461ad19a`, and the two known
-validators by source and SHA-256. Only `backup-authority-maintenance.sh` may be
-absent; if present it must already match the new reviewed bytes. Every other
-file must match its profile-old or reviewed-new bytes. This is not a generic
-allow-missing flag or user-supplied hash list. All ordinary install guards stay
-in force, and a missing helper cannot hide a subsequent invalid tool.
-
-Use distinct inspect/install receipts with this same named option. The private
-before-inventory records the missing helper as `null` and saves a `tool-3.absent`
-marker; existing files retain their before-copies. A partial install is not
-success, and the same operation never reruns. After reconciling its terminal
-failure and inspecting the old/new inventory, a fresh named plan may finish the
-reviewed installation. New host bundles and bootstrap include this helper so
-new hosts do not need the legacy absence migration.
-
 When an install returns only `precondition_failed`, create a separate
 `inspect-install` plan with the same inputs and `--previous-tooling-source`.
 Inspection shares the installer's identity, mount, ownership/control-path,
@@ -522,9 +504,7 @@ complete safe inventory. Failures before tooling inspection, or unexpected
 diagnostic/control-path failures, return no inventory (`null`). Invalid inventory
 is redacted to `inspection_failed` on the host before SSM sees it, and the local
 validator independently rejects malformed or contradictory state/hash bindings.
-Older saved version-1 diagnostics remain pollable with their original shapes
-and request/parameters hashes; existing receipts are never rewritten to add an
-inventory. A refused or interrupted inspection is not an
+A refused or interrupted inspection is not an
 installation failure and is never reported as success. No exception text,
 wrapper output, environment value, unknown setting name, host-supplied path, or
 file content is returned. Identity and retained-mount failures are distinct;
@@ -636,11 +616,9 @@ is `unconfirmed`, not proof that the runtime stopped or recovery succeeded.
 These semantics follow the [Run Command API](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html)
 and [invocation status contract](https://docs.aws.amazon.com/cli/latest/reference/ssm/get-command-invocation.html).
 
-New plans use request version 4, including the named legacy tooling install.
-They use a checksum-bound XZ-compressed text bundle containing the exact reviewed
-runner and non-secret artifacts. Installed tools travel as checksum witnesses;
+Plans use request version 4 and a checksum-bound XZ-compressed text bundle
+containing the exact reviewed runner and non-secret artifacts. Installed tools travel as checksum witnesses;
 `install` carries bytes for changed tools, and witnesses for unchanged tools.
-The named legacy install always carries the possibly absent backup helper.
 Every installed file still passes owner, mode and old/new hash checks before
 any action. Candidate records and profiles always include their exact bytes. The fixed loader
 checks its digest and size, reconstructs the canonical request and checks its
@@ -650,10 +628,9 @@ cap retries preset 6 with extreme search and zero position bits for unaligned
 text, retaining the same dictionary size.
 Previously valid receipt encodings stay unchanged. Decoding is bounded
 by both output size and memory. No third-party package or manual courier is
-needed. The 60-KiB command cap is unchanged. Old
-version-1, version-2 and version-3 receipts can still be polled with their original transport binding;
-unsubmitted version-1 plans cannot execute in the new CLI. Preserve old receipts
-and reconcile any unfinished command before planning a new operation.
+needed. The 60-KiB command cap is unchanged. The CLI and host runner accept
+only version 4, so receipts saved from earlier request versions can no longer
+be polled. Reconcile any unfinished command before planning a new operation.
 
 Host-side request/result journals live under
 `clean-data/release/remote-operations/<operation-id>/`. A duplicate exact request

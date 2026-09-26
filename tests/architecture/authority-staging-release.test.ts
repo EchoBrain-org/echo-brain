@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { executeStagingRelease, planStagingRelease, releaseAction, releaseSsmParameters, safeReleaseOutcome, stagingReleaseTarget, validateReleaseRequest } from '../../tools/authority-staging-release.mjs';
-import type { StagingReleasePlanOptions, StagingReleaseRequest } from '../../tools/authority-staging-release.mjs';
+import type { StagingReleasePlanOptions } from '../../tools/authority-staging-release.mjs';
 import { canonicalJsonForTest as canonical } from '../support/test-canonical-json.js';
 
 const temporary: string[] = [];
@@ -35,7 +35,7 @@ function fixture() {
   const outcome = () => {
     const receipt = JSON.parse(readFileSync(options.output, 'utf8'));
     const inspection = receipt.request.action === 'inspect-install';
-    return { schema_version: 1, kind: 'echo-staging-release-host-result-v1', operation_id: receipt.request.operation_id, request_sha256: receipt.request_sha256, action: receipt.request.action, ok: true, code: inspection ? 'inspection_verified' : 'verified', diagnostic: inspection ? { schema_version: 1, kind: 'echo-staging-release-install-inspection-v1', category: 'ready', tool: null } : receipt.request.action === 'diagnose' ? { schema_version: 1, kind: 'echo-clean-v1-environment-drift', release_id: receipt.request.accepted.release_id, candidate_staged: false, environment_matches: false, changed_settings: ['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1'], other_bytes_changed: false, allowlisted_settings_valid: true, environment_format_supported: true, repair_pending: false, repair_eligible: true, runtime_checked: false } : null };
+    return { schema_version: 1, kind: 'echo-staging-release-host-result-v1', operation_id: receipt.request.operation_id, request_sha256: receipt.request_sha256, action: receipt.request.action, ok: true, code: inspection ? 'inspection_verified' : 'verified', diagnostic: inspection ? { schema_version: 2, kind: 'echo-staging-release-install-inspection-v2', category: 'ready', tool: null, inventory: Object.fromEntries(Object.entries(receipt.request.old_tool_hashes).map(([name, sha256]) => [name, { state: sha256 === receipt.request.files[name].sha256 ? 'new' : 'old', sha256 }])) } : receipt.request.action === 'diagnose' ? { schema_version: 1, kind: 'echo-clean-v1-environment-drift', release_id: receipt.request.accepted.release_id, candidate_staged: false, environment_matches: false, changed_settings: ['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1'], other_bytes_changed: false, allowlisted_settings_valid: true, environment_format_supported: true, repair_pending: false, repair_eligible: true, runtime_checked: false } : null };
   };
   const aws = (args: string[]) => {
     calls.push(args);
@@ -50,30 +50,14 @@ function fixture() {
       default: throw new Error(`Unexpected AWS operation: ${args.slice(0, 2).join(' ')}`);
     }
   };
-  const reviewedLegacy = new Set(['be71eef5d3678957ef5f086a2ed42baeeb548687', '2b2a1b25647e5bc0e3b58ed4d5e1bb8f461ad19a']);
-  const readSource = (commit: string, path: string) => reviewedLegacy.has(commit)
-    ? execFileSync('git', ['-C', REPO, 'show', `${commit}:${path}`])
-    : commit === OLD && path === 'deploy/organization-authority/update-clean-v1.sh'
-      ? Buffer.from(`old-reviewed-tool:${path}\n`)
-      : readFileSync(join(REPO, path));
+  const readSource = (commit: string, path: string) => commit === OLD && path === 'deploy/organization-authority/update-clean-v1.sh'
+    ? Buffer.from(`old-reviewed-tool:${path}\n`)
+    : readFileSync(join(REPO, path));
   const dependencies = { aws, readSource, runtime: () => COMMIT, now: () => 1788640000000 };
   return { directory, options, calls, state, request, outcome, dependencies };
 }
 
-function fillToolBytes(request: any, readSource: (commit: string, path: string) => Buffer) {
-  for (const [name, entry] of Object.entries(request.files) as [string, any][]) {
-    if (name === 'candidate.json' || name === 'runtime-profile.json') continue;
-    const path = name.startsWith('release/') ? `deploy/${name}` : `deploy/organization-authority/${name}`;
-    entry.base64 = readSource(request.tooling_source, path).toString('base64');
-  }
-}
-
 afterEach(() => { for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
-
-function inventoryOutcome(f: ReturnType<typeof fixture>): any {
-  const request = f.request();
-  return { ...f.outcome(), diagnostic: { schema_version: 2, kind: 'echo-staging-release-install-inspection-v2', category: 'ready', tool: null, inventory: Object.fromEntries(Object.entries(request.old_tool_hashes).map(([name, sha256]) => [name, { state: sha256 === request.files[name].sha256 ? 'new' : 'old', sha256 }])) } };
-}
 
 describe('bounded staging release operator', () => {
   it.each(['stage-v5-to-v6', 'stage-v8-to-v9'] as const)('plans %s with installed-tool hash witnesses and no remote mutation', action => {
@@ -117,21 +101,6 @@ describe('bounded staging release operator', () => {
     expectTypeOf<Paths & { action: 'promote'; approval: string }>().toMatchTypeOf<StagingReleasePlanOptions>();
     expectTypeOf<Paths & { action: 'stage'; contentTelemetry: 'true' }>().toMatchTypeOf<StagingReleasePlanOptions>();
     expectTypeOf<Paths & { action: 'install' | 'inspect-install' }>().toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'install' | 'inspect-install'; toolingMigration: 'legacy-staging-host-v1' }>().toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'install'; toolingMigration: 'anything-else' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'status'; toolingMigration: 'legacy-staging-host-v1' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'stage'; toolingMigration: 'legacy-staging-host-v1' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'promote'; approval: string; toolingMigration: 'legacy-staging-host-v1' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
-    type MigrationRequest = Extract<StagingReleaseRequest, { schema_version: 3 }>;
-    expectTypeOf<MigrationRequest>().not.toBeNever();
-    expectTypeOf<MigrationRequest['action']>().toEqualTypeOf<'install' | 'inspect-install'>();
-    expectTypeOf<MigrationRequest['kind']>().toEqualTypeOf<'echo-staging-release-request-v3'>();
-    expectTypeOf<MigrationRequest['tooling_migration']>().toEqualTypeOf<'legacy-staging-host-v1'>();
-    expectTypeOf<MigrationRequest['approval']>().toBeNull();
-    expectTypeOf<MigrationRequest['content_telemetry']>().toBeNull();
-    expectTypeOf<Omit<MigrationRequest, 'tooling_migration'>>().not.toMatchTypeOf<StagingReleaseRequest>();
-    expectTypeOf<Omit<MigrationRequest, 'action'> & { action: 'diagnose' }>().not.toMatchTypeOf<StagingReleaseRequest>();
-    expectTypeOf<Extract<StagingReleaseRequest, { schema_version: 1 | 2 }> & { tooling_migration: 'legacy-staging-host-v1' }>().not.toMatchTypeOf<StagingReleaseRequest>();
   });
 
   it('does not accept arbitrary commands or a production operation', () => {
@@ -168,63 +137,11 @@ describe('bounded staging release operator', () => {
     expect(new Set(rendered)).toEqual(new Set([rendered[0]]));
   });
 
-  it('binds the exact named legacy install migration in the compact request', () => {
-    const f = fixture();
-    // @ts-expect-error Untrusted JS/CLI callers still require action validation.
-    expect(() => planStagingRelease({ ...f.options, action: 'status', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies)).toThrow('tooling_migration_invalid');
-    // @ts-expect-error Untrusted JS/CLI callers still require migration-name validation.
-    expect(() => planStagingRelease({ ...f.options, action: 'install', toolingMigration: 'anything-else' }, f.dependencies)).toThrow('tooling_migration_invalid');
-    planStagingRelease({ ...f.options, action: 'install', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies);
-    const request = validateReleaseRequest(f.request(), f.dependencies.readSource);
-    if (request.schema_version !== 4) throw new Error('Expected a V4 request');
-    expect(request).toMatchObject({
-      schema_version: 4,
-      kind: 'echo-staging-release-request-v4',
-      action: 'install',
-      tooling_migration: 'legacy-staging-host-v1',
-    });
-    expect(request.old_tool_hashes).toMatchObject({
-      'update-clean-v1.sh': 'db04aaacad63d71e6e74c3d90d1c521fc2f85f177013de8869eff0cbedd398d4',
-      'onboard-clean-v1.sh': '23b19666f5a85446dc50bc989f42dbd72ceafbedd6f294f13d7077220e9a036c',
-      'restore-clean-v1-host.sh': '4de16f689929ae4310cd7ff0f29b01e59cd577b652ea33b100397789dd13b583',
-      'release/clean-v1-release.py': 'fa72418c3daef1da8436f1a3963085d61f40ef4635f618c52be87d368eaacff6',
-      'release/clean-v1-runtime-profile.py': '83f5f96b6a330fc30eda56ffe25bfe4a074952e170147dacbe431644873b7072',
-    });
-    expect(request.old_tool_hashes['backup-authority-maintenance.sh']).toBe(request.files['backup-authority-maintenance.sh'].sha256);
-    const parameters = releaseSsmParameters(request, f.dependencies.readSource);
-    expect(Buffer.byteLength(JSON.stringify(parameters))).toBeLessThan(60 * 1024);
-    // Execute the actual bounded loader and both digest checks, then inspect
-    // its reconstructed request without invoking the host runner.
-    const inspection = parameters.commands[0].replace(/namespace=\{\}[\s\S]*?\nECHO_RELEASE_PY$/, "print(wire['request']['action'],wire['request']['tooling_migration'])\nECHO_RELEASE_PY");
-    const decoded = spawnSync('sh', ['-c', inspection], { encoding: 'utf8', timeout: 10000 });
-    expect(decoded.status, decoded.stderr).toBe(0);
-    expect(decoded.stdout).toBe('install legacy-staging-host-v1\n');
-  });
-
   it.each(['shell', 'onboard', 'restore', 'down', 'stage-v7-to-v9', 'stage-v8-to-v10'])('rejects unsupported action %s before AWS', action => {
     const f = fixture();
     // @ts-expect-error Untrusted JS/CLI callers still require runtime rejection.
     expect(() => planStagingRelease({ ...f.options, action }, f.dependencies)).toThrow('action_invalid');
     expect(f.calls).toHaveLength(0);
-  });
-
-  it('executes and replays a migration inspection with explicit backup absence', () => {
-    const f = fixture();
-    planStagingRelease({ ...f.options, action: 'inspect-install', toolingMigration: 'legacy-staging-host-v1' }, f.dependencies);
-    const result = inventoryOutcome(f);
-    for (const [name, entry] of Object.entries(result.diagnostic.inventory) as [string, any][]) {
-      if (entry.sha256 === f.request().files[name].sha256) entry.state = 'new';
-    }
-    result.diagnostic.inventory['backup-authority-maintenance.sh'] = { state: 'missing', sha256: null };
-    f.state.outputOverride = JSON.stringify(result);
-    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
-    expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
-    expect(f.state.submissions).toBe(1);
-    result.diagnostic.inventory['release/clean-v1-release.py'] = { state: 'unknown', sha256: '0'.repeat(64) };
-    expect(() => safeReleaseOutcome(JSON.stringify(result), f.request(), result.request_sha256)).toThrow('remote_outcome_unproven');
-    result.ok = false; result.code = 'inspection_refused';
-    result.diagnostic.category = 'tool_hash_unknown'; result.diagnostic.tool = 'release/clean-v1-release.py';
-    expect(safeReleaseOutcome(JSON.stringify(result), f.request(), result.request_sha256)).toEqual(result);
   });
 
   it('requires an Identity Center role in the exact account', () => {
@@ -330,12 +247,15 @@ describe('bounded staging release operator', () => {
     const host = readFileSync(join(REPO, 'tools/authority-staging-release-host.py'), 'utf8');
     const categories = [...host.match(/^INSPECTION_CATEGORIES = \((.*)\)$/m)![1].matchAll(/'([^']+)'/g)].map(match => match[1]);
     expect(categories).toContain('ready');
+    const toolProblems: Record<string, unknown> = { tool_missing: { state: 'missing', sha256: null }, tool_file_invalid: { state: 'invalid', sha256: null }, tool_hash_unknown: { state: 'unknown', sha256: '0'.repeat(64) } };
     for (const category of categories) {
       const result: any = f.outcome();
       result.ok = category === 'ready';
       result.code = result.ok ? 'inspection_verified' : 'inspection_refused';
       result.diagnostic.category = category;
-      result.diagnostic.tool = ['tool_missing', 'tool_file_invalid', 'tool_hash_unknown'].includes(category) ? 'update-clean-v1.sh' : null;
+      result.diagnostic.tool = toolProblems[category] ? 'update-clean-v1.sh' : null;
+      if (toolProblems[category]) result.diagnostic.inventory['update-clean-v1.sh'] = toolProblems[category];
+      else if (!['ready', 'repair_pending'].includes(category)) result.diagnostic.inventory = null;
       expect(safeReleaseOutcome(JSON.stringify(result), receipt.request, receipt.request_sha256)).toEqual(result);
     }
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
@@ -356,7 +276,7 @@ describe('bounded staging release operator', () => {
 
   it.each(['ready', 'unknown', 'early-refusal', 'repair-pending'])('persists complete versioned inventory without resubmission: %s', kind => {
     const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
-    const result = inventoryOutcome(f);
+    const result: any = f.outcome();
     const names = Object.keys(result.diagnostic.inventory);
     if (kind !== 'early-refusal') result.diagnostic.inventory[names[1]] = { state: 'new', sha256: f.request().files[names[1]].sha256 };
     if (kind !== 'ready') {
@@ -378,7 +298,7 @@ describe('bounded staging release operator', () => {
 
   it.each(['missing-entry', 'extra-entry', 'extra-field', 'bad-digest', 'array-digest', 'upper-digest', 'trailing-newline', 'unknown-state', 'wrong-old', 'wrong-new', 'known-as-unknown', 'missing-with-digest', 'null-ready', 'unknown-ready', 'wrong-tool', 'earlier-refusal', 'inventory-before-guards'])('rejects malformed or contradictory inventory: %s', kind => {
     const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
-    const result = inventoryOutcome(f);
+    const result: any = f.outcome();
     const inventory = result.diagnostic.inventory;
     const tool = 'update-clean-v1.sh';
     if (kind === 'missing-entry') delete inventory[tool];
@@ -467,62 +387,6 @@ describe('bounded staging release operator', () => {
     const rejected = spawnSync('sh', ['-c', tampered], { encoding: 'utf8', timeout: 10000 });
     expect(rejected.status).not.toBe(0);
     expect(rejected.stdout).toBe('');
-    expect(f.state.submissions).toBe(0);
-  });
-
-  it('polls a pre-existing compact V2 Base64 receipt without changing its exact parameter binding', () => {
-    const f = fixture();
-    const readSource = (commit: string, path: string) => {
-      if (path === 'tools/authority-staging-release-host.py' ||
-          path === 'deploy/organization-authority/update-clean-v1.sh' ||
-          path === 'deploy/organization-authority/onboard-clean-v1.sh' ||
-          path === 'deploy/organization-authority/restore-clean-v1-host.sh' ||
-          path === 'deploy/organization-authority/backup-authority-maintenance.sh' ||
-          path === 'deploy/release/clean-v1-release.py' ||
-          path === 'deploy/release/clean-v1-runtime-profile.py') {
-        return Buffer.from(`compact-reviewed-source:${path}\n`);
-      }
-      return f.dependencies.readSource(commit, path);
-    };
-    const dependencies = { ...f.dependencies, readSource };
-    planStagingRelease(f.options, dependencies);
-    const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
-    receipt.request.schema_version = 2;
-    receipt.request.kind = 'echo-staging-release-request-v2';
-    fillToolBytes(receipt.request, readSource);
-    receipt.request_sha256 = digest(canonical(receipt.request) + '\n');
-    const parameters = releaseSsmParameters(receipt.request, readSource);
-    receipt.parameters_sha256 = digest(canonical(parameters) + '\n');
-    expect(parameters.commands[0]).toContain('b64decode(');
-    expect(parameters.commands[0]).toContain('validate=True');
-    expect(parameters.commands[0]).not.toContain('b85decode');
-    expect(receipt.parameters_sha256).toBe(digest(canonical(parameters) + '\n'));
-
-    receipt.state = 'submitted';
-    receipt.command_id = COMMAND;
-    write(f.options.output, receipt);
-    expect(executeStagingRelease(f.options.output, dependencies, true).state).toBe('succeeded');
-    expect(f.state.submissions).toBe(0);
-    expect(f.calls.some(args => args.slice(0, 2).join(' ') === 'ssm send-command')).toBe(false);
-  });
-
-  it('can poll legacy receipts but never submit a legacy unpinned plan', () => {
-    const f = fixture(); planStagingRelease(f.options, f.dependencies);
-    const dependencies = { ...f.dependencies, readSource: (commit: string, path: string) => path === 'tools/authority-staging-release-host.py' ? Buffer.from('# legacy reviewed runner fixture\n') : f.dependencies.readSource(commit, path) };
-    const receipt = JSON.parse(readFileSync(f.options.output, 'utf8'));
-    fillToolBytes(receipt.request, dependencies.readSource);
-    receipt.request.schema_version = 1;
-    receipt.request.kind = 'echo-staging-release-request-v1';
-    for (const name of ['onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh']) {
-      delete receipt.request.files[name]; delete receipt.request.old_tool_hashes[name];
-    }
-    receipt.request_sha256 = digest(canonical(receipt.request) + '\n');
-    receipt.parameters_sha256 = digest(canonical(releaseSsmParameters(receipt.request, dependencies.readSource)) + '\n');
-    write(f.options.output, receipt);
-    expect(() => executeStagingRelease(f.options.output, dependencies)).toThrow('legacy_plan_execution_refused');
-    expect(f.state.submissions).toBe(0);
-    receipt.state = 'submitted'; receipt.command_id = COMMAND; write(f.options.output, receipt);
-    expect(executeStagingRelease(f.options.output, dependencies, true).state).toBe('succeeded');
     expect(f.state.submissions).toBe(0);
   });
 });

@@ -7,7 +7,6 @@ import { execFileSync } from 'node:child_process';
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
 import { canonicalJson, readCleanV1Release, validateCleanV1Release } from './clean-v1-release.mjs';
 import { readRuntimeProfile, validateRuntimeProfile } from './clean-v1-runtime-profile.mjs';
 import { awsCliArguments, sanitizedAwsEnvironment } from './authority-staging-onboarding-transfer.mjs';
@@ -29,15 +28,6 @@ const TOOL_FILES = Object.freeze({
   'release/clean-v1-runtime-profile.py': 'deploy/release/clean-v1-runtime-profile.py',
 });
 const RUNNER = 'tools/authority-staging-release-host.py';
-const LEGACY_MIGRATION = 'legacy-staging-host-v1';
-const LEGACY_MIGRATION_FILES = Object.freeze({
-  'update-clean-v1.sh': ['be71eef5d3678957ef5f086a2ed42baeeb548687', 'deploy/organization-authority/update-clean-v1.sh', 'db04aaacad63d71e6e74c3d90d1c521fc2f85f177013de8869eff0cbedd398d4'],
-  'onboard-clean-v1.sh': ['be71eef5d3678957ef5f086a2ed42baeeb548687', 'deploy/organization-authority/onboard-clean-v1.sh', '23b19666f5a85446dc50bc989f42dbd72ceafbedd6f294f13d7077220e9a036c'],
-  'restore-clean-v1-host.sh': ['2b2a1b25647e5bc0e3b58ed4d5e1bb8f461ad19a', 'deploy/organization-authority/restore-clean-v1-host.sh', '4de16f689929ae4310cd7ff0f29b01e59cd577b652ea33b100397789dd13b583'],
-  'release/clean-v1-release.py': ['be71eef5d3678957ef5f086a2ed42baeeb548687', 'deploy/release/clean-v1-release.py', 'fa72418c3daef1da8436f1a3963085d61f40ef4635f618c52be87d368eaacff6'],
-  'release/clean-v1-runtime-profile.py': ['be71eef5d3678957ef5f086a2ed42baeeb548687', 'deploy/release/clean-v1-runtime-profile.py', '83f5f96b6a330fc30eda56ffe25bfe4a074952e170147dacbe431644873b7072'],
-});
-const LEGACY_TOOL_FILES = Object.fromEntries(Object.entries(TOOL_FILES).filter(([name]) => !['onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh'].includes(name)));
 const MAX_COMMAND_BYTES = 60 * 1024;
 const TERMINAL = ['Failed', 'Cancelled', 'TimedOut', 'Undeliverable', 'Terminated'];
 const fail = code => { throw new Error(code); };
@@ -157,26 +147,21 @@ function approvalFor(request, approval) {
 
 /** Pure request validation is repeated before planning, rendering and execution. */
 export function validateReleaseRequest(request, readSource = sourceFile) {
-  const compact = request.schema_version === 4;
-  const migration = request.schema_version === 3 || (compact && Object.hasOwn(request, 'tooling_migration'));
-  exactKeys(request, ['schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval', ...(migration ? ['tooling_migration'] : [])]);
-  if (![1, 2, 3, 4].includes(request.schema_version) || request.kind !== `echo-staging-release-request-v${request.schema_version}` || !ID.test(request.operation_id)) fail('request_invalid');
-  if (migration && (request.tooling_migration !== LEGACY_MIGRATION || !['install', 'inspect-install'].includes(request.action))) fail('tooling_migration_invalid');
-  const toolFiles = request.schema_version === 1 ? LEGACY_TOOL_FILES : TOOL_FILES;
+  exactKeys(request, ['schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval']);
+  if (request.schema_version !== 4 || request.kind !== 'echo-staging-release-request-v4' || !ID.test(request.operation_id)) fail('request_invalid');
   releaseAction(request.action);
-  if (['stage-v5-to-v6', 'stage-v8-to-v9'].includes(request.action) && !compact) fail('request_invalid');
   if (!Number.isSafeInteger(request.created_at) || request.expires_at !== request.created_at + 1800) fail('request_lifetime_invalid');
   exactKeys(request.target, ['account', 'region', 'stack_id', 'instance_id', 'volume_id']);
   if (request.target.account !== ACCOUNT || request.target.region !== REGION || !new RegExp(`^arn:aws:cloudformation:${REGION}:${ACCOUNT}:stack/${STACK}/[a-f0-9-]+$`).test(request.target.stack_id) || !/^i-[a-f0-9]{17}$/.test(request.target.instance_id) || !/^vol-[a-f0-9]{17}$/.test(request.target.volume_id)) fail('target_invalid');
   if (!COMMIT.test(request.tooling_source) || !COMMIT.test(request.previous_tooling_source)) fail('source_invalid');
-  exactKeys(request.files, [...Object.keys(toolFiles), 'candidate.json', 'runtime-profile.json']);
-  exactKeys(request.old_tool_hashes, Object.keys(toolFiles));
+  exactKeys(request.files, [...Object.keys(TOOL_FILES), 'candidate.json', 'runtime-profile.json']);
+  exactKeys(request.old_tool_hashes, Object.keys(TOOL_FILES));
   const bytes = {};
   for (const [name, entry] of Object.entries(request.files)) {
-    if (compact && Object.hasOwn(toolFiles, name) && !Object.hasOwn(entry, 'base64')) {
+    if (Object.hasOwn(TOOL_FILES, name) && !Object.hasOwn(entry, 'base64')) {
       exactKeys(entry, ['sha256']);
       if (!SHA.test(entry.sha256)) fail('artifact_invalid');
-      if (request.action === 'install' && (request.old_tool_hashes[name] !== entry.sha256 || (migration && name === 'backup-authority-maintenance.sh'))) fail('artifact_bytes_required');
+      if (request.action === 'install' && request.old_tool_hashes[name] !== entry.sha256) fail('artifact_bytes_required');
       continue;
     }
     exactKeys(entry, ['sha256', 'base64']);
@@ -184,16 +169,8 @@ export function validateReleaseRequest(request, readSource = sourceFile) {
     bytes[name] = Buffer.from(entry.base64, 'base64');
     if (bytes[name].toString('base64') !== entry.base64 || digest(bytes[name]) !== entry.sha256) fail('artifact_checksum_mismatch');
   }
-  for (const [name, path] of Object.entries(toolFiles)) {
-    let old;
-    if (migration) {
-      if (name === 'backup-authority-maintenance.sh') old = request.files[name].sha256;
-      else {
-        const [commit, legacyPath, expected] = LEGACY_MIGRATION_FILES[name];
-        if (digest(readSource(commit, legacyPath)) !== expected) fail('tooling_source_mismatch');
-        old = expected;
-      }
-    } else old = digest(readSource(request.previous_tooling_source, path));
+  for (const [name, path] of Object.entries(TOOL_FILES)) {
+    const old = digest(readSource(request.previous_tooling_source, path));
     if (request.files[name].sha256 !== digest(readSource(request.tooling_source, path)) || request.old_tool_hashes[name] !== old) fail('tooling_source_mismatch');
   }
   const candidate = canonicalRecord(bytes['candidate.json']);
@@ -215,46 +192,42 @@ export function validateReleaseRequest(request, readSource = sourceFile) {
 export function releaseSsmParameters(request, readSource = sourceFile) {
   validateReleaseRequest(request, readSource);
   const body = jsonBytes(request);
-  const payload = gzipSync(body, { level: 9 }).toString('base64');
   const runner = readSource(request.tooling_source, RUNNER).toString('utf8');
-  let script = `${runner}\nmain('${payload}', '${digest(body)}')`;
   const parametersFor = value => ({ commands: [`/usr/bin/python3 - <<'ECHO_RELEASE_PY'\n${value}\nECHO_RELEASE_PY`], executionTimeout: ['1200'] });
-  if (request.schema_version >= 2) {
-    // Compress text once, not separately base64-expanded files plus a plain
-    // runner. The fixed loader verifies the whole reviewed, non-secret bundle.
-    const wire = { runner, request: structuredClone(request) };
-    for (const entry of Object.values(wire.request.files)) {
-      if (request.schema_version === 4 && !Object.hasOwn(entry, 'base64')) continue;
-      const bytes = Buffer.from(entry.base64, 'base64');
-      entry.utf8 = bytes.toString('utf8');
-      if (!Buffer.from(entry.utf8).equals(bytes)) fail('artifact_not_utf8');
-      delete entry.base64;
-    }
-    const raw = jsonBytes(wire);
-    if (raw.length > 768 * 1024) fail('bounded_command_too_large');
-    const compress = (extreme = false) => {
-      try {
-        // Python is already an operator/host prerequisite. Its standard-library
-        // XZ plus quote-free Base85 fits larger bundles without another transfer
-        // path. Keep the original Base64 wire when it fits so saved receipts replay.
-        // An exact read completes after the parent-advertised byte count even if
-        // the local pipe writer has not closed. Reject EOF-short input before it
-        // can reach the compressor; the emitted wire keeps its existing digest.
-        return JSON.parse(execFileSync('python3', ['-I', '-c', 'import base64,json,lzma,sys; length=int(sys.argv[1]); assert 0<=length<=786432; raw=sys.stdin.buffer.read(length); assert len(raw)==length; compressed=lzma.compress(raw,format=lzma.FORMAT_XZ,**({"filters":[{"id":lzma.FILTER_LZMA2,"preset":6 | lzma.PRESET_EXTREME,"pb":0}]} if sys.argv[2] == "1" else {"preset":6})); json.dump([base64.b64encode(compressed).decode(),base64.b85encode(compressed).decode()],sys.stdout)', String(raw.length), extreme ? '1' : '0'], { input: raw, stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000, maxBuffer: 768 * 1024 }).toString('utf8'));
-      } catch { fail('bounded_compression_unavailable'); }
-    };
-    const compressed = compress();
-    const scriptFor = decode => `import base64,gzip,hashlib,json,lzma\ndecoder=lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=134217728)\nraw=decoder.decompress(${decode},max_length=786433)\nif not decoder.eof or decoder.unused_data or len(raw)>786432 or hashlib.sha256(raw).hexdigest()!='${digest(raw)}': raise SystemExit(1)\nwire=json.loads(raw)\nfor entry in wire['request']['files'].values():\n${request.schema_version === 4 ? " if 'utf8' not in entry: continue\n" : ''} entry['base64']=base64.b64encode(entry.pop('utf8').encode()).decode()\nbody=(json.dumps(wire['request'],sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\\n').encode()\nif hashlib.sha256(body).hexdigest()!='${digest(body)}': raise SystemExit(1)\nnamespace={}\nexec(compile(wire['runner'],'<reviewed-staging-runner>','exec'),namespace)\nnamespace['main'](base64.b64encode(gzip.compress(body)).decode(),'${digest(body)}')`;
-    script = scriptFor(`base64.b64decode('${compressed[0]}',validate=True)`);
-    if (Buffer.byteLength(JSON.stringify(parametersFor(script))) > MAX_COMMAND_BYTES) {
-      script = scriptFor(`base64.b85decode('${compressed[1]}')`);
-    }
-    if (Buffer.byteLength(JSON.stringify(parametersFor(script))) > MAX_COMMAND_BYTES) {
-      // Existing valid receipt encodings stay byte-identical. Only a bundle
-      // that previously refused tries stronger unaligned-text compression with the same XZ
-      // dictionary and unchanged output, decoder-memory and command bounds.
-      script = scriptFor(`base64.b85decode('${compress(true)[1]}')`);
-    }
+  // Compress text once, not separately base64-expanded files plus a plain
+  // runner. The fixed loader verifies the whole reviewed, non-secret bundle.
+  const wire = { runner, request: structuredClone(request) };
+  for (const entry of Object.values(wire.request.files)) {
+    if (!Object.hasOwn(entry, 'base64')) continue;
+    const bytes = Buffer.from(entry.base64, 'base64');
+    entry.utf8 = bytes.toString('utf8');
+    if (!Buffer.from(entry.utf8).equals(bytes)) fail('artifact_not_utf8');
+    delete entry.base64;
+  }
+  const raw = jsonBytes(wire);
+  if (raw.length > 768 * 1024) fail('bounded_command_too_large');
+  const compress = (extreme = false) => {
+    try {
+      // Python is already an operator/host prerequisite. Its standard-library
+      // XZ plus quote-free Base85 fits larger bundles without another transfer
+      // path.
+      // An exact read completes after the parent-advertised byte count even if
+      // the local pipe writer has not closed. Reject EOF-short input before it
+      // can reach the compressor; the emitted wire keeps its existing digest.
+      return JSON.parse(execFileSync('python3', ['-I', '-c', 'import base64,json,lzma,sys; length=int(sys.argv[1]); assert 0<=length<=786432; raw=sys.stdin.buffer.read(length); assert len(raw)==length; compressed=lzma.compress(raw,format=lzma.FORMAT_XZ,**({"filters":[{"id":lzma.FILTER_LZMA2,"preset":6 | lzma.PRESET_EXTREME,"pb":0}]} if sys.argv[2] == "1" else {"preset":6})); json.dump([base64.b64encode(compressed).decode(),base64.b85encode(compressed).decode()],sys.stdout)', String(raw.length), extreme ? '1' : '0'], { input: raw, stdio: ['pipe', 'pipe', 'pipe'], timeout: 10000, maxBuffer: 768 * 1024 }).toString('utf8'));
+    } catch { fail('bounded_compression_unavailable'); }
+  };
+  const compressed = compress();
+  const scriptFor = decode => `import base64,gzip,hashlib,json,lzma\ndecoder=lzma.LZMADecompressor(format=lzma.FORMAT_XZ,memlimit=134217728)\nraw=decoder.decompress(${decode},max_length=786433)\nif not decoder.eof or decoder.unused_data or len(raw)>786432 or hashlib.sha256(raw).hexdigest()!='${digest(raw)}': raise SystemExit(1)\nwire=json.loads(raw)\nfor entry in wire['request']['files'].values():\n if 'utf8' not in entry: continue\n entry['base64']=base64.b64encode(entry.pop('utf8').encode()).decode()\nbody=(json.dumps(wire['request'],sort_keys=True,separators=(',',':'),ensure_ascii=False)+'\\n').encode()\nif hashlib.sha256(body).hexdigest()!='${digest(body)}': raise SystemExit(1)\nnamespace={}\nexec(compile(wire['runner'],'<reviewed-staging-runner>','exec'),namespace)\nnamespace['main'](base64.b64encode(gzip.compress(body)).decode(),'${digest(body)}')`;
+  let script = scriptFor(`base64.b64decode('${compressed[0]}',validate=True)`);
+  if (Buffer.byteLength(JSON.stringify(parametersFor(script))) > MAX_COMMAND_BYTES) {
+    script = scriptFor(`base64.b85decode('${compressed[1]}')`);
+  }
+  if (Buffer.byteLength(JSON.stringify(parametersFor(script))) > MAX_COMMAND_BYTES) {
+    // Only a bundle that would otherwise refuse tries stronger unaligned-text
+    // compression with the same XZ dictionary and unchanged output,
+    // decoder-memory and command bounds.
+    script = scriptFor(`base64.b85decode('${compress(true)[1]}')`);
   }
   const parameters = parametersFor(script);
   // Leave space for AWS-RunShellScript's document envelope under its 64 KiB limit.
@@ -265,8 +238,6 @@ export function releaseSsmParameters(request, readSource = sourceFile) {
 export function planStagingRelease(options, dependencies = {}) {
   const { aws = awsJson, readSource = sourceFile, runtime = reviewedRuntime, now = Date.now } = dependencies;
   releaseAction(options.action);
-  const migration = options.toolingMigration !== undefined;
-  if (migration && (options.toolingMigration !== LEGACY_MIGRATION || !['install', 'inspect-install'].includes(options.action))) fail('tooling_migration_invalid');
   const toolingSource = runtime();
   const previousSource = options.previousToolingSource ?? toolingSource;
   if (!COMMIT.test(previousSource)) fail('previous_tooling_source_invalid');
@@ -284,17 +255,10 @@ export function planStagingRelease(options, dependencies = {}) {
   const add = (name, bytes) => { files[name] = { sha256: digest(bytes), base64: bytes.toString('base64') }; };
   for (const [name, path] of Object.entries(TOOL_FILES)) {
     add(name, readSource(toolingSource, path));
-    if (!migration) old[name] = digest(readSource(previousSource, path));
-    else if (name === 'backup-authority-maintenance.sh') old[name] = files[name].sha256;
-    else {
-      const [commit, legacyPath, expected] = LEGACY_MIGRATION_FILES[name];
-      if (!dependencies.readSource) git(['merge-base', '--is-ancestor', commit, 'origin/main']);
-      if (digest(readSource(commit, legacyPath)) !== expected) fail('tooling_source_mismatch');
-      old[name] = expected;
-    }
+    old[name] = digest(readSource(previousSource, path));
   }
   for (const name of Object.keys(TOOL_FILES)) {
-    if (options.action !== 'install' || (old[name] === files[name].sha256 && !(migration && name === 'backup-authority-maintenance.sh'))) delete files[name].base64;
+    if (options.action !== 'install' || old[name] === files[name].sha256) delete files[name].base64;
   }
   add('candidate.json', candidateBytes);
   add('runtime-profile.json', readFileSync(options.runtimeProfile));
@@ -307,7 +271,6 @@ export function planStagingRelease(options, dependencies = {}) {
     candidate: { release_id: candidate.release_id, sha256: digest(candidateBytes), person_client_sha256: candidate.person_client.artifact_sha256 },
     files, old_tool_hashes: old, content_telemetry: options.contentTelemetry ?? null,
     approval: options.approval ? JSON.parse(privateFile(options.approval, 4096).toString()) : null,
-    ...(migration ? { tooling_migration: LEGACY_MIGRATION } : {}),
   };
   const parameters = releaseSsmParameters(request, readSource);
   const receipt = { schema_version: 1, kind: 'echo-staging-release-operation-v1', request, request_sha256: digest(jsonBytes(request)), parameters_sha256: digest(jsonBytes(parameters)), state: 'planned', command_id: null, outcome: null };
@@ -352,8 +315,7 @@ function validateToolingInventory(diagnostic, request) {
       const expected = entry.sha256 === request.files[name].sha256 ? 'new' : entry.sha256 === request.old_tool_hashes[name] ? 'old' : 'unknown';
       if (entry.state !== expected) fail('remote_outcome_unproven');
     }
-    const expectedAbsence = request.tooling_migration === LEGACY_MIGRATION && name === 'backup-authority-maintenance.sh' && entry.state === 'missing';
-    if (!expectedAbsence && firstProblem === null && Object.hasOwn(problemCategories, entry.state)) firstProblem = { category: problemCategories[entry.state], tool: name };
+    if (firstProblem === null && Object.hasOwn(problemCategories, entry.state)) firstProblem = { category: problemCategories[entry.state], tool: name };
   }
   if (['ready', 'repair_pending'].includes(diagnostic.category)) {
     if (firstProblem !== null) fail('remote_outcome_unproven');
@@ -372,12 +334,10 @@ export function safeReleaseOutcome(raw, request, requestHash) {
     if (request.action === 'inspect-install') {
       const categories = ['ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'repair_pending', 'inspection_failed', 'control_path_changed'];
       const diagnostic = result.diagnostic;
-      const version = diagnostic.schema_version;
-      if (![1, 2].includes(version)) fail('remote_outcome_unproven');
-      exactKeys(diagnostic, ['schema_version', 'kind', 'category', 'tool', ...(version === 2 ? ['inventory'] : [])]);
+      exactKeys(diagnostic, ['schema_version', 'kind', 'category', 'tool', 'inventory']);
       const toolCategories = ['tool_missing', 'tool_file_invalid', 'tool_hash_unknown'];
-      if (diagnostic.kind !== `echo-staging-release-install-inspection-v${version}` || !categories.includes(diagnostic.category) || (toolCategories.includes(diagnostic.category) ? typeof diagnostic.tool !== 'string' || !Object.hasOwn(TOOL_FILES, diagnostic.tool) : diagnostic.tool !== null) || result.ok !== (diagnostic.category === 'ready') || result.code !== (diagnostic.category === 'ready' ? 'inspection_verified' : 'inspection_refused')) fail('remote_outcome_unproven');
-      if (version === 2) validateToolingInventory(diagnostic, request);
+      if (diagnostic.schema_version !== 2 || diagnostic.kind !== 'echo-staging-release-install-inspection-v2' || !categories.includes(diagnostic.category) || (toolCategories.includes(diagnostic.category) ? typeof diagnostic.tool !== 'string' || !Object.hasOwn(TOOL_FILES, diagnostic.tool) : diagnostic.tool !== null) || result.ok !== (diagnostic.category === 'ready') || result.code !== (diagnostic.category === 'ready' ? 'inspection_verified' : 'inspection_refused')) fail('remote_outcome_unproven');
+      validateToolingInventory(diagnostic, request);
       return result;
     }
     const bools = ['candidate_staged', 'environment_matches', 'other_bytes_changed', 'allowlisted_settings_valid', 'environment_format_supported', 'repair_pending', 'repair_eligible', 'runtime_checked'];
@@ -429,7 +389,6 @@ export function executeStagingRelease(pathname, dependencies = {}, pollOnly = fa
       return pollReceipt(path, receipt, aws);
     }
     if (runtime() !== receipt.request.tooling_source) fail('exact_reviewed_runtime_required');
-    if (![2, 3, 4].includes(receipt.request.schema_version)) fail('legacy_plan_execution_refused');
     if (Math.floor(now() / 1000) > receipt.request.expires_at) fail('plan_expired');
     if (!same(stagingReleaseTarget(aws), receipt.request.target)) fail('staging_target_changed');
     const parameters = releaseSsmParameters(receipt.request, readSource);
@@ -459,9 +418,9 @@ function main(argv) {
   }
   if (command === 'plan') {
     const required = ['--action', '--accepted-release', '--release', '--runtime-profile', '--output'];
-    const allowed = [...required, '--previous-tooling-source', '--content-telemetry', '--approval', '--tooling-migration'];
+    const allowed = [...required, '--previous-tooling-source', '--content-telemetry', '--approval'];
     if (required.some(key => !options[key]) || Object.keys(options).some(key => !allowed.includes(key))) fail('arguments_invalid');
-    return planStagingRelease({ action: options['--action'], acceptedRelease: options['--accepted-release'], release: options['--release'], runtimeProfile: options['--runtime-profile'], output: options['--output'], previousToolingSource: options['--previous-tooling-source'], contentTelemetry: options['--content-telemetry'], approval: options['--approval'], toolingMigration: options['--tooling-migration'] });
+    return planStagingRelease({ action: options['--action'], acceptedRelease: options['--accepted-release'], release: options['--release'], runtimeProfile: options['--runtime-profile'], output: options['--output'], previousToolingSource: options['--previous-tooling-source'], contentTelemetry: options['--content-telemetry'], approval: options['--approval'] });
   }
   if (!['execute', 'status'].includes(command) || !same(Object.keys(options), ['--receipt'])) fail('arguments_invalid');
   return executeStagingRelease(options['--receipt'], {}, command === 'status');
