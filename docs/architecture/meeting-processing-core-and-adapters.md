@@ -171,8 +171,8 @@ tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
 The Organization Authority composition root concretely selects Granola as the
 meeting source, OpenRouter with the pinned Claude Sonnet processing version as the
-decision processor, Slack for approval, interactions, identity, and the
-existing delivery capability, and Authority SQLite state. It separately
+decision processor, Slack for private approval cards, interactions, and
+identity, and Authority SQLite state. It separately
 composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter
 DeepSeek planner/answer model. The other LLM transports are compiled
 alternatives, not active runtime dependencies. This is an allowed selecting

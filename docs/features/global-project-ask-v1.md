@@ -38,10 +38,8 @@ the answer with the source beside it, then the reader, then the project or
 People & invites, then Home. The reader names where its Back goes. Back from
 an original or an answer returns to the place the project feed was scrolled
 to. Escape or Close puts an unsent note or attached file away until Capture
-opens again, and a save in flight cannot be dismissed. The retired Swift app
-also went back with Command-[ and the mouse Back button, covered a narrow
-answer with its Sources pane, and asked before discarding a draft; see the
-desktop app's [known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
+opens again, and a save in flight cannot be dismissed. See the desktop app's
+[known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
 
 Capture, and a file dropped on the window, a project row or the Capture sheet,
 use one sheet: a note or one file, the projects it is filed in, and **Who can

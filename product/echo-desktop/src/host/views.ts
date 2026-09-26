@@ -320,8 +320,8 @@ export function isRecordRef(value: unknown): value is RecordRef {
 /**
  * An answer and what it is based on, in the answer's order, each source once:
  * an approved record by its digest and policy, an original by its revision
- * and anchor. Labels are the Swift app's: "Approved record 1", or the
- * original's own label ("Original source 2" without one).
+ * and anchor. Labels are "Approved record 1", or the original's own label
+ * ("Original source 2" without one).
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const value = object(unwrap(raw));

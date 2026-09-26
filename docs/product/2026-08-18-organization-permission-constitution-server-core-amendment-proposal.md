@@ -153,7 +153,6 @@ Acceptance requires an explicit review disposition that answers all of:
 5. Are the stated non-goals sufficient to prevent this proposal from being
    read as Phase-2 completion or destructive authorization?
 
-The linked
-[review-submission record](2026-08-18-organization-permission-constitution-server-core-amendment-review.md)
-records submission only. Until a later disposition explicitly accepts this
+The review-submission record (closed without acceptance and removed; see Git
+history) recorded submission only. Until a later disposition explicitly accepts this
 amendment, constitution v1 remains the governing text.

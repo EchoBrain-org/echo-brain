@@ -14,13 +14,13 @@ existing login/HTTP fixtures after the sandboxed run was stopped. This is
 offline implementation evidence, not project authorization or live-release
 qualification; those require the later stateful and integration tasks.
 
-Related scope: [CLI wiring and contract gaps](2026-09-21-projects-cli-wiring-and-contract-gaps.md)
+Related scope: the CLI wiring and contract gaps plan (removed; see Git history)
 and the frozen [PC-00 project context V1 contract](2026-09-21-project-context-v1-contract.md).
 The [PC-01 persistence handoff](2026-09-21-project-context-pc01-persistence.md)
 describes the V7 schema, repository integration and explicit reset boundary.
 The separate native UI implementation is excluded from this combined branch.
-The [parallel implementation handoff](2026-09-21-project-context-parallel-handoff.md)
-assigns the next worktrees, exact shared-file ownership, worker bridge, and
+The parallel implementation handoff (removed after merge; see Git history)
+assigned the next worktrees, exact shared-file ownership, worker bridge, and
 integration gates for PC-02 through PC-06.
 
 ## Current Write path

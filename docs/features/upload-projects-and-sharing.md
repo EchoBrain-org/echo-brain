@@ -16,10 +16,9 @@ with no project. A line under the choices says who can read it, and **Save**
 submits it once. Escape or Close puts the draft away until Capture opens again;
 a save in flight cannot be dismissed.
 
-The retired Swift app split the same choices over two pages, the second opened
-with **Next: Sharing**. The request contract below did not change. Where the
-desktop app differs from that app is listed in its
-[known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
+The desktop app's
+[known gaps](../product/2026-09-24-electron-desktop-known-gaps.md) list what it
+does not do yet.
 
 ## Scope and access
 

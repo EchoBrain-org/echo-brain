@@ -24,8 +24,3 @@ Mutable Git fixtures use `tests/fixtures/coherent-worktree.ts` to give each case
 an isolated checkout of the original dirty and untracked inputs.
 The four stateful workspace suites share `vitest.package.serial.config.ts` and
 retain serial execution.
-
-Tests for the retired LaunchAgent machine runtime, local product database,
-installation enrollment client, JSONL outbox, and fleet updater were deleted
-with that production code. Historical qualification evidence remains in
-`docs/qualification/`.
