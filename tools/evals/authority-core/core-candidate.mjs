@@ -1,6 +1,8 @@
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v2";
 import { createPrivateSlackBlockApprovalPolicyProjectorV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
+import { createPrivateSlackBlockApprovalPolicyProjectorV2 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2";
 /** Single child process running the existing core through canonical IPC ports. */
 import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -16,7 +18,7 @@ import { createReadableSearchGenerationReconcilerV1 } from "../../../services/or
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { openOrganizationRecordDatabase, OrganizationRecordAppenderV4, createRecordPolicyFactProjectorRegistryV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { createCoreIdentity } from "./core-identity.mjs";
-import { createCoreInput } from "./core-input.mjs";
+import { createCoreInput, createCoreSourceIngestion } from "./core-input.mjs";
 import { createCoreApproval } from "./core-approval.mjs";
 import { createCoreReadRoutes } from "./core-read-routes.mjs";
 
@@ -71,7 +73,10 @@ async function open(state_directory) {
   input = createCoreInput({ authority, coordinates, owner: identity.owner, sessions: identity.sessions });
   state = new SqliteAuthorityMeetingProcessingStateV1(authority, input.source_cursor_policy, input.processor.identity.adapter_id);
   const signer = FileOrganizationAuthoritySigner.openExisting({ directory: join(state_directory, "keys"), ...coordinates });
-  const projectors = createRecordPolicyFactProjectorRegistryV1([createPrivateSlackBlockApprovalPolicyProjectorV1()]);
+  const projectors = createRecordPolicyFactProjectorRegistryV1([
+    createPrivateSlackBlockApprovalPolicyProjectorV1(),
+    createPrivateSlackBlockApprovalPolicyProjectorV2(),
+  ]);
   approvals = await createCoreApproval({
     context: {
       // Match the production composition root: approval construction happens
@@ -87,11 +92,22 @@ async function open(state_directory) {
   reads = createCoreReadRoutes({ state_directory, sessions: identity.sessions });
   const search = createReadableSearchGenerationReconcilerV1({
     state_directory, root, authority, record, signer,
-    record_input_codecs: createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1]),
+    record_input_codecs: createRecordInputCodecRegistryV4([
+      HUMAN_ACT_RECORD_INPUT_CODEC_V1,
+      PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1,
+      PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2,
+    ]),
     policy_projectors: projectors, related_atom_projector: reads.related_atom_projector,
   });
   const source = new AdmittedMeetingProcessingCycleV1({
-    source: input.source, processor: input.processor, state, stager: approvals.stager,
+    source: input.source,
+    source_ingestion: createCoreSourceIngestion({
+      authority,
+      organization_id: coordinates.organization_id,
+      state,
+      source: input.source,
+    }),
+    processor: input.processor, state, stager: approvals.stager,
     source_cursor_policy: input.source_cursor_policy,
   });
   // These delegates mirror the generic composition root. Phase ordering,
