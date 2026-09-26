@@ -3,8 +3,7 @@
 The suite verifies the package's current runtime validators and canonical byte
 encoders:
 
-- Person OIDC and session DTOs;
-- Person Slack identity-link challenges and results; and
+- Person OIDC and session DTOs, including the Person email identity rules; and
 - meeting-ingestion exclusion changes and scoped reads.
 
 Wire compatibility assertions intentionally retain the existing URL paths,

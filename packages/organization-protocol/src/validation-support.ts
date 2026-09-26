@@ -100,17 +100,6 @@ export function assertTimestamp(
   );
 }
 
-export function timestampMillis(value: string, label: string): number {
-  assertTimestamp(value, label);
-  const milliseconds = Date.parse(value);
-  if (!Number.isFinite(milliseconds)) {
-    organizationProtocolValidationFailure(
-      `${label} is not a real UTC timestamp`,
-    );
-  }
-  return milliseconds;
-}
-
 export function assertPositiveSafeInteger(
   value: unknown,
   label: string,
@@ -118,17 +107,6 @@ export function assertPositiveSafeInteger(
   if (!Number.isSafeInteger(value) || (value as number) < 1) {
     organizationProtocolValidationFailure(
       `${label} must be a positive safe integer`,
-    );
-  }
-}
-
-export function assertNonnegativeSafeInteger(
-  value: unknown,
-  label: string,
-): asserts value is number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    organizationProtocolValidationFailure(
-      `${label} must be a nonnegative safe integer`,
     );
   }
 }
@@ -180,16 +158,33 @@ export function canonicalSnapshot<T>(
 }
 
 /**
- * Canonical JSON intentionally serializes only enumerable data. Protocol
- * validators must reject, rather than silently discard, any in-memory field
- * that could not have arrived on the JSON wire.
+ * Rejects every value that cannot be represented as inert, plain JSON data.
+ * Human act record input v1 passes `requireFiniteNumbers = false`: it has
+ * always accepted any number here and left NaN and Infinity for
+ * canonicalSnapshot to reject.
  */
-export function assertOnlyEnumerableDataProperties(
+export function assertPlainJsonData(
   value: unknown,
   label: string,
+  requireFiniteNumbers = true,
   seen: Set<object> = new Set<object>(),
 ): void {
-  if (typeof value !== "object" || value === null) return;
+  if (value === null) return;
+  if (typeof value !== "object") {
+    if (
+      typeof value !== "string" &&
+      typeof value !== "boolean" &&
+      (typeof value !== "number" ||
+        (requireFiniteNumbers && !Number.isFinite(value)))
+    ) {
+      organizationProtocolValidationFailure(
+        requireFiniteNumbers
+          ? `${label} must contain only finite JSON data`
+          : `${label} must contain only JSON data`,
+      );
+    }
+    return;
+  }
   if (seen.has(value)) {
     organizationProtocolValidationFailure(`${label} must not contain a cycle`);
   }
@@ -201,13 +196,13 @@ export function assertOnlyEnumerableDataProperties(
       );
     }
     if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        organizationProtocolValidationFailure(`${label} must be a plain array`);
+      }
       const names = Object.getOwnPropertyNames(value);
-      if (
-        names.length !== value.length + 1 ||
-        !names.includes("length")
-      ) {
+      if (names.length !== value.length + 1 || !names.includes("length")) {
         organizationProtocolValidationFailure(
-          `${label} must contain only dense array elements`,
+          `${label} must be a dense plain array`,
         );
       }
       for (let index = 0; index < value.length; index += 1) {
@@ -221,9 +216,12 @@ export function assertOnlyEnumerableDataProperties(
             `${label} must contain only enumerable data properties`,
           );
         }
-        assertOnlyEnumerableDataProperties(descriptor.value, label, seen);
+        assertPlainJsonData(descriptor.value, label, requireFiniteNumbers, seen);
       }
       return;
+    }
+    if (Object.getPrototypeOf(value) !== Object.prototype) {
+      organizationProtocolValidationFailure(`${label} must be a plain object`);
     }
     for (const descriptor of Object.values(
       Object.getOwnPropertyDescriptors(value),
@@ -233,9 +231,58 @@ export function assertOnlyEnumerableDataProperties(
           `${label} must contain only enumerable data properties`,
         );
       }
-      assertOnlyEnumerableDataProperties(descriptor.value, label, seen);
+      assertPlainJsonData(descriptor.value, label, requireFiniteNumbers, seen);
     }
   } finally {
     seen.delete(value);
+  }
+}
+
+/**
+ * Snapshots a plain JSON object that has exactly `keys`. Callers pass their
+ * document byte limit, as for canonicalSnapshot.
+ */
+export function exactObject(
+  value: unknown,
+  keys: readonly string[],
+  label: string,
+  maximumBytes: number,
+  requireFiniteNumbers = true,
+): Record<string, unknown> {
+  assertPlainJsonData(value, label, requireFiniteNumbers);
+  const snapshot = canonicalSnapshot(value, label, maximumBytes);
+  if (
+    snapshot === null ||
+    typeof snapshot !== "object" ||
+    Array.isArray(snapshot)
+  ) {
+    organizationProtocolValidationFailure(`${label} must be a plain object`);
+  }
+  const record = snapshot as Record<string, unknown>;
+  const actual = Object.keys(record).sort();
+  const expected = [...keys].sort();
+  if (
+    actual.length !== expected.length ||
+    actual.some((key, index) => key !== expected[index])
+  ) {
+    organizationProtocolValidationFailure(`${label} has an unexpected shape`);
+  }
+  return record;
+}
+
+export function assertText(
+  value: unknown,
+  label: string,
+): asserts value is string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 256 ||
+    value.trim() !== value ||
+    value.includes("\0")
+  ) {
+    organizationProtocolValidationFailure(
+      `${label} must be a bounded non-empty string`,
+    );
   }
 }

@@ -19,8 +19,10 @@ import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "./record-payload.js";
 import {
   assertDigest,
   assertPositiveSafeInteger,
+  assertText,
   assertTimestamp,
   canonicalSnapshot,
+  exactObject,
   validateP256SigningKey,
 } from "./validation-support.js";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
@@ -202,108 +204,6 @@ function fail(message: string, cause?: unknown): never {
   return organizationProtocolValidationFailure(message, cause);
 }
 
-/** Rejects every value that cannot be represented as inert, plain JSON data. */
-function assertPlainJsonData(
-  value: unknown,
-  label: string,
-  seen: Set<object> = new Set<object>(),
-): void {
-  if (value === null) return;
-  if (typeof value !== "object") {
-    if (
-      typeof value !== "string" &&
-      typeof value !== "boolean" &&
-      (typeof value !== "number" || !Number.isFinite(value))
-    ) {
-      fail(`${label} must contain only finite JSON data`);
-    }
-    return;
-  }
-  if (seen.has(value)) fail(`${label} must not contain a cycle`);
-  seen.add(value);
-  try {
-    if (Object.getOwnPropertySymbols(value).length !== 0) {
-      fail(`${label} must not contain symbol properties`);
-    }
-    if (Array.isArray(value)) {
-      if (Object.getPrototypeOf(value) !== Array.prototype) {
-        fail(`${label} must be a plain array`);
-      }
-      const names = Object.getOwnPropertyNames(value);
-      if (names.length !== value.length + 1 || !names.includes("length")) {
-        fail(`${label} must be a dense plain array`);
-      }
-      for (let index = 0; index < value.length; index += 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-        if (
-          descriptor === undefined ||
-          !("value" in descriptor) ||
-          descriptor.enumerable !== true
-        ) {
-          fail(`${label} must contain only enumerable data properties`);
-        }
-        assertPlainJsonData(descriptor.value, label, seen);
-      }
-      return;
-    }
-    if (Object.getPrototypeOf(value) !== Object.prototype) {
-      fail(`${label} must be a plain object`);
-    }
-    for (const descriptor of Object.values(
-      Object.getOwnPropertyDescriptors(value),
-    )) {
-      if (!("value" in descriptor) || descriptor.enumerable !== true) {
-        fail(`${label} must contain only enumerable data properties`);
-      }
-      assertPlainJsonData(descriptor.value, label, seen);
-    }
-  } finally {
-    seen.delete(value);
-  }
-}
-
-function exactObject(
-  value: unknown,
-  keys: readonly string[],
-  label: string,
-): Record<string, unknown> {
-  assertPlainJsonData(value, label);
-  const snapshot = canonicalSnapshot(
-    value,
-    label,
-    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
-  );
-  if (
-    snapshot === null ||
-    typeof snapshot !== "object" ||
-    Array.isArray(snapshot)
-  ) {
-    fail(`${label} must be a plain object`);
-  }
-  const record = snapshot as Record<string, unknown>;
-  const actual = Object.keys(record).sort();
-  const expected = [...keys].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((key, index) => key !== expected[index])
-  ) {
-    fail(`${label} has an unexpected shape`);
-  }
-  return record;
-}
-
-function assertText(value: unknown, label: string): asserts value is string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > 256 ||
-    value.trim() !== value ||
-    value.includes("\0")
-  ) {
-    fail(`${label} must be a bounded non-empty string`);
-  }
-}
-
 /**
  * Provider-owned identifiers are opaque bytes carried in a JSON string. Keep
  * surrounding/control characters exactly as supplied; only NUL is forbidden.
@@ -358,6 +258,7 @@ export function validateMeetingSourceProvenanceV1(
     value,
     SOURCE_PROVENANCE_KEYS,
     "Meeting source provenance v1",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
   );
   if (
     provenance.schema_version !== 1 ||
@@ -407,6 +308,7 @@ export function validateDecisionProcessorProvenanceV1(
     value,
     PROCESSOR_PROVENANCE_KEYS,
     "Decision processor provenance v1",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
   );
   if (
     provenance.schema_version !== 1 ||
@@ -503,7 +405,7 @@ export function validateOrganizationRecordEnvelopeBodyV4(
   value: unknown,
   codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): OrganizationRecordEnvelopeBodyV4 {
-  const body = exactObject(value, RECORD_BODY_KEYS, "Record envelope body v4");
+  const body = exactObject(value, RECORD_BODY_KEYS, "Record envelope body v4", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   if (
     body.schema_version !== 4 ||
     body.kind !== ORGANIZATION_RECORD_ENVELOPE_V4_KIND
@@ -596,6 +498,7 @@ export function validateOrganizationRecordSignatureInputV4(
     value,
     SIGNATURE_INPUT_KEYS,
     "Record signature input v4",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
   );
   if (
     input.schema_version !== 4 ||
@@ -664,7 +567,7 @@ export function validateOrganizationRecordEnvelopeV4(
   value: unknown,
   codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): OrganizationRecordEnvelopeV4 {
-  const wrapper = exactObject(value, RECORD_WRAPPER_KEYS, "Record envelope v4");
+  const wrapper = exactObject(value, RECORD_WRAPPER_KEYS, "Record envelope v4", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   const body = validateOrganizationRecordEnvelopeBodyV4(wrapper.body, codecs);
   assertDigest(wrapper.record_sha256, "Record envelope v4 record_sha256");
   if (wrapper.record_sha256 !== organizationRecordEnvelopeBodyV4Sha256(body, codecs)) {
@@ -747,7 +650,7 @@ export async function createOrganizationRecordEnvelopeV4(
   sign: AuthorityDetachedSigner,
   codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4,
 ): Promise<OrganizationRecordEnvelopeV4> {
-  const input = exactObject(value, CREATE_INPUT_KEYS, "Create record envelope v4 input");
+  const input = exactObject(value, CREATE_INPUT_KEYS, "Create record envelope v4 input", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES);
   assertText(input.envelope_id, "Create record envelope v4 envelope_id");
   assertTimestamp(input.issued_at, "Create record envelope v4 issued_at");
   assertPredecessor(input.predecessor_position, input.predecessor_record_sha256);

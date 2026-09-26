@@ -22,8 +22,10 @@ import {
 } from "./person-content-policy-v2.js";
 import {
   assertDigest,
+  assertPlainJsonData,
   assertPositiveSafeInteger,
-  canonicalSnapshot,
+  assertText,
+  exactObject,
 } from "./validation-support.js";
 import { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "./record-payload.js";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
@@ -202,104 +204,11 @@ function fail(message: string): never {
   return organizationProtocolValidationFailure(message);
 }
 
-function assertPlainJsonData(
-  value: unknown,
-  label: string,
-  seen: Set<object> = new Set<object>(),
-): void {
-  if (value === null) return;
-  if (typeof value !== "object") {
-    if (
-      typeof value !== "string" &&
-      typeof value !== "number" &&
-      typeof value !== "boolean"
-    ) {
-      fail(`${label} must contain only JSON data`);
-    }
-    return;
-  }
-  if (seen.has(value)) fail(`${label} must not contain a cycle`);
-  seen.add(value);
-  try {
-    if (Object.getOwnPropertySymbols(value).length !== 0) {
-      fail(`${label} must not contain symbol properties`);
-    }
-    if (Array.isArray(value)) {
-      if (Object.getPrototypeOf(value) !== Array.prototype) {
-        fail(`${label} must be a plain array`);
-      }
-      const names = Object.getOwnPropertyNames(value);
-      if (names.length !== value.length + 1 || !names.includes("length")) {
-        fail(`${label} must be a dense plain array`);
-      }
-      for (let index = 0; index < value.length; index += 1) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-        if (
-          descriptor === undefined ||
-          !("value" in descriptor) ||
-          descriptor.enumerable !== true
-        ) {
-          fail(`${label} must contain only enumerable data properties`);
-        }
-        assertPlainJsonData(descriptor.value, label, seen);
-      }
-      return;
-    }
-    if (Object.getPrototypeOf(value) !== Object.prototype) {
-      fail(`${label} must be a plain object`);
-    }
-    for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
-      if (!("value" in descriptor) || descriptor.enumerable !== true) {
-        fail(`${label} must contain only enumerable data properties`);
-      }
-      assertPlainJsonData(descriptor.value, label, seen);
-    }
-  } finally {
-    seen.delete(value);
-  }
-}
-
-function exactObject(
-  value: unknown,
-  keys: readonly string[],
-  label: string,
-): Record<string, unknown> {
-  assertPlainJsonData(value, label);
-  const snapshot = canonicalSnapshot(
-    value,
-    label,
-    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
-  );
-  if (
-    snapshot === null ||
-    typeof snapshot !== "object" ||
-    Array.isArray(snapshot)
-  ) {
-    fail(`${label} must be a plain object`);
-  }
-  const record = snapshot as Record<string, unknown>;
-  const actual = Object.keys(record).sort();
-  const expected = [...keys].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((key, index) => key !== expected[index])
-  ) {
-    fail(`${label} has an unexpected shape`);
-  }
-  return record;
-}
-
-function assertText(value: unknown, label: string): asserts value is string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > 256 ||
-    value.trim() !== value ||
-    value.includes("\0")
-  ) {
-    fail(`${label} must be a bounded non-empty string`);
-  }
-}
+/**
+ * Human act record input v1 has always accepted any number in its plain JSON
+ * check and left NaN and Infinity for canonicalSnapshot to reject.
+ */
+const REQUIRE_FINITE_JSON_NUMBERS = false;
 
 function assertAction(value: unknown, label: string): asserts value is HumanActActionV1 {
   if (value !== "approve" && value !== "reject") fail(`${label} is unsupported`);
@@ -356,6 +265,8 @@ export function validateApprovedDecisionSnapshotV2(
     value,
     APPROVED_DECISION_SNAPSHOT_KEYS,
     "Approved decision snapshot v2",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
+    REQUIRE_FINITE_JSON_NUMBERS,
   );
   if (snapshot.schema_version !== 2 || snapshot.kind !== APPROVED_DECISION_SNAPSHOT_V2_KIND) {
     fail("Approved decision snapshot v2 has an unsupported envelope");
@@ -386,6 +297,8 @@ export function validateHumanActResolutionRefV1(
     value,
     HUMAN_ACT_RESOLUTION_REF_KEYS,
     "Human act resolution ref v1",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
+    REQUIRE_FINITE_JSON_NUMBERS,
   );
   if (reference.schema_version !== 1 || reference.kind !== HUMAN_ACT_RESOLUTION_REF_V1_KIND) {
     fail("Human act resolution ref v1 has an unsupported envelope");
@@ -429,13 +342,13 @@ export function humanActResolutionRefV1Sha256(
 }
 
 export function validateHumanActEventV1(value: unknown): HumanActEventV1 {
-  assertPlainJsonData(value, "Human act event v1");
+  assertPlainJsonData(value, "Human act event v1", REQUIRE_FINITE_JSON_NUMBERS);
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     fail("Human act event v1 must be a plain object");
   }
   const kind = (value as Record<string, unknown>).kind;
   if (kind === "approved") {
-    const event = exactObject(value, APPROVED_EVENT_KEYS, "Approved human act event v1");
+    const event = exactObject(value, APPROVED_EVENT_KEYS, "Approved human act event v1", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES, REQUIRE_FINITE_JSON_NUMBERS);
     const snapshot = validateApprovedDecisionSnapshotV2(event.approved_snapshot);
     assertDigest(event.approved_snapshot_sha256, "Approved human act event v1 approved_snapshot_sha256");
     if (event.approved_snapshot_sha256 !== approvedDecisionSnapshotV2Sha256(snapshot)) {
@@ -457,7 +370,7 @@ export function validateHumanActEventV1(value: unknown): HumanActEventV1 {
     return event as unknown as ApprovedHumanActEventV1;
   }
   if (kind === "rejected") {
-    const event = exactObject(value, REJECTED_EVENT_KEYS, "Rejected human act event v1");
+    const event = exactObject(value, REJECTED_EVENT_KEYS, "Rejected human act event v1", MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES, REQUIRE_FINITE_JSON_NUMBERS);
     for (const key of [
       "candidate_sha256",
       "approved_snapshot_sha256",
@@ -488,6 +401,8 @@ export function validateHumanActEventCommitmentV1(
     value,
     HUMAN_ACT_EVENT_COMMITMENT_KEYS,
     "Human act event commitment v1",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
+    REQUIRE_FINITE_JSON_NUMBERS,
   );
   if (
     commitment.schema_version !== 1 ||
@@ -523,6 +438,8 @@ export function validateHumanActIdempotencyV2(
     value,
     HUMAN_ACT_IDEMPOTENCY_KEYS,
     "Human act idempotency v2",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
+    REQUIRE_FINITE_JSON_NUMBERS,
   );
   if (
     preimage.schema_version !== 2 ||
@@ -577,6 +494,8 @@ export function validateHumanActRecordInputV1(
     value,
     HUMAN_ACT_RECORD_INPUT_KEYS,
     "Human act record input v1",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
+    REQUIRE_FINITE_JSON_NUMBERS,
   );
   const reference = validateHumanActResolutionRefV1(
     input.human_act_resolution_ref,
@@ -640,6 +559,8 @@ export function buildHumanActRecordInputV1(
     input,
     BUILD_HUMAN_ACT_RECORD_INPUT_KEYS,
     "Human act record input v1 build input",
+    MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
+    REQUIRE_FINITE_JSON_NUMBERS,
   );
   const reference = validateHumanActResolutionRefV1(
     source.human_act_resolution_ref,
