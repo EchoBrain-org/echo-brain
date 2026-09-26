@@ -293,6 +293,8 @@ function environmentDriftFixture(stateName = "release-state") {
   };
 }
 
+// Exercise the retained historical Authority-file conversion lanes. Other
+// planes remain current fixture state; these are not migrations to current V10.
 function migrationFixture(from: 5 | 8 = 5) {
   const to = from === 5 ? 6 : 9;
   const migration = `v${from}-to-v${to}`;

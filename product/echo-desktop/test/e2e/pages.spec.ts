@@ -15,7 +15,8 @@ test('a refused read for the same account shows why instead of loading forever',
 test('Back keeps the pages Home had loaded, and showing the window re-reads it', async () => {
   run = await launch('many-projects');
   const { page, app } = run;
-  const lists = () => run.calls().filter(call => call.path === '/v1/person/projects').length;
+  const lists = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v2/person/projects' &&
+    new URLSearchParams(call.query).get('status') === 'active').length;
   await expect(page.getByTestId('project-row')).toHaveCount(10);
   await page.getByTestId('more-projects').click();
   await expect(page.getByTestId('project-row')).toHaveCount(13);
@@ -31,7 +32,8 @@ test('Back keeps the pages Home had loaded, and showing the window re-reads it',
 test('opening ECHO again while it runs brings the window forward, as Open ECHO does', async () => {
   run = await launch();
   const { page, app } = run;
-  const lists = () => run.calls().filter(call => call.path === '/v1/person/projects').length;
+  const lists = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v2/person/projects' &&
+    new URLSearchParams(call.query).get('status') === 'active').length;
   await expect(page.getByTestId('project-row')).toHaveCount(2);
   const before = lists();
   // What macOS sends when ECHO is opened from Spotlight or Finder while it runs.

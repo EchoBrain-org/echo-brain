@@ -11,6 +11,7 @@ import { NewProject } from './screens/new-project.js';
 import { Organization } from './screens/organization.js';
 import { People } from './screens/people.js';
 import { MembersButton, Project } from './screens/project.js';
+import { ProjectSettings, ProjectSettingsButton } from './screens/project-settings.js';
 import { Reader } from './screens/reader.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
@@ -132,7 +133,7 @@ function App() {
   const sheet = state.sheet;
   return (
     <Shell state={state} title={title} backLabel={backLabel} pane={pane}
-      trailing={inProject && !covered && !state.ask ? <MembersButton state={state} /> : null}>
+      trailing={inProject && !covered && !state.ask ? <><MembersButton state={state} /><ProjectSettingsButton state={state} /></> : null}>
       <main class="page">
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
@@ -151,6 +152,7 @@ function App() {
       <Bar state={state} />
       {pane && <SourcePane state={state} />}
       {state.compose && !state.compose.hidden && <Compose state={state} />}
+      {!state.concealed && <ProjectSettings state={state} />}
       {sheet?.kind === 'tools' ? <ConnectedTools state={state} sheet={sheet} />
         : sheet?.kind === 'people' ? !state.concealed && <People state={state} sheet={sheet} />
         : sheet?.kind === 'new-project' ? <NewProject state={state} sheet={sheet} />

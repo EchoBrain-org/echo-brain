@@ -312,6 +312,24 @@ export interface ChangeState {
   confirmDismiss: boolean;
 }
 
+/** A project-level operation. Its receipt, not a local optimistic update, settles it. */
+export interface ProjectSettingsState {
+  project: ProjectSummary;
+  menu: boolean;
+  rename: string | null;
+  confirm: 'archive' | 'unarchive' | 'leave' | null;
+  write: {
+    requestId: string;
+    operation: 'rename' | 'archive' | 'leave';
+    name?: string;
+    archived?: boolean;
+    status: 'sending' | 'unknown' | 'failed';
+    failure?: Failure;
+    /** Forgetting an unknown request is itself asked once. */
+    dismissConfirm?: boolean;
+  } | null;
+}
+
 /** The live matches for the bar's text, within the scope they were searched in. */
 export interface MatchesState {
   seq: number;
@@ -327,10 +345,12 @@ export interface State {
   booting: boolean;
   route: Route;
   projects: { items: ProjectSummary[]; next: string | null; loading: boolean; failure?: Failure };
+  archivedProjects: { items: ProjectSummary[]; next: string | null; loading: boolean; failure?: Failure };
   feed: FeedState | null;
   roster: RosterState | null;
   reader: ReaderState | null;
   change: ChangeState | null;
+  projectSettings: ProjectSettingsState | null;
   /**
    * What the bar asks about, and searches: a project (the chip) or all
    * context. The page never moves with it.
@@ -370,8 +390,8 @@ function rememberedSidebar(): boolean {
 }
 
 let state: State = {
-  status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false }, feed: null, roster: null,
-  reader: null, change: null,
+  status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false },
+  archivedProjects: { items: [], next: null, loading: false }, feed: null, roster: null, reader: null, change: null, projectSettings: null,
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, concealed: false,
   signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, employeeWrite: null,
 };
@@ -447,7 +467,7 @@ function applyStatus(status: AppStatus): void {
     if (state.route.page === 'organization' && next.role !== 'owner') goHome();
   }
   lastAccount = { authority: next.authority, membership_id: next.membership_id };
-  if (!same || !wasSignedIn) void loadProjects();
+  if (!same || !wasSignedIn) { void loadProjects(); void loadArchivedProjects(); }
 }
 
 /** Nothing of an account's stays on screen or in memory, not even a draft. */
@@ -455,7 +475,8 @@ function forgetAccount(): void {
   lastAccount = null;
   emptyBar();
   set({ route: { page: 'home' }, feed: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
-    barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, organization: null, employeeWrite: null });
+    barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, archivedProjects: { items: [], next: null, loading: false },
+    projectSettings: null, organization: null, employeeWrite: null });
   setCompose(null);
   setChange(null);
 }
@@ -558,7 +579,7 @@ export function signOutHeld(): boolean {
   const status = state.compose?.status;
   const sheet = state.sheet;
   return status === 'sending' || status === 'checking' || status === 'unknown' || state.change?.status === 'sending' ||
-    state.change?.status === 'unknown' || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null;
+    state.change?.status === 'unknown' || projectSettingsBlocked() || (sheet?.kind === 'new-project' && newProjectBusy(sheet)) || state.employeeWrite !== null;
 }
 
 /** Sign out, or Switch account, after the person confirmed it. */
@@ -607,7 +628,7 @@ export async function loadProjects(more = false): Promise<void> {
   if (!account || (more && !state.projects.next)) return;
   const cursor = more ? state.projects.next ?? undefined : undefined;
   set({ projects: { ...state.projects, loading: true, failure: undefined } });
-  const result = await rpc('projects.list', { expect: account, ...(cursor ? { cursor } : {}) });
+  const result = await rpc('projects.list', { expect: account, status: 'active', ...(cursor ? { cursor } : {}) });
   if (!result.ok) {
     accountLost(result.failure);
     set({ projects: { ...state.projects, loading: false, failure: result.failure } });
@@ -617,6 +638,23 @@ export async function loadProjects(more = false): Promise<void> {
   const seen = new Set(more ? state.projects.items.map(project => project.project_id) : []);
   const items = [...(more ? state.projects.items : []), ...result.value.items.filter(project => !seen.has(project.project_id))];
   set({ projects: { items, next: result.value.next_cursor, loading: false } });
+}
+
+/** Archived projects live in their own list: they can be opened, but never picked for new material. */
+export async function loadArchivedProjects(more = false): Promise<void> {
+  const account = expect();
+  if (!account || (more && !state.archivedProjects.next)) return;
+  const cursor = more ? state.archivedProjects.next ?? undefined : undefined;
+  set({ archivedProjects: { ...state.archivedProjects, loading: true, failure: undefined } });
+  const result = await rpc('projects.list', { expect: account, status: 'archived', ...(cursor ? { cursor } : {}) });
+  if (!result.ok) {
+    accountLost(result.failure);
+    set({ archivedProjects: { ...state.archivedProjects, loading: false, failure: result.failure } });
+    return;
+  }
+  const seen = new Set(more ? state.archivedProjects.items.map(project => project.project_id) : []);
+  const items = [...(more ? state.archivedProjects.items : []), ...result.value.items.filter(project => !seen.has(project.project_id))];
+  set({ archivedProjects: { items, next: result.value.next_cursor, loading: false } });
 }
 
 /** A project you were lead of is now one you are a member of, or the other way: a change of access. */
@@ -640,7 +678,7 @@ export function goHome(): void {
 export async function refreshHome(): Promise<void> {
   const account = expect();
   if (!account || state.route.page !== 'home' || state.projects.loading) return;
-  const result = await rpc('projects.list', { expect: account });
+  const result = await rpc('projects.list', { expect: account, status: 'active' });
   if (!result.ok) { accountLost(result.failure); return; }
   if (state.route.page !== 'home') return;
   const first = result.value.items;
@@ -649,6 +687,7 @@ export async function refreshHome(): Promise<void> {
   const loadedMore = state.projects.items.length > first.length;
   const later = loadedMore ? state.projects.items.slice(first.length).filter(project => !seen.has(project.project_id)) : [];
   set({ projects: { items: [...first, ...later], next: loadedMore ? state.projects.next : result.value.next_cursor, loading: false } });
+  void loadArchivedProjects();
 }
 
 /** Opens a project, from Home or the sidebar: the bar's scope narrows to it, and its text stays. */
@@ -895,7 +934,7 @@ export function projectChoices(current: State = state): ProjectSummary[] {
   const filed = new Set(reader.document?.document.project_ids ?? []);
   if (reader.from.kind === 'project') filed.add(reader.from.project_id);
   if (reader.from.kind === 'document' && reader.from.project_id) filed.add(reader.from.project_id);
-  return current.projects.items.filter(project => !filed.has(project.project_id));
+  return current.projects.items.filter(project => project.status === 'active' && !filed.has(project.project_id));
 }
 
 /** What the reader shows can leave the project it was opened in. */
@@ -920,7 +959,7 @@ export function removeFromProject(): void {
 /** Add to project: filed there too; who can read it does not change. */
 export function addToProject(project: ProjectSummary): void {
   const reader = state.reader;
-  if (!reader || (reader.from.kind === 'document' && !reader.document) || (reader.from.kind !== 'document' && !reader.content)) return;
+  if (!reader || project.status !== 'active' || (reader.from.kind === 'document' && !reader.document) || (reader.from.kind !== 'document' && !reader.content)) return;
   set({ reader: { ...reader, menu: 'closed' } });
   void sendChange(reader.from.kind === 'document'
     ? { kind: 'document-associate', project_id: project.project_id, document_id: reader.id }
@@ -1032,6 +1071,172 @@ function changed(done: ChangeState): void {
       return;
     }
   }
+}
+
+// ---- project settings ----------------------------------------------------------
+
+/** A project settings operation is unsettled until its exact receipt arrives. */
+export function projectSettingsBlocked(current: State = state): boolean {
+  const status = current.projectSettings?.write?.status;
+  return status === 'sending' || status === 'unknown';
+}
+
+export function toggleProjectSettings(): void {
+  const project = state.route.page === 'project' && !state.concealed ? state.route.project : null;
+  if (!project || state.sheet || state.ask || state.reader || projectSettingsBlocked()) return;
+  const shown = state.projectSettings;
+  set({ projectSettings: shown?.project.project_id === project.project_id ? { ...shown, menu: !shown.menu, rename: null, confirm: null } : {
+    project, menu: true, rename: null, confirm: null, write: null,
+  } });
+}
+
+export function closeProjectSettings(): void {
+  const settings = state.projectSettings;
+  if (settings && !projectSettingsBlocked()) set({ projectSettings: null });
+}
+
+export function beginProjectRename(): void {
+  const settings = state.projectSettings;
+  if (!settings || settings.project.role !== 'lead' || projectSettingsBlocked()) return;
+  set({ projectSettings: { ...settings, menu: false, confirm: null, rename: settings.project.name } });
+}
+
+export function setProjectRename(name: string): void {
+  const settings = state.projectSettings;
+  if (settings && settings.rename !== null && !projectSettingsBlocked()) set({ projectSettings: { ...settings, rename: name } });
+}
+
+export function cancelProjectSettingsAction(): void {
+  const settings = state.projectSettings;
+  if (settings && !projectSettingsBlocked()) set({ projectSettings: { ...settings, rename: null, confirm: null, menu: false } });
+}
+
+export function askProjectSetting(action: 'archive' | 'unarchive' | 'leave'): void {
+  const settings = state.projectSettings;
+  if (!settings || projectSettingsBlocked() || (action !== 'leave' && settings.project.role !== 'lead')) return;
+  set({ projectSettings: { ...settings, menu: false, rename: null, confirm: action } });
+}
+
+function settingsName(value: string): string | null {
+  const name = value.normalize('NFC').trim();
+  return name === '' || new TextEncoder().encode(name).byteLength > 200 || /[\u0000-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(name) ? null : name;
+}
+
+export function projectRenameValid(name: string, previous: string): boolean {
+  const valid = settingsName(name);
+  return valid !== null && valid !== previous;
+}
+
+/** Rename sends the exact visible name; archive and leave begin only after their confirmation. */
+export function confirmProjectSetting(): void {
+  const settings = state.projectSettings;
+  if (!settings || projectSettingsBlocked()) return;
+  if (settings.rename !== null) {
+    const name = settingsName(settings.rename);
+    if (!projectRenameValid(settings.rename, settings.project.name) || name === null) return;
+    void sendProjectSetting(settings.project, 'rename', { name });
+    return;
+  }
+  if (!settings.confirm) return;
+  const operation = settings.confirm === 'leave' ? 'leave' : 'archive';
+  void sendProjectSetting(settings.project, operation, settings.confirm === 'leave' ? {} : { archived: settings.confirm === 'archive' });
+}
+
+async function sendProjectSetting(project: ProjectSummary, operation: 'rename' | 'archive' | 'leave', detail: { name?: string; archived?: boolean }, requestId: string = crypto.randomUUID()): Promise<void> {
+  const account = expect();
+  const settings = state.projectSettings;
+  const retrying = settings?.write?.requestId === requestId;
+  if (!account || !settings || settings.project.project_id !== project.project_id || (!retrying && projectSettingsBlocked())) return;
+  const write = { requestId, operation, ...detail, status: 'sending' as const };
+  set({ projectSettings: { ...settings, menu: false, rename: null, confirm: null, write } });
+  unresolvedChanged();
+  const result = operation === 'rename'
+    ? await rpc('projects.rename', { expect: account, request_id: requestId, project_id: project.project_id, name: detail.name! })
+    : operation === 'archive'
+      ? await rpc('projects.archive', { expect: account, request_id: requestId, project_id: project.project_id, archived: detail.archived! })
+      : await rpc('projects.leave', { expect: account, request_id: requestId, project_id: project.project_id });
+  const current = state.projectSettings;
+  if (current?.write?.requestId !== requestId) return;
+  if (!result.ok) {
+    const unknown = retrying || result.failure.mutation_outcome === 'unknown';
+    set({ projectSettings: { ...current, write: { ...current.write, status: unknown ? 'unknown' : 'failed', failure: result.failure } } });
+    unresolvedChanged();
+    accountLost(result.failure);
+    return;
+  }
+  set({ projectSettings: null });
+  unresolvedChanged();
+  appliedProjectSetting(project, operation, detail);
+}
+
+export function retryProjectSetting(): void {
+  const settings = state.projectSettings;
+  const write = settings?.write;
+  if (!settings || !write || write.status !== 'unknown') return;
+  void sendProjectSetting(settings.project, write.operation, { name: write.name, archived: write.archived }, write.requestId);
+}
+
+export function dismissProjectSetting(): void {
+  const settings = state.projectSettings;
+  if (settings?.write?.status === 'sending') return;
+  if (settings?.write?.status === 'unknown' && !settings.write.dismissConfirm) {
+    set({ projectSettings: { ...settings, write: { ...settings.write, dismissConfirm: true } } });
+    return;
+  }
+  set({ projectSettings: null });
+  unresolvedChanged();
+}
+
+export function keepProjectSetting(): void {
+  const settings = state.projectSettings;
+  if (settings?.write?.dismissConfirm) set({ projectSettings: { ...settings, write: { ...settings.write, dismissConfirm: false } } });
+}
+
+function replaceProject(project: ProjectSummary): void {
+  const update = (items: ProjectSummary[]) => items.map(item => item.project_id === project.project_id ? project : item);
+  set({ projects: { ...state.projects, items: update(state.projects.items) }, archivedProjects: { ...state.archivedProjects, items: update(state.archivedProjects.items) },
+    ...(state.route.page === 'project' && state.route.project.project_id === project.project_id ? { route: { page: 'project' as const, project } } : {}) });
+}
+
+function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'archive' | 'leave', detail: { name?: string; archived?: boolean }): void {
+  if (operation === 'rename') {
+    const fresh = { ...project, name: detail.name! };
+    replaceProject(fresh);
+    set({ toast: `Renamed to ${fresh.name}` });
+    return;
+  }
+  if (operation === 'archive') {
+    const fresh = { ...project, status: detail.archived ? 'archived' as const : 'active' as const };
+    const from = detail.archived ? state.projects : state.archivedProjects;
+    const to = detail.archived ? state.archivedProjects : state.projects;
+    const without = from.items.filter(item => item.project_id !== project.project_id);
+    const moved = [...to.items.filter(item => item.project_id !== project.project_id), fresh];
+    set({ ...(detail.archived ? { projects: { ...from, items: without }, archivedProjects: { ...to, items: moved } }
+      : { archivedProjects: { ...from, items: without }, projects: { ...to, items: moved } }),
+      ...(state.route.page === 'project' && state.route.project.project_id === project.project_id ? { route: { page: 'project' as const, project: fresh } } : {}),
+      toast: detail.archived ? `Archived ${fresh.name}` : `Restored ${fresh.name}` });
+    return;
+  }
+  forgetLeftProject(project.project_id);
+  set({ toast: `Left ${project.name}` });
+}
+
+/** Leaving removes every local target for the project before returning Home. */
+function forgetLeftProject(projectId: string): void {
+  const projects = state.projects.items.filter(project => project.project_id !== projectId);
+  const archivedProjects = state.archivedProjects.items.filter(project => project.project_id !== projectId);
+  const compose = state.compose;
+  let nextCompose = compose;
+  if (compose) {
+    const picked = compose.projects.filter(project => project.project_id !== projectId);
+    const previous = compose.picking ? { ...compose.picking, projects: compose.picking.projects.filter(project => project.project_id !== projectId) } : null;
+    nextCompose = { ...compose, context: compose.context?.project_id === projectId ? null : compose.context, projects: picked, picking: previous,
+      ...(compose.readers === 'projects' && picked.length === 0 ? { readers: 'only-me' as const } : {}) };
+  }
+  readSeq += 1;
+  emptyBar();
+  set({ projects: { ...state.projects, items: projects }, archivedProjects: { ...state.archivedProjects, items: archivedProjects }, compose: nextCompose,
+    route: { page: 'home' }, feed: null, roster: null, reader: null, ask: null, sources: null, sheet: null, barScope: { kind: 'global' }, organization: null });
 }
 
 // ---- people ----------------------------------------------------------------------
@@ -2176,7 +2381,7 @@ function unresolvedChanged(): void {
   const saving = compose?.status === 'sending' || compose?.status === 'unknown' || compose?.status === 'checking';
   const sheet = state.sheet?.kind === 'new-project' ? state.sheet : null;
   const uploading = sheet?.files.some(file => file.status === 'saving' || file.status === 'checking' || file.status === 'unknown') === true;
-  const changing = changeBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown' ||
+  const changing = changeBlocked() || projectSettingsBlocked() || sheet?.create.status === 'sending' || sheet?.create.status === 'unknown' ||
     sheet?.picks.some(pick => pick.status === 'adding' || pick.status === 'unknown') === true;
   const told = {
     unresolved: saving || uploading || changing,
@@ -2213,7 +2418,7 @@ function release(compose: ComposeState): void {
 
 /** The project on screen, if any. While another app is in front there is none: its page is covered. */
 function onScreen(): ProjectSummary | null {
-  return state.route.page === 'project' && !state.concealed ? state.route.project : null;
+  return state.route.page === 'project' && !state.concealed && state.route.project.status === 'active' ? state.route.project : null;
 }
 
 /**
@@ -2292,7 +2497,7 @@ export function openProjects(): void {
 /** Ticks a project in the list, or unticks it. No more than the API takes. */
 export function tickProject(project: ProjectSummary): void {
   const compose = state.compose;
-  if (!compose?.picking) return;
+  if (!compose?.picking || project.status !== 'active') return;
   const ticked = compose.projects.some(entry => entry.project_id === project.project_id);
   if (!ticked && compose.projects.length >= MAX_CAPTURE_PROJECTS) return;
   editCompose({ projects: ticked ? compose.projects.filter(entry => entry.project_id !== project.project_id) : [...compose.projects, project] });
@@ -2327,6 +2532,18 @@ export async function attachFile(): Promise<void> {
 /** Projects with none ticked: nothing to save yet. */
 export function choosingProjects(compose: ComposeState): boolean {
   return compose.readers === 'projects' && compose.projects.length === 0;
+}
+
+/** A project moved to Archived after a draft started cannot be silently replaced with a different audience. */
+function archivedComposeTarget(compose: ComposeState): ProjectSummary | null {
+  // Home can hold only its first active page. Absence from that page says
+  // nothing about a target chosen from a later page, so only a known archived
+  // record (or the target's own current status) closes the admission path.
+  const archived = new Set(state.archivedProjects.items.map(project => project.project_id));
+  const unavailable = (project: ProjectSummary) => project.status === 'archived' || archived.has(project.project_id);
+  const target = compose.projects.find(unavailable) ??
+    (compose.projects.length === 0 && compose.context && unavailable(compose.context) ? compose.context : null);
+  return target ?? null;
 }
 
 /** One project's members, or several projects' (sorted, so a resend is the identical request). */
@@ -2373,6 +2590,13 @@ export async function sendCompose(): Promise<void> {
   if (!account || !compose || compose.status === 'sending' || compose.status === 'checking') return;
   if ((!compose.file && compose.text.trim() === '') || choosingProjects(compose)) return;
   const retrying = compose.status === 'unknown';
+  // Retrying an accepted upload is not a new admission. Its immutable request
+  // must reach the Authority even if the project was archived meanwhile.
+  const archived = retrying ? null : archivedComposeTarget(compose);
+  if (archived) {
+    setCompose({ ...compose, notice: `${archived.name} is archived. Restore it or choose another project.` });
+    return;
+  }
   // Too long is said here, before anything is sent, not as a refusal.
   if (!compose.file && !retrying && new TextEncoder().encode(compose.text).length > MAX_NOTE_BYTES) {
     setCompose({ ...compose, notice: TOO_LONG });
@@ -2459,6 +2683,8 @@ export function canDrop(event: DragEvent): boolean {
  */
 export async function acceptDrop(file: File, on: ProjectSummary | 'window' | 'sheet'): Promise<void> {
   if (!expect() || state.sheet) return;
+  const target = on === 'window' || on === 'sheet' ? (on === 'window' ? state.route.page === 'project' ? state.route.project : null : null) : on;
+  if (target?.status === 'archived') { set({ toast: 'Restore this project to add files or notes.' }); return; }
   const result = await dropFile(file);
   if (!expect() || state.sheet) return;
   const current = state.compose;

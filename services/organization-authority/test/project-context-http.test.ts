@@ -69,6 +69,36 @@ async function failure(response: Response, status = 400, code = 'invalid_request
 }
 
 describe('frozen project/V2 HTTP transport', () => {
+  it('routes lifecycle settings and V2 project reads through their exact codecs', async () => {
+    const project_id: `prj_${string}` = 'prj_00000000-0000-4000-8000-000000000002';
+    const request_id = '00000000-0000-4000-8000-000000000001';
+    const created_at = '2026-09-21T00:00:00.000Z';
+    const summary = { schema_version: 2 as const, kind: 'echo-project-summary-v2' as const, project_id, name: 'Archive', created_at, role: 'lead' as const, status: 'archived' as const };
+    const receipt = (operation: 'rename' | 'archive' | 'leave') => ({ schema_version: 1 as const, kind: 'echo-project-settings-receipt-v1' as const, request_id, project_id, operation, received_at: created_at, state: 'applied' as const });
+    const origin = await start(fake({
+      listProjectsV2: (...args: unknown[]) => { calls.push({ operation: 'listProjectsV2', args }); return { schema_version: 2, kind: 'echo-project-list-v2', items: [summary], next_cursor: null }; },
+      readProjectV2: (...args: unknown[]) => { calls.push({ operation: 'readProjectV2', args }); return summary; },
+      renameProject: (...args: unknown[]) => { calls.push({ operation: 'renameProject', args }); return receipt('rename'); },
+      archiveProject: (...args: unknown[]) => { calls.push({ operation: 'archiveProject', args }); return receipt('archive'); },
+      leaveProject: (...args: unknown[]) => { calls.push({ operation: 'leaveProject', args }); return receipt('leave'); },
+    }));
+    expect(await (await fetch(`${origin}/v2/person/projects?status=archived`, { headers })).json()).toEqual({ schema_version: 2, kind: 'echo-project-list-v2', items: [summary], next_cursor: null });
+    expect(await (await fetch(`${origin}/v2/person/projects/${project_id}`, { headers })).json()).toEqual(summary);
+    const rename = { schema_version: 1, kind: 'echo-project-rename-v1', request_id, project_id, name: 'Renamed' };
+    const archive = { schema_version: 1, kind: 'echo-project-archive-v1', request_id, project_id, archived: true };
+    const leave = { schema_version: 1, kind: 'echo-project-leave-v1', request_id, project_id };
+    for (const [path, body] of [['rename', rename], ['archive', archive], ['leave', leave]] as const) {
+      expect(await (await fetch(`${origin}/v1/person/projects/${path}`, { method: 'POST', headers, body: JSON.stringify(body) })).json()).toEqual(receipt(path === 'rename' ? 'rename' : path === 'archive' ? 'archive' : 'leave'));
+    }
+    expect(calls).toEqual([
+      { operation: 'listProjectsV2', args: ['fixture-session', { limit: 10, status: 'archived' }] },
+      { operation: 'readProjectV2', args: ['fixture-session', project_id] },
+      { operation: 'renameProject', args: ['fixture-session', rename] },
+      { operation: 'archiveProject', args: ['fixture-session', archive] },
+      { operation: 'leaveProject', args: ['fixture-session', leave] },
+    ]);
+  });
+
   it.each(fixtures)('dispatches the exact fixture method/path and response: $id', async row => {
     const origin = await start();
     const response = await send(origin, row);

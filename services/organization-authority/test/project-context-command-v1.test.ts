@@ -83,6 +83,22 @@ describe('PC-00 immutable command identity (no persistence or authorization impl
     }
   });
 
+  it('binds each settings operation and its complete settings payload into the shared replay namespace', () => {
+    const rename = (name: string) => projectCommandIdentityV1(actor, { operation: 'rename', request: {
+      schema_version: 1, kind: 'echo-project-rename-v1', request_id: id, project_id: project, name,
+    } });
+    const archive = (archived: boolean) => projectCommandIdentityV1(actor, { operation: 'archive', request: {
+      schema_version: 1, kind: 'echo-project-archive-v1', request_id: id, project_id: project, archived,
+    } });
+    const leave = projectCommandIdentityV1(actor, { operation: 'leave', request: {
+      schema_version: 1, kind: 'echo-project-leave-v1', request_id: id, project_id: project,
+    } });
+    expect(rename('Alpha').command_sha256).not.toBe(rename('Beta').command_sha256);
+    expect(archive(true).command_sha256).not.toBe(archive(false).command_sha256);
+    expect(rename('Alpha').command_sha256).not.toBe(archive(true).command_sha256);
+    expect(leave.command_sha256).not.toBe(archive(true).command_sha256);
+  });
+
   it('keeps additive membership distinct from an intentional role assignment in the shared receipt namespace', () => {
     const add = projectCommandIdentityV1(actor, { operation: 'member_set', request: {
       schema_version: 1, kind: 'echo-project-member-add-v1', request_id: id, project_id: project, membership_id: actor.membership_id,

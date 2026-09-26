@@ -60,7 +60,7 @@ function metadataV2(row: Row, association_project_ids: readonly ProjectIdV1[]): 
 export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositoryV1 {
   readonly sourceAdmission: SqliteSourceAdmissionStoreV1;
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
-    if (![9, 10].includes(database.pragma('user_version', { simple: true }) as number) || database.pragma('foreign_keys', { simple: true }) !== 1) throw new Error('Documents require Authority V9 or V10 and foreign keys');
+    if (database.pragma('user_version', { simple: true }) !== 10 || database.pragma('foreign_keys', { simple: true }) !== 1) throw new Error('Documents require Authority V10 and foreign keys');
     // SQLite lower() only folds ASCII. Keep title filtering inside the paged,
     // authorized query while applying the same Unicode rules as request input.
     database.function('echo_document_title_contains_v1', { deterministic: true }, (title, query) =>
@@ -82,12 +82,28 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
     return { actor: binding, grants, digest: canonicalSha256({ actor: binding, grants }) };
   }
   private requireProject(permission: Permissions, project: string|null): void { if (project !== null && !permission.grants.some(g => g.project_id === project)) fail(); }
+  /** Archived projects retain their grants and read access, but reject new uploads. */
+  private requireActiveProject(organizationId: string, project: string|null): void {
+    if (project !== null && !this.database.prepare(`SELECT 1 FROM authority_projects_v1 WHERE organization_id=? AND project_id=? AND status='active'`).get(organizationId, project)) fail();
+  }
+  private requireActiveCoordinates(permission: Permissions, projects: readonly string[]): void {
+    projects.forEach((project) => this.requireActiveProject(permission.actor.organization_id, project));
+  }
+  private coordinateProjects(value: PersonDocumentUploadMetadataV1): readonly ProjectIdV1[] {
+    const projects: ProjectIdV1[] = [];
+    if (value.project_id !== null) projects.push(value.project_id);
+    if (value.audience.kind === 'project') projects.push(value.audience.project_id);
+    return projects;
+  }
   private coordinates(permission: Permissions, value: PersonDocumentUploadMetadataV1): void { this.requireProject(permission, value.project_id); if (value.audience.kind === 'project') this.requireProject(permission, value.audience.project_id); }
   preflight(actor: PersonAccessAuthorization, value?: PersonDocumentUploadMetadataV1): void {
     const permission=this.permissions(actor);if(!value)return;
     const input=validatePersonDocumentUploadMetadataV1(value);
     assertPersonRequestNamespaceV1(this.database,actor,input.request_id,'document');
-    if(!this.priorReceipt(actor,input))this.coordinates(permission,input);
+    if(!this.priorReceipt(actor,input)) {
+      this.coordinates(permission,input);
+      this.requireActiveCoordinates(permission, this.coordinateProjects(input));
+    }
   }
   private priorReceipt(actor: AuthorityPersonMembershipBinding, value: PersonDocumentUploadMetadataV1): PersonDocumentReceiptV1|undefined {
     const prior=this.database.prepare(`SELECT payload_sha256,receipt_json,receipt_sha256 FROM authority_person_document_receipts_v1 WHERE organization_id=? AND membership_id=? AND request_id=?`).get(actor.organization_id,actor.membership_id,value.request_id) as {payload_sha256:string;receipt_json:string;receipt_sha256:string}|undefined;
@@ -122,6 +138,7 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
       const prior=this.priorReceipt(actor,value);
       if(prior){this.current(actor,permission,reauthenticate);return immutable(this.receiptVisible(permission,value)?prior:saved(prior));}
       this.coordinates(permission,value);
+      this.requireActiveCoordinates(permission, this.coordinateProjects(value));
       assertPersonDocumentCapacityV1(this.database,actor,bytes.byteLength);
       const document_id = `doc_${canonicalSha256({kind:'echo-person-document-id-v1',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:value.request_id}).slice(7)}` as const;
       const received_at = this.now();
@@ -140,10 +157,17 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
     if (value.audience.kind === 'projects') for (const project_id of value.audience.project_ids) this.requireProject(permission, project_id);
     if (value.audience.kind === 'project') this.requireProject(permission, value.audience.project_id);
   }
+  private coordinateProjectsV2(value: PersonDocumentUploadMetadataV2): readonly string[] {
+    const audience = value.audience.kind === 'projects' ? value.audience.project_ids : value.audience.kind === 'project' ? [value.audience.project_id] : [];
+    return [...value.association_project_ids, ...audience];
+  }
   preflightV2(actor: PersonAccessAuthorization, value?: PersonDocumentUploadMetadataV2): void {
     const permission = this.permissions(actor); if (!value) return;
     const input = validatePersonDocumentUploadMetadataV2(value); assertPersonRequestNamespaceV1(this.database, actor, input.request_id, 'document');
-    if (this.priorReceiptV2(actor, input) === undefined) this.coordinatesV2(permission, input);
+    if (this.priorReceiptV2(actor, input) === undefined) {
+      this.coordinatesV2(permission, input);
+      this.requireActiveCoordinates(permission, this.coordinateProjectsV2(input));
+    }
   }
   private priorReceiptV2(actor: AuthorityPersonMembershipBinding, value: PersonDocumentUploadMetadataV2): PersonDocumentReceiptV2 | undefined {
     const prior=this.database.prepare(`SELECT payload_sha256,receipt_json,receipt_sha256 FROM authority_person_document_receipts_v1 WHERE organization_id=? AND membership_id=? AND request_id=?`).get(actor.organization_id,actor.membership_id,value.request_id) as {payload_sha256:string;receipt_json:string;receipt_sha256:string}|undefined;
@@ -160,7 +184,7 @@ export class SqlitePersonDocumentRepositoryV1 implements PersonDocumentRepositor
     return this.transaction(() => {
       const permission=this.permissions(actor); assertPersonRequestNamespaceV1(this.database,actor,value.request_id,'document'); const payload=canonicalSha256(value); const prior=this.priorReceiptV2(actor,value);
       if (prior) { this.current(actor,permission,reauthenticate); return immutable(this.receiptVisibleV2(permission,value) ? prior : savedV2(prior)); }
-      this.coordinatesV2(permission,value); assertPersonDocumentCapacityV1(this.database,actor,bytes.byteLength);
+      this.coordinatesV2(permission,value); this.requireActiveCoordinates(permission, this.coordinateProjectsV2(value)); assertPersonDocumentCapacityV1(this.database,actor,bytes.byteLength);
       const document_id=`doc_${canonicalSha256({kind:'echo-person-document-id-v1',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:value.request_id}).slice(7)}` as const;
       const received_at=this.now(); const audienceProjects=value.audience.kind==='projects'?value.audience.project_ids:value.audience.kind==='project'?[value.audience.project_id]:[];
       const receipt: PersonDocumentReceiptV2={...value,kind:'echo-person-document-receipt-v2',document_id,detected_media_type:media,received_at,state:'saved',extraction_state:'extracting'};

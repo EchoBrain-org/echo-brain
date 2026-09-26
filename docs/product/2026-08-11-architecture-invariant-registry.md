@@ -227,6 +227,13 @@ Its invariant trace and compatibility rules are additive; historical implementat
 claims above remain pinned to their original baselines. Implementation and live
 qualification must be established for the new contract independently.
 
+[ADR-0018](../decisions/ADR-0018-project-settings-v1.md) is the founder-accepted
+bounded extension for project rename, self-leave, and reversible archive.
+It preserves current audience and Person-release rules while adding project
+lifecycle admission checks and separate active/archived discovery. Its invariant
+trace and required negative proofs are recorded in the ADR; acceptance is not a
+claim of deployment or global enforcement.
+
 Update this registry whenever any of these change:
 
 - an envelope, policy, Person/effect, or retrieval-generation schema version;

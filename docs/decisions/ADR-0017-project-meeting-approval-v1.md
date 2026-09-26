@@ -103,6 +103,13 @@ requires a separately reviewed offline operation.
 
 Fresh state uses Authority V10, record-log V4, retrieval facts V3 and retrieval
 content/lexical V2. Older pinned baselines remain available for verification.
+This V10 is combined with [project settings](ADR-0018-project-settings-v1.md).
+Archived projects cannot be selected for a new approval; a frozen card rechecks
+that its selected projects are still active before approval. Archiving preserves
+existing approved records and transcript access under their current audiences.
+The founder confirmed that existing data is disposable and there are no live
+users, so this combined version uses fresh initialization without a new
+preservation migration.
 The direct read is exposed as `POST /v1/person/meeting-transcripts/read` and
 `echo transcript`, using the approval ID and exact source coordinates from the
 readable record. It works independently of optional Ask model configuration.

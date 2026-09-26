@@ -35,7 +35,7 @@ function fixture() {
   const database = new Database(":memory:");
   databases.push(database);
   database.pragma("foreign_keys=ON");
-  database.exec(readFileSync(new URL("../../../packages/organization-authority-kernel/baselines/authority-baseline-v9.sql", import.meta.url), "utf8"));
+  database.exec(readFileSync(new URL("../../../packages/organization-authority-kernel/baselines/authority-baseline-v10.sql", import.meta.url), "utf8"));
   database.prepare(`INSERT INTO authority_metadata
     (singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at)
     VALUES (1,'oau_original_context',?,'Original context fixture','{}',?,?)`).run(OWNER.organization_id, PROJECT_CONTEXT_NOW, PROJECT_CONTEXT_NOW);
@@ -262,6 +262,42 @@ describe("adversarial original-context retrieval", () => {
     expect(texts(result)[0]).toContain("PRD-14");
   });
 
+  it("keeps archived-project Ask evidence and its citation readable until the member grant is removed", async () => {
+    const f = fixture();
+    f.upload("Archive evidence", "archive-ask-marker remains valid after project archive", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
+    const projects = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
+    projects.archiveProject("owner", { schema_version: 1, kind: "echo-project-archive-v1", request_id: randomUUID(), project_id: PROJECT_ALPHA, archived: true });
+    const app = createPersonAnswerV2Route({
+      authority_id: "oau_original_context", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
+      originals: f.retrieval,
+      records: {
+        searchBatch: (input: { readonly project_id?: string; readonly queries: readonly string[] }) => {
+          expect(input.project_id).toBe(PROJECT_ALPHA);
+          return { response: { items: [] }, query_hit_counts: input.queries.map(() => 0), release: {
+            current_authorization: authorization(MEMBER),
+            active_pointer: { generation_id: canonicalSha256("empty project records"), record_head: { position: 0, record_sha256: null } },
+            record_read_audit_row_sha256: canonicalSha256("empty record release"),
+          } };
+        },
+        revalidateBatchRelease: () => authorization(MEMBER),
+      } as never,
+      model: { async generate(input) {
+        const prompt = JSON.parse(input.user_prompt) as { sources: { citation_id: string; text: string }[] };
+        expect(prompt.sources.map(source => source.text).join("\n")).toContain("archive-ask-marker");
+        return { answer: { text: "Archived evidence remains available.", citations: [prompt.sources[0]!.citation_id] } };
+      } },
+      generation: { generation_adapter_id: "fixture", planner_model: "unused", answer_model: "fixture", timeout_ms: 1000 },
+      audit: new SqlitePersonAnswerCompositionAuditV1(f.database),
+    });
+    const answer = await app.ask({ access_token: "member", request: { schema_version: 2, question: "Where is archive ask marker?", project_id: PROJECT_ALPHA } });
+    expect(answer.citations).toHaveLength(1);
+    const citation = answer.citations[0]!;
+    if (citation.kind !== "source_revision") throw new Error("expected source evidence citation");
+    expect(f.retrieval.read({ access_token: "member", scope: answer.scope, citation }).atom.text).toContain("archive-ask-marker");
+    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+    expect(() => f.retrieval.read({ access_token: "member", scope: answer.scope, citation })).toThrow();
+  });
+
   it("does not release private or other-project evidence when only some question terms match", () => {
     const f = fixture();
     const allowed = f.upload("Visible", "battery reserve review", { project_id: PROJECT_ALPHA });
@@ -354,7 +390,7 @@ describe("adversarial original-context retrieval", () => {
     expect(texts(raw).join(" ")).not.toContain("rawmeetingsecretmarker");
   });
 
-  it("releases an explicitly approved transcript only under its current project policy and exact retained revision", async () => {
+  it("retains an approved transcript through archive and revokes it on leave under its exact source and current policy", async () => {
     const f = fixture();
     const meeting = {
       schema_version: 1 as const, id: "meeting-transcript-1",
@@ -404,6 +440,10 @@ describe("adversarial original-context retrieval", () => {
     expect(retrieval.retrieve({ access_token: "member", queries: ["approved transcript marker"], scope: { kind: "global" } }).query_hit_counts).toEqual([0]);
     const released = retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation });
     expect(released.text).toContain("approved transcript marker");
+    const projects = createProjectContextApplicationV1({ authenticate: token => authorization(token === "member" ? MEMBER : OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
+    projects.archiveProject("owner", { schema_version: 1, kind: "echo-project-archive-v1", request_id: randomUUID(), project_id: PROJECT_ALPHA, archived: true });
+    expect(retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation }).text).toBe(released.text);
+    expect(retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation }).text).toBe(released.text);
     const transcriptAudit = (f.database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1").all() as Array<{ body_json: string }>)
       .map(row => JSON.parse(row.body_json) as Record<string, unknown>)
       .find(row => row.kind === "echo-person-approved-meeting-transcript-read-audit-v1");
@@ -426,8 +466,8 @@ describe("adversarial original-context retrieval", () => {
     const auditsAfterFinalFence = f.database.prepare("SELECT COUNT(*) AS count FROM authority_person_upload_read_audit_v1 WHERE body_json LIKE '%echo-person-approved-meeting-transcript-read-audit-v1%'").get() as { count: number };
     expect(auditsAfterFinalFence.count).toBe(auditsBeforeFinalFence.count);
     revokeAtFinalFence = false;
-    f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
-      .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
+    projects.leaveProject("member", { schema_version: 1, kind: "echo-project-leave-v1", request_id: randomUUID(), project_id: PROJECT_ALPHA });
+    expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation })).toThrow();
     expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "member", scope: { kind: "global" }, citation })).toThrow();
     enabled = false;
     expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "owner", scope: { kind: "global" }, citation })).toThrow();

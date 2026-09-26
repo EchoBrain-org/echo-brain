@@ -45,6 +45,9 @@ export function Project({ state, project }: { state: State; project: ProjectSumm
     );
   }
   if (feed && !feed.loading && entries.length === 0 && !more) {
+    if (project.status === 'archived') {
+      return <div class="column center" data-testid="archived-project-empty"><div class="notice">This project is archived. Restore it to add files or notes.</div></div>;
+    }
     return (
       <div class="column center" data-testid="feed-empty">
         <button type="button" class="empty-capture" data-testid="empty-capture" onClick={() => openCompose()}>

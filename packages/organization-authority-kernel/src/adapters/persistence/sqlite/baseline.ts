@@ -85,11 +85,18 @@ export function applyAuthorityBaselineV9(database: Database.Database): void {
   applyEmptyAuthorityBaseline(database, authorityBaselineSqlV9(), AUTHORITY_BASELINE_SCHEMA_VERSION_V9);
 }
 
+/** Active fresh-state schema; V5 through V9 remain pinned historical baselines. */
 export const AUTHORITY_BASELINE_SCHEMA_VERSION_V10 = 10;
+
 export function authorityBaselineSqlV10(): string {
   return readFileSync(new URL("../../../../baselines/authority-baseline-v10.sql", import.meta.url), "utf8");
 }
-export function authorityBaselineSha256V10(): Sha256Digest { return sha256Digest(authorityBaselineSqlV10()); }
+
+export function authorityBaselineSha256V10(): Sha256Digest {
+  return sha256Digest(authorityBaselineSqlV10());
+}
+
+/** V10 applies only to a completely empty fresh Authority database. */
 export function applyAuthorityBaselineV10(database: Database.Database): void {
   applyEmptyAuthorityBaseline(database, authorityBaselineSqlV10(), AUTHORITY_BASELINE_SCHEMA_VERSION_V10);
 }

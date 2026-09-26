@@ -47,7 +47,7 @@ export function Sidebar({ state }: { state: State }) {
         {account && items.length > 0 && (
           <>
             <div class="side-header">PROJECTS</div>
-            {items.map(project => <SidebarProject key={project.project_id} project={project} current={project.project_id === current} />)}
+            {items.filter(project => project.status === 'active').map(project => <SidebarProject key={project.project_id} project={project} current={project.project_id === current} />)}
             {next && (
               <button type="button" class="link-button side-more" data-testid="sidebar-more" disabled={loading} onClick={() => void loadProjects(true)}>
                 More

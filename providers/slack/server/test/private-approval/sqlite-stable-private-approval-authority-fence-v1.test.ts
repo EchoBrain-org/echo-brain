@@ -211,6 +211,8 @@ describe("SQLite stable private approval Authority fence v1", () => {
     const { database, pending: legacy, card } = fixture(10, delivery);
     try {
       const replacement = "pgm_00000000-0000-4000-8000-000000000002";
+      database.prepare(`INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
+        VALUES(?,?,'Project',?,'prn_owner','mem_owner','owner')`).run(project, ORGANIZATION_ID, NOW);
       database.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,
         principal_id,membership_id,membership_type,role,status,granted_at) VALUES(?,?,?,'prn_owner','mem_owner','owner','member','active',?)`)
         .run(grant, project, ORGANIZATION_ID, NOW);
@@ -222,6 +224,15 @@ describe("SQLite stable private approval Authority fence v1", () => {
         expect(stable.currentProjectMemberships?.({ principal_id: "prn_owner", membership_id: "mem_owner", project_ids: [project] }))
           .toEqual([{ project_id: project, project_membership_id: grant }]);
       });
+      database.prepare("UPDATE authority_projects_v1 SET status='archived' WHERE project_id=?").run(project);
+      await fence.withStablePrivateApprovalFence(stable => {
+        // The frozen card remains authentic; this newly selected project is no
+        // longer an admissible target. Only me / Team still have no targets.
+        expect(stable.revalidatePrivateApprovalAuthorization({ pending, card_binding: card, lookup: lookup() })).toMatchObject({ schema_version: 2 });
+        expect(stable.currentProjectMemberships?.({ principal_id: "prn_owner", membership_id: "mem_owner", project_ids: [project] })).toBeUndefined();
+        expect(stable.currentProjectMemberships?.({ principal_id: "prn_owner", membership_id: "mem_owner", project_ids: [] })).toEqual([]);
+      });
+      database.prepare("UPDATE authority_projects_v1 SET status='active' WHERE project_id=?").run(project);
       database.prepare(`UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_membership_id=?`).run(NOW, grant);
       database.prepare(`INSERT INTO authority_project_memberships_v1(project_membership_id,project_id,organization_id,
         principal_id,membership_id,membership_type,role,status,granted_at) VALUES(?,?,?,'prn_owner','mem_owner','owner','member','active',?)`)

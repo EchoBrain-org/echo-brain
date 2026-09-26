@@ -83,6 +83,10 @@ describe("private Slack DM approval stager V2", () => {
     authorityDatabase.prepare(`INSERT INTO authority_source_revisions_v1 (organization_id,source_id,revision_id,adapter_version,captured_at,content_sha256,revision_sha256,manifest_json) VALUES ('org_1',?,?,'1',?,'${"0".repeat(64)}',?,'{}')`).run(source.item.source_id, source.revision.revision_id, NOW, sourceContentSha256V1((({ captured_at: _capturedAt, ...immutable }) => immutable)(source.revision)));
     authorityDatabase.prepare(`INSERT INTO authority_projects_v1 (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type) VALUES (?,'org_1','Launch',?,'prn_1','mem_1','owner')`).run(PROJECT, NOW);
     authorityDatabase.prepare(`INSERT INTO authority_project_memberships_v1 (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at,revoked_at) VALUES (?,?,'org_1','prn_1','mem_1','owner','lead','active',?,NULL)`).run(PROJECT_MEMBERSHIP, PROJECT, NOW);
+    // An active grant in an archived project must not become a new card choice.
+    const archivedProject = "prj_33333333-3333-4333-8333-333333333333";
+    authorityDatabase.prepare(`INSERT INTO authority_projects_v1 (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type,status) VALUES (?,'org_1','Archived launch',?,'prn_1','mem_1','owner','archived')`).run(archivedProject, NOW);
+    authorityDatabase.prepare(`INSERT INTO authority_project_memberships_v1 (project_membership_id,project_id,organization_id,principal_id,membership_id,membership_type,role,status,granted_at) VALUES ('pgm_44444444-4444-4444-8444-444444444444',?,'org_1','prn_1','mem_1','owner','lead','active',?)`).run(archivedProject, NOW);
     const frozenDelivery = new SqlitePrivateSlackApprovalAssignmentStateV1(authorityDatabase, () => NOW);
     let deliveryReader = frozenDelivery;
     let frozenPending: any;
@@ -138,6 +142,10 @@ describe("private Slack DM approval stager V2", () => {
     expect(operations.indexOf("prepare")).toBeLessThan(operations.indexOf("open-dm"));
     expect(frozenPending).toMatchObject({ schema_version: 2, eligible_projects: [{ project_id: PROJECT, project_membership_id: PROJECT_MEMBERSHIP }], transcript_source: { revision_id: "revision-1", source_sha256: `sha256:${sourceContentSha256V1((({ captured_at: _capturedAt, ...immutable }) => immutable)(meetingSourceEnvelopeV1(input.meeting).revision))}` } });
 
+    expect(frozenPending.eligible_projects).toHaveLength(1);
+    // Preserve the exact displayed choices on retry; the tap-time fence decides
+    // whether a previously displayed choice can still admit a new approval.
+    authorityDatabase.prepare("UPDATE authority_projects_v1 SET status='archived' WHERE project_id=?").run(PROJECT);
     const providerOperations = operations.length;
     recipientChanged = true;
     await expect(stager.stage(input)).resolves.toEqual({ kind: "state_drift" });

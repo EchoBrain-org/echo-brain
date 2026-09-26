@@ -19,6 +19,10 @@ import {
   validateProjectContextSearchResultV1,
   validateProjectCreateReceiptV1,
   validateProjectCreateV1,
+  validateProjectRenameV1,
+  validateProjectArchiveV1,
+  validateProjectLeaveV1,
+  validateProjectSettingsReceiptV1,
   validateProjectDirectoryV1,
   validateProjectDirectorySearchV1,
   validateProjectListV1,
@@ -28,6 +32,9 @@ import {
   validateProjectMembersV1,
   validateProjectMutationReceiptV1,
   validateProjectPageRequestV1,
+  validateProjectPageRequestV2,
+  validateProjectSummaryV2,
+  validateProjectListV2,
 } from '../src/index.js';
 
 const request_id = '00000000-0000-4000-8000-000000000001';
@@ -48,6 +55,33 @@ describe('project context V1 public codecs', () => {
     expect(validateProjectMemberAddV1({ schema_version: 1, kind: 'echo-project-member-add-v1', request_id, project_id, membership_id }))
       .toMatchObject({ request_id, project_id, membership_id });
     expect(validateProjectCreateV1({ schema_version: 1, kind: 'echo-project-create-v1', request_id, name: 'é'.repeat(100) }).name).toBe('é'.repeat(100));
+  });
+
+  it('keeps settings mutations closed and gives V2 lifecycle state its own response family', () => {
+    expect(validateProjectRenameV1({ schema_version: 1, kind: 'echo-project-rename-v1', request_id, project_id, name: 'Renamed' }))
+      .toMatchObject({ project_id, name: 'Renamed' });
+    expect(validateProjectArchiveV1({ schema_version: 1, kind: 'echo-project-archive-v1', request_id, project_id, archived: true }))
+      .toMatchObject({ archived: true });
+    expect(validateProjectLeaveV1({ schema_version: 1, kind: 'echo-project-leave-v1', request_id, project_id })).toMatchObject({ project_id });
+    expect(validateProjectSettingsReceiptV1({ schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id, project_id, operation: 'archive', received_at, state: 'applied' }))
+      .toMatchObject({ operation: 'archive', project_id });
+    for (const invalid of [
+      { schema_version: 1, kind: 'echo-project-rename-v1', request_id, project_id, name: 'Renamed', archived: false },
+      { schema_version: 1, kind: 'echo-project-archive-v1', request_id, project_id, archived: 'true' },
+      { schema_version: 1, kind: 'echo-project-leave-v1', request_id, project_id, name: 'surprise' },
+    ]) expect(() => {
+      if (invalid.kind === 'echo-project-rename-v1') return validateProjectRenameV1(invalid);
+      if (invalid.kind === 'echo-project-archive-v1') return validateProjectArchiveV1(invalid);
+      return validateProjectLeaveV1(invalid);
+    }).toThrow();
+    const summary = { schema_version: 2 as const, kind: 'echo-project-summary-v2' as const, project_id, name: 'Renamed', created_at: received_at, role: 'lead' as const, status: 'archived' as const };
+    expect(validateProjectSummaryV2(summary)).toEqual(summary);
+    expect(validateProjectListV2({ schema_version: 2, kind: 'echo-project-list-v2', items: [summary], next_cursor: null }).items).toEqual([summary]);
+    expect(validateProjectPageRequestV2({})).toEqual({ limit: 10, status: 'active' });
+    expect(validateProjectPageRequestV2({ status: 'archived', limit: 1 })).toEqual({ limit: 1, status: 'archived' });
+    expect(() => validateProjectSummaryV2({ ...summary, status: 'deleted' })).toThrow();
+    expect(() => validateProjectListV2({ schema_version: 2, kind: 'echo-project-list-v2', items: [summary, summary], next_cursor: null })).toThrow();
+    expect(() => validateProjectPageRequestV2({ status: 'archived', project_id })).toThrow();
   });
 
   it.each([
