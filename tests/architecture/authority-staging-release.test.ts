@@ -25,7 +25,7 @@ function fixture() {
   temporary.push(directory);
   const profile = { schema_version: 1, kind: 'echo-clean-v1-runtime-profile', source_sha: COMMIT, files: Object.fromEntries(['Caddyfile.clean-v1', 'Caddyfile.clean-v1.ec2', 'compose.clean-v1.ec2.yaml', 'compose.clean-v1.yaml'].map(name => [name, readFileSync(join(REPO, 'deploy/organization-authority', name), 'utf8')])) };
   const record = (id: string) => ({ schema_version: 1, kind: 'echo-clean-v1-release', release_id: id, released_at: '2026-09-05T00:00:00Z', source_sha: COMMIT, baseline_compatibility_class: 'clean-v1', authority_image: { reference: `904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:${'d'.repeat(64)}` }, person_client: { package: '@echo-brain/person-client', version: '0.1.0-internal.1', artifact_url: 'https://rehearsal.invalid/client.tgz', artifact_sha256: 'c'.repeat(64) }, runtime_profile: { profile_version: 'clean-v1-profile-1', artifact_url: 'https://rehearsal.invalid/profile.json', artifact_sha256: digest(canonical(profile) + '\n') } });
-  const options: StagingReleasePlanOptions = { action: 'diagnose', acceptedRelease: join(directory, 'accepted.json'), release: join(directory, 'candidate.json'), runtimeProfile: join(directory, 'profile.json'), output: join(directory, 'operation.json'), previousToolingSource: OLD };
+  const options: StagingReleasePlanOptions = { action: 'status', acceptedRelease: join(directory, 'accepted.json'), release: join(directory, 'candidate.json'), runtimeProfile: join(directory, 'profile.json'), output: join(directory, 'operation.json'), previousToolingSource: OLD };
   write(options.acceptedRelease, record('clean-v1-accepted-test'));
   write(options.release, record('clean-v1-candidate-test'));
   write(options.runtimeProfile, profile);
@@ -35,7 +35,7 @@ function fixture() {
   const outcome = () => {
     const receipt = JSON.parse(readFileSync(options.output, 'utf8'));
     const inspection = receipt.request.action === 'inspect-install';
-    return { schema_version: 1, kind: 'echo-staging-release-host-result-v1', operation_id: receipt.request.operation_id, request_sha256: receipt.request_sha256, action: receipt.request.action, ok: true, code: inspection ? 'inspection_verified' : 'verified', diagnostic: inspection ? { schema_version: 2, kind: 'echo-staging-release-install-inspection-v2', category: 'ready', tool: null, inventory: Object.fromEntries(Object.entries(receipt.request.old_tool_hashes).map(([name, sha256]) => [name, { state: sha256 === receipt.request.files[name].sha256 ? 'new' : 'old', sha256 }])) } : receipt.request.action === 'diagnose' ? { schema_version: 1, kind: 'echo-clean-v1-environment-drift', release_id: receipt.request.accepted.release_id, candidate_staged: false, environment_matches: false, changed_settings: ['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1'], other_bytes_changed: false, allowlisted_settings_valid: true, environment_format_supported: true, repair_pending: false, repair_eligible: true, runtime_checked: false } : null };
+    return { schema_version: 1, kind: 'echo-staging-release-host-result-v1', operation_id: receipt.request.operation_id, request_sha256: receipt.request_sha256, action: receipt.request.action, ok: true, code: inspection ? 'inspection_verified' : 'verified', diagnostic: inspection ? { schema_version: 2, kind: 'echo-staging-release-install-inspection-v2', category: 'ready', tool: null, inventory: Object.fromEntries(Object.entries(receipt.request.old_tool_hashes).map(([name, sha256]) => [name, { state: sha256 === receipt.request.files[name].sha256 ? 'new' : 'old', sha256 }])) } : null };
   };
   const aws = (args: string[]) => {
     calls.push(args);
@@ -62,10 +62,10 @@ afterEach(() => { for (const path of temporary.splice(0)) rmSync(path, { recursi
 describe('bounded staging release operator', () => {
   it.each(['stage-v5-to-v6', 'stage-v8-to-v9'] as const)('plans %s with installed-tool hash witnesses and no remote mutation', action => {
     const f = fixture();
-    const options = { ...f.options, action, contentTelemetry: 'true' as const };
+    const options = { ...f.options, action };
     expect(planStagingRelease(options, f.dependencies).state).toBe('planned');
     const request = f.request();
-    expect(request).toMatchObject({ schema_version: 4, kind: 'echo-staging-release-request-v4', action, content_telemetry: 'true' });
+    expect(request).toMatchObject({ schema_version: 4, kind: 'echo-staging-release-request-v4', action });
     expect(Object.keys(request.files['update-clean-v1.sh'])).toEqual(['sha256']);
     expect(request.files['candidate.json'].base64).toBeDefined();
     expect(f.state.submissions).toBe(0);
@@ -97,16 +97,13 @@ describe('bounded staging release operator', () => {
     type Paths = Pick<StagingReleasePlanOptions, 'acceptedRelease' | 'release' | 'runtimeProfile' | 'output'>;
     expectTypeOf<Paths & { action: 'promote' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
     expectTypeOf<Paths & { action: 'status'; approval: string }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'status'; contentTelemetry: 'true' }>().not.toMatchTypeOf<StagingReleasePlanOptions>();
     expectTypeOf<Paths & { action: 'promote'; approval: string }>().toMatchTypeOf<StagingReleasePlanOptions>();
-    expectTypeOf<Paths & { action: 'stage'; contentTelemetry: 'true' }>().toMatchTypeOf<StagingReleasePlanOptions>();
     expectTypeOf<Paths & { action: 'install' | 'inspect-install' }>().toMatchTypeOf<StagingReleasePlanOptions>();
   });
 
   it('does not accept arbitrary commands or a production operation', () => {
     expect(() => releaseAction('shell')).toThrow('action_invalid');
     expect(() => releaseAction('onboard')).toThrow('action_invalid');
-    expect(releaseAction('diagnose')).toBe('diagnose');
     expect(releaseAction('inspect-install')).toBe('inspect-install');
   });
 
@@ -196,7 +193,7 @@ describe('bounded staging release operator', () => {
   it('submits once and returns the same verified outcome on repeated execute', () => {
     const f = fixture(); planStagingRelease(f.options, f.dependencies);
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
-    expect(executeStagingRelease(f.options.output, f.dependencies).outcome?.diagnostic).toMatchObject({ repair_eligible: true });
+    expect(executeStagingRelease(f.options.output, f.dependencies).outcome?.code).toBe('verified');
     expect(f.state.submissions).toBe(1);
   });
 
@@ -216,12 +213,12 @@ describe('bounded staging release operator', () => {
     expect(f.state.submissions).toBe(1);
   });
 
-  it.each(['extra-key', 'wrong-hash', 'unknown-setting', 'free-text-error'])('rejects remote output with %s', kind => {
+  it.each(['extra-key', 'wrong-hash', 'unexpected-diagnostic', 'free-text-error'])('rejects remote output with %s', kind => {
     const f = fixture(); planStagingRelease(f.options, f.dependencies);
     const result: any = f.outcome();
     if (kind === 'extra-key') result.secret = 'must-not-leak';
     if (kind === 'wrong-hash') result.request_sha256 = 'f'.repeat(64);
-    if (kind === 'unknown-setting') result.diagnostic.changed_settings = ['PRIVATE_SETTING_NAME'];
+    if (kind === 'unexpected-diagnostic') result.diagnostic = { changed_settings: ['must-not-leak'] };
     if (kind === 'free-text-error') result.code = 'must-not-leak';
     f.state.outputOverride = JSON.stringify(result);
     expect(() => executeStagingRelease(f.options.output, f.dependencies)).toThrow();
@@ -255,7 +252,7 @@ describe('bounded staging release operator', () => {
       result.diagnostic.category = category;
       result.diagnostic.tool = toolProblems[category] ? 'update-clean-v1.sh' : null;
       if (toolProblems[category]) result.diagnostic.inventory['update-clean-v1.sh'] = toolProblems[category];
-      else if (!['ready', 'repair_pending'].includes(category)) result.diagnostic.inventory = null;
+      else if (category !== 'ready') result.diagnostic.inventory = null;
       expect(safeReleaseOutcome(JSON.stringify(result), receipt.request, receipt.request_sha256)).toEqual(result);
     }
     expect(executeStagingRelease(f.options.output, f.dependencies).state).toBe('succeeded');
@@ -274,7 +271,7 @@ describe('bounded staging release operator', () => {
     expect(() => safeReleaseOutcome(JSON.stringify({ ...result, action: 'inspect-install' }), { ...receipt.request, action: 'inspect-install' }, receipt.request_sha256)).toThrow('remote_outcome_unproven');
   });
 
-  it.each(['ready', 'unknown', 'early-refusal', 'repair-pending'])('persists complete versioned inventory without resubmission: %s', kind => {
+  it.each(['ready', 'unknown', 'early-refusal'])('persists complete versioned inventory without resubmission: %s', kind => {
     const f = fixture(); planStagingRelease({ ...f.options, action: 'inspect-install' }, f.dependencies);
     const result: any = f.outcome();
     const names = Object.keys(result.diagnostic.inventory);
@@ -284,9 +281,9 @@ describe('bounded staging release operator', () => {
       if (kind === 'unknown') {
         result.diagnostic.category = 'tool_hash_unknown'; result.diagnostic.tool = 'update-clean-v1.sh';
         result.diagnostic.inventory['update-clean-v1.sh'] = { state: 'unknown', sha256: '0'.repeat(64) };
-      } else if (kind === 'early-refusal') {
+      } else {
         result.diagnostic.category = 'identity_invalid'; result.diagnostic.inventory = null;
-      } else result.diagnostic.category = 'repair_pending';
+      }
     }
     f.state.outputOverride = JSON.stringify(result);
     const state = result.ok ? 'succeeded' : 'failed';

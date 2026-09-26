@@ -96,15 +96,12 @@ class HostProtocol(unittest.TestCase):
         value = copy.deepcopy(base)
         value['action'] = action
         value['operation_id'] = str(uuid.uuid4())
-        value['content_telemetry'] = None
         return value
 
     def invoke(self, root, operation, args):
         self.calls.append(args)
         self.assertTrue((root / '.staging-release-guard/owner-pid').is_file())
-        if args[0] == 'diagnose-environment':
-            return True, 'verified', {'release_id': base['accepted']['release_id'], 'candidate_staged': False, 'repair_eligible': True, 'repair_pending': False}
-        return True, 'verified', None
+        return True, 'verified'
 
     def execute(self, request, invoke=None, now=None):
         return host.execute_request(request, host.sha(host.canonical(request)), root=self.root, identity=lambda *_: None, invoke=invoke or self.invoke, now=now or (lambda: request['created_at'] + 1))
@@ -136,13 +133,12 @@ class HostProtocol(unittest.TestCase):
     def test_v8_to_v9_dispatch_keeps_the_bounded_stage_arguments(self):
         self.install()
         request = self.request('stage-v8-to-v9')
-        request['content_telemetry'] = 'true'
         for name in host.TOOLS:
             del request['files'][name]['base64']
         result = self.execute(request)
         self.assertTrue(result['ok'], result)
         self.assertEqual(self.calls[-1][0], 'stage-v8-to-v9')
-        self.assertEqual(self.calls[-1][-2:], ['--content-telemetry', 'true'])
+        self.assertEqual(self.calls[-1][1::2], ['--release', '--runtime-profile'])
         legacy = self.request('stage-v8-to-v9')
         legacy['schema_version'] = 2
         legacy['kind'] = 'echo-staging-release-request-v2'
@@ -251,13 +247,6 @@ class HostProtocol(unittest.TestCase):
         self.assertIsNone(result['diagnostic']['inventory'])
         self.assertEqual(result['diagnostic']['category'], 'accepted_record_mismatch')
 
-    def test_inventory_pending_repair_preserves_safe_hashes_without_success(self):
-        self.write('clean-data/release/environment-repair.pending.json', b'{}\n')
-        result = self.execute(self.request('inspect-install'))
-        self.assertEqual(result['diagnostic']['category'], 'repair_pending')
-        self.assertEqual(set(result['diagnostic']['inventory']), set(host.TOOLS))
-        self.assertFalse(result['ok'])
-
     def test_inventory_prefers_new_when_both_reviewed_digests_are_equal(self):
         request = self.request('inspect-install')
         name = host.TOOLS[0]
@@ -299,12 +288,10 @@ class HostProtocol(unittest.TestCase):
         for expected, prepare in (
             ('hostname_mismatch', lambda: self.write('.env.clean-v1', b'ECHO_CLEAN_AUTHORITY_HOST=wrong.invalid\n')),
             ('candidate_present', self.candidate),
-            ('repair_pending', lambda: self.write('clean-data/release/environment-repair.pending.json', b'{}\n')),
         ):
             self.write('clean-data/release/current.clean-v1.json', accepted_bytes)
             candidate = self.root / 'clean-data/release/candidate.clean-v1.json'
-            pending = self.root / 'clean-data/release/environment-repair.pending.json'
-            candidate.unlink(missing_ok=True); pending.unlink(missing_ok=True)
+            candidate.unlink(missing_ok=True)
             self.write('.env.clean-v1', b'ECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n')
             prepare()
             result = self.execute(self.request('inspect-install'))
@@ -478,10 +465,10 @@ class HostProtocol(unittest.TestCase):
         self.assertFalse(self.execute(self.request('install'))['ok'])
         self.assertEqual(self.calls, [])
 
-    def test_staged_candidate_blocks_install_repair_and_stage(self):
+    def test_staged_candidate_blocks_install_and_stage(self):
         self.install()
         self.candidate()
-        for action in ('install', 'repair', 'stage'):
+        for action in ('install', 'stage'):
             self.assertFalse(self.execute(self.request(action))['ok'])
         self.assertEqual(self.calls, [])
 
@@ -523,26 +510,6 @@ class HostProtocol(unittest.TestCase):
         self.assertEqual(self.execute(request)['code'], 'operation_incomplete')
         self.assertEqual(self.calls, [])
 
-    def test_repair_requires_positive_diagnostic_and_exact_accepted_id(self):
-        self.install()
-        request = self.request('repair')
-        self.assertTrue(self.execute(request)['ok'])
-        self.assertEqual(self.calls[-1], ['repair-environment', '--expected-release-id', base['accepted']['release_id'], '--restore-accepted'])
-        self.calls.clear()
-        def ineligible(root, operation, args):
-            self.calls.append(args)
-            return True, 'verified', {'release_id': base['accepted']['release_id'], 'candidate_staged': False, 'repair_eligible': False, 'repair_pending': False}
-        self.assertFalse(self.execute(self.request('repair'), invoke=ineligible)['ok'])
-        self.assertEqual(self.calls, [['diagnose-environment']])
-
-    def test_stage_passes_telemetry_only_to_candidate_command(self):
-        self.install()
-        request = self.request('stage')
-        request['content_telemetry'] = 'true'
-        self.assertTrue(self.execute(request)['ok'])
-        self.assertEqual(self.calls[-1][-2:], ['--content-telemetry', 'true'])
-        self.assertEqual((self.root / 'clean-data/release/current.clean-v1.json').read_bytes(), accepted_bytes)
-
     def test_canary_and_rollback_require_exact_candidate(self):
         self.install()
         for action in ('canary', 'rollback'):
@@ -565,7 +532,7 @@ class HostProtocol(unittest.TestCase):
         self.write('update-clean-v1.sh', b'#!/bin/sh\necho never-print-private-output\necho never-print-secret-error >&2\nexit 1\n', 0o755)
         operation = self.root / 'clean-data/release'
         result = host.wrapper(self.root, operation, ['status'])
-        self.assertEqual(result, (False, 'wrapper_failed', None))
+        self.assertEqual(result, (False, 'wrapper_failed'))
 
     def test_wrapper_bounds_flooding_descendant_output_and_reaps_the_group(self):
         started = self.root / 'descendant-started'
@@ -628,63 +595,14 @@ while True:
             with self.assertRaises(host.InterruptedWrapper):
                 host.wrapper(self.root, self.root / 'clean-data/release', ['status'])
 
-    def test_non_diagnostic_wrapper_allows_progress_output_without_retaining_it(self):
+    def test_wrapper_allows_progress_output_without_retaining_it(self):
         probe = f'''#!{sys.executable}
 import os
 for _ in range(9):
     os.write(1, b'x' * 16384)
 '''
         self.write('update-clean-v1.sh', probe.encode(), 0o755)
-        self.assertEqual(host.wrapper(self.root, self.root / 'clean-data/release', ['status']), (True, 'verified', None))
-
-    def test_diagnose_drains_valid_multi_chunk_short_lived_output(self):
-        diagnostic = {
-            'schema_version': 1,
-            'kind': 'echo-clean-v1-environment-drift',
-            'release_id': base['accepted']['release_id'],
-            'changed_settings': [],
-            'candidate_staged': False,
-            'environment_matches': True,
-            'other_bytes_changed': False,
-            'allowlisted_settings_valid': True,
-            'environment_format_supported': True,
-            'repair_pending': False,
-            'repair_eligible': False,
-            'runtime_checked': False,
-        }
-        payload = json.dumps(diagnostic, sort_keys=True, separators=(',', ':')).encode()
-        probe = f'''#!{sys.executable}
-import os
-os.write(1, {payload!r})
-'''
-        self.write('update-clean-v1.sh', probe.encode(), 0o755)
-        with patch.object(host, 'WRAPPER_READ_BYTES', 7):
-            self.assertEqual(host.wrapper(self.root, self.root / 'clean-data/release', ['diagnose-environment']), (True, 'verified', diagnostic))
-
-    def test_diagnose_trailing_output_over_64k_forces_interrupted_result(self):
-        diagnostic = {
-            'schema_version': 1,
-            'kind': 'echo-clean-v1-environment-drift',
-            'release_id': base['accepted']['release_id'],
-            'changed_settings': [],
-            'candidate_staged': False,
-            'environment_matches': True,
-            'other_bytes_changed': False,
-            'allowlisted_settings_valid': True,
-            'environment_format_supported': True,
-            'repair_pending': False,
-            'repair_eligible': False,
-            'runtime_checked': False,
-        }
-        payload = json.dumps(diagnostic, sort_keys=True, separators=(',', ':')).encode() + b'x' * 65536
-        probe = f'''#!{sys.executable}
-import os
-os.write(1, {payload!r})
-'''
-        self.write('update-clean-v1.sh', probe.encode(), 0o755)
-        with patch.object(host, 'WRAPPER_READ_BYTES', 17):
-            with self.assertRaises(host.InterruptedWrapper):
-                host.wrapper(self.root, self.root / 'clean-data/release', ['diagnose-environment'])
+        self.assertEqual(host.wrapper(self.root, self.root / 'clean-data/release', ['status']), (True, 'verified'))
 
     def test_interrupted_wrapper_termination_retains_the_root_guard(self):
         self.install()
@@ -710,7 +628,7 @@ os.write(1, {payload!r})
             decoy = release / 'remote-operations' / request['operation_id'] / 'candidate.json'
             decoy.write_bytes(b'{"different":"candidate"}\n')
             seen.append(host.sha(pathlib.Path(args[2]).read_bytes()))
-            return True, 'verified', None
+            return True, 'verified'
         result = self.execute(request, invoke=attack)
         self.assertEqual(seen, [request['candidate']['sha256']])
         self.assertEqual(result['code'], 'control_path_changed')
@@ -724,7 +642,7 @@ os.write(1, {payload!r})
             (root / 'clean-data/release').rename(root / 'clean-data/release-before-swap')
             (root / 'clean-data/release').mkdir(mode=0o700)
             outcomes.append(self.execute(self.request('status'))['code'])
-            return True, 'verified', None
+            return True, 'verified'
         self.execute(self.request('status'), invoke=attack)
         self.assertEqual(outcomes, ['operation_locked'])
 
@@ -753,7 +671,7 @@ PY
             observed.append(host.wrapper(root, operation, args))
             return observed[-1]
         self.assertEqual(self.execute(request, invoke=attack)['code'], 'control_path_changed')
-        self.assertEqual(observed, [(True, 'verified', None)])
+        self.assertEqual(observed, [(True, 'verified')])
 
     def test_actual_updater_copy_preserves_pinned_relative_io_for_temporary_files(self):
         source = host.base64.b64decode(base['files']['update-clean-v1.sh']['base64']).decode()

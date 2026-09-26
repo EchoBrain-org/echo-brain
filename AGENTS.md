@@ -100,8 +100,8 @@ compile, guess `authorityPinSha256` from the public endpoint, or put a login
 grant in output, argv, or chat.
 
 For a current-host staging update, a local coding agent may drive the reviewed
-release CLI, eligible telemetry-drift recovery, exact offline Person-client
-installation, and both candidate-client checks. During initial onboarding, the
+release CLI, exact offline Person-client installation, and both candidate-client
+checks. During initial onboarding, the
 local operator on the designated owner Mac may also verify the release-installed
 client and run both authenticated Person reads; host wrapper actions still
 remain in the human Session Manager lane. Reuse valid sessions, completed setup

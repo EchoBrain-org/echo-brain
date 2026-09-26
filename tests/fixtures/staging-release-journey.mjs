@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { once } from 'node:events';
 import { canonicalJson } from '@echo-brain/federation-protocol';
@@ -78,11 +78,11 @@ try {
     ECHO_CLEAN_AUTHORITY_HOST: 'authority-staging.echobrain.org', ECHO_CLEAN_AUTHORITY_UID: '999', ECHO_CLEAN_AUTHORITY_GID: '988',
     ECHO_CLEAN_AUTHORITY_IMAGE: accepted.authority_image.reference, ECHO_CLEAN_RELEASE_ID: accepted.release_id,
     ECHO_CLEAN_RELEASE_SOURCE_SHA: COMMIT, ECHO_CLEAN_RUNTIME_PROFILE_SHA256: profileSha, ECHO_CLEAN_RUNTIME_PROFILE_VERSION: 'clean-v1-profile-1',
-    PRIVATE_FIXTURE: 'synthetic-never-publish-value',
+    PRIVATE_FIXTURE: 'synthetic-never-publish-value', ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: 'true',
   };
   const acceptedEnv = Object.entries(acceptedEnvironment).map(([key, value]) => `${key}=${value}\n`).join('');
   write(join(release, 'runtime-environments', accepted.release_id + '.env'), acceptedEnv);
-  write(join(host, '.env.clean-v1'), acceptedEnv + 'ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true\n');
+  write(join(host, '.env.clean-v1'), acceptedEnv);
   for (const name of ['update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh']) write(join(host, name), readFileSync(join(REPO, 'deploy/organization-authority', name)), 0o755);
   for (const name of ['clean-v1-release.py', 'clean-v1-runtime-profile.py']) write(join(host, 'release', name), readFileSync(join(REPO, 'deploy/release', name)), 0o755);
   const materialized = join(root, 'materialized-profile');
@@ -150,26 +150,7 @@ try {
   write(validator, validatorBytes, 0o755);
   success(action('install'));
   assert.equal(noEngineCalls(), '', 'inspection/install must never invoke container actions');
-  const drifted = readFileSync(join(host, '.env.clean-v1'), 'utf8');
-  write(join(host, '.env.clean-v1'), drifted + 'UNRELATED_FIXTURE=changed\n');
-  const ineligible = action('diagnose'); success(ineligible);
-  assert.equal(ineligible.outcome.diagnostic.repair_eligible, false);
-  assert.equal(action('repair').state, 'failed');
-  assert.equal(noEngineCalls(), '', 'unknown drift must not start runtime repair');
-  assert.equal(readFileSync(join(host, '.env.clean-v1'), 'utf8'), drifted + 'UNRELATED_FIXTURE=changed\n');
-  write(join(host, '.env.clean-v1'), drifted);
-  const diagnosis = action('diagnose'); success(diagnosis);
-  assert.equal(diagnosis.outcome.diagnostic.repair_eligible, true);
-  const manifestPath = join(host, 'clean-data/state/onboarding/clean-founder-v1.json');
-  const savedManifest = join(root, 'saved-manifest.json');
-  renameSync(manifestPath, savedManifest);
-  assert.equal(JSON.parse(run(process.execPath, [runtimeFixture, 'setup-status', root])).runtime_status, 'not_ready');
-  assert.equal(action('repair').state, 'failed', 'exit-zero not_ready setup must not complete runtime repair');
-  assert.equal(existsSync(join(release, 'environment-repair.pending.json')), true);
-  renameSync(savedManifest, manifestPath);
-  success(action('repair'));
-  assert.equal(readFileSync(join(host, '.env.clean-v1'), 'utf8'), acceptedEnv);
-  success(action('stage', { contentTelemetry: 'true' }));
+  success(action('stage'));
   const beforeFailure = read(join(root, 'provider-evidence.json'));
   write(join(root, 'provider-evidence.json'), { ...beforeFailure, publish_failures_remaining: 1 });
   const pending = action('canary');
@@ -215,7 +196,6 @@ try {
   assert.equal(contracts[0].card_sha256, outbox[0].frozen_card_sha256);
   noApproval();
   assert.equal(readFileSync(join(release, 'runtime-environments', accepted.release_id + '.env'), 'utf8'), acceptedEnv);
-  assert.equal(existsSync(join(release, 'environment-repair.pending.json')), false);
   assert.equal(existsSync(join(host, '.staging-release-guard')), false);
   process.stdout.write(JSON.stringify({ result: 'awaiting_human_slack_approval', simulated_boundaries: ['AWS/SSM', 'container engine and identity', 'public TLS routing', 'OIDC/Granola/LLM/Slack HTTP'] }) + '\n');
 } catch (error) {

@@ -1,5 +1,5 @@
 export type StagingReleaseAction =
-  | 'install' | 'inspect-install' | 'diagnose' | 'repair' | 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'
+  | 'install' | 'inspect-install' | 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'
   | 'canary' | 'status' | 'rollback' | 'promote';
 
 export type StagingReleaseCode =
@@ -33,16 +33,8 @@ export type StagingReleaseAuthorization = Readonly<{
 
 type ReleaseArtifact = Readonly<{ sha256: string; base64: string }>;
 type RequestAction =
-  | Readonly<{
-      action: 'promote'; approval: StagingReleaseAuthorization; content_telemetry: null;
-    }>
-  | Readonly<{
-      action: 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'; approval: null; content_telemetry: 'true' | 'false' | null;
-    }>
-  | Readonly<{
-      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'>;
-      approval: null; content_telemetry: null;
-    }>;
+  | Readonly<{ action: 'promote'; approval: StagingReleaseAuthorization }>
+  | Readonly<{ action: Exclude<StagingReleaseAction, 'promote'>; approval: null }>;
 
 /** Unchanged installed tools travel as hash witnesses; changed install tools carry bytes. */
 export type StagingReleaseRequest = Readonly<{
@@ -71,7 +63,7 @@ export type StagingReleaseInspectionCategory =
   | 'request_expired' | 'accepted_record_invalid' | 'accepted_record_mismatch'
   | 'environment_invalid' | 'hostname_mismatch' | 'candidate_present'
   | 'tool_missing' | 'tool_file_invalid' | 'tool_hash_unknown'
-  | 'repair_pending' | 'inspection_failed' | 'control_path_changed';
+  | 'inspection_failed' | 'control_path_changed';
 
 type ToolProblem = 'tool_missing' | 'tool_file_invalid' | 'tool_hash_unknown';
 type InspectionLocation =
@@ -89,21 +81,6 @@ export type StagingReleaseInspection = InspectionLocation & Readonly<{
   inventory: StagingReleaseToolInventory | null;
 }>;
 
-export type StagingReleaseEnvironmentDiagnostic = Readonly<{
-  schema_version: 1;
-  kind: 'echo-clean-v1-environment-drift';
-  release_id: string;
-  candidate_staged: boolean;
-  environment_matches: boolean;
-  changed_settings: readonly [] | readonly ['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1'];
-  other_bytes_changed: boolean;
-  allowlisted_settings_valid: boolean;
-  environment_format_supported: boolean;
-  repair_pending: boolean;
-  repair_eligible: boolean;
-  runtime_checked: false;
-}>;
-
 type OutcomeFields = Readonly<{
   schema_version: 1;
   kind: 'echo-staging-release-host-result-v1';
@@ -114,9 +91,8 @@ type OutcomeFields = Readonly<{
 }>;
 export type StagingReleaseOutcome = OutcomeFields & (
   | Readonly<{ action: 'inspect-install'; diagnostic: StagingReleaseInspection }>
-  | Readonly<{ action: 'diagnose'; diagnostic: StagingReleaseEnvironmentDiagnostic | null }>
   | Readonly<{
-      action: Exclude<StagingReleaseAction, 'inspect-install' | 'diagnose'>;
+      action: Exclude<StagingReleaseAction, 'inspect-install'>;
       diagnostic: null;
     }>
 );
@@ -154,12 +130,8 @@ export type StagingReleasePlanOptions = Readonly<{
   output: string;
   previousToolingSource?: string;
 }> & (
-  | Readonly<{ action: 'promote'; approval: string; contentTelemetry?: never }>
-  | Readonly<{ action: 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'; approval?: never; contentTelemetry?: 'true' | 'false' }>
-  | Readonly<{
-      action: Exclude<StagingReleaseAction, 'promote' | 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'>;
-      approval?: never; contentTelemetry?: never;
-    }>
+  | Readonly<{ action: 'promote'; approval: string }>
+  | Readonly<{ action: Exclude<StagingReleaseAction, 'promote'>; approval?: never }>
 );
 export type StagingReleaseSourceReader = (commit: string, path: string) => Buffer;
 export type StagingReleaseAws = (args: string[]) => unknown;

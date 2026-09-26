@@ -23,9 +23,9 @@ import urllib.request
 
 DEPLOY = pathlib.Path('/srv/echo-authority-clean-v1')
 TOOLS = ('update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh', 'release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py')
-ACTIONS = ('install', 'inspect-install', 'diagnose', 'repair', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9', 'canary', 'status', 'rollback', 'promote')
+ACTIONS = ('install', 'inspect-install', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9', 'canary', 'status', 'rollback', 'promote')
 SAFE_CODES = ('installed', 'installation_failed', 'inspection_verified', 'inspection_refused', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed')
-INSPECTION_CATEGORIES = ('ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'repair_pending', 'inspection_failed', 'control_path_changed')
+INSPECTION_CATEGORIES = ('ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'inspection_failed', 'control_path_changed')
 TOOL_CATEGORIES = ('tool_missing', 'tool_file_invalid', 'tool_hash_unknown')
 WRAPPER_TIMEOUT_SECONDS = 1000
 WRAPPER_TERM_GRACE_SECONDS = 5
@@ -33,7 +33,6 @@ WRAPPER_KILL_REAP_SECONDS = 5
 WRAPPER_STREAM_BYTES = 65536
 WRAPPER_READ_BYTES = 16384
 WRAPPER_TOTAL_OUTPUT_BYTES = 4 * 1024 * 1024
-WRAPPER_DIAGNOSE_STDOUT_BYTES = 65536
 
 
 class Refused(Exception):
@@ -122,7 +121,7 @@ def make_directory(path):
 
 
 def validate_request(request):
-    expected = {'schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval'}
+    expected = {'schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'approval'}
     require(set(request) == expected)
     require(request['schema_version'] == 4 and request['kind'] == 'echo-staging-release-request-v4')
     require(re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', request['operation_id']) is not None)
@@ -151,8 +150,6 @@ def validate_request(request):
         files[name] = data
     for name in TOOLS:
         require(re.fullmatch(r'[a-f0-9]{64}', request['old_tool_hashes'][name]) is not None)
-    require(request['content_telemetry'] in (None, 'true', 'false'))
-    require(request['action'] in ('stage', 'stage-v5-to-v6', 'stage-v8-to-v9') or request['content_telemetry'] is None)
     for binding in ('accepted', 'candidate'):
         require(re.fullmatch(r'clean-v1-[a-z0-9][a-z0-9-]{2,63}', request[binding]['release_id']) is not None)
         require(re.fullmatch(r'[a-f0-9]{64}', request[binding]['sha256']) is not None)
@@ -161,7 +158,7 @@ def validate_request(request):
     require(candidate['person_client']['artifact_sha256'] == request['candidate']['person_client_sha256'])
     require(candidate['runtime_profile']['artifact_sha256'] == sha(files['runtime-profile.json']))
     if request['accepted']['release_id'] == request['candidate']['release_id']:
-        require(request['action'] in ('install', 'inspect-install', 'diagnose', 'repair', 'status') and request['accepted']['sha256'] == request['candidate']['sha256'])
+        require(request['action'] in ('install', 'inspect-install', 'status') and request['accepted']['sha256'] == request['candidate']['sha256'])
     approval = request['approval']
     if request['action'] == 'promote':
         require(isinstance(approval, dict) and set(approval) == {'kind', 'release_sha256', 'person_client_sha256', 'slack_approved', 'person_records_passed', 'person_ask_passed', 'release_authorized'})
@@ -194,20 +191,16 @@ def machine_identity(request, root):
 
 
 class CapturedOutput:
-    def __init__(self, limit, enforce_limit=False):
+    def __init__(self, limit):
         self.limit = limit
-        self.enforce_limit = enforce_limit
         self.value = bytearray()
         self.total = 0
-        self.exceeded = False
 
     def append(self, chunk):
         self.total += len(chunk)
         remaining = self.limit - len(self.value)
         if remaining > 0:
             self.value.extend(chunk[:remaining])
-        if self.enforce_limit and len(chunk) > remaining:
-            self.exceeded = True
 
 
 class OutputBudget:
@@ -269,10 +262,6 @@ def read_output(selector, captures, budget, timeout):
         budget.append(chunk)
 
 
-def output_exceeded(captures, budget):
-    return budget.exceeded or any(capture.exceeded for capture in captures.values())
-
-
 def drain_output(selector, captures, budget, deadline):
     """Consume an exited group's remaining pipe bytes without an unbounded read."""
     while selector.get_map():
@@ -280,7 +269,7 @@ def drain_output(selector, captures, budget, deadline):
         if remaining <= 0:
             return False
         read_output(selector, captures, budget, min(remaining, 0.1))
-        if output_exceeded(captures, budget):
+        if budget.exceeded:
             return False
     return True
 
@@ -333,19 +322,13 @@ def wrapper(root, operation, args):
     try:
         child = subprocess.Popen([str(root / 'update-clean-v1.sh'), *args], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
         streams = [child.stdout, child.stderr]
-        captures = {
-            stream: CapturedOutput(
-                WRAPPER_DIAGNOSE_STDOUT_BYTES if stream is child.stdout and args[0] == 'diagnose-environment' else WRAPPER_STREAM_BYTES,
-                stream is child.stdout and args[0] == 'diagnose-environment',
-            )
-            for stream in streams
-        }
+        captures = {stream: CapturedOutput(WRAPPER_STREAM_BYTES) for stream in streams}
         for stream in streams:
             os.set_blocking(stream.fileno(), False)
             selector.register(stream, selectors.EVENT_READ)
         deadline = time.monotonic() + WRAPPER_TIMEOUT_SECONDS
         while True:
-            if output_exceeded(captures, budget):
+            if budget.exceeded:
                 interrupt_wrapper(child, selector, captures, budget)
             if child.poll() is not None:
                 # A direct child exiting is insufficient: a descendant may
@@ -354,7 +337,6 @@ def wrapper(root, operation, args):
                     interrupt_wrapper(child, selector, captures, budget)
                 if not drain_output(selector, captures, budget, deadline):
                     interrupt_wrapper(child, selector, captures, budget)
-                raw = bytes(captures[child.stdout].value)
                 error = bytes(captures[child.stderr].value)
                 code = child.returncode
                 break
@@ -371,7 +353,7 @@ def wrapper(root, operation, args):
             except Exception:
                 pass
             raise InterruptedWrapper() from None
-        return False, 'wrapper_failed', None
+        return False, 'wrapper_failed'
     finally:
         close_output(selector, streams)
         try:
@@ -380,21 +362,11 @@ def wrapper(root, operation, args):
             pass
     if code != 0:
         if b'release environment drifted from the accepted release record' in error:
-            return False, 'environment_drift', None
+            return False, 'environment_drift'
         if b'staging canary delivery is still pending' in error:
-            return False, 'delivery_pending', None
-        return False, 'wrapper_failed', None
-    if args[0] == 'diagnose-environment':
-        require(len(raw) <= 65536)
-        result = json.loads(raw)
-        bools = {'candidate_staged', 'environment_matches', 'other_bytes_changed', 'allowlisted_settings_valid', 'environment_format_supported', 'repair_pending', 'repair_eligible', 'runtime_checked'}
-        require(set(result) == bools | {'schema_version', 'kind', 'release_id', 'changed_settings'})
-        require(all(type(result[key]) is bool for key in bools))
-        require(result['schema_version'] == 1 and result['kind'] == 'echo-clean-v1-environment-drift' and result['runtime_checked'] is False)
-        require(re.fullmatch(r'clean-v1-[a-z0-9][a-z0-9-]{2,63}', result['release_id']) is not None)
-        require(result['changed_settings'] in ([], ['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1']))
-        return True, 'verified', result
-    return True, 'verified', None
+            return False, 'delivery_pending'
+        return False, 'wrapper_failed'
+    return True, 'verified'
 
 
 def result_for(request, request_hash, ok, code, diagnostic=None):
@@ -432,7 +404,7 @@ def valid_inventory(request, inventory, category, tool):
             elif type(digest) is not str or re.fullmatch(r'[a-f0-9]{64}', digest) is None or entry['state'] != tooling_state(request, name, digest):
                 return False
         problem = inventory_problem(inventory)
-        if category in ('ready', 'repair_pending'):
+        if category == 'ready':
             return problem == (None, None)
         return category in TOOL_CATEGORIES and problem == (category, tool)
     except Exception:
@@ -491,7 +463,7 @@ def installer_preconditions(request, root):
             require(sha(regular(candidate_path, True, 16384)) == request['candidate']['sha256'], 'candidate_present')
         except Exception:
             raise Refused('candidate_present')
-    if request['action'] in ('install', 'inspect-install', 'repair', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9'):
+    if request['action'] in ('install', 'inspect-install', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9'):
         require(not candidate_present, 'candidate_present')
     if request['action'] in ('canary', 'promote', 'rollback'):
         require(candidate_present)
@@ -515,11 +487,7 @@ def installer_preconditions(request, root):
                 allowed.add(request['old_tool_hashes'][name])
             if old_hashes[name] not in allowed:
                 raise Refused('tool_hash_unknown', name)
-    if request['action'] in ('install', 'inspect-install'):
-        pending = pathlib.Path('environment-repair.pending.json')
-        if pending.exists() or pending.is_symlink():
-            raise Refused('repair_pending', inventory=inventory)
-    return candidate_present, old_hashes, inventory
+    return old_hashes, inventory
 
 
 def execute_request(request, request_hash, root=DEPLOY, identity=machine_identity, invoke=wrapper, now=time.time):
@@ -642,7 +610,7 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
     immutable(operation / 'request.json', canonical(request))
     installing = False
     try:
-        candidate_present, old_hashes, inventory = installer_preconditions(request, root)
+        old_hashes, inventory = installer_preconditions(request, root)
         if request['action'] == 'inspect-install':
             result = inspection_result(request, request_hash, 'ready', inventory=inventory)
         elif request['action'] == 'install':
@@ -677,16 +645,9 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
                 immutable(root / '.staging-release-guard' / name, files[name])
             inputs = root / '.staging-release-guard'
             action = request['action']
-            args = {'diagnose': ['diagnose-environment'], 'status': ['status'], 'repair': ['repair-environment', '--expected-release-id', request['accepted']['release_id'], '--restore-accepted'], 'stage': ['stage', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v5-to-v6': ['stage-v5-to-v6', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v8-to-v9': ['stage-v8-to-v9', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'canary': ['canary'], 'rollback': ['rollback'], 'promote': ['promote', '--release', str(inputs / 'candidate.json'), '--canary-passed']}[action]
-            if action == 'repair':
-                ok, code, diagnostic = invoke(root, operation, ['diagnose-environment'])
-                require(ok and diagnostic['release_id'] == request['accepted']['release_id'] and not diagnostic['candidate_staged'] and (diagnostic['repair_eligible'] or diagnostic['repair_pending']))
-            if action in ('stage', 'stage-v5-to-v6', 'stage-v8-to-v9') and request['content_telemetry'] is not None:
-                args += ['--content-telemetry', request['content_telemetry']]
-            ok, code, diagnostic = invoke(root, operation, args)
-            if diagnostic is not None:
-                require(diagnostic['release_id'] == request['candidate' if candidate_present else 'accepted']['release_id'])
-            result = result_for(request, request_hash, ok, code, diagnostic)
+            args = {'status': ['status'], 'stage': ['stage', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v5-to-v6': ['stage-v5-to-v6', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v8-to-v9': ['stage-v8-to-v9', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'canary': ['canary'], 'rollback': ['rollback'], 'promote': ['promote', '--release', str(inputs / 'candidate.json'), '--canary-passed']}[action]
+            ok, code = invoke(root, operation, args)
+            result = result_for(request, request_hash, ok, code)
         if not binding_ok():
             result = inspection_result(request, request_hash, 'control_path_changed') if request['action'] == 'inspect-install' else result_for(request, request_hash, False, 'control_path_changed')
         immutable(operation / 'result.json', canonical(result))

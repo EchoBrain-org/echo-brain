@@ -18,7 +18,7 @@ const STACK = 'echo-authority-staging-v1';
 const SHA = /^[a-f0-9]{64}$/;
 const COMMIT = /^[a-f0-9]{40}$/;
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-const ACTIONS = ['install', 'inspect-install', 'diagnose', 'repair', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9', 'canary', 'status', 'rollback', 'promote'];
+const ACTIONS = ['install', 'inspect-install', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9', 'canary', 'status', 'rollback', 'promote'];
 const TOOL_FILES = Object.freeze({
   'update-clean-v1.sh': 'deploy/organization-authority/update-clean-v1.sh',
   'onboard-clean-v1.sh': 'deploy/organization-authority/onboard-clean-v1.sh',
@@ -147,7 +147,7 @@ function approvalFor(request, approval) {
 
 /** Pure request validation is repeated before planning, rendering and execution. */
 export function validateReleaseRequest(request, readSource = sourceFile) {
-  exactKeys(request, ['schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'content_telemetry', 'approval']);
+  exactKeys(request, ['schema_version', 'kind', 'operation_id', 'action', 'created_at', 'expires_at', 'target', 'tooling_source', 'previous_tooling_source', 'accepted', 'candidate', 'files', 'old_tool_hashes', 'approval']);
   if (request.schema_version !== 4 || request.kind !== 'echo-staging-release-request-v4' || !ID.test(request.operation_id)) fail('request_invalid');
   releaseAction(request.action);
   if (!Number.isSafeInteger(request.created_at) || request.expires_at !== request.created_at + 1800) fail('request_lifetime_invalid');
@@ -178,13 +178,12 @@ export function validateReleaseRequest(request, readSource = sourceFile) {
   if (request.candidate.release_id !== candidate.release_id || request.candidate.sha256 !== digest(bytes['candidate.json']) || request.candidate.person_client_sha256 !== candidate.person_client.artifact_sha256) fail('candidate_binding_mismatch');
   exactKeys(request.accepted, ['release_id', 'sha256']);
   if (!/^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/.test(request.accepted.release_id) || !SHA.test(request.accepted.sha256)) fail('accepted_binding_invalid');
-  if (request.accepted.release_id === candidate.release_id && (!['install', 'inspect-install', 'diagnose', 'repair', 'status'].includes(request.action) || request.accepted.sha256 !== request.candidate.sha256)) fail('accepted_binding_invalid');
+  if (request.accepted.release_id === candidate.release_id && (!['install', 'inspect-install', 'status'].includes(request.action) || request.accepted.sha256 !== request.candidate.sha256)) fail('accepted_binding_invalid');
   const profile = validateRuntimeProfile(JSON.parse(bytes['runtime-profile.json'].toString('utf8')));
   if (!jsonBytes(profile).equals(bytes['runtime-profile.json']) || digest(bytes['runtime-profile.json']) !== candidate.runtime_profile.artifact_sha256 || profile.source_sha !== candidate.source_sha) fail('profile_binding_mismatch');
   for (const [name, content] of Object.entries(profile.files)) {
     if (!Buffer.from(content).equals(readSource(candidate.source_sha, `deploy/organization-authority/${name}`))) fail('profile_source_mismatch');
   }
-  if (![null, 'true', 'false'].includes(request.content_telemetry) || (!['stage', 'stage-v5-to-v6', 'stage-v8-to-v9'].includes(request.action) && request.content_telemetry !== null)) fail('content_option_invalid');
   approvalFor(request, request.approval);
   return request;
 }
@@ -269,7 +268,7 @@ export function planStagingRelease(options, dependencies = {}) {
     tooling_source: toolingSource, previous_tooling_source: previousSource,
     accepted: { release_id: accepted.release_id, sha256: digest(acceptedBytes) },
     candidate: { release_id: candidate.release_id, sha256: digest(candidateBytes), person_client_sha256: candidate.person_client.artifact_sha256 },
-    files, old_tool_hashes: old, content_telemetry: options.contentTelemetry ?? null,
+    files, old_tool_hashes: old,
     approval: options.approval ? JSON.parse(privateFile(options.approval, 4096).toString()) : null,
   };
   const parameters = releaseSsmParameters(request, readSource);
@@ -317,7 +316,7 @@ function validateToolingInventory(diagnostic, request) {
     }
     if (firstProblem === null && Object.hasOwn(problemCategories, entry.state)) firstProblem = { category: problemCategories[entry.state], tool: name };
   }
-  if (['ready', 'repair_pending'].includes(diagnostic.category)) {
+  if (diagnostic.category === 'ready') {
     if (firstProblem !== null) fail('remote_outcome_unproven');
   } else if (firstProblem === null || firstProblem.category !== diagnostic.category || firstProblem.tool !== diagnostic.tool) fail('remote_outcome_unproven');
 }
@@ -331,22 +330,16 @@ export function safeReleaseOutcome(raw, request, requestHash) {
   if (result.ok !== ['installed', 'inspection_verified', 'verified'].includes(result.code)) fail('remote_outcome_unproven');
   if ((request.action === 'inspect-install') !== ['inspection_verified', 'inspection_refused'].includes(result.code) || (['installed', 'installation_failed'].includes(result.code) && request.action !== 'install')) fail('remote_outcome_unproven');
   if (result.diagnostic !== null) {
-    if (request.action === 'inspect-install') {
-      const categories = ['ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'repair_pending', 'inspection_failed', 'control_path_changed'];
-      const diagnostic = result.diagnostic;
-      exactKeys(diagnostic, ['schema_version', 'kind', 'category', 'tool', 'inventory']);
-      const toolCategories = ['tool_missing', 'tool_file_invalid', 'tool_hash_unknown'];
-      if (diagnostic.schema_version !== 2 || diagnostic.kind !== 'echo-staging-release-install-inspection-v2' || !categories.includes(diagnostic.category) || (toolCategories.includes(diagnostic.category) ? typeof diagnostic.tool !== 'string' || !Object.hasOwn(TOOL_FILES, diagnostic.tool) : diagnostic.tool !== null) || result.ok !== (diagnostic.category === 'ready') || result.code !== (diagnostic.category === 'ready' ? 'inspection_verified' : 'inspection_refused')) fail('remote_outcome_unproven');
-      validateToolingInventory(diagnostic, request);
-      return result;
-    }
-    const bools = ['candidate_staged', 'environment_matches', 'other_bytes_changed', 'allowlisted_settings_valid', 'environment_format_supported', 'repair_pending', 'repair_eligible', 'runtime_checked'];
-    exactKeys(result.diagnostic, ['schema_version', 'kind', 'release_id', 'changed_settings', ...bools]);
-    const diag = result.diagnostic;
-    if (request.action !== 'diagnose' || diag.kind !== 'echo-clean-v1-environment-drift' || diag.schema_version !== 1 || ![request.accepted.release_id, request.candidate.release_id].includes(diag.release_id) || bools.some(key => typeof diag[key] !== 'boolean') || diag.runtime_checked !== false || ![canonicalJson([]), canonicalJson(['ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1'])].includes(canonicalJson(diag.changed_settings))) fail('remote_outcome_unproven');
+    if (request.action !== 'inspect-install') fail('remote_outcome_unproven');
+    const categories = ['ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'inspection_failed', 'control_path_changed'];
+    const diagnostic = result.diagnostic;
+    exactKeys(diagnostic, ['schema_version', 'kind', 'category', 'tool', 'inventory']);
+    const toolCategories = ['tool_missing', 'tool_file_invalid', 'tool_hash_unknown'];
+    if (diagnostic.schema_version !== 2 || diagnostic.kind !== 'echo-staging-release-install-inspection-v2' || !categories.includes(diagnostic.category) || (toolCategories.includes(diagnostic.category) ? typeof diagnostic.tool !== 'string' || !Object.hasOwn(TOOL_FILES, diagnostic.tool) : diagnostic.tool !== null) || result.ok !== (diagnostic.category === 'ready') || result.code !== (diagnostic.category === 'ready' ? 'inspection_verified' : 'inspection_refused')) fail('remote_outcome_unproven');
+    validateToolingInventory(diagnostic, request);
+    return result;
   }
   if (request.action === 'inspect-install') fail('remote_outcome_unproven');
-  if (result.ok && request.action === 'diagnose' && result.diagnostic === null) fail('remote_outcome_unproven');
   return result;
 }
 
@@ -418,9 +411,9 @@ function main(argv) {
   }
   if (command === 'plan') {
     const required = ['--action', '--accepted-release', '--release', '--runtime-profile', '--output'];
-    const allowed = [...required, '--previous-tooling-source', '--content-telemetry', '--approval'];
+    const allowed = [...required, '--previous-tooling-source', '--approval'];
     if (required.some(key => !options[key]) || Object.keys(options).some(key => !allowed.includes(key))) fail('arguments_invalid');
-    return planStagingRelease({ action: options['--action'], acceptedRelease: options['--accepted-release'], release: options['--release'], runtimeProfile: options['--runtime-profile'], output: options['--output'], previousToolingSource: options['--previous-tooling-source'], contentTelemetry: options['--content-telemetry'], approval: options['--approval'] });
+    return planStagingRelease({ action: options['--action'], acceptedRelease: options['--accepted-release'], release: options['--release'], runtimeProfile: options['--runtime-profile'], output: options['--output'], previousToolingSource: options['--previous-tooling-source'], approval: options['--approval'] });
   }
   if (!['execute', 'status'].includes(command) || !same(Object.keys(options), ['--receipt'])) fail('arguments_invalid');
   return executeStagingRelease(options['--receipt'], {}, command === 'status');

@@ -174,14 +174,12 @@ status, but does not accept it yet.
   --runtime-profile /absolute/private/candidate-runtime-profile.json
 ```
 
-For an accepted staging Authority only, an explicit `--content-telemetry true` or
-`--content-telemetry false` may follow those arguments. The option sets
-`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1` in the new candidate's saved
-environment before activation and verifies the effective container setting.
-The source environment must use the literal format described below.
-It never modifies the accepted snapshot. Without the option, the candidate
-inherits the accepted setting. Do not enable telemetry by editing `.env.clean-v1`
-after promotion: that creates environment drift and blocks the next release.
+Apart from its release identity, the candidate's saved environment carries
+forward every accepted setting, including the staging
+`ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1` value that onboarding sets. It never
+modifies the accepted snapshot. Do not change telemetry or any other setting by
+editing `.env.clean-v1` after promotion: that creates environment drift and
+blocks the next release.
 
 Run the bounded private-DM canary through the selected running release. It
 prefers a staged candidate, otherwise uses the accepted release. It refuses any
@@ -255,8 +253,8 @@ Use `plan --action stage-v8-to-v9` through the reviewed release CLI after
 installing the merged migration tooling. It requires an already accepted,
 healthy staging host with exact V8 state and a V9 candidate. Supply the same
 accepted release, candidate release and candidate runtime-profile inputs as
-`stage`; `--content-telemetry` remains optional. Ordinary `stage` refuses V8
-before publishing a candidate. No command implicitly changes the database version.
+`stage`. Ordinary `stage` refuses V8 before publishing a candidate. No command
+implicitly changes the database version.
 
 ```sh
 npm run authority:staging-release -- plan \
@@ -308,8 +306,8 @@ V9 candidate refuses its V6 output; it is not the project-context rollout path.
 
 Use `plan --action stage-v5-to-v6` through the reviewed release CLI after
 installing the merged migration tooling. Supply the same accepted release,
-candidate release and candidate runtime-profile inputs as `stage`. Optional
-`--content-telemetry` has the same meaning. The installed host action is:
+candidate release and candidate runtime-profile inputs as `stage`. The
+installed host action is:
 
 ```sh
 ./update-clean-v1.sh stage-v5-to-v6 \
@@ -359,69 +357,12 @@ unconfirmed, stop and retain all evidence. Snapshot cleanup is separate work.
 
 ### Environment drift before staging
 
-If `status` refuses an environment mismatch, a human on the exact reviewed
-staging host runs the installed wrapper:
-
-```sh
-./update-clean-v1.sh diagnose-environment
-```
-
-This checks the selected release's stored tuple and materialized profile,
-but does not query Docker or assert runtime health. Its JSON reports the
-selected release ID, candidate presence, whether environment bytes match,
-the fixed allowlisted setting name when changed, whether other bytes differ,
-and pending-repair state. Arbitrary setting names, values, and raw diffs are
-never printed. `repair_eligible` describes environment eligibility only;
-execution separately verifies the exact accepted runtime.
-
-For an accepted release with no staged candidate, the only automatic repair
-allowed is restoring the saved environment when every difference is confined
-to one canonical `ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true|false` line
-(or that line's presence). Every other byte must be unchanged. Both files must
-be private, current-operator-owned regular files. A non-staging Authority,
-unrelated change, malformed or duplicate switch, unsafe file, or mismatched
-repair evidence is refused. Do not paste environment files into chat.
-
-Automatic repair and the explicit candidate override accept only the
-onboarding writer's literal `NAME=value` lines (plus blank/comment lines).
-The final literal line may omit its trailing newline, as onboarding writes it;
-inspection does not normalize or rewrite those bytes.
-Quoted or multiline values, interpolation, escape syntax, alternate
-assignment syntax, CR/CRLF line endings, and NUL bytes are deliberately refused;
-the diagnostic reports `environment_format_supported=false`. This prevents a
-setting-looking line inside private content from being classified as a safe
-configuration change. Other valid Compose environment formats require review,
-not automatic rewriting.
-
-After reviewing the diagnostic and the effect of restoring the saved setting,
-the human binds the operation to that exact accepted release ID:
-
-```sh
-./update-clean-v1.sh repair-environment \
-  --expected-release-id <accepted-release-id-from-diagnostic> --restore-accepted
-./update-clean-v1.sh status
-```
-
-The restore may disable content telemetry if it was enabled after acceptance.
-It atomically restores the accepted environment and restarts/checks the exact
-accepted image, profile, proxy, public descriptor, and effective telemetry
-setting. It does not replace the accepted record, change its snapshot, create
-a candidate, or infer canary approval. The private original file is retained
-as `clean-data/release/environment-repairs/<release-id>.before.env`; a private
-verification receipt is stored alongside it. These files are immutable and
-not overwritten with different evidence for another repair of the same release.
-
-A durable `environment-repair.pending.json` blocks status success, staging,
-canary, promotion, and rollback until recovery is verified. After an
-interruption or failed restart, rerun the same repair command for the same
-release; diagnostics remain available. An unrelated intervening change stops
-the retry. Do not remove or edit the pending marker, backup, or accepted
-snapshot. An already matching, verified accepted runtime is a no-op.
-
-Once repair and status succeed, stage the next reviewed candidate with the
-intended `--content-telemetry` option, then follow the normal canary and human
-approval gates. General configuration or credential drift requires separate
-review; this command is not a blanket environment reset.
+`status`, `stage`, `canary` and `promote` refuse when `.env.clean-v1` differs
+from the selected release's saved environment snapshot. There is no automatic
+diagnosis or repair: drift blocks staging, and a human on the exact reviewed
+staging host investigates the change before any further release action. Do not
+paste environment files into chat, and never overwrite an accepted snapshot to
+make the equality check pass.
 
 ## Automated current-host staging lane
 
@@ -435,8 +376,7 @@ change once. Local tests do not require a merge or permission to deploy.
 The rehearsal starts with the reviewed tooling installed, executes the real
 release planner, host runner and updater, and connects their canary to a real
 local Authority, SQLite state, private socket, card builder and Slack delivery
-adapter. It proves unknown-tool/drift refusal,
-eligible repair, affirmative setup readiness, candidate staging, failed-card
+adapter. It proves unknown-tool refusal, candidate staging, failed-card
 publication followed by restart-safe retry, and a durable pending approval
 bound to one published card. It never clicks approval, appends an approved
 record, or promotes the candidate. The test is included in `npm run check`.
@@ -484,8 +424,8 @@ copies and hashes; it never edits the accepted release or environment.
 When an install returns only `precondition_failed`, create a separate
 `inspect-install` plan with the same inputs and `--previous-tooling-source`.
 Inspection shares the installer's identity, mount, ownership/control-path,
-accepted-record, literal environment and hostname, candidate, old-or-new tool
-hash, and pending-repair guards. It returns `ready` or a fixed refusal
+accepted-record, literal environment and hostname, candidate, and old-or-new
+tool hash guards. It returns `ready` or a fixed refusal
 category; `tool_missing`, `tool_file_invalid`, and `tool_hash_unknown` identify one of the six
 fixed reviewed tool names. Once the preceding identity, path, accepted-state
 and environment-format guards pass, the version-2 diagnostic also includes a
@@ -499,8 +439,7 @@ The inventory uses the existing no-follow, regular-file, owner, mode, link-count
 and size checks before hashing. It never hashes the environment or follows a
 tool symlink to another file. All six entries are collected even when one is
 unknown or unsafe; the result retains the first tool refusal in the fixed tool
-order and does not claim readiness. A pending-repair refusal can include a
-complete safe inventory. Failures before tooling inspection, or unexpected
+order and does not claim readiness. Failures before tooling inspection, or unexpected
 diagnostic/control-path failures, return no inventory (`null`). Invalid inventory
 is redacted to `inspection_failed` on the host before SSM sees it, and the local
 validator independently rejects malformed or contradictory state/hash bindings.
@@ -542,7 +481,7 @@ npm run authority:staging-release -- status \
 
 Substitute `--action inspect-install` and use a distinct receipt path for the
 non-mutating guard inspection. It never replaces tooling, invokes an updater or
-runtime wrapper, restarts containers, repairs the environment, changes release
+runtime wrapper, restarts containers, changes the environment or release
 state, clears locks, or forces progress. It does take the transient root-owned
 staging interlock and creates the existing request/result operation journal for
 serialization and idempotency. Those bounded files are removed or retained
@@ -594,12 +533,10 @@ is installed; the new installed tools must match the executing reviewed source.
 | Action | Preconditions and result |
 | --- | --- |
 | `inspect-install` | Checks the actual install guards and old-or-new reviewed tooling hashes without replacing tools or invoking runtime behavior. Returns a strictly allowlisted readiness/refusal diagnostic. |
-| `diagnose` | Returns the fixed secret-safe diagnostic; no runtime-health claim. |
-| `repair` | Requires accepted-only eligible telemetry drift or its exact pending repair; restores the saved environment and verifies the accepted runtime. May temporarily disable telemetry. |
 | `status` | Fresh installed-wrapper runtime check, not a cached polling receipt. |
-| `stage` | No staged candidate; uses exact candidate/profile. Optional `--content-telemetry true` or `false`. |
-| `stage-v8-to-v9` | Explicit stopped-state copy and migration on the accepted V8 staging host; retains original state for rollback. Same inputs and telemetry option as `stage`. |
-| `stage-v5-to-v6` | Explicit stopped-state copy and migration on the accepted V5 staging host; retains original state for rollback. Same inputs and telemetry option as `stage`. |
+| `stage` | No staged candidate; uses exact candidate/profile. A drifted environment returns `environment_drift`. |
+| `stage-v8-to-v9` | Explicit stopped-state copy and migration on the accepted V8 staging host; retains original state for rollback. Same inputs as `stage`. |
+| `stage-v5-to-v6` | Explicit stopped-state copy and migration on the accepted V5 staging host; retains original state for rollback. Same inputs as `stage`. |
 | `canary` | Requires the exact staged candidate; stops for the human to approve its private Slack card. `delivery_pending` is safe to retry with a new canary operation after the first invocation has definitively completed. |
 | `rollback` | Requires the exact staged candidate and unchanged accepted record; existing wrapper recovery semantics apply. |
 | `promote` | Requires the exact staged candidate, its stored canary receipt, successful exact-client checks, and the separate final founder authorization below. |
@@ -641,7 +578,7 @@ retains its root-owned guard and inputs. A replacement tree is never treated as
 the accepted control state. Stop for investigation; do not remove or relocate
 the guard or any release directory to force a retry.
 
-Never delete a lock, pending repair, or journal to force progress. Unknown
+Never delete a lock or journal to force progress. Unknown
 tooling, state mismatch, unsupported environment syntax, unconfirmed execution,
 and destructive/infrastructure changes require investigation outside this lane.
 
@@ -673,7 +610,7 @@ digest or false/missing confirmation refuses before any host command. Blanket
 automation permission, code-review approval, a merge, and a canary receipt do
 not authorize promotion. After promotion, use the newly accepted record as the
 accepted input for subsequent operations and keep the old record as history.
-For a fresh post-promotion `status` or `diagnose`, pass that new accepted record
+For a fresh post-promotion `status`, pass that new accepted record
 to both `--accepted-release` and `--release`, with its matching profile. This
 does not stage a candidate or require inventing a future release.
 

@@ -66,7 +66,7 @@ PY
     for name, content in (('candidate.json', candidate), ('runtime-profile.json', profile)):
         files[name] = {'sha256': host.sha(content), 'base64': base64.b64encode(content).decode()}
     now = int(time.time())
-    request = {'schema_version': 4, 'kind': 'echo-staging-release-request-v4', 'operation_id': str(uuid.uuid4()), 'action': 'stage', 'created_at': now, 'expires_at': now + 1800, 'target': {'account': '904560150024', 'region': 'us-west-2', 'stack_id': 'arn:aws:cloudformation:us-west-2:904560150024:stack/echo-authority-staging-v1/11111111-1111-4111-8111-111111111111', 'instance_id': 'i-0123456789abcdef0', 'volume_id': 'vol-0123456789abcdef0'}, 'tooling_source': 'a' * 40, 'previous_tooling_source': 'b' * 40, 'accepted': {'release_id': 'clean-v1-accepted-fixture', 'sha256': host.sha(accepted)}, 'candidate': {'release_id': 'clean-v1-candidate-fixture', 'sha256': host.sha(candidate), 'person_client_sha256': 'c' * 64}, 'files': files, 'old_tool_hashes': old_hashes, 'content_telemetry': None, 'approval': None}
+    request = {'schema_version': 4, 'kind': 'echo-staging-release-request-v4', 'operation_id': str(uuid.uuid4()), 'action': 'stage', 'created_at': now, 'expires_at': now + 1800, 'target': {'account': '904560150024', 'region': 'us-west-2', 'stack_id': 'arn:aws:cloudformation:us-west-2:904560150024:stack/echo-authority-staging-v1/11111111-1111-4111-8111-111111111111', 'instance_id': 'i-0123456789abcdef0', 'volume_id': 'vol-0123456789abcdef0'}, 'tooling_source': 'a' * 40, 'previous_tooling_source': 'b' * 40, 'accepted': {'release_id': 'clean-v1-accepted-fixture', 'sha256': host.sha(accepted)}, 'candidate': {'release_id': 'clean-v1-candidate-fixture', 'sha256': host.sha(candidate), 'person_client_sha256': 'c' * 64}, 'files': files, 'old_tool_hashes': old_hashes, 'approval': None}
 
     # Only the shared /tmp ancestors are exempted. All fixture inode owner,
     # group, mode, descriptor, and subprocess checks are real kernel checks.
@@ -130,7 +130,7 @@ print('service-swap-completed-root-guard-protected')
         blocked = host.execute_request(next_request, host.sha(host.canonical(next_request)), root=root, identity=lambda *_: None)
         assert blocked['code'] == 'operation_locked'
         result = host.wrapper(root, operation, args)
-        assert result == (True, 'verified', None), result
+        assert result == (True, 'verified'), result
         return result
 
     result = host.execute_request(request, host.sha(host.canonical(request)), root=root, identity=lambda *_: None, invoke=invoke)

@@ -156,10 +156,10 @@ running/healthy/image/profile checks and live telemetry for runtime proof.
 ## Exceptions and recovery
 
 Use the [release guide](../../deploy/release/README.md#automated-current-host-staging-lane)
-for `inspect-install` and its hash inventory. Use its [environment-drift procedure](../../deploy/release/README.md#environment-drift-before-staging)
-for `diagnose` and eligible accepted-only `repair`. Never edit environment files
-by hand. Check whether repair would reduce intended telemetry; preserving
-observability takes precedence over making a status check pass.
+for `inspect-install` and its hash inventory. [Environment drift](../../deploy/release/README.md#environment-drift-before-staging)
+blocks staging: stop and leave the investigation to the human host operator.
+Never edit environment files by hand; preserving observability takes precedence
+over making a status check pass.
 
 One operator controls the slot. Coding agents do not start interactive SSM sessions.
 Agents use only the reviewed repository CLIs for bounded remote actions, never
