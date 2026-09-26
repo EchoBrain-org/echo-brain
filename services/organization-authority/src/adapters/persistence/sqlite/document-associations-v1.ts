@@ -43,6 +43,10 @@ export class SqlitePersonDocumentAssociationRepositoryV1 implements PersonDocume
   private relationships(documentId: string): readonly string[] {
     return (this.database.prepare('SELECT project_id FROM authority_person_document_associations_v1 WHERE document_id=? ORDER BY project_id').all(documentId) as { project_id: string }[]).map(row => row.project_id);
   }
+  /** Dissociation remains available after archive; only a new association is blocked. */
+  private requireActiveProject(organizationId: string, projectId: string): void {
+    if (!this.database.prepare(`SELECT 1 FROM authority_projects_v1 WHERE organization_id=? AND project_id=? AND status='active'`).get(organizationId, projectId)) fail();
+  }
   private authorizationRevision(organizationId: string): number {
     const state = this.database.prepare('SELECT revision FROM authority_project_authorization_state_v1 WHERE organization_id=?').get(organizationId) as { revision: number } | undefined;
     if (!state) fail('stale_access_state');
@@ -77,6 +81,7 @@ export class SqlitePersonDocumentAssociationRepositoryV1 implements PersonDocume
         const existing = this.relationships(request.document_id);
         if (operation === 'associate') {
           if (!grants.some(grant => grant.project_id === request.project_id)) fail();
+          this.requireActiveProject(actor.organization_id, request.project_id);
           if (!uploader) fail();
           if (document.request_version === 1 && existing.some(id => id !== request.project_id)) fail('conflict');
           if (!existing.includes(request.project_id) && existing.length >= 20) fail('conflict');

@@ -208,8 +208,8 @@ describe('SQLite project upload enrichment authorization V1', () => {
     const authorization = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
     expect(authorization.capture(CONTEXT)).toBeUndefined();
     database.pragma('user_version = 6');
-    expect(() => new SqliteProjectUploadEnrichmentAuthorizationV1(database)).toThrow('V9');
-    database.pragma('user_version = 9');
+    expect(() => new SqliteProjectUploadEnrichmentAuthorizationV1(database)).toThrow('V10');
+    database.pragma('user_version = 10');
     database.pragma('foreign_keys = OFF');
     expect(() => new SqliteProjectUploadEnrichmentAuthorizationV1(database)).toThrow('foreign keys');
   });

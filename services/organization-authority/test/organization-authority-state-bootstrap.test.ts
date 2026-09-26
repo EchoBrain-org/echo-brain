@@ -100,7 +100,7 @@ describe("Authority state initialization", () => {
         join(stateDirectory, "authority.sqlite"),
         "PRAGMA user_version",
       ),
-    ).toEqual([{ user_version: 9 }]);
+    ).toEqual([{ user_version: 10 }]);
     expect(
       rows(
         join(stateDirectory, "integrations.sqlite"),

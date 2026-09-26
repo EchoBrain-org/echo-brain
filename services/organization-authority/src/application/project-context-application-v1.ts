@@ -10,12 +10,16 @@ import {
   validateProjectContextDissociateV1,
   validateProjectContextSearchV1,
   validateProjectCreateV1,
+  validateProjectArchiveV1,
+  validateProjectLeaveV1,
+  validateProjectRenameV1,
   validateProjectMemberAddV1,
   validateProjectDirectorySearchV1,
   validateProjectIdV1,
   validateProjectMemberRemoveV1,
   validateProjectMemberSetV1,
   validateProjectPageRequestV1,
+  validateProjectPageRequestV2,
   type OrganizationDirectoryV1,
   type PersonUpdateReceiptV2,
   type PersonUpdateReceiptV3,
@@ -34,9 +38,12 @@ import {
   type ProjectCreateReceiptV1,
   type ProjectDirectoryV1,
   type ProjectListV1,
+  type ProjectListV2,
   type ProjectMembersV1,
   type ProjectMutationReceiptV1,
+  type ProjectSettingsReceiptV1,
   type ProjectSummaryV1,
+  type ProjectSummaryV2,
 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -69,9 +76,17 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectPageRequestV1(value));
     return this.read(accessToken, actor, { operation: 'project_list' }, (transaction, snapshot) => transaction.listProjects(snapshot, request));
   }
+  listProjectsV2(accessToken: string, value: unknown): ProjectListV2 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectPageRequestV2(value));
+    return this.read(accessToken, actor, { operation: 'project_list_v2' }, (transaction, snapshot) => transaction.listProjectsV2(snapshot, request));
+  }
   readProject(accessToken: string, value: unknown): ProjectSummaryV1 {
     const actor = this.authenticate(accessToken); const projectId = this.input(() => validateProjectIdV1(value));
     return this.read(accessToken, actor, { operation: 'project_read', project_id: projectId }, (transaction, snapshot) => transaction.readProject(snapshot, projectId));
+  }
+  readProjectV2(accessToken: string, value: unknown): ProjectSummaryV2 {
+    const actor = this.authenticate(accessToken); const projectId = this.input(() => validateProjectIdV1(value));
+    return this.read(accessToken, actor, { operation: 'project_read_v2', project_id: projectId }, (transaction, snapshot) => transaction.readProjectV2(snapshot, projectId));
   }
   listMembers(accessToken: string, value: unknown): ProjectMembersV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextBrowseV1(value));
@@ -105,6 +120,18 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
   dissociateContext(accessToken: string, value: unknown): ProjectMutationReceiptV1 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextDissociateV1(value));
     return this.write(actor, { operation: 'dissociate', request }, (transaction, snapshot) => transaction.dissociateContext(snapshot, request));
+  }
+  renameProject(accessToken: string, value: unknown): ProjectSettingsReceiptV1 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectRenameV1(value));
+    return this.write(actor, { operation: 'rename', request }, (transaction, snapshot) => transaction.renameProject(snapshot, request));
+  }
+  archiveProject(accessToken: string, value: unknown): ProjectSettingsReceiptV1 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectArchiveV1(value));
+    return this.write(actor, { operation: 'archive', request }, (transaction, snapshot) => transaction.archiveProject(snapshot, request));
+  }
+  leaveProject(accessToken: string, value: unknown): ProjectSettingsReceiptV1 {
+    const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectLeaveV1(value));
+    return this.write(actor, { operation: 'leave', request }, (transaction, snapshot) => transaction.leaveProject(snapshot, request));
   }
   feedV2(accessToken: string, value: unknown): ProjectContextFeedV2 {
     const actor = this.authenticate(accessToken); const request = this.input(() => validateProjectContextBrowseV1(value));

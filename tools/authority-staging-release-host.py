@@ -23,7 +23,7 @@ import urllib.request
 
 DEPLOY = pathlib.Path('/srv/echo-authority-clean-v1')
 TOOLS = ('update-clean-v1.sh', 'onboard-clean-v1.sh', 'restore-clean-v1-host.sh', 'backup-authority-maintenance.sh', 'release/clean-v1-release.py', 'release/clean-v1-runtime-profile.py')
-ACTIONS = ('install', 'inspect-install', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9', 'canary', 'status', 'rollback', 'promote')
+ACTIONS = ('install', 'inspect-install', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9', 'stage-v9-to-v10', 'canary', 'status', 'rollback', 'promote')
 SAFE_CODES = ('installed', 'installation_failed', 'inspection_verified', 'inspection_refused', 'verified', 'wrapper_failed', 'environment_drift', 'precondition_failed', 'operation_locked', 'operation_incomplete', 'expired', 'delivery_pending', 'control_path_changed')
 INSPECTION_CATEGORIES = ('ready', 'identity_invalid', 'retained_mount_invalid', 'deployment_path_invalid', 'data_ownership_invalid', 'release_control_invalid', 'operation_locked', 'legacy_lock_present', 'operation_incomplete', 'request_expired', 'accepted_record_invalid', 'accepted_record_mismatch', 'environment_invalid', 'hostname_mismatch', 'candidate_present', 'tool_missing', 'tool_file_invalid', 'tool_hash_unknown', 'inspection_failed', 'control_path_changed')
 TOOL_CATEGORIES = ('tool_missing', 'tool_file_invalid', 'tool_hash_unknown')
@@ -463,7 +463,7 @@ def installer_preconditions(request, root):
             require(sha(regular(candidate_path, True, 16384)) == request['candidate']['sha256'], 'candidate_present')
         except Exception:
             raise Refused('candidate_present')
-    if request['action'] in ('install', 'inspect-install', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9'):
+    if request['action'] in ('install', 'inspect-install', 'stage', 'stage-v5-to-v6', 'stage-v8-to-v9', 'stage-v9-to-v10'):
         require(not candidate_present, 'candidate_present')
     if request['action'] in ('canary', 'promote', 'rollback'):
         require(candidate_present)
@@ -645,7 +645,7 @@ def execute_pinned(request, request_hash, root, files, invoke, now, binding_ok):
                 immutable(root / '.staging-release-guard' / name, files[name])
             inputs = root / '.staging-release-guard'
             action = request['action']
-            args = {'status': ['status'], 'stage': ['stage', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v5-to-v6': ['stage-v5-to-v6', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v8-to-v9': ['stage-v8-to-v9', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'canary': ['canary'], 'rollback': ['rollback'], 'promote': ['promote', '--release', str(inputs / 'candidate.json'), '--canary-passed']}[action]
+            args = {'status': ['status'], 'stage': ['stage', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v5-to-v6': ['stage-v5-to-v6', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v8-to-v9': ['stage-v8-to-v9', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'stage-v9-to-v10': ['stage-v9-to-v10', '--release', str(inputs / 'candidate.json'), '--runtime-profile', str(inputs / 'runtime-profile.json')], 'canary': ['canary'], 'rollback': ['rollback'], 'promote': ['promote', '--release', str(inputs / 'candidate.json'), '--canary-passed']}[action]
             ok, code = invoke(root, operation, args)
             result = result_for(request, request_hash, ok, code)
         if not binding_ok():

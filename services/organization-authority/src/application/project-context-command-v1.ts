@@ -5,6 +5,9 @@ import {
   validateProjectContextAssociateV1,
   validateProjectContextDissociateV1,
   validateProjectCreateV1,
+  validateProjectArchiveV1,
+  validateProjectLeaveV1,
+  validateProjectRenameV1,
   validateProjectMemberAddV1,
   validateProjectMemberRemoveV1,
   validateProjectMemberSetV1,
@@ -40,6 +43,9 @@ export function projectCommandIdentityV1(
       case 'member_remove': return validateProjectMemberRemoveV1(mutation.request);
       case 'associate': return validateProjectContextAssociateV1(mutation.request);
       case 'dissociate': return validateProjectContextDissociateV1(mutation.request);
+      case 'rename': return validateProjectRenameV1(mutation.request);
+      case 'archive': return validateProjectArchiveV1(mutation.request);
+      case 'leave': return validateProjectLeaveV1(mutation.request);
       case 'upload_submit': return validatePersonUpdateSubmitV2(mutation.request);
       case 'upload_submit_v3': return validatePersonUpdateSubmitV3(mutation.request);
       default: throw new Error('Unsupported project command');

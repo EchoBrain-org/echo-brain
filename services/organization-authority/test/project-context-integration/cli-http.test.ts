@@ -105,7 +105,7 @@ function uploadArgv(project: string, audience: string, audienceProject?: string)
     ...(audienceProject ? ['--audience-project-id', audienceProject] : [])];
 }
 
-describe('PC-06 real CLI -> loopback HTTP -> application -> V9, fixture authentication/model', () => {
+describe('PC-06 real CLI -> loopback HTTP -> application -> V10, fixture authentication/model', () => {
   it('preserves disjoint project visibility, private/team audience and cross-project coordinates', async () => {
     const alpha = await create('Synthetic Alpha'); const beta = await create('Synthetic Beta');
     await member(alpha, 'bob'); await member(beta, 'carol');

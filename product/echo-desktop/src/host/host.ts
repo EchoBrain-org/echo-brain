@@ -13,7 +13,7 @@ import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
   abandonView, answerView, changeView, contextView, createdView, directoryView, documentPageView, documentTextView, employeesView, evidenceView, failureView,
-  feedView, invitationView, isRecordRef, membersView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, projectView,
+  feedView, invitationView, isRecordRef, membersView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, projectSettingsView, projectView,
   NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
@@ -82,7 +82,8 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'ask.run': 145_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000, 'documents.list': 45_000,
   'documents.read': 45_000, 'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000, 'projects.directory': 45_000,
-  'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
+  'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
+  'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
@@ -359,8 +360,9 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       return login([option('invitation', invitation)], 'invitation_failed');
     }
     case 'projects.list': {
-      const { expect, cursor } = params as Params<'projects.list'>;
-      return forAccount(method, expect, ['projects', 'list', '--limit=10', ...(cursor ? [option('cursor', cursor)] : [])],
+      const { expect, cursor, status } = params as Params<'projects.list'>;
+      if (status !== undefined && status !== 'active' && status !== 'archived') return code('invalid_request');
+      return forAccount(method, expect, ['projects', 'list-v2', '--limit=10', ...(status ? [option('status', status)] : []), ...(cursor ? [option('cursor', cursor)] : [])],
         stdout => projectPageView(lastJson(stdout)));
     }
     case 'projects.feed': {
@@ -400,7 +402,7 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
     case 'projects.read': {
       const { expect, project_id } = params as Params<'projects.read'>;
       if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) return code('invalid_request');
-      return forAccount(method, expect, ['projects', 'read', option('project-id', project_id)], stdout => projectView(lastJson(stdout), project_id));
+      return forAccount(method, expect, ['projects', 'read-v2', option('project-id', project_id)], stdout => projectView(lastJson(stdout), project_id));
     }
     case 'projects.members': {
       const { expect, project_id, cursor } = params as Params<'projects.members'>;
@@ -441,6 +443,31 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       if (title === null) return code('invalid_request', true, request_id);
       return forAccount(method, expect, ['projects', 'create', option('request-id', request_id), option('name', title)],
         stdout => createdView(lastJson(stdout), request_id), request_id);
+    }
+    case 'projects.rename': {
+      const { expect, request_id, project_id, name } = params as Params<'projects.rename'>;
+      const title = projectName(name);
+      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id) || typeof project_id !== 'string' || !PROJECT_ID.test(project_id) || title === null) {
+        return code('invalid_request', true, typeof request_id === 'string' ? request_id : undefined);
+      }
+      return forAccount(method, expect, ['projects', 'rename', option('request-id', request_id), option('project-id', project_id), option('name', title)],
+        stdout => projectSettingsView(lastJson(stdout), request_id, project_id, 'rename'), request_id);
+    }
+    case 'projects.archive': {
+      const { expect, request_id, project_id, archived } = params as Params<'projects.archive'>;
+      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id) || typeof project_id !== 'string' || !PROJECT_ID.test(project_id) || typeof archived !== 'boolean') {
+        return code('invalid_request', true, typeof request_id === 'string' ? request_id : undefined);
+      }
+      return forAccount(method, expect, ['projects', archived ? 'archive' : 'unarchive', option('request-id', request_id), option('project-id', project_id)],
+        stdout => projectSettingsView(lastJson(stdout), request_id, project_id, 'archive'), request_id);
+    }
+    case 'projects.leave': {
+      const { expect, request_id, project_id } = params as Params<'projects.leave'>;
+      if (typeof request_id !== 'string' || !REQUEST_ID.test(request_id) || typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) {
+        return code('invalid_request', true, typeof request_id === 'string' ? request_id : undefined);
+      }
+      return forAccount(method, expect, ['projects', 'leave', option('request-id', request_id), option('project-id', project_id)],
+        stdout => projectSettingsView(lastJson(stdout), request_id, project_id, 'leave'), request_id);
     }
     case 'employees.list': {
       const { expect } = params as Params<'employees.list'>;

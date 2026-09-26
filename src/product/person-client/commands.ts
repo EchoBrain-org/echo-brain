@@ -2,7 +2,7 @@ import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1 }
 import { DocumentFileError } from './document-file.js';
 import { validateProjectContextAudienceV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchV2, parseCanonicalAssociationProjectIdsJsonV1, validatePersonUploadAudienceV3 } from '@echo-brain/organization-api';
 import { readUpdateFile } from './update-file.js';
-import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validatePersonUploadAudienceV2, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1 } from '@echo-brain/organization-api';
+import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validatePersonUploadAudienceV2, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1, validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { validatePersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolCommandV1 } from '@echo-brain/organization-api';
@@ -59,6 +59,7 @@ const OPTIONS = {
   "audience-project-ids-json": { type: "string" },
   "membership-id": { type: "string" },
   role: { type: "string" },
+  status: { type: "string" },
   cursor: { type: "string" },
   title: { type: "string" },
   file: { type: "string" },
@@ -98,8 +99,14 @@ const RULES: Readonly<
   "documents-download": { accepts: ["document-id", "out", "project-id"], requires: ["document-id", "out"] },
   "documents-download-v2": { accepts: ["document-id", "out", "project-id"], requires: ["document-id", "out"] },
   "projects-list": { accepts: ["limit", "cursor"] },
+  "projects-list-v2": { accepts: ["limit", "cursor", "status"] },
   "projects-create": { accepts: ["request-id", "name"], requires: ["request-id", "name"] },
   "projects-read": { accepts: ["project-id"], requires: ["project-id"] },
+  "projects-read-v2": { accepts: ["project-id"], requires: ["project-id"] },
+  "projects-rename": { accepts: ["request-id", "project-id", "name"], requires: ["request-id", "project-id", "name"] },
+  "projects-archive": { accepts: ["request-id", "project-id"], requires: ["request-id", "project-id"] },
+  "projects-unarchive": { accepts: ["request-id", "project-id"], requires: ["request-id", "project-id"] },
+  "projects-leave": { accepts: ["request-id", "project-id"], requires: ["request-id", "project-id"] },
   "projects-members": { accepts: ["project-id", "limit", "cursor"], requires: ["project-id"] },
   "projects-directory": { accepts: ["project-id", "query", "limit", "cursor"], requires: ["project-id"] },
   directory: { accepts: ["query", "limit", "cursor"] },
@@ -281,13 +288,17 @@ Streams the exact saved original to a new file, verifies its length and SHA-256,
 
 Streams a V2 document's exact saved original to a new file and verifies its length and SHA-256 before publishing it atomically.
 `,
-  projects: `usage: echo-brain person projects <list|create|read|members|directory|member-add|member-set|member-remove|associate|dissociate|feed|feed-v2|search|search-v2|read-context|read-context-v2> [options]
+  projects: `usage: echo-brain person projects <list|list-v2|create|read|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|feed|feed-v2|search|search-v2|read-context|read-context-v2> [options]
 
 Projects organize original context. Association does not change its audience. Only projects list is the capability probe; a canonical 404 there means Not live yet. Use person ask --project for a strict project-scoped answer.
 `,
   "projects-list": `usage: echo-brain person projects list [--limit <1-10>] [--cursor <opaque-base64url>]
 
 Lists your current projects. This is the sole capability probe; an individual project's not_found response is not a capability result.
+`,
+  "projects-list-v2": `usage: echo-brain person projects list-v2 [--status <active|archived>] [--limit <1-10>] [--cursor <opaque-base64url>]
+
+Lists active projects by default, or archived projects when selected. V2 includes each project's lifecycle status.
 `,
   "projects-create": `usage: echo-brain person projects create --request-id <uuid> --name <name>
 
@@ -296,6 +307,26 @@ Creates a project with you as its initial lead. Retain the request ID for exact 
   "projects-read": `usage: echo-brain person projects read --project-id <project-id>
 
 Read one currently accessible project.
+`,
+  "projects-read-v2": `usage: echo-brain person projects read-v2 --project-id <project-id>
+
+Reads one accessible project with its active or archived lifecycle status.
+`,
+  "projects-rename": `usage: echo-brain person projects rename --request-id <uuid> --project-id <project-id> --name <name>
+
+Leads rename an active project. Retain the exact request ID for replay.
+`,
+  "projects-archive": `usage: echo-brain person projects archive --request-id <uuid> --project-id <project-id>
+
+Leads archive a project. Archived projects remain readable and can be unarchived.
+`,
+  "projects-unarchive": `usage: echo-brain person projects unarchive --request-id <uuid> --project-id <project-id>
+
+Leads return an archived project to the active list.
+`,
+  "projects-leave": `usage: echo-brain person projects leave --request-id <uuid> --project-id <project-id>
+
+Leaves a project. The last lead must appoint another lead before leaving.
 `,
   "projects-members": `usage: echo-brain person projects members --project-id <project-id> [--limit <1-10>] [--cursor <opaque-base64url>]
 
@@ -468,7 +499,7 @@ function isContextAction(action: string): boolean {
 }
 
 function contextCliFailure(action: string, error: unknown, values: Record<Option, string | boolean | undefined>) {
-  const mutation = ['projects-create', 'projects-member-add', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit', 'updates-submit-v3', 'documents-upload', 'documents-upload-v2', 'documents-retry', 'documents-associate', 'documents-dissociate'].includes(action);
+  const mutation = ['projects-create', 'projects-rename', 'projects-archive', 'projects-unarchive', 'projects-leave', 'projects-member-add', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit', 'updates-submit-v3', 'documents-upload', 'documents-upload-v2', 'documents-retry', 'documents-associate', 'documents-dissociate'].includes(action);
   let requestId: string | undefined;
   try { requestId = validatePersonUpdateRequestId(values['request-id']); } catch { /* Never echo invalid caller input. */ }
   return {
@@ -960,12 +991,28 @@ export async function runPersonClientCli(
       case 'projects-list':
         print(stdout, await client.projects(contextPaging(values)));
         break;
+      case 'projects-list-v2':
+        print(stdout, await client.projectsV2({ ...contextPaging(values), ...(values.status === undefined ? {} : { status: requiredText(values, 'status') as 'active' | 'archived' }) }));
+        break;
       case 'projects-create':
         print(stdout, await client.createProject(validateProjectCreateV1({ schema_version: 1, kind: 'echo-project-create-v1',
           request_id: requiredText(values, 'request-id'), name: requiredText(values, 'name') })));
         break;
       case 'projects-read':
         print(stdout, await client.readProject(requiredText(values, 'project-id')));
+        break;
+      case 'projects-read-v2':
+        print(stdout, await client.readProjectV2(requiredText(values, 'project-id')));
+        break;
+      case 'projects-rename':
+        print(stdout, await client.renameProject(validateProjectRenameV1({ schema_version: 1, kind: 'echo-project-rename-v1', request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), name: requiredText(values, 'name') })));
+        break;
+      case 'projects-archive':
+      case 'projects-unarchive':
+        print(stdout, await client.archiveProject(validateProjectArchiveV1({ schema_version: 1, kind: 'echo-project-archive-v1', request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), archived: action === 'projects-archive' })));
+        break;
+      case 'projects-leave':
+        print(stdout, await client.leaveProject(validateProjectLeaveV1({ schema_version: 1, kind: 'echo-project-leave-v1', request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id') })));
         break;
       case 'projects-members':
         print(stdout, await client.projectMembers({ project_id: validateProjectIdV1(values['project-id']), ...contextPaging(values) }));

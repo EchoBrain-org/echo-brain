@@ -7,12 +7,14 @@ import { validatePersonQueryText } from '@echo-brain/organization-api';
 import { validatePersonSourceEvidenceReadRequestV1, type PersonSourceEvidenceReadRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import {
-  validateProjectPageRequestV1, validateProjectCreateV1, validateProjectIdV1,
+  validateProjectPageRequestV1, validateProjectPageRequestV2, validateProjectCreateV1, validateProjectIdV1,
   validateProjectContextBrowseV1, validateProjectDirectorySearchV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
+  validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1,
   validateProjectContextSearchV1, validateProjectContextReadRequestV1, validatePersonUpdateSubmitV2, validatePersonUploadSearchV2,
-  type ProjectPageRequestV1, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
+  type ProjectPageRequestV1, type ProjectPageRequestV2, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
   type ProjectMemberAddV1, type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
+  type ProjectRenameV1, type ProjectArchiveV1, type ProjectLeaveV1,
   type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2, type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import { validatePersonUpdateSubmitV3, validatePersonUploadSearchV3, type PersonUpdateSubmitV3, type PersonUploadSearchV3 } from '@echo-brain/organization-api';
@@ -600,6 +602,11 @@ export class PersonClient {
     return this.withContextSession((authority, token) => authority.projects(token, request));
   }
 
+  async projectsV2(value: ProjectPageRequestV2 = {}) {
+    const request = validateProjectPageRequestV2(value);
+    return this.withContextSession((authority, token) => authority.projectsV2(token, request));
+  }
+
   async createProject(value: ProjectCreateV1) {
     const request = validateProjectCreateV1(value);
     return this.withContextSession((authority, token) => authority.createProject(token, request), request);
@@ -608,6 +615,26 @@ export class PersonClient {
   async readProject(projectId: string) {
     const project = validateProjectIdV1(projectId);
     return this.withContextSession((authority, token) => authority.readProject(token, project));
+  }
+
+  async readProjectV2(projectId: string) {
+    const project = validateProjectIdV1(projectId);
+    return this.withContextSession((authority, token) => authority.readProjectV2(token, project));
+  }
+
+  async renameProject(value: ProjectRenameV1) {
+    const request = validateProjectRenameV1(value);
+    return this.withContextSession((authority, token) => authority.renameProject(token, request), request);
+  }
+
+  async archiveProject(value: ProjectArchiveV1) {
+    const request = validateProjectArchiveV1(value);
+    return this.withContextSession((authority, token) => authority.archiveProject(token, request), request);
+  }
+
+  async leaveProject(value: ProjectLeaveV1) {
+    const request = validateProjectLeaveV1(value);
+    return this.withContextSession((authority, token) => authority.leaveProject(token, request), request);
   }
 
   async projectMembers(value: ProjectContextBrowseV1) {

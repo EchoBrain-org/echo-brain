@@ -132,6 +132,10 @@
     "./adapters/persistence/sqlite/authority-v8-to-v9": {
       "types": "./dist/adapters/persistence/sqlite/authority-v8-to-v9.d.ts",
       "import": "./dist/adapters/persistence/sqlite/authority-v8-to-v9.js"
+    },
+    "./adapters/persistence/sqlite/authority-v9-to-v10": {
+      "types": "./dist/adapters/persistence/sqlite/authority-v9-to-v10.d.ts",
+      "import": "./dist/adapters/persistence/sqlite/authority-v9-to-v10.js"
     }
   },
   "files": [
@@ -143,7 +147,8 @@
     "baselines/authority-baseline-v6.sql",
     "baselines/authority-baseline-v7.sql",
     "baselines/authority-baseline-v8.sql",
-    "baselines/authority-baseline-v9.sql"
+    "baselines/authority-baseline-v9.sql",
+    "baselines/authority-baseline-v10.sql"
   ],
   "scripts": {
     "build": "tsc -b",

@@ -84,6 +84,46 @@ describe('ProjectContextApplicationV1', () => {
     })).toThrow(expect.objectContaining({ code: 'not_found' }));
   });
 
+  it('archives without revoking existing reads, while blocking new project-scoped writes', () => {
+    const f = fixture(); const alpha = project(f, 110); const beta = project(f, 111);
+    for (const projectId of [alpha.project_id, beta.project_id]) {
+      f.application.setMember('owner', { schema_version: 1, kind: 'echo-project-member-set-v1', request_id: requestId(projectId === alpha.project_id ? 112 : 113), project_id: projectId, membership_id: MEMBER.membership_id, role: 'member' });
+    }
+    expect(() => f.application.renameProject('member', { schema_version: 1, kind: 'echo-project-rename-v1', request_id: requestId(121), project_id: alpha.project_id, name: 'Forbidden' })).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(() => f.application.archiveProject('member', { schema_version: 1, kind: 'echo-project-archive-v1', request_id: requestId(122), project_id: alpha.project_id, archived: true })).toThrow(expect.objectContaining({ code: 'not_found' }));
+    const activePage = f.application.listProjectsV2('member', { status: 'active', limit: 1 });
+    expect(activePage.next_cursor).not.toBeNull();
+    const alphaUpload = f.application.submitUploadV3('owner', {
+      schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(114), title: 'Archived evidence', text: 'Existing project text remains readable.',
+      association_project_ids: [alpha.project_id], audience: { kind: 'project', project_id: alpha.project_id },
+    });
+    const betaUpload = f.application.submitUploadV3('owner', {
+      schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(115), title: 'Active evidence', text: 'Alternate project access remains readable.',
+      association_project_ids: [beta.project_id], audience: { kind: 'project', project_id: beta.project_id },
+    });
+    const archive = { schema_version: 1 as const, kind: 'echo-project-archive-v1' as const, request_id: requestId(116), project_id: alpha.project_id, archived: true };
+    expect(f.application.archiveProject('owner', archive)).toMatchObject({ operation: 'archive', state: 'applied' });
+    expect(f.application.archiveProject('owner', archive)).toMatchObject({ operation: 'archive' });
+    expect(() => f.application.listProjectsV2('member', { status: 'archived', limit: 1, cursor: activePage.next_cursor! })).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+    expect(f.application.listProjects('member', {}).items.map(item => item.project_id)).not.toContain(alpha.project_id);
+    expect(f.application.listProjectsV2('member', { status: 'archived' }).items).toEqual([expect.objectContaining({ project_id: alpha.project_id, status: 'archived' })]);
+    expect(f.application.readProjectV2('member', alpha.project_id)).toMatchObject({ status: 'archived' });
+    expect(f.application.readContextV2('member', alpha.project_id, alphaUpload.context_id).text).toContain('Existing project text');
+    expect(f.application.readUploadV3('member', betaUpload.context_id).text).toContain('Alternate project access');
+    expect(() => f.application.submitUploadV3('owner', {
+      schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: requestId(117), title: 'Blocked', text: 'No new archive content.',
+      association_project_ids: [alpha.project_id], audience: { kind: 'team' },
+    })).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(() => f.application.associateContext('owner', {
+      schema_version: 1, kind: 'echo-project-context-associate-v1', request_id: requestId(118), project_id: alpha.project_id, context_id: betaUpload.context_id,
+    })).toThrow(expect.objectContaining({ code: 'not_found' }));
+    expect(f.application.renameProject('owner', { schema_version: 1, kind: 'echo-project-rename-v1', request_id: requestId(119), project_id: alpha.project_id, name: 'Archived Launch' })).toMatchObject({ operation: 'rename' });
+    const leave = { schema_version: 1 as const, kind: 'echo-project-leave-v1' as const, request_id: requestId(120), project_id: alpha.project_id };
+    expect(f.application.leaveProject('member', leave)).toMatchObject({ operation: 'leave' });
+    expect(f.application.leaveProject('member', leave)).toMatchObject({ operation: 'leave' });
+    expect(() => f.application.leaveProject('owner', { ...leave, request_id: requestId(121) })).toThrow(expect.objectContaining({ code: 'conflict' }));
+  });
+
   it('lets a lead add a selected organization member without treating a stale selection as a role change', () => {
     const f = fixture(); const created = project(f, 14);
     const add = { schema_version: 1 as const, kind: 'echo-project-member-add-v1' as const, request_id: requestId(15), project_id: created.project_id, membership_id: MEMBER.membership_id };

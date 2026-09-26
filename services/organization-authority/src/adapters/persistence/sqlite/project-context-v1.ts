@@ -12,7 +12,8 @@ import {
   validateProjectCreateReceiptV1, validateProjectListV1, validateProjectMembersV1,
   validateProjectContextBrowseV1, validateProjectContextSearchV1, validateProjectDirectorySearchV1,
   validateProjectDirectoryV1, validateProjectIdV1, validateProjectMutationReceiptV1,
-  validateProjectPageRequestV1, validateProjectSummaryV1,
+  validateProjectPageRequestV1, validateProjectSummaryV1, validateProjectListV2, validateProjectPageRequestV2,
+  validateProjectSettingsReceiptV1, validateProjectSummaryV2,
   validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1,
   type OrganizationDirectorySearchV1, type OrganizationDirectoryV1,
   type PersonUpdateReceiptV2, type PersonUpdateStatusV2, type PersonUpdateSubmitV2,
@@ -25,6 +26,8 @@ import {
   type ProjectDirectorySearchV1, type ProjectDirectoryV1, type ProjectIdV1, type ProjectListV1,
   type ProjectMembersV1, type ProjectMemberAddV1, type ProjectMemberRemoveV1, type ProjectMemberSetV1,
   type ProjectMutationReceiptV1, type ProjectPageRequestV1, type ProjectRoleV1, type ProjectSummaryV1,
+  type ProjectArchiveV1, type ProjectLeaveV1, type ProjectListV2, type ProjectPageRequestV2,
+  type ProjectRenameV1, type ProjectSettingsReceiptV1, type ProjectStatusV2, type ProjectSummaryV2,
 } from '@echo-brain/organization-api';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
@@ -43,7 +46,7 @@ import {
 
 type ProjectRow = {
   project_id: ProjectIdV1; organization_id: string; name: string; created_at: string;
-  role: ProjectRoleV1;
+  role: ProjectRoleV1; status: ProjectStatusV2;
 };
 type SourceRow = AuthorityPersonMembershipBinding & {
   request_id: string; context_id: string; payload_sha256: Sha256Digest; title: string; text: string;
@@ -66,8 +69,8 @@ type InternalProjectStoreV1 = {
   readonly readable: (actor: AuthorityPersonMembershipBinding, grants: readonly ProjectMembershipGrantV1[], row: SourceRow) => boolean;
   readonly source: (id: string) => SourceRow | undefined;
   readonly sourceOwned: (actor: AuthorityPersonMembershipBinding, requestId: string) => SourceRow | undefined;
-  readonly replay: <T extends ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3>(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1) => T | undefined;
-  readonly record: (actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1, value: ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3) => void;
+  readonly replay: <T extends ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | ProjectSettingsReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3>(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1) => T | undefined;
+  readonly record: (actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1, value: ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | ProjectSettingsReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3) => void;
   readonly validateSource: (row: SourceRow) => void;
 };
 let transactionActive = false;
@@ -121,8 +124,8 @@ function binary(a: string, b: string): number { return Buffer.compare(Buffer.fro
 export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositoryV1 {
   private readonly issued = new WeakMap<ProjectAuthorizationSnapshotV1, Issued>();
   constructor(private readonly database: Database.Database, private readonly now: () => string = () => new Date().toISOString()) {
-    if (database.pragma('user_version', { simple: true }) !== 9 || database.pragma('foreign_keys', { simple: true }) !== 1) {
-      throw new Error('Project context requires Authority V9 with foreign keys enabled');
+    if (database.pragma('user_version', { simple: true }) !== 10 || database.pragma('foreign_keys', { simple: true }) !== 1) {
+      throw new Error('Project context requires Authority V10 with foreign keys enabled');
     }
   }
 
@@ -232,7 +235,7 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
     return this.database.prepare(`SELECT operation, command_sha256, receipt_json, receipt_sha256 FROM authority_project_command_receipts_v1
       WHERE organization_id = ? AND membership_id = ? AND request_id = ?`).get(actor.organization_id, actor.membership_id, requestId) as { operation: ProjectMutationV1['operation']; command_sha256: Sha256Digest; receipt_json: string; receipt_sha256: Sha256Digest } | undefined;
   }
-  private replay<T extends ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3>(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1): T | undefined {
+  private replay<T extends ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | ProjectSettingsReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3>(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1): T | undefined {
     const identity = projectCommandIdentityV1(actor, mutation);
     assertPersonRequestNamespaceV1(this.database, actor, identity.request_id, 'project');
     const stored = this.receipts(actor, identity.request_id);
@@ -240,7 +243,7 @@ export class SqliteProjectContextRepositoryV1 implements ProjectContextRepositor
     if (stored.operation !== mutation.operation || stored.command_sha256 !== identity.command_sha256 || canonicalSha256(JSON.parse(stored.receipt_json)) !== stored.receipt_sha256) denied('conflict');
     return receipt(stored.operation, JSON.parse(stored.receipt_json)) as T;
   }
-  private record(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1, value: ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3): void {
+  private record(actor: AuthorityPersonMembershipBinding, mutation: ProjectMutationV1, value: ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | ProjectSettingsReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3): void {
     const identity = projectCommandIdentityV1(actor, mutation);
     const body = immutable(value);
     this.database.prepare(`INSERT INTO authority_project_command_receipts_v1
@@ -311,21 +314,40 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
     const input = this.input(() => validateProjectPageRequestV1(request));
     const limit = input.limit ?? 10; const scope = cursorScope(snapshot, limit);
     const position = decodeProjectCursorV1(input.cursor, scope);
-    const rows = this.store.database.prepare(`SELECT project.project_id, project.organization_id, project.name, project.created_at, grant.role
+    const rows = this.store.database.prepare(`SELECT project.project_id, project.organization_id, project.name, project.created_at, project.status, grant.role
       FROM authority_projects_v1 AS project JOIN authority_project_memberships_v1 AS grant
       ON grant.project_id = project.project_id AND grant.organization_id = project.organization_id
       JOIN authority_memberships AS membership ON membership.membership_id = grant.membership_id AND membership.status = 'active'
-      WHERE project.organization_id = ? AND grant.membership_id = ? AND grant.status = 'active'
+      WHERE project.organization_id = ? AND grant.membership_id = ? AND grant.status = 'active' AND project.status = 'active'
       ORDER BY project.created_at DESC, project.project_id ASC`).all(snapshot.person.organization_id, snapshot.person.membership_id) as ProjectRow[];
     const remaining = after(rows, position, row => [row.created_at, row.project_id]);
     const page = remaining.slice(0, limit);
     const response = validateProjectListV1({ schema_version: 1, kind: 'echo-project-list-v1', items: page.map(row => ({ schema_version: 1, kind: 'echo-project-summary-v1', project_id: row.project_id, name: row.name, created_at: row.created_at, role: row.role })), next_cursor: next(remaining, page, limit) ? encodeProjectCursorV1(scope, [page.at(-1)!.created_at, page.at(-1)!.project_id]) : null });
     return this.store.issue(snapshot, 'project_list', response);
   }
+  listProjectsV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectPageRequestV2): ProjectListV2 {
+    this.open(); this.require(snapshot, 'project_list_v2');
+    const input = this.input(() => validateProjectPageRequestV2(request));
+    const status = input.status ?? 'active'; const limit = input.limit ?? 10; const scope = cursorScope(snapshot, limit, undefined, status);
+    const position = decodeProjectCursorV1(input.cursor, scope);
+    const rows = this.store.database.prepare(`SELECT project.project_id, project.organization_id, project.name, project.created_at, project.status, grant.role
+      FROM authority_projects_v1 AS project JOIN authority_project_memberships_v1 AS grant
+      ON grant.project_id = project.project_id AND grant.organization_id = project.organization_id
+      JOIN authority_memberships AS membership ON membership.membership_id = grant.membership_id AND membership.status = 'active'
+      WHERE project.organization_id = ? AND grant.membership_id = ? AND grant.status = 'active' AND project.status = ?
+      ORDER BY project.created_at DESC, project.project_id ASC`).all(snapshot.person.organization_id, snapshot.person.membership_id, status) as ProjectRow[];
+    const remaining = after(rows, position, row => [row.created_at, row.project_id]); const page = remaining.slice(0, limit);
+    return this.store.issue(snapshot, 'project_list_v2', validateProjectListV2({ schema_version: 2, kind: 'echo-project-list-v2', items: page.map(row => ({ schema_version: 2, kind: 'echo-project-summary-v2', project_id: row.project_id, name: row.name, created_at: row.created_at, role: row.role, status: row.status })), next_cursor: next(remaining, page, limit) ? encodeProjectCursorV1(scope, [page.at(-1)!.created_at, page.at(-1)!.project_id]) : null }));
+  }
   readProject(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1): ProjectSummaryV1 {
     this.open(); const input = this.input(() => validateProjectIdV1(projectId)); this.require(snapshot, 'project_read', input);
     const row = this.project(snapshot.person, input); if (row === undefined) denied();
-    return this.store.issue(snapshot, 'project_read', validateProjectSummaryV1({ schema_version: 1, kind: 'echo-project-summary-v1', ...row }));
+    return this.store.issue(snapshot, 'project_read', validateProjectSummaryV1({ schema_version: 1, kind: 'echo-project-summary-v1', project_id: row.project_id, name: row.name, created_at: row.created_at, role: row.role }));
+  }
+  readProjectV2(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1): ProjectSummaryV2 {
+    this.open(); const input = this.input(() => validateProjectIdV1(projectId)); this.require(snapshot, 'project_read_v2', input);
+    const row = this.project(snapshot.person, input); if (row === undefined) denied();
+    return this.store.issue(snapshot, 'project_read_v2', validateProjectSummaryV2({ schema_version: 2, kind: 'echo-project-summary-v2', project_id: row.project_id, name: row.name, created_at: row.created_at, role: row.role, status: row.status }));
   }
   listMembers(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectMembersV1 {
     this.open(); const input = this.input(() => validateProjectContextBrowseV1(request)); this.require(snapshot, 'members', input.project_id);
@@ -474,11 +496,42 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       const result = mutationReceipt(request, this.store.now()); this.store.record(snapshot.person, mutation, result); return result;
     });
   }
+  renameProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectRenameV1): ProjectSettingsReceiptV1 {
+    return this.mutate(() => {
+      this.writable(); const mutation = { operation: 'rename' as const, request }; this.store.assertActive(snapshot.person);
+      const replay = this.replay(snapshot, mutation) as ProjectSettingsReceiptV1 | undefined; if (replay) return replay;
+      this.require(snapshot, 'rename', request.project_id); this.requireLead(snapshot, request.project_id);
+      this.store.database.prepare(`UPDATE authority_projects_v1 SET name = ? WHERE organization_id = ? AND project_id = ?`).run(request.name, snapshot.person.organization_id, request.project_id);
+      const result = settingsReceipt(request, 'rename', this.store.now()); this.store.record(snapshot.person, mutation, result); return result;
+    });
+  }
+  archiveProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectArchiveV1): ProjectSettingsReceiptV1 {
+    return this.mutate(() => {
+      this.writable(); const mutation = { operation: 'archive' as const, request }; this.store.assertActive(snapshot.person);
+      const replay = this.replay(snapshot, mutation) as ProjectSettingsReceiptV1 | undefined; if (replay) return replay;
+      this.require(snapshot, 'archive', request.project_id); this.requireLead(snapshot, request.project_id);
+      this.store.database.prepare(`UPDATE authority_projects_v1 SET status = ? WHERE organization_id = ? AND project_id = ?`).run(request.archived ? 'archived' : 'active', snapshot.person.organization_id, request.project_id);
+      const result = settingsReceipt(request, 'archive', this.store.now()); this.store.record(snapshot.person, mutation, result); return result;
+    });
+  }
+  leaveProject(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectLeaveV1): ProjectSettingsReceiptV1 {
+    return this.mutate(() => {
+      this.writable(); const mutation = { operation: 'leave' as const, request }; this.store.assertActive(snapshot.person);
+      const replay = this.replay(snapshot, mutation) as ProjectSettingsReceiptV1 | undefined; if (replay) return replay;
+      this.require(snapshot, 'leave', request.project_id);
+      const grant = this.store.database.prepare(`SELECT project_membership_id, role FROM authority_project_memberships_v1
+        WHERE organization_id = ? AND project_id = ? AND membership_id = ? AND status = 'active'`).get(snapshot.person.organization_id, request.project_id, snapshot.person.membership_id) as { project_membership_id: string; role: ProjectRoleV1 } | undefined;
+      if (!grant) denied();
+      if (grant.role === 'lead') this.lastLead(request.project_id, snapshot.person.membership_id);
+      this.store.database.prepare(`UPDATE authority_project_memberships_v1 SET status = 'revoked', revoked_at = ? WHERE project_membership_id = ?`).run(this.store.now(), grant.project_membership_id);
+      const result = settingsReceipt(request, 'leave', this.store.now()); this.store.record(snapshot.person, mutation, result); return result;
+    });
+  }
   associateContext(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextAssociateV1): ProjectMutationReceiptV1 {
     return this.mutate(() => {
       this.writable(); const mutation={operation:'associate' as const,request}; this.store.assertActive(snapshot.person);
       const replay=this.replay(snapshot,mutation) as ProjectMutationReceiptV1 | undefined; if(replay)return replay;
-      this.require(snapshot,'associate',request.project_id); if (!snapshot.grants.some(grant => grant.project_id === request.project_id)) denied(); const row=this.store.source(request.context_id); if(!row || row.membership_id!==snapshot.person.membership_id || !this.store.readable(snapshot.person,snapshot.grants,row)) denied(); this.store.validateSource(row);
+      this.require(snapshot,'associate',request.project_id); if (!snapshot.grants.some(grant => grant.project_id === request.project_id)) denied(); this.requireActiveProject(snapshot.person.organization_id, request.project_id); const row=this.store.source(request.context_id); if(!row || row.membership_id!==snapshot.person.membership_id || !this.store.readable(snapshot.person,snapshot.grants,row)) denied(); this.store.validateSource(row);
       const existing=(this.store.database.prepare('SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id = ? ORDER BY project_id').all(row.context_id) as {project_id:ProjectIdV1}[]).map(link=>link.project_id);
       if(row.request_version===2 && existing.some(id=>id!==request.project_id)) denied('conflict');
       if(!existing.includes(request.project_id) && existing.length>=20) denied('conflict');
@@ -505,6 +558,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       this.require(snapshot,'upload_submit');
       const selectedProjects = [request.project_id, request.audience.kind === 'project' ? request.audience.project_id : null].filter((id): id is ProjectIdV1 => id !== null);
       if (selectedProjects.some(id => !snapshot.grants.some(grant => grant.project_id === id))) denied();
+      selectedProjects.forEach((projectId) => this.requireActiveProject(snapshot.person.organization_id, projectId));
       assertPersonDocumentCapacityV1(this.store.database,snapshot.person,Buffer.byteLength(request.text),'legacy_text');
       const received_at=this.store.now(); const context_id=sourceContextId(snapshot.person,request.request_id);
       const audience_project_id=request.audience.kind==='project'?request.audience.project_id:null;
@@ -525,6 +579,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       const audienceProjectId = request.audience.kind === 'project' ? request.audience.project_id : null;
       const selected = [...request.association_project_ids, ...audienceProjectIds];
       if (selected.some((id) => !snapshot.grants.some((grant) => grant.project_id === id))) denied();
+      selected.forEach((projectId) => this.requireActiveProject(snapshot.person.organization_id, projectId));
       assertPersonDocumentCapacityV1(this.store.database, snapshot.person, Buffer.byteLength(request.text), 'legacy_text');
       const received_at = this.store.now(); const context_id = sourceContextId(snapshot.person, request.request_id, 3);
       this.store.database.prepare(`INSERT INTO authority_person_updates_v2
@@ -544,7 +599,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
     });
   }
   private known(snapshot: ProjectAuthorizationSnapshotV1): void { if (!this.snapshots.has(snapshot)) throw new Error('project context snapshot escaped or was forged'); }
-  private replay(snapshot: ProjectAuthorizationSnapshotV1, mutation: ProjectMutationV1): ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3 | undefined {
+  private replay(snapshot: ProjectAuthorizationSnapshotV1, mutation: ProjectMutationV1): ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | ProjectSettingsReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3 | undefined {
     this.known(snapshot);
     if (!('request' in snapshot.scope) || snapshot.scope.operation !== mutation.operation || canonicalJson(snapshot.scope.request) !== canonicalJson(mutation.request)) throw new Error('project context mutation scope mismatch');
     this.store.assertActive(snapshot.person);
@@ -556,14 +611,18 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
   }
   private require(snapshot: ProjectAuthorizationSnapshotV1, operation: ProjectAuthorizationScopeV1['operation'], projectId?: ProjectIdV1): void { this.known(snapshot); if(snapshot.scope.operation!==operation || (projectId!==undefined && projectOf(snapshot.scope)!==projectId)) throw new Error('project context scope mismatch'); }
   private requireLead(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1): void { if(!snapshot.grants.some(g=>g.project_id===projectId&&g.role==='lead'))denied(); }
-  private project(actor: AuthorityPersonMembershipBinding, projectId: ProjectIdV1): Omit<ProjectRow,'organization_id'>|undefined { return this.store.database.prepare(`SELECT project.project_id,project.name,project.created_at,grant.role FROM authority_projects_v1 project JOIN authority_project_memberships_v1 grant ON grant.project_id=project.project_id AND grant.organization_id=project.organization_id JOIN authority_memberships membership ON membership.membership_id=grant.membership_id AND membership.status='active' WHERE project.project_id=? AND project.organization_id=? AND grant.membership_id=? AND grant.status='active'`).get(projectId,actor.organization_id,actor.membership_id) as Omit<ProjectRow,'organization_id'>|undefined; }
+  /** Archive leaves all existing grants readable, but cannot accept new content. */
+  private requireActiveProject(organizationId: string, projectId: ProjectIdV1): void {
+    if (!this.store.database.prepare(`SELECT 1 FROM authority_projects_v1 WHERE organization_id = ? AND project_id = ? AND status = 'active'`).get(organizationId, projectId)) denied();
+  }
+  private project(actor: AuthorityPersonMembershipBinding, projectId: ProjectIdV1): Omit<ProjectRow,'organization_id'>|undefined { return this.store.database.prepare(`SELECT project.project_id,project.name,project.created_at,project.status,grant.role FROM authority_projects_v1 project JOIN authority_project_memberships_v1 grant ON grant.project_id=project.project_id AND grant.organization_id=project.organization_id JOIN authority_memberships membership ON membership.membership_id=grant.membership_id AND membership.status='active' WHERE project.project_id=? AND project.organization_id=? AND grant.membership_id=? AND grant.status='active'`).get(projectId,actor.organization_id,actor.membership_id) as Omit<ProjectRow,'organization_id'>|undefined; }
   private members(projectId:ProjectIdV1): {membership_id:string;display_name:string;role:ProjectRoleV1}[]{return this.store.database.prepare(`SELECT grant.membership_id,principal.display_name,grant.role FROM authority_project_memberships_v1 grant JOIN authority_memberships membership ON membership.membership_id=grant.membership_id AND membership.status='active' JOIN authority_principals principal ON principal.principal_id=grant.principal_id WHERE grant.project_id=? AND grant.status='active' ORDER BY principal.display_name ASC,grant.membership_id ASC`).all(projectId) as {membership_id:string;display_name:string;role:ProjectRoleV1}[];}
   private projectSourcesV3(snapshot:ProjectAuthorizationSnapshotV1,projectId:ProjectIdV1):SourceRow[]{return(this.store.database.prepare(`${SELECT_SOURCE} JOIN authority_project_context_associations_v1 association ON association.context_id=submission.context_id WHERE association.project_id=? AND association.organization_id=? AND submission.request_version IN (2,3)`).all(projectId,snapshot.person.organization_id) as SourceRow[]).filter(row=>{if(!this.store.readable(snapshot.person,snapshot.grants,row))return false;this.store.validateSource(row);return true;});}
   private projectSources(snapshot:ProjectAuthorizationSnapshotV1,projectId:ProjectIdV1):SourceRow[]{return(this.store.database.prepare(`${SELECT_SOURCE} JOIN authority_project_context_associations_v1 association ON association.context_id=submission.context_id WHERE association.project_id=? AND association.organization_id=? AND submission.request_version=2`).all(projectId,snapshot.person.organization_id) as SourceRow[]).filter(row=>{if(!this.store.readable(snapshot.person,snapshot.grants,row))return false;this.store.validateSource(row);return true;});}
   private lastLead(projectId:ProjectIdV1,_membershipId:string):void{const n=(this.store.database.prepare(`SELECT count(*) AS n FROM authority_project_memberships_v1 grant JOIN authority_memberships membership ON membership.membership_id=grant.membership_id AND membership.status='active' WHERE grant.project_id=? AND grant.status='active' AND grant.role='lead'`).get(projectId) as {n:number}).n;if(n<=1)denied('conflict');}
 }
 function readOperation(scope: ProjectAuthorizationScopeV1): ProjectReadOperationV1 {
-  const reads = ['project_list', 'project_read', 'members', 'directory', 'organization_directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'];
+  const reads = ['project_list', 'project_list_v2', 'project_read', 'project_read_v2', 'members', 'directory', 'organization_directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'];
   if (reads.includes(scope.operation)) return scope.operation as ProjectReadOperationV1;
   throw new Error('mutation cannot release');
 }
@@ -572,7 +631,7 @@ function projectOf(scope:ProjectAuthorizationScopeV1):ProjectIdV1|undefined {
   return 'request' in scope && 'project_id' in scope.request ? scope.request.project_id ?? undefined : undefined;
 }
 function isReadScope(scope: ProjectAuthorizationScopeV1): boolean {
-  return ['project_list', 'project_read', 'members', 'directory', 'organization_directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'].includes(scope.operation);
+  return ['project_list', 'project_list_v2', 'project_read', 'project_read_v2', 'members', 'directory', 'organization_directory', 'feed', 'search', 'context_read', 'feed_v2', 'search_v2', 'context_read_v2', 'upload_status', 'upload_read', 'upload_search', 'upload_status_v3', 'upload_read_v3', 'upload_search_v3'].includes(scope.operation);
 }
 function count(response: ProjectReadResponseV1): number {
   if ('items' in response) return response.items.length;
@@ -584,9 +643,13 @@ function item(row: SourceRow) {
 }
 function receipt(operation: ProjectMutationV1['operation'], body: unknown) {
   if (operation === 'create') return validateProjectCreateReceiptV1(body);
+  if (operation === 'rename' || operation === 'archive' || operation === 'leave') return validateProjectSettingsReceiptV1(body);
   if (operation === 'upload_submit') return validatePersonUpdateReceiptV2(body);
   if (operation === 'upload_submit_v3') return validatePersonUpdateReceiptV3(body);
   return validateProjectMutationReceiptV1(body);
+}
+function settingsReceipt(request: ProjectRenameV1 | ProjectArchiveV1 | ProjectLeaveV1, operation: ProjectSettingsReceiptV1['operation'], received_at: string): ProjectSettingsReceiptV1 {
+  return validateProjectSettingsReceiptV1({ schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id: request.request_id, project_id: request.project_id, operation, received_at, state: 'applied' });
 }
 function mutationReceipt(request: ProjectMemberAddV1 | ProjectMemberSetV1 | ProjectMemberRemoveV1 | ProjectContextAssociateV1 | ProjectContextDissociateV1, received_at: string): ProjectMutationReceiptV1 {
   const memberOperation = request.kind.includes('member');
@@ -604,8 +667,8 @@ function mutationReceipt(request: ProjectMemberAddV1 | ProjectMemberSetV1 | Proj
     state: 'applied',
   });
 }
-function cursorScope(snapshot: ProjectAuthorizationSnapshotV1, limit: number | undefined, query?: string): ProjectCursorScopeV1 {
-  return { operation: readOperation(snapshot.scope) as ProjectCursorScopeV1['operation'], ...('project_id' in snapshot.scope ? { project_id: snapshot.scope.project_id } : {}), ...(query === undefined ? {} : { canonical_query: normalizeProjectSearchQueryV1(query) }), limit: limit ?? 10, organization_id: snapshot.person.organization_id, membership_id: snapshot.person.membership_id };
+function cursorScope(snapshot: ProjectAuthorizationSnapshotV1, limit: number | undefined, query?: string, status?: ProjectStatusV2): ProjectCursorScopeV1 {
+  return { operation: readOperation(snapshot.scope) as ProjectCursorScopeV1['operation'], ...('project_id' in snapshot.scope ? { project_id: snapshot.scope.project_id } : {}), ...(query === undefined ? {} : { canonical_query: normalizeProjectSearchQueryV1(query) }), ...(status === undefined ? {} : { status }), limit: limit ?? 10, organization_id: snapshot.person.organization_id, membership_id: snapshot.person.membership_id };
 }
 function after<T>(rows: readonly T[], position: readonly (string | number)[] | undefined, coordinates: (row: T) => readonly (string | number)[], firstDescending = true): T[] {
   if (position === undefined) return [...rows];

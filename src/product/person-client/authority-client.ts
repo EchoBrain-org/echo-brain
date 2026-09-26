@@ -18,6 +18,7 @@ import {
 import {
   PERSON_PROJECTS_PATH_V2,
   validateProjectContextFeedV2, validateProjectContextSearchResultV2, validateProjectContextReadV2,
+  validateProjectPageRequestV2, validateProjectListV2, validateProjectSummaryV2, type ProjectPageRequestV2,
 } from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
@@ -27,8 +28,9 @@ import {
   PERSON_DIRECTORY_PATH_V1, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, type OrganizationDirectorySearchV1,
 } from '@echo-brain/organization-api';
 import {
-  PERSON_PROJECTS_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
+  PERSON_PROJECTS_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_UPDATES_PATH_V2, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
   validateProjectPageRequestV1, validateProjectListV1, validateProjectCreateV1, validateProjectCreateReceiptV1,
+  validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1, validateProjectSettingsReceiptV1,
   validateProjectIdV1, validateProjectSummaryV1, validateProjectContextBrowseV1, validateProjectMembersV1,
   validateProjectDirectorySearchV1, validateProjectDirectoryV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1,
   validateProjectMutationReceiptV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
@@ -37,6 +39,7 @@ import {
   validatePersonUpdateSubmitV2, validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2,
   validatePersonUploadContentV2, validatePersonUploadSearchV2, validatePersonUploadSearchResultV2,
   type ProjectPageRequestV1, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
+  type ProjectRenameV1, type ProjectArchiveV1, type ProjectLeaveV1,
   type ProjectMemberAddV1, type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
   type ProjectContextSearchV1, type ProjectContextReadRequestV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2,
 } from '@echo-brain/organization-api';
@@ -957,6 +960,14 @@ export class PersonAuthorityClient {
       matches: result => result.items.length <= (request.limit ?? 10) });
   }
 
+  async projectsV2(accessToken: string, value: ProjectPageRequestV2 = {}) {
+    const request = validateProjectPageRequestV2(value);
+    const query = new URLSearchParams({ limit: String(request.limit), status: request.status ?? 'active' });
+    if (request.cursor !== undefined) query.set('cursor', request.cursor);
+    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}?${query}`, validate: validateProjectListV2,
+      matches: result => result.items.length <= (request.limit ?? 10) && result.items.every(item => item.status === (request.status ?? 'active')) });
+  }
+
   async createProject(accessToken: string, value: ProjectCreateV1) {
     const request = validateProjectCreateV1(value);
     return this.contextRequest(accessToken, { path: PERSON_PROJECTS_PATH_V1, body: request, status: 201,
@@ -968,6 +979,33 @@ export class PersonAuthorityClient {
     const project = validateProjectIdV1(projectId);
     return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V1}/${project}`, validate: validateProjectSummaryV1,
       matches: result => result.project_id === project });
+  }
+
+  async readProjectV2(accessToken: string, projectId: string) {
+    const project = validateProjectIdV1(projectId);
+    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/${project}`, validate: validateProjectSummaryV2,
+      matches: result => result.project_id === project });
+  }
+
+  async renameProject(accessToken: string, value: ProjectRenameV1) {
+    const request = validateProjectRenameV1(value);
+    return this.contextRequest(accessToken, { path: PERSON_PROJECT_RENAME_PATH_V1, body: request,
+      request_id: request.request_id, validate: validateProjectSettingsReceiptV1,
+      matches: result => result.operation === 'rename' && result.request_id === request.request_id && result.project_id === request.project_id });
+  }
+
+  async archiveProject(accessToken: string, value: ProjectArchiveV1) {
+    const request = validateProjectArchiveV1(value);
+    return this.contextRequest(accessToken, { path: PERSON_PROJECT_ARCHIVE_PATH_V1, body: request,
+      request_id: request.request_id, validate: validateProjectSettingsReceiptV1,
+      matches: result => result.operation === 'archive' && result.request_id === request.request_id && result.project_id === request.project_id });
+  }
+
+  async leaveProject(accessToken: string, value: ProjectLeaveV1) {
+    const request = validateProjectLeaveV1(value);
+    return this.contextRequest(accessToken, { path: PERSON_PROJECT_LEAVE_PATH_V1, body: request,
+      request_id: request.request_id, validate: validateProjectSettingsReceiptV1,
+      matches: result => result.operation === 'leave' && result.request_id === request.request_id && result.project_id === request.project_id });
   }
 
   async projectMembers(accessToken: string, value: ProjectContextBrowseV1) {

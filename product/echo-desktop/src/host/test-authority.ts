@@ -131,6 +131,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }
   // The organization as it is now: its projects, who is in each, and what is filed in it.
   const projects = mode === 'no-projects' ? [] : structuredClone(desktop.projects);
+  const projectStatus = new Map<string, 'active' | 'archived'>(projects.map(project => [project.project_id, 'active']));
   const members = structuredClone(desktop.members);
   // No longer a lead of the first project, though the list said so.
   if (mode === 'demoted') members[desktop.projects[0]!.project_id] = members[desktop.projects[0]!.project_id]!.map(entry => ({ ...entry, role: entry.role === 'lead' ? 'member' : 'lead' }));
@@ -273,7 +274,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         : (audience.kind === 'only_me' || audience.kind === 'team') && keys === 'kind' ? [] : null;
     const filed = body?.association_project_ids;
     if (readers === null || !canonical(filed, 0)) return failure('invalid_request', 400);
-    const yours = new Set(listed().map(project => project.project_id));
+    const yours = new Set(listed().filter(project => (projectStatus.get(project.project_id) ?? 'active') === 'active').map(project => project.project_id));
     return [...filed, ...readers].every(id => yours.has(id)) ? null : failure('not_found', 404);
   };
   /** A project keeps at least one lead. */
@@ -346,6 +347,34 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       response.items = page.map((project, index) => ({ ...(fixture('projects-read')), ...project, ...demoted(index) }));
       response.next_cursor = paged && from + 10 < all.length ? (from === 0 ? 'cGFnZTI' : 'cGFnZTM') : null;
       return json(response);
+    }
+    if (method === 'GET' && path === '/v2/person/projects') {
+      const status = url.searchParams.get('status') === 'archived' ? 'archived' : 'active';
+      // Synthetic list modes generate projects after the state map is made;
+      // they model newly created projects whose initial status is active.
+      const all = listed().filter(project => (projectStatus.get(project.project_id) ?? 'active') === status);
+      const paged = LIST_PAGES.has(mode);
+      const from = !paged ? 0 : url.searchParams.get('cursor') === 'cGFnZTM' ? 20 : url.searchParams.get('cursor') === 'cGFnZTI' ? 10 : 0;
+      const page = paged ? all.slice(from, from + 10) : all;
+      // The archived read is independent of the active list. It must not
+      // advance fixtures that model a change in the active membership view.
+      if (status === 'active') projectLists += 1;
+      const demoted = (index: number) => status === 'active' && mode === 'role-changes' && projectLists > 1 && index === 0 ? { role: 'member' } : {};
+      return json({ schema_version: 2, kind: 'echo-project-list-v2', items: page.map((project, index) => ({
+        schema_version: 2, kind: 'echo-project-summary-v2', project_id: project.project_id, name: project.name, created_at: NOW,
+        // Lists can be stale; People reads the current role separately.
+        role: project.role, status, ...demoted(index),
+      })), next_cursor: paged && from + 10 < all.length ? (from === 0 ? 'cGFnZTI' : 'cGFnZTM') : null });
+    }
+    const projectV2 = /^\/v2\/person\/projects\/(prj_[0-9a-f-]+)$/.exec(path);
+    if (method === 'GET' && projectV2) {
+      const known = listed().find(project => project.project_id === projectV2[1]);
+      const role = roleOf(projectV2[1]!, session.membership_id);
+      if (!known || !role) return failure('not_found', 404);
+      // A direct read observes the same role transition as the active list.
+      const currentRole = mode === 'role-changes' && projectLists > 1 && known.project_id === desktop.projects[0]?.project_id ? 'member' : role;
+      return json({ schema_version: 2, kind: 'echo-project-summary-v2', project_id: known.project_id, name: known.name, created_at: NOW,
+        role: currentRole, status: projectStatus.get(known.project_id) ?? 'active' });
     }
     if (method === 'POST' && path === '/v2/person/projects/context/feed' && mode === 'feed-unauthorized') {
       return failure('unauthorized', 401);
@@ -422,12 +451,50 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return change(path, body, () => {
         const projectId = `prj_${randomUUID()}`;
         projects.push({ project_id: projectId, name, role: 'lead' });
+        projectStatus.set(projectId, 'active');
         members[projectId] = [{ membership_id: session.membership_id, role: 'lead' }];
         filed.set(projectId, []);
         return {
           schema_version: 1, kind: 'echo-project-create-receipt-v1', request_id: body?.request_id, project_id: projectId, created_at: NOW, state: 'created',
         };
       }, 201);
+    }
+    if (method === 'POST' && path === '/v1/person/projects/rename') {
+      const projectId = String(body?.project_id);
+      const name = body?.name;
+      if (Object.keys(body ?? {}).sort().join(',') !== 'kind,name,project_id,request_id,schema_version' || body?.schema_version !== 1 ||
+          body?.kind !== 'echo-project-rename-v1' || typeof name !== 'string') return failure('invalid_request', 400);
+      return change(path, body, () => {
+        const project = projects.find(entry => entry.project_id === projectId);
+        if (!project || roleOf(projectId, session.membership_id) !== 'lead') return failure('not_found', 404);
+        project.name = name;
+        return { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id: body?.request_id, project_id: projectId,
+          operation: 'rename', received_at: NOW, state: 'applied' };
+      });
+    }
+    if (method === 'POST' && path === '/v1/person/projects/archive') {
+      const projectId = String(body?.project_id);
+      if (Object.keys(body ?? {}).sort().join(',') !== 'archived,kind,project_id,request_id,schema_version' || body?.schema_version !== 1 ||
+          body?.kind !== 'echo-project-archive-v1' || typeof body?.archived !== 'boolean') return failure('invalid_request', 400);
+      return change(path, body, () => {
+        if (!projects.some(entry => entry.project_id === projectId) || roleOf(projectId, session.membership_id) !== 'lead') return failure('not_found', 404);
+        projectStatus.set(projectId, body!.archived ? 'archived' : 'active');
+        return { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id: body?.request_id, project_id: projectId,
+          operation: 'archive', received_at: NOW, state: 'applied' };
+      });
+    }
+    if (method === 'POST' && path === '/v1/person/projects/leave') {
+      const projectId = String(body?.project_id);
+      if (Object.keys(body ?? {}).sort().join(',') !== 'kind,project_id,request_id,schema_version' || body?.schema_version !== 1 ||
+          body?.kind !== 'echo-project-leave-v1') return failure('invalid_request', 400);
+      return change(path, body, () => {
+        const role = roleOf(projectId, session.membership_id);
+        if (!role) return failure('not_found', 404);
+        if (role === 'lead' && leadsAfter(projectId, session.membership_id, null) === 0) return failure('conflict', 409);
+        members[projectId] = (members[projectId] ?? []).filter(entry => entry.membership_id !== session.membership_id);
+        return { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id: body?.request_id, project_id: projectId,
+          operation: 'leave', received_at: NOW, state: 'applied' };
+      });
     }
     // People & invites, for the owner: list, invite (POST), reissue (PUT) and revoke (DELETE), each by email.
     if (path === '/v1/person/employees') {

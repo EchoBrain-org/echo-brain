@@ -43,6 +43,11 @@ chosen under **Who can read**.
 
 ## Admission and recovery
 
+Archived projects remain readable under current permissions but cannot be
+selected for new uploads or associations, including as an upload audience.
+An accepted upload retry still reconciles its existing receipt. See
+[Project settings V1](project-settings-v1.md) for archive and leave behavior.
+
 One upload creates one original, one source identity and one extraction task,
 regardless of the number of selected projects. Admission validates every selected
 project and commits the original, links, audience grants and receipt atomically.
@@ -86,11 +91,11 @@ automatic decision/action extraction are outside this change.
 
 ## Storage and staging
 
-Authority V9 adds immutable initial association/audience snapshots, audience
+Authority V9 introduced immutable initial association/audience snapshots, audience
 project joins and multiple current association rows. Source custody uses immutable
 audience policy; mutable associations are not part of its identity. Historical
-V8 SQL remains unchanged. Runtime lineage and admission checks require the exact
-V9 baseline.
+V8 and V9 SQL remain unchanged. Project settings advance runtime lineage and
+admission checks to the exact V10 baseline while preserving those upload facts.
 
 The explicit offline V8-to-V9 copier validates exact V8 source custody and creates
 a separate V9 snapshot, preserving original bytes, legacy payload hashes, source
@@ -100,3 +105,7 @@ Ordinary stage does not silently migrate data. Rollback restores the retained V8
 snapshot before its matching image. Follow the
 [Authority operator playbook](../operations/PB-OPERATIONS-001-authority-operator-lane.md)
 for the candidate's exact release approval and checks.
+
+The subsequent explicit V9-to-V10 transition preserves those originals and
+initializes all existing projects as active. It adds project rename and archive
+state, not a new upload audience or a content-deletion operation.

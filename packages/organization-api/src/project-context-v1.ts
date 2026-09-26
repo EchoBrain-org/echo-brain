@@ -13,6 +13,9 @@ import {
 import { validatePersonUpdateRequestId, validatePersonUploadContextId } from './person-updates.js';
 
 export const PERSON_PROJECTS_PATH_V1 = '/v1/person/projects';
+export const PERSON_PROJECT_RENAME_PATH_V1 = `${PERSON_PROJECTS_PATH_V1}/rename`;
+export const PERSON_PROJECT_ARCHIVE_PATH_V1 = `${PERSON_PROJECTS_PATH_V1}/archive`;
+export const PERSON_PROJECT_LEAVE_PATH_V1 = `${PERSON_PROJECTS_PATH_V1}/leave`;
 /** Organization-wide people search for any active member; needs no project. */
 export const PERSON_DIRECTORY_PATH_V1 = '/v1/person/directory';
 export const PROJECT_NAME_MAX_BYTES = 200;
@@ -43,6 +46,36 @@ export interface ProjectCreateReceiptV1 {
   readonly project_id: ProjectIdV1;
   readonly created_at: string;
   readonly state: 'created';
+}
+/** Project-level settings remain separate from member/content mutations. */
+export interface ProjectRenameV1 {
+  readonly schema_version: 1;
+  readonly kind: 'echo-project-rename-v1';
+  readonly request_id: string;
+  readonly project_id: ProjectIdV1;
+  readonly name: string;
+}
+export interface ProjectArchiveV1 {
+  readonly schema_version: 1;
+  readonly kind: 'echo-project-archive-v1';
+  readonly request_id: string;
+  readonly project_id: ProjectIdV1;
+  readonly archived: boolean;
+}
+export interface ProjectLeaveV1 {
+  readonly schema_version: 1;
+  readonly kind: 'echo-project-leave-v1';
+  readonly request_id: string;
+  readonly project_id: ProjectIdV1;
+}
+export interface ProjectSettingsReceiptV1 {
+  readonly schema_version: 1;
+  readonly kind: 'echo-project-settings-receipt-v1';
+  readonly request_id: string;
+  readonly project_id: ProjectIdV1;
+  readonly operation: 'rename' | 'archive' | 'leave';
+  readonly received_at: string;
+  readonly state: 'applied';
 }
 export type ProjectMutationOperationV1 = 'member_set' | 'member_remove' | 'associate' | 'dissociate';
 export type ProjectMutationReceiptV1 =
@@ -235,6 +268,29 @@ export function validateProjectCreateReceiptV1(value: unknown): ProjectCreateRec
   if (record.schema_version !== 1 || record.kind !== 'echo-project-create-receipt-v1' || record.state !== 'created') fail('Project create receipt is invalid');
   validatePersonUpdateRequestId(record.request_id); const project_id = project(record, 'Project create receipt'); assertTimestamp(record.created_at, 'Project create receipt created_at');
   return { schema_version: 1, kind: 'echo-project-create-receipt-v1', request_id: record.request_id as string, project_id, created_at: record.created_at as string, state: 'created' };
+}
+function settingsRequest(value: unknown, kind: ProjectRenameV1['kind'] | ProjectArchiveV1['kind'] | ProjectLeaveV1['kind'], label: string): ProjectRenameV1 | ProjectArchiveV1 | ProjectLeaveV1 {
+  const record = snapshot(value, label);
+  const fields = kind === 'echo-project-rename-v1' ? ['schema_version', 'kind', 'request_id', 'project_id', 'name']
+    : kind === 'echo-project-archive-v1' ? ['schema_version', 'kind', 'request_id', 'project_id', 'archived']
+      : ['schema_version', 'kind', 'request_id', 'project_id'];
+  assertExactKeys(record, fields, label);
+  if (record.schema_version !== 1 || record.kind !== kind) fail(`${label} version or kind is unsupported`);
+  validatePersonUpdateRequestId(record.request_id); project(record, label);
+  if (kind === 'echo-project-rename-v1') name(record.name);
+  if (kind === 'echo-project-archive-v1' && typeof record.archived !== 'boolean') fail(`${label} archived is invalid`);
+  return record as unknown as ProjectRenameV1 | ProjectArchiveV1 | ProjectLeaveV1;
+}
+export function validateProjectRenameV1(value: unknown): ProjectRenameV1 { return settingsRequest(value, 'echo-project-rename-v1', 'Project rename') as ProjectRenameV1; }
+export function validateProjectArchiveV1(value: unknown): ProjectArchiveV1 { return settingsRequest(value, 'echo-project-archive-v1', 'Project archive') as ProjectArchiveV1; }
+export function validateProjectLeaveV1(value: unknown): ProjectLeaveV1 { return settingsRequest(value, 'echo-project-leave-v1', 'Project leave') as ProjectLeaveV1; }
+export function validateProjectSettingsReceiptV1(value: unknown): ProjectSettingsReceiptV1 {
+  const record = object(value, 'Project settings receipt');
+  assertExactKeys(record, ['schema_version', 'kind', 'request_id', 'project_id', 'operation', 'received_at', 'state'], 'Project settings receipt');
+  if (record.schema_version !== 1 || record.kind !== 'echo-project-settings-receipt-v1' ||
+      (record.operation !== 'rename' && record.operation !== 'archive' && record.operation !== 'leave') || record.state !== 'applied') fail('Project settings receipt is invalid');
+  validatePersonUpdateRequestId(record.request_id); const project_id = project(record, 'Project settings receipt'); assertTimestamp(record.received_at, 'Project settings receipt received_at');
+  return { schema_version: 1, kind: 'echo-project-settings-receipt-v1', request_id: record.request_id as string, project_id, operation: record.operation, received_at: record.received_at as string, state: 'applied' };
 }
 export function validateProjectMutationReceiptV1(value: unknown): ProjectMutationReceiptV1 {
   const record = object(value, 'Project mutation receipt');

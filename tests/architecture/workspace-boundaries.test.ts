@@ -587,6 +587,7 @@ describe("workspace source boundaries", () => {
         "authority-baseline-v7.sql",
         "authority-baseline-v8.sql",
         "authority-baseline-v9.sql",
+        "authority-baseline-v10.sql",
       ],
       "packages/organization-control-plane": [
         "organization-control-plane-baseline-v3.sql",
