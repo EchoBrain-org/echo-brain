@@ -108,13 +108,12 @@ person out cleanly, as ADR-0002 §4 requires.
 - **The onboarding kit is command-line only.** The person kit builds only the
   macOS arm64 command-line kit (`--installation cli-kit`) and the Linux x64
   kit. Neither carries an app or a graphical setup.
-- **CI runs the desktop app.** The `desktop-app` job (macOS arm64, on
-  `macos-15`) builds the Person client the app loads, then runs the
-  typecheck, the vitest suite, the full Playwright suite, the release build
-  that proves the bundles carry no test code, and `scripts/package.mjs`. It
-  verifies the packaged app's code signature and runs its `--smoke`, which
-  must pass every check and report a build of the commit from a clean tree.
-  It then asserts that packaging left the checkout clean. `CI required
-  checks` needs the job to succeed. The required `desktop-linux` job also runs
-  the desktop suite on Ubuntu 24.04 x64 under Xvfb, builds deb/tar.gz packages,
-  verifies release fuses, and installs and smokes the deb.
+- **CI runs the desktop app.** The `desktop-app` matrix runs macOS arm64 on
+  `macos-15` and Linux x64 on `ubuntu-24.04`. Both build the Person client,
+  typecheck, run unit and full Playwright tests, then package from clean
+  committed source. Packaging builds the release bundles and verifies that
+  they contain no test code. The shared smoke command verifies release fuses,
+  source identity, startup, and refusal of remote debugging. macOS verifies
+  the code signature; Linux runs under Xvfb and additionally installs and
+  smokes the deb. Both assert a clean checkout afterward. `CI required checks`
+  requires both targets, and a failed target does not cancel the other.

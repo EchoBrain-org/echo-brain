@@ -169,10 +169,26 @@ jobs:
           tests/architecture/client-update-dispatch.test.ts
 
   desktop-app:
-    name: macOS arm64 desktop app
-    # macOS runners have a window server, so Electron needs no display shim.
-    runs-on: macos-15
+    name: ${{ matrix.name }} desktop app
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    strategy:
+      # Report both platforms even when one fails. Both remain required.
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            runner: macos-15
+            arch: arm64
+            cache-root: ~/Library/Caches
+          - name: Linux x64
+            runner: ubuntu-24.04
+            arch: x64
+            cache-root: ~/.cache
+    defaults:
+      run:
+        shell: bash
+        working-directory: product/echo-desktop
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -182,107 +198,64 @@ jobs:
           cache-dependency-path: |
             npm-shrinkwrap.json
             product/echo-desktop/package-lock.json
-      - run: npm ci
-      - name: Build the Person client the desktop host loads
-        run: node tools/build.mjs --person-client
-      - name: Install the desktop app's locked dependencies
-        working-directory: product/echo-desktop
-        run: npm ci
-      # The electron package has no install script: it fetches its binary on
-      # first use, and parallel Playwright workers would race to extract it.
-      - name: Install the Electron binary before any test launches it
-        working-directory: product/echo-desktop
-        run: npx --no install-electron
-      - name: Typecheck the desktop app
-        working-directory: product/echo-desktop
-        run: npm run typecheck
-      - name: Run the desktop unit tests
-        working-directory: product/echo-desktop
-        run: npx vitest run
-      - name: Build the desktop bundles with the test hook
-        working-directory: product/echo-desktop
-        run: npm run build
-      - name: Run the full desktop end-to-end suite
-        working-directory: product/echo-desktop
-        run: npx playwright test
-      - name: Prove the release bundles carry no test code
-        working-directory: product/echo-desktop
-        run: node scripts/build.mjs --release
-      - name: Package the app from the clean checkout
-        working-directory: product/echo-desktop
-        run: node scripts/package.mjs
-      - name: Smoke the packaged app
-        working-directory: product/echo-desktop
-        shell: bash
-        run: |
-          set -euo pipefail
-          app="dist-app/mac-arm64/ECHO.app"
-          /usr/bin/codesign --verify --deep --strict "$app"
-          smoke="$RUNNER_TEMP/echo-desktop-smoke.txt"
-          "$app/Contents/MacOS/ECHO" --smoke > "$smoke"
-          node -e '
-            const fs = require("node:fs");
-            const lines = fs.readFileSync(process.argv[1], "utf8").trim().split("\n");
-            const result = JSON.parse(lines[lines.length - 1]);
-            const expected = ["renderer_has_no_node", "bridge_present", "test_hook_absent", "host_started", "client_identity"];
-            if (
-              result.smoke !== "passed" ||
-              !expected.every((name) => result.checks?.[name] === true) ||
-              result.build?.source_sha !== process.env.GITHUB_SHA ||
-              result.build?.dirty !== false
-            ) throw new Error(`unexpected smoke result: ${JSON.stringify(result)}`);
-          ' "$smoke"
-      - name: Assert packaging left the checkout clean
-        shell: bash
-        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
-
-  desktop-linux:
-    name: Linux x64 desktop app
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - name: Verify the native build architecture
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: node -e 'if (process.arch !== process.env.TARGET_ARCH) throw new Error("Unexpected runner architecture")'
+      - name: Cache Electron and packaging-tool downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          node-version: ${{ env.PRODUCT_NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            npm-shrinkwrap.json
-            product/echo-desktop/package-lock.json
-      - name: Prepare the isolated runner for sandboxed Electron
+          path: |
+            ${{ matrix.cache-root }}/electron
+            ${{ matrix.cache-root }}/electron-builder
+          key: desktop-downloads-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('product/echo-desktop/package-lock.json') }}
+      - name: Prepare Linux for sandboxed Electron
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y binutils xvfb xauth dbus-x11 desktop-file-utils libgtk-3-0t64 libnss3 libasound2t64 libgbm1
           # Unpackaged Electron has no installed AppArmor profile. Allow its
           # user-namespace sandbox on this disposable runner; never --no-sandbox.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      - run: npm ci
+      - name: Install repository dependencies
+        working-directory: .
+        run: npm ci
       - name: Build the Person client the desktop host loads
+        working-directory: .
         run: node tools/build.mjs --person-client
       - name: Install the desktop app's locked dependencies
-        working-directory: product/echo-desktop
         run: npm ci
+      # Electron fetches its binary on first use; install before parallel tests.
       - name: Install the Electron binary before any test launches it
-        working-directory: product/echo-desktop
         run: npx --no install-electron
-      - name: Typecheck and run desktop unit tests
-        working-directory: product/echo-desktop
+      - name: Typecheck the desktop app
+        run: npm run typecheck
+      - name: Run the desktop unit tests
+        run: npx vitest run
+      - name: Build the desktop bundles with the test hook
+        run: npm run build
+      - name: Run the full desktop end-to-end suite
         run: |
-          npm run typecheck
-          npx vitest run
-      - name: Build and exercise the desktop on X11
-        working-directory: product/echo-desktop
-        run: |
-          npm run build
-          xvfb-run -a dbus-run-session -- npx playwright test
-      - name: Package Linux from the clean checkout
-        working-directory: product/echo-desktop
-        run: npm run package:linux
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a dbus-run-session -- npx playwright test
+          else
+            npx playwright test
+          fi
+      # Packaging builds and verifies the release bundles itself; do it once.
+      - name: Package the app from the clean checkout
+        run: npm run package
+      - name: Verify the macOS signature
+        if: runner.os == 'macOS'
+        run: /usr/bin/codesign --verify --deep --strict dist-app/mac-arm64/ECHO.app
       - name: Verify release fuses and smoke the packaged app
-        working-directory: product/echo-desktop
-        run: xvfb-run -a dbus-run-session -- npm run smoke
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a dbus-run-session -- npm run smoke
+          else
+            npm run smoke
+          fi
       - name: Install and smoke the deb and validate its desktop launcher
-        working-directory: product/echo-desktop
+        if: runner.os == 'Linux'
         run: |
           sha256sum /usr/bin/echo > "$RUNNER_TEMP/coreutils-echo.sha256"
           packages=(dist-app/*.deb)
@@ -503,7 +476,7 @@ jobs:
   required-checks:
     name: CI required checks
     if: ${{ always() }}
-    needs: [check, person-client-package, desktop-app, desktop-linux, authority-container, authority-recovery-infrastructure]
+    needs: [check, person-client-package, desktop-app, authority-container, authority-recovery-infrastructure]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -513,7 +486,6 @@ jobs:
           CHECK_RESULT: ${{ needs.check.result }}
           PERSON_CLIENT_PACKAGE_RESULT: ${{ needs.person-client-package.result }}
           DESKTOP_APP_RESULT: ${{ needs.desktop-app.result }}
-          DESKTOP_LINUX_RESULT: ${{ needs.desktop-linux.result }}
           AUTHORITY_CONTAINER_RESULT: ${{ needs.authority-container.result }}
           AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT: ${{ needs.authority-recovery-infrastructure.result }}
         run: |
@@ -521,6 +493,5 @@ jobs:
           test "$CHECK_RESULT" = success
           test "$PERSON_CLIENT_PACKAGE_RESULT" = success
           test "$DESKTOP_APP_RESULT" = success
-          test "$DESKTOP_LINUX_RESULT" = success
           test "$AUTHORITY_CONTAINER_RESULT" = success
           test "$AUTHORITY_RECOVERY_INFRASTRUCTURE_RESULT" = success
