@@ -53,7 +53,7 @@ test('Capture in the sidebar opens capture where you are, and the account row na
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('sidebar-capture')).toContainText('Capture');
-  await expect(page.getByTestId('sidebar-capture')).toContainText('⌘⇧E');
+  await expect(page.getByTestId('sidebar-capture')).toContainText(process.platform === 'darwin' ? '⌘⇧E' : 'Ctrl+Shift+E');
   await expect(page.getByTestId('account-row')).toContainText('Ari');
   await expect(page.getByTestId('account-row')).toContainText('employee');
   // People & invites is for owners.

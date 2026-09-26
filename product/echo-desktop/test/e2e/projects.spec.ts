@@ -80,7 +80,7 @@ test('the reader says who can read an original when it is not the project\'s mem
   await page.getByTestId('write-button').click();
   await page.getByTestId('readers-only-me').click();
   await page.getByTestId('compose-body').fill('My own reminder');
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   await expect(rows.first()).toContainText('My own reminder');
   await expect(rows.first().getByLabel('Only me')).toBeVisible();

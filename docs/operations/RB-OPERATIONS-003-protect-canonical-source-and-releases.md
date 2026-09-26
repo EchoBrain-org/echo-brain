@@ -81,6 +81,7 @@ GitHub App is `github-actions` with application ID `15368`. In the committed
 check
 macOS arm64 Person-client package
 macOS arm64 desktop app
+Linux x64 desktop app
 Organization authority container
 Authority recovery infrastructure
 ```
@@ -88,7 +89,9 @@ Authority recovery infrastructure
 The aggregate uses `if: always()` and succeeds only when every dependency
 result equals `success`. The executable architecture test
 [`tests/architecture/ci-workflow.test.ts`](../../tests/architecture/ci-workflow.test.ts)
-asserts the dependency topology and each success test. Requiring the five
+asserts the dependency topology and each success test. The two desktop runs
+come from one `desktop-app` matrix with `fail-fast: false`; both must succeed
+before its aggregate dependency succeeds. Requiring the individual
 implementation checks separately would duplicate the committed topology in
 GitHub settings and make safe CI evolution brittle.
 

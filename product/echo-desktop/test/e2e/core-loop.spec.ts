@@ -77,7 +77,7 @@ test('capture starts private outside a project, closes itself on save and says w
   await page.getByTestId('compose-body').fill('Northwind wants annual\nwith a pilot clause.');
   // The live region is there before the toast, so a screen reader announces the toast.
   await expect(page.getByRole('status')).toHaveText('');
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   await expect(page.getByRole('status')).toHaveText('Saved for you');
   await expect(page.getByTestId('compose')).toHaveCount(0);
@@ -133,7 +133,7 @@ test('Only me and Organization keep a capture filed in the projects ticked, read
   await expect(page.getByTestId('readers-projects')).toHaveAttribute('aria-checked', 'false');
   await expect(page.getByTestId('compose-readers')).toHaveText('Only you can read this.');
   // The caret stays in Capture: ⌘↩ saves straight away.
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   expect(notes()[0]!.body?.audience).toEqual({ kind: 'only_me' });
   expect(notes()[0]!.body?.association_project_ids).toEqual([BEACON]);
@@ -150,7 +150,7 @@ test('Only me and Organization keep a capture filed in the projects ticked, read
   await expect(page.getByTestId('projects-list')).toHaveCount(0);
   await expect(page.getByTestId('compose-readers')).toHaveText('Everyone in your org can read this.');
   await page.getByTestId('compose-body').fill('For everyone, about Apollo and Beacon');
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Shared with your organization');
   expect(notes()[1]!.body?.audience).toEqual({ kind: 'team' });
   expect(notes()[1]!.body?.association_project_ids).toEqual([APOLLO, BEACON]);

@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "ECHO desktop app (Electron) for macOS, Windows and Linux",
+  "homepage": "https://github.com/EchoBrain-org/echo-brain",
+  "desktopName": "org.echobrain.echo-desktop.desktop",
   "type": "module",
   "main": "build/main.cjs",
   "engines": {
@@ -14,7 +16,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && vitest run && playwright test",
     "package": "node scripts/package.mjs",
-    "smoke": "dist-app/mac-arm64/ECHO.app/Contents/MacOS/ECHO --smoke"
+    "package:linux": "node scripts/package.mjs --linux",
+    "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
     "@electron/fuses": "2.1.3",

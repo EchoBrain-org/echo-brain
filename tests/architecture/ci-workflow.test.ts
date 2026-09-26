@@ -209,42 +209,80 @@ describe("CI workflow", () => {
     );
   });
 
-  it("tests, packages from a clean checkout, and smokes the desktop app on macOS", () => {
+  it("requires native macOS and Linux desktop tests and package proofs", () => {
     const source = workflow();
     const desktopJob = source.slice(
       source.indexOf("  desktop-app:"),
       source.indexOf("  authority-container:"),
     );
     const steps = [
-      "- run: npm ci",
+      "- name: Install repository dependencies",
       "run: node tools/build.mjs --person-client",
-      "working-directory: product/echo-desktop\n        run: npm ci",
+      "- name: Install the desktop app's locked dependencies",
       "run: npx --no install-electron",
       "run: npm run typecheck",
       "run: npx vitest run",
       "run: npm run build",
-      "run: npx playwright test",
-      "run: node scripts/build.mjs --release",
-      "run: node scripts/package.mjs",
-      '"$app/Contents/MacOS/ECHO" --smoke',
+      "- name: Run the full desktop end-to-end suite",
+      "run: npm run package",
+      "- name: Verify release fuses and smoke the packaged app",
       'test -z "$(git status --porcelain=v1 --untracked-files=all)"',
     ].map((step) => [step, desktopJob.indexOf(step)] as const);
 
-    expect(desktopJob).toContain("name: macOS arm64 desktop app");
-    expect(desktopJob).toContain("runs-on: macos-15");
+    expect(desktopJob).toContain("name: ${{ matrix.name }} desktop app");
+    expect(desktopJob).toContain("runs-on: ${{ matrix.runner }}");
+    expect(desktopJob).toContain("fail-fast: false");
+    expect(desktopJob).toContain(
+      "- name: macOS arm64\n            runner: macos-15\n            arch: arm64",
+    );
+    expect(desktopJob).toContain(
+      "- name: Linux x64\n            runner: ubuntu-24.04\n            arch: x64",
+    );
+    expect(desktopJob).toContain("TARGET_ARCH: ${{ matrix.arch }}");
+    expect(desktopJob).toContain("process.arch !== process.env.TARGET_ARCH");
+    expect(desktopJob).toContain("working-directory: product/echo-desktop");
     expect(desktopJob).toMatch(/^    timeout-minutes: 20$/m);
     expect(desktopJob).toContain("node-version: ${{ env.PRODUCT_NODE_VERSION }}");
     expect(desktopJob).toContain("product/echo-desktop/package-lock.json");
     for (const [index, [step, position]] of steps.entries()) {
       expect(position, step).toBeGreaterThan(index === 0 ? 0 : steps[index - 1]![1]);
     }
-    expect(desktopJob).toContain(
-      "result.build?.source_sha !== process.env.GITHUB_SHA",
-    );
-    // A skipped step still leaves the job, and so the aggregate, a success:
-    // no step or the job itself may carry a condition.
+    // Shared tests and package proofs must not be skipped while the matrix
+    // reports success to the aggregate. Only native platform setup may vary.
+    const conditionalSteps = desktopJob
+      .split(/(?=^      - )/m)
+      .filter((step) => /^        if:/m.test(step));
+    expect(conditionalSteps).toHaveLength(3);
+    for (const [name, os] of [
+      ["Prepare Linux for sandboxed Electron", "Linux"],
+      ["Verify the macOS signature", "macOS"],
+      ["Install and smoke the deb and validate its desktop launcher", "Linux"],
+    ]) {
+      expect(conditionalSteps).toContainEqual(
+        expect.stringContaining(`- name: ${name}\n        if: runner.os == '${os}'`),
+      );
+    }
+    expect(desktopJob).not.toMatch(/^    if:/m);
     expect(desktopJob).not.toMatch(
-      /secrets\.|upload-artifact|--allow-dirty|continue-on-error|--publish always|\bif:/,
+      /secrets\.|upload-artifact|--allow-dirty|continue-on-error|--publish always/,
     );
+    expect(desktopJob).toContain("xvfb-run -a dbus-run-session -- npx playwright test");
+    expect(desktopJob).toContain("\n            npx playwright test\n");
+    expect(desktopJob).toContain("xvfb-run -a dbus-run-session -- npm run smoke");
+    expect(desktopJob).toContain("\n            npm run smoke\n");
+    expect(desktopJob).toContain("npm run smoke -- /opt/ECHO/echo-desktop");
+    expect(desktopJob).toContain("desktop-file-validate");
+    expect(desktopJob).toContain("codesign --verify --deep --strict");
+    const packager = readFileSync(
+      resolve(REPO, "product/echo-desktop/scripts/package.mjs"), "utf8",
+    );
+    expect(packager).toContain("['scripts/build.mjs', '--release']");
+    const smoke = readFileSync(
+      resolve(REPO, "product/echo-desktop/scripts/smoke.mjs"), "utf8",
+    );
+    expect(smoke).toContain("result.build?.source_sha !== source");
+    expect(smoke).toContain("result.build?.dirty !== false");
+    expect(smoke).toContain("getCurrentFuseWire");
+    expect(smoke).toContain("--remote-debugging-port=0");
   });
 });

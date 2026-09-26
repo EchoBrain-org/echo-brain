@@ -712,7 +712,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const scope = typeof body?.project_id === 'string' ? { kind: 'project', project_id: body.project_id } : { kind: 'global' };
       // Follow-ups: the second answer comes late, and the third question fails.
       if (mode === 'ask-follow-ups' && asks === 2) {
-        await new Promise(resolveLater => setTimeout(resolveLater, 1_500));
+        // The test releases the reply after cancellation. A fixed delay races
+        // the UI on slower Linux runners and can answer before Cancel is clicked.
+        while (!existsSync(join(home, 'release-follow-up'))) {
+          await new Promise(resolveLater => setTimeout(resolveLater, 25));
+        }
         return json({ ...desktop.answer, answer: 'A late answer.', scope });
       }
       if (mode === 'ask-follow-ups' && asks === 3) return failure('unavailable', 503);

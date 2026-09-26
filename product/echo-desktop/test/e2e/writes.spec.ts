@@ -134,7 +134,7 @@ test('a note over 8 KiB says so before anything is sent, and one that fits is sa
   // Shortened, the notice goes and the note is saved.
   await page.getByTestId('compose-body').fill(`Long note\n${'x'.repeat(8 * 1024 - 10)}`);
   await expect(page.getByTestId('compose-notice')).toHaveCount(0);
-  await page.keyboard.press('Meta+Enter');
+  await page.keyboard.press('ControlOrMeta+Enter');
   await expect(page.getByTestId('toast')).toHaveText('Saved for you');
   expect(posts()).toHaveLength(1);
 });
