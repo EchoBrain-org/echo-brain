@@ -8,6 +8,14 @@ test.afterEach(async () => { await run?.close(); });
 
 const refreshes = () => run.calls().filter(call => call.path === '/v2/session/refresh');
 
+/** Both startup lists fail before sending; a known-not-sent refresh preserves the session for the next call. */
+async function expectOfflineStartup(): Promise<void> {
+  const completedLists = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')
+    .match(/projects\.list transport_failed/g)?.length ?? 0;
+  await expect.poll(completedLists).toBe(2);
+  expect(run.calls().map(call => call.path)).toEqual(['/v2/session/refresh', '/v2/session/refresh']);
+}
+
 /** Sign in with the fixture's browser, which stands in for Google, and land on Home. */
 async function signIn(page: Page) {
   await expect(page.getByTestId('signed-out')).toBeVisible();
@@ -62,8 +70,8 @@ test('a refresh that never left the machine keeps you signed in, and status alon
   const { page, app } = run;
   await expect(page.getByTestId('home-error')).toContainText('ECHO cannot be reached. Check your connection');
   await expect(page.getByTestId('signed-out')).toHaveCount(0);
-  // One refresh, and the call that needed it is not made.
-  expect(run.calls().map(call => call.path)).toEqual(['/v2/session/refresh']);
+  // Active and archived lists each try once; neither list reaches the Authority.
+  await expectOfflineStartup();
   // Showing the window again re-reads status; it does not try the network.
   const statuses = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8').match(/app\.status ok/g)?.length ?? 0;
   const before = statuses();
@@ -71,13 +79,15 @@ test('a refresh that never left the machine keeps you signed in, and status alon
   await emit(app, 'echo-test:resume');
   await expect.poll(statuses).toBe(before + 1);
   await expect(page.getByTestId('home-error')).toBeVisible();
-  expect(refreshes()).toHaveLength(1);
+  expect(refreshes()).toHaveLength(2);
 });
 
 test('a note written while the refresh cannot leave the machine is not sent, and that call refreshes again', async () => {
   run = await launch('refresh-offline');
   const { page } = run;
   await expect(page.getByTestId('home-error')).toBeVisible();
+  await expectOfflineStartup();
+  const startupRefreshes = refreshes().length;
   await page.getByTestId('write-button').click();
   await page.getByTestId('compose-body').fill('Offline note');
   await page.getByTestId('compose-send').click();
@@ -86,7 +96,7 @@ test('a note written while the refresh cannot leave the machine is not sent, and
   await expect(page.getByTestId('compose-unresolved')).toHaveCount(0);
   await expect(page.getByTestId('compose-body')).not.toHaveAttribute('readonly', '');
   expect(run.calls().some(call => call.path === '/v3/person/updates')).toBe(false);
-  expect(refreshes()).toHaveLength(2);
+  expect(refreshes()).toHaveLength(startupRefreshes + 1);
 });
 
 for (const [mode, why] of [['refresh-refused', 'is refused'], ['refresh-fails', 'may have reached the Authority']] as const) {
