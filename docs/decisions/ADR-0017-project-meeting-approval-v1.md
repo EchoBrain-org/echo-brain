@@ -115,7 +115,12 @@ evidence), transcript-off and rejected/pending meetings, incorrect revision,
 and audit failure. Existing approval/restart, source-release and architecture
 tests remain part of the full repository check. Live rehearsal remains separate.
 
-The existing fixed synthetic staging canary retains its V1 card: its invented
-meeting is not admitted into source custody and cannot grant transcript release.
-Real meetings lacking the exact retained source fail closed before provider I/O;
-they never fall back to the synthetic or historical path.
+The single synthetic staging canary enters the same source-admission and meeting
+processing cycle as Granola and the synthetic demo adapter. Its one-item adapter
+has no next cursor, so it retains the real provider's admission fence without
+advancing that provider's cursor. New canaries use a fixed V2 envelope with an
+explicitly synthetic transcript and receive the normal V2 project approval card.
+The rehearsal can therefore verify the same custody, extraction, approval and
+gated transcript read. Historical V1 envelope bytes and frozen cards remain
+recoverable under their original contracts. Meetings lacking the exact retained
+source fail closed before new V2 card delivery.

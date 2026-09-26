@@ -38,7 +38,6 @@ import {
 import type { ApprovalWorkflowOutboxV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
 import { ApprovalWorkflowStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/approval-workflow-state-v1";
 import type { MeetingApprovalJourneyTelemetryPortV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
-import { isStagingSyntheticMeetingCanaryV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/staging-synthetic-meeting-canary-v1";
 
 type Digest = ApprovalContractSha256;
 type CompiledDecisionBrief = ReturnType<typeof compileDecisionBrief>;
@@ -562,16 +561,10 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       (deliveryV2.readDeliveryV2 !== undefined ||
         deliveryV2.freezeDeliveryV2 !== undefined) &&
       supportsPrivateApprovalDeliveryV2(this.options.authority_database);
-    // The exact synthetic canary has no admitted source custody. Preserve its
-    // existing V1 rehearsal; real meetings must prove custody before V2 staging.
-    const syntheticCanary = isStagingSyntheticMeetingCanaryV1(
-      input.meeting,
-      input.admission.source.cursor,
-    );
     const existingV2 = v2DeliverySupported
       ? deliveryV2.readDeliveryV2?.(outbox.approval_id)
       : undefined;
-    if (existingV2 !== undefined || (v2DeliverySupported && !syntheticCanary && outbox.state === "queued" && deliveryV2.freezeDeliveryV2 !== undefined)) {
+    if (existingV2 !== undefined || (v2DeliverySupported && outbox.state === "queued" && deliveryV2.freezeDeliveryV2 !== undefined)) {
       // This read-only proof precedes the only V2 delivery write. A missing
       // owner leaves the durable candidate queued without freezing a card.
       target = this.resolveReviewerTarget(targetInput);
