@@ -88,6 +88,9 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await field.press('Enter');
   await expect(page.getByTestId('asking')).toContainText('Thinking…');
   await expect(earlier.locator('.q')).toHaveText(['First?']);
+  // The pending state is rendered before its IPC request reaches the fixture.
+  // Wait for that receipt before checking that a second follow-up is blocked.
+  await expect.poll(questions).toEqual(['First?', 'Second?']);
   // One question at a time: the next waits in the bar.
   await field.fill('Third?');
   await field.press('Enter');

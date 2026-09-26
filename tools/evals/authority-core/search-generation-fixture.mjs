@@ -64,9 +64,9 @@ export function withSearchGeneration(corpusAtoms, run) {
       lineage: {
         ...LINEAGE,
         planes: {
-          facts: plane("retrieval-facts", engine.READABLE_SEARCH_FACTS_BASELINE_V2, 2, engine.readableSearchPlaneBaselineSha256),
-          content: plane("retrieval-content", engine.READABLE_SEARCH_CONTENT_BASELINE_V1, 1, engine.readableSearchPlaneBaselineSha256V1),
-          lexical: plane("retrieval-lexical", engine.READABLE_SEARCH_LEXICAL_BASELINE_V1, 1, engine.readableSearchPlaneBaselineSha256V1),
+          facts: plane("retrieval-facts", engine.READABLE_SEARCH_FACTS_BASELINE_V3, 3, engine.readableSearchPlaneBaselineSha256),
+          content: plane("retrieval-content", engine.READABLE_SEARCH_CONTENT_BASELINE_V2, 2, engine.readableSearchPlaneBaselineSha256),
+          lexical: plane("retrieval-lexical", engine.READABLE_SEARCH_LEXICAL_BASELINE_V2, 2, engine.readableSearchPlaneBaselineSha256),
         },
       },
       exact_head: { ...LINEAGE, position: last.record_position, record_sha256: last.record_sha256 },
