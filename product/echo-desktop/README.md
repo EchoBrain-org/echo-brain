@@ -22,7 +22,7 @@ OS; `npm run package -- --mac` explicitly selects macOS arm64.
 
 Linux outputs are in `dist-app/`:
 
-- `ECHO-<version>-linux-x64.deb`: Debian/Ubuntu installer with the Electron
+- `ECHO-<version>-linux-amd64.deb`: Debian/Ubuntu installer with the Electron
   runtime, dependencies, desktop launcher and sandbox integration.
 - `ECHO-<version>-linux-x64.tar.gz`: the app directory for manual distribution;
   the receiving system must supply Electron's system libraries and permit its
@@ -38,7 +38,7 @@ Building an archive on macOS does not validate Linux execution.
 On an x64 Debian/Ubuntu desktop, install the deb with the system package manager:
 
 ```sh
-sudo apt install ./ECHO-0.1.0-linux-x64.deb
+sudo apt install ./ECHO-0.1.0-linux-amd64.deb
 echo-desktop
 ```
 
