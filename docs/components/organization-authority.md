@@ -108,10 +108,12 @@ its complete compatible state generation as one qualification boundary.
 
 ## Original Person upload custody
 
-Authority V7 retains authenticated V1 original-text uploads with the selected Only me/Team
-visibility and an immutable receipt. Upload-specific read/search verifies the
-current reader, enforces that visibility, and audits before release. Optional
-search enrichment cannot change permissions or source text. Uploads remain in
+Authority retains authenticated original-text uploads with their selected
+audience and an immutable receipt. Upload-specific read/search verifies the
+current reader, enforces that audience, and audits before release. Optional
+search enrichment cannot change permissions or source text. The V1 upload
+route is retired; V1 originals already retained keep their Only me/Team
+visibility and remain citable by Ask. Uploads remain in
 protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits, indefinite retention, and the offline V5 copy.

@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import { applyAuthorityBaselineV7, applyAuthorityBaselineV8, authorityBaselineSha256V7, authorityBaselineSha256V8 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
-import { SqlitePersonUpdateInboxV1 } from '../src/adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { copyAuthorityV7ToV8 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/authority-v7-to-v8';
 
 const roots: string[] = [];
@@ -83,8 +82,6 @@ describe('offline Authority V7 to V8', () => {
     expect(readFileSync(f.path)).toEqual(before);
     for (const [name, expected] of rows) expect(target.prepare(`SELECT * FROM ${name}`).all(), name).toEqual(expected);
     expect(target.pragma('user_version', { simple: true })).toBe(8);
-    const originalId = target.prepare('SELECT context_id FROM authority_person_updates_v1').pluck().get() as string;
-    expect(new SqlitePersonUpdateInboxV1(target).content(OWNER, originalId).text).toBe('Keep exact CRLF\r\n雪');
     expect(target.pragma('foreign_key_check')).toEqual([]);
     const fresh = open(); applyAuthorityBaselineV8(fresh); expect(objects(target)).toEqual(objects(fresh));
     const manifest = JSON.parse(target.prepare('SELECT manifest_json FROM echo_state_lineage_manifest').pluck().get() as string);

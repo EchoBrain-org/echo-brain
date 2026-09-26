@@ -5,11 +5,9 @@ import { request as httpRequest } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES, PROJECT_CONTEXT_RESPONSE_MAX_BYTES,
-  validatePersonUpdateSubmitV1,
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { ProjectContextApplicationV1 } from '../src/application/ports/project-context-v1.js';
-import type { PersonUpdatesApplicationV1 } from '../src/application/person-updates.js';
 import {
   createOrganizationAuthorityHttpServer,
   type OrganizationAuthorityHttpServerOptions,
@@ -223,24 +221,6 @@ describe('frozen project/V2 HTTP transport', () => {
         expect(() => createOrganizationAuthorityHttpServer({ ...options(), [key]: { routes: [{ route_id: 'collision', method: 'POST', path }], accept: async () => ({ status: 200, body: {} }) } })).toThrow('collides with Authority route');
       }
     }
-  });
-
-  it('preserves the separate strict V1 upload boundary', async () => {
-    let submitted = 0;
-    const person_updates = { submit(_token: string, value: unknown) {
-      let request;
-      try { request = validatePersonUpdateSubmitV1(value); }
-      catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
-      submitted++;
-      return { schema_version: 1, kind: 'echo-person-update-receipt-v1', request_id: request.request_id, context_id: `ctx_${'a'.repeat(64)}`, visibility: 'only_me', received_at: '2026-09-21T22:01:00.000Z', state: 'received' };
-    } } as PersonUpdatesApplicationV1;
-    const origin = await start(fake(), { person_updates });
-    const request = { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: '00000000-0000-4000-8000-000000000001', title: 'V1', text: 'Original' };
-    for (const body of [fixture('updates-submit-v2').http.body, { ...request, project_id: null }, { ...request, visibility: 'project' }]) {
-      await failure(await fetch(`${origin}/v1/person/updates`, { method: 'POST', headers, body: JSON.stringify(body) }));
-    }
-    expect((await fetch(`${origin}/v1/person/updates`, { method: 'POST', headers, body: JSON.stringify(request) })).status).toBe(202);
-    expect(submitted).toBe(1); expect(calls).toEqual([]);
   });
 });
 

@@ -108,3 +108,23 @@ export function revokeMembership(
        WHERE membership_id = ? AND organization_id = ?`,
   ).run(PROJECT_CONTEXT_NOW, actor.membership_id, actor.organization_id);
 }
+
+/** Seeds one retained V1 note. The V1 route is retired; its rows stay as read-only history. */
+export function insertLegacyTextV1(
+  database: Database.Database,
+  actor: AuthorityPersonMembershipBinding,
+  note: { readonly request_id: string; readonly title: string; readonly text: string; readonly visibility?: "only_me" | "team" },
+): string {
+  const visibility = note.visibility ?? "only_me";
+  const request = { schema_version: 1, kind: "echo-person-update-submit-v1", request_id: note.request_id, title: note.title, text: note.text, visibility };
+  const contextId = `ctx_${canonicalSha256({ organization_id: actor.organization_id, membership_id: actor.membership_id, request_id: note.request_id }).slice(7)}`;
+  database.prepare(
+    `INSERT INTO authority_person_updates_v1
+       (organization_id, principal_id, membership_id, membership_type, request_id, context_id, payload_sha256, title, text, visibility, received_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type,
+    note.request_id, contextId, canonicalSha256(request), note.title, note.text, visibility, PROJECT_CONTEXT_NOW,
+  );
+  return contextId;
+}

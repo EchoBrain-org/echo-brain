@@ -20,7 +20,6 @@ import type { PersonDocumentUploadStagingV1 } from '../application/ports/documen
 import { createPersonDocumentsHttpHandlerV1 } from './person-documents-http-route-v1.js';
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2 } from '@echo-brain/organization-api';
 import { PERSON_UPDATES_PATH_V1, MAX_ORGANIZATION_API_BODY_BYTES } from '@echo-brain/organization-api';
-import type { PersonUpdatesApplicationV1 } from '../application/person-updates.js';
 import { validatePersonQueryText } from "@echo-brain/organization-api";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { Buffer } from "node:buffer";
@@ -92,7 +91,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_EMPLOYEES_PATH_V1}`,
   `PUT ${PERSON_EMPLOYEES_PATH_V1}`,
   `DELETE ${PERSON_EMPLOYEES_PATH_V1}`,
-  `POST ${PERSON_UPDATES_PATH_V1}`,
   `GET ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V1}`,
@@ -130,7 +128,6 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_answer?: PersonAnswerHttpApplicationV1;
   /** V2 keeps scope and typed source provenance inside the Authority boundary. */
   readonly person_answer_v2?: PersonAnswerV2HttpApplication;
-  readonly person_updates?: PersonUpdatesApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
   readonly project_context?: ProjectContextApplicationV1;
   readonly person_documents?: PersonDocumentApplicationV1;
@@ -157,6 +154,7 @@ function providerIngressRoutes(
       ) throw new Error("invalid provider ingress route");
       routeIds.add(route.route_id);
       const key = routeKey(route.method, route.path);
+      // The retired V1 notes path stays reserved so no adapter can mount it.
       if (ORGANIZATION_AUTHORITY_HTTP_ROUTES.has(key) ||
         [PERSON_UPDATES_PATH_V1, PERSON_UPDATES_PATH_V2, PERSON_UPDATES_PATH_V3, PERSON_PROJECTS_PATH_V1, PERSON_PROJECTS_PATH_V2, PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2]
           .some(path => route.path === path || route.path.startsWith(`${path}/`))) {
@@ -845,33 +843,6 @@ export function createOrganizationAuthorityHttpServer(
           // Persistence/audit failures must keep the closed project error
           // contract while withholding the response and private diagnostics.
           throw new AuthorityOperationError('unavailable', 'request failed');
-        }
-      }
-      if (options.person_updates !== undefined && url.search === '') {
-        if (method === 'POST' && url.pathname === PERSON_UPDATES_PATH_V1) {
-          const token = accessToken(request.headers.authorization);
-          // Reject malformed UTF-8 instead of replacing bytes before validation.
-          let requestBody: unknown;
-          try { requestBody = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES))); }
-          catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
-          json(response, 202, options.person_updates.submit(token, requestBody));
-          return;
-        }
-        if (method === 'POST' && url.pathname === `${PERSON_UPDATES_PATH_V1}/search`) {
-          const token = accessToken(request.headers.authorization);
-          let requestBody: unknown;
-          try { requestBody = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await rawBody(request, MAX_ORGANIZATION_API_BODY_BYTES))); }
-          catch { throw new AuthorityOperationError('invalid_request', 'request failed'); }
-          json(response, 200, options.person_updates.search(token, requestBody));
-          return;
-        }
-        if (method === 'GET' && url.pathname.startsWith(`${PERSON_UPDATES_PATH_V1}/content/`)) {
-          json(response, 200, options.person_updates.content(accessToken(request.headers.authorization), url.pathname.slice(PERSON_UPDATES_PATH_V1.length + '/content/'.length)));
-          return;
-        }
-        if (method === 'GET' && url.pathname.startsWith(`${PERSON_UPDATES_PATH_V1}/`)) {
-          json(response, 200, options.person_updates.status(accessToken(request.headers.authorization), url.pathname.slice(PERSON_UPDATES_PATH_V1.length + 1)));
-          return;
         }
       }
       if (

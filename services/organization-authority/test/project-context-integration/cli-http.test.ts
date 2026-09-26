@@ -10,7 +10,6 @@ import { PersonSessionStore } from '../../../../src/product/person-client/sessio
 import { createProjectContextApplicationV1 } from '../../src/application/project-context-application-v1.js';
 import { createOrganizationAuthorityHttpServer } from '../../src/presentation/organization-authority-http-server.js';
 import { createPersonUpdateProcessingV1 } from '../../src/composition/person-update-processing-v1.js';
-import { SqlitePersonUpdateInboxV1 } from '../../src/adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../../src/adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { authorization, PROJECT_CONTEXT_NOW } from '../fixtures/project-context-sqlite.js';
 import { SyntheticProjectHarness, PEOPLE } from './synthetic-harness.js';
@@ -173,7 +172,7 @@ describe('PC-06 real CLI -> loopback HTTP -> application -> V9, fixture authenti
       if (outcome === 'revocation') await ok('bob', ['projects', 'member-remove', '--request-id', h.requestId(), '--project-id', alpha, '--membership-id', PEOPLE.alice.membership_id]);
       return { search_hints: 'zenith' };
     });
-    const worker = createPersonUpdateProcessingV1(new SqlitePersonUpdateInboxV1(h.database, () => now), {
+    const worker = createPersonUpdateProcessingV1({
       structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 },
     }, new SqlitePersonUpdateEnrichmentWorkV2(h.database, h.eligibility, () => now));
     for (let attempt = 0; attempt < (outcome === 'failure' ? 5 : 1); attempt++) {

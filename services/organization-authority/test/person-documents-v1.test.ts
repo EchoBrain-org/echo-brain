@@ -4,13 +4,12 @@ import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonDocumentMetadataV1, validatePersonDocumentTextV1, validatePersonDocumentSearchResultV1, type PersonDocumentUploadMetadataV1 } from '@echo-brain/organization-api';
-import { SqlitePersonUpdateInboxV1 } from '../src/adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { extractDocument } from '../src/adapters/documents/document-extraction.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { createProjectContextApplicationV1 } from '../src/application/project-context-application-v1.js';
-import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, revokeMembership } from './fixtures/project-context-sqlite.js';
+import { OWNER, MEMBER, RETURNED_MEMBER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization, insertLegacyTextV1, revokeMembership } from './fixtures/project-context-sqlite.js';
 import type { AuthorityPersonMembershipBinding } from '@echo-brain/organization-authority-kernel/application/ports/authority-repository';
 const databases: Database.Database[]=[];
 afterEach(()=>databases.splice(0).forEach(d=>d.close()));
@@ -98,12 +97,12 @@ describe('Document custody and retrieval V1',()=>{
   expect(()=>app.upload('member',{...request,title:'different'},bytes)).toThrow(expect.objectContaining({code:'conflict'}));expect(()=>app.read('member',saved.document_id)).toThrow(expect.objectContaining({code:'not_found'}));expect(()=>app.status('owner',request.request_id)).toThrow(expect.objectContaining({code:'not_found'}));
   revokeMembership(db,MEMBER);addMembership(db,RETURNED_MEMBER,'Returned','member@example.test');expect(()=>app.status('returned',request.request_id)).toThrow(expect.objectContaining({code:'not_found'}));
  });
- it('uses one request namespace across document, project and legacy text operations in both directions',()=>{
-  const {app,db}=setup();const projects=createProjectContextApplicationV1({authenticate:()=>authorization(OWNER),repository:new SqliteProjectContextRepositoryV1(db,()=>PROJECT_CONTEXT_NOW)});const legacy=new SqlitePersonUpdateInboxV1(db,()=>PROJECT_CONTEXT_NOW);const bytes=Buffer.from('namespace');
+ it('uses one request namespace across document and project operations in both directions and against retained legacy text',()=>{
+  const {app,db}=setup();const projects=createProjectContextApplicationV1({authenticate:()=>authorization(OWNER),repository:new SqliteProjectContextRepositoryV1(db,()=>PROJECT_CONTEXT_NOW)});const bytes=Buffer.from('namespace');
   const create=(request_id:string)=>projects.createProject('owner',{schema_version:1,kind:'echo-project-create-v1',request_id,name:'Namespace project'});
-  const text=(request_id:string)=>legacy.submit(OWNER,{schema_version:1,kind:'echo-person-update-submit-v1',request_id,title:'Text',text:'text',visibility:'team'});
+  const text=(request_id:string)=>insertLegacyTextV1(db,OWNER,{request_id,title:'Text',text:'text',visibility:'team'});
   const priorProject=randomUUID();create(priorProject);expect(()=>app.upload('owner',input(bytes,{request_id:priorProject}),bytes)).toThrow(expect.objectContaining({code:'conflict'}));
-  const priorDocument=randomUUID();app.upload('owner',input(bytes,{request_id:priorDocument}),bytes);expect(()=>create(priorDocument)).toThrow(expect.objectContaining({code:'conflict'}));expect(()=>text(priorDocument)).toThrow(expect.objectContaining({code:'conflict'}));
+  const priorDocument=randomUUID();app.upload('owner',input(bytes,{request_id:priorDocument}),bytes);expect(()=>create(priorDocument)).toThrow(expect.objectContaining({code:'conflict'}));
   const priorText=randomUUID();text(priorText);expect(()=>app.upload('owner',input(bytes,{request_id:priorText}),bytes)).toThrow(expect.objectContaining({code:'conflict'}));
  });
  it('continues keyset search without repeats after newer inserts and with deterministic equal-time ties',()=>{
@@ -170,7 +169,7 @@ describe('Document custody and retrieval V1',()=>{
  it('enforces document-only byte quota while retaining the shared note/document count cap',()=>{
   const {app,db}=setup();const bytes=Buffer.alloc(25*1024*1024,0x61);for(let n=0;n<10;n++)app.upload('owner',input(bytes),bytes);
   expect(()=>app.upload('owner',input(Buffer.from('x')),Buffer.from('x'))).toThrow(expect.objectContaining({code:'quota_exceeded'}));
-  const legacy=new SqlitePersonUpdateInboxV1(db,()=>PROJECT_CONTEXT_NOW);expect(legacy.submit(OWNER,{schema_version:1,kind:'echo-person-update-submit-v1',request_id:randomUUID(),title:'Legacy',text:'x',visibility:'team'})).toMatchObject({state:'received'});
+  insertLegacyTextV1(db,OWNER,{request_id:randomUUID(),title:'Legacy',text:'x',visibility:'team'});
   const projects=createProjectContextApplicationV1({authenticate:()=>authorization(OWNER),repository:new SqliteProjectContextRepositoryV1(db,()=>PROJECT_CONTEXT_NOW)});expect(projects.submitUpload('owner',{schema_version:2,kind:'echo-person-update-submit-v2',request_id:randomUUID(),title:'Project note',text:'x',audience:{kind:'team'},project_id:null})).toMatchObject({state:'received'});
   expect(db.prepare('SELECT count(*) n FROM authority_person_documents_v1').get()).toEqual({n:10});
  });

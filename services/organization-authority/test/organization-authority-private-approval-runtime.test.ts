@@ -1,6 +1,3 @@
-import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
-import { SqlitePersonUpdateInboxV1 } from '../src/adapters/persistence/sqlite/person-update-inbox-v1.js';
-import { AdapterError } from '@echo-brain/organization-processing/core';
 import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -1757,67 +1754,6 @@ describe("Organization Authority runtime private approval lane", () => {
 });
 
 
-
-describe('original Person upload context', () => {
-  it('saves and searches an original memo without a Slack connection, model, or worker, across restart', async () => {
-    const fixture = await admittedFixture();
-    const open = async () => startOrganizationAuthorityApiRuntime({ state_directory: fixture.config.state_directory, host: '127.0.0.1', port: await availablePort(), authority_url: fixture.config.authority_url, oidc: fixture.config.oidc, client_authentication: fixture.config.client_authentication, pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(`file:${fixture.config.pkce_key_file}`) }, { oidc_provider: new TestPersonOidcProvider() });
-    let runtime = await open();
-    const headers = { authorization: `Bearer ${fixture.owner_access_token}`, 'content-type': 'application/json' };
-    const base = () => `http://127.0.0.1:${runtime.address.port}/v1/person/updates`;
-    const request = { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: randomUUID(), title: 'Client memo', text: 'Acme prefers a phone call before lunch.\n' };
-    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
-    try {
-      expect((await fetch(base(), { method: 'POST', body: JSON.stringify(request) })).status).toBe(401);
-      for (const forged of [{ reviewer: 'owner@example.com' }, { metadata: { visibility: 'team' } }, { organization_id: 'forged' }, { visibility: 'public' }]) {
-        expect((await fetch(base(), { method: 'POST', headers, body: JSON.stringify({ ...request, ...forged }) })).status).toBe(400);
-      }
-      expect((await fetch(base(), { method: 'POST', headers, body: Buffer.from([0x7b, 0xc3, 0x28, 0x7d]) })).status).toBe(400);
-      const escaped = JSON.stringify({ ...request, text: 'x'.repeat(8192) }).replace('x'.repeat(8192), '\\u0078'.repeat(8192));
-      expect((await fetch(base(), { method: 'POST', headers, body: escaped })).status).toBe(400);
-      const replies = await Promise.all(Array.from({ length: 4 }, () => fetch(base(), { method: 'POST', headers, body: JSON.stringify(request) })));
-      expect(replies.map(reply => reply.status)).toEqual([202, 202, 202, 202]);
-      const receipts = await Promise.all(replies.map(reply => reply.json()));
-      expect(receipts.every(receipt => canonicalJson(receipt) === canonicalJson(receipts[0]))).toBe(true);
-      const receipt = receipts[0] as { context_id: string };
-      expect((await fetch(base(), { method: 'POST', headers, body: JSON.stringify({ ...request, visibility: 'team' }) })).status).toBe(409);
-      await runtime.close(); runtime = await open();
-      expect(await (await fetch(`${base()}/${request.request_id}`, { headers })).json()).toMatchObject({ status: 'stored', visibility: 'only_me' });
-      const search = await fetch(`${base()}/search`, { method: 'POST', headers, body: JSON.stringify({ query: 'Acme' }) });
-      expect(search.status).toBe(200);
-      expect(await search.json()).toMatchObject({ results: [{ context_id: receipt.context_id, title: request.title, visibility: 'only_me' }] });
-      expect(await (await fetch(`${base()}/content/${receipt.context_id}`, { headers })).json()).toMatchObject({ text: request.text });
-      const sharedReply = await fetch(base(), { method: 'POST', headers, body: JSON.stringify({ ...request, request_id: randomUUID(), title: 'Shared work note', visibility: 'team' }) });
-      expect(sharedReply.status).toBe(202);
-      const shared = await sharedReply.json() as { context_id: string; visibility: string }; expect(shared.visibility).toBe('team');
-      expect(await (await fetch(`${base()}/content/${shared.context_id}`, { headers })).json()).toMatchObject({ text: request.text, visibility: 'team' });
-      expect(authority.prepare('SELECT count(*) AS n FROM authority_person_updates_v1').get()).toEqual({ n: 2 });
-      expect(authority.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
-      expect(authority.prepare('SELECT count(*) AS n FROM authority_person_upload_read_audit_v1').get()).toEqual({ n: 3 });
-      expect(fixture.poster.published).toHaveLength(0);
-      authority.exec(`CREATE TRIGGER fixture_read_audit_failure BEFORE INSERT ON authority_person_upload_read_audit_v1 BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END`);
-      const denied = await fetch(`${base()}/content/${receipt.context_id}`, { headers });
-      expect(denied.status).toBe(500); expect(await denied.text()).not.toContain(request.text);
-    } finally { await runtime.close(); authority.close(); }
-  });
-
-  it('enriches one original upload while an unavailable meeting source cannot force extraction or approval', async () => {
-    const fixture = await admittedFixture({ seed_private_slack_connection: true });
-    const source = fakeSource(fixture.source.identity, 0); source.pull = async () => { throw new AdapterError('temporarily_unavailable', 'source unavailable', true); };
-    const processor = fakeProcessor(fixture.processorIdentity); const extract = vi.spyOn(processor, 'extract');
-    const authority = openAuthorityDatabase(join(fixture.initialized.state_directory, 'authority.sqlite'), { fileMustExist: true });
-    const inbox = new SqlitePersonUpdateInboxV1(authority);
-    const receipt = inbox.submit({ organization_id: fixture.initialized.organization_id, principal_id: fixture.initialized.owner_principal_id, membership_id: fixture.initialized.owner_membership_id, membership_type: 'owner' }, { schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: randomUUID(), title: 'Client reminder', text: 'Call Acme before lunch.', visibility: 'team' });
-    const runtime = await openOrganizationAuthorityService({ ...fixture.config, worker_interval_ms: 60_000 }, { api: { answer_composition_generation: { generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 1000 }, structured_output: { generate: async () => ({ search_hints: 'customer telephone' }) } } }, processing_adapter_overrides: { source, processor, private_approval_card_poster: fixture.poster } });
-    try {
-      await runtime.drain(AbortSignal.timeout(5000));
-      expect(extract).not.toHaveBeenCalled(); expect(fixture.poster.published).toHaveLength(0);
-      expect((authority.prepare('SELECT state FROM authority_person_update_work_v1 WHERE context_id = ?').get(receipt.context_id) as { state: string }).state).toBe('ready');
-      expect(inbox.content({ organization_id: fixture.initialized.organization_id, principal_id: fixture.initialized.owner_principal_id, membership_id: fixture.initialized.owner_membership_id, membership_type: 'owner' }, receipt.context_id)).toMatchObject({ text: 'Call Acme before lunch.', visibility: 'team' });
-      expect(authority.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
-    } finally { await runtime.close(); authority.close(); }
-  });
-});
 
 it('runs submit/status from the exact packed Person CLI against a disposable Authority', async () => {
   const parent = root();

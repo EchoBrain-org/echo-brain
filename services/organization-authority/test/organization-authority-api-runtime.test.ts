@@ -1329,10 +1329,6 @@ describe("Organization Authority API runtime", () => {
       expect(await post("/v2/person/updates", upload, 202)).toEqual(receipt);
       expect(await post("/v2/person/updates", { ...upload, audience: { kind: "team" } }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
       expect(await get(`/v2/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text, audience: upload.audience });
-      const legacy = { schema_version: 1, kind: "echo-person-update-submit-v1", request_id: "00000000-0000-4000-8000-000000000007", title: "V1 remains strict", text: "Legacy original" };
-      expect(await post("/v1/person/updates", upload, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
-      expect(await post("/v1/person/updates", { ...legacy, project_id }, 400)).toEqual({ error: { code: "invalid_request", message: "request failed" } });
-      expect(await post("/v1/person/updates", legacy, 202)).toMatchObject({ kind: "echo-person-update-receipt-v1", visibility: "only_me" });
 
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,

@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type Database from 'better-sqlite3';
 import type { PersonUpdateSubmitV2 } from '@echo-brain/organization-api';
 import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition';
-import { SqlitePersonUpdateInboxV1 } from '../src/adapters/persistence/sqlite/person-update-inbox-v1.js';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../src/adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../src/adapters/persistence/sqlite/project-upload-enrichment-v1.js';
@@ -21,7 +20,6 @@ function fixture() {
   const application = createProjectContextApplicationV1({
     authenticate: token => authorization(token === 'member' ? MEMBER : OWNER), repository,
   });
-  const inbox = new SqlitePersonUpdateInboxV1(database, () => now);
   const policy = new SqliteProjectUploadEnrichmentAuthorizationV1(database);
   const work = new SqlitePersonUpdateEnrichmentWorkV2(database, policy, () => now);
   const generate = vi.fn<StructuredGenerationPort['generate']>(async () => ({ search_hints: 'telephone' }));
@@ -36,7 +34,7 @@ function fixture() {
     schema_version: 1, kind: 'echo-project-member-set-v1', request_id: requestId(2),
     project_id: project.project_id, membership_id: MEMBER.membership_id, role: 'lead',
   });
-  const worker = () => createPersonUpdateProcessingV1(inbox, generation, work);
+  const worker = () => createPersonUpdateProcessingV1(generation, work);
   const run = () => worker().runOnce(new AbortController().signal);
   const submit = (audience: PersonUpdateSubmitV2['audience'] = { kind: 'team' }) => application.submitUpload('owner', {
     schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId(3),
@@ -47,7 +45,7 @@ function fixture() {
     project_id: project.project_id, membership_id: OWNER.membership_id,
   });
   return {
-    database, application, inbox, policy, generate, project, worker, run, submit, removeUploader,
+    database, application, policy, generate, project, worker, run, submit, removeUploader,
     later: () => { now = new Date(Date.parse(now) + 301_000).toISOString(); },
   };
 }
@@ -57,24 +55,6 @@ function workState(database: Database.Database, contextId: string) {
 }
 
 describe('V2 enrichment lifecycle and revocation', () => {
-  it('uses the same bounded worker pass for V1 and V2 work without reprocessing completed hints', async () => {
-    const f = fixture();
-    const v1 = f.inbox.submit(OWNER, {
-      schema_version: 1, kind: 'echo-person-update-submit-v1', request_id: requestId(5),
-      title: 'V1 note', text: 'The first customer prefers calls.', visibility: 'team',
-    });
-    const v2 = f.submit();
-    await f.run();
-    expect(f.inbox.status(OWNER, v1.request_id).metadata).toBe('ready');
-    expect(workState(f.database, v2.context_id)).toMatchObject({ state: 'pending' });
-    expect(f.generate).toHaveBeenCalledTimes(1);
-    await f.run();
-    await f.run();
-    expect(workState(f.database, v2.context_id)).toMatchObject({ state: 'ready' });
-    expect(f.generate).toHaveBeenCalledTimes(2);
-    expect(f.database.prepare('SELECT count(*) AS n FROM authority_live_source_candidates_v2').get()).toEqual({ n: 0 });
-  });
-
   it.each(['organization', 'audience project'] as const)('does not hand an original to the model after uploader %s revocation', async kind => {
     const f = fixture();
     const receipt = f.submit({ kind: 'project', project_id: f.project.project_id });

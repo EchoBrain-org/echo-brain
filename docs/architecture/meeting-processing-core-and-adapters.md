@@ -251,10 +251,12 @@ document retrieval for Ask. Existing meeting sources retain their explicitly
 composed `automatic` decision workflow; common admission does not imply every
 source executes every downstream stage.
 
-Legacy `/v1/person/updates` and `/v2/person/updates` note contracts retain their
-existing original inbox, read indexes and optional search-enrichment worker.
-Server pull also admits accepted text notes through the same Person source
-capability as documents, without requiring a model. Its typed content
+The legacy `/v2/person/updates` note contract retains its existing original
+inbox, read indexes and optional search-enrichment worker. The client-less
+`/v1/person/updates` route and its V1 search-hint worker are retired. Retained
+V1 notes stay in custody and remain citable by Ask. Server pull also admits
+accepted text notes, including retained V1 notes, through the same Person
+source capability as documents, without requiring a model. Its typed content
 distinguishes `person-text` from `person-document`; neither invents
 `MeetingDocument` facts. Existing enrichment hints cannot alter the original or
 audience and are not decision/action proposals; model failure preserves source
