@@ -99,7 +99,7 @@ function packagedClient(root: string, label: 'a' | 'b'): { artifact: string; sou
 }
 
 /** Assemble the same fixed eight-file kit consumed by the production updater. */
-function updateKit(root: string, label: 'a' | 'b', client: ReturnType<typeof packagedClient>, releaseId: string): { archive: string; release: string } {
+function updateKit(root: string, label: 'a' | 'b', client: ReturnType<typeof packagedClient>, releaseId: string, bootstrap?: unknown): { archive: string; release: string } {
   const kitParent = join(root, `kit-${label}`);
   const kit = join(kitParent, 'echo-person-onboarding-kit');
   mkdirSync(kit, { recursive: true, mode: 0o700 });
@@ -126,6 +126,7 @@ function updateKit(root: string, label: 'a' | 'b', client: ReturnType<typeof pac
     release_record_sha256: sha256(release), person_client_artifact_sha256: sha256(client.artifact),
     build_identity_sha256: sha256(identity),
     runtime: { version: process.version, platform, architecture, node_sha256: sha256(process.execPath) },
+    ...(process.platform === 'linux' && bootstrap ? { update_bootstrap: bootstrap } : {}),
   };
   writeFileSync(join(kit, 'kit-manifest.v1.json'), `${canonicalJson(manifest)}\n`, { mode: 0o600 });
   execFileSync('chmod', ['0700', 'Start-ECHO.sh', 'node', 'verify-person-onboarding-kit.mjs', 'clean-v1-release.mjs'], { cwd: kit });
@@ -158,13 +159,7 @@ it.skipIf(!nativeTarget)('updates a packaged CLI before exactly one Person comma
   const clientB = packagedClient(root, 'b');
   const releaseA = 'clean-v1-dispatch-a';
   const releaseB = 'clean-v1-dispatch-b';
-  const kitA = updateKit(root, 'a', clientA, releaseA);
-  const kitB = updateKit(root, 'b', clientB, releaseB);
-  const unpackedA = join(root, 'unpacked-a');
-  execFileSync('unzip', ['-q', kitA.archive, '-d', unpackedA]);
-  const starter = join(unpackedA, 'echo-person-onboarding-kit', 'Start-ECHO.sh');
   const environment = { ...process.env, HOME: home, XDG_DATA_HOME: xdg };
-  run('/bin/bash', [starter, '--install-only'], environment);
 
   const cliRoot = process.platform === 'linux'
     ? join(xdg, 'echo/person')
@@ -179,7 +174,7 @@ it.skipIf(!nativeTarget)('updates a packaged CLI before exactly one Person comma
 
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const tls = issueLocalCertificate(root);
-  const artifact = readFileSync(kitB.archive);
+  let artifact: Buffer = Buffer.alloc(0);
   let envelope = Buffer.alloc(0);
   const server = createServer({ key: readFileSync(tls.key), cert: readFileSync(tls.certificate) }, (request, response) => {
     const payload = request.url === '/feed.json' ? envelope : request.url === '/artifact.zip' ? artifact : undefined;
@@ -195,6 +190,18 @@ it.skipIf(!nativeTarget)('updates a packaged CLI before exactly one Person comma
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('local HTTPS server did not bind TCP');
     const feedUrl = `https://localhost:${address.port}/feed.json`;
+    const bootstrap = {
+      schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: feedUrl,
+      public_key_spki: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
+      minimum_sequence: 1, automatic: true, installation: 'cli-kit',
+    };
+    const kitA = updateKit(root, 'a', clientA, releaseA, bootstrap);
+    const kitB = updateKit(root, 'b', clientB, releaseB, bootstrap);
+    artifact = readFileSync(kitB.archive);
+    const unpackedA = join(root, 'unpacked-a');
+    execFileSync('unzip', ['-q', kitA.archive, '-d', unpackedA]);
+    const starter = join(unpackedA, 'echo-person-onboarding-kit', 'Start-ECHO.sh');
+    run('/bin/bash', [starter, '--install-only'], environment);
     const platform = process.platform === 'linux'
       ? { platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit' }
       : { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit' };
@@ -208,13 +215,11 @@ it.skipIf(!nativeTarget)('updates a packaged CLI before exactly one Person comma
     const payload = Buffer.from(JSON.stringify(manifest));
     envelope = Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') }));
     const config = join(root, 'trusted-config.json');
-    writeFileSync(config, JSON.stringify({
-      schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: feedUrl,
-      public_key_spki: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
-      minimum_sequence: 1, automatic: true, installation: 'cli-kit',
-    }));
+    writeFileSync(config, JSON.stringify(bootstrap));
     const updateEnvironment = { ...environment, NODE_EXTRA_CA_CERTS: tls.certificate };
-    run(cli, ['update', 'configure', '--file', config], updateEnvironment);
+    if (process.platform === 'linux') {
+      expect(JSON.parse(readFileSync(join(cliRoot, 'updater/config.json'), 'utf8'))).toEqual(bootstrap);
+    } else run(cli, ['update', 'configure', '--file', config], updateEnvironment);
     const dispatched = await runAsync(cli, ['person', 'status'], updateEnvironment);
     const output = dispatched.stdout.trim().split('\n').filter(Boolean);
     expect(output).toHaveLength(1);

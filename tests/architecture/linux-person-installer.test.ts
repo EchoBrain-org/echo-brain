@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { configureClientUpdates, runClientUpdate } from '../../src/product/person-client/client-update.js';
+import { runClientUpdate } from '../../src/product/person-client/client-update.js';
 import { installLinuxClientUpdate } from '../../src/product/person-client/client-update-linux.js';
 import { parseUpdateConfig, updateDigest } from '../../src/product/person-client/client-update-contract.js';
 
@@ -29,8 +29,13 @@ function fixture() {
   }
   const installer = readFileSync(INSTALLER, "utf8");
   writeFileSync(join(kit, "Start-ECHO.sh"), installer, { mode: 0o755 });
-  writeFileSync(join(kit, "node"), `#!/usr/bin/env bash\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
-  writeFileSync(join(kit, "verify-person-onboarding-kit.mjs"), 'if (process.env.REJECT_KIT) process.exit(1);\n');
+  writeFileSync(join(kit, "node"), `#!/usr/bin/env bash\nif [[ "$1" == --version ]]; then echo v22.22.1; else exec '${process.execPath}' "$@"; fi\n`, { mode: 0o755 });
+  writeFileSync(join(kit, "verify-person-onboarding-kit.mjs"), `import {readFileSync} from 'node:fs';
+import {verifyUpdateBootstrap} from ${JSON.stringify(join(REPO, 'deploy/release/verify-person-onboarding-kit.mjs'))};
+if (process.env.REJECT_KIT) process.exit(1);
+const bootstrap=JSON.parse(readFileSync(process.argv[2]+'/kit-manifest.v1.json')).update_bootstrap;
+if(bootstrap !== undefined) { verifyUpdateBootstrap(bootstrap); if(process.argv[3] === '--update-bootstrap') console.log(JSON.stringify(bootstrap)); }
+`);
   writeFileSync(join(kit, "clean-v1-release.mjs"), `import {readFileSync} from 'node:fs';
 const record=JSON.parse(readFileSync(process.argv[3]));
 if(process.argv[2] === 'field') console.log(record[process.argv[4]] ?? record.person_client[process.argv[4] === 'client-version' ? 'version' : '']);
@@ -50,6 +55,11 @@ else if(process.argv[2] !== 'validate') process.exit(1);
     execFileSync("tar", ["-czf", join(kit, "person-client.tgz"), "package"], { cwd: root });
   }
   let preparedRelease: number | undefined;
+  function bootstrap(automatic = true, publicKey = generateKeyPairSync('ed25519').publicKey) {
+    const config = parseUpdateConfig({ schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://fixture.invalid/feed.json', public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic, installation: 'cli-kit' });
+    writeFileSync(join(kit, 'kit-manifest.v1.json'), JSON.stringify({ update_bootstrap: { ...config, automatic: true } }));
+    return config;
+  }
   function run(release: number, argument = "--install-only", env: Record<string, string> = {}) {
     if (preparedRelease !== release) {
       prepare(release);
@@ -57,14 +67,86 @@ else if(process.argv[2] !== 'validate') process.exit(1);
     }
     return spawnSync("bash", [join(kit, "Start-ECHO.sh"), argument], { encoding: "utf8", env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, ".local", "share"), PATH: `${tools}:${process.env.PATH}`, ...env } });
   }
-  return { root, home, kit, tools, run, prepare };
+  return { root, home, kit, tools, run, prepare, bootstrap };
 }
 
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe("Linux x64 Person onboarding installer", () => {
+  it('rolls back new enrollment when stable-command activation fails and permits retry', () => {
+    const subject = fixture();
+    expect(subject.run(1).status).toBe(0);
+    const root = join(subject.home, '.local/share/echo/person');
+    const wrapper = join(root, 'bin/echo-brain');
+    const before = readFileSync(wrapper);
+    subject.bootstrap();
+    writeFileSync(join(subject.tools, 'mv'), '#!/usr/bin/env bash\nif [[ "${FAIL_ACTIVATE:-}" == yes && "$2" == */bin/echo-brain ]]; then exit 1; fi\nexec /bin/mv "$@"\n', { mode: 0o755 });
+    expect(subject.run(2, '--install-only', { FAIL_ACTIVATE: 'yes' }).status).toBe(1);
+    expect(readFileSync(wrapper)).toEqual(before);
+    expect(existsSync(join(root, 'updater/config.json'))).toBe(false);
+    expect(existsSync(join(root, 'updater/.lock'))).toBe(false);
+    expect(subject.run(2).status).toBe(0);
+    expect(existsSync(join(root, 'updater/config.json'))).toBe(true);
+  });
+
+  it('enrolls automatic updates on normal install and preserves existing settings and checkpoints', () => {
+    const subject = fixture();
+    const supplied = subject.bootstrap();
+    expect(subject.run(1).status).toBe(0);
+    const updater = join(subject.home, '.local/share/echo/person/updater');
+    expect(JSON.parse(readFileSync(join(updater, 'config.json'), 'utf8'))).toEqual(supplied);
+    const retained = { ...supplied, automatic: false };
+    writeFileSync(join(updater, 'config.json'), JSON.stringify(retained), { mode: 0o600 });
+    const checkpoint = '{"checkpoint":{"sequence":9}}';
+    writeFileSync(join(updater, 'state.json'), checkpoint, { mode: 0o600 });
+    subject.bootstrap();
+    expect(subject.run(2).status).toBe(0);
+    expect(JSON.parse(readFileSync(join(updater, 'config.json'), 'utf8'))).toEqual(retained);
+    expect(readFileSync(join(updater, 'state.json'), 'utf8')).toBe(checkpoint);
+  });
+
+  it('keeps legacy kits usable without claiming enrollment', () => {
+    const subject = fixture();
+    expect(subject.run(1).status).toBe(0);
+    expect(existsSync(join(subject.home, '.local/share/echo/person/updater/config.json'))).toBe(false);
+  });
+
+  it('rejects malformed bootstrap before changing the installed command', () => {
+    const subject = fixture();
+    expect(subject.run(1).status).toBe(0);
+    const wrapper = join(subject.home, '.local/share/echo/person/bin/echo-brain');
+    const before = readFileSync(wrapper);
+    const bootstrap = subject.bootstrap();
+    writeFileSync(join(subject.kit, 'kit-manifest.v1.json'), JSON.stringify({ update_bootstrap: { ...bootstrap, feed_url: 'http://fixture.invalid/feed.json' } }));
+    expect(subject.run(2).status).toBe(1);
+    expect(readFileSync(wrapper)).toEqual(before);
+    expect(existsSync(join(subject.home, '.local/share/echo/person/updater/config.json'))).toBe(false);
+  });
+
+  it.each(['lock', 'state', 'symlink'])('preserves existing updater %s and refuses a fresh enrollment', (kind) => {
+    const subject = fixture();
+    expect(subject.run(1).status).toBe(0);
+    const root = join(subject.home, '.local/share/echo/person');
+    const before = readFileSync(join(root, 'bin/echo-brain'));
+    const updater = join(root, 'updater');
+    mkdirSync(updater, { mode: 0o700 });
+    if (kind === 'lock') mkdirSync(join(updater, '.lock'), { mode: 0o700 });
+    if (kind === 'state') writeFileSync(join(updater, 'state.json'), 'retained checkpoint', { mode: 0o600 });
+    if (kind === 'symlink') symlinkSync(join(subject.root, 'absent-config'), join(updater, 'config.json'));
+    subject.bootstrap();
+    expect(subject.run(2).status).toBe(1);
+    expect(readFileSync(join(root, 'bin/echo-brain'))).toEqual(before);
+    if (kind === 'lock') expect(existsSync(join(updater, '.lock'))).toBe(true);
+    if (kind === 'state') {
+      expect(readFileSync(join(updater, 'state.json'), 'utf8')).toBe('retained checkpoint');
+      expect(existsSync(join(updater, '.lock'))).toBe(false);
+    }
+  });
+
   it('updates from a signed feed through the real installer without changing session files', async () => {
     const subject = fixture();
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const config = subject.bootstrap(true, publicKey);
     expect(subject.run(1).status).toBe(0);
     const root = join(subject.home, '.local/share/echo/person');
     const sessionRoot = join(subject.home, '.local/share/echo-brain/person');
@@ -75,9 +157,6 @@ describe("Linux x64 Person onboarding installer", () => {
     const zip = join(subject.root, 'release-b.zip');
     execFileSync('zip', ['-qr', zip, 'echo-person-onboarding-kit'], { cwd: subject.root });
     const bytes = readFileSync(zip);
-    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
-    const config = parseUpdateConfig({ schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://fixture.invalid/feed.json', public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' });
-    configureClientUpdates(root, config);
     const manifest = { schema_version: 1, kind: 'echo-client-update-manifest-v1', channel: 'fixture', sequence: 1, issued_at: '2026-09-24T00:00:00.000Z', expires_at: '2026-10-01T00:00:00.000Z', release_id: 'clean-v1-linux-2', source_sha: '2'.repeat(40), product_version: '0.1.1', release_sha256: updateDigest(readFileSync(join(subject.kit, 'release.json'))), artifacts: [{ platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit', url: 'https://fixture.invalid/b.zip', bytes: bytes.length, sha256: updateDigest(bytes) }] };
     const payload = Buffer.from(JSON.stringify(manifest));
     const envelope = JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') });
@@ -85,6 +164,8 @@ describe("Linux x64 Person onboarding installer", () => {
       install: input => installLinuxClientUpdate(input, { ...process.env, HOME: subject.home, PATH: `${subject.tools}:${process.env.PATH}` }),
     });
     expect(result.status).toBe('updated');
+    expect(JSON.parse(readFileSync(join(root, 'updater/config.json'), 'utf8'))).toEqual(config);
+    expect(JSON.parse(readFileSync(join(root, 'updater/state.json'), 'utf8')).checkpoint.sequence).toBe(1);
     const status = JSON.parse(execFileSync('bash', [join(root, 'bin/echo-brain'), 'person', 'status'], { encoding: 'utf8' }));
     expect(status.client_build.source_sha).toBe('2'.repeat(40));
     expect(readFileSync(session, 'utf8')).toBe('synthetic existing session bytes');

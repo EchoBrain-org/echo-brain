@@ -634,7 +634,7 @@ from the same accepted release record and exact Person-client tarball:
 | Kit | Builder flags | Manifest | Stable command |
 | --- | --- | --- | --- |
 | macOS arm64 | `--target darwin-arm64 --installation cli-kit` | schema 3, `echo-person-cli-kit-v1` | `~/Library/Application Support/ECHO/cli/bin/echo-brain` |
-| Linux x64 | `--target linux-x64` | schema 2, `echo-person-onboarding-kit-v2` | `${XDG_DATA_HOME:-~/.local/share}/echo/person/bin/echo-brain` |
+| Linux x64 | `--target linux-x64 --update-config <public-bootstrap.json>` | schema 2, `echo-person-onboarding-kit-v2` | `${XDG_DATA_HOME:-~/.local/share}/echo/person/bin/echo-brain` |
 
 Each kit is a flat ZIP of eight files under `echo-person-onboarding-kit/`:
 `Start-ECHO.sh`, the pinned Node 22.22.1 runtime `node`, `release.json`,
@@ -855,6 +855,7 @@ sudo, or a repository checkout.
 ```sh
 npm run kit:person-onboarding -- \
   --target linux-x64 \
+  --update-config /absolute/private/bootstrap-config.json \
   --release /absolute/private/current.clean-v1.json \
   --artifact /absolute/private/echo-brain-person-client-0.1.0-internal.1.tgz \
   --runtime-node /absolute/private/node-v22.22.1-linux-x64/bin/node \
@@ -865,8 +866,14 @@ For a release offered on both platforms, reuse the **same canonical release
 record and exact Person-client tarball**. The Authority image is shared too;
 the employee's CPU architecture does not select a different server. The kits
 differ in their bundled Node runtime and installer. Linux uses a strict v2
-manifest binding its runtime, release, client, and kit build identity. The
-macOS kit uses `--installation cli-kit`, a schema-3 manifest with the same
+manifest binding its runtime, release, client, kit build identity, and validated
+public automatic-update bootstrap. The bootstrap must target `cli-kit` and set
+`automatic` to true. Normal setup installs it privately without another user
+command; reinstall and signed updates preserve existing trust, checkpoints, and
+the automatic-disabled choice. Existing Linux seats run this configured kit's
+`Start-ECHO.sh --install-only` once to bridge into automatic updates while
+keeping their session. Legacy Linux kits without the field still install but
+cannot enroll themselves. The macOS kit uses `--installation cli-kit`, a schema-3 manifest with the same
 bindings, and its own CLI root.
 
 Send a folder named `ECHO-Employee-Onboarding-linux-x64-<source_sha12>` containing
