@@ -1,6 +1,5 @@
 export {
   organizationAuthorityPinSha256,
-  organizationAuthorityPublicKey,
   validateOrganizationAuthorityDescriptor,
   verifyOrganizationAuthorityPin,
 } from "./authority-descriptor.js";

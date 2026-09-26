@@ -21,7 +21,6 @@ export {
   p256KeyId,
   verifyP256LowSSignature,
 } from "./signature-profile.js";
-export type { DecodedEcdsaSignature } from "./signature-profile.js";
 export {
   FederationProtocolValidationError,
   isFederationProtocolValidationError,
@@ -32,5 +31,4 @@ export type {
   JsonValue,
   P256SigningKeyDescriptor,
   Sha256Digest,
-  SignedIntegrity,
 } from "./protocol-types.js";

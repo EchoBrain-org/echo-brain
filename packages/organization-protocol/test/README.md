@@ -5,8 +5,7 @@ The package suite covers the current public protocol responsibilities:
 - authority descriptor validation, independent pin comparison, signing-key
   binding, and canonical digest behavior exercised through envelope and receipt
   verification;
-- approval and rejection payload validation against the shared decision-brief
-  conformance fixture;
+- approval payload validation against the decision-brief conformance fixture;
 - Person content-policy reader selectors and frozen consequence digests;
 - provider-neutral and private Slack Block Kit human-action inputs;
 - version-4 record envelope provenance, lineage, predecessor, semantic

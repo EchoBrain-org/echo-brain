@@ -1,8 +1,4 @@
-import {
-  canonicalSha256,
-  verifyP256SigningKeyDescriptor,
-} from "@echo-brain/federation-protocol";
-import type { Buffer } from "node:buffer";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type { OrganizationAuthorityDescriptorV1 } from "./contracts.js";
 import {
@@ -117,14 +113,6 @@ export function resolvePinnedOrganizationAuthority(
     );
   }
   return descriptor;
-}
-
-/** Returns fresh public-key bytes from a verified process-local pin handle. */
-export function organizationAuthorityPublicKey(
-  pinnedAuthority: PinnedOrganizationAuthority,
-): Buffer {
-  const descriptor = resolvePinnedOrganizationAuthority(pinnedAuthority);
-  return verifyP256SigningKeyDescriptor(descriptor.signing_key);
 }
 
 /** Canonical digest suitable for an exact local authority pin. */

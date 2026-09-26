@@ -2,8 +2,8 @@
 
 Tests live beside the narrowest active component they exercise:
 
-- `processing/core/` covers provider-neutral contracts, approval, delivery,
-  canonical briefs, and core state behavior.
+- `processing/core/` covers the provider-neutral canonical meeting-context
+  contract.
 - `processing/adapters/` covers concrete meeting-source, decision-processor,
   approval, delivery, and provider transport adapters.
 - `processing/admitted-meeting-processing/` covers the durable serialized

@@ -67,9 +67,9 @@ receipt commitments before accepting the signature.
 
 Record payloads may be up to `MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES` because
 approved evidence can exceed the package's ordinary document limit. The
-`fixtures/organization-record-payload-conformance.v1.json` fixture pins the
-restated decision-brief contract against the core validator without creating a
-runtime dependency between the two components.
+test-only `test/fixtures/organization-record-payload-conformance.v1.json`
+fixture holds accepted and rejected decision briefs for the approval payload
+validator.
 
 The package depends only on `@echo-brain/federation-protocol`. It owns no
 transport implementation, persistence, hash-chain storage, key provider, or

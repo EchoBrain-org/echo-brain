@@ -19,8 +19,7 @@ provider API -> server adapter -> processing contracts <- processing cycle
   vendor SDKs, Authority composition, or persistence implementation.
 - `providers/<provider>/src/` implements typed core ports and owns provider transport.
 - `packages/organization-processing/src/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.ts`
-  owns the SQLite implementation of production processing state; the core
-  storage port remains under `packages/organization-processing/src/core/storage/`.
+  owns production processing state in SQLite.
 - `packages/organization-processing/src/admitted-meeting-processing/` owns the serialized bounded server cycle.
 - Authority composition selects concrete adapters, credentials, organization
   policy, and stores through explicit bundles for meeting source, decision
@@ -91,8 +90,6 @@ meeting source
   -> exact approval snapshot
   -> exact human approve or reject resolution
   -> canonical organization record and policy facts
-  -> delivery surface for an approved workflow
-  -> acknowledged delivery receipt
 ```
 
 The server owns source cursors, processing state, pending approvals, delivery
@@ -111,8 +108,8 @@ server adapters remain outside its dependency closure.
   actions, rationales, and source-linked evidence.
 - An **approval surface** presents the exact staged brief and records an
   explicit human outcome.
-- A **delivery surface** publishes an approved destination-neutral envelope
-  and returns a provider receipt.
+- No **delivery surface** port exists today. A capability that publishes
+  approved content elsewhere would need its own typed port.
 
 The shared approval path retains an opaque, generic presentation reference,
 not a provider message timestamp or channel grammar. The approved-record path
@@ -120,12 +117,10 @@ receives a policy projector that translates a canonical terminal approval into
 the record facts appropriate for the selected product policy; it does not
 inspect an approval-surface payload.
 
-Approval and delivery remain separate capabilities. They may share a provider
-connection, but a generic Slack delivery channel must differ from the active
-Slack approval channel, preserving main's human-action/side-effect boundary.
-The current compatibility composition still reuses approval configuration for
-its one Slack delivery surface; Phase 2D/D5 must remove that coupling before
-claiming this target invariant and before compatibility deletion.
+Approval and any future delivery remain separate capabilities. They may share
+a provider connection, but a generic Slack delivery channel must differ from
+the active Slack approval channel, preserving main's human-action/side-effect
+boundary.
 
 ## Cross-capability invariants
 

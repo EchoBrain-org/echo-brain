@@ -68,7 +68,6 @@ COPY --from=build /app/packages/organization-processing/package.json ./packages/
 COPY --from=build /app/packages/organization-processing/dist ./packages/organization-processing/dist
 COPY --from=build /app/packages/organization-protocol/package.json ./packages/organization-protocol/package.json
 COPY --from=build /app/packages/organization-protocol/dist ./packages/organization-protocol/dist
-COPY --from=build /app/packages/organization-protocol/fixtures/organization-record-payload-conformance.v1.json ./packages/organization-protocol/fixtures/organization-record-payload-conformance.v1.json
 COPY --from=build /app/packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json ./packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json
 COPY --from=build /app/packages/organization-record/package.json ./packages/organization-record/package.json
 COPY --from=build /app/packages/organization-record/dist ./packages/organization-record/dist

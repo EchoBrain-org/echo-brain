@@ -1,7 +1,7 @@
 {
   "fixture_version": 1,
   "kind": "echo-organization-record-payload-conformance-fixture",
-  "note": "Shared positive and negative cases pinning the organization record payload schema to core's DecisionBrief validator. Both validators must agree on every case in valid and invalid; core imports no packages, so this data is the only shared artifact. The record_only_invalid cases are the deliberate divergence: core accepts them and the organization record contract does not.",
+  "note": "Positive and negative decision-brief cases for the organization record approval payload validator. Every valid brief must be accepted and every invalid brief rejected.",
   "meeting_id": "granola:meeting-2026-08-07-pricing",
   "valid": [
     {
@@ -750,13 +750,10 @@
           "generated_at": "2026-08-07T15:40:00.000Z"
         }
       }
-    }
-  ],
-  "record_only_invalid": [
+    },
     {
       "name": "repeated participant id",
       "reason": "derive keys a participant observation by (meeting snapshot, participant), so a repeated id would collide on insert or silently drop a distinct observation; every protocol-valid payload must be derivable",
-      "core_accepts": true,
       "brief": {
         "schema_version": 1,
         "id": "brief-minimal",
@@ -785,7 +782,6 @@
     {
       "name": "participant id repeated with identical facts",
       "reason": "an exactly duplicated entry is still two observations of one participant; structural uniqueItems does not catch the display-name variant above, so the runtime owns the id-level rule",
-      "core_accepts": true,
       "brief": {
         "schema_version": 1,
         "id": "brief-minimal",

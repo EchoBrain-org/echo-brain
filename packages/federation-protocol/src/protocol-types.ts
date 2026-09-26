@@ -12,11 +12,3 @@ export interface P256SigningKeyDescriptor {
   algorithm: "ecdsa-p256-sha256-der-low-s";
   public_key_spki_der_base64: string;
 }
-
-export interface SignedIntegrity {
-  canonicalization: "RFC8785";
-  payload_sha256: Sha256Digest;
-  signature_algorithm: "ecdsa-p256-sha256-der-low-s";
-  key_id: Sha256Digest;
-  signature_base64: string;
-}

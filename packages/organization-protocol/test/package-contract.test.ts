@@ -14,7 +14,6 @@ const packageJson = JSON.parse(
 
 const assetExports = [
   "./schemas/organization-authority-descriptor.v1.schema.json",
-  "./fixtures/organization-record-payload-conformance.v1.json",
 ] as const;
 
 describe("organization protocol package contract", () => {
@@ -35,7 +34,6 @@ describe("organization protocol package contract", () => {
       "dist/**/*.d.ts",
       "dist/**/*.d.ts.map",
       "schemas/*.schema.json",
-      "fixtures/**",
     ]);
     expect(packageJson.files).not.toContain("dist/.tsbuildinfo");
   });
@@ -44,16 +42,5 @@ describe("organization protocol package contract", () => {
     expect(packageJson.dependencies).toEqual({
       "@echo-brain/federation-protocol": "0.0.0-dev.0",
     });
-  });
-
-  it("ships no private key or bearer grant in its fixtures", () => {
-    for (const name of [
-      "fixtures/organization-record-payload-conformance.v1.json",
-    ]) {
-      const fixture = readFileSync(new URL(name, packageRoot), "utf8");
-      expect(fixture, name).not.toMatch(/private[_ -]?key/i);
-      expect(fixture, name).not.toMatch(/enrollment_grant_base64/i);
-      expect(fixture, name).not.toMatch(/enrollment_grant_bytes/i);
-    }
   });
 });

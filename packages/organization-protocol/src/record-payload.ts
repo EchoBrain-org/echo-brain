@@ -413,9 +413,9 @@ function assertRationaleLinks(
 }
 
 /**
- * Restates the `DecisionBrief` shape core validates. Core imports no packages,
- * so the two are pinned together by the shared golden payload fixtures rather
- * than by shared code, and this side is never looser than core's validator.
+ * Restates the `DecisionBrief` shape core produces. Core imports no packages,
+ * so this package owns its own validator, exercised by the test-only payload
+ * conformance fixture.
  */
 function assertOrganizationRecordDecisionBrief(
   value: unknown,

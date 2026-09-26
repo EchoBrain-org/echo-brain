@@ -12,7 +12,6 @@
       "import": "./dist/index.js"
     },
     "./schemas/organization-authority-descriptor.v1.schema.json": "./schemas/organization-authority-descriptor.v1.schema.json",
-    "./fixtures/organization-record-payload-conformance.v1.json": "./fixtures/organization-record-payload-conformance.v1.json",
     "./record-codec-support-v4": {
       "types": "./dist/record-codec-support-v4.d.ts",
       "import": "./dist/record-codec-support-v4.js"
@@ -23,8 +22,7 @@
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
-    "schemas/*.schema.json",
-    "fixtures/**"
+    "schemas/*.schema.json"
   ],
   "scripts": {
     "build": "tsc -b",
