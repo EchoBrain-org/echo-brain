@@ -185,11 +185,13 @@ existing Slack DM challenge remains usable. A `replace-rehearsal` starts with
 fresh private state, so configure browser connection again after it is prepared.
 
 After that setup, the ordinary release updater only replaces artifacts within
-this same lineage: Authority V4, private-approval control-plane V2, and
-record-log V2. It refuses older or mixed persisted state before runtime,
-configuration, or state mutation. This is deliberately a replacement boundary,
-not a hidden migration path; use `replace-rehearsal --confirm-no-live-users`
-for unreleased rehearsal state that does not meet this floor.
+the current lineage: Authority V10, private-approval control-plane V3,
+record-log V4, retrieval facts V3, retrieval content/lexical V2, and a six-role
+V2 root. It refuses older or mixed persisted state before runtime,
+configuration, or state mutation. Use `replace-rehearsal --confirm-no-live-users`
+and prepare again with the exact new release for disposable unreleased rehearsal
+state that does not match these baselines. The [release procedure](../release/README.md)
+retains separately named historical migrations.
 
 Complete the bootstrap, initial-owner identity link, credential installation, and
 finalization, then start the active runtime. `resume` stops at this point and
@@ -248,9 +250,9 @@ organization.
 
 ### Replace unreleased rehearsal state
 
-The roster candidate changes the fresh Authority baseline. It cannot start over
-an earlier rehearsal lineage. Because that lineage has no live users, retire it
-once through the explicit initial-owner attestation:
+The current release requires fresh Authority V10 state. It cannot start over
+an earlier rehearsal lineage. For disposable rehearsal state with no live users,
+retire it through the explicit initial-owner attestation:
 
 ```sh
 ./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
