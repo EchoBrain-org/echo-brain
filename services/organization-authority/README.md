@@ -6,12 +6,13 @@ admitted meeting processing, approval finalization, immutable V4 records, and
 permission-aware Person reads and answer composition. It also owns durable
 Person document and upload custody, projects with their association and
 audience, audited read/search, and optional search enrichment. Uploads do not
-require Slack approval. The current artifact is Authority V9, and the project
-routes and Person-client project operations are live. Runtime opening never
-migrates state. The reviewed
+require Slack approval. The current artifact is Authority V10, with project
+settings and project-scoped meeting approvals. Runtime opening never migrates
+state. This release requires fresh databases; existing disposable rehearsal
+state uses the [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state).
+The reviewed historical
 [V8-to-V9 staging migration](../../deploy/release/README.md#state-preserving-v8-to-v9-staging-migration)
-preserves an accepted V8 organization; other baselines require an explicit
-migration or an authorized reset.
+preserves an accepted V8 organization for a V9 candidate only.
 
 For any deployed staging initial-owner setup, do not run the lower-level setup
 commands in this service reference. Start with the
@@ -189,9 +190,9 @@ workspace:
 3. Put the signing secret from that same Slack app in a separate current-user
    `0600` regular file containing one value with no trailing newline. Do not
    reuse a signing secret from another Slack app.
-4. Use a wholly fresh provider-neutral V4 staging lineage. Do not upgrade or
-   reuse an earlier V3 or shared-channel rehearsal database, state directory, or
-   approval binding.
+4. Use a wholly fresh Authority V10 staging lineage with the
+   [current storage baselines](#state-and-baselines). Use the supported rehearsal
+   reset before preparing state from an earlier release.
 
 Complete bootstrap, the initial-owner identity link, credential installation, and
 finalization first, then start the active runtime. Only after that runtime is
@@ -334,8 +335,8 @@ directory atomically and records a lineage root plus role-specific manifests.
 Startup verifies the root and every persisted database identity, schema
 version, and baseline digest before opening the Authority runtime.
 
-Current state uses Authority V9, control-plane V3, record-log V3, retrieval
-facts V2, and retrieval lexical/content V1. The V2 root binds exactly these six
+Current state uses Authority V10, control-plane V3, record-log V4, retrieval
+facts V3, and retrieval lexical/content V2. The V2 root binds exactly these six
 roles. Per-database manifests remain V1; schema versions and digests identify
 each role's current baseline. Each baseline applies only to a completely empty
 database. Old roots, retired databases, and mismatched schemas refuse before
@@ -345,7 +346,7 @@ The immutable approval-delivery quarantine fences unrepresentable approval
 packages before any provider post and retains them for audit. A temporarily
 missing reviewer identity leaves its durable outbox queued for reconciliation.
 
-The checkout also retains the pinned Authority V5 to V8 baselines and the
+The checkout also retains the pinned Authority V5 to V9 baselines and the
 explicit offline [V5-to-V6](../../tools/copy-authority-v5-to-v6.mjs) and
 [V7-to-V8](../../tools/copy-authority-v7-to-v8.mjs) copiers. Each copier reads a
 stopped snapshot and writes a separate database, preserving existing rows.
@@ -354,10 +355,10 @@ baselines and converters remain in Git history.
 
 Routine releases use baseline-preserving image replacements through the
 [release procedure](../../deploy/release/README.md); that updater refuses
-schema changes. An accepted V8 installation moves to V9 only through the
-reviewed `stage-v8-to-v9` lane, which retains the original state for rollback.
-Rollback must restore the complete matching code/state snapshot; image rollback
-alone cannot reverse the schema change.
+schema changes. The historical `stage-v8-to-v9` lane retains the original state
+for rollback and applies only to a V9 candidate. It does not prepare current V10
+state. Rollback must restore the complete matching code/state snapshot; image
+rollback alone cannot reverse the schema change.
 
 ## Verification
 

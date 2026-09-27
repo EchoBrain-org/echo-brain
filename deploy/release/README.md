@@ -843,8 +843,10 @@ acceptance.
 
 The Linux kit supports glibc x86_64 machines (Ubuntu 22.04+ / Debian 12+ class).
 It installs the same Person CLI as the macOS kit, with invitation login,
-status, records, Ask, and server-authorized organization commands. There is no
-Linux desktop app. Linux arm64, musl/Alpine, and Windows are unsupported.
+status, records, Ask, and server-authorized organization commands. This terminal
+kit contains no desktop app. Separate Linux x64 desktop `.deb` and `.tar.gz`
+packages are described in the [desktop README](../../product/echo-desktop/README.md).
+Linux arm64, musl/Alpine, and Windows are unsupported kit targets.
 
 Build on Linux x64 from the clean release commit. Supply the official Node
 22.22.1 Linux x64 binary after checking its download against Node's
