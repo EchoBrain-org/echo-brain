@@ -1,10 +1,10 @@
-import { useLayoutEffect, useRef } from 'preact/hooks';
+import { useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
 import { message } from '../messages.js';
 import { loadArchivedProjects, loadProjects, openNewProject, openProject, type State } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Plus } from './icons.js';
+import { Chevron, Plus } from './icons.js';
 
 /** One project. A file dropped on it is captured into it. */
 function ProjectRow({ project }: { project: ProjectSummary }) {
@@ -27,6 +27,7 @@ let savedScroll = 0;
 export function Home({ state }: { state: State }) {
   const { items, loading, failure } = state.projects;
   const archived = state.archivedProjects;
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const list = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const element = list.current;
@@ -62,13 +63,14 @@ export function Home({ state }: { state: State }) {
       {failure && <div class="error more">{message(failure)} <button type="button" class="link-button" onClick={() => void loadProjects()}>Try again</button></div>}
       {(archived.items.length > 0 || archived.loading || archived.failure) && (
         <section class="archived-projects" data-testid="archived-projects" aria-label="Archived projects">
-          <div class="side-header">ARCHIVED</div>
-          {archived.items.map(project => <ProjectRow key={project.project_id} project={project} />)}
-          {archived.next && (
+          <button type="button" class="archived-heading" data-testid="archived-projects-toggle" aria-expanded={archivedOpen}
+            onClick={() => setArchivedOpen(!archivedOpen)}><Chevron /><span>ARCHIVED</span></button>
+          {archivedOpen && archived.items.map(project => <ProjectRow key={project.project_id} project={project} />)}
+          {archivedOpen && archived.next && (
             <button type="button" class="link-button more" data-testid="more-archived-projects" disabled={archived.loading}
               onClick={() => void loadArchivedProjects(true)}>More</button>
           )}
-          {archived.failure && <div class="error more">{message(archived.failure)} <button type="button" class="link-button"
+          {archivedOpen && archived.failure && <div class="error more">{message(archived.failure)} <button type="button" class="link-button"
             onClick={() => void loadArchivedProjects()}>Try again</button></div>}
         </section>
       )}

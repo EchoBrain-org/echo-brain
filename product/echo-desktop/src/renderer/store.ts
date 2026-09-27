@@ -316,6 +316,7 @@ export interface ChangeState {
 export interface ProjectSettingsState {
   project: ProjectSummary;
   menu: boolean;
+  menuOrigin: 'header' | 'sidebar';
   rename: string | null;
   confirm: 'archive' | 'unarchive' | 'leave' | null;
   write: {
@@ -1081,12 +1082,15 @@ export function projectSettingsBlocked(current: State = state): boolean {
   return status === 'sending' || status === 'unknown';
 }
 
-export function toggleProjectSettings(): void {
-  const project = state.route.page === 'project' && !state.concealed ? state.route.project : null;
-  if (!project || state.sheet || state.ask || state.reader || projectSettingsBlocked()) return;
+export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'header' | 'sidebar' = 'header'): void {
+  const project = target ?? (state.route.page === 'project' ? state.route.project : null);
+  if (!project || state.concealed || state.sheet || (state.compose && !state.compose.hidden) ||
+      (menuOrigin === 'header' && (state.ask || state.reader)) || projectSettingsBlocked()) return;
   const shown = state.projectSettings;
-  set({ projectSettings: shown?.project.project_id === project.project_id ? { ...shown, menu: !shown.menu, rename: null, confirm: null } : {
-    project, menu: true, rename: null, confirm: null, write: null,
+  set({ projectSettings: shown?.project.project_id === project.project_id ? {
+    ...shown, menu: shown.menuOrigin !== menuOrigin || !shown.menu, menuOrigin, rename: null, confirm: null,
+  } : {
+    project, menu: true, menuOrigin, rename: null, confirm: null, write: null,
   } });
 }
 

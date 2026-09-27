@@ -31,6 +31,10 @@ test('a lead renames then archives and restores a project while its existing fee
 
   // Archived projects are still readable, but are absent from Capture's target list.
   await page.getByTestId('back').click();
+  await expect(page.getByTestId('archived-projects-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('archived-project-row')).toHaveCount(0);
+  await page.getByTestId('archived-projects-toggle').click();
+  await expect(page.getByTestId('archived-projects-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('archived-project-row')).toHaveCount(1);
   await page.getByTestId('sidebar-capture').click();
   await page.getByTestId('readers-projects').click();
@@ -46,12 +50,21 @@ test('a lead renames then archives and restores a project while its existing fee
   expect(settingCalls().at(-1)?.body).toMatchObject({ kind: 'echo-project-archive-v1', project_id: APOLLO, archived: false });
 });
 
-test('leaving a project returns Home and removes the project from active pickable projects', async () => {
+test('a sidebar action targets its row without navigating and preserves member permissions', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').nth(1).click();
-  await page.getByTestId('project-settings').click();
+  await page.getByRole('button', { name: 'Actions for Beacon' }).click();
+  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('project-settings-menu')).toHaveCount(1);
+  await expect(page.getByTestId('project-rename')).toHaveCount(0);
+  await expect(page.getByTestId('project-archive')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Actions for Beacon' })).toBeFocused();
+  await page.getByTestId('project-row').first().click();
+  await page.getByRole('button', { name: 'Actions for Beacon' }).click();
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('project-leave').click();
+  await expect(page.getByRole('heading', { name: 'Leave Beacon?' })).toBeVisible();
   await page.getByTestId('project-settings-confirm').click();
   await expect(page.getByTestId('title')).toHaveText('ECHO');
   await expect(page.getByTestId('project-row')).toHaveCount(1);
