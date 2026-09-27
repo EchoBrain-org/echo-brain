@@ -99,9 +99,11 @@ sequence floor, `automatic: true`, and `installation: "cli-kit"`. No client,
 kit, feed, repository or publication receipt receives the private key.
 
 Run the [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed)
-with the exact accepted release and platform kit. Keep the prepared bundle,
-authorization and receipts in private mode-0700 directories with mode-0600
-files. Preview signing before approving its exact manifest digest:
+with the exact accepted release and both platform kits: macOS arm64 and Linux
+x64/glibc. The preparation, signer, seal and publication commands require the
+complete pair with the same source SHA and Person-client artifact. Keep the
+prepared bundle, authorization and receipts in private mode-0700 directories
+with mode-0600 files. Preview signing before approving its exact manifest digest:
 
 ```sh
 npm run client-update:sign -- sign \
@@ -175,6 +177,10 @@ bootstrap configuration, including its `feed_url`, channel, public key, and
 `installation: "cli-kit"`. Its signed sequence must be strictly greater than
 the currently published feed. The lane adds no signer-rotation, channel-change,
 rollback, deletion, or hosting-replacement command.
+
+Every new publication or replacement requires both supported CLI targets. A
+historical single-platform predecessor or receipt can still be verified through
+the read-only status path; it does not authorize another single-platform write.
 
 Obtain the expected predecessor SHA-256 from the preserved succeeded most-recent
 publication or replacement receipt's `hashes.feed.json` field. For the first

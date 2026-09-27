@@ -14,22 +14,31 @@ const STACK = 'echo-client-update-staging-s3-v1';
 const STACK_ID = `arn:aws:cloudformation:us-west-2:904560150024:stack/${STACK}/11111111-1111-4111-8111-111111111111`;
 const TEMPLATE = Buffer.from('{"Resources":{}}');
 function save(path: string, value: unknown) { writeFileSync(path, typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value), { mode: 0o600 }); }
-function fixture(options: { expiresAt?: number; previousExpiresAt?: number; previousSequence?: number; sequence?: number; existingArtifact?: boolean } = {}) {
+function fixture(options: { expiresAt?: number; previousExpiresAt?: number; previousSequence?: number; sequence?: number; existingArtifact?: boolean; targets?: 'both' | 'macos' | 'linux' } = {}) {
   const directory = mkdtempSync(join(realpathSync(tmpdir()), 'echo-publish-test-'));
   chmodSync(directory, 0o700); directories.push(directory);
   const prepared = join(directory, 'prepared');
   mkdirSync(prepared, { mode: 0o700 }); mkdirSync(join(prepared, 'artifacts'), { mode: 0o700 });
-  const artifactBytes = Buffer.from('synthetic validated kit');
-  const sha = updateDigest(artifactBytes);
-  const artifactKey = `artifacts/${sha}.zip`;
-  save(join(prepared, artifactKey), artifactBytes);
+  const targets = [
+    { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit' },
+    { platform: 'linux', architecture: 'x64', libc: 'glibc', installation: 'cli-kit' },
+  ].filter(target => options.targets === undefined || options.targets === 'both' || target.platform === (options.targets === 'macos' ? 'darwin' : 'linux'));
+  const artifacts = targets.map(target => {
+    const bytes = Buffer.from(`synthetic validated ${target.platform} kit`);
+    const sha256 = updateDigest(bytes);
+    const key = `artifacts/${sha256}.zip`;
+    save(join(prepared, key), bytes);
+    return { key, bytes, manifest: { ...target, sha256, bytes: bytes.length, url: new URL(key, FEED).href } };
+  });
+  const artifactKeys = artifacts.map(artifact => artifact.key);
+  const artifactKey = artifactKeys[0];
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const config = parseUpdateConfig({ schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'staging', feed_url: FEED, public_key_spki: publicKey.export({ format: 'der', type: 'spki' }).toString('base64'), minimum_sequence: 1, automatic: true, installation: 'cli-kit' });
   const createdAt = Date.now();
-  const manifest = parseUpdateManifest({ schema_version: 1, kind: 'echo-client-update-manifest-v1', channel: 'staging', sequence: options.sequence ?? 1, issued_at: new Date(createdAt - 10000).toISOString(), expires_at: new Date(options.expiresAt ?? createdAt + 86400000).toISOString(), release_id: 'clean-v1-fixture', release_sha256: 'b'.repeat(64), source_sha: SOURCE, product_version: '0.1.1', artifacts: [{ platform: 'darwin', architecture: 'arm64', libc: null, installation: 'cli-kit', sha256: sha, bytes: artifactBytes.length, url: new URL(artifactKey, FEED).href }] });
+  const manifest = parseUpdateManifest({ schema_version: 1, kind: 'echo-client-update-manifest-v1', channel: 'staging', sequence: options.sequence ?? 1, issued_at: new Date(createdAt - 10000).toISOString(), expires_at: new Date(options.expiresAt ?? createdAt + 86400000).toISOString(), release_id: 'clean-v1-fixture', release_sha256: 'b'.repeat(64), source_sha: SOURCE, product_version: '0.1.1', artifacts: artifacts.map(artifact => artifact.manifest) });
   const payload = Buffer.from(JSON.stringify(manifest));
   const feedBytes = Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') }));
-  const previousManifest = options.previousSequence === undefined ? undefined : parseUpdateManifest({ ...manifest, sequence: options.previousSequence, issued_at: new Date(createdAt - 86_400_000).toISOString(), expires_at: new Date(options.previousExpiresAt ?? createdAt + 43_200_000).toISOString() });
+  const previousManifest = options.previousSequence === undefined ? undefined : parseUpdateManifest({ ...manifest, artifacts: manifest.artifacts.slice(0, 1), sequence: options.previousSequence, issued_at: new Date(createdAt - 86_400_000).toISOString(), expires_at: new Date(options.previousExpiresAt ?? createdAt + 43_200_000).toISOString() });
   const previousPayload = previousManifest && Buffer.from(JSON.stringify(previousManifest));
   const previousFeedBytes = previousPayload && Buffer.from(JSON.stringify({ payload: previousPayload.toString('base64'), signature: sign(null, previousPayload, privateKey).toString('base64') }));
   save(join(prepared, 'bootstrap-config.json'), config); save(join(prepared, 'manifest.json'), payload); save(join(prepared, 'release.json'), { synthetic: true }); save(join(prepared, 'feed.json'), feedBytes);
@@ -44,7 +53,7 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
   const state = { throwAfterPut: '', throwBeforePut: '', tamperFetch: '', replaceBeforeConditionalFeedPut: false, advanceAfterFetch: {} as Record<string, number>, advanceAfterHead: {} as Record<string, number>, headerOverride: {} as Record<string, string>, statusOverride: 200, now: createdAt, validationOptions: [] as Array<{ now?: number; allowExpired?: boolean }> };
   const metadata = (bytes: Buffer, contentType: string, cacheControl: string, version: number) => ({ ContentLength: bytes.length, ContentType: contentType, CacheControl: cacheControl, ServerSideEncryption: 'AES256', VersionId: `version-${version}`, ETag: `"${version.toString(16).padStart(32, '0')}"` });
   if (previousFeedBytes) objects.set('feed.json', { bytes: previousFeedBytes, metadata: metadata(previousFeedBytes, 'application/json', 'no-store', 1) });
-  if (options.existingArtifact) objects.set(artifactKey, { bytes: artifactBytes, metadata: metadata(artifactBytes, 'application/zip', 'public, max-age=31536000, immutable', 2) });
+  if (options.existingArtifact) for (const [index, artifact] of artifacts.entries()) objects.set(artifact.key, { bytes: artifact.bytes, metadata: metadata(artifact.bytes, 'application/zip', 'public, max-age=31536000, immutable', index + 2) });
   const aws = (args: string[]): any => {
     calls.push(args);
     const value = (flag: string) => args[args.indexOf(flag) + 1];
@@ -108,24 +117,60 @@ function fixture(options: { expiresAt?: number; previousExpiresAt?: number; prev
   const replacePlan = () => planClientUpdateReplacement({ hostingReceipt, prepared, authorization, output: receipt, expectedPredecessor: previousFeedBytes ? updateDigest(previousFeedBytes) : '0'.repeat(64) }, dependencies);
   const replaceExecute = () => executeClientUpdateReplacement({ receipt, approveManifest: updateDigest(payload) }, dependencies);
   const replaceStatus = () => statusClientUpdateReplacement({ receipt }, dependencies);
-  return { directory, prepared, authorization, hostingReceipt, hosting, receipt, config, manifest, feedBytes, previousFeedBytes, previousManifest, privateKey, payload, artifactKey, objects, calls, events, state, dependencies, plan, execute, status, replacePlan, replaceExecute, replaceStatus };
+  return { directory, prepared, authorization, hostingReceipt, hosting, receipt, config, manifest, feedBytes, previousFeedBytes, previousManifest, privateKey, payload, artifactKey, artifactKeys, metadata, objects, calls, events, state, dependencies, plan, execute, status, replacePlan, replaceExecute, replaceStatus };
+}
+
+// Historical receipts were allowed to contain a single platform. Construct the
+// old on-disk contract directly: current planning must never mint these again.
+function historicalReceipt(f: ReturnType<typeof fixture>, replacement: boolean, attempted: 'none' | 'artifact' | 'all') {
+  const inputs = [...f.manifest.artifacts.map(artifact => ({ key: `artifacts/${artifact.sha256}.zip`, sha256: artifact.sha256, bytes: artifact.bytes,
+    content_type: 'application/zip', cache_control: 'public, max-age=31536000, immutable' })),
+  { key: 'feed.json', sha256: updateDigest(f.feedBytes), bytes: f.feedBytes.length, content_type: 'application/json', cache_control: 'no-store' }];
+  const predecessorMetadata = f.objects.get('feed.json')?.metadata;
+  const objects = inputs.map((input, index) => {
+    const wasAttempted = attempted === 'all' || (attempted === 'artifact' && input.key !== 'feed.json');
+    if (wasAttempted) {
+      const bytes = readFileSync(join(f.prepared, input.key));
+      f.objects.set(input.key, { bytes, metadata: f.metadata(bytes, input.content_type, input.cache_control, index + 10) });
+    }
+    return { ...input, ...(replacement ? { reused: false } : {}), attempted: wasAttempted, succeeded: false, verified: false, version_id: null };
+  });
+  const common = {
+    schema_version: 1, kind: replacement ? 'echo-client-update-feed-replacement-v1' : 'echo-client-update-first-publication-v1',
+    operation_id: '11111111-1111-4111-8111-111111111111', source_sha: SOURCE, state: attempted === 'none' ? 'planned' : 'unconfirmed',
+    hosting_receipt: f.hostingReceipt, prepared: f.prepared, authorization: f.authorization,
+    hosting: { receipt_sha256: updateDigest(readFileSync(f.hostingReceipt)), stack_id: STACK_ID, template_sha256: updateDigest(TEMPLATE), bucket: BUCKET, feed_url: FEED },
+    hashes: { ...Object.fromEntries(['bootstrap-config.json', 'manifest.json', 'release.json', 'feed.json'].map(name => [name, updateDigest(readFileSync(join(f.prepared, name)))])), authorization: updateDigest(readFileSync(f.authorization)) },
+    release_id: f.manifest.release_id,
+  };
+  save(f.receipt, replacement ? { ...common, artifacts: objects.slice(0, -1), feed: objects.at(-1),
+    predecessor: { key: 'feed.json', sha256: updateDigest(f.previousFeedBytes!), bytes: f.previousFeedBytes!.length,
+      version_id: predecessorMetadata!.VersionId, etag: predecessorMetadata!.ETag, channel: f.previousManifest!.channel, sequence: f.previousManifest!.sequence } }
+    : { ...common, objects });
 }
 
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 
 describe('bounded first S3 client update publication', () => {
+  it.each(['macos', 'linux'] as const)('rejects a new %s-only publication before creating a receipt or writing objects', async targets => {
+    const f = fixture({ targets });
+    await expect(f.plan()).rejects.toThrow('both_cli_kits_required');
+    expect(existsSync(f.receipt)).toBe(false);
+    expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
+  });
+
   it('plans without mutation, durably records attempts, verifies public artifacts, then publishes and verifies the feed', async () => {
     const f = fixture();
-    expect(await f.plan()).toMatchObject({ state: 'planned', object_count: 2, verified_objects: 0 });
+    expect(await f.plan()).toMatchObject({ state: 'planned', object_count: 3, verified_objects: 0 });
     expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
-    expect(await f.execute()).toMatchObject({ state: 'succeeded', object_count: 2, verified_objects: 2 });
-    expect(f.events).toEqual([`put:${f.artifactKey}`, `get:${f.artifactKey}`, 'put:feed.json', 'get:feed.json']);
-    expect([...f.objects.keys()]).toEqual([f.artifactKey, 'feed.json']);
+    expect(await f.execute()).toMatchObject({ state: 'succeeded', object_count: 3, verified_objects: 3 });
+    expect(f.events).toEqual([...f.artifactKeys.flatMap(key => [`put:${key}`, `get:${key}`]), 'put:feed.json', 'get:feed.json']);
+    expect([...f.objects.keys()]).toEqual([...f.artifactKeys, 'feed.json']);
     const receipt = JSON.parse(readFileSync(f.receipt, 'utf8'));
     expect(receipt.objects.every((object: any) => object.attempted && object.succeeded && object.verified && object.version_id)).toBe(true);
     expect(f.calls.flat()).not.toContain('delete-object');
-    expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
   it('does not begin publication when less than the bounded first-publication window remains', async () => {
@@ -160,8 +205,8 @@ describe('bounded first S3 client update publication', () => {
     const f = fixture({ expiresAt });
     await f.plan();
     f.state.advanceAfterHead['feed.json'] = expiresAt - 5 * 60 * 1000;
-    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(1);
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
     expect(f.objects.has('feed.json')).toBe(false);
   });
 
@@ -170,9 +215,9 @@ describe('bounded first S3 client update publication', () => {
     await f.plan();
     await f.execute();
     f.state.now = Date.parse(f.manifest.expires_at) + 1;
-    expect(await f.status()).toMatchObject({ state: 'succeeded', metadata_fresh: false, verified_objects: 2 });
+    expect(await f.status()).toMatchObject({ state: 'succeeded', metadata_fresh: false, verified_objects: 3 });
     expect(f.state.validationOptions.at(-1)).toMatchObject({ allowExpired: true, now: f.state.now });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
   it('keeps a replaced object version unconfirmed when status audits after expiry', async () => {
@@ -182,7 +227,7 @@ describe('bounded first S3 client update publication', () => {
     f.state.now = Date.parse(f.manifest.expires_at) + 1;
     f.objects.get(f.artifactKey)!.metadata.VersionId = 'replacement-version';
     expect(await f.status()).toMatchObject({ state: 'unconfirmed', metadata_fresh: false });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
   it('keeps a corrupted remote feed unconfirmed when status audits after expiry', async () => {
@@ -192,7 +237,7 @@ describe('bounded first S3 client update publication', () => {
     f.state.now = Date.parse(f.manifest.expires_at) + 1;
     f.state.tamperFetch = 'feed.json';
     expect(await f.status()).toMatchObject({ state: 'unconfirmed', metadata_fresh: false });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
   it('refuses a preexisting feed, and a new receipt cannot bypass a partially published artifact', async () => {
@@ -264,7 +309,7 @@ describe('bounded first S3 client update publication', () => {
     expect(await f.status()).toMatchObject({ state: 'publishing', verified_objects: 1 });
     expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(1);
     expect(await f.execute()).toMatchObject({ state: 'succeeded' });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
   it('never retries an attempted PUT whose outcome remains absent', async () => {
@@ -277,10 +322,10 @@ describe('bounded first S3 client update publication', () => {
 
   it('completes an uncertain final feed PUT using status without any further writes', async () => {
     const f = fixture(); await f.plan(); f.state.throwAfterPut = 'feed.json';
-    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
     f.state.now = Date.parse(f.manifest.expires_at) + 1;
-    expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(await f.status()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
   it.each(['digest', 'compression', 'redirect', 'length', 'cache'])('does not publish the feed when artifact verification fails: %s', async change => {
@@ -299,7 +344,7 @@ describe('bounded first S3 client update publication', () => {
     const f = fixture(); await f.plan(); await f.execute();
     f.objects.get(f.artifactKey)!.metadata.VersionId = 'replacement-version';
     expect(await f.status()).toMatchObject({ state: 'unconfirmed' });
-    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(3);
   });
 
   it('refuses an unexpected public feed signature even when matching planned raw bytes were supplied by a faulty validator', async () => {
@@ -308,7 +353,7 @@ describe('bounded first S3 client update publication', () => {
     const invalid = Buffer.from(JSON.stringify(envelope)); save(join(f.prepared, 'feed.json'), invalid);
     f.dependencies.validatePrepared = () => ({ config: f.config, manifest: f.manifest, feedBytes: invalid });
     await f.plan();
-    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
+    expect(await f.execute()).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
   });
 
   it('requires private input files and serializes concurrent operations with the receipt lock', async () => {
@@ -322,13 +367,22 @@ describe('bounded first S3 client update publication', () => {
 });
 
 describe('bounded conditional S3 feed replacement', () => {
+  it.each(['macos', 'linux'] as const)('rejects a new %s-only replacement before creating a receipt or writing objects', async targets => {
+    const f = fixture({ targets, previousSequence: 1, sequence: 2 });
+    await expect(f.replacePlan()).rejects.toThrow('both_cli_kits_required');
+    expect(existsSync(f.receipt)).toBe(false);
+    expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
+  });
+
   it('keeps the first-publication refusal, then replaces only the expected signed predecessor with a higher sequence', async () => {
     const f = fixture({ previousSequence: 1, sequence: 2 });
+    expect(f.previousManifest!.artifacts).toHaveLength(1);
+    expect(f.manifest.artifacts).toHaveLength(2);
     await expect(f.plan()).rejects.toThrow('first_publication_object_already_exists');
     expect(await f.replacePlan()).toMatchObject({ kind: 'echo-client-update-feed-replacement-v1', state: 'planned' });
     const receipt = JSON.parse(readFileSync(f.receipt, 'utf8'));
     expect(receipt.predecessor).toMatchObject({ sha256: updateDigest(f.previousFeedBytes!), sequence: 1, channel: 'staging' });
-    expect(await f.replaceExecute()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
+    expect(await f.replaceExecute()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
     const put = f.calls.find(args => args[1] === 'put-object' && args.includes('feed.json'))!;
     expect(put[put.indexOf('--if-match') + 1]).toBe(receipt.predecessor.etag);
     expect(put).not.toContain('--if-none-match');
@@ -408,9 +462,70 @@ describe('bounded conditional S3 feed replacement', () => {
   it('recovers a lost final PUT result through status without a second write', async () => {
     const f = fixture({ previousSequence: 1, sequence: 2 });
     await f.replacePlan(); f.state.throwAfterPut = 'feed.json';
-    expect(await f.replaceExecute()).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
-    expect(await f.replaceStatus()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
+    expect(await f.replaceExecute()).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
+    expect(await f.replaceStatus()).toMatchObject({ state: 'succeeded', verified_objects: 3 });
     expect(f.calls.filter(args => args[1] === 'put-object' && args.includes('feed.json'))).toHaveLength(1);
+  });
+});
+
+
+describe.each([{ label: 'first-publication', replacement: false }, { label: 'replacement', replacement: true }])('paired release enforcement for $label receipts', ({ replacement }) => {
+  it.each(['macos', 'linux'] as const)('refuses new writes from an old %s-only receipt, while status still inspects it', async targets => {
+    const f = fixture({ targets, ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
+    historicalReceipt(f, replacement, 'none');
+    const status = replacement ? f.replaceStatus : f.status;
+    const execute = replacement ? f.replaceExecute : f.execute;
+    expect(await status()).toMatchObject({ state: 'planned', object_count: 2 });
+    await expect(execute()).rejects.toThrow('both_cli_kits_required');
+    expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
+  });
+
+  it('reconciles a historical single-platform artifact attempt without allowing the remaining feed write', async () => {
+    const f = fixture({ targets: 'macos', ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
+    historicalReceipt(f, replacement, 'artifact');
+    const status = replacement ? f.replaceStatus : f.status;
+    const execute = replacement ? f.replaceExecute : f.execute;
+    expect(await status()).toMatchObject({ state: 'publishing', verified_objects: 1 });
+    await expect(execute()).rejects.toThrow('both_cli_kits_required');
+    expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
+  });
+
+  it('reconciles a historical single-platform final attempt without writing again', async () => {
+    const f = fixture({ targets: 'macos', ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
+    historicalReceipt(f, replacement, 'all');
+    const status = replacement ? f.replaceStatus : f.status;
+    const execute = replacement ? f.replaceExecute : f.execute;
+    expect(await status()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
+    expect(await execute()).toMatchObject({ state: 'succeeded', verified_objects: 2 });
+    expect(f.calls.some(args => args[1] === 'put-object')).toBe(false);
+  });
+
+  it('rechecks the exact target pair immediately before the next artifact write', async () => {
+    const f = fixture({ ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
+    await (replacement ? f.replacePlan() : f.plan());
+    const fetch = f.dependencies.fetch!;
+    f.dependencies.fetch = async (input, init) => {
+      const response = await fetch(input, init);
+      if (String(input).endsWith(f.artifactKey)) f.manifest.artifacts[1].architecture = 'arm64';
+      return response;
+    };
+    expect(await (replacement ? f.replaceExecute() : f.execute())).toMatchObject({ state: 'unconfirmed', verified_objects: 1 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(1);
+    expect(f.objects.has(f.artifactKeys[1])).toBe(false);
+  });
+
+  it('applies the target guard again after final sealed-input revalidation', async () => {
+    const f = fixture({ ...(replacement ? { previousSequence: 1, sequence: 2 } : {}) });
+    await (replacement ? f.replacePlan() : f.plan());
+    const validatePrepared = f.dependencies.validatePrepared!;
+    f.dependencies.validatePrepared = options => {
+      const result = validatePrepared(options);
+      if (f.objects.has(f.artifactKeys[1])) return { ...result, manifest: { ...result.manifest, artifacts: result.manifest.artifacts.map(artifact => ({ ...artifact, architecture: 'arm64' as const })) } };
+      return result;
+    };
+    expect(await (replacement ? f.replaceExecute() : f.execute())).toMatchObject({ state: 'unconfirmed', verified_objects: 2 });
+    expect(f.calls.filter(args => args[1] === 'put-object')).toHaveLength(2);
+    expect(f.calls.some(args => args[1] === 'put-object' && args.includes('feed.json'))).toBe(false);
   });
 });
 

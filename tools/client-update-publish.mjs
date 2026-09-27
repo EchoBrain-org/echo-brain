@@ -11,7 +11,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { awsCliArguments, sanitizedAwsEnvironment } from './authority-staging-onboarding-transfer.mjs';
 import { canonicalJson } from './clean-v1-release.mjs';
-import { validateSealedClientUpdateFeed } from './client-update-feed.mjs';
+import { requireBothCliTargets, validateSealedClientUpdateFeed } from './client-update-feed.mjs';
 import { UPDATE_ARTIFACT_LIMIT, UPDATE_METADATA_LIMIT, verifyUpdateEnvelope } from '../src/product/person-client/dist/client-update-contract.js';
 
 const REPO = resolve(import.meta.dirname, '..');
@@ -213,6 +213,7 @@ export async function planClientUpdatePublish({ hostingReceipt, prepared, author
     account(d.aws);
     const host = hosting(absolute(hostingReceipt), d.aws, d.readTemplate);
     const inputs = preparedInputs(absolute(prepared), absolute(authorization), d.validatePrepared, { now: currentTime(d) });
+    requireBothCliTargets(inputs.manifest);
     if (inputs.config.feed_url !== host.feed_url) fail('publication_feed_url_mismatch');
     // Check feed first. A new receipt cannot bypass an existing publication.
     absent(d.aws, host.bucket, 'feed.json');
@@ -232,6 +233,8 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
     if (receipt.state === 'unconfirmed') fail('publication_unconfirmed_use_status');
     let inputs = boundInputs(receipt, d);
     if (receipt.state === 'succeeded') return summary(receipt, inputs, d);
+    // Historical single-platform receipts may be inspected, but never resumed with new writes.
+    if (receipt.objects.some(object => !object.attempted)) requireBothCliTargets(inputs.manifest);
     try {
       for (const [index, object] of receipt.objects.entries()) {
         if (!object.attempted) {
@@ -244,6 +247,7 @@ export async function executeClientUpdatePublish({ receipt: path, approveManifes
           // The final feed is revalidated after its preflight HEAD and file
           // read, immediately before the sole conditional write makes it live.
           if (object.key === 'feed.json') inputs = revalidateSealedInputs(receipt, d);
+          requireBothCliTargets(inputs.manifest);
           requirePublicationWindow(receipt, index, inputs, d);
           receipt.state = 'publishing'; object.attempted = true; save(path, receipt);
           const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', object.key, '--body', file, '--if-none-match', '*', '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', object.content_type, '--cache-control', object.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(object.sha256, 'hex').toString('base64')]);
@@ -411,6 +415,7 @@ export async function planClientUpdateReplacement({ hostingReceipt, prepared, au
     account(d.aws);
     const host = hosting(absolute(hostingReceipt), d.aws, d.readTemplate);
     const inputs = preparedInputs(absolute(prepared), absolute(authorization), d.validatePrepared, { now: currentTime(d) });
+    requireBothCliTargets(inputs.manifest);
     if (inputs.config.feed_url !== host.feed_url) fail('publication_feed_url_mismatch');
     const predecessor = await observePredecessor(host, inputs.config, d);
     if (predecessor.sha256 !== expectedPredecessor) fail('unexpected_predecessor_feed');
@@ -438,6 +443,7 @@ export async function executeClientUpdateReplacement({ receipt: path, approveMan
     if (receipt.state === 'unconfirmed') fail('publication_unconfirmed_use_status');
     let inputs = replacementInputs(receipt, d);
     if (receipt.state === 'succeeded') return replacementSummary(receipt, inputs, d);
+    if (!receipt.feed.attempted || receipt.artifacts.some(object => !object.reused && !object.attempted)) requireBothCliTargets(inputs.manifest);
     try {
       for (const [index, object] of receipt.artifacts.entries()) {
         if (object.reused) {
@@ -449,6 +455,7 @@ export async function executeClientUpdateReplacement({ receipt: path, approveMan
           const file = join(receipt.prepared, object.key);
           const bytes = read(file, UPDATE_ARTIFACT_LIMIT);
           if (bytes.length !== object.bytes || digest(bytes) !== object.sha256) fail('publication_inputs_changed');
+          requireBothCliTargets(inputs.manifest);
           replacementWindow(receipt, index, inputs, d);
           receipt.state = 'publishing'; object.attempted = true; save(path, receipt);
           const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', object.key, '--body', file, '--if-none-match', '*', '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', object.content_type, '--cache-control', object.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(object.sha256, 'hex').toString('base64')]);
@@ -464,6 +471,7 @@ export async function executeClientUpdateReplacement({ receipt: path, approveMan
         if (bytes.length !== receipt.feed.bytes || digest(bytes) !== receipt.feed.sha256) fail('publication_inputs_changed');
         inputs = replacementInputs(receipt, d);
         await recheckPredecessor(receipt, inputs, d);
+        requireBothCliTargets(inputs.manifest);
         replacementWindow(receipt, receipt.artifacts.length, inputs, d);
         receipt.state = 'publishing'; receipt.feed.attempted = true; save(path, receipt);
         const result = d.aws(['s3api', 'put-object', '--bucket', receipt.hosting.bucket, '--key', 'feed.json', '--body', file, '--if-match', receipt.predecessor.etag, '--expected-bucket-owner', ACCOUNT, '--server-side-encryption', 'AES256', '--content-type', receipt.feed.content_type, '--cache-control', receipt.feed.cache_control, '--checksum-algorithm', 'SHA256', '--checksum-sha256', Buffer.from(receipt.feed.sha256, 'hex').toString('base64')]);
