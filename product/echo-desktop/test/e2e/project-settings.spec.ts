@@ -111,6 +111,38 @@ test('a native account sheet dismisses the project menu without restoring it aft
   expect(settingCalls()).toHaveLength(0);
 });
 
+for (const role of ['member', 'lead'] as const) {
+  test(`a bottom-edge ${role} menu leaves its opener available to close it`, async () => {
+    run = await launch(role === 'lead' ? 'many-projects-lead' : 'many-projects');
+    const { page } = run;
+    await run.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(800, 560));
+    await page.getByTestId('sidebar-more').click();
+    await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
+    const opener = page.getByTestId('sidebar-project-more').last();
+    await opener.scrollIntoViewIfNeeded();
+    // Settle the deliberate scroll before opening: scrolling an open menu dismisses it.
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const box = (await opener.boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.click(x, y);
+    await expect(page.getByTestId('project-settings-menu')).toBeVisible();
+    const menu = (await page.getByTestId('project-settings-menu').boundingBox())!;
+    const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    expect(menu.x).toBeGreaterThanOrEqual(8);
+    expect(menu.x + menu.width).toBeLessThanOrEqual(viewport.width - 8);
+    expect(menu.y).toBeGreaterThanOrEqual(8);
+    expect(menu.y + menu.height).toBeLessThanOrEqual(viewport.height - 8);
+    if (role === 'lead') expect(menu.y + menu.height).toBeLessThanOrEqual(box.y - 4);
+    // A second click at the same physical point must hit the opener, never an action.
+    await page.mouse.click(x, y);
+    await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+    await expect(page.getByTestId('project-rename-input')).toHaveCount(0);
+    await expect(page.getByTestId('project-settings-confirm')).toHaveCount(0);
+    expect(settingCalls()).toHaveLength(0);
+  });
+}
+
 test('a last lead is told to promote another lead before leaving', async () => {
   run = await launch();
   const { page } = run;

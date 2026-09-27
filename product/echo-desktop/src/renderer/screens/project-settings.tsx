@@ -35,9 +35,12 @@ function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anc
   useLayoutEffect(() => {
     const rect = anchor.getBoundingClientRect();
     const box = menu.current!.getBoundingClientRect();
+    // Flip above when there is no room below, so the menu never covers its opener.
+    const top = rect.bottom + 4 + box.height <= window.innerHeight - 8
+      ? rect.bottom + 4 : rect.top - box.height - 4;
     setPosition({
       left: Math.max(8, Math.min(rect.left, window.innerWidth - box.width - 8)),
-      top: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - box.height - 8)),
+      top: Math.max(8, Math.min(top, window.innerHeight - box.height - 8)),
     });
     menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus({ preventScroll: true });
     const outside = (event: PointerEvent) => {

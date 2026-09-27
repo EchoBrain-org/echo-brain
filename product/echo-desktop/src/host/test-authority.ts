@@ -68,7 +68,7 @@ function found(query: unknown, entry: { title: string; text?: string; excerpt?: 
 function excerpt(text: string): string { return [...text.trim()].slice(0, 300).join(''); }
 
 /** The modes whose project list comes ten at a time. */
-const LIST_PAGES = new Set(['many-projects', 'long-project-names', 'over-twenty-projects']);
+const LIST_PAGES = new Set(['many-projects', 'many-projects-lead', 'long-project-names', 'over-twenty-projects']);
 /** A project ID, as the API writes one. */
 const PROJECT_ID = /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** The most projects a capture is filed in, or read by (PERSON_UPLOAD_PROJECT_SET_MAX). */
@@ -245,7 +245,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       project_id: `prj_${String(index + 1).padStart(8, '0')}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`,
       name: name(index), role: 'member' as const,
     }));
-    if (mode === 'many-projects') return numbered(13, '1', index => `Project ${index + 1}`);
+    if (mode === 'many-projects' || mode === 'many-projects-lead') return numbered(13, '1', index => `Project ${index + 1}`)
+      .map((project, index) => mode === 'many-projects-lead' && index === 12 ? { ...project, role: 'lead' as const } : project);
     // Twenty in two pages, some with long names, one longer than Capture is wide.
     if (mode === 'long-project-names') return numbered(20, '2', index => LONG_NAMES[index]!);
     // More than a capture can be filed in: twenty-two, in three pages.
