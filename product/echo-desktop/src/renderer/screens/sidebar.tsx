@@ -3,20 +3,24 @@ import { colorFor, initial } from '../format.js';
 import { loadProjects, openCompose, openNewProject, openOrganization, openProject, showAccountMenu, type State } from '../store.js';
 import { useDropTarget } from './drop.js';
 import { Capture, FolderPlus, People, Person } from './icons.js';
+import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
 
 /** One project: a click opens it, a dropped file is captured into it. */
-function SidebarProject({ project, current }: { project: ProjectSummary; current: boolean }) {
+function SidebarProject({ project, current, state }: { project: ProjectSummary; current: boolean; state: State }) {
   const drop = useDropTarget(project);
   return (
-    <button
-      type="button" data-testid="sidebar-project" class={`side-project${current ? ' current' : ''}${drop.over ? ' drop-target' : ''}`}
-      aria-current={current ? 'page' : undefined} onClick={() => void openProject(project)} {...drop.handlers}
-    >
-      <span class="dot" style={{ background: colorFor(project.project_id) }} aria-hidden="true">{initial(project.name)}</span>
-      <span class="label">{project.name}</span>
-    </button>
+    <div class={`side-project-row${current ? ' current' : ''}${drop.over ? ' drop-target' : ''}`} {...drop.handlers}>
+      <button
+        type="button" data-testid="sidebar-project" class="side-project"
+        aria-current={current ? 'page' : undefined} onClick={() => void openProject(project)}
+      >
+        <span class="dot" style={{ background: colorFor(project.project_id) }} aria-hidden="true">{initial(project.name)}</span>
+        <span class="label">{project.name}</span>
+      </button>
+      <ProjectSettingsButton state={state} project={project} />
+    </div>
   );
 }
 
@@ -47,7 +51,7 @@ export function Sidebar({ state }: { state: State }) {
         {account && items.length > 0 && (
           <>
             <div class="side-header">PROJECTS</div>
-            {items.filter(project => project.status === 'active').map(project => <SidebarProject key={project.project_id} project={project} current={project.project_id === current} />)}
+            {items.filter(project => project.status === 'active').map(project => <SidebarProject key={project.project_id} project={project} current={project.project_id === current} state={state} />)}
             {next && (
               <button type="button" class="link-button side-more" data-testid="sidebar-more" disabled={loading} onClick={() => void loadProjects(true)}>
                 More

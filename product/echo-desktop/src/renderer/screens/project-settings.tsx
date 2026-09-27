@@ -1,34 +1,87 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { createPortal } from 'preact/compat';
+import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import type { ProjectSummary } from '../../shared/protocol.js';
 import { message } from '../messages.js';
 import {
   askProjectSetting, beginProjectRename, cancelProjectSettingsAction, closeProjectSettings, confirmProjectSetting, dismissProjectSetting,
-  keepProjectSetting, projectRenameValid, retryProjectSetting, setProjectRename, toggleProjectSettings, type State,
+  keepProjectSetting, projectRenameValid, projectSettingsBlocked, retryProjectSetting, setProjectRename, toggleProjectSettings, type State, type ProjectSettingsState,
 } from '../store.js';
 import { trapTab } from './compose.js';
 import { Ellipsis } from './icons.js';
 
-/** Project actions live beside People, rather than in a separate settings page. */
-export function ProjectSettingsButton({ state }: { state: State }) {
+/** Both entry points share one target and the same project actions. */
+export function ProjectSettingsButton({ state, project }: { state: State; project?: ProjectSummary }) {
+  const opener = useRef<HTMLButtonElement>(null);
   const route = state.route;
-  if (route.page !== 'project' || state.concealed || state.ask || state.reader) return null;
-  const settings = state.projectSettings?.project.project_id === route.project.project_id ? state.projectSettings : null;
-  const busy = settings?.write?.status === 'sending' || settings?.write?.status === 'unknown';
+  const target = project ?? (route.page === 'project' ? route.project : null);
+  const origin = project ? 'sidebar' : 'header';
+  if (!target || state.concealed || (!project && (state.ask || state.reader))) return null;
+  const settings = state.projectSettings?.project.project_id === target.project_id && state.projectSettings.menuOrigin === origin ? state.projectSettings : null;
+  const busy = projectSettingsBlocked(state);
   return (
     <div class="project-settings">
-      <button type="button" class="icon-button" data-testid="project-settings" aria-label="Project settings" aria-haspopup="menu"
-        aria-expanded={settings?.menu ?? false} disabled={busy} onClick={toggleProjectSettings}><Ellipsis /></button>
-      {settings?.menu && (
-        <div class="menu" role="menu" data-testid="project-settings-menu">
-          {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-rename" onClick={beginProjectRename}>Rename project</button>}
-          {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-archive"
-            onClick={() => askProjectSetting(settings.project.status === 'archived' ? 'unarchive' : 'archive')}>
-            {settings.project.status === 'archived' ? 'Restore project' : 'Archive project'}
-          </button>}
-          <div class="menu-rule" />
-          <button type="button" role="menuitem" class="menu-item danger" data-testid="project-leave" onClick={() => askProjectSetting('leave')}>Leave project</button>
-        </div>
-      )}
+      <button ref={opener} type="button" class="icon-button" data-testid={project ? 'sidebar-project-more' : 'project-settings'}
+        aria-label={project ? `Actions for ${target.name}` : 'Project settings'} aria-haspopup="menu"
+        aria-expanded={settings?.menu ?? false} disabled={busy} onClick={() => toggleProjectSettings(target, origin)}><Ellipsis /></button>
+      {settings?.menu && opener.current && <ProjectMenu settings={settings} anchor={opener.current} />}
     </div>
+  );
+}
+
+/** Render outside the scrolling sidebar and keep the complete menu inside the window. */
+function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anchor: HTMLButtonElement }) {
+  const menu = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+  useLayoutEffect(() => {
+    const rect = anchor.getBoundingClientRect();
+    const box = menu.current!.getBoundingClientRect();
+    // Flip above when there is no room below, so the menu never covers its opener.
+    const top = rect.bottom + 4 + box.height <= window.innerHeight - 8
+      ? rect.bottom + 4 : rect.top - box.height - 4;
+    setPosition({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - box.width - 8)),
+      top: Math.max(8, Math.min(top, window.innerHeight - box.height - 8)),
+    });
+    menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus({ preventScroll: true });
+    const outside = (event: PointerEvent) => {
+      if (!menu.current?.contains(event.target as Node) && !anchor.contains(event.target as Node)) closeProjectSettings();
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        const items = Array.from(menu.current!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+        const index = items.indexOf(document.activeElement as HTMLButtonElement);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus({ preventScroll: true });
+        return;
+      }
+      if (event.key !== 'Escape' && event.key !== 'Tab') return;
+      if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); }
+      closeProjectSettings();
+      anchor.focus({ preventScroll: true });
+    };
+    const moved = () => closeProjectSettings();
+    document.addEventListener('pointerdown', outside);
+    window.addEventListener('keydown', key, true);
+    window.addEventListener('resize', moved);
+    document.addEventListener('scroll', moved, true);
+    return () => {
+      document.removeEventListener('pointerdown', outside);
+      window.removeEventListener('keydown', key, true);
+      window.removeEventListener('resize', moved);
+      document.removeEventListener('scroll', moved, true);
+    };
+  }, [anchor]);
+  return createPortal(
+    <div ref={menu} class="menu project-actions-menu" style={position} role="menu" data-testid="project-settings-menu">
+      {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-rename" onClick={beginProjectRename}>Rename project</button>}
+      {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-archive"
+        onClick={() => askProjectSetting(settings.project.status === 'archived' ? 'unarchive' : 'archive')}>
+        {settings.project.status === 'archived' ? 'Restore project' : 'Archive project'}
+      </button>}
+      {settings.project.role === 'lead' && <div class="menu-rule" />}
+      <button type="button" role="menuitem" class="menu-item danger" data-testid="project-leave" onClick={() => askProjectSetting('leave')}>Leave project</button>
+    </div>, document.body,
   );
 }
 

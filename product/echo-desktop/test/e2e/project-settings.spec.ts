@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { emit, launch, type Launched } from './launch.js';
+import { chooseFromTray, emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -31,6 +31,10 @@ test('a lead renames then archives and restores a project while its existing fee
 
   // Archived projects are still readable, but are absent from Capture's target list.
   await page.getByTestId('back').click();
+  await expect(page.getByTestId('archived-projects-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('archived-project-row')).toHaveCount(0);
+  await page.getByTestId('archived-projects-toggle').click();
+  await expect(page.getByTestId('archived-projects-toggle')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('archived-project-row')).toHaveCount(1);
   await page.getByTestId('sidebar-capture').click();
   await page.getByTestId('readers-projects').click();
@@ -46,18 +50,98 @@ test('a lead renames then archives and restores a project while its existing fee
   expect(settingCalls().at(-1)?.body).toMatchObject({ kind: 'echo-project-archive-v1', project_id: APOLLO, archived: false });
 });
 
-test('leaving a project returns Home and removes the project from active pickable projects', async () => {
+test('a sidebar action targets its row without navigating and preserves member permissions', async () => {
   run = await launch();
   const { page } = run;
-  await page.getByTestId('project-row').nth(1).click();
-  await page.getByTestId('project-settings').click();
+  await page.getByRole('button', { name: 'Actions for Beacon' }).click();
+  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('project-settings-menu')).toHaveCount(1);
+  await expect(page.getByTestId('project-rename')).toHaveCount(0);
+  await expect(page.getByTestId('project-archive')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Actions for Beacon' })).toBeFocused();
+  await page.getByTestId('project-row').first().click();
+  await page.getByRole('button', { name: 'Actions for Beacon' }).click();
+  await expect(page.getByTestId('title')).toHaveText('Apollo');
   await page.getByTestId('project-leave').click();
+  await expect(page.getByRole('heading', { name: 'Leave Beacon?' })).toBeVisible();
   await page.getByTestId('project-settings-confirm').click();
   await expect(page.getByTestId('title')).toHaveText('ECHO');
   await expect(page.getByTestId('project-row')).toHaveCount(1);
   await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
   expect(settingCalls().at(-1)?.body).toMatchObject({ kind: 'echo-project-leave-v1', project_id: BEACON });
 });
+
+for (const origin of ['sidebar', 'header'] as const) {
+  test(`Capture dismisses the ${origin} project menu and keeps its keyboard focus`, async () => {
+    run = await launch();
+    const { page } = run;
+    if (origin === 'header') await page.getByTestId('project-row').first().click();
+    const opener = origin === 'header' ? page.getByTestId('project-settings')
+      : page.getByRole('button', { name: 'Actions for Apollo' });
+    await opener.click();
+    await expect(page.getByTestId('project-settings-menu')).toBeVisible();
+    // The real global shortcut opens Capture without a pointer event to dismiss the menu.
+    await emit(run.app, 'echo-test:capture');
+    await expect(page.getByTestId('compose-body')).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(page.getByTestId('compose-body')).toBeFocused();
+    await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('compose')).toHaveCount(0);
+    await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+    await opener.click();
+    await expect(page.getByTestId('project-settings-menu')).toHaveCount(1);
+    expect(settingCalls()).toHaveLength(0);
+  });
+}
+
+test('a native account sheet dismisses the project menu without restoring it afterward', async () => {
+  run = await launch();
+  const { page } = run;
+  await page.getByRole('button', { name: 'Actions for Apollo' }).click();
+  await chooseFromTray(run, 'Sign out…');
+  await expect(page.getByTestId('confirm-cancel')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByTestId('confirm-cancel')).toBeFocused();
+  await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('confirm')).toHaveCount(0);
+  await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+  expect(settingCalls()).toHaveLength(0);
+});
+
+for (const role of ['member', 'lead'] as const) {
+  test(`a bottom-edge ${role} menu leaves its opener available to close it`, async () => {
+    run = await launch(role === 'lead' ? 'many-projects-lead' : 'many-projects');
+    const { page } = run;
+    await run.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(800, 560));
+    await page.getByTestId('sidebar-more').click();
+    await expect(page.getByTestId('sidebar-project')).toHaveCount(13);
+    const opener = page.getByTestId('sidebar-project-more').last();
+    await opener.scrollIntoViewIfNeeded();
+    // Settle the deliberate scroll before opening: scrolling an open menu dismisses it.
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const box = (await opener.boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await page.mouse.click(x, y);
+    await expect(page.getByTestId('project-settings-menu')).toBeVisible();
+    const menu = (await page.getByTestId('project-settings-menu').boundingBox())!;
+    const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+    expect(menu.x).toBeGreaterThanOrEqual(8);
+    expect(menu.x + menu.width).toBeLessThanOrEqual(viewport.width - 8);
+    expect(menu.y).toBeGreaterThanOrEqual(8);
+    expect(menu.y + menu.height).toBeLessThanOrEqual(viewport.height - 8);
+    if (role === 'lead') expect(menu.y + menu.height).toBeLessThanOrEqual(box.y - 4);
+    // A second click at the same physical point must hit the opener, never an action.
+    await page.mouse.click(x, y);
+    await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+    await expect(page.getByTestId('project-rename-input')).toHaveCount(0);
+    await expect(page.getByTestId('project-settings-confirm')).toHaveCount(0);
+    expect(settingCalls()).toHaveLength(0);
+  });
+}
 
 test('a last lead is told to promote another lead before leaving', async () => {
   run = await launch();
@@ -80,6 +164,11 @@ test('an unconfirmed rename is retried with its same request instead of being ca
   await page.getByTestId('project-rename-save').click();
   await expect(page.getByTestId('project-settings-error')).toHaveText('This may not have been sent.');
   const request = settingCalls().at(-1)?.body?.request_id;
+  // A blocking sheet closes only transient menus; the unresolved write must survive it.
+  await chooseFromTray(run, 'Sign out…');
+  await expect(page.getByTestId('confirm-signout')).toBeDisabled();
+  await page.getByTestId('confirm-cancel').click();
+  await expect(page.getByTestId('project-settings-error')).toHaveText('This may not have been sent.');
   await page.getByTestId('project-settings-retry').click();
   await expect(page.getByTestId('title')).toHaveText('Apollo retry');
   expect(settingCalls().at(-1)?.body?.request_id).toBe(request);
