@@ -402,6 +402,11 @@ let seq = 0;
 export function getState(): State { return state; }
 function set(patch: Partial<State>): void {
   state = { ...state, ...patch };
+  // A modal owns keyboard focus. Dismiss only the transient project menu,
+  // retaining settings drafts and writes while unmounting its global handlers.
+  if (state.projectSettings?.menu && (state.sheet || (state.compose && !state.compose.hidden))) {
+    state = { ...state, projectSettings: { ...state.projectSettings, menu: false } };
+  }
   listeners.forEach(listener => listener());
 }
 

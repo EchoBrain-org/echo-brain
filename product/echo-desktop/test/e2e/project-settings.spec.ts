@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { emit, launch, type Launched } from './launch.js';
+import { chooseFromTray, emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
@@ -72,6 +72,45 @@ test('a sidebar action targets its row without navigating and preserves member p
   expect(settingCalls().at(-1)?.body).toMatchObject({ kind: 'echo-project-leave-v1', project_id: BEACON });
 });
 
+for (const origin of ['sidebar', 'header'] as const) {
+  test(`Capture dismisses the ${origin} project menu and keeps its keyboard focus`, async () => {
+    run = await launch();
+    const { page } = run;
+    if (origin === 'header') await page.getByTestId('project-row').first().click();
+    const opener = origin === 'header' ? page.getByTestId('project-settings')
+      : page.getByRole('button', { name: 'Actions for Apollo' });
+    await opener.click();
+    await expect(page.getByTestId('project-settings-menu')).toBeVisible();
+    // The real global shortcut opens Capture without a pointer event to dismiss the menu.
+    await emit(run.app, 'echo-test:capture');
+    await expect(page.getByTestId('compose-body')).toBeFocused();
+    await page.keyboard.press('ArrowDown');
+    await expect(page.getByTestId('compose-body')).toBeFocused();
+    await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('compose')).toHaveCount(0);
+    await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+    await opener.click();
+    await expect(page.getByTestId('project-settings-menu')).toHaveCount(1);
+    expect(settingCalls()).toHaveLength(0);
+  });
+}
+
+test('a native account sheet dismisses the project menu without restoring it afterward', async () => {
+  run = await launch();
+  const { page } = run;
+  await page.getByRole('button', { name: 'Actions for Apollo' }).click();
+  await chooseFromTray(run, 'Sign out…');
+  await expect(page.getByTestId('confirm-cancel')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByTestId('confirm-cancel')).toBeFocused();
+  await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('confirm')).toHaveCount(0);
+  await expect(page.getByTestId('project-settings-menu')).toHaveCount(0);
+  expect(settingCalls()).toHaveLength(0);
+});
+
 test('a last lead is told to promote another lead before leaving', async () => {
   run = await launch();
   const { page } = run;
@@ -93,6 +132,11 @@ test('an unconfirmed rename is retried with its same request instead of being ca
   await page.getByTestId('project-rename-save').click();
   await expect(page.getByTestId('project-settings-error')).toHaveText('This may not have been sent.');
   const request = settingCalls().at(-1)?.body?.request_id;
+  // A blocking sheet closes only transient menus; the unresolved write must survive it.
+  await chooseFromTray(run, 'Sign out…');
+  await expect(page.getByTestId('confirm-signout')).toBeDisabled();
+  await page.getByTestId('confirm-cancel').click();
+  await expect(page.getByTestId('project-settings-error')).toHaveText('This may not have been sent.');
   await page.getByTestId('project-settings-retry').click();
   await expect(page.getByTestId('title')).toHaveText('Apollo retry');
   expect(settingCalls().at(-1)?.body?.request_id).toBe(request);
