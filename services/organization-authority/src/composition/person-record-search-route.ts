@@ -2,10 +2,14 @@ import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel
 import {
   canonicalJson,
   canonicalSha256,
+  parseCanonicalJson,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
+import { validateOrganizationRecordEnvelopeV4 } from "@echo-brain/organization-protocol";
 import {
   clearReadableSearchActiveGenerationV1,
+  listReadableSearchGenerationV1,
+  readReadableSearchGenerationAtomsV1,
   searchReadableSearchGenerationV1,
   type ReadableSearchActiveGenerationV1,
   type ReadableSearchReaderV1,
@@ -49,6 +53,11 @@ interface RecordHead {
 type SearchGeneration = typeof searchReadableSearchGenerationV1;
 const RELATED_ATOM_PACKET_MAX_ITEMS_V1 = 16;
 
+/** Only an observed head/pointer lag may put the request in originals-only mode. */
+export class PersonRecordSearchIndexLagV1 extends AuthorityOperationError {
+  constructor() { super("unavailable", "an exact-head readable-search generation is not available"); }
+}
+
 /**
  * The Layer 2 related-atom reader is injected here so the Authority boundary
  * remains independently testable while the disposable relationship plane is
@@ -84,12 +93,22 @@ export interface PersonRecordSearchBatchInputV1 {
    */
   readonly exact_release_id?: string;
   readonly limit?: number;
+  /** Desk-only result kind narrowing, applied by Layer 2 before its cap. */
+  readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
+  /** Internal desk release: bind immutable presentation metadata into audit. */
+  readonly desk?: true;
   /**
    * Server-only answer-composition request for the bounded decision packet.
    * The HTTP search route and direct `searchBatch` callers retain lexical
    * ordering unless Layer 4 explicitly asks for this plan.
    */
   readonly include_related_atom_packet?: true;
+  /**
+   * Request-bound callers may require the pointer captured by an earlier
+   * release.  A changed active generation is unavailable rather than silently
+   * mixing evidence from two record heads.
+   */
+  readonly expected_pointer?: PersonRecordSearchReleasePointerV1;
   /** Internal, fail-open seam used to close the Ask authorization stage. */
   readonly on_authorized?: () => void;
 }
@@ -126,6 +145,24 @@ export interface PersonRecordSearchBatchResultV1 {
   readonly release: PersonRecordSearchBatchReleaseV1;
   /** Ordered per-query result counts, kept server-side for answer auditing only. */
   readonly query_hit_counts: readonly number[];
+  /** Private desk projection of immutable V4 meeting metadata. */
+  readonly desk_items?: readonly PersonRecordDeskItemV1[];
+  readonly truncated?: boolean;
+}
+
+export interface PersonRecordDeskItemV1 {
+  readonly atom_id: Sha256Digest;
+  readonly record_sha256: Sha256Digest;
+  readonly item_kind: ReadableSearchResultItemV1["item_kind"];
+  readonly text: string;
+  readonly policy_id: ReadableSearchResultItemV1["policy_id"];
+  readonly record_position: number;
+  readonly envelope_sha256: Sha256Digest;
+  readonly atom_order: number;
+  readonly audience_project_count: number;
+  readonly label: string;
+  readonly visibility: "team" | "project" | "projects" | "approver_only";
+  readonly attributes?: Readonly<{ owner?: string; due_at?: string; status?: string }>;
 }
 
 export interface PersonRecordSearchBatchApplicationV1 {
@@ -136,6 +173,33 @@ export interface PersonRecordSearchBatchApplicationV1 {
     readonly access_token: string;
     readonly release: PersonRecordSearchBatchReleaseV1;
   }): PersonRecordSearchReleaseAuthorizationV1;
+  /** Desk-only bounded sibling open, tied to an already released anchor. */
+  openDeskBatch?(input: {
+    readonly access_token: string;
+    readonly release: PersonRecordSearchBatchReleaseV1;
+    readonly anchor: Pick<ReadableSearchResultItemV1, "atom_id" | "record_sha256" | "record_position" | "envelope_sha256" | "atom_order" | "audience_project_count" | "item_kind" | "text" | "policy_id">;
+  }): PersonRecordSearchBatchResultV1;
+  /** Desk-only content-free inventory of the current authorized generation. */
+  listDeskBatch?(input: {
+    readonly access_token: string;
+    readonly project_id?: string;
+    readonly expected_pointer?: PersonRecordSearchReleasePointerV1;
+    readonly limit?: number;
+    readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
+  }): PersonRecordSearchBatchResultV1;
+  /** Pins the initial desk record release, distinguishing verified index lag. */
+  initializeDesk?(input: {
+    readonly access_token: string;
+    readonly project_id?: string;
+  }): PersonRecordSearchBatchResultV1;
+  /** Fresh CLI/HTTP open by an immutable record citation, never by query text. */
+  openDeskCitation?(input: {
+    readonly access_token: string;
+    readonly project_id?: string;
+    readonly atom_id: Sha256Digest;
+    readonly record_sha256: Sha256Digest;
+    readonly policy_id: ReadableSearchResultItemV1["policy_id"];
+  }): PersonRecordSearchBatchResultV1;
 }
 
 export type PersonRecordSearchRouteV1 =
@@ -197,6 +261,19 @@ function sameHead(pointer: ActiveGenerationRow, head: RecordHead): boolean {
   );
 }
 
+function isVerifiedIndexLag(
+  record: Database.Database,
+  pointer: ActiveGenerationRow | null,
+  head: RecordHead,
+  options: Pick<CreatePersonRecordSearchRouteV1Options, "organization_id" | "retrieval_contract_sha256">,
+): boolean {
+  if (pointer === null) return true;
+  if (pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256) return false;
+  if (pointer.record_head_position >= head.position || pointer.record_head_position < 0) return false;
+  const row = record.prepare("SELECT record_sha256 FROM organization_record_log WHERE position=?").get(pointer.record_head_position) as { readonly record_sha256: Sha256Digest } | undefined;
+  return row !== undefined && row.record_sha256 === pointer.record_head_hash;
+}
+
 function samePointer(
   left: ActiveGenerationRow,
   right: ActiveGenerationRow | null,
@@ -210,6 +287,17 @@ function samePointer(
     left.record_head_position === right.record_head_position &&
     left.record_head_hash === right.record_head_hash
   );
+}
+
+function matchesReleasePointer(
+  pointer: ActiveGenerationRow,
+  expected: PersonRecordSearchReleasePointerV1,
+): boolean {
+  return pointer.generation_id === expected.generation_id &&
+    pointer.manifest_sha256 === expected.manifest_sha256 &&
+    pointer.retrieval_contract_sha256 === expected.retrieval_contract_sha256 &&
+    pointer.record_head_position === expected.record_head.position &&
+    pointer.record_head_hash === expected.record_head.record_sha256;
 }
 
 /**
@@ -266,6 +354,7 @@ function assertValidBatch(input: PersonRecordSearchBatchInputV1): void {
     input.queries.length > 4 ||
     new Set(input.queries).size !== input.queries.length ||
     input.queries.some((query) => !validBatchQuery(query)) ||
+    (input.kinds !== undefined && (!Array.isArray(input.kinds) || input.kinds.length < 1 || new Set(input.kinds).size !== input.kinds.length || input.kinds.some((kind) => kind !== "decision" && kind !== "action" && kind !== "rationale"))) ||
     (input.exact_release_id !== undefined &&
       !isCanonicalReleaseId(input.exact_release_id)) ||
     (input.limit !== undefined &&
@@ -282,6 +371,10 @@ function unavailable(): never {
     "unavailable",
     "an exact-head readable-search generation is not available",
   );
+}
+
+function indexLagUnavailable(): never {
+  throw new PersonRecordSearchIndexLagV1();
 }
 
 function asResponse(input: {
@@ -302,6 +395,47 @@ function asResponse(input: {
       ),
     ),
   });
+}
+
+function deskLabel(title: string | undefined, time: { readonly scheduled_start_at?: string; readonly actual_start_at?: string; readonly scheduled_end_at?: string; readonly actual_end_at?: string } | undefined): string {
+  const date = time?.actual_start_at ?? time?.scheduled_start_at ?? time?.actual_end_at ?? time?.scheduled_end_at;
+  const value = `${title === undefined ? "Approved meeting" : title}${date === undefined ? "" : ` (${date.slice(0, 10)})`}`;
+  if (Buffer.byteLength(value, "utf8") <= 1024) return value;
+  let prefix = "";
+  for (const scalar of value) {
+    if (Buffer.byteLength(prefix + scalar, "utf8") > 1021) break;
+    prefix += scalar;
+  }
+  return `${prefix}...`;
+}
+
+function deskItems(record: Database.Database, items: readonly ReadableSearchResultItemV1[]): readonly PersonRecordDeskItemV1[] {
+  const statement = record.prepare(`SELECT canonical_envelope, record_sha256 FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`);
+  return Object.freeze(items.map((item) => {
+    const row = statement.get(item.record_position, item.record_sha256) as { readonly canonical_envelope: string; readonly record_sha256: Sha256Digest } | undefined;
+    if (row === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
+    try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope)); } catch { throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable"); }
+    if (envelope.record_sha256 !== item.record_sha256 || envelope.body.event.kind !== "approved") throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    const brief = envelope.body.event.approved_snapshot.approved_payload.brief;
+    if (item.atom_order === undefined || item.audience_project_count === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    const signal = [...brief.decisions, ...brief.actions, ...brief.rationales][item.atom_order];
+    if (signal === undefined || signal.kind !== item.item_kind || signal.text !== item.text) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    const attributes = signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(signal.owner === null ? {} : { owner: signal.owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) } : undefined;
+    const visibility = item.policy_id === "restricted-reviewer-person-v2" ? "approver_only" : item.policy_id === "project-members-readable-person-v1" ? (item.audience_project_count === 1 ? "project" : "projects") : "team";
+    if (item.policy_id === "project-members-readable-person-v1" && item.audience_project_count < 1) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), visibility, ...(attributes === undefined || Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
+  }));
+}
+
+function approvedRecordAtomCount(record: Database.Database, position: number, recordSha256: Sha256Digest): number {
+  const row = record.prepare(`SELECT canonical_envelope FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`).get(position, recordSha256) as { readonly canonical_envelope: string } | undefined;
+  if (row === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+  let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
+  try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope)); } catch { throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable"); }
+  if (envelope.record_sha256 !== recordSha256 || envelope.body.event.kind !== "approved") throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+  const brief = envelope.body.event.approved_snapshot.approved_payload.brief;
+  return brief.decisions.length + brief.actions.length + brief.rationales.length;
 }
 
 function hasExpectedGenerationIdentity(input: {
@@ -376,6 +510,9 @@ export function createPersonRecordSearchRouteV1(
       clearReadableSearchActiveGenerationV1();
       unavailable();
     }
+    if (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer)) {
+      unavailable();
+    }
     let results;
     try {
       results = input.queries.map((query) =>
@@ -400,6 +537,7 @@ export function createPersonRecordSearchRouteV1(
         },
         ...(input.project_id === undefined ? {} : { project_id: input.project_id }),
         query,
+        ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
         }),
       );
@@ -576,6 +714,7 @@ export function createPersonRecordSearchRouteV1(
           ? selectedItems.slice(0, RELATED_ATOM_PACKET_MAX_ITEMS_V1)
           : selectedItems,
     });
+    const deskProjection = input.desk === true ? deskItems(options.record, response.items.map((responseItem) => selectedItems.find((item) => item.atom_id === responseItem.atom_id)!).filter((item): item is ReadableSearchResultItemV1 => item !== undefined)) : undefined;
     const recordReadAuditRowSha256 = options.audit.append({
       read_mode: "layer2",
       authority_id: options.authority_id,
@@ -585,9 +724,7 @@ export function createPersonRecordSearchRouteV1(
       membership_id: released.membership_id,
       session_family_id: released.session_family_id,
       result_count: response.items.length,
-      response_sha256: canonicalSha256(
-        JSON.parse(canonicalJson(response)) as never,
-      ),
+      response_sha256: canonicalSha256(JSON.parse(canonicalJson(deskProjection === undefined ? response : { response, desk_items: deskProjection })) as never),
       checked_at: released.checked_at,
     });
     const release: PersonRecordSearchBatchReleaseV1 = Object.freeze({
@@ -611,6 +748,8 @@ export function createPersonRecordSearchRouteV1(
       response,
       release,
       query_hit_counts: Object.freeze(results.map((result) => result.items.length)),
+      ...(deskProjection === undefined ? {} : { desk_items: deskProjection }),
+      truncated: results.some((result) => result.truncated === true),
     });
   }
 
@@ -627,6 +766,137 @@ export function createPersonRecordSearchRouteV1(
       }).response;
     },
     searchBatch,
+    initializeDesk(input: {
+      readonly access_token: string;
+      readonly project_id?: string;
+    }): PersonRecordSearchBatchResultV1 {
+      // Authenticate and capture scope before testing the only failure which
+      // can legitimately select originals-only mode: an index behind the log.
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      assertExpectedOrganization(authorization);
+      captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
+      const head = recordHead(options.record);
+      const pointer = activeGeneration(options.authority);
+      if (pointer === null) indexLagUnavailable();
+      if (pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256) unavailable();
+      if (!sameHead(pointer, head)) {
+        if (isVerifiedIndexLag(options.record, pointer, head, options)) indexLagUnavailable();
+        unavailable();
+      }
+      // A one-item inventory both fixes the immutable release and ensures the
+      // warmed generation can actually be opened. Any later error is terminal.
+      return this.listDeskBatch!({ access_token: input.access_token, ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit: 1 });
+    },
+    listDeskBatch(input: {
+      readonly access_token: string;
+      readonly project_id?: string;
+      readonly expected_pointer?: PersonRecordSearchReleasePointerV1;
+      readonly limit?: number;
+      readonly kinds?: readonly ReadableSearchResultItemV1["item_kind"][];
+    }): PersonRecordSearchBatchResultV1 {
+      const limit = input.limit ?? 50;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new AuthorityOperationError("invalid_request", "request is invalid");
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      assertExpectedOrganization(authorization);
+      const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
+      const head = recordHead(options.record);
+      const pointer = activeGeneration(options.authority);
+      if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head) || (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer))) unavailable();
+      let inventory: ReadableSearchResultV1;
+      try {
+        inventory = listReadableSearchGenerationV1({
+          state_directory: options.state_directory,
+          active_generation: { generation_id: pointer.generation_id, manifest_sha256: pointer.manifest_sha256, retrieval_contract_sha256: pointer.retrieval_contract_sha256, exact_head: { authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id, position: pointer.record_head_position, record_sha256: pointer.record_head_hash } },
+          reader: { principal_id: authorization.principal_id, membership_id: authorization.membership_id, ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }) },
+          ...(input.project_id === undefined ? {} : { project_id: input.project_id }), limit,
+          ...(input.kinds === undefined ? {} : { kinds: input.kinds }),
+        });
+      } catch (error) { if (isUnavailableGenerationError(error)) unavailable(); throw error; }
+      if (!hasExpectedGenerationIdentity({ result: inventory, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+      const released = options.sessions.authenticateAccess({ access_token: input.access_token });
+      if (!sameReleaseAuthorization(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
+      const response = asResponse({ items: inventory.items });
+      const projection = deskItems(options.record, inventory.items);
+      const receipt = options.audit.append({ read_mode: "layer2", authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id, principal_id: released.principal_id, membership_id: released.membership_id, session_family_id: released.session_family_id, result_count: response.items.length, response_sha256: canonicalSha256(JSON.parse(canonicalJson({ response, desk_items: projection })) as never), checked_at: released.checked_at });
+      const release: PersonRecordSearchBatchReleaseV1 = Object.freeze({ initial_authorization: releaseAuthorization(authorization), current_authorization: releaseAuthorization(released), active_pointer: Object.freeze({ generation_id: pointer.generation_id, manifest_sha256: pointer.manifest_sha256, retrieval_contract_sha256: pointer.retrieval_contract_sha256, record_head: Object.freeze({ position: pointer.record_head_position, record_sha256: pointer.record_head_hash }) }), record_read_audit_row_sha256: receipt, project_authorization: projects, ...(input.project_id === undefined ? {} : { project_id: input.project_id }) });
+      releaseWitnesses.add(release);
+      return Object.freeze({ response, release, query_hit_counts: Object.freeze([]), desk_items: projection, truncated: inventory.truncated === true });
+    },
+    openDeskCitation(input: {
+      readonly access_token: string;
+      readonly project_id?: string;
+      readonly atom_id: Sha256Digest;
+      readonly record_sha256: Sha256Digest;
+      readonly policy_id: ReadableSearchResultItemV1["policy_id"];
+    }): PersonRecordSearchBatchResultV1 {
+      const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
+      assertExpectedOrganization(authorization);
+      const projects = captureRecordProjectsV1(options.capture_projects, authorization, input.project_id);
+      const head = recordHead(options.record);
+      const pointer = activeGeneration(options.authority);
+      if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256 || !sameHead(pointer, head)) unavailable();
+      let found: ReadableSearchResultV1;
+      try {
+        found = readReadableSearchGenerationAtomsV1({ state_directory: options.state_directory, active_generation: { generation_id: pointer.generation_id, manifest_sha256: pointer.manifest_sha256, retrieval_contract_sha256: pointer.retrieval_contract_sha256, exact_head: { authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id, position: pointer.record_head_position, record_sha256: pointer.record_head_hash } }, reader: { principal_id: authorization.principal_id, membership_id: authorization.membership_id, ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }) }, ...(input.project_id === undefined ? {} : { project_id: input.project_id }), atom_ids: [input.atom_id] });
+      } catch (error) { if (isUnavailableGenerationError(error)) unavailable(); throw error; }
+      if (!hasExpectedGenerationIdentity({ result: found, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+      const anchor = found.items[0];
+      if (anchor === undefined || anchor.record_sha256 !== input.record_sha256 || anchor.policy_id !== input.policy_id) throw new AuthorityOperationError("not_found", "record evidence is not available");
+      const released = options.sessions.authenticateAccess({ access_token: input.access_token });
+      if (!sameReleaseAuthorization(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
+      const response = asResponse({ items: [anchor] });
+      const receipt = options.audit.append({ read_mode: "layer2", authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id, principal_id: released.principal_id, membership_id: released.membership_id, session_family_id: released.session_family_id, result_count: 1, response_sha256: canonicalSha256(JSON.parse(canonicalJson(response)) as never), checked_at: released.checked_at });
+      const release: PersonRecordSearchBatchReleaseV1 = Object.freeze({ initial_authorization: releaseAuthorization(authorization), current_authorization: releaseAuthorization(released), active_pointer: Object.freeze({ generation_id: pointer.generation_id, manifest_sha256: pointer.manifest_sha256, retrieval_contract_sha256: pointer.retrieval_contract_sha256, record_head: Object.freeze({ position: pointer.record_head_position, record_sha256: pointer.record_head_hash }) }), record_read_audit_row_sha256: receipt, project_authorization: projects, ...(input.project_id === undefined ? {} : { project_id: input.project_id }) });
+      releaseWitnesses.add(release);
+      return this.openDeskBatch({ access_token: input.access_token, release, anchor });
+    },
+    openDeskBatch(input: {
+      readonly access_token: string;
+      readonly release: PersonRecordSearchBatchReleaseV1;
+      readonly anchor: Pick<ReadableSearchResultItemV1, "atom_id" | "record_sha256" | "record_position" | "envelope_sha256" | "atom_order" | "audience_project_count" | "item_kind" | "text" | "policy_id">;
+    }): PersonRecordSearchBatchResultV1 {
+      // First prove the original release still binds the current person and
+      // exact head.  An anchor is accepted only from the caller's retained
+      // desk state; this method never turns a model string into a search.
+      const current = this.revalidateBatchRelease({ access_token: input.access_token, release: input.release });
+      if (options.expand_related_atoms === undefined) unavailable();
+      const pointer = activeGeneration(options.authority);
+      if (pointer === null || !matchesReleasePointer(pointer, input.release.active_pointer)) unavailable();
+      const projects = captureRecordProjectsV1(options.capture_projects, current, input.release.project_id);
+      let related: ReadableSearchResultV1;
+      try {
+        related = options.expand_related_atoms({
+          state_directory: options.state_directory,
+          active_generation: {
+            generation_id: pointer.generation_id,
+            manifest_sha256: pointer.manifest_sha256,
+            retrieval_contract_sha256: pointer.retrieval_contract_sha256,
+            exact_head: { authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id, position: pointer.record_head_position, record_sha256: pointer.record_head_hash },
+          },
+          reader: { principal_id: current.principal_id, membership_id: current.membership_id, ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }) },
+          ...(input.release.project_id === undefined ? {} : { project_id: input.release.project_id }),
+          anchor_atom_ids: [input.anchor.atom_id],
+          include_anchor_records: true,
+          // One anchor plus at most nine siblings, bounded by the RFC desk cap.
+          limit: 9,
+        });
+      } catch (error) {
+        if (isUnavailableGenerationError(error)) unavailable();
+        throw error;
+      }
+      if (!hasExpectedGenerationIdentity({ result: related, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
+      const items = [input.anchor, ...related.items.filter((item) => item.record_sha256 === input.anchor.record_sha256)].slice(0, 10);
+      const released = options.sessions.authenticateAccess({ access_token: input.access_token });
+      if (!sameReleaseAuthorization(current, released) || captureRecordProjectsV1(options.capture_projects, released, input.release.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) {
+        throw new AuthorityOperationError("unauthorized", "person authentication failed");
+      }
+      const response: PersonRecordSearchResponseV2 = Object.freeze({ schema_version: 2, kind: "echo-clean-person-record-search-v2", items: Object.freeze(items.map((item) => Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, kind: item.item_kind, text: item.text, policy_id: item.policy_id }))) });
+      const projection = deskItems(options.record, [input.anchor, ...related.items.filter((item) => item.record_sha256 === input.anchor.record_sha256)].slice(0, 10));
+      const receipt = options.audit.append({ read_mode: "layer2", authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id, principal_id: released.principal_id, membership_id: released.membership_id, session_family_id: released.session_family_id, result_count: response.items.length, response_sha256: canonicalSha256(JSON.parse(canonicalJson({ response, desk_items: projection })) as never), checked_at: released.checked_at });
+      const release: PersonRecordSearchBatchReleaseV1 = Object.freeze({ initial_authorization: input.release.initial_authorization, current_authorization: releaseAuthorization(released), active_pointer: input.release.active_pointer, record_read_audit_row_sha256: receipt, project_authorization: projects, ...(input.release.project_id === undefined ? {} : { project_id: input.release.project_id }) });
+      releaseWitnesses.add(release);
+      return Object.freeze({ response, release, query_hit_counts: Object.freeze([]), desk_items: projection, truncated: approvedRecordAtomCount(options.record, input.anchor.record_position, input.anchor.record_sha256) > 10 });
+    },
     revalidateBatchRelease(input: {
       readonly access_token: string;
       readonly release: PersonRecordSearchBatchReleaseV1;

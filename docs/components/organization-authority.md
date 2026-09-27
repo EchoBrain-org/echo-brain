@@ -27,6 +27,7 @@ decision_ids:
   - ADR-0016
   - ADR-0017
   - ADR-0018
+  - ADR-0019
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -122,3 +123,7 @@ for provisional transport limits, indefinite retention, and the offline V5 copy.
 The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persistence.md)
 describes the original V7 project storage. The current Authority is V9, and
 its project routes and client operations are live.
+
+Agentic Ask V1 is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md)
+and [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md). Its V3 route and shared evidence
+desk are capability-gated; implementation and live qualification are separate.

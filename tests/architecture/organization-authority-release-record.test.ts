@@ -565,6 +565,29 @@ describe("Organization Authority clean-v1 release record", () => {
     expect(node.stdout).not.toMatch(/token|secret|grant|session/i);
   });
 
+  it("preserves legacy release bytes while binding the allowlisted Agentic Ask switch in new records", () => {
+    const legacy = writeRecord(record());
+    const enabled = writeRecord({ ...record(), agentic_ask_v1: true });
+    const disabled = writeRecord({ ...record(), agentic_ask_v1: false });
+    for (const path of [legacy, enabled, disabled]) {
+      const node = run(process.execPath, [TOOL, "validate", path]);
+      const python = run("python3", [DEPLOY_TOOL, "validate", path]);
+      expect(node.status, node.stderr).toBe(0);
+      expect(python.status, python.stderr).toBe(0);
+      expect(node.stdout).toBe(python.stdout);
+    }
+    expect(readFileSync(legacy, "utf8")).not.toContain("agentic_ask_v1");
+    expect(run(process.execPath, [TOOL, "field", legacy, "agentic-ask-v1"]).stdout).toBe("false\n");
+    expect(run("python3", [DEPLOY_TOOL, "field", legacy, "agentic-ask-v1"]).stdout).toBe("false\n");
+    expect(run(process.execPath, [TOOL, "field", enabled, "agentic-ask-v1"]).stdout).toBe("true\n");
+    expect(createHash("sha256").update(readFileSync(enabled)).digest("hex"))
+      .not.toBe(createHash("sha256").update(readFileSync(disabled)).digest("hex"));
+
+    const malformed = writeRecord({ ...record(), agentic_ask_v1: "true" });
+    expect(run(process.execPath, [TOOL, "validate", malformed]).status).toBe(1);
+    expect(run("python3", [DEPLOY_TOOL, "validate", malformed]).status).toBe(1);
+  });
+
   it("creates one canonical record without overwriting a prior release record", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-release-create-"));
     roots.push(root);
@@ -2554,6 +2577,25 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     expect(readFileSync(fixture.snapshot, "utf8")).toBe(original);
     expect(fixture.execute("rollback").status).toBe(0);
     expect(readFileSync(fixture.envFile, "utf8")).toBe(original);
+  });
+
+  it("materializes only the candidate's Agentic Ask switch and restores the accepted environment on rollback", () => {
+    const fixture = environmentDriftFixture();
+    writeFileSync(fixture.envFile, fixture.original);
+    const candidateRecord = releaseWithRuntimeProfile(fixture.profile, {
+      release_id: "clean-v1-20260822-002",
+      authority_image: { reference: fixture.accepted.authority_image.reference.replace(/b{64}$/, "d".repeat(64)) },
+      agentic_ask_v1: true,
+    });
+    const candidate = writeRecord(candidateRecord);
+    const stage = fixture.execute("stage", "--release", candidate, "--runtime-profile", fixture.profile);
+    expect(stage.status, stage.stderr).toBe(0);
+    const candidateSnapshot = acceptedRuntimeEnvironment(fixture.state, candidateRecord.release_id);
+    expect(readFileSync(candidateSnapshot, "utf8")).toContain("ECHO_AGENTIC_ASK_V1=true\n");
+    expect(readFileSync(fixture.envFile, "utf8")).toContain("ECHO_AGENTIC_ASK_V1=true\n");
+    expect(fixture.execute("rollback").status).toBe(0);
+    expect(readFileSync(fixture.envFile, "utf8")).toBe(fixture.original);
+    expect(readFileSync(fixture.snapshot, "utf8")).toBe(fixture.original);
   });
 
   it("refuses environment drift without disclosing private values", () => {

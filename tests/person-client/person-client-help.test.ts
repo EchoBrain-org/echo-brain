@@ -49,6 +49,12 @@ describe("Person client help", () => {
     await expect(help(["ask", "--help"])).resolves.toContain(
       "echo-brain person ask --question <text> [--project <project-id>]",
     );
+    await expect(help(["evidence", "search", "--help"])).resolves.toContain(
+      "echo-brain person evidence search [--query <text>]",
+    );
+    await expect(help(["evidence", "open", "--help"])).resolves.toContain(
+      "echo-brain person evidence open --item <citation-json>",
+    );
     await expect(help(["ask-source", "--help"])).resolves.toContain(
       "echo-brain person ask-source --source-id <source-id>",
     );

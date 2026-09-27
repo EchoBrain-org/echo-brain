@@ -578,7 +578,9 @@ describe("Person client", () => {
           home_directory: home,
           now: () => NOW,
           fetch: async (input, init) => {
-            expect(new URL(String(input)).pathname).toBe("/v2/person/ask");
+            const path = new URL(String(input)).pathname;
+            if (path === "/v3/person/capabilities") return json({ error: { code: "not_found", message: "not live" } }, 404);
+            expect(path).toBe("/v2/person/ask");
             expect(init?.method).toBe("POST");
             expect(JSON.parse(String(init?.body))).toEqual({
               schema_version: 2,
@@ -606,7 +608,8 @@ describe("Person client", () => {
       );
 
       expect(result.code).toBe(0);
-      expect(timeout).toHaveBeenCalledOnce();
+      expect(timeout).toHaveBeenCalledTimes(2);
+      expect(timeout).toHaveBeenCalledWith(15_000);
       expect(timeout).toHaveBeenCalledWith(135_000);
       expect(result.stderr).toBe("");
       expect(JSON.parse(result.stdout)).toEqual({
@@ -639,6 +642,7 @@ describe("Person client", () => {
           if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
             return json({ authority_descriptor: authorityDescriptor() });
           }
+          if (new URL(String(input)).pathname === "/v3/person/capabilities") return json({ error: { code: "not_found", message: "not live" } }, 404);
           expect(new URL(String(input)).pathname).toBe("/v2/person/ask");
           expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 2, question: "What is in this project?", project_id: projectId });
           return json({
@@ -664,6 +668,46 @@ describe("Person client", () => {
         scope: { kind: "project", project_id: projectId },
         citations: [{ kind: "source_revision", label: "MRD" }],
       });
+    });
+  });
+
+  it("does not downgrade when a live Agentic Ask request returns a canonical 404", async () => {
+    await withHome(async home => {
+      let legacyCalled = false;
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async input => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+        if (path === '/v3/person/capabilities') return json({ schema_version: 1, kind: 'echo-person-capabilities-v1', agentic_ask_v1: true });
+        if (path === '/v3/person/ask') return json({ error: { code: 'not_found', message: 'removed while request was running' } }, 404);
+        if (path === '/v2/person/ask') legacyCalled = true;
+        throw new Error(`unexpected path ${path}`);
+      } });
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await expect(client.ask('What is current?')).rejects.toMatchObject({ code: 'not_found', status: 404 });
+      expect(legacyCalled).toBe(false);
+    });
+  });
+
+  it("discovers Agentic Ask and validates its V4 response before returning it", async () => {
+    await withHome(async home => {
+      const digest = `sha256:${'a'.repeat(64)}`;
+      let sawV3 = false;
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+        if (path === '/v3/person/capabilities') return json({ schema_version: 1, kind: 'echo-person-capabilities-v1', agentic_ask_v1: true });
+        if (path !== '/v3/person/ask') throw new Error(`unexpected path ${path}`);
+        sawV3 = true;
+        expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'What changed?' });
+        return json({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+          citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
+          direct: { text: 'The launch date moved.', citation_indexes: [0], private: false },
+          parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch date moved.', citation_indexes: [0], private: false }] }],
+        });
+      } });
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await expect(client.ask('What changed?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v4', direct: { citation_indexes: [0] } });
+      expect(sawV3).toBe(true);
     });
   });
 
@@ -750,6 +794,7 @@ describe("Person client", () => {
       const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async (input) => {
         const path = new URL(String(input)).pathname;
         if (path === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
+        if (path === "/v3/person/capabilities") return json({ error: { code: "not_found", message: "not live" } }, 404);
         if (path === "/v2/person/ask") return json({ schema_version: 3, kind: "echo-clean-person-answer-v3", answer: "Answer.", citations: [], scope: { kind: "global" } });
         return json({ schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" }, citation: { ...citation, label: "MRD" }, text: "MRD" });
       } });
@@ -770,6 +815,7 @@ describe("Person client", () => {
           if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
             return json({ authority_descriptor: authorityDescriptor() });
           }
+          if (new URL(String(input)).pathname === "/v3/person/capabilities") return json({ error: { code: "not_found", message: "not live" } }, 404);
           return pendingResponse;
         },
       });
@@ -836,6 +882,7 @@ describe("Person client", () => {
           if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
             return json({ authority_descriptor: authority });
           }
+          if (new URL(String(input)).pathname === '/v3/person/capabilities') return json({ error: { code: 'not_found', message: 'not live' } }, 404);
           asks += 1;
           return json({
             schema_version: 3,
@@ -924,6 +971,7 @@ describe("Person client", () => {
           if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
             return json({ authority_descriptor: authority });
           }
+          if (new URL(String(input)).pathname === '/v3/person/capabilities') return json({ error: { code: 'not_found', message: 'not live' } }, 404);
           expect(new Headers(init?.headers).get("x-echo-person-answer-version")).toBeNull();
           return json({
             schema_version: 3,
@@ -1077,6 +1125,7 @@ describe("Person client", () => {
         expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
+        if (path === "/v3/person/capabilities") return json({ error: { code: "not_found", message: "not live" } }, 404);
         if (path === "/v2/person/ask") return json({ schema_version: 3, kind: "echo-clean-person-answer-v3", answer: "No approved records.", citations: [], scope: { kind: "global" } });
         expect(path).toBe("/v3/person/tools");
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
@@ -1085,11 +1134,15 @@ describe("Person client", () => {
       await client.installSession("https://authority.example", ROTATED_SESSION);
       expect((await client.tools()).tools).toEqual([]);
       expect(await client.records(1)).toMatchObject({ records: [] });
-      expect((await client.ask("What is approved?")).answer).toBe("No approved records.");
+      const firstAnswer = await client.ask("What is approved?");
+      expect(firstAnswer.kind).toBe('echo-clean-person-answer-v3');
+      if (firstAnswer.kind === 'echo-clean-person-answer-v3') expect(firstAnswer.answer).toBe("No approved records.");
       tools = [{ tool_id: "calendar", display_name: "Calendar", availability: "enabled", personal_status: "linked", external_scope_id: "calendar-workspace", external_subject_id: "calendar-user" }];
       expect((await client.tools()).tools[0]?.personal_status).toBe("linked");
       expect(await client.records(1)).toMatchObject({ records: [] });
-      expect((await client.ask("What is approved?")).answer).toBe("No approved records.");
+      const secondAnswer = await client.ask("What is approved?");
+      expect(secondAnswer.kind).toBe('echo-clean-person-answer-v3');
+      if (secondAnswer.kind === 'echo-clean-person-answer-v3') expect(secondAnswer.answer).toBe("No approved records.");
       tools = "failure";
       await expect(client.tools()).rejects.toThrow();
       expect(calls).not.toContain("/v2/integration-links/slack/challenges");

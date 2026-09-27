@@ -716,4 +716,16 @@ describe("adversarial original-context retrieval", () => {
     expect(proof.atom.anchor_sha256).toBe(atom.anchor_sha256);
     expect(meter.bytes()).toBeLessThan(extractedBytes * 8);
   });
+
+  it("desk-open preserves the requested later packet of a large document chunk", () => {
+    const f = fixture();
+    const suffix = " later-packet-marker";
+    f.uploadChunks("Packet proof", ["x".repeat(3_072 - Buffer.byteLength(suffix)) + suffix]);
+    const found = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "later-packet-marker" });
+    const item = found.items[0]!;
+    expect(item.text).toContain("later-packet-marker");
+    const opened = f.retrieval.deskOpen({ access_token: "member", scope: { kind: "global" }, citation: item.citation });
+    expect(opened.items[0]!.citation.anchor_sha256).toBe(item.citation.anchor_sha256);
+    expect(opened.items[0]!.text).toContain("later-packet-marker");
+  });
 });

@@ -172,6 +172,15 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .source-failure { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .source-failure .link-button { margin-left: -8px; }
 .asking { display: flex; gap: 6px; align-items: center; color: var(--faint); }
+.agentic-answer, .answer-part, .answer-statement { display: flex; flex-direction: column; gap: 7px; }
+.agentic-answer { gap: 12px; }
+.answer-part { padding: 10px; border-radius: 9px; background: rgba(240, 236, 230, 0.04); }
+.answer-statement { line-height: 1.45; }
+.answer-statement > div:first-child { white-space: pre-wrap; }
+.answer-statement .chips { gap: 5px; }
+.answer-statement .source-chip { height: 24px; font-size: 12px; }
+.private-mark { align-self: center; padding: 3px 7px; border-radius: 10px; font-size: 11px; color: var(--accent-text); background: var(--accent-soft); }
+.answer-banner, .answer-gap { padding: 8px 10px; border-radius: 7px; font-size: 13px; color: var(--faint); background: rgba(240, 236, 230, 0.06); }
 .asking .link-button { margin-left: 8px; }
 .asking i { width: 6px; height: 6px; border-radius: 3px; background: var(--accent); animation: pulse 1.2s infinite ease-in-out; }
 .asking i:nth-child(2) { animation-delay: 0.15s; } .asking i:nth-child(3) { animation-delay: 0.3s; }

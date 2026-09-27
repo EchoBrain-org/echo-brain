@@ -2,7 +2,7 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, CreatedProject, DocumentPage,
+  Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, CreatedProject, DocumentPage,
   DocumentSummary, DocumentText, Employee, Employees, Extraction, Failure, FeedItem, FeedPage, InvitationSaved, Match, Matches, Member, MemberPage,
   ProjectChange, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   WriteStatus,
@@ -318,7 +318,7 @@ function sourceRef(citation: Json): SourceRef {
 }
 
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
-const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['organization-member-readable-person-v2', 'restricted-reviewer-person-v2']);
+const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['organization-member-readable-person-v2', 'restricted-reviewer-person-v2', 'project-members-readable-person-v1']);
 
 /** A record the page may ask the host to read: a well-formed digest and a known policy. */
 export function isRecordRef(value: unknown): value is RecordRef {
@@ -335,6 +335,7 @@ export function isRecordRef(value: unknown): value is RecordRef {
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const value = object(unwrap(raw));
+  if (value.kind === 'echo-clean-person-answer-v4') return answerV4View(value, scope);
   if (value.kind !== 'echo-clean-person-answer-v3') throw new ViewError();
   const sources: AnswerSource[] = [];
   const seen = new Set<string>();
@@ -360,6 +361,55 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
     }
   }
   return { text: text(value.answer), scope, sources };
+}
+
+function v4Source(raw: unknown, fallback: string): AnswerSource {
+  const item = object(raw);
+  const citation = object(item.citation);
+  const label = text(item.label);
+  if (citation.kind === 'approved_record') {
+    const record = { record_sha256: citation.record_sha256, policy_id: citation.policy_id };
+    if (!isRecordRef(record)) throw new ViewError();
+    return { kind: 'record', label: label || fallback, record };
+  }
+  if (citation.kind === 'source_revision') return { kind: 'original', label: label || fallback, ref: sourceRef(citation) };
+  throw new ViewError();
+}
+
+function v4Statement(raw: unknown, sourceCount: number): AnswerStatement {
+  const item = object(raw);
+  if (typeof item.private !== 'boolean') throw new ViewError();
+  const indexes = list(item.citation_indexes).map(value => {
+    if (!Number.isSafeInteger(value) || value < 0 || value >= sourceCount) throw new ViewError();
+    return value as number;
+  });
+  if (indexes.length === 0 || new Set(indexes).size !== indexes.length) throw new ViewError();
+  return { text: text(item.text), citation_indexes: indexes, private: item.private };
+}
+
+function v4Part(raw: unknown, sourceCount: number): AnswerPart {
+  const item = object(raw);
+  const status = item.status;
+  if (status !== 'answered' && status !== 'partial' && status !== 'not_found' && status !== 'records_only') throw new ViewError();
+  const gap = optionalText(item.gap);
+  const records = item.records === undefined ? undefined : list(item.records).map(value => v4Statement(value, sourceCount));
+  return { question: text(item.question), status, statements: list(item.statements).map(value => v4Statement(value, sourceCount)),
+    ...(gap === undefined ? {} : { gap }), ...(records === undefined ? {} : { records }) };
+}
+
+/** Preserve V3 unchanged while exposing V4's statement-level cited result to the renderer. */
+function answerV4View(value: Json, scope: AskScope): Answer {
+  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`));
+  const direct = value.direct === undefined ? undefined : v4Statement(value.direct, sources.length);
+  const parts = list(value.parts).map(part => v4Part(part, sources.length));
+  const outcome = value.outcome;
+  if (outcome !== 'answered' && outcome !== 'partial' && outcome !== 'not_found' && outcome !== 'off_scope') throw new ViewError();
+  const assumption = optionalText(value.assumption);
+  const notice = optionalText(value.notice);
+  const textValue = [direct?.text, ...parts.flatMap(part => [part.question, ...part.statements.map(statement => statement.text), ...(part.records?.map(record => record.text) ?? []), part.gap])]
+    .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
+  return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
+    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }) };
 }
 
 /** Longest text the source pane shows, in characters; longer is cut and marked. */
@@ -466,7 +516,7 @@ export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
     all_day: time.all_day === true,
     ...(approver === undefined ? {} : { approved_by: approver }),
     participants, participants_more: participantsMore,
-    visibility: asked.policy_id === 'organization-member-readable-person-v2' ? 'organization' : 'approver',
+    visibility: asked.policy_id === 'restricted-reviewer-person-v2' ? 'approver' : 'organization',
     decisions, actions, rationales,
   };
 }

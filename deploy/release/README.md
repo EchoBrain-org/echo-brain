@@ -178,12 +178,20 @@ status, but does not accept it yet.
   --runtime-profile /absolute/private/candidate-runtime-profile.json
 ```
 
-Apart from its release identity, the candidate's saved environment carries
-forward every accepted setting, including the staging
+Apart from its release identity and the release-bound `agentic_ask_v1` switch,
+the candidate's saved environment carries forward every accepted setting, including the staging
 `ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1` value that onboarding sets. It never
 modifies the accepted snapshot. Do not change telemetry or any other setting by
 editing `.env.clean-v1` after promotion: that creates environment drift and
 blocks the next release.
+
+`agentic_ask_v1` is the only candidate configuration setting accepted by this
+release record. It is a boolean in the canonical candidate bytes, defaults to
+`false` for legacy records that predate it, and is materialized as
+`ECHO_AGENTIC_ASK_V1=true|false` in that candidate's saved environment tuple.
+The candidate record SHA already bound to the staging request covers the value.
+Rollback restores the accepted tuple verbatim, including its earlier flag value
+or its legacy absence. No command accepts arbitrary environment names or values.
 
 Run the bounded private-DM canary through the selected running release. It
 prefers a staged candidate, otherwise uses the accepted release. It refuses any

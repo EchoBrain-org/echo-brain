@@ -5,6 +5,10 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./shared/evidence-desk-v1": {
+      "types": "./dist/shared/evidence-desk-v1.d.ts",
+      "import": "./dist/shared/evidence-desk-v1.js"
+    },
     "./shared/released-source-context-v1": {
       "types": "./dist/shared/released-source-context-v1.d.ts",
       "import": "./dist/shared/released-source-context-v1.js"
@@ -64,6 +68,10 @@
     "./answer-composition/retrieval-grounded-answer-composition": {
       "types": "./dist/answer-composition/retrieval-grounded-answer-composition.d.ts",
       "import": "./dist/answer-composition/retrieval-grounded-answer-composition.js"
+    },
+    "./answer-composition/agentic-ask-v1": {
+      "types": "./dist/answer-composition/agentic-ask-v1.d.ts",
+      "import": "./dist/answer-composition/agentic-ask-v1.js"
     },
     "./application/ports/authority-clock": {
       "types": "./dist/application/ports/authority-clock.d.ts",

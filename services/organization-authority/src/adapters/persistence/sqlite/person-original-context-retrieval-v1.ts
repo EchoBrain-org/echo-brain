@@ -13,8 +13,10 @@ import type {
   ApprovedMeetingTranscriptReadV1,
   OriginalContextReleaseV1,
   OriginalContextCitationV1,
+  OriginalContextDeskItemV1,
+  OriginalContextDeskReleaseV1,
   PersonAskScopeV2,
-  PersonOriginalContextRetrievalPortV1,
+  PersonOriginalContextEvidenceDeskPortV1,
 } from "../../../application/ports/person-original-context-retrieval-v1.js";
 
 const MAXIMUM_PACKET_BYTES = 3_072;
@@ -37,6 +39,7 @@ type SourceRow = {
   readonly text: string;
   readonly received_at: string;
   readonly lexical_score: number;
+  readonly visibility?: "only_me" | "team" | "project" | "projects";
 };
 type DocumentRow = {
   readonly source_id: string;
@@ -60,6 +63,7 @@ type DocumentRow = {
   readonly detected_media_type: string;
   readonly received_at: string;
   readonly lexical_score: number;
+  readonly visibility?: "only_me" | "team" | "project" | "projects";
 };
 type MeetingSourceRow = {
   readonly source_id: string;
@@ -99,6 +103,12 @@ function lexicalScore(title: string, text: string, terms: readonly string[]): nu
   // Preserve the original substring matching contract, but rank by distinct
   // matched terms. Repetition cannot boost a source's score.
   return terms.reduce((score, term) => score + (value.includes(term) ? 1 : 0), 0);
+}
+
+/** Desk ranking deliberately matches complete Unicode terms, never substrings. */
+function wholeTermScore(title: string, text: string, terms: readonly string[]): number {
+  const found = new Set((`${title}\n${text}`).normalize("NFC").toLocaleLowerCase("en-US").match(/[\p{L}\p{N}]+/gu) ?? []);
+  return terms.reduce((score, term) => score + (found.has(term) ? 1 : 0), 0);
 }
 
 function queryTerms(query: string): readonly string[] {
@@ -155,6 +165,19 @@ function matchingPacket(title: string, body: string, terms: readonly string[]): 
   return Object.freeze({ index, text: values[index]! });
 }
 
+function wholeMatchingPacket(title: string, body: string, terms: readonly string[]): { readonly index: number; readonly text: string } {
+  const values = packets(title, body);
+  if (terms.length === 0) return Object.freeze({ index: 0, text: values[0]! });
+  let index = -1;
+  let bestScore = 0;
+  for (let candidate = 0; candidate < values.length; candidate += 1) {
+    const score = wholeTermScore("", values[candidate]!, terms);
+    if (score > bestScore) { bestScore = score; index = candidate; }
+  }
+  if (index < 0) unavailable();
+  return Object.freeze({ index, text: values[index]! });
+}
+
 /** A transcript page is bounded by UTF-8 bytes and never splits a code point. */
 function transcriptPage(body: string, offset: number): { readonly text: string; readonly next_offset: number | null } {
   const points = [...body.normalize("NFC")];
@@ -188,8 +211,9 @@ function presentationLabel(value: string): string {
  * are intentionally excluded here: admission alone never makes raw meetings
  * readable through Ask.
  */
-export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalContextRetrievalPortV1 {
+export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalContextEvidenceDeskPortV1 {
   private readonly releases = new WeakSet<OriginalContextReleaseV1>();
+  private readonly deskReleases = new WeakSet<OriginalContextDeskReleaseV1>();
   constructor(
     private readonly database: Database.Database,
     private readonly sessions: Sessions,
@@ -206,6 +230,9 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     database.function("echo_original_context_score_v1", { deterministic: true }, (title, text, query) =>
       typeof title === "string" && typeof text === "string" && typeof query === "string"
         ? lexicalScore(title, text, JSON.parse(query) as readonly string[]) : 0);
+    database.function("echo_original_context_whole_score_v1", { deterministic: true }, (title, text, query) =>
+      typeof title === "string" && typeof text === "string" && typeof query === "string"
+        ? wholeTermScore(title, text, JSON.parse(query) as readonly string[]) : 0);
   }
 
   retrieve(input: {
@@ -279,8 +306,112 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       released_count: release.released_atoms.length,
       checked_at: actor.checked_at,
     };
-    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(canonicalSha256(audit), canonicalJson(audit), actor.checked_at);
-    return Object.freeze({ release, query_hit_counts: Object.freeze(counts) });
+    const receipt = canonicalSha256(audit);
+    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(receipt, canonicalJson(audit), actor.checked_at);
+    return Object.freeze({ release, receipt, query_hit_counts: Object.freeze(counts) });
+  }
+
+  /**
+   * Request-bound desk search.  This is intentionally distinct from V2's
+   * substring matcher: whole terms and the three-passages-per-document cap
+   * apply only to the new desk surface.
+   */
+  deskSearch(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+    readonly query?: string;
+    readonly kinds?: readonly ("note" | "document_passage")[];
+    readonly limit?: number;
+  }): OriginalContextDeskReleaseV1 {
+    const limit = input.limit ?? (input.query === undefined ? 50 : 10);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > (input.query === undefined ? 50 : 10)) {
+      throw new AuthorityOperationError("invalid_request", "request is invalid");
+    }
+    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
+    this.assertOrganization(actor);
+    this.assertScope(actor, input.scope);
+    const terms = input.query === undefined ? [] : queryTerms(input.query);
+    const candidates = input.query === undefined
+      ? this.deskInventoryRows(actor, input.scope, limit + 1, input.kinds)
+      : this.deskSearchRows(actor, input.scope, terms, limit + 1, input.kinds);
+    const rows = candidates.slice(0, limit);
+    const atoms = rows.map((row) => this.deskAtom(row, terms));
+    const items = rows.map((row, index) => this.deskItem(row, atoms[index]!, input.query !== undefined));
+    return this.commitDeskRelease(actor, input.access_token, input.scope, items, atoms, candidates.length > limit);
+  }
+
+  deskAuthorize(input: { readonly access_token: string; readonly scope: PersonAskScopeV2 }): { readonly checked_at: string } {
+    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
+    this.assertOrganization(actor);
+    this.assertScope(actor, input.scope);
+    return Object.freeze({ checked_at: actor.checked_at });
+  }
+
+  deskOpen(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+    readonly citation: OriginalContextCitationV1;
+    readonly neighbours?: number;
+  }): OriginalContextDeskReleaseV1 {
+    const neighbours = input.neighbours ?? 0;
+    if (!Number.isSafeInteger(neighbours) || neighbours < 0 || neighbours > 2) {
+      throw new AuthorityOperationError("invalid_request", "request is invalid");
+    }
+    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
+    this.assertOrganization(actor);
+    this.assertScope(actor, input.scope);
+    if (input.citation.document_id === undefined) {
+      const row = this.textBySource(actor, input.scope, input.citation.source_id, input.citation.revision_id);
+      if (row === undefined) denied();
+      const atom = this.textAnchorForCitation(row, input.citation);
+      if (atom === undefined) denied();
+      return this.commitDeskRelease(actor, input.access_token, input.scope,
+        [this.deskItem(row, atom, true)], [atom]);
+    }
+    const meta = this.documentSourceMeta(actor, input.scope, input.citation.source_id, input.citation.revision_id, input.citation.document_id, input.citation.representation_sha256);
+    if (meta === undefined) denied();
+    // Parse and verify the immutable representation once.  The anchor scan is
+    // streaming; it never materializes every extracted chunk or repeats the
+    // representation parse for each candidate in a large document.
+    const representation = this.representationChunks(meta as DocumentRow);
+    let anchorRow: DocumentRow | undefined;
+    let anchor: ReleasedSourceContextAtomV1 | undefined;
+    for (const chunk of this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? AND extractor=? ORDER BY ordinal").iterate(input.citation.document_id, meta.extractor) as Iterable<Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor">>) {
+      const row = Object.freeze({ ...meta, ...chunk }) as DocumentRow;
+      const candidate = this.documentAnchorForCitation(row, input.citation, representation);
+      if (candidate !== undefined) { anchorRow = row; anchor = candidate; break; }
+    }
+    if (anchorRow === undefined || anchor === undefined) denied();
+    // Anchor first, then preceding and following ordinal neighbours. The cap
+    // is three immutable packets (9 KiB), independent of record/doc size.
+    const before = this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? AND extractor=? AND ordinal<? ORDER BY ordinal DESC LIMIT 1").get(input.citation.document_id, meta.extractor, anchorRow.ordinal) as Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor"> | undefined;
+    const after = this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? AND extractor=? AND ordinal>? ORDER BY ordinal ASC LIMIT 1").get(input.citation.document_id, meta.extractor, anchorRow.ordinal) as Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor"> | undefined;
+    const neighbourRows = [before, after].filter((chunk): chunk is Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor"> => chunk !== undefined).slice(0, neighbours).map((chunk) => Object.freeze({ ...meta, ...chunk }) as DocumentRow);
+    const selected = [anchorRow, ...neighbourRows];
+    // Preserve the exact requested segment.  A large extracted chunk can have
+    // several 3 KiB packets, and recomputing the anchor with an empty query
+    // would otherwise silently substitute packet zero.
+    const atoms = [anchor, ...selected.slice(1).map((row) => this.deskAtom(row, []))];
+    return this.commitDeskRelease(actor, input.access_token, input.scope,
+      selected.map((row, index) => this.deskItem(row, atoms[index]!, true)), atoms);
+  }
+
+  revalidateDeskRelease(input: {
+    readonly access_token: string;
+    readonly release: OriginalContextDeskReleaseV1;
+  }): { readonly checked_at: string } {
+    if (!this.deskReleases.has(input.release)) unavailable();
+    const checked = this.revalidate({ access_token: input.access_token, release: input.release.release });
+    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
+    // V1/V2 retain their historical per-atom revalidation semantics.  The
+    // request-bound desk additionally pins the authorization revision so a
+    // later desk call cannot mix project-association snapshots.
+    if (this.authorizationRevision(actor.organization_id) !== input.release.release.authorization_revision) denied();
+    for (const item of input.release.items) {
+      const atom = input.release.release.released_atoms.find((candidate) => this.citationMatches(candidate, item.citation));
+      if (atom === undefined || canonicalJson(this.currentDeskItem(actor, input.release.release.scope, atom, item.text !== undefined)) !== canonicalJson(item)) denied();
+    }
+    return checked;
   }
 
   revalidate(input: { readonly access_token: string; readonly release: OriginalContextReleaseV1 }) {
@@ -479,6 +610,113 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     });
   }
 
+  private deskSearchRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], limit: number, kinds: readonly ("note" | "document_passage")[] | undefined): readonly (SourceRow | DocumentRow)[] {
+    const candidates = [...this.deskTextRows(actor, scope, terms, false), ...this.deskDocumentRows(actor, scope, terms, false)]
+      .filter((row) => kinds === undefined || kinds.includes("document_id" in row ? "document_passage" : "note"))
+      .sort((left, right) => right.lexical_score - left.lexical_score || right.received_at.localeCompare(left.received_at) || left.source_id.localeCompare(right.source_id) || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0));
+    const documents = new Map<string, number>();
+    const selected: (SourceRow | DocumentRow)[] = [];
+    for (const row of candidates) {
+      if ("document_id" in row) {
+        const count = documents.get(row.document_id) ?? 0;
+        if (count >= 3) continue;
+        documents.set(row.document_id, count + 1);
+      }
+      selected.push(row);
+      if (selected.length === limit) break;
+    }
+    return Object.freeze(selected);
+  }
+
+  private deskInventoryRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, limit: number, kinds: readonly ("note" | "document_passage")[] | undefined): readonly (SourceRow | DocumentRow)[] {
+    // One stable representative passage per document is enough to mint an
+    // existing source-revision citation without disclosing passage text.
+    const candidates = [...this.deskTextRows(actor, scope, [], true), ...this.deskDocumentRows(actor, scope, [], true)]
+      .filter((row) => kinds === undefined || kinds.includes("document_id" in row ? "document_passage" : "note"))
+      .sort((left, right) => right.received_at.localeCompare(left.received_at) || left.source_id.localeCompare(right.source_id) || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0));
+    const documents = new Set<string>();
+    const selected: (SourceRow | DocumentRow)[] = [];
+    for (const row of candidates) {
+      if ("document_id" in row) {
+        if (documents.has(row.document_id)) continue;
+        documents.add(row.document_id);
+      }
+      selected.push(row);
+      if (selected.length === limit) break;
+    }
+    return Object.freeze(selected);
+  }
+
+  private deskTextRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], inventory: boolean): readonly SourceRow[] {
+    const acl = this.acl(actor, "u");
+    const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)" : "";
+    const updates = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
+      UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
+    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,u.audience_kind AS visibility,echo_original_context_whole_score_v1(u.title,u.text,?) AS lexical_score
+      FROM ${updates} u JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
+      JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
+      JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
+      WHERE u.organization_id=? AND ${acl.sql} ${scopeSql} ${inventory ? "" : "AND lexical_score > 0"}
+      ORDER BY lexical_score DESC,u.received_at DESC,s.source_id LIMIT 100`;
+    return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : [])) as readonly SourceRow[];
+  }
+
+  private deskDocumentRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], inventory: boolean): readonly DocumentRow[] {
+    const acl = this.acl(actor, "d");
+    const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)" : "";
+    const firstChunk = inventory ? "AND t.ordinal=(SELECT MIN(first_t.ordinal) FROM authority_person_document_text_v1 first_t WHERE first_t.document_id=d.document_id AND first_t.extractor=t.extractor)" : "";
+    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at,d.audience_kind AS visibility,echo_original_context_whole_score_v1(d.filename,t.text,?) AS lexical_score
+      FROM authority_person_documents_v1 d JOIN authority_person_document_text_v1 t ON t.document_id=d.document_id
+      JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial') AND work.extractor=t.extractor
+      JOIN authority_sources_v1 s ON s.organization_id=d.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=d.document_id
+      JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=d.original_sha256
+      JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
+      JOIN authority_source_representations_v1 representation ON representation.organization_id=r.organization_id AND representation.source_id=r.source_id AND representation.revision_id=r.revision_id AND representation.processor_version=t.extractor
+      WHERE d.organization_id=? AND ${acl.sql} ${scopeSql} ${inventory ? "" : "AND lexical_score > 0"} ${firstChunk}
+      ORDER BY lexical_score DESC,d.received_at DESC,s.source_id,t.ordinal LIMIT 100`;
+    return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : [])) as readonly DocumentRow[];
+  }
+
+  private deskAtom(row: SourceRow | DocumentRow, terms: readonly string[]): ReleasedSourceContextAtomV1 {
+    const selected = wholeMatchingPacket(row.title, row.text, terms);
+    if ("document_id" in row) {
+      this.assertIntegrity(row); this.assertDocumentSourceRevision(row); this.assertDocumentChunk(row, this.representationChunks(row));
+      return Object.freeze({ kind: "source_revision" as const, source_id: row.source_id, revision_id: row.revision_id, source_sha256: row.source_sha256, representation_sha256: row.representation_sha256, anchor_sha256: canonicalSha256({ kind: "document", document_id: row.document_id, ordinal: row.ordinal, anchor_kind: row.anchor_kind, anchor_start: row.anchor_start, segment: selected.index, text: selected.text }), document_id: row.document_id, label: presentationLabel(row.title), text: selected.text });
+    }
+    this.assertIntegrity(row); this.assertTextSourceRevision(row);
+    return Object.freeze({ kind: "source_revision" as const, source_id: row.source_id, revision_id: row.revision_id, source_sha256: row.source_sha256, representation_sha256: row.representation_sha256, anchor_sha256: canonicalSha256({ kind: "text", context_id: row.context_id, segment: selected.index, text: selected.text }), label: row.title, text: selected.text });
+  }
+
+  private deskItem(row: SourceRow | DocumentRow, atom: ReleasedSourceContextAtomV1, includeText: boolean): OriginalContextDeskItemV1 {
+    const visibility = row.visibility;
+    if (visibility !== "only_me" && visibility !== "team" && visibility !== "project" && visibility !== "projects") unavailable();
+    const citation: OriginalContextCitationV1 = Object.freeze({ kind: "source_revision", source_id: atom.source_id, revision_id: atom.revision_id, source_sha256: atom.source_sha256, representation_sha256: atom.representation_sha256, anchor_sha256: atom.anchor_sha256, ...(atom.document_id === undefined ? {} : { document_id: atom.document_id }) });
+    return Object.freeze({ citation, kind: atom.document_id === undefined ? "note" : "document_passage", ...(includeText ? { text: atom.text } : {}), visibility, label: atom.label ?? "Saved context", received_at: row.received_at, version: atom.revision_id });
+  }
+
+  private currentDeskItem(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1, includeText: boolean): OriginalContextDeskItemV1 {
+    if (atom.document_id === undefined) {
+      const row = this.textBySource(actor, scope, atom.source_id, atom.revision_id);
+      if (row === undefined) denied();
+      return this.deskItem(row, atom, includeText);
+    }
+    const row = this.documentSourceMeta(actor, scope, atom.source_id, atom.revision_id, atom.document_id, atom.representation_sha256);
+    if (row === undefined) denied();
+    return this.deskItem(row as DocumentRow, atom, includeText);
+  }
+
+  private commitDeskRelease(actor: PersonAccessAuthorization, accessToken: string, scope: PersonAskScopeV2, items: readonly OriginalContextDeskItemV1[], atoms: readonly ReleasedSourceContextAtomV1[], truncated = false): OriginalContextDeskReleaseV1 {
+    const release: OriginalContextReleaseV1 = Object.freeze({ authorization: Object.freeze({ principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, checked_at: actor.checked_at }), scope: Object.freeze({ ...scope }), authorization_revision: this.authorizationRevision(actor.organization_id), released_atoms: Object.freeze([...atoms]) });
+    this.releases.add(release);
+    this.revalidate({ access_token: accessToken, release });
+    const audit = { schema_version: 1, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, authorization_revision: release.authorization_revision, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text }) => ({ citation, kind, visibility, label, received_at, version, ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }) }))), released_count: items.length, checked_at: actor.checked_at };
+    const receipt = canonicalSha256(audit);
+    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(receipt, canonicalJson(audit), actor.checked_at);
+    const result: OriginalContextDeskReleaseV1 = Object.freeze({ release, receipt, items: Object.freeze([...items]), truncated });
+    this.deskReleases.add(result);
+    return result;
+  }
+
   private textRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[]): readonly SourceRow[] {
     const acl = this.acl(actor, "u");
     const scopeSql = scope.kind === "project"
@@ -625,7 +863,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)" : "";
     const updates = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
       UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
-    return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at
+    return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,u.audience_kind AS visibility
       FROM ${updates} u JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
@@ -653,7 +891,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   private documentSourceMeta(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string, documentId: string, representationSha256: Sha256Digest): Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text"> | undefined {
     const acl = this.acl(actor, "d");
     const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)" : "";
-    return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,work.extractor,representation.content_json AS representation_json,d.received_at
+    return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,work.extractor,representation.content_json AS representation_json,d.received_at,d.audience_kind AS visibility
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial')
       JOIN authority_sources_v1 s ON s.organization_id=d.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=d.document_id

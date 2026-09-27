@@ -27,6 +27,8 @@ export interface OriginalContextReleaseV1 {
 
 export interface OriginalContextRetrievalResultV1 {
   readonly release: OriginalContextReleaseV1;
+  /** Digest of the content-free Layer-3 release audit committed before bytes return. */
+  readonly receipt: Sha256Digest;
   /** One count for every requested query, before cross-query deduplication. */
   readonly query_hit_counts: readonly number[];
 }
@@ -102,6 +104,53 @@ export interface PersonOriginalContextRetrievalPortV1 {
     readonly citation: PersonMeetingTranscriptCitationV1;
     readonly offset?: number;
   }): ApprovedMeetingTranscriptReadV1;
+}
+
+/** Desk-only, request-bound original evidence release.  V1/V2 Ask continue to
+ * use PersonOriginalContextRetrievalPortV1 and cannot invoke these methods. */
+export type OriginalContextDeskKindV1 = "note" | "document_passage";
+export type OriginalContextDeskVisibilityV1 = "only_me" | "team" | "project" | "projects";
+
+export interface OriginalContextDeskItemV1 {
+  readonly citation: OriginalContextCitationV1;
+  readonly kind: OriginalContextDeskKindV1;
+  readonly text?: string;
+  readonly visibility: OriginalContextDeskVisibilityV1;
+  readonly label: string;
+  readonly received_at: string;
+  readonly version: string;
+}
+
+export interface OriginalContextDeskReleaseV1 {
+  readonly release: OriginalContextReleaseV1;
+  readonly receipt: Sha256Digest;
+  readonly items: readonly OriginalContextDeskItemV1[];
+  readonly truncated: boolean;
+}
+
+export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalContextRetrievalPortV1 {
+  /** Authenticates the request-bound desk before its first model call. */
+  deskAuthorize(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+  }): { readonly checked_at: string };
+  deskSearch(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+    readonly query?: string;
+    readonly kinds?: readonly OriginalContextDeskKindV1[];
+    readonly limit?: number;
+  }): OriginalContextDeskReleaseV1;
+  deskOpen(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+    readonly citation: OriginalContextCitationV1;
+    readonly neighbours?: number;
+  }): OriginalContextDeskReleaseV1;
+  revalidateDeskRelease(input: {
+    readonly access_token: string;
+    readonly release: OriginalContextDeskReleaseV1;
+  }): { readonly checked_at: string };
 }
 
 /** A source citation omits evidence text and presentation-only labels. */

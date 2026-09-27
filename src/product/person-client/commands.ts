@@ -37,6 +37,8 @@ export interface PersonClientCliDependencies {
   readonly random_uuid?: () => string;
   readonly read_input?: () => string | Promise<string>;
   readonly open_authorization_url?: (url: string) => boolean | Promise<boolean>;
+  /** Desktop cancellation aborts the underlying fetch rather than hiding a late reply. */
+  readonly abort_signal?: AbortSignal;
 }
 
 const OPTIONS = {
@@ -78,6 +80,9 @@ const OPTIONS = {
   limit: { type: "string" },
   "open-browser": { type: "boolean" },
   "record-sha256": { type: "string" },
+  kind: { type: "string" },
+  item: { type: "string" },
+  neighbours: { type: "string" },
 } as const;
 
 type Option = string;
@@ -141,6 +146,8 @@ const RULES: Readonly<
     accepts: ["question", "project"],
     requires: ["question"],
   },
+  "evidence-search": { accepts: ["query", "project", "kind", "limit"], requires: [] },
+  "evidence-open": { accepts: ["item", "project", "neighbours"], requires: ["item"] },
   "ask-source": {
     accepts: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256", "document-id", "project"],
     requires: ["source-id", "revision-id", "source-sha256", "representation-sha256", "anchor-sha256"],
@@ -190,6 +197,7 @@ Commands:
   status      Show client build identity and sign-in state.
   logout      Remove the local session.
   ask         Ask a question over records you may read.
+  evidence    Search or open released Ask evidence.
   transcript  Read an explicitly approved meeting transcript page.
   records     List records or search the current generation.
   directory   Find people in your organization by name.
@@ -218,6 +226,18 @@ Removes the local session. A revoked session is also removed locally.
   ask: `usage: echo-brain person ask --question <text> [--project <project-id>]
 
 Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, it retrieves only context proven associated with that current project. Answers include typed citations.
+`,
+  evidence: `usage: echo-brain person evidence <search|open> [options]
+
+Search or open released evidence under a fresh signed-in request. Use the citation JSON returned by search with open.
+`,
+  "evidence-search": `usage: echo-brain person evidence search [--query <text>] [--project <project-id>] [--kind <decision|action|rationale|note|document_passage>] [--limit <1-50>]
+
+Without --query, lists readable evidence titles and kinds without body text.
+`,
+  "evidence-open": `usage: echo-brain person evidence open --item <citation-json> [--project <project-id>] [--neighbours <0-2>]
+
+Opens one cited evidence item under a fresh signed-in request. --item is the citation object from evidence search JSON.
 `,
   "ask-source": `usage: echo-brain person ask-source --source-id <source-id> --revision-id <revision-id> --source-sha256 <sha256:64hex> --representation-sha256 <sha256:64hex> --anchor-sha256 <sha256:64hex> [--document-id <document-id>] [--project <project-id>]
 
@@ -451,7 +471,7 @@ Shows each employee's name, canonical email, membership state, and invitation st
 
 /** Returns supported human CLI help without constructing a client or session. */
 function personClientCliHelp(argv: readonly string[], commands: readonly PersonToolCommandV1[]): string | undefined {
-  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
+  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents' || argv[0] === 'evidence') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
   const tool = commands.find(command => command.name === argv[0]);
   if (tool && argv.length === 2 && argv[1] === '--help') {
     return `usage: echo-brain person ${tool.name}${Object.keys(tool.options).map(option => ' --' + option + ' <value>').join('')}\n\n${tool.description}\n`;
@@ -802,9 +822,10 @@ export async function runPersonClientCli(
         ]
       : undefined;
   const documentAction = argv[0] === 'documents' ? `documents-${argv[1] ?? ''}` : undefined;
+  const evidenceAction = argv[0] === 'evidence' ? `evidence-${argv[1] ?? ''}` : undefined;
   const updateAction = argv[0] === 'updates' && ['submit', 'status', 'search', 'read', 'submit-v3', 'status-v3', 'search-v3', 'read-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
-  const action = documentAction ?? projectAction ?? updateAction ?? employeeAction ?? (argv[0] ?? "");
+  const action = documentAction ?? evidenceAction ?? projectAction ?? updateAction ?? employeeAction ?? (argv[0] ?? "");
   const toolCommand = registered.get(action);
   const rule = RULES[action] ?? (toolCommand === undefined ? undefined : { accepts: Object.keys(toolCommand.options), requires: toolCommand.requires });
   if (rule === undefined) {
@@ -814,7 +835,7 @@ export async function runPersonClientCli(
 
   let values: Record<Option, string | boolean | undefined> = {};
   try {
-    const args = [...argv.slice(employeeAction === undefined && updateAction === undefined && projectAction === undefined && documentAction === undefined ? 1 : 2)];
+    const args = [...argv.slice(employeeAction === undefined && updateAction === undefined && projectAction === undefined && documentAction === undefined && evidenceAction === undefined ? 1 : 2)];
     // Accept a negative integer as a limit value so the existing bounds explain
     // it. Other dash-prefixed values retain parseArgs' strict option behavior.
     if (action === "records") {
@@ -1187,9 +1208,36 @@ export async function runPersonClientCli(
           result: await client.ask(
             requiredText(values, "question"),
             values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project")),
+            dependencies.abort_signal,
           ),
         });
         break;
+      case 'evidence-search': {
+        const project_id = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
+        const kind = values.kind;
+        if (kind !== undefined && !['decision', 'action', 'rationale', 'note', 'document_passage'].includes(String(kind))) throw new Error('Invalid evidence kind');
+        const limit = values.limit === undefined ? undefined : Number(values.limit);
+        if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)) throw new Error('Invalid evidence limit');
+        print(stdout, { ok: true, result: await client.evidenceSearch({ schema_version: 1,
+          ...(values.query === undefined ? {} : { query: requiredText(values, 'query') }),
+          ...(kind === undefined ? {} : { kinds: [kind as 'decision' | 'action' | 'rationale' | 'note' | 'document_passage'] as const }),
+          ...(limit === undefined ? {} : { limit }),
+          ...(project_id === undefined ? {} : { project_id }),
+        }, dependencies.abort_signal) });
+        break;
+      }
+      case 'evidence-open': {
+        let citation: unknown;
+        try { citation = JSON.parse(requiredText(values, 'item')); } catch { throw new Error('Evidence citation JSON is invalid'); }
+        const neighbours = values.neighbours === undefined ? undefined : Number(values.neighbours);
+        if (neighbours !== undefined && (!Number.isSafeInteger(neighbours) || neighbours < 0 || neighbours > 2)) throw new Error('Invalid evidence neighbours');
+        const project_id = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
+        print(stdout, { ok: true, result: await client.evidenceOpen({ schema_version: 1, citation: citation as never,
+          ...(neighbours === undefined ? {} : { neighbours: neighbours as 0 | 1 | 2 }),
+          ...(project_id === undefined ? {} : { project_id }),
+        }, dependencies.abort_signal) });
+        break;
+      }
       case "ask-source": {
         const project_id = values.project === undefined
           ? undefined

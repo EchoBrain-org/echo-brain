@@ -19,6 +19,7 @@ decision_ids:
   - ADR-0016
   - ADR-0017
   - ADR-0018
+  - ADR-0019
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-RUNTIME-001
@@ -72,3 +73,7 @@ default. No Slack approval, provider code, background upload, or local queue is
 required. Search and exact reads return only authorized originals; submit/status
 remain content-free. The carrier and optional metadata do not settle the final
 context shape. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).
+
+Agentic Ask V1 is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md)
+and [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md). Its V3 route and shared evidence
+desk are capability-gated; implementation and live qualification are separate.

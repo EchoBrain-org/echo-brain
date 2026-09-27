@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { AnswerSource, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
+import type { AnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
@@ -121,6 +121,47 @@ function BasedOn({ state }: { state: State }) {
   );
 }
 
+/** A V4 statement owns its citations, so readers can see exactly what supports it. */
+function Statement({ state, statement }: { state: State; statement: AnswerStatement }) {
+  const sources = answerSources(state);
+  return (
+    <div class="answer-statement selectable">
+      <div>{statement.text}</div>
+      <div class="chips">
+        {statement.citation_indexes.map(index => {
+          const source = sources[index];
+          if (!source) return null;
+          return <button type="button" key={index} class="source-chip" data-testid="statement-citation"
+            onClick={() => chooseSource(index)} title={`Show ${chipLabel(source, state.sources)}`}>
+            <span class="n">{index + 1}</span><span class="label">{chipLabel(source, state.sources)}</span>
+          </button>;
+        })}
+        {statement.private && <span class="private-mark" data-testid="private-mark">Private</span>}
+      </div>
+    </div>
+  );
+}
+
+function AgenticAnswer({ state, turn }: { state: State; turn: AskTurn }) {
+  const answer = turn.answer;
+  return (
+    <div class="agentic-answer" data-testid="agentic-answer">
+      {answer.assumption && <div class="answer-banner" data-testid="answer-assumption">{answer.assumption}</div>}
+      {answer.outcome === 'off_scope' && <div class="answer-banner" data-testid="answer-off-scope">The accessible evidence may be about a different subject.</div>}
+      {answer.notice && <div class="answer-banner" data-testid="answer-notice">{answer.notice}</div>}
+      {answer.direct && <Statement state={state} statement={answer.direct} />}
+      {answer.parts?.map((part, index) => (
+        <section class="answer-part" key={index}>
+          <div class="section-label">{part.question}</div>
+          {part.statements.map((statement, statementIndex) => <Statement key={statementIndex} state={state} statement={statement} />)}
+          {part.records?.map((statement, statementIndex) => <Statement key={`record-${statementIndex}`} state={state} statement={statement} />)}
+          {part.gap && <div class="answer-gap" data-testid="answer-gap">{part.gap}</div>}
+        </section>
+      ))}
+    </div>
+  );
+}
+
 /** An earlier question and, collapsed, two lines of its answer. A click shows or hides the rest. */
 function EarlierTurn({ turn }: { turn: AskTurn }) {
   const [open, setOpen] = useState(false);
@@ -150,7 +191,9 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
     <div class="turn">
       <div class="question selectable" data-testid="question">{turn.question}</div>
       <div class="asked">{turn.scopeName}</div>
-      <div class="answer selectable" data-testid="answer">{turn.answer.text}</div>
+      {turn.answer.parts === undefined
+        ? <div class="answer selectable" data-testid="answer">{turn.answer.text}</div>
+        : <AgenticAnswer state={state} turn={turn} />}
       <BasedOn state={state} />
       <div class="actions">
         {count > 0 && (
@@ -188,10 +231,7 @@ export function AskView({ state }: { state: State }) {
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>
           <div class="asked">{asking.scopeName}</div>
-          <div class="asking" data-testid="asking">
-            <i /><i /><i /><span>Thinking…</span>
-            <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
-          </div>
+          <Asking />
         </div>
       )}
       {failed && (
@@ -208,6 +248,19 @@ export function AskView({ state }: { state: State }) {
       )}
     </section>
   );
+}
+
+function Asking() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 250);
+    return () => clearInterval(timer);
+  }, []);
+  return <div class="asking" data-testid="asking">
+    <i /><i /><i /><span>Thinking… {elapsed}s</span>
+    <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
+  </div>;
 }
 
 /** A decision, action or rationale, and the excerpts that support it. */

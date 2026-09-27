@@ -13,6 +13,7 @@ qualification status separately.
 | RFC | Title | Status |
 | --- | --- | --- |
 | [RFC-0001](RFC-0001-server-core-lean-authority-contracts.md) | Server-core lean Authority contracts | draft |
+| [RFC-0002](RFC-0002-agentic-ask-v1.md) | Agentic Ask V1 and the evidence desk | accepted |
 
 ## Required content
 

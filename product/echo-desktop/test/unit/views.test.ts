@@ -69,6 +69,22 @@ describe('view models copy only what the renderer may see', () => {
       .toThrow(ViewError);
   });
 
+  it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace', () => {
+    const citation = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' };
+    const answer = answerView({ ok: true, result: {
+      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'partial',
+      citations: [{ citation, kind: 'decision', label: 'Project review', visibility: 'project' }],
+      direct: { text: 'A private summary.', citation_indexes: [0], private: true },
+      parts: [{ question: 'What changed?', status: 'records_only', statements: [], gap: 'No prose was available.',
+        records: [{ text: 'Exact\n  fallback', citation_indexes: [0], private: false }] }],
+      assumption: 'Ecko means Echo', notice: 'Meeting records were unavailable.',
+    } }, { kind: 'global' });
+    expect(answer).toMatchObject({ outcome: 'partial', assumption: 'Ecko means Echo', notice: 'Meeting records were unavailable.',
+      direct: { private: true, citation_indexes: [0] }, parts: [{ status: 'records_only', records: [{ text: 'Exact\n  fallback' }] }],
+      sources: [{ kind: 'record', label: 'Project review', record: { policy_id: 'project-members-readable-person-v1' } }],
+    });
+  });
+
   it('accepts a receipt only for the request that was sent', () => {
     expect(() => receiptView({ request_id: 'other' }, 'mine', { kind: 'only-me' })).toThrow(ViewError);
     expect(receiptView({ request_id: 'mine' }, 'mine', { kind: 'team' })).toEqual({ request_id: 'mine', audience: { kind: 'team' } });

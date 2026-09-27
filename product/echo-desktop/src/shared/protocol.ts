@@ -178,7 +178,7 @@ export interface SourceRef {
 }
 
 /** Who may read an approved record: the organization's members, or its reviewer only. */
-export type RecordPolicy = 'organization-member-readable-person-v2' | 'restricted-reviewer-person-v2';
+export type RecordPolicy = 'organization-member-readable-person-v2' | 'restricted-reviewer-person-v2' | 'project-members-readable-person-v1';
 
 /** An approved record an answer cites, read with `person records --record-sha256`. */
 export interface RecordRef {
@@ -191,10 +191,31 @@ export type AnswerSource =
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef }
   | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef };
 
+/** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
+export interface AnswerStatement {
+  readonly text: string;
+  readonly citation_indexes: readonly number[];
+  readonly private: boolean;
+}
+
+export interface AnswerPart {
+  readonly question: string;
+  readonly status: 'answered' | 'partial' | 'not_found' | 'records_only';
+  readonly statements: readonly AnswerStatement[];
+  readonly gap?: string;
+  readonly records?: readonly AnswerStatement[];
+}
+
 export interface Answer {
   readonly text: string;
   readonly scope: AskScope;
   readonly sources: readonly AnswerSource[];
+  /** V3 answers keep the existing compact presentation. */
+  readonly direct?: AnswerStatement;
+  readonly parts?: readonly AnswerPart[];
+  readonly outcome?: 'answered' | 'partial' | 'not_found' | 'off_scope';
+  readonly assumption?: string;
+  readonly notice?: string;
 }
 
 export interface SourceEvidence {
@@ -347,7 +368,9 @@ export interface HostMethods {
     params: { expect: Expect; request_id: string; file_handle: string; title: string; audience: Audience; project_ids: readonly string[] };
     result: Receipt;
   };
-  'ask.run': { params: { expect: Expect; question: string; scope: AskScope }; result: Answer };
+  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string }; result: Answer };
+  /** Cancels an active Ask by its renderer-issued opaque id. */
+  'ask.cancel': { params: { cancel_id: string }; result: null };
   /** The bar's live search, within its scope: a project, or all context. */
   'search.run': { params: { expect: Expect; query: string; scope: AskScope }; result: Matches };
   /** Reads a saved note found in all context. A project's match is read with projects.readContext. */
@@ -397,7 +420,7 @@ export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
-  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
+  'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'search.read', 'documents.list', 'documents.read', 'documents.save', 'projects.read',
   'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
   'employees.reissue', 'employees.revoke',

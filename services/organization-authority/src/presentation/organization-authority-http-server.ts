@@ -65,13 +65,22 @@ import {
 } from "./person-answer-http-application.js";
 import {
   PERSON_ANSWER_PATH_V2,
+  PERSON_ANSWER_PATH_V3,
+  PERSON_CAPABILITIES_PATH_V1,
+  PERSON_EVIDENCE_OPEN_PATH_V1,
+  PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   PERSON_MEETING_TRANSCRIPT_PATH_V1,
   validatePersonAnswerRequestV2,
+  validatePersonAnswerRequestV3,
+  validatePersonCapabilitiesV1,
+  validatePersonEvidenceOpenRequestV1,
+  validatePersonEvidenceSearchRequestV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonMeetingTranscriptReadRequestV1,
 } from "@echo-brain/organization-api";
 import type { PersonAnswerV2HttpApplication, PersonMeetingTranscriptHttpApplicationV1 } from "./person-answer-v2-http-application.js";
+import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
@@ -99,6 +108,10 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V2}`,
+  `POST ${PERSON_ANSWER_PATH_V3}`,
+  `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
+  `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
+  `GET ${PERSON_CAPABILITIES_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
   `POST ${PERSON_MEETING_TRANSCRIPT_PATH_V1}`,
 ]);
@@ -133,6 +146,10 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_answer?: PersonAnswerHttpApplicationV1;
   /** V2 keeps scope and typed source provenance inside the Authority boundary. */
   readonly person_answer_v2?: PersonAnswerV2HttpApplication;
+  /** V3 agentic Ask and the evidence desk are mounted only when enabled. */
+  readonly person_answer_v3?: PersonAnswerV3HttpApplication;
+  /** Authenticated capability discovery is the only permitted client downgrade signal. */
+  readonly agentic_ask_v1_enabled?: boolean;
   /** Explicit transcript release uses the same originals gate but no Ask model. */
   readonly person_meeting_transcript?: PersonMeetingTranscriptHttpApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
@@ -402,6 +419,24 @@ async function body(request: IncomingMessage): Promise<unknown> {
       "request body is invalid",
     );
   }
+}
+
+/** A disconnected client must stop the bounded Ask loop without releasing a response. */
+function disconnectSignal(request: IncomingMessage, response: ServerResponse): { readonly signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const responseClose = () => {
+    if (!response.writableEnded) abort();
+  };
+  request.once("aborted", abort);
+  response.once("close", responseClose);
+  return Object.freeze({
+    signal: controller.signal,
+    dispose() {
+      request.removeListener("aborted", abort);
+      response.removeListener("close", responseClose);
+    },
+  });
 }
 
 function accessToken(value: string | undefined): string {
@@ -1003,6 +1038,83 @@ export function createOrganizationAuthorityHttpServer(
             request: requestBody,
           }),
         );
+        return;
+      }
+      if (
+        method === "GET" &&
+        url.pathname === PERSON_CAPABILITIES_PATH_V1 &&
+        url.search === ""
+      ) {
+        options.sessions.authenticateAccess({ access_token: accessToken(request.headers.authorization) });
+        if ((await rawBody(request)).byteLength !== 0) {
+          throw new AuthorityOperationError("invalid_request", "request is invalid");
+        }
+        json(response, 200, validatePersonCapabilitiesV1({
+          schema_version: 1,
+          kind: "echo-person-capabilities-v1",
+          agentic_ask_v1: options.agentic_ask_v1_enabled === true,
+        }));
+        return;
+      }
+      if (
+        method === "POST" &&
+        url.pathname === PERSON_ANSWER_PATH_V3 &&
+        url.search === ""
+      ) {
+        if (options.agentic_ask_v1_enabled !== true || options.person_answer_v3 === undefined) {
+          fail(response, 503, "unavailable");
+          return;
+        }
+        let requestBody;
+        try {
+          requestBody = validatePersonAnswerRequestV3(await body(request));
+        } catch {
+          throw new AuthorityOperationError("invalid_request", "request is invalid");
+        }
+        const disconnect = disconnectSignal(request, response);
+        try {
+          json(response, 200, await options.person_answer_v3.ask({
+            access_token: accessToken(request.headers.authorization),
+            request: requestBody,
+            signal: disconnect.signal,
+          }));
+        } finally {
+          disconnect.dispose();
+        }
+        return;
+      }
+      if (
+        method === "POST" &&
+        (url.pathname === PERSON_EVIDENCE_SEARCH_PATH_V1 || url.pathname === PERSON_EVIDENCE_OPEN_PATH_V1) &&
+        url.search === ""
+      ) {
+        if (options.agentic_ask_v1_enabled !== true || options.person_answer_v3 === undefined) {
+          fail(response, 503, "unavailable");
+          return;
+        }
+        const access_token = accessToken(request.headers.authorization);
+        const disconnect = disconnectSignal(request, response);
+        try {
+          if (url.pathname === PERSON_EVIDENCE_SEARCH_PATH_V1) {
+            let requestBody;
+            try {
+              requestBody = validatePersonEvidenceSearchRequestV1(await body(request));
+            } catch {
+              throw new AuthorityOperationError("invalid_request", "request is invalid");
+            }
+            json(response, 200, await options.person_answer_v3.searchEvidence({ access_token, request: requestBody, signal: disconnect.signal }));
+          } else {
+            let requestBody;
+            try {
+              requestBody = validatePersonEvidenceOpenRequestV1(await body(request));
+            } catch {
+              throw new AuthorityOperationError("invalid_request", "request is invalid");
+            }
+            json(response, 200, await options.person_answer_v3.openEvidence({ access_token, request: requestBody, signal: disconnect.signal }));
+          }
+        } finally {
+          disconnect.dispose();
+        }
         return;
       }
       if (

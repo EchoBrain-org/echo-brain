@@ -398,6 +398,8 @@ let state: State = {
 };
 const listeners = new Set<() => void>();
 let seq = 0;
+/** The active request's host cancellation id. It never leaves the desktop IPC. */
+let activeAskCancelId: string | null = null;
 
 export function getState(): State { return state; }
 function set(patch: Partial<State>): void {
@@ -2130,9 +2132,12 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
   const thread = state.ask;
   if (!account || text === '' || thread?.asking) return;
   const mine = ++seq;
+  const cancelId = crypto.randomUUID();
+  activeAskCancelId = cancelId;
   const asking: AskQuestion = { question: text, scope, scopeName: scopeName(scope) };
   set({ ask: { seq: mine, earlier: thread?.earlier ?? [], previous: thread?.shown ?? null, shown: null, asking, failed: null }, sources: null, toast: null });
-  const result = await rpc('ask.run', { expect: account, question: text, scope });
+  const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId });
+  if (activeAskCancelId === cancelId) activeAskCancelId = null;
   const current = state.ask;
   if (current?.seq !== mine) return; // cancelled, or Ask was left
   if (!result.ok) {
@@ -2150,6 +2155,9 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
 export function cancelAsk(): void {
   const thread = state.ask;
   if (!thread?.asking) return;
+  const cancelId = activeAskCancelId;
+  activeAskCancelId = null;
+  if (cancelId) void rpc('ask.cancel', { cancel_id: cancelId });
   if (!thread.previous) { closeAsk(); return; }
   set({ ask: { ...thread, seq: ++seq, shown: thread.previous, previous: null, asking: null } });
   startSources();
@@ -2163,6 +2171,9 @@ export async function copyAnswer(): Promise<boolean> {
 
 /** Back or Escape: leaves the thread, and it is gone. */
 export function closeAsk(): void {
+  const cancelId = activeAskCancelId;
+  activeAskCancelId = null;
+  if (cancelId) void rpc('ask.cancel', { cancel_id: cancelId });
   set({ ask: null, sources: null });
   syncSearch();
 }

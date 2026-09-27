@@ -48,6 +48,8 @@ import {
   type AnswerCompositionFailureEventV1,
 } from "./person-answer-route.js";
 import { createPersonAnswerV2Route, createPersonMeetingTranscriptReadRouteV1 } from "./person-answer-v2-route.js";
+import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
+import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import type { AnswerCompositionGenerationBindingV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
@@ -75,6 +77,8 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 }
 
 export interface OrganizationAuthorityApiRuntimeDependencies {
+  /** Per-organization V3 Ask capability. It is off unless the serving profile opts in. */
+  readonly agentic_ask_v1_enabled?: boolean;
   /** Historical record protocol projection, independent of live ingress. */
   readonly record_approver?: RecordApproverProjectorV1;
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
@@ -248,6 +252,9 @@ export async function startOrganizationAuthorityApiRuntime(
       sessions,
       oidc_provider: provider,
       expected_issuer: config.oidc.issuer,
+      // A flag without the bound generation profile is not a usable V3
+      // capability. Clients may downgrade only from this explicit false.
+      agentic_ask_v1_enabled: dependencies.agentic_ask_v1_enabled === true && dependencies.answer_composition_generation !== undefined,
       ...(dependencies.core_runtime_observation === undefined ? {} : { core_runtime_observation: dependencies.core_runtime_observation }),
       person_record_read: createPersonRecordReadRouteV1({
         authority_id: metadata.authority_id,
@@ -296,6 +303,19 @@ export async function startOrganizationAuthorityApiRuntime(
               audit: new SqlitePersonAnswerCompositionAuditV1(database),
               ...(dependencies.ask_journey_telemetry === undefined ? {} : { ask_journey_telemetry: dependencies.ask_journey_telemetry }),
               ...(dependencies.answer_failure === undefined ? {} : { on_failure: dependencies.answer_failure }),
+            }),
+            ...(dependencies.agentic_ask_v1_enabled !== true ? {} : {
+              person_answer_v3: createPersonAnswerV3Route({
+                authority_id: metadata.authority_id,
+                organization_id: metadata.organization_id,
+                state_lineage_id: lineage.root.state_lineage_id,
+                sessions,
+                originals,
+                records: recordSearch,
+                model: dependencies.answer_composition_generation.structured_output,
+                generation: dependencies.answer_composition_generation.generation,
+                audit: new SqlitePersonAgenticAskAuditV1(database),
+              }),
             }),
           }),
       person_documents: createPersonDocumentApplicationV1({
