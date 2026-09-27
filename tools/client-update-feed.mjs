@@ -37,6 +37,16 @@ function sameTarget(left, right) {
     left.libc === right.libc && left.installation === right.installation;
 }
 
+// New releases move both supported CLI platforms together. Historical feed
+// validation deliberately does not apply this publication requirement.
+export function requireBothCliTargets(manifest) {
+  const artifacts = manifest?.artifacts;
+  if (!Array.isArray(artifacts) || artifacts.length !== 2 ||
+      !Object.values(KIT_TARGETS).every(target => artifacts.some(artifact => artifact && sameTarget(artifact, target)))) {
+    fail('both_cli_kits_required');
+  }
+}
+
 function validateKit(archive, directory, manifest, release, target, config) {
   const temporary = mkdtempSync(join(directory, '.verify-'));
   const kit = join(temporary, 'kit');
@@ -87,7 +97,7 @@ export function prepareClientUpdateFeed({ configPath, releasePath, linuxKit, mac
     linuxKit && { path: linuxKit, target: KIT_TARGETS.linux },
     macosKit && { path: macosKit, target: KIT_TARGETS.macos },
   ].filter(Boolean);
-  if (!inputs.length) fail('missing_artifact');
+  requireBothCliTargets({ artifacts: inputs.map(input => input.target) });
   const artifacts = inputs.map(input => {
     const bytes = read(input.path, UPDATE_ARTIFACT_LIMIT);
     const sha256 = updateDigest(bytes);
@@ -172,6 +182,7 @@ export function validateSealedClientUpdateFeed({ prepared, authorizationPath, no
 
 export function sealClientUpdateFeed({ prepared, signaturePath, authorizationPath, now = Date.now() }) {
   const { config, manifest, payload } = validatePreparedClientUpdateFeed({ prepared, authorizationPath, now });
+  requireBothCliTargets(manifest);
   const signature = read(signaturePath, 64);
   if (signature.length !== 64) fail('invalid_signature');
   const envelope = { payload: payload.toString('base64'), signature: signature.toString('base64') };
@@ -185,10 +196,9 @@ export function sealClientUpdateFeed({ prepared, signaturePath, authorizationPat
 function main(argv) {
   const action = argv[0];
   const fields = action === 'prepare' ? ['config', 'release', 'linux-kit', 'macos-kit', 'sequence', 'expires', 'out'] : action === 'seal' ? ['prepared', 'signature', 'authorization'] : [];
-  if (!fields.length) fail('usage: client-update-feed.mjs prepare --config FILE --release FILE [--linux-kit ZIP] [--macos-kit ZIP] --sequence N --expires ISO --out NEW_DIRECTORY | seal --prepared DIRECTORY --signature FILE --authorization FILE');
+  if (!fields.length) fail('usage: client-update-feed.mjs prepare --config FILE --release FILE --linux-kit ZIP --macos-kit ZIP --sequence N --expires ISO --out NEW_DIRECTORY | seal --prepared DIRECTORY --signature FILE --authorization FILE');
   const { values, positionals } = parseArgs({ args: argv.slice(1), options: Object.fromEntries(fields.map(f => [f, { type: 'string' }])), strict: true, allowPositionals: false });
-  const required = action === 'prepare' ? ['config', 'release', 'sequence', 'expires', 'out'] : fields;
-  if (positionals.length || required.some(f => !values[f]) || (action === 'prepare' && !values['linux-kit'] && !values['macos-kit'])) fail('missing_argument');
+  if (positionals.length || fields.some(f => !values[f])) fail('missing_argument');
   const result = action === 'prepare' ? prepareClientUpdateFeed({ configPath: resolve(values.config), releasePath: resolve(values.release), linuxKit: values['linux-kit'] && resolve(values['linux-kit']), macosKit: values['macos-kit'] && resolve(values['macos-kit']), sequence: Number(values.sequence), expiresAt: values.expires, output: resolve(values.out) }) : sealClientUpdateFeed({ prepared: resolve(values.prepared), signaturePath: resolve(values.signature), authorizationPath: resolve(values.authorization) });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

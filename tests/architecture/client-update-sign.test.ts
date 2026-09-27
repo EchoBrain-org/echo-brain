@@ -32,24 +32,32 @@ function fixture() {
   const release = { schema_version: 1, kind: 'echo-clean-v1-release', release_id: 'clean-v1-sign-fixture', source_sha: sourceSha, released_at: '2026-09-24T00:00:00Z', baseline_compatibility_class: 'clean-v1', authority_image: { reference: `registry.example.test/authority@sha256:${'a'.repeat(64)}` }, person_client: { artifact_sha256: clientHash, artifact_url: 'https://fixture.invalid/client.tgz', package: '@echo-brain/person-client', version: '0.1.1' }, runtime_profile: { artifact_sha256: 'b'.repeat(64), artifact_url: 'https://fixture.invalid/profile.json', profile_version: 'clean-v1-profile-1' } };
   const releasePath = join(root, 'release.json');
   save(releasePath, release);
-  const kit = join(root, 'echo-person-onboarding-kit');
-  mkdirSync(kit, { mode: 0o700 });
-  for (const [file, source] of [['Start-ECHO.sh', 'deploy/release/start-person-cli-kit-macos.sh'], ['clean-v1-release.mjs', 'tools/clean-v1-release.mjs'], ['verify-person-onboarding-kit.mjs', 'deploy/release/verify-person-onboarding-kit.mjs']]) {
-    writeFileSync(join(kit, file), execFileSync('git', ['show', `${sourceSha}:${source}`], { cwd: REPO }), { mode: 0o600 });
-  }
-  writeFileSync(join(kit, 'release.json'), readFileSync(releasePath), { mode: 0o600 });
-  writeFileSync(join(kit, 'person-client.tgz'), readFileSync(client), { mode: 0o600 });
-  save(join(kit, 'build-identity.v1.json'), { schema_version: 1, kind: 'echo-person-onboarding-kit-identity-v1', product_version: '0.1.1', source_sha: sourceSha, platform: 'darwin', architecture: 'arm64', release_id: release.release_id });
-  writeFileSync(join(kit, 'node'), 'synthetic macOS runtime', { mode: 0o600 });
-  const digest = (file: string) => updateDigest(readFileSync(join(kit, file)));
-  save(join(kit, 'kit-manifest.v1.json'), { schema_version: 3, kind: 'echo-person-cli-kit-v1', release_id: release.release_id, source_sha: sourceSha, release_record_sha256: digest('release.json'), person_client_artifact_sha256: clientHash, build_identity_sha256: digest('build-identity.v1.json'), runtime: { platform: 'darwin', architecture: 'arm64', version: 'v22.22.1', node_sha256: digest('node') } });
-  const archive = join(root, 'macos.zip');
-  execFileSync('zip', ['-qr', archive, 'echo-person-onboarding-kit'], { cwd: root });
   const configPath = join(root, 'config.json');
   const config = { schema_version: 1, kind: 'echo-client-update-config-v1', channel: 'fixture', feed_url: 'https://fixture.invalid/feed.json', public_key_spki: metadata.public_key_spki, minimum_sequence: 1, automatic: true, installation: 'cli-kit' };
   save(configPath, config);
+  const targets = [
+    { name: 'macos', platform: 'darwin', architecture: 'arm64', schema_version: 3, kind: 'echo-person-cli-kit-v1', startSource: 'deploy/release/start-person-cli-kit-macos.sh' },
+    { name: 'linux', platform: 'linux', architecture: 'x64', schema_version: 2, kind: 'echo-person-onboarding-kit-v2', startSource: 'deploy/release/start-person-onboarding-kit-linux.sh' },
+  ];
+  const archives = targets.flatMap(target => {
+    const directory = join(root, target.name);
+    const kit = join(directory, 'echo-person-onboarding-kit');
+    mkdirSync(kit, { recursive: true, mode: 0o700 });
+    for (const [file, source] of [['Start-ECHO.sh', target.startSource], ['clean-v1-release.mjs', 'tools/clean-v1-release.mjs'], ['verify-person-onboarding-kit.mjs', 'deploy/release/verify-person-onboarding-kit.mjs']]) {
+      writeFileSync(join(kit, file), execFileSync('git', ['show', `${sourceSha}:${source}`], { cwd: REPO }), { mode: 0o600 });
+    }
+    writeFileSync(join(kit, 'release.json'), readFileSync(releasePath), { mode: 0o600 });
+    writeFileSync(join(kit, 'person-client.tgz'), readFileSync(client), { mode: 0o600 });
+    save(join(kit, 'build-identity.v1.json'), { schema_version: 1, kind: 'echo-person-onboarding-kit-identity-v1', product_version: '0.1.1', source_sha: sourceSha, platform: target.platform, architecture: target.architecture, release_id: release.release_id });
+    writeFileSync(join(kit, 'node'), `synthetic ${target.name} runtime`, { mode: 0o600 });
+    const digest = (file: string) => updateDigest(readFileSync(join(kit, file)));
+    save(join(kit, 'kit-manifest.v1.json'), { schema_version: target.schema_version, kind: target.kind, release_id: release.release_id, source_sha: sourceSha, release_record_sha256: digest('release.json'), person_client_artifact_sha256: clientHash, build_identity_sha256: digest('build-identity.v1.json'), runtime: { platform: target.platform, architecture: target.architecture, version: 'v22.22.1', node_sha256: digest('node') }, ...(target.name === 'linux' ? { update_bootstrap: config } : {}) });
+    const archive = join(root, `${target.name}.zip`);
+    execFileSync('zip', ['-qr', archive, 'echo-person-onboarding-kit'], { cwd: directory });
+    return [`--${target.name}-kit`, archive];
+  });
   const prepared = join(root, 'prepared');
-  const prepare = spawnSync(process.execPath, [join(REPO, 'tools/client-update-feed.mjs'), 'prepare', '--config', configPath, '--release', releasePath, '--macos-kit', archive, '--sequence', '1', '--expires', new Date(Date.now() + 86_400_000).toISOString(), '--out', prepared], { cwd: REPO, encoding: 'utf8' });
+  const prepare = spawnSync(process.execPath, [join(REPO, 'tools/client-update-feed.mjs'), 'prepare', '--config', configPath, '--release', releasePath, ...archives, '--sequence', '1', '--expires', new Date(Date.now() + 86_400_000).toISOString(), '--out', prepared], { cwd: REPO, encoding: 'utf8' });
   expect(prepare.status, prepare.stderr).toBe(0);
   const authorizationPath = join(root, 'authorization.json');
   const authorization = { kind: 'echo-staging-release-founder-authorization-v1', release_sha256: updateDigest(readFileSync(releasePath)), person_client_sha256: clientHash, slack_approved: true, person_records_passed: true, person_ask_passed: true, release_authorized: true };
@@ -94,6 +102,19 @@ describe('local approved release signer', () => {
     expect(verify(null, f.payload, publicKey, signature)).toBe(true);
     expect(verify(null, f.payload.subarray(0, -1), publicKey, signature)).toBe(false);
     expect(() => signClientUpdateFeed(f.options)).toThrow('signature_already_exists');
+  });
+
+  it.each([
+    ['linux', false], ['darwin', false], ['linux', true], ['darwin', true],
+  ] as const)('rejects a manually reduced %s-only manifest with approval=%s', (platform, approved) => {
+    const f = fixture();
+    const manifestPath = join(f.prepared, 'manifest.json');
+    const manifest = JSON.parse(f.payload.toString('utf8'));
+    manifest.artifacts = manifest.artifacts.filter((artifact: { platform: string }) => artifact.platform === platform);
+    save(manifestPath, manifest);
+    const approveManifest = approved ? updateDigest(readFileSync(manifestPath)) : undefined;
+    expect(() => signClientUpdateFeed({ ...f.options, approveManifest })).toThrow('both_cli_kits_required');
+    expect(existsSync(f.signaturePath)).toBe(false);
   });
 
   it.each(['slack_approved', 'person_records_passed', 'person_ask_passed', 'release_authorized'] as const)('refuses without existing %s authorization', (field) => {

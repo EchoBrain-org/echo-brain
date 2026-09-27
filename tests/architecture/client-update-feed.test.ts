@@ -15,7 +15,7 @@ const TARGET = {
   macos: { platform: 'darwin', architecture: 'arm64', libc: null, schema_version: 3, kind: 'echo-person-cli-kit-v1', startSource: 'deploy/release/start-person-cli-kit-macos.sh' },
 } as const;
 
-function fixture(targets: Target[] = ['linux']) {
+function fixture(targets: Target[] = ['linux', 'macos']) {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'echo-feed-test-'));
   roots.push(root);
   const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim();
@@ -62,9 +62,20 @@ function fixture(targets: Target[] = ['linux']) {
     writeFileSync(approvalPath, JSON.stringify({ kind: 'echo-staging-release-founder-authorization-v1', release_sha256: updateDigest(readFileSync(releasePath)), person_client_sha256: clientHash, slack_approved: true, person_records_passed: true, person_ask_passed: true, release_authorized: authorized }));
   };
   const seal = () => run(['seal', '--prepared', output, '--signature', signaturePath, '--authorization', approvalPath]);
+  const retainTarget = (target: Target) => {
+    const path = join(output, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(path, 'utf8'));
+    manifest.artifacts = manifest.artifacts.filter((artifact: { platform: string }) => artifact.platform === TARGET[target].platform);
+    writeFileSync(path, canonical(manifest) + '\n');
+    return manifest;
+  };
+  const writeHistoricalEnvelope = () => writeFileSync(join(output, 'feed.json'), canonical({
+    payload: readFileSync(join(output, 'manifest.json')).toString('base64'),
+    signature: readFileSync(signaturePath).toString('base64'),
+  }) + '\n');
   const validateSealed = (now = Date.now(), allowExpired = false) => spawnSync(process.execPath, ['--input-type=module', '-e',
     'import { validateSealedClientUpdateFeed } from "./tools/client-update-feed.mjs"; validateSealedClientUpdateFeed({prepared: process.argv[1], authorizationPath: process.argv[2], now: Number(process.argv[3]), allowExpired: process.argv[4] === "true"});', output, approvalPath, String(now), String(allowExpired)], { cwd: REPO, encoding: 'utf8' });
-  return { root, kits, output, prepare, authorize, seal, signaturePath, approvalPath, validateSealed };
+  return { root, kits, output, prepare, authorize, seal, signaturePath, approvalPath, retainTarget, writeHistoricalEnvelope, validateSealed };
 }
 afterEach(() => { for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
@@ -94,12 +105,31 @@ describe('approved update feed publisher', () => {
     expect(f.validateSealed().status).toBe(0);
   });
 
-  it.each([[['linux'] as Target[]], [['macos'] as Target[]]])('prepares a %s-only CLI feed', (targets) => {
+  it.each([[['linux'] as Target[]], [['macos'] as Target[]]])('refuses preparation when only the %s CLI kit is supplied', (targets) => {
     const f = fixture(targets);
+    expect(f.prepare().status).toBe(1);
+    expect(existsSync(f.output)).toBe(false);
+  });
+
+  it.each(['linux', 'macos'] as const)('refuses to seal a manually reduced %s-only manifest', (target) => {
+    const f = fixture();
     expect(f.prepare().status).toBe(0);
-    expect(JSON.parse(readFileSync(join(f.output, 'manifest.json'), 'utf8')).artifacts).toHaveLength(1);
+    f.retainTarget(target);
     f.authorize();
-    expect(f.seal().status).toBe(0);
+    expect(f.seal().status).toBe(1);
+    expect(existsSync(join(f.output, 'feed.json'))).toBe(false);
+  });
+
+  it.each(['linux', 'macos'] as const)('still audits a previously signed %s-only feed, including after expiry', (target) => {
+    const f = fixture();
+    expect(f.prepare().status).toBe(0);
+    const manifest = f.retainTarget(target);
+    f.authorize();
+    // Historical bytes are constructed directly, without asking new-release
+    // preparation or sealing to authorize a single-platform publication.
+    f.writeHistoricalEnvelope();
+    expect(f.validateSealed().status).toBe(0);
+    expect(f.validateSealed(Date.parse(manifest.expires_at) + 1, true).status).toBe(0);
   });
 
   it('prepares one signed feed with both exact supported CLI targets', () => {
@@ -195,14 +225,14 @@ describe('approved update feed publisher', () => {
   });
 
   it('refuses a macOS kit whose runtime claims Linux, or the legacy desktop-kit shape', () => {
-    const mismatched = fixture(['macos']);
+    const mismatched = fixture();
     const manifest = join(mismatched.kits.macos.directory, 'kit-manifest.v1.json');
     const value = JSON.parse(readFileSync(manifest, 'utf8'));
     value.runtime.platform = 'linux';
     writeFileSync(manifest, JSON.stringify(value));
     mismatched.kits.macos.zipKit();
     expect(mismatched.prepare().status).toBe(1);
-    const legacy = fixture(['macos']);
+    const legacy = fixture();
     const legacyManifest = join(legacy.kits.macos.directory, 'kit-manifest.v1.json');
     const legacyValue = JSON.parse(readFileSync(legacyManifest, 'utf8'));
     legacyValue.schema_version = 1;
