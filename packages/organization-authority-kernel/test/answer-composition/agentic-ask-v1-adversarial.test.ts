@@ -16,13 +16,14 @@ const generation = {
 };
 
 function item(id: string, options: Partial<EvidenceDeskItemV1> = {}): EvidenceDeskItemV1 {
-  const fill = id.charCodeAt(0).toString(16).slice(-1) || 'a';
+  const atom = canonicalSha256({ id });
+  const record = canonicalSha256({ id, kind: 'record' });
   return {
     id,
     citation: {
       kind: 'approved_record',
-      atom_id: `sha256:${fill.repeat(64)}`,
-      record_sha256: `sha256:${'b'.repeat(64)}`,
+      atom_id: atom,
+      record_sha256: record,
       policy_id: 'organization-member-readable-person-v2',
     },
     kind: 'decision',
@@ -82,6 +83,37 @@ describe('Agentic Ask V1 adversarial boundaries', () => {
 
     await expect(answer.answer({ question: 'Question' })).rejects.toThrow('membership revoked');
     expect(model.generate).not.toHaveBeenCalled();
+    expect(entries).toEqual([]);
+  });
+
+  it('does not admit a queued parallel writer after another writer revalidation fails', async () => {
+    let revalidations = 0;
+    const authorizationFailure = new Error('membership revoked during writer admission');
+    const calls: string[] = [];
+    const model: StructuredGenerationPort = {
+      generate: vi.fn(async input => {
+        const current = role(input); calls.push(current);
+        switch (current) {
+          case 'plan': return plan([{ question: 'First', queries: ['first'] }, { question: 'Second', queries: ['second'] }]);
+          case 'judge': return judged([{ id: 'p1', status: 'answered', evidence_ids: ['one'] }, { id: 'p2', status: 'answered', evidence_ids: ['two'] }]);
+          case 'writer': throw new Error('a writer must not start after an admission fence failure');
+          case 'summary': return { statement: null };
+        }
+      }),
+    };
+    const entries: AgenticAskAuditEntryV1[] = [];
+    const answer = composition(model, desk({
+      search: query => query === 'first' ? { items: [item('one')], truncated: false } : query === 'second' ? { items: [item('two')], truncated: false } : { items: [], truncated: false },
+      revalidate: async () => {
+        revalidations += 1;
+        if (revalidations === 3) throw authorizationFailure; // plan, judge, then first writer
+        return { checked_at: '2026-09-27T00:00:00.000Z' };
+      },
+    }), entries);
+
+    await expect(answer.answer({ question: 'Both' })).rejects.toBe(authorizationFailure);
+    expect(calls).toEqual(['plan', 'judge']);
+    expect(revalidations).toBe(3);
     expect(entries).toEqual([]);
   });
 

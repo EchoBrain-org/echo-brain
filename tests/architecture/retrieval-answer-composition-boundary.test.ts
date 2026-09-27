@@ -57,6 +57,20 @@ describe('retrieval and answer-composition boundaries', () => {
     }
     expect(read(AUDIT)).toContain('context_kind: "answer_composition"');
   });
+  it('keeps the entire answer kernel closure free of provider, record and storage implementations', () => {
+    // Route composition may bind the desk and audit adapters. The kernel and
+    // every helper it imports may consume only their released contracts.
+    const pending = files(ANSWER_ROOT);
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const path = pending.pop()!;
+      if (visited.has(path)) continue;
+      visited.add(path);
+      expect(path).not.toMatch(/^providers\/|^services\/|^packages\/organization-(?:record|retrieval)\/|\/(?:adapters\/persistence|storage)\//);
+      pending.push(...graph.targets(path));
+    }
+    expect(visited.size).toBeGreaterThan(files(ANSWER_ROOT).length);
+  });
   it('keeps legacy composition free of agent modules and all Ask paths non-streaming', () => {
     const implementation = files(ANSWER_ROOT);
     expect(implementation.length).toBeGreaterThan(0);

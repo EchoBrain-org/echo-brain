@@ -17,7 +17,7 @@ import type {
   PersonOriginalContextEvidenceDeskPortV1,
 } from "../application/ports/person-original-context-retrieval-v1.js";
 import type {
-  PersonRecordSearchBatchApplicationV1,
+  PersonEvidenceDeskRecordsV1,
   PersonRecordSearchBatchReleaseV1,
   PersonRecordSearchReleasePointerV1,
 } from "./person-record-search-route.js";
@@ -29,7 +29,7 @@ export interface CreatePersonEvidenceDeskV1Options {
   readonly access_token: string;
   readonly scope: PersonAskScopeV2;
   readonly originals: PersonOriginalContextEvidenceDeskPortV1;
-  readonly records: PersonRecordSearchBatchApplicationV1;
+  readonly records: PersonEvidenceDeskRecordsV1;
 }
 
 type Stored = Readonly<{
@@ -103,7 +103,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       visibility: value.visibility, receipt_sha256: release.receipt,
     }), { original: release }));
   };
-  const records = (result: ReturnType<PersonRecordSearchBatchApplicationV1["searchBatch"]>, includeText = true): readonly EvidenceDeskItemV1[] => {
+  const records = (result: ReturnType<PersonEvidenceDeskRecordsV1["searchBatch"]>, includeText = true): readonly EvidenceDeskItemV1[] => {
     latestRecordTruncated ||= result.truncated === true;
     pointer ??= result.release.active_pointer;
     if (pointer.generation_id !== result.release.active_pointer.generation_id || pointer.manifest_sha256 !== result.release.active_pointer.manifest_sha256 || pointer.record_head.position !== result.release.active_pointer.record_head.position || pointer.record_head.record_sha256 !== result.release.active_pointer.record_head.record_sha256) throw new AuthorityOperationError("unavailable", "record evidence snapshot changed");
@@ -131,9 +131,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     // The empty model-facing desk still needs a fixed record-mode decision.
     // This server-owned probe never enters the pad or a provider prompt.
     try {
-      const probe = options.records.initializeDesk === undefined
-        ? options.records.searchBatch({ access_token: options.access_token, queries: ["evidence"], limit: 1, desk: true, ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}) })
-        : options.records.initializeDesk({ access_token: options.access_token, ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}) });
+      const probe = options.records.initializeDesk({ access_token: options.access_token, ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}) });
       pointer = probe.release.active_pointer;
       recordReleases.push(probe.release);
       initializationReceipts = [probe.release.record_read_audit_row_sha256];
@@ -159,7 +157,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       const released = options.originals.deskSearch({ access_token: options.access_token, scope: options.scope, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
       const beforeRecords = recordReleases.length;
       const recordKinds = input.kinds?.filter((kind): kind is "decision" | "action" | "rationale" => kind === "decision" || kind === "action" || kind === "rationale");
-      const recordInventory = recordsUnavailableAtStart || options.records.listDeskBatch === undefined ? [] : records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
+      const recordInventory = recordsUnavailableAtStart ? [] : records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
       const items = balanced(originals(released), recordInventory).filter((item) => input.kinds === undefined || input.kinds.includes(item.kind));
       return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
     }
@@ -179,7 +177,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       const release = options.originals.deskOpen({ access_token: options.access_token, scope: options.scope, citation: value.item.citation, ...(input.neighbours === undefined ? {} : { neighbours: input.neighbours }) });
       return result(originals(release), release.truncated, [release.receipt]);
     }
-    if (value.record === undefined || value.record_anchor === undefined || options.records.openDeskBatch === undefined) throw new AuthorityOperationError("unavailable", "record evidence open is unavailable");
+    if (value.record === undefined || value.record_anchor === undefined) throw new AuthorityOperationError("unavailable", "record evidence open is unavailable");
     const expanded = options.records.openDeskBatch({ access_token: options.access_token, release: value.record, anchor: value.record_anchor });
     latestRecordTruncated = false;
     return result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]);
@@ -190,7 +188,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       input.signal?.throwIfAborted();
       initialize();
       if (input.citation.kind === "approved_record") {
-        if (options.records.openDeskCitation === undefined) throw new AuthorityOperationError("unavailable", "record evidence open is unavailable");
         const expanded = options.records.openDeskCitation({ access_token: options.access_token, atom_id: input.citation.atom_id, record_sha256: input.citation.record_sha256, policy_id: input.citation.policy_id, ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}) });
         latestRecordTruncated = false;
         return result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]);

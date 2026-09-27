@@ -127,3 +127,14 @@ its project routes and client operations are live.
 Agentic Ask V1 is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md)
 and [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md). Its V3 route and shared evidence
 desk are capability-gated; implementation and live qualification are separate.
+
+The desk owns Person authorization, the pinned retrieval snapshot and release
+audits. Record coordinates are resolved through that authorized snapshot before
+raw-record metadata is added. Its required ports expose the complete desk
+contract; legacy Ask contracts remain separate.
+
+The answer kernel owns request-local orchestration and budgets. Pure model
+protocol and response helpers handle parsing and canonical V4 validation, while
+the route binds the Person, desk, model and request audit. It receives no storage
+handle or provider-specific implementation. Architecture tests traverse its
+entire import closure to enforce that separation.

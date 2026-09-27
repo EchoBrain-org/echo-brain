@@ -79,7 +79,7 @@ modules.catch(error => { console.error('person host failed to load the client:',
 const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  'ask.run': 145_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
+  'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000, 'documents.list': 45_000,
   'documents.read': 45_000, 'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000, 'projects.directory': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,

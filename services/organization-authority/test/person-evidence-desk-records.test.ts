@@ -51,8 +51,7 @@ function authorization(): PersonAccessAuthorization {
   };
 }
 
-function atom(input: { readonly record_sha256: Sha256Digest; readonly envelope_sha256: Sha256Digest }): ReadableSearchAtomV1 {
-  const text = 'Decision 0';
+function atom(input: { readonly record_sha256: Sha256Digest; readonly envelope_sha256: Sha256Digest }, text = 'Decision 0'): ReadableSearchAtomV1 {
   return {
     authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, record_position: 1,
     record_sha256: input.record_sha256, envelope_sha256: input.envelope_sha256, approval_id: 'approval-1', atom_id: sha256Digest('atom'), atom_order: 0,
@@ -92,14 +91,14 @@ function emptyOriginals(): PersonOriginalContextEvidenceDeskPortV1 {
   } as unknown as PersonOriginalContextEvidenceDeskPortV1;
 }
 
-async function fixture(options: { readonly active?: boolean; readonly corrupt?: boolean; readonly forged_pointer?: boolean } = {}) {
+async function fixture(options: { readonly active?: boolean; readonly corrupt?: boolean; readonly forged_pointer?: boolean; readonly atom_text?: string; readonly atom_envelope_sha256?: Sha256Digest } = {}) {
   const authority = openAuthorityDatabase(':memory:');
   applyAuthorityBaselineV10(authority);
   authority.prepare("INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES(1,?,?, 'Clean','{}','2026-09-27T00:00:00.000Z','2026-09-27T00:00:00.000Z')").run(COORDINATES.authority_id, COORDINATES.organization_id);
   const record = recordDatabase();
-  const appended = await new OrganizationRecordAppenderV4(record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID }));
+  const appended = await new OrganizationRecordAppenderV4(record, COORDINATES).append(appendInput({ authority: protocolAuthority(), policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, ...(options.atom_text === undefined ? {} : { decision_text: options.atom_text }) }));
   const state_directory = stateRoot();
-  const recordAtom = atom(appended);
+  const recordAtom = atom({ ...appended, envelope_sha256: options.atom_envelope_sha256 ?? appended.envelope_sha256 }, options.atom_text);
   if (options.active !== false) {
     const built = buildReadableSearchGenerationV1(generation(state_directory, [recordAtom]));
     const active = { generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256, retrieval_contract_sha256: RETRIEVAL_CONTRACT, exact_head: { ...COORDINATES, position: 1, record_sha256: recordAtom.record_sha256 } };
@@ -165,6 +164,67 @@ describe('Person evidence desk over the real approved-record route', () => {
       drifted.authority.prepare('UPDATE authority_readable_search_active_generation SET manifest_sha256=? WHERE singleton=1').run(digest('drift'));
       await expect(desk.revalidate({})).rejects.toThrow('person authentication failed');
     } finally { drifted.close(); }
+  });
+
+  it('does not turn a valid release witness into authority for a forged atom anchor', async () => {
+    const value = await fixture();
+    try {
+      const batch = value.route.searchBatch({ access_token: 'token', queries: ['Decision'], desk: true });
+      const anchor = batch.desk_items![0]!;
+      expect(() => value.route.openDeskBatch({
+        access_token: 'token',
+        release: batch.release,
+        anchor: { ...anchor, atom_id: digest('forged-record-atom') },
+      })).toThrow('exact-head readable-search generation is not available');
+    } finally { value.close(); }
+  });
+
+  it('keeps a 3,072-byte record atom, but omits 3,073- and 4,096-byte atoms with truncation', async () => {
+    const accepted = await fixture({ atom_text: `Decision ${'x '.repeat(1_532).slice(0, 3_063)}` });
+    try {
+      expect(Buffer.byteLength(accepted.recordAtom.text, 'utf8')).toBe(3_072);
+      const result = await accepted.makeDesk().search({ query: 'Decision', limit: 10 });
+      expect(result.items.filter(item => item.citation.kind === 'approved_record')).toHaveLength(1);
+      expect(result.truncated).toBe(false);
+      const inventoryDesk = accepted.makeDesk();
+      const inventory = await inventoryDesk.search({ limit: 10 });
+      const item = inventory.items.find(value => value.citation.kind === 'approved_record');
+      expect(item).toBeDefined();
+      await expect(inventoryDesk.open({ item: item!.id })).resolves.toMatchObject({
+        items: [expect.objectContaining({ text: accepted.recordAtom.text })],
+      });
+    } finally { accepted.close(); }
+
+    for (const bytes of [3_073, 4_096]) {
+      const value = await fixture({ atom_text: `Decision ${'x '.repeat(2_100).slice(0, bytes - 9)}` });
+      try {
+        expect(Buffer.byteLength(value.recordAtom.text, 'utf8')).toBe(bytes);
+        const result = await value.makeDesk().search({ query: 'Decision', limit: 10 });
+        expect(result.items.filter(item => item.citation.kind === 'approved_record')).toEqual([]);
+        expect(result.truncated).toBe(true);
+      } finally { value.close(); }
+    }
+  });
+
+  it('writes one final record-read audit for a fresh citation open', async () => {
+    const value = await fixture();
+    try {
+      const desk = value.makeDesk();
+      const searched = await desk.search({ query: 'Decision', limit: 10 });
+      const citation = searched.items.find(item => item.citation.kind === 'approved_record')!.citation;
+      if (citation.kind !== 'approved_record') throw new Error('missing record citation');
+      const count = () => (value.authority.prepare("SELECT count(*) AS n FROM authority_person_read_decision_audit_v2 WHERE context_kind='record_read'").get() as { readonly n: number }).n;
+      const before = count();
+      await desk.openCitation({ citation });
+      expect(count()).toBe(before + 1);
+    } finally { value.close(); }
+  });
+
+  it('fails closed when raw-record metadata no longer binds the warmed envelope', async () => {
+    const value = await fixture({ atom_envelope_sha256: digest('corrupt-envelope') });
+    try {
+      await expect(value.makeDesk().search({ query: 'Decision', limit: 10 })).rejects.toThrow('record evidence metadata is unavailable');
+    } finally { value.close(); }
   });
 
   it('treats an unavailable index at request start as a records-only notice, but propagates corruption', async () => {

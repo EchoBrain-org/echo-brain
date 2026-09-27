@@ -17,12 +17,17 @@ const item = (id = "e1", text = "The launch decision is approved for Tuesday.", 
   });
 };
 
-function desk(input: { readonly first?: readonly EvidenceDeskItemV1[]; readonly inventory?: readonly EvidenceDeskItemV1[]; readonly opened?: readonly EvidenceDeskItemV1[] } = {}) {
+function desk(input: {
+  readonly first?: readonly EvidenceDeskItemV1[];
+  readonly inventory?: readonly EvidenceDeskItemV1[];
+  readonly opened?: readonly EvidenceDeskItemV1[];
+  readonly revalidate?: () => Promise<{ readonly checked_at: string }>;
+} = {}) {
   const search = vi.fn(async (request: { readonly query?: string }) => ({
     items: request.query === undefined ? input.inventory ?? [] : input.first ?? [], truncated: false, receipt_digests: [digest("d")],
   }));
   const open = vi.fn(async () => ({ items: input.opened ?? [], truncated: false, receipt_digests: [digest("e")] }));
-  const revalidate = vi.fn(async () => ({ checked_at: "2026-09-27T00:00:00.000Z" }));
+  const revalidate = vi.fn(async () => input.revalidate?.() ?? ({ checked_at: "2026-09-27T00:00:00.000Z" }));
   return Object.freeze({ scope: { kind: "global" as const }, search, open, revalidate }) as EvidenceDeskPortV1 & { search: typeof search; open: typeof open; revalidate: typeof revalidate };
 }
 
@@ -78,6 +83,126 @@ describe("agentic Ask V1", () => {
 
     expect(result.outcome).toBe("answered");
     expect(audit[0]).toMatchObject({ repairs: 1, fallbacks: 1, model_calls: 5 });
+  });
+
+  it("repairs a planner query that exceeds the shared lexical term limit before it reaches the desk", async () => {
+    const tooManyTerms = Array.from({ length: 33 }, (_, index) => `term${index}`).join(" ");
+    const evidence = desk({ first: [item()] });
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const result = await createAgenticAskV1({
+      desk: evidence,
+      model: scripted([{ parts: [{ question: "When is launch?", queries: [tooManyTerms] }] }, plan, judge, writer, summary]),
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: entry => { audit.push(entry); } },
+    }).answer({ question: "When is launch?" });
+
+    expect(result.outcome).toBe("answered");
+    expect(audit[0]).toMatchObject({ repairs: 1, model_calls: 5 });
+    expect(evidence.search).not.toHaveBeenCalledWith(expect.objectContaining({ query: tooManyTerms }));
+  });
+
+  it("repairs a judge query that exceeds the shared lexical term limit before another desk call", async () => {
+    const tooManyTerms = Array.from({ length: 33 }, (_, index) => `term${index}`).join(" ");
+    const evidence = desk({ first: [item()] });
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const invalidJudge = { scope: { matches_question: true, note: "" }, parts: [{ id: "p1", status: "partial", evidence_ids: ["e1"], new_queries: [tooManyTerms] }], done: false };
+    const result = await createAgenticAskV1({
+      desk: evidence,
+      model: scripted([plan, invalidJudge, judge, writer, summary]),
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: entry => { audit.push(entry); } },
+    }).answer({ question: "When is launch?" });
+
+    expect(result.outcome).toBe("answered");
+    expect(audit[0]).toMatchObject({ repairs: 1, model_calls: 5 });
+    expect(evidence.search).not.toHaveBeenCalledWith(expect.objectContaining({ query: tooManyTerms }));
+  });
+
+  it("shares cached repeated-query evidence with each part when judge fallback is used", async () => {
+    const shared = item("shared", "The shared launch evidence is exact.");
+    const badJudge = { nope: true };
+    const model = scripted([
+      { parts: [{ question: "First launch detail", queries: ["launch"] }, { question: "Second launch detail", queries: ["launch"] }] },
+      badJudge,
+      badJudge,
+      { statements: [] }, { statements: [] },
+    ]);
+    const result = await createAgenticAskV1({
+      desk: desk({ first: [shared] }), model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() },
+    }).answer({ question: "What launch details changed?" });
+
+    expect(result.parts.map(part => part.status)).toEqual(["records_only", "records_only"]);
+    expect(result.parts[1]?.records?.[0]?.text).toBe(shared.text);
+  });
+
+  it("does not start inventory discovery after the writing reserve begins", async () => {
+    let clock = 0;
+    const evidence = desk();
+    evidence.search.mockImplementation(async request => {
+      if (request.query !== undefined) clock = 46_000;
+      return { items: [], truncated: false, receipt_digests: [digest("d")] };
+    });
+    const result = await createAgenticAskV1({
+      desk: evidence, model: scripted([{ parts: [{ question: "When is launch?", queries: [] }] }]),
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() }, now_ms: () => clock,
+    }).answer({ question: "When is launch?" });
+
+    expect(result.outcome).toBe("not_found");
+    expect(evidence.search).not.toHaveBeenCalledWith(expect.objectContaining({ query: undefined, limit: 50 }));
+  });
+
+  it("audits a hard deadline as timed_out rather than caller cancellation", async () => {
+    let clock = 0;
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const model: StructuredGenerationPort = { generate: vi.fn(async () => { clock = 60_000; return plan; }) };
+    await expect(createAgenticAskV1({
+      desk: desk(), model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: entry => { audit.push(entry); } }, now_ms: () => clock,
+    }).answer({ question: "When is launch?" })).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
+    expect(audit).toEqual([expect.objectContaining({ outcome: "timed_out", prompt_sha256: null, response_sha256: null })]);
+  });
+
+  it("audits a timer-aborted hung model as timed_out without a caller cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const audit: AgenticAskAuditEntryV1[] = [];
+      let entered!: () => void;
+      const enteredModel = new Promise<void>(resolve => { entered = resolve; });
+      const model: StructuredGenerationPort = { generate: vi.fn(async () => { entered(); return new Promise<never>(() => undefined); }) };
+      const pending = createAgenticAskV1({
+        desk: desk(), model,
+        generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+        audit: { append: entry => { audit.push(entry); } },
+      }).answer({ question: "When is launch?" });
+
+      await enteredModel;
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await rejected;
+      expect(audit).toEqual([expect.objectContaining({ outcome: "timed_out", model_calls: 1, prompt_sha256: null, answer_sha256: null, response_sha256: null })]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("binds an off-scope audit to the final revalidation fence", async () => {
+    let checks = 0;
+    const stamps = ["2026-09-27T00:00:01.000Z", "2026-09-27T00:00:02.000Z", "2026-09-27T00:00:03.000Z"];
+    const evidence = desk({ first: [item()], revalidate: async () => ({ checked_at: stamps[checks++]! }) });
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const offScopeJudge = { scope: { matches_question: false, note: "Released evidence is unrelated." }, parts: [{ id: "p1", status: "missing", evidence_ids: [], new_queries: [] }], done: true };
+    const result = await createAgenticAskV1({
+      desk: evidence, model: scripted([plan, offScopeJudge]),
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: entry => { audit.push(entry); } },
+    }).answer({ question: "When is launch?" });
+
+    expect(result.outcome).toBe("off_scope");
+    expect(audit).toEqual([expect.objectContaining({ checked_at: "2026-09-27T00:00:03.000Z" })]);
   });
 
   it("does not publish a fallback after cancellation, but writes a terminal cancellation audit", async () => {
@@ -170,7 +295,6 @@ describe("agentic Ask V1", () => {
     const result = await createAgenticAskV1({
       desk: evidence, model,
       generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
-      validate_response: value => validatePersonAnswerResponseV4(value) as never,
       audit: { append: vi.fn() },
     }).answer({ question: "All parts" });
     expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(64 * 1024);

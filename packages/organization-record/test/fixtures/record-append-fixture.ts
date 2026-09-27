@@ -169,6 +169,7 @@ export function humanAct(
     readonly actions?: number;
     readonly rationales?: number;
   },
+  decision_text?: string,
 ) {
   const selected = policy(policy_id);
   const reference = {
@@ -204,7 +205,7 @@ export function humanAct(
           (_, index) => ({
             id: `decision-${approval_id}-${index}`,
             kind: "decision" as const,
-            text: `Decision ${index}`,
+            text: decision_text ?? `Decision ${index}`,
             subject: null,
             confidence: null,
             evidence: [
@@ -492,6 +493,7 @@ export function appendInput(input: {
     readonly actions?: number;
     readonly rationales?: number;
   };
+  readonly decision_text?: string;
   readonly envelope_calls?: { value: number };
   readonly receipt?: V4ReceiptFactory;
   readonly semantic_idempotency_key?: Sha256Digest;
@@ -502,6 +504,7 @@ export function appendInput(input: {
     input.policy_id ?? RESTRICTED_REVIEWER_PERSON_POLICY_ID,
     input.signal_count ?? 1,
     input.signal_counts,
+    input.decision_text,
   );
   return {
     approval_id: input.approval_id ?? "approval-1",

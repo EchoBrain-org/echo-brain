@@ -288,6 +288,10 @@ The terminal audit describes the authorized result at the release decision,
 not a guarantee that the client received it. A disconnect after that immutable
 audit suppresses delivery without writing a second terminal outcome. Earlier
 cancellation records a cancelled outcome with no answer content.
+The hard request deadline records `timed_out`, distinct from caller
+cancellation, and publishes no late answer. Budget and writing-reserve stops
+still use the evidence fallback while enough request time remains to complete
+the final authorization and audit.
 
 ### Threats and mitigations
 

@@ -380,8 +380,8 @@ function v4Statement(raw: unknown, sourceCount: number): AnswerStatement {
   const item = object(raw);
   if (typeof item.private !== 'boolean') throw new ViewError();
   const indexes = list(item.citation_indexes).map(value => {
-    if (!Number.isSafeInteger(value) || value < 0 || value >= sourceCount) throw new ViewError();
-    return value as number;
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value >= sourceCount) throw new ViewError();
+    return value;
   });
   if (indexes.length === 0 || new Set(indexes).size !== indexes.length) throw new ViewError();
   return { text: text(item.text), citation_indexes: indexes, private: item.private };
