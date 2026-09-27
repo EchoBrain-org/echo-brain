@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { canonicalJson } from './clean-v1-release.mjs';
-import { validatePreparedClientUpdateFeed } from './client-update-feed.mjs';
+import { requireBothCliTargets, validatePreparedClientUpdateFeed } from './client-update-feed.mjs';
 import { UPDATE_ARTIFACT_LIMIT, UPDATE_METADATA_LIMIT, updateDigest } from '../src/product/person-client/dist/client-update-contract.js';
 
 const PRIVATE_KEY = 'private-key.pkcs8.der';
@@ -111,6 +111,7 @@ export function signClientUpdateFeed({ directory: signerDirectory, prepared, aut
     readPrivate(join(prepared, 'artifacts', `${artifact.sha256}.zip`), UPDATE_ARTIFACT_LIMIT);
   }
   const validated = validatePreparedClientUpdateFeed({ prepared, authorizationPath, now });
+  requireBothCliTargets(validated.manifest);
   if (!validated.payload.equals(payload) || !readPrivate(join(prepared, 'bootstrap-config.json')).equals(configBytes) ||
       !readPrivate(join(prepared, 'release.json')).equals(releaseBytes) || !readPrivate(authorizationPath).equals(authorization)) fail('input_changed');
   const manifestDigest = updateDigest(payload);

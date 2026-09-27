@@ -152,14 +152,17 @@ node tools/client-update-feed.mjs prepare \
   --out /absolute/path/to/new-feed-bundle
 ```
 
-Supply one or both platform kits. A single feed can serve both operating systems;
-each client selects only its exact OS, architecture, libc and installation type.
-Both kits must bind the same canonical release and Person-client artifact.
+Supply both supported CLI kits: macOS arm64 and Linux x64/glibc. Preparation,
+signing, sealing and publication refuse a release missing either target. Both
+kits must bind the same canonical release, source SHA and Person-client artifact;
+each client selects its exact OS, architecture, libc and installation type.
+Historical single-platform feeds remain readable by clients and auditable through
+publication status, but cannot be published again without both platform kits.
 
 Choose a sequence at least the bootstrap minimum and strictly higher than the
 previously published sequence; choose a future expiry no more than 31 days
 after issuance. `prepare` produces `manifest.json`, the public bootstrap
-configuration, the canonical release record and a content-addressed artifact.
+configuration, the canonical release record and both content-addressed artifacts.
 It does not publish anything or read a private signing key.
 
 Have the release signer review the exact manifest and sign its **unchanged
