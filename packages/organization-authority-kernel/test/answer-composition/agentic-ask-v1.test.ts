@@ -3,6 +3,7 @@ import { validatePersonAnswerResponseV4 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import {
   AGENTIC_ASK_ANSWER_RESERVE_MS_V1,
+  AGENTIC_ASK_DEADLINE_MS_V1,
   AGENTIC_ASK_MAX_MODEL_CALLS_V1,
   createAgenticAskV1,
   type AgenticAskAuditEntryV1,
@@ -327,7 +328,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model, audit, now: () => clock }).answer({ question: "When is launch?" });
     expect(result.outcome).toBe("answered");
-    for (const call of timeouts.filter(value => value.role === "step")) expect(call.at + call.timeout).toBeLessThanOrEqual(60_000 - AGENTIC_ASK_ANSWER_RESERVE_MS_V1);
+    for (const call of timeouts.filter(value => value.role === "step")) expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_ANSWER_RESERVE_MS_V1);
     expect(timeouts.at(-1)!.role).toBe("answer");
     expect(audit[0]!.outcome).toBe("answered");
   });
@@ -360,7 +361,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
       const pending = ask({ desk: desk(), model, audit }).answer({ question: "When is launch?" });
       await started;
       const rejected = expect(pending).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(AGENTIC_ASK_DEADLINE_MS_V1);
       await rejected;
       expect(audit).toEqual([expect.objectContaining({ outcome: "timed_out", model_calls: 1, prompt_sha256: null, response_sha256: null })]);
     } finally { vi.useRealTimers(); }

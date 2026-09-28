@@ -310,7 +310,9 @@ deadline. Causes (Answer Lab `docs/v3-port-a1-timeout-diagnosis.md`):
 
 A2 replaces the plan → judge → writer → summary pipeline in Layer 4. The
 evidence desk, permissions, release audits, revalidation fence, citation
-checks, V4 response and 60-second hard deadline are unchanged.
+checks and V4 response are unchanged. The hard deadline is raised from 60 s
+to 180 s (2026-09-28): quality comes first, and the first A2 run showed
+provider stalls, not the loop, consuming the budget.
 
 - **One loop, three read tools plus `finish`.** Each research step returns
   per-part notes and up to four actions: `search(keywords)`, `open(id)`,
@@ -328,8 +330,8 @@ checks, V4 response and 60-second hard deadline are unchanged.
   also accepts a seen title, and returns two neighbouring passages. The loop
   also stops after two steps that find nothing new, after six steps, or when
   only the answer reserve remains.
-- **Time budget.** Research steps are capped at 10 s each and never start
-  inside the last 27 s; the final answer gets the remaining time minus 2 s for
+- **Time budget.** Research steps are capped at 60 s each (the generation
+  profile's per-call limit) and never start inside the last 62 s; the final answer gets the remaining time minus 2 s for
   revalidation and audit. A timed-out call is retried once unchanged when
   time allows; a step that still fails ends research, and the answer uses
   what was found. If the answer call fails, each part shows its cited
