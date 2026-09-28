@@ -138,12 +138,15 @@ function validateProcessCapture(require, answer, label, approvedRecords = []) {
       check(capture.stderr === "" && exactKeys(response, ["ok", "result"]) && response.ok === true,
         `${label} lacks a matching successful answer on stdout`);
       const value = response?.result;
-      const keys = ["schema_version", "kind", "answer", "citations"];
+      const keys = ["schema_version", "kind", "answer", "citations", "scope"];
       const shape = exactKeys(value, keys) || exactKeys(value, [...keys, "outcome"]);
       check(shape, `${label} public answer contains missing or unexpected fields`);
       if (!shape) return false;
-      check(value.schema_version === 2 && value.kind === "echo-clean-person-answer-v2",
-        `${label} public answer is not the current V2 contract`);
+      check(value.schema_version === 3 && value.kind === "echo-clean-person-answer-v3",
+        `${label} public answer is not the current V3 contract`);
+      // The rehearsal asks without --project, so the response must echo the global scope.
+      check(exactKeys(value.scope, ["kind"]) && value.scope.kind === "global",
+        `${label} public answer is not globally scoped`);
       check(nonempty(value.answer) && value.answer.trim() === value.answer && [...value.answer].length <= 12_000 && value.answer === answer.answer_text,
         `${label} public answer text is invalid or differs from its summary`);
       check(!Object.hasOwn(value, "outcome") || value.outcome === "authorship_unsupported",
@@ -157,8 +160,9 @@ function validateProcessCapture(require, answer, label, approvedRecords = []) {
       const atomIds = new Set();
       const meetingIds = new Set();
       for (const citation of value.citations) {
-        const validCitation = exactKeys(citation, ["atom_id", "record_sha256", "policy_id"]) &&
-          isDigest(citation.atom_id) && isDigest(citation.record_sha256) &&
+        // The fixture admits meetings only, so every citation must be an approved record.
+        const validCitation = exactKeys(citation, ["kind", "atom_id", "record_sha256", "policy_id"]) &&
+          citation.kind === "approved_record" && isDigest(citation.atom_id) && isDigest(citation.record_sha256) &&
           ["organization-member-readable-person-v2", "restricted-reviewer-person-v2"].includes(citation.policy_id);
         check(validCitation, `${label} public citation is malformed`);
         if (!validCitation) continue;

@@ -81,15 +81,18 @@ evidence still requires current access when opened.
 
 ## Current limits
 
-- Approved records currently have no authoritative project association. They
-  contribute to global Ask; project Ask uses associated original context. A
-  project name appearing in an approved record is not sufficient to include it.
+- An approved record is associated with a project only when its owner approved
+  it with the **Projects** audience
+  ([ADR-0017](../decisions/ADR-0017-project-meeting-approval-v1.md)). Project
+  Ask includes those records while their audience still admits the reader;
+  Only me, Team and older records remain global-only. A project name appearing
+  in an approved record is not sufficient to include it.
 - Raw meeting snapshots and pending/rejected approvals are not exposed merely
   because they exist in the shared source tables.
 - V2 Ask sends the validated question directly to retrieval, without a model
-  planner. It selects at most five original evidence packets and, globally,
-  five approved records. The core retains its 16-atom / 49,152-byte ceiling and
-  at most one answer model call. Empty evidence makes no model call. The
+  planner. It selects at most five original evidence packets and five approved
+  records in either scope. The core retains its 16-atom / 49,152-byte ceiling
+  and at most one answer model call. Empty evidence makes no model call. The
   legacy V1 approved-record route retains model planning.
 - Original retrieval uses distinct-term substring coverage, omitting a closed
   English function-word list, then recency and stable source/ordinal tie-breaks.

@@ -317,8 +317,18 @@ to **Only me** (`restricted-reviewer-person-v2`), which allows only the exact
 approving owner and that owner's current membership tenure to read the record.
 Before approving, the owner may select **Team**
 (`organization-member-readable-person-v2`), which allows every current active
-owner or employee in the organization to read it. The selected policy freezes
-with the approved record.
+owner or employee in the organization to read it, or, when the owner has an
+active project, **Projects** (`project-members-readable-person-v1`) with one to
+twenty of the owner's projects. Projects lets current members of any selected
+project read the record and associates it with those projects for project Ask;
+Only me and Team records carry no project association. The selected policy and
+project IDs freeze with the approved record; project readers are resolved at
+read time.
+
+The separate **Share transcript with the selected audience** checkbox defaults
+off. When checked, the same approval releases the exact retained transcript
+revision to the record's audience through `echo-brain person transcript`
+(`POST /v1/person/meeting-transcripts/read`). Ask does not search transcripts.
 
 A later source-folder move does not reinterpret a posted card or approved
 record.

@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-IDENTITY-ACCESS
 created_at: 2026-08-13
-reviewed_at: 2026-08-14
-reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
   - ADR-0012
   - ADR-0002
@@ -50,8 +50,7 @@ qualification_ids:
 This cross-cutting domain establishes who a human is and whether the caller
 currently has organization access. It includes Authority pinning, Person
 sessions, principals, memberships, provider identity links, expiry, and
-revocation. Historical installation enrollment and access state remain as
-server compatibility until record and approval bindings are re-keyed.
+revocation.
 
 It does not decide which particular organization content a caller may read;
 that belongs to [permissions](permissions.md).
@@ -60,8 +59,8 @@ that belongs to [permissions](permissions.md).
 
 - The Person client owns only its private Authority-issued session credential
   pair and no installation or organization/provider credential.
-- The central Authority owns organization principals, memberships,
-  enrollments, grants, and current signed access state.
+- The central Authority owns organization principals, memberships, OIDC
+  identity bindings, login grants, and Person session families.
 - The control plane owns verified provider identity and its binding to central
   principal and membership IDs.
 - External providers remain authoritative for their own workspace, app, bot,

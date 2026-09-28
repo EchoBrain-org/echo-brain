@@ -2,6 +2,14 @@
 
 Date: 2026-09-12. Status: blocked before production mutation.
 
+Status note, 2026-09-27: the data-preservation requirement below is superseded.
+On 2026-09-26 the founder confirmed that all existing data is disposable and
+there are no live users; see
+[ADR-0018](../decisions/ADR-0018-project-settings-v1.md). The current V10
+release uses fresh state and adds no preservation migration. Resets follow the
+[Authority operator lane](../operations/PB-OPERATIONS-001-authority-operator-lane.md).
+The findings below remain a record of this preflight.
+
 The founder requested the first promotion of the accepted staging release to
 the existing production organization. Preserve production identity, memberships,
 sessions, provider links and credentials, approvals, and records. No production

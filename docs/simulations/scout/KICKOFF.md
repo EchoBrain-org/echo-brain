@@ -1,10 +1,10 @@
 # SCOUT: group-chat kickoff
 
-First complete the [document upload acceptance checks](DOCUMENT-UPLOAD-ACCEPTANCE.md) on the intended client and Authority. The currently installed text-only path cannot accept the full PRD, and larger-document support has not yet passed this checkpoint.
+First complete the [document upload acceptance checks](DOCUMENT-UPLOAD-ACCEPTANCE.md) on the intended client and Authority. The full PRD exceeds the text-note limit and must be added as a file; larger-document support is implemented but has not yet passed this checkpoint.
 
 In the ECHO desktop app on this Mac, confirm the staging environment and PM account. Choose **New project**, name it **SCOUT**, and add the Hardware, Software and QA participants using their individual accounts. On the same page, choose **Add files…** and select `SCOUT-MRD-v0.1.md` and `SCOUT-PRD-v0.1.md`, or verified PDF/Word exports of those versions, then choose **Create**.
 
-Each file added there is saved to SCOUT for its members, which supplies both project audience and project association. Verify both originals were actually saved with the expected contents and that their text is available for agent retrieval. Then replace the project and two original references below with values from those successful uploads. Native Ask is not assumed to read these originals.
+Each file added there is saved to SCOUT for its members, which supplies both project audience and project association. Verify both originals were actually saved with the expected contents and that their text is available for agent retrieval. Then replace the project and two original references below with values from those successful uploads. ECHO Ask cites only a few excerpts of extracted text, so it does not substitute for reading these originals.
 
 If the agents do not yet have individual ECHO access, keep that as an explicit setup blocker. Posting the files directly in chat can support a document-review rehearsal, but does not demonstrate cross-person retrieval through ECHO.
 

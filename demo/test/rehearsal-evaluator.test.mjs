@@ -56,10 +56,10 @@ const digest = (value) => `sha256:${createHash("sha256").update(value).digest("h
 
 function processCapture(answer, records) {
   const citations = records.filter(record => answer.citation_meeting_ids.includes(record.meeting_id))
-    .map(record => ({ atom_id: record.atom_ids[0], record_sha256: record.record_sha256,
+    .map(record => ({ kind: "approved_record", atom_id: record.atom_ids[0], record_sha256: record.record_sha256,
       policy_id: record.policy === "team" ? "organization-member-readable-person-v2" : "restricted-reviewer-person-v2" }));
   return { exit_code: 0, signal: null, launch_error_code: null, stderr: "",
-    stdout: JSON.stringify({ ok: true, result: { schema_version: 2, kind: "echo-clean-person-answer-v2", answer: answer.answer_text, citations } }) };
+    stdout: JSON.stringify({ ok: true, result: { schema_version: 3, kind: "echo-clean-person-answer-v3", answer: answer.answer_text, citations, scope: { kind: "global" } } }) };
 }
 
 function passingResult() {
@@ -788,8 +788,11 @@ function mutateStdout(answer, mutate) {
 for (const [name, mutate] of [
   ["private citation", (envelope, result) => {
     const record = result.approved_records[3];
-    envelope.result.citations = [{ atom_id: record.atom_ids[0], record_sha256: record.record_sha256, policy_id: "restricted-reviewer-person-v2" }];
+    envelope.result.citations = [{ kind: "approved_record", atom_id: record.atom_ids[0], record_sha256: record.record_sha256, policy_id: "restricted-reviewer-person-v2" }];
   }],
+  ["retired V2 contract", envelope => { envelope.result.schema_version = 2; envelope.result.kind = "echo-clean-person-answer-v2"; delete envelope.result.scope; }],
+  ["missing scope", envelope => { delete envelope.result.scope; }],
+  ["project scope", envelope => { envelope.result.scope = { kind: "project", project_id: "prj_rehearsal" }; }],
   ["retired record head", envelope => { envelope.result.record_head = { position: 9, record_sha256: digest("hidden") }; }],
   ["retired generation", envelope => { envelope.result.generation_id = digest("hidden-generation"); }],
   ["wrong schema", envelope => { envelope.result.schema_version = 1; }],
@@ -805,7 +808,7 @@ for (const [name, mutate] of [
   });
 }
 
-for (const mutation of ["wrong record", "wrong atom", "wrong policy", "duplicate atom", "extra citation field", "missing citation", "missing record hash", "missing atom evidence"]) {
+for (const mutation of ["wrong record", "wrong atom", "wrong policy", "duplicate atom", "extra citation field", "missing citation kind", "source citation", "missing citation", "missing record hash", "missing atom evidence"]) {
   test(`rejects ${mutation} instead of trusting mapped citation summaries`, () => {
     const result = passingResult();
     if (mutation === "missing record hash") delete result.approved_records[0].record_sha256;
@@ -817,6 +820,9 @@ for (const mutation of ["wrong record", "wrong atom", "wrong policy", "duplicate
       if (mutation === "wrong policy") citation.policy_id = "restricted-reviewer-person-v2";
       if (mutation === "duplicate atom") envelope.result.citations.push({ ...citation });
       if (mutation === "extra citation field") citation.hidden = "extra";
+      if (mutation === "missing citation kind") delete citation.kind;
+      if (mutation === "source citation") envelope.result.citations[0] = { kind: "source_revision", source_id: `source:${"a".repeat(64)}`,
+        revision_id: "revision-1", source_sha256: citation.record_sha256, representation_sha256: digest("representation"), anchor_sha256: digest("anchor") };
       if (mutation === "missing citation") envelope.result.citations.pop();
     });
     assert.equal(evaluateRehearsal(result, expectations, meetingDocuments, { expectedInputPaths }).passed, false);

@@ -1,14 +1,14 @@
 # SCOUT document upload acceptance
 
-Status: planned acceptance for the larger-document implementation. These checks have not been run against an updated installed client or Authority.
+Status: planned acceptance for the larger-document implementation, merged in PR #206. No run of these checks against an updated installed client or Authority is recorded yet.
 
-The PM must be able to upload ordinary project documents without shortening their contents to fit the earlier 8 KiB text carrier. The target document path accepts supported originals up to 25 MiB and retains their original bytes. PDF and Word `.docx` extraction produces a separate searchable representation.
+The PM must be able to upload ordinary project documents without shortening their contents to fit the 8 KiB text-note carrier. The [document path](../../features/project-documents-v1.md) accepts UTF-8 text/Markdown (`.txt`, `.md`, `.markdown`), PDF and Word `.docx` originals up to 25 MiB (26,214,400 bytes) and retains their original bytes. Legacy `.doc` is rejected and scanned PDFs get no OCR. Extraction produces a separate searchable representation.
 
 ## Source artifacts
 
 Use the full [MRD v0.1](SCOUT-MRD-v0.1.md) and [PRD v0.1](SCOUT-PRD-v0.1.md) as regression inputs, as well as the current [MRD v0.2](SCOUT-MRD-v0.2.md) and [PRD v0.2](SCOUT-PRD-v0.2.md). The original v0.1 PRD exceeds 8 KiB and must not require shortening or splitting. Any PDF or DOCX export must preserve the source version, requirement IDs and planning qualifications.
 
-The v0.2 files remain a fallback for the currently installed text-only client; their smaller size is not evidence that larger documents are supported.
+The v0.2 files were condensed for the earlier text-only path; their smaller size is not evidence that larger documents are supported.
 
 ## Acceptance matrix
 

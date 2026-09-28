@@ -12,7 +12,7 @@ qualification status separately.
 
 | RFC | Title | Status |
 | --- | --- | --- |
-| [RFC-0001](RFC-0001-server-core-lean-authority-contracts.md) | Server-core lean Authority contracts | draft |
+| [RFC-0001](RFC-0001-server-core-lean-authority-contracts.md) | Server-core lean Authority contracts | superseded by [ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md) without acceptance |
 
 ## Required content
 
