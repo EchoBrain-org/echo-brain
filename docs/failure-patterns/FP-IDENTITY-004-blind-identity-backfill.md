@@ -8,11 +8,11 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 77b7744b46a912b9154c218b3a036e8552d7180e
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 origin: live
 evidence_status: observed-live
-status: mitigating
+status: retired
 severity: critical
 first_observed: 2026-08-12
 invariant_ids:
@@ -30,6 +30,23 @@ regression_test_refs:
 ---
 
 # FP-IDENTITY-004: Missing provider identity is repaired by blind backfill
+
+## Retirement
+
+Retired. The Slack app-identity promotion migration, the integrations
+repository and owner re-onboarding path that ran it, and both linked tests
+were deleted with the retired server lineage in `59ee182b` (lean: delete
+retired server lineage). The control-plane database at the reviewed ref opens
+its clean baseline without importing or applying migrations, and the current
+Slack tool-connection contract in
+[`organization-tool-connection-contracts-v2.ts`](../../providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.ts)
+requires `provider_app_id` on every connection. No historical null app ID
+remains to repair.
+[`INV-IDENTITY-004`](../invariants/INV-IDENTITY-004-provider-identity-migration.md)
+is retired with it. The pinned regression refs remain historical proof at
+their commit. The pattern below is kept as history. It applies again if a
+future required identity field is added over existing connections, bindings,
+or grants.
 
 ## Plain-English summary
 
@@ -58,7 +75,8 @@ the verifier for legacy rows.
 
 Require owner-authorized re-verification against authoritative endpoints and
 atomically promote every exact binding while preserving stable IDs and
-appending audit. Reject partial and malformed promotion. Tests cover migration,
-multi-binding atomicity, and no in-place fallback. The indexed live evidence
+appending audit. Reject partial and malformed promotion. The pinned tests
+covered migration, multi-binding atomicity, and no in-place fallback. The
+indexed live evidence
 records the promotion outcome; the exact implementation and test scope is fixed
 by the refs above.

@@ -47,13 +47,15 @@ private infrastructure identifiers, and meeting content were not copied.
 | [`FP-ADAPTERS-003`](FP-ADAPTERS-003-model-execution-channel.md) | Model spends the output budget outside the visible answer channel | mitigating |
 | [`FP-ADAPTERS-004`](FP-ADAPTERS-004-model-authors-evidence.md) | Model is required to reproduce evidence bytes | mitigating |
 | [`FP-ADAPTERS-005`](FP-ADAPTERS-005-first-provider-becomes-architecture.md) | The first provider becomes the architecture | mitigating |
-| [`FP-IDENTITY-002`](FP-IDENTITY-002-unversioned-lease-change.md) | Lease duration changes without protocol negotiation | mitigating |
-| [`FP-IDENTITY-003`](FP-IDENTITY-003-revocation-window-overclaim.md) | Central revocation is described as immediate on an offline Mac | mitigating |
-| [`FP-IDENTITY-004`](FP-IDENTITY-004-blind-identity-backfill.md) | Missing provider identity is repaired by blind backfill | mitigating |
+| [`FP-IDENTITY-002`](FP-IDENTITY-002-unversioned-lease-change.md) | Lease duration changes without protocol negotiation | retired |
+| [`FP-IDENTITY-003`](FP-IDENTITY-003-revocation-window-overclaim.md) | Central revocation is described as immediate on an offline Mac | retired |
+| [`FP-IDENTITY-004`](FP-IDENTITY-004-blind-identity-backfill.md) | Missing provider identity is repaired by blind backfill | retired |
 | [`FP-RELEASE-001`](FP-RELEASE-001-wrong-worktree-artifact.md) | Packaging builds a different worktree than the claimed source | observed |
 | [`FP-OPERATIONS-001`](FP-OPERATIONS-001-stale-shared-namespace.md) | Dependency restart leaves a proxy in a stale shared namespace | mitigating |
 
 Use the [failure-pattern template](../_templates/failure-pattern.md). A
 `mitigated` pattern must link at least one deterministic regression test or
 exact qualification assertion. An `accepted-risk` pattern must link the risk
-decision, state the residual risk, and name its next review date.
+decision, state the residual risk, and name its next review date. A `retired`
+pattern names the commit that removed its boundary and keeps its pinned
+regression refs as historical proof.
