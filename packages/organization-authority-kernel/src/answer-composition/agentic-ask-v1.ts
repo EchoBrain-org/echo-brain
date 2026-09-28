@@ -57,6 +57,8 @@ export const AGENTIC_ASK_MAX_NEW_ITEMS_PER_PART_PER_ROUND_V1 = 8;
 export const AGENTIC_ASK_DEADLINE_MS_V1 = 60_000;
 export const AGENTIC_ASK_WRITING_RESERVE_MS_V1 = 15_000;
 export const AGENTIC_ASK_MAX_DISCOVERY_OPENS_V1 = 5;
+export const AGENTIC_ASK_MAX_WRITER_ITEMS_V1 = 20;
+export const AGENTIC_ASK_MAX_WRITER_BYTES_V1 = 32_768;
 const AGENTIC_ASK_OUTPUT_TOKENS_V1 = Object.freeze({ plan: 1_200, judge: 4_096, writer: 1_800, summary: 800 } as const);
 
 /** The hard request deadline elapsed before a release-safe response could finish. */
@@ -117,6 +119,8 @@ export interface CreateAgenticAskV1Options {
   readonly audit: AgenticAskAuditPortV1;
   /** Monotonic milliseconds, supplied by tests or the route telemetry clock. */
   readonly now_ms?: () => number;
+  /** Experimental measured switch. Disabled unless the route explicitly opts in. */
+  readonly small_scope_shortcut?: boolean;
 }
 type UnmaterializedStatement = { readonly text: string; readonly citation_ids: readonly string[]; readonly private: boolean };
 type UnmaterializedRecordFallback = { readonly text: string; readonly citation_ids: readonly string[]; readonly private: boolean };
@@ -200,12 +204,6 @@ function nearSpelling(question: string, evidence: readonly EvidenceDeskItemV1[])
   }
   return null;
 }
-function documentSnippet(textValue: string, queries: ReadonlySet<string>): string {
-  const terms = [...queries].flatMap(query => query.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(term => term.length > 1);
-  const sentences = textValue.match(/[^.!?\n]+[.!?]?/gu) ?? [textValue];
-  const matched = sentences.filter(sentence => terms.some(term => sentence.toLocaleLowerCase().includes(term)));
-  return (matched.length > 0 ? matched : sentences).join(" ").trim().slice(0, 300);
-}
 
 export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
   const now = options.now_ms ?? (() => performance.now());
@@ -231,6 +229,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
       const pad = new Map<string, EvidenceDeskItemV1>();
       const notice = new Set<string>();
       const partItems = new Map<string, Set<string>>();
+      const literalQuestionItems = new Set<string>();
       const partTriedQueries = new Map<string, Set<string>>();
       let roundAdditions = new Map<string, number>();
       const triedQueries = new Set<string>();
@@ -266,6 +265,16 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
           }
         }
       };
+      const addLiteralQuestionItems = (items: readonly EvidenceDeskItemV1[]) => {
+        for (const item of items) {
+          if (item.text === undefined || item.text.length === 0) continue;
+          const itemSize = itemBytes(item);
+          const wouldFit = pad.has(item.id) || (pad.size < AGENTIC_ASK_MAX_PAD_ITEMS_V1 && [...pad.values()].reduce((total, current) => total + itemBytes(current), 0) + itemSize <= AGENTIC_ASK_MAX_PAD_BYTES_V1);
+          if (!wouldFit) continue;
+          if (!pad.has(item.id)) pad.set(item.id, item);
+          literalQuestionItems.add(item.id);
+        }
+      };
       const trackQuery = (query: string, target: readonly string[]) => {
         for (const id of target) {
           const queries = partTriedQueries.get(id) ?? new Set<string>();
@@ -295,13 +304,51 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         const result = await raceAbort(activeSignal, options.desk.search({ query, limit, signal: activeSignal }));
         observeDeskResult(result);
         searchResults.set(query, result.items);
-        for (const [index, item] of result.items.entries()) add([target[index % target.length]!], [item], AGENTIC_ASK_MAX_NEW_ITEMS_PER_PART_PER_ROUND_V1);
+        if (query === input.question) addLiteralQuestionItems(result.items);
+        else for (const [index, item] of result.items.entries()) add([target[index % target.length]!], [item], AGENTIC_ASK_MAX_NEW_ITEMS_PER_PART_PER_ROUND_V1);
       };
       const searchWhileReserved = async (operation: () => Promise<void>): Promise<boolean> => {
         if (deadlineExpired || now() >= deadline) assertLive();
         if (now() >= deadline - AGENTIC_ASK_WRITING_RESERVE_MS_V1) return false;
         await operation();
         return true;
+      };
+      const smallScopeItems = async (): Promise<readonly string[] | undefined> => {
+        if (options.small_scope_shortcut !== true) return undefined;
+        // A shortcut probe is optional. Preserve terminal cancellation and the
+        // hard deadline, but fall through to the regular bounded path once the
+        // writing reserve starts instead of failing the whole answer.
+        assertLive();
+        if (now() >= deadline - AGENTIC_ASK_WRITING_RESERVE_MS_V1) return undefined;
+        const inventory = await raceAbort(activeSignal, options.desk.search({ limit: AGENTIC_ASK_MAX_WRITER_ITEMS_V1, inventory_mode: "items", signal: activeSignal }));
+        observeDeskResult(inventory);
+        // A capped/truncated inventory cannot prove that this is the complete
+        // readable scope, so it deliberately falls through to normal search.
+        if (inventory.truncated || inventory.items.length > AGENTIC_ASK_MAX_WRITER_ITEMS_V1) return undefined;
+        assertLive();
+        if (now() >= deadline - AGENTIC_ASK_WRITING_RESERVE_MS_V1) return undefined;
+        const provisional = new Map<string, EvidenceDeskItemV1>();
+        for (const inventoryItem of inventory.items) {
+          assertLive();
+          if (now() >= deadline - AGENTIC_ASK_WRITING_RESERVE_MS_V1) return undefined;
+          const opened = await raceAbort(activeSignal, options.desk.open({ item: inventoryItem.id, signal: activeSignal }));
+          observeDeskResult(opened);
+          // An open may include a truncated neighbour expansion. The inventory
+          // is still complete when this coordinate itself resolves exactly.
+          const exact = opened.items.find(item => item.id === inventoryItem.id && item.text !== undefined);
+          // Every inventory coordinate must yield one readable item. Duplicate
+          // identities or a neighbour-only open cannot establish completeness.
+          if (exact === undefined || provisional.has(exact.id)) return undefined;
+          provisional.set(exact.id, exact);
+        }
+        const values = [...provisional.values()];
+        const bytes = values.reduce((total, item) => total + itemBytes(item), 0);
+        if (values.length !== inventory.items.length || values.length > AGENTIC_ASK_MAX_WRITER_ITEMS_V1 || bytes > AGENTIC_ASK_MAX_WRITER_BYTES_V1 || values.length > AGENTIC_ASK_MAX_PAD_ITEMS_V1 || bytes > AGENTIC_ASK_MAX_PAD_BYTES_V1) return undefined;
+        // Commit only after the whole inventory proves it fits. This keeps a
+        // failed probe out of round/part tagging while desk releases remain
+        // covered by the normal pre-call revalidation fence.
+        for (const item of values) pad.set(item.id, item);
+        return Object.freeze(values.map(item => item.id));
       };
       const call = async (role: "plan" | "judge" | "writer" | "summary", system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, reserve: number): Promise<unknown> => {
         // Admission is serialized so every call is preceded by a cumulative desk revalidation;
@@ -383,7 +430,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         }));
         terminalAudited = true;
       };
-      const judgeEvidence = () => [...pad.values()].map(item => ({ id: item.id, kind: item.kind, label: item.label, text: item.kind === "document_passage" ? documentSnippet(item.text!, triedQueries) : item.text, ...(item.attributes === undefined ? {} : { attributes: item.attributes }) }));
+      const judgeEvidence = () => [...pad.values()].map(item => ({ id: item.id, kind: item.kind, label: item.label, text: item.text, ...(item.attributes === undefined ? {} : { attributes: item.attributes }) }));
       const judgeParts = (parts: readonly PartPlan[]) => parts.map(part => ({ ...part, tried_queries: Object.freeze([...(partTriedQueries.get(part.id) ?? new Set<string>())]) }));
       try {
         let parts: readonly PartPlan[];
@@ -391,57 +438,60 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         catch (error) { if (isAbort(error, input.signal) || !recoverableFallback(error)) throw error; parts = fallbackPlan(input.question); fallbacks += 1; }
         for (const part of parts) { partItems.set(part.id, new Set()); partTriedQueries.set(part.id, new Set()); }
 
-        rounds = 1;
-        roundAdditions = new Map();
-        let searchTimeRemaining = await searchWhileReserved(() => searchRoundRobin(input.question, parts.map(part => part.id), 10));
-        for (const part of parts) for (const query of part.queries) {
-          if (!searchTimeRemaining) break;
-          if (query !== input.question) searchTimeRemaining = await searchWhileReserved(() => search(query, [part.id], 10));
-        }
-
-        // Lean discovery: only a true zero-result first round obtains the readable
-        // inventory and opens its first bounded entries; labels never enter a model prompt.
-        if (pad.size === 0 && searchTimeRemaining) {
-          let inventory: { readonly items: readonly EvidenceDeskItemV1[] } | undefined;
-          searchTimeRemaining = await searchWhileReserved(async () => {
-            const result = await raceAbort(activeSignal, options.desk.search({ limit: 50, signal: activeSignal }));
-            observeDeskResult(result);
-            inventory = result;
-          });
-          for (const [index, item] of (inventory?.items ?? []).slice(0, AGENTIC_ASK_MAX_DISCOVERY_OPENS_V1).entries()) {
-            if (!searchTimeRemaining) break;
-            let opened: { readonly items: readonly EvidenceDeskItemV1[] } | undefined;
-            searchTimeRemaining = await searchWhileReserved(async () => {
-              const result = await raceAbort(activeSignal, options.desk.open({ item: item.id, signal: activeSignal }));
-              observeDeskResult(result);
-              opened = result;
-            });
-            if (opened !== undefined) add([parts[index % parts.length]!.id], opened.items, AGENTIC_ASK_MAX_NEW_ITEMS_PER_PART_PER_ROUND_V1);
-          }
-        }
-
+        const shortcutItems = await smallScopeItems();
         let judge: Judge | undefined;
-        for (;;) {
-          const ids = new Set(pad.keys());
-          try {
-            judge = await withRepair("judge", JUDGE_PROMPT, { question: input.question, parts: judgeParts(parts), evidence: judgeEvidence() }, judgeSchema, AGENTIC_ASK_WRITING_RESERVE_MS_V1, value => parseJudge(value, parts, ids));
-          } catch (error) { if (isAbort(error, input.signal) || !recoverableFallback(error)) throw error; fallbacks += 1; break; }
-          if (judge.parts.every(part => part.status === "answered") || rounds >= AGENTIC_ASK_MAX_ROUNDS_V1 || now() >= deadline - AGENTIC_ASK_WRITING_RESERVE_MS_V1) break;
-          const before = pad.size; rounds += 1; roundAdditions = new Map();
-          for (const judged of judge.parts.filter(part => part.status !== "answered")) {
-            const plan = parts.find(part => part.id === judged.id)!;
-            const unusedPlannerQueries = plan.queries.filter(query => !(partTriedQueries.get(plan.id)?.has(query) ?? false));
-            const partTextQuery = deskQuery(plan.question);
-            const queries = judged.new_queries.length > 0
-              ? judged.new_queries
-              : unusedPlannerQueries.length > 0
-                ? unusedPlannerQueries
-                : partTextQuery === null ? [] : [partTextQuery];
-            for (const query of queries.slice(0, AGENTIC_ASK_MAX_QUERIES_PER_PART_PER_ROUND_V1)) {
-              if (!(await searchWhileReserved(() => search(query, [plan.id], 10)))) break;
+        if (shortcutItems === undefined) {
+          rounds = 1;
+          roundAdditions = new Map();
+          let searchTimeRemaining = await searchWhileReserved(() => searchRoundRobin(input.question, parts.map(part => part.id), 10));
+          for (const part of parts) for (const query of part.queries) {
+            if (!searchTimeRemaining) break;
+            if (query !== input.question) searchTimeRemaining = await searchWhileReserved(() => search(query, [part.id], 10));
+          }
+
+          // Lean discovery: only a true zero-result first round obtains the readable
+          // inventory and opens its first bounded entries; labels never enter a model prompt.
+          if (pad.size === 0 && searchTimeRemaining) {
+            let inventory: { readonly items: readonly EvidenceDeskItemV1[] } | undefined;
+            searchTimeRemaining = await searchWhileReserved(async () => {
+              const result = await raceAbort(activeSignal, options.desk.search({ limit: 50, signal: activeSignal }));
+              observeDeskResult(result);
+              inventory = result;
+            });
+            for (const [index, item] of (inventory?.items ?? []).slice(0, AGENTIC_ASK_MAX_DISCOVERY_OPENS_V1).entries()) {
+              if (!searchTimeRemaining) break;
+              let opened: { readonly items: readonly EvidenceDeskItemV1[] } | undefined;
+              searchTimeRemaining = await searchWhileReserved(async () => {
+                const result = await raceAbort(activeSignal, options.desk.open({ item: item.id, signal: activeSignal }));
+                observeDeskResult(result);
+                opened = result;
+              });
+              if (opened !== undefined) add([parts[index % parts.length]!.id], opened.items, AGENTIC_ASK_MAX_NEW_ITEMS_PER_PART_PER_ROUND_V1);
             }
           }
-          if (pad.size === before) break;
+
+          for (;;) {
+            const ids = new Set(pad.keys());
+            try {
+              judge = await withRepair("judge", JUDGE_PROMPT, { question: input.question, parts: judgeParts(parts), evidence: judgeEvidence() }, judgeSchema, AGENTIC_ASK_WRITING_RESERVE_MS_V1, value => parseJudge(value, parts, ids));
+            } catch (error) { if (isAbort(error, input.signal) || !recoverableFallback(error)) throw error; fallbacks += 1; break; }
+            if (judge.parts.every(part => part.status === "answered") || rounds >= AGENTIC_ASK_MAX_ROUNDS_V1 || now() >= deadline - AGENTIC_ASK_WRITING_RESERVE_MS_V1) break;
+            const before = pad.size; rounds += 1; roundAdditions = new Map();
+            for (const judged of judge.parts.filter(part => part.status !== "answered")) {
+              const plan = parts.find(part => part.id === judged.id)!;
+              const unusedPlannerQueries = plan.queries.filter(query => !(partTriedQueries.get(plan.id)?.has(query) ?? false));
+              const partTextQuery = deskQuery(plan.question);
+              const queries = judged.new_queries.length > 0
+                ? judged.new_queries
+                : unusedPlannerQueries.length > 0
+                  ? unusedPlannerQueries
+                  : partTextQuery === null ? [] : [partTextQuery];
+              for (const query of queries.slice(0, AGENTIC_ASK_MAX_QUERIES_PER_PART_PER_ROUND_V1)) {
+                if (!(await searchWhileReserved(() => search(query, [plan.id], 10)))) break;
+              }
+            }
+            if (pad.size === before) break;
+          }
         }
 
         let assumption: string | undefined;
@@ -454,22 +504,23 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
             } catch (error) { if (isAbort(error, input.signal) || !recoverableFallback(error)) throw error; fallbacks += 1; }
           }
         }
-        if (judge !== undefined && !judge.matches_question) {
-          const result: AgenticAskResultV1 = Object.freeze({ schema_version: 4, kind: "echo-clean-person-answer-v4", scope: options.desk.scope, outcome: "off_scope", parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: "not_found" as const, statements: Object.freeze([]), gap: "I couldn't find evidence about this in the records you can access." }))), citations: Object.freeze([]), ...(assumption === undefined ? {} : { assumption }), ...(notice.size === 0 ? {} : { notice: [...notice].join(" ") }) });
-          assertLive();
-          const revalidated = await raceAbort(activeSignal, options.desk.revalidate({ signal: activeSignal })); checkedAt = revalidated.checked_at;
-          const validated = compactAndValidateAgenticAskResponseV1(result);
-          await audit(validated.outcome, 0, validated);
-          if (input.signal?.aborted) abort();
-          assertLive();
-          clearTimeout(deadlineTimer);
-          return validated;
-        }
-
         const assigned = new Map<string, readonly string[]>();
         for (const part of parts) {
-          const fromJudge = judge?.parts.find(value => value.id === part.id)?.evidence_ids ?? [];
-          assigned.set(part.id, judge === undefined ? Object.freeze([...(partItems.get(part.id) ?? new Set<string>())]) : fromJudge);
+          const candidates = shortcutItems === undefined
+            ? [
+              ...(judge?.parts.find(value => value.id === part.id)?.evidence_ids ?? []),
+              ...(partItems.get(part.id) ?? new Set<string>()),
+              ...literalQuestionItems,
+            ]
+            : shortcutItems;
+          const ids: string[] = []; let bytes = 0;
+          for (const id of candidates) {
+            if (ids.includes(id)) continue;
+            const item = pad.get(id);
+            if (item === undefined || ids.length >= AGENTIC_ASK_MAX_WRITER_ITEMS_V1 || bytes + itemBytes(item) > AGENTIC_ASK_MAX_WRITER_BYTES_V1) continue;
+            ids.push(id); bytes += itemBytes(item);
+          }
+          assigned.set(part.id, Object.freeze(ids));
         }
         const drafts = await Promise.all(parts.map(async part => {
           const ids = assigned.get(part.id)!;
@@ -486,7 +537,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         for (const written of drafts) {
           const ids = assigned.get(written.part.id)!;
           if (written.draft === null || written.draft.statements.length === 0) {
-            const evidence = ids.map(id => pad.get(id)).filter((item): item is EvidenceDeskItemV1 => item !== undefined).slice(0, 5);
+            const evidence = ids.map(id => pad.get(id)).filter((item): item is EvidenceDeskItemV1 => item !== undefined);
             if (evidence.length === 0) partResults.push(Object.freeze({ question: written.part.question, status: "not_found", statements: Object.freeze([]), gap: "I couldn't find evidence in the records you can access." }));
             else {
               for (const item of evidence) used.set(item.id, item);
@@ -519,7 +570,12 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         const finishedParts: readonly AgenticAskPartV1[] = Object.freeze(partResults.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(materialize)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(materializeFallback)) }) })));
         const direct = directDraft === null ? undefined : materialize(Object.freeze({ text: directDraft.text, citation_ids: directDraft.evidence_ids, private: directDraft.evidence_ids.some(id => privateItem(pad.get(id)!)) }));
         const outcomes = finishedParts.map(part => part.status);
-        const outcome = outcomes.every(status => status === "not_found") ? "not_found" : outcomes.every(status => status === "answered") ? "answered" : "partial";
+        const noReleasedStatement = outcomes.every(status => status === "not_found");
+        const scopeRejected = judge !== undefined && !judge.matches_question;
+        const outcome = scopeRejected && noReleasedStatement ? "off_scope" : noReleasedStatement ? "not_found" : outcomes.every(status => status === "answered") ? "answered" : "partial";
+        // The response already retains the asker's part text. Do not echo a
+        // valid 4 KB question into the bounded public notice.
+        if (outcome === "off_scope" && judge!.note.length > 0) notice.add(judge!.note);
         const result: AgenticAskResultV1 = Object.freeze({ schema_version: 4, kind: "echo-clean-person-answer-v4", scope: options.desk.scope, outcome, ...(direct === undefined ? {} : { direct }), parts: Object.freeze(finishedParts), citations: Object.freeze(citations.map(item => Object.freeze({ citation: item.citation, kind: item.kind, label: item.label, visibility: item.visibility }))), ...(assumption === undefined ? {} : { assumption }), ...(notice.size === 0 ? {} : { notice: [...notice].join(" ") }) });
         const validated = compactAndValidateAgenticAskResponseV1(result);
         assertLive();

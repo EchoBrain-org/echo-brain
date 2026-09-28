@@ -40,6 +40,8 @@ const runtimeState = vi.hoisted(() => ({
     readonly client_secret: string;
     readonly redirect_uri: string;
   } | undefined,
+  agentic_ask_v1_enabled: undefined as true | undefined,
+  agentic_ask_v1_small_scope_shortcut: undefined as true | undefined,
   authority_url: "https://authority.example",
   processing: "active" as "active" | "idle_until_finalize",
   shutdown_events: [] as string[],
@@ -80,6 +82,8 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
       readonly approved_search_backlog_observer?: ApprovedSearchBacklogObserver;
     };
     readonly staging_meeting_approval_journey_telemetry_enabled?: true;
+    readonly agentic_ask_v1_enabled?: true;
+    readonly agentic_ask_v1_small_scope_shortcut?: true;
     readonly slack_signing_secret_file: string;
     readonly slack_connection_id: string;
     readonly openrouter_credential_file: string;
@@ -105,6 +109,9 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
       config.meeting_approval_journey_telemetry;
     runtimeState.staging_meeting_approval_journey_telemetry_enabled =
       config.staging_meeting_approval_journey_telemetry_enabled;
+    runtimeState.agentic_ask_v1_enabled = config.agentic_ask_v1_enabled;
+    runtimeState.agentic_ask_v1_small_scope_shortcut =
+      config.agentic_ask_v1_small_scope_shortcut;
     runtimeState.slack_signing_secret_file = config.slack_signing_secret_file;
     runtimeState.slack_connection_id = config.slack_connection_id;
     runtimeState.openrouter_credential_file = config.openrouter_credential_file;
@@ -166,6 +173,8 @@ afterEach(() => {
   delete process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1;
   delete process.env.ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1;
   delete process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR;
+  delete process.env.ECHO_AGENTIC_ASK_V1;
+  delete process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT;
   delete process.env.ECHO_BUILD_NUMBER;
   delete process.env.ECHO_SOURCE_SHA;
   runtimeState.worker_error = undefined;
@@ -183,6 +192,8 @@ afterEach(() => {
   runtimeState.meeting_approval_journey_telemetry = undefined;
   runtimeState.staging_meeting_approval_journey_telemetry_enabled = undefined;
   runtimeState.slack_browser_oauth = undefined;
+  runtimeState.agentic_ask_v1_enabled = undefined;
+  runtimeState.agentic_ask_v1_small_scope_shortcut = undefined;
   runtimeState.authority_url = "https://authority.example";
   runtimeState.processing = "active";
   runtimeState.shutdown_events = [];
@@ -215,6 +226,38 @@ function start(
 }
 
 describe("admitted runtime CLI events", () => {
+  it("keeps the shortcut off by default and passes it only with the V3 capability", async () => {
+    for (const input of [
+      { agentic: undefined, shortcut: undefined },
+      { agentic: "false", shortcut: "true" },
+      { agentic: "true", shortcut: undefined },
+      { agentic: "true", shortcut: "false" },
+      { agentic: "true", shortcut: "true" },
+      { agentic: undefined, shortcut: "true" },
+    ]) {
+      if (input.agentic === undefined) delete process.env.ECHO_AGENTIC_ASK_V1;
+      else process.env.ECHO_AGENTIC_ASK_V1 = input.agentic;
+      if (input.shortcut === undefined) {
+        delete process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT;
+      } else {
+        process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT = input.shortcut;
+      }
+      const running = start({ stderr: () => undefined });
+      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+      expect(runtimeState.agentic_ask_v1_enabled).toBe(
+        input.agentic === "true" ? true : undefined,
+      );
+      expect(runtimeState.agentic_ask_v1_small_scope_shortcut).toBe(
+        input.agentic === "true" && input.shortcut === "true"
+          ? true
+          : undefined,
+      );
+      process.emit("SIGTERM");
+      await expect(running).resolves.toBe(0);
+      runtimeState.worker_error = undefined;
+    }
+  });
+
   it("closes telemetry only after the authority runtime has finished", async () => {
     process.env.ECHO_STAGING_JOURNEY_TELEMETRY_V1 = "true";
     process.env.ECHO_SOURCE_SHA = "a".repeat(40);

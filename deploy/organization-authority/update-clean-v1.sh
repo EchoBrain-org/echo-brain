@@ -223,13 +223,16 @@ create_environment_snapshot() {
     "$(field "$record" source-sha)" \
     "$(field "$record" runtime-profile-sha256)" \
     "$(field "$record" runtime-profile-version)" \
-    "$(field "$record" agentic-ask-v1)" <<'PY'
+    "$(field "$record" agentic-ask-v1)" \
+    "$(field "$record" small-scope-shortcut)" <<'PY'
 import os, pathlib, stat, sys
 
 source, destination = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-image, release_id, source_sha, profile_sha, profile_version, agentic_ask_v1 = sys.argv[3:9]
+image, release_id, source_sha, profile_sha, profile_version, agentic_ask_v1, small_scope_shortcut = sys.argv[3:10]
 if agentic_ask_v1 not in ('true', 'false'):
     raise SystemExit('release record agentic Ask flag is invalid')
+if small_scope_shortcut not in ('true', 'false'):
+    raise SystemExit('release record small-scope shortcut flag is invalid')
 state = source.lstat()
 if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or state.st_mode & 0o077:
     raise SystemExit('Authority deployment environment must be a private regular file')
@@ -240,9 +243,10 @@ names = {
     'ECHO_CLEAN_RELEASE_SOURCE_SHA': source_sha,
     'ECHO_CLEAN_RUNTIME_PROFILE_SHA256': profile_sha,
     'ECHO_CLEAN_RUNTIME_PROFILE_VERSION': profile_version,
-    # This is intentionally the sole non-identity candidate configuration
-    # derived from a release record. Do not accept arbitrary environment names.
+    # These are the only non-identity candidate configuration values derived
+    # from a release record. Do not accept arbitrary environment names.
     'ECHO_AGENTIC_ASK_V1': agentic_ask_v1,
+    'ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT': small_scope_shortcut,
 }
 for name in names:
     if sum(line.startswith(name + '=') for line in lines) > 1:

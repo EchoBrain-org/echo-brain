@@ -163,6 +163,7 @@ All limits live in one configuration object:
 | Results per search | 10 |
 | Rounds | ≤ 3 |
 | Pad | ≤ 40 items and ≤ 49,152 bytes, filled round-robin across parts, ≤ 8 new items per part per round |
+| Writer evidence | Judge-selected items first, then items found for the part and for the literal question; ≤ 20 items and ≤ 32,768 bytes per writer |
 | Statements per part | ≤ 5 |
 | Model calls per request | ≤ 12 |
 | Repairs | 1 per call |
@@ -192,9 +193,17 @@ against the budget.
    to the same per-part, pad and deadline limits. Assign these discovery items
    round-robin to the parts. This deterministic fallback is V1's bounded
    keyword-free discovery policy; the judge does not choose arbitrary tools.
+
+   **Small-scope shortcut** (experimental switch `small_scope_shortcut`, off
+   by default until measured; amendment A1). Before round 1, code counts the
+   readable records and passages in scope through the desk. If they fit the
+   writer-evidence limit, code releases all of them into the pad through desk
+   calls, skips further search rounds and the judge, and gives every writer
+   all of them. Planning still defines the parts. Otherwise the loop runs
+   unchanged.
 3. **Judge.** Input: question, parts with the queries already tried, and the
-   pad (record text in full; document passages as a snippet of at most 300
-   characters, title plus the sentences sharing query terms). Output:
+   pad with every item's full released text; the pad limits bound this input
+   (amendment A1). Output:
    `scope {matches_question, note}`, one entry per part `{id, status:
    answered|partial|missing, evidence_ids, new_queries}`, and `done`. The
    reply is invalid unless it has exactly one entry per part and its evidence
@@ -205,16 +214,23 @@ against the budget.
    when it offers none, from unused planner queries or the part text. Stop
    when every part is answered, no round remains, the deadline reserve is
    reached, or a round adds nothing new.
-5. **Off scope.** If the judge reports that the evidence is not about what was
-   asked, code first looks for a near-spelling: a capitalized name in the
-   question within edit distance 1 (≤ 6 characters) or 2 (longer), same first
-   letter, of a name in released evidence. If found, the judge reruns under
-   that stated assumption and the answer displays it ("Assuming 'Ecko' means
-   'Echo'"). Otherwise the answer states what was asked and what the evidence
-   covers, with no citations and every part not found.
-6. **Write.** One call per part, in parallel, seeing only the items the judge
-   assigned to that part. At most five statements `{text, evidence_ids}` and a
-   gap note for any uncovered portion. The writer:
+5. **Off scope.** The judge's scope verdict is advisory and never discards
+   evidence (amendment A1). If the judge reports that the evidence is not
+   about what was asked, code first looks for a near-spelling: a capitalized
+   name in the question within edit distance 1 (≤ 6 characters) or 2
+   (longer), same first letter, of a name in released evidence. If found, the
+   judge reruns under that stated assumption and the answer displays it
+   ("Assuming 'Ecko' means 'Echo'"). Writing proceeds either way. Only if
+   every part ends with no released statement does the answer become
+   `off_scope`, stating what was asked and what the evidence covers, with no
+   citations.
+6. **Write.** One call per part, in parallel. Each writer receives the
+   judge-selected items for its part first, then the other items found for
+   that part and for the literal question, in retrieval order, within the
+   writer-evidence limit. A part makes no writer call, and is not found, only
+   when none of those sources contains an item for it. At most five
+   statements `{text, evidence_ids}` and a gap note for any uncovered portion.
+   The writer:
    - keeps each condition, date and limit with its own item;
    - preserves decision status: proposed and unresolved decisions remain so
      even in an approved record; only decided decisions establish a decision,
@@ -222,9 +238,9 @@ against the budget.
    - names an owner only when the evidence names one;
    - corrects a false premise.
 
-   A missing part makes no call: code writes "I couldn't find … in the
+   A part with no items makes no call: code writes "I couldn't find … in the
    records you can access." On failure after repair, the part shows its
-   assigned items instead of prose.
+   supplied items instead of prose.
 7. **Summary.** One sentence that only restates the parts; it may stay
    general rather than combine separate items. On failure the answer has no
    summary line. It uses the same cited statement shape as part statements;
@@ -249,6 +265,37 @@ model-authored evidence
 ([INV-ADAPTERS-004](../invariants/INV-ADAPTERS-004-source-owned-grounding.md),
 [FP-ADAPTERS-004](../failure-patterns/FP-ADAPTERS-004-model-authors-evidence.md)).
 
+### Amendment A1, 2026-09-27: evidence visibility
+
+The first paired measurement of the implementation (Answer Lab, local):
+- 24 frozen SCOUT and VIREL document questions, one trial per arm, 23
+  comparable pairs.
+- V3 finished below V2:
+
+| Metric | V2 | V3 |
+| --- | --- | --- |
+| Complete and supported | 9 | 6 |
+| Unjustified abstentions | 3 | 9 |
+| Required parts retrieved | 56/60 | 59/60 |
+| Required parts shown to a model | 56/60 | 35/60 |
+| Median latency | 2.9 s | 12.7 s |
+
+Two mechanisms specified by this RFC hid the retrieved evidence:
+- The judge saw 300-character document snippets, and writers saw only the
+  judge's selections.
+- The scope verdict discarded all evidence. For example, battery-reserve
+  requirements were ruled off scope because they lacked voltage
+  specifications.
+
+A1 makes four changes:
+- The judge sees full text.
+- Writers see everything found for their part, with judge picks first.
+- The scope verdict is advisory.
+- The small-scope shortcut is added as a separately measured switch.
+
+The principle: permission filtering is strict; a model's relevance judgment
+orders evidence and never hides it.
+
 ### Answer format
 
 `POST /v3/person/ask` takes `{schema_version: 3, question, project_id?}` and
@@ -265,10 +312,10 @@ returns `PersonAnswerResponseV4`:
 | `statements[]` | `{text, citation_indexes[], private}` |
 | `citations[]` | `{citation, kind, label, visibility}` |
 
-`records` uses the same cited statement shape, with exact assigned evidence
+`records` uses the same cited statement shape, with exact supplied evidence
 text rather than model prose. It is bounded by the request pad and rendered
-with its citation and private marker. Unknown or out-of-part evidence IDs
-cannot support a writer statement. If no valid statement survives, use this
+with its citation and private marker. Unknown evidence IDs, or IDs not
+supplied to that writer, cannot support a writer statement. If no valid statement survives, use this
 records-only fallback. All labels and visibility values come from the desk.
 
 The desktop app renders the direct answer, one section per part, citation
@@ -391,6 +438,37 @@ claim made by an offline pass. Existing candidate release gates still apply.
   - sample p95 of 60 s or less.
 - Content-free observability: stage timings, model calls, repairs,
   fallbacks and outcome.
+- Paired re-measurement after amendment A1, before V3 becomes a default
+  candidate:
+  - **Arms:** V2; V3 with A1; and V3 with A1 plus the small-scope shortcut.
+  - **Trials:** three per question per arm.
+  - **Question sets:** the 24 document questions, and the 13 meeting-record
+    questions with the meeting-record plane populated, each asked as an
+    owner-approver and as a team member. The 13 are the 2026-09-27 spike
+    set:
+    - Twelve Answer Lab `fixtures/questions.json` IDs:
+      `after-team-approval-rollout-question`,
+      `approver-private-price-question`, `safe-commitment-question`,
+      `first-10-prerequisites-question`, `remaining-work-question`,
+      `expansion-rule-question`, `confirmed-launch-premise-question`,
+      `approved-commitments-question`, `unsupported-question`,
+      `after-team-approval-rollout-question-paraphrase-2`,
+      `expansion-rule-question-paraphrase-1`,
+      `approved-commitments-question-paraphrase-2`.
+    - One question outside that file, ID `northstar-remaining-locations`:
+      "What can we safely promise Northstar about the remaining locations?"
+  - **Report:**
+    - complete and supported answers;
+    - unjustified abstentions;
+    - required parts retrieved;
+    - required parts shown to a model;
+    - unsupported material claims;
+    - model calls;
+    - median and p95 latency.
+  - **V3 qualifies only if:**
+    - it is at least V2 on both corpora and better on at least one;
+    - required parts shown to a model are not below V2;
+    - privacy and scope failures are zero.
 
 ### Open questions
 

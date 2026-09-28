@@ -39,6 +39,8 @@ export interface EvidenceDeskSearchInputV1 {
   readonly query?: string;
   readonly kinds?: readonly EvidenceDeskKindV1[];
   readonly limit?: number;
+  /** Server-internal complete atom inventory. It is valid only without a query. */
+  readonly inventory_mode?: "items";
   readonly signal?: AbortSignal;
 }
 

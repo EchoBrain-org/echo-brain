@@ -79,6 +79,8 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 export interface OrganizationAuthorityApiRuntimeDependencies {
   /** Per-organization V3 Ask capability. It is off unless the serving profile opts in. */
   readonly agentic_ask_v1_enabled?: boolean;
+  /** Server-only V3 experiment. It has no effect unless V3 Ask is enabled. */
+  readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Historical record protocol projection, independent of live ingress. */
   readonly record_approver?: RecordApproverProjectorV1;
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
@@ -315,6 +317,9 @@ export async function startOrganizationAuthorityApiRuntime(
                 model: dependencies.answer_composition_generation.structured_output,
                 generation: dependencies.answer_composition_generation.generation,
                 audit: new SqlitePersonAgenticAskAuditV1(database),
+                ...(dependencies.agentic_ask_v1_small_scope_shortcut === true
+                  ? { small_scope_shortcut: true }
+                  : {}),
               }),
             }),
           }),

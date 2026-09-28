@@ -76,6 +76,8 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly pkce_key_file: string;
   /** Per-organization V3 Ask capability. Serving profiles leave it disabled by default. */
   readonly agentic_ask_v1_enabled?: boolean;
+  /** Server-only V3 experiment, off unless the serving profile opts in. */
+  readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Explicit provider/source bundle. This generic root does not select one. */
   readonly meeting_source_bundle: MeetingSourceBundleV1;
   /** Explicit decision-processor bundle. This generic root does not select one. */
@@ -296,6 +298,10 @@ export async function openOrganizationAuthorityRuntime(
   const baseApiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
     ...dependencies.api,
     ...(config.agentic_ask_v1_enabled === true ? { agentic_ask_v1_enabled: true } : {}),
+    ...(config.agentic_ask_v1_enabled === true &&
+    config.agentic_ask_v1_small_scope_shortcut === true
+      ? { agentic_ask_v1_small_scope_shortcut: true }
+      : {}),
     ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
     ...(dependencies.api?.ask_journey_telemetry !== undefined ||
     config.ask_journey_telemetry === undefined

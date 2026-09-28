@@ -28,6 +28,8 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly model: StructuredGenerationPort;
   readonly generation: AnswerCompositionGenerationProfileV1;
   readonly audit: SqlitePersonAgenticAskAuditV1;
+  /** Server-only experiment; V3 remains behaviorally unchanged unless enabled. */
+  readonly small_scope_shortcut?: boolean;
 }
 
 function scopeOf(request: { readonly project_id?: string }): PersonAskScopeV2 {
@@ -62,15 +64,23 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
     async ask(input: { readonly access_token: string; readonly request: PersonAnswerRequestV3; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4> {
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       const desk = deskFor(options, input.access_token, input.request);
-      return createAgenticAskV1({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest({
-        authority_id: options.authority_id,
-        organization_id: options.organization_id,
-        state_lineage_id: options.state_lineage_id,
-        principal_id: authorization.principal_id,
-        membership_id: authorization.membership_id,
-        session_family_id: authorization.session_family_id,
-        request_id: `ask_${randomUUID()}`,
-      }) })
+      return createAgenticAskV1({
+        desk,
+        model: options.model,
+        generation: options.generation,
+        audit: options.audit.forRequest({
+          authority_id: options.authority_id,
+          organization_id: options.organization_id,
+          state_lineage_id: options.state_lineage_id,
+          principal_id: authorization.principal_id,
+          membership_id: authorization.membership_id,
+          session_family_id: authorization.session_family_id,
+          request_id: `ask_${randomUUID()}`,
+        }),
+        ...(options.small_scope_shortcut === true
+          ? { small_scope_shortcut: true }
+          : {}),
+      })
         .answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });
     },
     async searchEvidence(input: { readonly access_token: string; readonly request: PersonEvidenceSearchRequestV1; readonly signal?: AbortSignal }): Promise<PersonEvidenceDeskResponseV1> {

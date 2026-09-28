@@ -49,8 +49,14 @@ def validate(value):
     # The optional release-bound switch was added after clean-v1 records were
     # accepted. Preserve those canonical legacy bytes while treating absence as
     # false; a new candidate may bind the only supported runtime switch here.
-    if not isinstance(value, dict) or sorted(value) not in (sorted(required), sorted(required + ["agentic_ask_v1"])):
-        fail("$ must contain exactly: " + ", ".join(sorted(required + ["agentic_ask_v1"])))
+    allowed = (
+        sorted(required),
+        sorted(required + ["agentic_ask_v1"]),
+        sorted(required + ["small_scope_shortcut"]),
+        sorted(required + ["agentic_ask_v1", "small_scope_shortcut"]),
+    )
+    if not isinstance(value, dict) or sorted(value) not in allowed:
+        fail("$ must contain exactly: " + ", ".join(sorted(required + ["agentic_ask_v1", "small_scope_shortcut"])))
     if type(value["schema_version"]) is not int or value["schema_version"] != 1:
         fail("schema_version must equal integer 1")
     if value["kind"] != "echo-clean-v1-release":
@@ -75,6 +81,10 @@ def validate(value):
         fail("runtime_profile.profile_version must equal clean-v1-profile-1")
     if "agentic_ask_v1" in value and type(value["agentic_ask_v1"]) is not bool:
         fail("agentic_ask_v1 must be boolean")
+    if "small_scope_shortcut" in value and type(value["small_scope_shortcut"]) is not bool:
+        fail("small_scope_shortcut must be boolean")
+    if value.get("small_scope_shortcut") is True and value.get("agentic_ask_v1") is not True:
+        fail("small_scope_shortcut requires agentic_ask_v1=true")
     return value
 
 
@@ -96,7 +106,7 @@ def read(path):
 
 def main(argv):
     if len(argv) not in (2, 3) or argv[0] not in ("validate", "field") or (argv[0] == "field" and len(argv) != 3):
-        fail("usage: clean-v1-release.py <validate|field> <record> [authority-image|baseline-class|client-url|client-sha256|client-version|runtime-profile-url|runtime-profile-sha256|runtime-profile-version|agentic-ask-v1]")
+        fail("usage: clean-v1-release.py <validate|field> <record> [authority-image|baseline-class|client-url|client-sha256|client-version|runtime-profile-url|runtime-profile-sha256|runtime-profile-version|agentic-ask-v1|small-scope-shortcut]")
     record = read(argv[1])
     if argv[0] == "validate":
         sys.stdout.write(json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
@@ -112,6 +122,7 @@ def main(argv):
         "runtime-profile-sha256": record["runtime_profile"]["artifact_sha256"],
         "runtime-profile-version": record["runtime_profile"]["profile_version"],
         "agentic-ask-v1": "true" if record.get("agentic_ask_v1", False) else "false",
+        "small-scope-shortcut": "true" if record.get("small_scope_shortcut", False) else "false",
         "source-sha": record["source_sha"],
     }
     if argv[2] not in fields:

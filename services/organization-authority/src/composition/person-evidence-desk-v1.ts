@@ -149,12 +149,22 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   };
   const search = async (input: EvidenceDeskSearchInputV1): Promise<EvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
+    if (input.inventory_mode !== undefined &&
+      (input.query !== undefined || input.inventory_mode !== "items")) {
+      throw new AuthorityOperationError("invalid_request", "evidence inventory mode is invalid");
+    }
     initialize();
     const limit = input.limit ?? (input.query === undefined ? 50 : 10);
     if (input.query === undefined) {
       latestRecordTruncated = false;
       const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" => kind === "note" || kind === "document_passage");
-      const released = options.originals.deskSearch({ access_token: options.access_token, scope: options.scope, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
+      const released = options.originals.deskSearch({
+        access_token: options.access_token,
+        scope: options.scope,
+        limit,
+        ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }),
+        ...(input.inventory_mode === "items" ? { inventory_mode: "items" } : {}),
+      });
       const beforeRecords = recordReleases.length;
       const recordKinds = input.kinds?.filter((kind): kind is "decision" | "action" | "rationale" => kind === "decision" || kind === "action" || kind === "rationale");
       const recordInventory = recordsUnavailableAtStart ? [] : records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);

@@ -175,7 +175,7 @@ describe('Agentic Ask V1 adversarial boundaries', () => {
     }));
     const result = await answer.answer({ question: 'Question' });
     expect(result.parts[0]?.statements[0]?.text).toBe('Second round matters.');
-    expect((writerInputs[0] as { evidence: readonly { id: string }[] }).evidence.map(value => value.id)).toEqual(['round-two']);
+    expect((writerInputs[0] as { evidence: readonly { id: string }[] }).evidence.map(value => value.id)).toEqual(['round-two', ...initial.map(value => value.id)]);
   });
 
   it('gives each writer only the evidence the judge assigned to its part', async () => {
@@ -215,7 +215,7 @@ describe('Agentic Ask V1 adversarial boundaries', () => {
     expect(result.direct).toBeUndefined();
   });
 
-  it('continues when a judge incorrectly says done with a partial part, but does not call a writer for a missing part', async () => {
+  it('continues when a judge incorrectly says done with a partial part, and writes retained part/literal evidence for a later missing verdict', async () => {
     const calls: string[] = [];
     let judgeCalls = 0;
     const model: StructuredGenerationPort = {
@@ -228,14 +228,14 @@ describe('Agentic Ask V1 adversarial boundaries', () => {
             ? judged([{ id: 'p1', status: 'partial', evidence_ids: ['old'], new_queries: ['follow-up'] }], true)
             : judged([{ id: 'p1', status: 'missing', evidence_ids: [] }], true);
         }
-        if (current === 'writer') return { statements: [{ text: 'Must not write.', evidence_ids: ['old'] }] };
+        if (current === 'writer') return { statements: [{ text: 'Retained evidence still matters.', evidence_ids: ['old'] }] };
         return { statement: null };
       },
     };
     const result = await composition(model, desk({ search: query => query === 'Question' ? { items: [item('old')], truncated: false } : query === 'follow-up' ? { items: [item('new')], truncated: false } : { items: [], truncated: false } })).answer({ question: 'Question' });
     expect(calls.filter(value => value === 'judge')).toHaveLength(2);
-    expect(calls).not.toContain('writer');
-    expect(result.parts[0]?.status).toBe('not_found');
+    expect(calls).toContain('writer');
+    expect(result.parts[0]?.status).toBe('answered');
   });
 
   it('uses exact released fallback text after an empty-prose writer failure', async () => {
@@ -281,7 +281,7 @@ describe('Agentic Ask V1 adversarial boundaries', () => {
         throw new Error('off-scope path must not write');
       },
     };
-    const result = await composition(model, desk({ search: () => ({ items: [item('evidence', { label: 'Echo rollout' })], truncated: false }) })).answer({ question: 'Eckoooo status' });
+    const result = await composition(model, desk({ search: () => ({ items: [], truncated: false }) })).answer({ question: 'Eckoooo status' });
     expect(judges).toBe(1);
     expect(result.outcome).toBe('off_scope');
     expect(result.assumption).toBeUndefined();

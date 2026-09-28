@@ -728,4 +728,45 @@ describe("adversarial original-context retrieval", () => {
     expect(opened.items[0]!.citation.anchor_sha256).toBe(item.citation.anchor_sha256);
     expect(opened.items[0]!.text).toContain("later-packet-marker");
   });
+
+  it("keeps the ordinary document inventory representative-only, while the internal item inventory counts every readable passage", () => {
+    const f = fixture();
+    f.uploadChunks("Complete shortcut inventory", ["first readable passage", "second readable passage", "third readable passage"]);
+    const ordinary = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, limit: 20 });
+    const complete = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, limit: 20, inventory_mode: "items" });
+    expect(ordinary.items).toHaveLength(1);
+    expect(complete.items).toHaveLength(3);
+    expect(complete.truncated).toBe(false);
+    expect(new Set(complete.items.map(item => item.citation.anchor_sha256)).size).toBe(3);
+    expect(complete.items.every(item => item.text === undefined)).toBe(true);
+  });
+
+  it("marks the internal item inventory truncated before the shortcut can treat more than twenty passages as complete", () => {
+    const f = fixture();
+    f.uploadChunks("Oversized shortcut inventory", Array.from({ length: 21 }, (_, index) => `readable passage ${index + 1}`));
+    const complete = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, limit: 20, inventory_mode: "items" });
+    expect(complete.items).toHaveLength(20);
+    expect(complete.truncated).toBe(true);
+  });
+
+  it("counts every canonical packet in a long document and note for complete items inventory", async () => {
+    const f = fixture();
+    const documentTail = "document-tail-fact";
+    const noteTail = "note-tail-fact";
+    // Extraction limits a chunk to 3072 bytes, but a filename heading still
+    // leaves less room in a desk packet and therefore creates two anchors.
+    f.uploadChunks("Packetized document", [`${"d".repeat(3_054)}${documentTail}`]);
+    await f.admitLegacyTeamNote("Packetized note", `${"note body ".repeat(500)}${noteTail}`);
+    const complete = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, limit: 20, inventory_mode: "items" });
+    expect(complete.items.length).toBeGreaterThan(2);
+    expect(complete.truncated).toBe(false);
+    const passages = complete.items.filter(item => item.kind === "document_passage");
+    const notes = complete.items.filter(item => item.kind === "note");
+    expect(passages.length).toBeGreaterThan(1);
+    expect(notes.length).toBeGreaterThan(1);
+    const tailDocument = passages[passages.length - 1]!;
+    const tailNote = notes[notes.length - 1]!;
+    expect(f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: tailDocument.citation }).atom.text).toContain(documentTail);
+    expect(f.retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: tailNote.citation }).atom.text).toContain(noteTail);
+  });
 });

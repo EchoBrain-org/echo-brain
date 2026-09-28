@@ -21,12 +21,14 @@ function desk(input: {
   readonly first?: readonly EvidenceDeskItemV1[];
   readonly inventory?: readonly EvidenceDeskItemV1[];
   readonly opened?: readonly EvidenceDeskItemV1[];
+  readonly inventoryTruncated?: boolean;
+  readonly openedTruncated?: boolean;
   readonly revalidate?: () => Promise<{ readonly checked_at: string }>;
 } = {}) {
   const search = vi.fn(async (request: { readonly query?: string }) => ({
-    items: request.query === undefined ? input.inventory ?? [] : input.first ?? [], truncated: false, receipt_digests: [digest("d")],
+    items: request.query === undefined ? input.inventory ?? [] : input.first ?? [], truncated: request.query === undefined && input.inventoryTruncated === true, receipt_digests: [digest("d")],
   }));
-  const open = vi.fn(async () => ({ items: input.opened ?? [], truncated: false, receipt_digests: [digest("e")] }));
+  const open = vi.fn(async () => ({ items: input.opened ?? [], truncated: input.openedTruncated === true, receipt_digests: [digest("e")] }));
   const revalidate = vi.fn(async () => input.revalidate?.() ?? ({ checked_at: "2026-09-27T00:00:00.000Z" }));
   return Object.freeze({ scope: { kind: "global" as const }, search, open, revalidate }) as EvidenceDeskPortV1 & { search: typeof search; open: typeof open; revalidate: typeof revalidate };
 }
@@ -57,6 +59,19 @@ describe("agentic Ask V1", () => {
     expect(audit).toEqual([expect.objectContaining({ model_calls: 4, repairs: 0, citation_count: 1, response_sha256: expect.stringMatching(/^sha256:/) })]);
   });
 
+  it("gives the judge full released document text rather than a sentence snippet", async () => {
+    const fullText = `Heading. ${"é".repeat(400)}`;
+    const model = scripted([plan, judge, writer, summary]);
+    await createAgenticAskV1({
+      desk: desk({ first: [item("e1", fullText)] }), model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() },
+    }).answer({ question: "When is launch?" });
+
+    const judgeInput = (model.generate as ReturnType<typeof vi.fn>).mock.calls[1]?.[0] as StructuredGenerationInput;
+    expect(JSON.parse(judgeInput!.user_prompt).evidence[0].text).toBe(fullText);
+  });
+
   it("opens a bounded query-less inventory only after the first lexical round is empty", async () => {
     const catalog: EvidenceDeskItemV1 = { ...item("catalog"), text: undefined };
     const evidence = desk({ inventory: [catalog], opened: [item()] });
@@ -69,6 +84,190 @@ describe("agentic Ask V1", () => {
     expect(evidence.search).toHaveBeenCalledWith(expect.objectContaining({ limit: 50 }));
     expect(evidence.open).toHaveBeenCalledOnce();
     expect(result.outcome).toBe("answered");
+  });
+
+  it("small-scope shortcut opens the complete inventory, skips the judge, and gives each writer all released items", async () => {
+    const catalog = { ...item(), text: undefined };
+    const evidence = desk({ inventory: [catalog], opened: [item()] });
+    const model = scripted([plan, writer, summary]);
+    const result = await createAgenticAskV1({
+      desk: evidence, model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() }, small_scope_shortcut: true,
+    }).answer({ question: "When is launch?" });
+
+    expect(result.outcome).toBe("answered");
+    expect(evidence.search).toHaveBeenCalledTimes(1);
+    expect(evidence.search).toHaveBeenCalledWith(expect.objectContaining({ limit: 20, inventory_mode: "items" }));
+    expect(model.generate).toHaveBeenCalledTimes(3); // plan, writer, summary; no judge
+  });
+
+  it("accepts a truncated neighbour expansion when every complete-inventory anchor opens", async () => {
+    const catalog = { ...item(), text: undefined };
+    const evidence = desk({ inventory: [catalog], opened: [item()], openedTruncated: true });
+    const model = scripted([plan, writer, summary]);
+    const result = await createAgenticAskV1({
+      desk: evidence, model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() }, small_scope_shortcut: true,
+    }).answer({ question: "When is launch?" });
+
+    expect(result.outcome).toBe("answered");
+    expect(model.generate).toHaveBeenCalledTimes(3);
+  });
+
+  it("falls through from a too-large small-scope inventory without committing probe items to the writer", async () => {
+    const inventory = Array.from({ length: 21 }, (_, index) => ({ ...item(`i${index}`), text: undefined }));
+    const evidence = desk({ inventory, first: [item()] });
+    const model = scripted([plan, judge, writer, summary]);
+    await createAgenticAskV1({
+      desk: evidence, model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() }, small_scope_shortcut: true,
+    }).answer({ question: "When is launch?" });
+
+    expect(evidence.open).not.toHaveBeenCalled();
+    expect(model.generate).toHaveBeenCalledTimes(4); // normal plan, judge, writer, summary
+  });
+
+  it("measures writer bytes in UTF-8 before enabling the small-scope shortcut", async () => {
+    const catalog = { ...item(), text: undefined };
+    const oversized = item("e1", "é".repeat(17_000));
+    const evidence = desk({ inventory: [catalog], opened: [oversized], first: [item()] });
+    const model = scripted([plan, judge, writer, summary]);
+    await createAgenticAskV1({
+      desk: evidence, model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() }, small_scope_shortcut: true,
+    }).answer({ question: "When is launch?" });
+
+    expect(evidence.open).toHaveBeenCalledOnce();
+    expect(model.generate).toHaveBeenCalledTimes(4); // byte overflow falls through to normal loop
+  });
+
+  it("falls through from a shortcut probe after the writing reserve begins", async () => {
+    let clock = 0;
+    const evidence = desk({ inventory: [] });
+    evidence.search.mockImplementation(async request => {
+      if (request.query === undefined) clock = 46_000;
+      return { items: [], truncated: false, receipt_digests: [digest("d")] };
+    });
+    const result = await createAgenticAskV1({
+      desk: evidence, model: scripted([plan]),
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() }, now_ms: () => clock, small_scope_shortcut: true,
+    }).answer({ question: "When is launch?" });
+
+    expect(result.outcome).toBe("not_found");
+  });
+
+  it("treats a false scope verdict as advisory and still writes released evidence", async () => {
+    const evidence = desk({ first: [item()] });
+    const offScopeJudge = { scope: { matches_question: false, note: "The model judged the evidence unrelated." }, parts: [{ id: "p1", status: "answered", evidence_ids: ["e1"], new_queries: [] }], done: true };
+    const result = await createAgenticAskV1({
+      desk: evidence, model: scripted([plan, offScopeJudge, writer, summary]),
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() },
+    }).answer({ question: "When is launch?" });
+
+    expect(result.outcome).toBe("answered");
+    expect(result.parts[0]?.statements).toHaveLength(1);
+  });
+
+  it("orders writer evidence as judge picks, part hits, then literal-question hits and reuses that list for records fallback", async () => {
+    const first = [item("e1", "first"), item("e2", "second"), item("e3", "third")];
+    const selected = { scope: { matches_question: true, note: "" }, parts: [{ id: "p1", status: "answered", evidence_ids: ["e2"], new_queries: [] }], done: true };
+    const model = scripted([plan, selected, { statements: [] }]);
+    const result = await createAgenticAskV1({
+      desk: desk({ first }), model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() },
+    }).answer({ question: "When is launch?" });
+
+    const writerInput = (model.generate as ReturnType<typeof vi.fn>).mock.calls[2]?.[0] as StructuredGenerationInput;
+    expect(JSON.parse(writerInput!.user_prompt).evidence.map((value: { id: string }) => value.id)).toEqual(["e2", "e1", "e3"]);
+    expect(result.parts[0]?.records?.map(record => record.text)).toEqual(["second", "first", "third"]);
+  });
+
+  it("keeps all writer-assigned items in an invalid-writer records fallback", async () => {
+    const evidence = Array.from({ length: 6 }, (_, index) => item(`e${index}`, `item ${index}`));
+    const allSelected = { scope: { matches_question: true, note: "" }, parts: [{ id: "p1", status: "answered", evidence_ids: evidence.map(value => value.id), new_queries: [] }], done: true };
+    const result = await createAgenticAskV1({
+      desk: desk({ first: evidence }), model: scripted([plan, allSelected, { statements: [] }]),
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() },
+    }).answer({ question: "When is launch?" });
+
+    expect(result.parts[0]?.records).toHaveLength(6);
+  });
+
+  it("caps the actual writer list at twenty items before both generation and fallback", async () => {
+    const evidence = Array.from({ length: 21 }, (_, index) => item(`e${index}`, `item ${index}`));
+    const allSelected = { scope: { matches_question: true, note: "" }, parts: [{ id: "p1", status: "answered", evidence_ids: evidence.map(value => value.id), new_queries: [] }], done: true };
+    const model = scripted([plan, allSelected, { statements: [] }]);
+    const result = await createAgenticAskV1({
+      desk: desk({ first: evidence }), model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() },
+    }).answer({ question: "When is launch?" });
+
+    const writerInput = (model.generate as ReturnType<typeof vi.fn>).mock.calls[2]?.[0] as StructuredGenerationInput;
+    expect(JSON.parse(writerInput.user_prompt).evidence.map((value: { id: string }) => value.id)).toEqual(evidence.slice(0, 20).map(value => value.id));
+    expect(result.parts[0]?.records).toHaveLength(20);
+  });
+
+  it("caps the actual writer list at 32,768 UTF-8 bytes", async () => {
+    const first = item("first", "a".repeat(20_000));
+    const second = item("second", "b".repeat(20_000));
+    const selected = { scope: { matches_question: true, note: "" }, parts: [{ id: "p1", status: "answered", evidence_ids: ["first", "second"], new_queries: [] }], done: true };
+    const model = scripted([plan, selected, { statements: [{ text: "First fits.", evidence_ids: ["first"] }] }, summary]);
+    await createAgenticAskV1({
+      desk: desk({ first: [first, second] }), model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() },
+    }).answer({ question: "When is launch?" });
+
+    const writerInput = (model.generate as ReturnType<typeof vi.fn>).mock.calls[2]?.[0] as StructuredGenerationInput;
+    expect(JSON.parse(writerInput.user_prompt).evidence.map((value: { id: string }) => value.id)).toEqual(["first"]);
+  });
+
+  it("supplies literal-question hits to every writer without round-robin part tagging", async () => {
+    const shared = item("literal", "shared literal evidence");
+    const twoPartPlan = { parts: [{ question: "First part", queries: [] }, { question: "Second part", queries: [] }] };
+    const emptyJudge = { scope: { matches_question: true, note: "" }, parts: [{ id: "p1", status: "answered", evidence_ids: [], new_queries: [] }, { id: "p2", status: "answered", evidence_ids: [], new_queries: [] }], done: true };
+    const writerInputs: string[][] = [];
+    const model: StructuredGenerationPort = { generate: vi.fn(async input => {
+      if (input.system_prompt.includes("Split only")) return twoPartPlan;
+      if (input.system_prompt.includes("Mark each")) return emptyJudge;
+      if (input.system_prompt.includes("Write only")) { writerInputs.push(JSON.parse(input.user_prompt).evidence.map((value: { id: string }) => value.id)); return { statements: [{ text: "Shared support.", evidence_ids: ["literal"] }] }; }
+      return { statement: null };
+    }) };
+    await createAgenticAskV1({
+      desk: desk({ first: [shared] }), model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() },
+    }).answer({ question: "Both parts?" });
+
+    expect(writerInputs).toEqual([["literal"], ["literal"]]);
+  });
+
+  it("gives every multi-part shortcut writer the complete readable item set", async () => {
+    const first = item("e1", "first item"), second = item("e2", "second item");
+    const catalog = [{ ...first, text: undefined }, { ...second, text: undefined }];
+    const twoPartPlan = { parts: [{ question: "First part", queries: [] }, { question: "Second part", queries: [] }] };
+    const writerInputs: string[][] = [];
+    const model: StructuredGenerationPort = { generate: vi.fn(async input => {
+      if (input.system_prompt.includes("Split only")) return twoPartPlan;
+      if (input.system_prompt.includes("Write only")) { writerInputs.push(JSON.parse(input.user_prompt).evidence.map((value: { id: string }) => value.id)); return { statements: [{ text: "Complete scope support.", evidence_ids: ["e1"] }] }; }
+      return { statement: null };
+    }) };
+    await createAgenticAskV1({
+      desk: desk({ inventory: catalog, opened: [first, second] }), model,
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() }, small_scope_shortcut: true,
+    }).answer({ question: "Both parts?" });
+
+    expect(writerInputs).toEqual([["e1", "e2"], ["e1", "e2"]]);
   });
 
   it("repairs malformed planner output once and falls back to the literal question", async () => {
@@ -192,9 +391,9 @@ describe("agentic Ask V1", () => {
   it("binds an off-scope audit to the final revalidation fence", async () => {
     let checks = 0;
     const stamps = ["2026-09-27T00:00:01.000Z", "2026-09-27T00:00:02.000Z", "2026-09-27T00:00:03.000Z"];
-    const evidence = desk({ first: [item()], revalidate: async () => ({ checked_at: stamps[checks++]! }) });
+    const evidence = desk({ revalidate: async () => ({ checked_at: stamps[checks++]! }) });
     const audit: AgenticAskAuditEntryV1[] = [];
-    const offScopeJudge = { scope: { matches_question: false, note: "Released evidence is unrelated." }, parts: [{ id: "p1", status: "missing", evidence_ids: [], new_queries: [] }], done: true };
+    const offScopeJudge = { scope: { matches_question: false, note: "Released evidence is unrelated." }, parts: [{ id: "p1", status: "answered", evidence_ids: [], new_queries: [] }], done: true };
     const result = await createAgenticAskV1({
       desk: evidence, model: scripted([plan, offScopeJudge]),
       generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
@@ -203,6 +402,21 @@ describe("agentic Ask V1", () => {
 
     expect(result.outcome).toBe("off_scope");
     expect(audit).toEqual([expect.objectContaining({ checked_at: "2026-09-27T00:00:03.000Z" })]);
+  });
+
+  it("keeps a long valid question out of the bounded off-scope notice", async () => {
+    const question = `Q ${"x ".repeat(1_400)}`.trim();
+    const longPlan = { parts: [{ question: "What status does the request ask about?", queries: [] }] };
+    const offScopeJudge = { scope: { matches_question: false, note: "The released evidence covers a different project." }, parts: [{ id: "p1", status: "answered", evidence_ids: [], new_queries: [] }], done: true };
+    const result = await createAgenticAskV1({
+      desk: desk(), model: scripted([longPlan, offScopeJudge]),
+      generation: { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 1_000 },
+      audit: { append: vi.fn() },
+    }).answer({ question });
+
+    expect(result.outcome).toBe("off_scope");
+    expect(result.notice).toBe("The released evidence covers a different project.");
+    expect(() => validatePersonAnswerResponseV4(result)).not.toThrow();
   });
 
   it("does not publish a fallback after cancellation, but writes a terminal cancellation audit", async () => {

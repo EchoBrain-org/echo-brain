@@ -166,6 +166,9 @@ export async function runOrganizationAuthorityServiceCli(
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
     const agenticAskEnabled = process.env.ECHO_AGENTIC_ASK_V1 === "true";
+    const agenticAskSmallScopeShortcut =
+      agenticAskEnabled &&
+      process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT === "true";
     const environmentSyntheticMeetingsDirectory =
       process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR;
     const requestedSyntheticMeetingsDirectory =
@@ -247,6 +250,9 @@ export async function runOrganizationAuthorityServiceCli(
             },
       pkce_key_file: manifest.pkce_key_file,
       ...(agenticAskEnabled ? { agentic_ask_v1_enabled: true } : {}),
+      ...(agenticAskSmallScopeShortcut
+        ? { agentic_ask_v1_small_scope_shortcut: true }
+        : {}),
       slack_signing_secret_file: required(
         parsed,
         "--slack-signing-secret-file",
