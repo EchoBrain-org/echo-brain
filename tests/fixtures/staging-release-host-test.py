@@ -115,12 +115,12 @@ class HostProtocol(unittest.TestCase):
 
     def test_v4_hash_witnesses_still_require_installed_reviewed_bytes(self):
         self.install()
-        request = self.request('stage-v5-to-v6')
+        request = self.request('stage')
         for name in host.TOOLS:
             del request['files'][name]['base64']
         result = self.execute(request)
         self.assertTrue(result['ok'], result)
-        self.assertEqual(self.calls[-1][0], 'stage-v5-to-v6')
+        self.assertEqual(self.calls[-1][0], 'stage')
         for mutation in ('unknown', 'missing'):
             request['operation_id'] = str(uuid.uuid4())
             path = self.root / host.TOOLS[0]
@@ -130,16 +130,16 @@ class HostProtocol(unittest.TestCase):
             self.assertFalse(result['ok'])
         self.assertEqual(len(self.calls), 1)
 
-    def test_v8_to_v9_dispatch_keeps_the_bounded_stage_arguments(self):
+    def test_stage_dispatch_keeps_the_bounded_stage_arguments(self):
         self.install()
-        request = self.request('stage-v8-to-v9')
+        request = self.request('stage')
         for name in host.TOOLS:
             del request['files'][name]['base64']
         result = self.execute(request)
         self.assertTrue(result['ok'], result)
-        self.assertEqual(self.calls[-1][0], 'stage-v8-to-v9')
+        self.assertEqual(self.calls[-1][0], 'stage')
         self.assertEqual(self.calls[-1][1::2], ['--release', '--runtime-profile'])
-        legacy = self.request('stage-v8-to-v9')
+        legacy = self.request('stage')
         legacy['schema_version'] = 2
         legacy['kind'] = 'echo-staging-release-request-v2'
         with self.assertRaises(host.Refused):

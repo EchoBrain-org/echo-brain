@@ -388,14 +388,6 @@ function retainedTranscriptSourceV2(
   });
 }
 
-/** V10 stores an immutable V2 delivery contract. Earlier authority files keep V1 exact. */
-function supportsPrivateApprovalDeliveryV2(database: Database.Database): boolean {
-  return database.prepare(
-    `SELECT 1 FROM pragma_table_info('authority_live_approval_outbox_v2')
-     WHERE name='private_approval_card_v2_json'`,
-  ).get() !== undefined;
-}
-
 function candidateCommitment(
   outbox: ApprovalWorkflowOutboxV1,
   card: Pick<PrivateCardAndSnapshotV1 | PrivateCardAndSnapshotV2, "frozen_card_sha256" | "approved_snapshot_sha256">,
@@ -545,9 +537,8 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
     let target: PrivateSlackApprovalReviewerTargetV1 | undefined;
     let pendingV2: PendingPrivateApprovalV2 | undefined;
     let frozen: PrivateCardAndSnapshotV1 | PrivateCardAndSnapshotV2;
-    // Test and historical V1 adapters lack this capability. The production
-    // assignment adapter always has it, so every newly queued production
-    // candidate enters V2 while pre-V2 recoveries retain their exact path.
+    // Test V1 adapters lack this capability. The production assignment adapter
+    // always has it, so every queued production candidate enters V2.
     const deliveryV2 = this.options.assignments as unknown as {
       readonly readDeliveryV2?: (approvalId: string) => PendingPrivateApprovalV2 | undefined;
       readonly freezeDeliveryV2?: (input: {
@@ -558,9 +549,8 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       }) => PendingPrivateApprovalV2;
     };
     const v2DeliverySupported =
-      (deliveryV2.readDeliveryV2 !== undefined ||
-        deliveryV2.freezeDeliveryV2 !== undefined) &&
-      supportsPrivateApprovalDeliveryV2(this.options.authority_database);
+      deliveryV2.readDeliveryV2 !== undefined ||
+      deliveryV2.freezeDeliveryV2 !== undefined;
     const existingV2 = v2DeliverySupported
       ? deliveryV2.readDeliveryV2?.(outbox.approval_id)
       : undefined;

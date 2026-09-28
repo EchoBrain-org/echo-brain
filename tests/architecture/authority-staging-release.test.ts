@@ -60,8 +60,9 @@ function fixture() {
 afterEach(() => { for (const path of temporary.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
 describe('bounded staging release operator', () => {
-  it.each(['stage-v5-to-v6', 'stage-v8-to-v9'] as const)('plans %s with installed-tool hash witnesses and no remote mutation', action => {
+  it('plans stage with installed-tool hash witnesses and no remote mutation', () => {
     const f = fixture();
+    const action = 'stage' as const;
     const options = { ...f.options, action };
     expect(planStagingRelease(options, f.dependencies).state).toBe('planned');
     const request = f.request();
