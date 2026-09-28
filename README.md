@@ -13,17 +13,26 @@ login session and sends authenticated requests to that Authority.
 
 The only shipped machine product is `@echo-brain/person-client` in
 `src/product/person-client`. The Electron desktop app in `product/echo-desktop`
-is its graphical interface on macOS: it runs this same client in process and
-keeps no other session (see
+is its graphical interface on macOS arm64 and Linux x64: it runs this same
+client in process and keeps no other session (see
 [Person client architecture](docs/architecture/person-client-architecture.md)).
 The native Swift app is retired.
 
 It can:
 
 - begin Google OIDC login and install or refresh a Person session;
-- list approved records and search currently indexed organization content;
-- manage the signed-in member's meeting exclusions; and
-- bind the signed-in identity to Slack.
+- ask cited questions across everything the member may read, or within one
+  project;
+- list and search approved records and read explicitly shared meeting
+  transcripts;
+- create projects and manage their members, settings and associated context;
+- upload text notes and documents with a chosen audience, then read or
+  download them;
+- find people in the organization directory;
+- manage the signed-in member's meeting exclusions;
+- bind the signed-in identity to Slack and read organization tool link status;
+- let an owner list, invite, reissue or revoke employees; and
+- install signed CLI updates from a configured feed.
 
 It does not run meeting processing, hold Granola or Slack service
 credentials, manage a LaunchAgent, keep a local product database, write a
@@ -40,12 +49,15 @@ Tokens are never printed by successful commands.
 
 - external OIDC Person identity and rotating sessions;
 - organization authorization and audit;
-- meeting-source, decision-processing, approval, and Slack delivery adapters;
+- meeting-source, decision-processing, and Slack approval and identity adapters;
 - the append-only organization record; and
 - deterministic, permission-aware record reads and cited answers.
 
-The server starts only from the seven byte-pinned baseline schemas. Historical
-migration runners and compatibility APIs are not shipped. Released retrieval
+The server starts only from six byte-pinned baseline schemas, one per state
+role: Authority V10, control-plane V3, record-log V4, retrieval facts V3,
+retrieval lexical V2 and retrieval content V2. Startup refuses older state
+instead of migrating it; retained historical copies run only through named
+offline staging operations. Released retrieval
 is the sole content-release boundary. The answer-composition generation path is one
 synchronous Person `ask` path: one bounded plan, one released-retrieval batch,
 at most one answer call, and
@@ -55,15 +67,18 @@ memory, streaming, or direct record or retrieval-store access.
 ## Repository layout
 
 ```text
-packages/                         Linked reusable modules and shared contracts
-services/organization-authority/ Deployable Authority and processing service
-packages/organization-control-plane/ Linked Authority control-plane module
-packages/organization-record/        Linked Authority record module
-packages/organization-retrieval/     Linked Authority retrieval module
-src/product/person-client/       Standalone Person CLI package
-product/echo-desktop/            Electron desktop app over the Person client
-deploy/organization-authority/   Container and EC2 deployment assets
-tests/                            Cross-workspace architecture and Person tests
+packages/                               Linked reusable modules and shared contracts
+packages/organization-authority-kernel/ Authority baselines, persistence and state lineage
+packages/organization-processing/       Provider-neutral meeting processing
+packages/organization-control-plane/    Linked Authority control-plane module
+packages/organization-record/           Linked Authority record module
+packages/organization-retrieval/        Linked Authority retrieval module
+providers/                              Granola, Slack, model and synthetic provider adapters
+services/organization-authority/        Deployable Authority and processing service
+src/product/person-client/              Standalone Person CLI package
+product/echo-desktop/                   Electron desktop app over the Person client
+deploy/organization-authority/          Container and EC2 deployment assets
+tests/                                  Cross-workspace architecture and Person tests
 ```
 
 ## Development
@@ -120,9 +135,10 @@ mkdir -p /absolute/path/to/artifacts
 npm run pack:person-client -- /absolute/path/to/artifacts
 ```
 
-The packer includes only the Person client and its three public protocol/API
-dependencies. CI installs that exact tarball offline on macOS arm64 and checks
-version, help, and absent-session behavior.
+The packer includes only the Person client and its four bundled workspace
+dependencies: the federation, organization protocol and organization API
+contracts and the Slack client fragment. CI installs that exact tarball
+offline on macOS arm64 and checks version, help, and absent-session behavior.
 
 Installed CLI shape:
 

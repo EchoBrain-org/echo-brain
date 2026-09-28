@@ -17,7 +17,7 @@ export function authorityBaselineSha256V5(): Sha256Digest {
   return sha256Digest(authorityBaselineSqlV5());
 }
 
-/** Pinned previous schema, retained for offline compatibility verification. */
+/** Pinned historical schema, retained for offline compatibility verification. */
 export function applyAuthorityBaselineV5(database: Database.Database): void {
   applyEmptyAuthorityBaseline(database, authorityBaselineSqlV5(), AUTHORITY_BASELINE_SCHEMA_VERSION_V5);
 }
@@ -32,12 +32,12 @@ export function authorityBaselineSha256V6(): Sha256Digest {
   return sha256Digest(authorityBaselineSqlV6());
 }
 
-/** Active schema; existing databases use the explicit offline transition. */
+/** Pinned historical schema; the retained offline V5-to-V6 transition targets it. */
 export function applyAuthorityBaselineV6(database: Database.Database): void {
   applyEmptyAuthorityBaseline(database, authorityBaselineSqlV6(), AUTHORITY_BASELINE_SCHEMA_VERSION_V6);
 }
 
-/** Active fresh-state schema; V5/V6 remain pinned historical baselines. */
+/** Pinned historical fresh-state schema; the retained V7-to-V8 copier reads it. */
 export const AUTHORITY_BASELINE_SCHEMA_VERSION_V7 = 7;
 
 export function authorityBaselineSqlV7(): string {
@@ -53,7 +53,7 @@ export function applyAuthorityBaselineV7(database: Database.Database): void {
   applyEmptyAuthorityBaseline(database, authorityBaselineSqlV7(), AUTHORITY_BASELINE_SCHEMA_VERSION_V7);
 }
 
-/** Active fresh-state schema; V5/V6/V7 remain pinned historical baselines. */
+/** Pinned historical fresh-state schema; retained V7-to-V8 and V8-to-V9 transitions use it. */
 export const AUTHORITY_BASELINE_SCHEMA_VERSION_V8 = 8;
 
 export function authorityBaselineSqlV8(): string {
@@ -69,7 +69,7 @@ export function applyAuthorityBaselineV8(database: Database.Database): void {
   applyEmptyAuthorityBaseline(database, authorityBaselineSqlV8(), AUTHORITY_BASELINE_SCHEMA_VERSION_V8);
 }
 
-/** Active fresh-state schema; V5 through V8 remain pinned historical baselines. */
+/** Pinned historical schema; the retained V8-to-V9 transition targets it. */
 export const AUTHORITY_BASELINE_SCHEMA_VERSION_V9 = 9;
 
 export function authorityBaselineSqlV9(): string {

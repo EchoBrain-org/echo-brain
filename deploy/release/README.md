@@ -306,7 +306,7 @@ host, authorize a final release, or permit a production transition.
 ### State-preserving V5-to-V6 staging migration
 
 This retained operation applies to V5 and V6 release artifacts only. A current
-V9 candidate refuses its V6 output; it is not the project-context rollout path.
+V10 candidate refuses its V6 output; it is not the project-context rollout path.
 
 Use `plan --action stage-v5-to-v6` through the reviewed release CLI after
 installing the merged migration tooling. Supply the same accepted release,
@@ -542,8 +542,8 @@ is installed; the new installed tools must match the executing reviewed source.
 | `inspect-install` | Checks the actual install guards and old-or-new reviewed tooling hashes without replacing tools or invoking runtime behavior. Returns a strictly allowlisted readiness/refusal diagnostic. |
 | `status` | Fresh installed-wrapper runtime check, not a cached polling receipt. |
 | `stage` | No staged candidate; uses exact candidate/profile. A drifted environment returns `environment_drift`. |
-| `stage-v8-to-v9` | Explicit stopped-state copy and migration on the accepted V8 staging host; retains original state for rollback. Same inputs as `stage`. |
-| `stage-v5-to-v6` | Explicit stopped-state copy and migration on the accepted V5 staging host; retains original state for rollback. Same inputs as `stage`. |
+| `stage-v8-to-v9` | Historical: explicit stopped-state copy and migration from an accepted V8 staging host to a V9 candidate; retains original state for rollback. Same inputs as `stage`. Cannot prepare V10 state. |
+| `stage-v5-to-v6` | Historical: explicit stopped-state copy and migration from an accepted V5 staging host to a V6 candidate; retains original state for rollback. Same inputs as `stage`. Cannot prepare V10 state. |
 | `canary` | Requires the exact staged candidate; stops for the human to approve its private Slack card. `delivery_pending` is safe to retry with a new canary operation after the first invocation has definitively completed. |
 | `rollback` | Requires the exact staged candidate and unchanged accepted record; existing wrapper recovery semantics apply. |
 | `promote` | Requires the exact staged candidate, its stored canary receipt, successful exact-client checks, and the separate final founder authorization below. |
@@ -801,8 +801,9 @@ Use the existing operator lane's release/image evidence and correlated request
 audit or telemetry to identify that Authority independently.
 
 The candidate implements [ADR-0012](../../docs/decisions/ADR-0012-person-public-response-privacy.md).
-Its matching clients decode `echo-clean-person-record-search-v2` and
-`echo-clean-person-answer-v2` (schema 2); older exact-shape clients are incompatible.
+Current clients decode `echo-clean-person-record-search-v2` and, from
+`person ask`, `echo-clean-person-answer-v3` (schema 3); older exact-shape
+clients are incompatible.
 Select clients by committed source and tarball SHA-256, not a reused product version.
 The implementation contract is accepted; coordinated live qualification and
 the exact candidate's release decision remain required.

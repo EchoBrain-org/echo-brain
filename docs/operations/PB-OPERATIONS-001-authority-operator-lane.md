@@ -6,8 +6,8 @@ title: Select the Authority operator lane
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-09-02
-reviewed_at: 2026-09-02
-reviewed_ref: 70c7040d455f969bd570d4ca08e39e5c28c8a328
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 tested_at: null
 ---
 
@@ -42,9 +42,9 @@ every round. Fresh runtime and journey evidence is still required for each run.
 | --- | --- |
 | Compile or test locally | `npm run authority:local`. For the simulated staging journey, run `npm run test:staging-journey`, fix failures and run `npm run check` before review. Local tests are not live delivery proof. |
 | Inspect staging | `authority:staging status` for the slot; the release CLI's fresh `status` action for a current-host release; human host-wrapper `status` during initial onboarding. |
-| Update the current accepted host | Follow the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane): install reviewed tooling, stage, canary, human Slack approval, operator client checks, human final decision, promote. Execute reviewed merged tooling from a clean checkout. |
-| Preserve an accepted V8 staging organization while moving to V9 | Use the reviewed release CLI's [`stage-v8-to-v9`](../../deploy/release/README.md#state-preserving-v8-to-v9-staging-migration) after installing merged tooling; then continue the ordinary canary and human release gates. Keep the original state snapshot and exclude normal user traffic until qualification, because rollback restores the pre-migration state. |
-| Preserve an accepted V5 staging organization while moving to V6 | Use the reviewed release CLI's [`stage-v5-to-v6`](../../deploy/release/README.md#state-preserving-v5-to-v6-staging-migration) after installing merged tooling; then continue the ordinary canary and human release gates. Keep the original state snapshot. |
+| Update the current accepted host | Follow the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane): install reviewed tooling, stage, canary, human Slack approval, operator client checks, human final decision, promote. Execute reviewed merged tooling from a clean checkout. `stage` accepts only the current persisted baseline and never migrates older state. |
+| Move staging from an older baseline to a V10 release | V10 is fresh-state only; no migration reaches it ([release guide](../../deploy/release/README.md)). With no live users, the human host operator runs the [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state) `./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users`, then prepares the organization again with the V10 release record and matching runtime profile. To keep provider credentials, use the provider-reuse row below instead. Continue with onboarding and the canary gates. |
+| Historical: V8-to-V9 or V5-to-V6 staging migration | Not a current lane. [`stage-v8-to-v9`](../../deploy/release/README.md#state-preserving-v8-to-v9-staging-migration) and [`stage-v5-to-v6`](../../deploy/release/README.md#state-preserving-v5-to-v6-staging-migration) remain only for their historical V9 and V6 candidates and cannot prepare V10 state. |
 | First onboarding | Follow [resumable onboarding](../../deploy/organization-authority/README.md#resumable-initial-owner-onboarding) and the actor table below. Host-local onboarding remains in the human Session Manager lane. |
 | Transfer initial inputs | Onboarding-transfer `preflight`, `plan`, review the named change set, then `execute`. Run `cleanup` only when execute retains the receipt and reports `cleanup_required`. |
 | Reset unreleased staging while reusing provider credentials | Follow [provider reuse](../../deploy/organization-authority/README.md#reuse-provider-credentials-for-a-fresh-staging-rehearsal): transfer the new nonsecret inputs, then human `replace-rehearsal --reuse-provider-inputs` and `prepare-rehearsal`. The transfer alone does not reset or prepare the host. |
@@ -52,6 +52,7 @@ every round. Fresh runtime and journey evidence is still required for each run.
 | Create or repair the retained boundary | `authority:staging slot-init`: plan, human change-set review, execute the unchanged operation. |
 | Create the first host | Reviewed `up --initialize-blank-data-volume` on a never-prepared volume only. |
 | Replace the host, retaining data | Reviewed `down`, then a new operation ID for reviewed `up --require-authority`; keep the flag on plan and execute. |
+| Host or publish the signed CLI update feed | Follow the [CLI update staging feed](../../deploy/client-updates/README.md) from a clean committed checkout. `client-update:staging` plans a CloudFormation change set for the dedicated S3 feed stack; the human reviews that exact change set before `execute`. `client-update:sign` signs locally once the exact manifest digest is approved. `client-update:publish` writes release objects to the feed bucket with that approved digest; resume an unconfirmed receipt only through `status` or `replace-status`. Separate from the Authority slot and onboarding transfer. |
 
 Before a slot change, preserve `edge_checked`, `host_ready` and
 `authority_accepted` from its status receipt. Use this routing:

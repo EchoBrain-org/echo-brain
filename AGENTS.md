@@ -34,6 +34,14 @@ On founder-live machines, those instructions also bind every ECHO-using turn to 
   boundary. Host-local onboarding remains in the human Session Manager lane.
   If the MCP is unavailable,
   use the AWS CLI only for inspection that the repository CLIs do not expose.
+- The CLI update feed is a separate AWS lane. `npm run client-update:staging`
+  creates a CloudFormation change set for the feed's S3 stack, and
+  `npm run client-update:publish` writes release objects to that bucket;
+  `npm run client-update:sign` signs locally. Mutate the feed stack and bucket
+  only through these CLIs, following the operator playbook and
+  [`deploy/client-updates/README.md`](deploy/client-updates/README.md).
+  Execution requires a human-reviewed exact change set; signing and publishing
+  require an approved exact manifest digest.
 - Before starting a task, check whether a relevant AWS skill is available.
   Load the skill with `retrieve_skill` and prefer its guidance over
   general knowledge.
@@ -88,6 +96,7 @@ Do not add a tool-specific skill, playbook, or chat checklist that restates it.
 
 Before `authority:local`, `authority:staging`, `authority:staging-release`, onboarding transfer,
 `onboard-clean-v1.sh`, `update-clean-v1.sh`, `restore-clean-v1-host.sh`,
+`client-update:staging`, `client-update:sign`, `client-update:publish`,
 Authority image or host-bundle builds, SSM, restage, onboard, or deploy, read
 and follow
 [`docs/operations/PB-OPERATIONS-001-authority-operator-lane.md`](docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).

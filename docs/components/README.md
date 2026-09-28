@@ -15,8 +15,8 @@ component_ids:
   - CMP-PROTOCOLS-CRYPTO
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 ---
 
 # Component catalog
@@ -28,9 +28,9 @@ and qualification proof.
 | Component | Primary source | Responsibility |
 | --- | --- | --- |
 | [Meeting processing core](meeting-processing-core.md) | `packages/organization-processing/src/core/` | Provider-neutral meeting processing rules and ports |
-| [Processing adapters](processing-adapters.md) | `providers/` | Provider-specific sources, processors, approvals, and delivery |
+| [Processing adapters](processing-adapters.md) | `providers/` | Provider-specific sources, processors, approval surfaces, and identity links |
 | [Person client](person-client.md) | `src/product/person-client/` | Thin Person CLI and private session state |
-| [Identity and access](identity-access.md) | Person client plus Authority | Person sessions, membership, compatibility enrollment, and revocation state |
+| [Identity and access](identity-access.md) | Person client plus Authority | Person sessions, membership, and revocation state |
 | [Organization Authority](organization-authority.md) | `services/organization-authority/`; `packages/organization-{control-plane,record,retrieval}/` | Organization identity, policy, record, retrieval, and API authority |
 | [Permissions](permissions.md) | cross-cutting | Approval, admission, visibility, and read authorization |
 | [Protocols and cryptography](protocols-crypto.md) | `packages/*` | Signed documents, canonicalization, identifiers, and HTTP contracts |

@@ -64,7 +64,7 @@ The core validates the whole bounded batch and canonical hashes before durable
 admission. Changed bytes cannot overwrite a retained revision. A duplicate
 admission remains eligible for downstream job recovery.
 
-Authority V8 stores these records in `authority_sources_v1`,
+Authority stores these records in `authority_sources_v1`,
 `authority_source_revisions_v1`, `authority_source_contents_v1` and
 `authority_source_representations_v1`. Stable identity excludes adapter version;
 captured provenance retains it. New representations name their input revision
@@ -92,8 +92,8 @@ meeting source
   -> canonical organization record and policy facts
 ```
 
-The server owns source cursors, processing state, pending approvals, delivery
-receipts, and organization-record submission. The Person client owns none of
+The server owns source cursors, processing state, pending approvals, and
+organization-record submission. The Person client owns none of
 that state. Its provider client fragments use only authenticated Authority ports;
 server adapters remain outside its dependency closure.
 
@@ -106,8 +106,8 @@ server adapters remain outside its dependency closure.
   inbox leases instead of inventing provider cursors.
 - A **decision processor** turns one canonical revision into decisions,
   actions, rationales, and source-linked evidence.
-- An **approval surface** presents the exact staged brief and records an
-  explicit human outcome.
+- An **approval surface**, loaded through `ApprovalWorkflowBundleV1`, presents
+  the exact staged brief and records an explicit human outcome.
 - No **delivery surface** port exists today. A capability that publishes
   approved content elsewhere would need its own typed port.
 
@@ -133,12 +133,12 @@ boundary.
   provider actor, external identity link, exact principal/membership tenure,
   and explicit action capability required by
   [INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md).
-- Repeating the same source, processing, approval, or delivery operation is
-  idempotent.
+- Repeating the same source, processing, or approval operation is idempotent.
 - A cursor returns only to the exact source instance and version that issued
   it.
 - Pending approval pins its source revision and staged brief.
-- Delivery uses the stored approved snapshot, never regenerated content.
+- The approved record uses the stored approved snapshot, never regenerated
+  content.
 - Provider acknowledgement is required before success is recorded.
 - Unknown remote outcomes remain unknown and retry conservatively.
 - Authentication, invalid input, rejection, rate limiting, temporary failure,
@@ -163,8 +163,8 @@ contract. Its Ollama, OpenAI, Anthropic, and OpenRouter drivers own only
 provider authentication, wire translation, capability checks, response
 extraction, and error normalization.
 
-Slack approval and delivery adapters share a narrow transport but retain
-separate authorization, idempotency, and receipt semantics. Slack actors are
+The Slack approval adapter owns its narrow Web API transport and its own
+authorization, idempotency, and receipt semantics. Slack actors are
 tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
 ## Current composition
@@ -190,9 +190,12 @@ layers directly.
 Current live composition delivers private meeting-owner approval DMs. Their
 visibility selector defaults to **Only me**, which binds
 `restricted-reviewer-person-v2` if approved unchanged. The owner may select
-**Team** before approving to bind `organization-member-readable-person-v2`.
-The selected policy is frozen with the approved record; rejection creates no
-record.
+**Team** before approving to bind `organization-member-readable-person-v2`,
+or, when they hold active project memberships, **Projects** to bind
+`project-members-readable-person-v1` for the chosen projects. A separate
+**Share transcript with the selected audience** checkbox, off by default, also
+releases the exact retained transcript to that audience. The selected policy is
+frozen with the approved record; rejection creates no record.
 
 ## Extension rule
 
@@ -217,8 +220,9 @@ and
   file-key, Node-runtime, or authentication-protocol implementations. The
   source port is pull-oriented; Person push submissions use the durable edge
   inbox. New push providers need an equivalent explicit buffering boundary.
-- V3 physically stores `provider_message_ts`; shared code treats it as opaque
-  `presentation_external_id` until an explicit schema migration.
+- The Authority approval outbox physically stores `provider_message_ts`;
+  shared code treats it as opaque `presentation_external_id` until an explicit
+  schema migration.
 - Bundles are trusted static composition, and ownership/dependency checks cannot
   detect every hidden semantic coupling. Each selected profile still needs
   capability tests and a bounded staging rehearsal.
@@ -246,8 +250,9 @@ disclosing content after project access is lost.
 
 Person documents carry `on_request` analysis policy. Admission and extraction
 do not invoke the meeting decision processor, create approval cards or publish
-approved records. This implementation adds neither a requested-analysis API nor
-document retrieval for Ask. Existing meeting sources retain their explicitly
+approved records. This implementation adds no requested-analysis API;
+[global/project Ask](../features/global-project-ask-v1.md) answers from
+extracted document evidence. Existing meeting sources retain their explicitly
 composed `automatic` decision workflow; common admission does not imply every
 source executes every downstream stage.
 
