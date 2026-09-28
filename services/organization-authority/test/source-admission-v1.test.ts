@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalJson, canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
-import { applyAuthorityBaselineV8, applyAuthorityBaselineV10 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
+import { applyAuthorityBaselineV10 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1, sourceContentSha256V1, type MeetingDocument } from '@echo-brain/organization-processing/core';
 import { SqliteSourceAdmissionStoreV1 } from '../src/adapters/persistence/sqlite/source-admission-v1.js';
 import { PersonSourceAdapterV1 } from '../src/adapters/sources/person-source-v1.js';
@@ -15,7 +15,7 @@ const at='2026-09-23T00:00:00.000Z';
 const dbs: Database.Database[]=[];
 afterEach(()=>{for(const db of dbs.splice(0)) db.close();});
 function fixture() {
-  const db=new Database(':memory:'); dbs.push(db); db.pragma('foreign_keys=ON'); applyAuthorityBaselineV8(db);
+  const db=new Database(':memory:'); dbs.push(db); db.pragma('foreign_keys=ON'); applyAuthorityBaselineV10(db);
   db.prepare("INSERT INTO authority_metadata VALUES (1,'oau_fixture','org_fixture','Fixture','{}',?,?)").run(at,at);
   return {db,store:new SqliteSourceAdmissionStoreV1(db)};
 }
@@ -29,10 +29,9 @@ function meeting(): MeetingDocument {
 
 describe('durable common source admission',()=>{
   it('admits a departed contributor V3 projects note with a project-set custody commitment', async () => {
-    const db = new Database(':memory:'); dbs.push(db); db.pragma('foreign_keys=ON'); applyAuthorityBaselineV10(db);
+    const {db}=fixture();
     const actor={organization_id:'org_fixture',principal_id:'prn_pm',membership_id:'mem_11111111-1111-4111-8111-111111111111',membership_type:'owner'} as const;
     const first='prj_11111111-1111-4111-8111-111111111111'; const second='prj_22222222-2222-4222-8222-222222222222';
-    db.prepare("INSERT INTO authority_metadata VALUES (1,'oau_fixture','org_fixture','Fixture','{}',?,?)").run(at,at);
     db.prepare("INSERT INTO authority_project_authorization_state_v1 VALUES ('org_fixture',0,?)").run(at);
     db.prepare("INSERT INTO authority_principals VALUES (?,?,'PM',?)").run(actor.principal_id,actor.organization_id,at);
     db.prepare("INSERT INTO authority_memberships(membership_id,organization_id,principal_id,membership_type,status,provisioned_at) VALUES (?,?,?,?,'active',?)").run(actor.membership_id,actor.organization_id,actor.principal_id,actor.membership_type,at);
@@ -63,7 +62,8 @@ describe('durable common source admission',()=>{
     const oneId=`ctx_${canonicalSha256({organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:one.request_id}).slice(7)}`;
     const twoId=`ctx_${canonicalSha256({schema_version:2,kind:'echo-person-update-source-v2',organization_id:actor.organization_id,membership_id:actor.membership_id,request_id:two.request_id}).slice(7)}`;
     db.prepare('INSERT INTO authority_person_updates_v1 VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,one.request_id,oneId,canonicalSha256(one),one.title,one.text,one.visibility,at);
-    db.prepare('INSERT INTO authority_person_updates_v2 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,two.request_id,twoId,canonicalSha256(two),two.title,two.text,two.audience.kind,project,project,at);
+    db.prepare('INSERT INTO authority_person_updates_v2 VALUES (?,?,?,?,?,2,?,?,?,?,?,?,?,?,?,?)').run(actor.organization_id,actor.principal_id,actor.membership_id,actor.membership_type,two.request_id,twoId,canonicalSha256(two),two.title,two.text,two.audience.kind,project,JSON.stringify([project]),JSON.stringify([project]),project,at);
+    db.prepare('INSERT INTO authority_person_update_audience_projects_v1 VALUES (?,?,?)').run(twoId,project,actor.organization_id);
     db.prepare("UPDATE authority_memberships SET status='revoked',revoked_at=?,revocation_reason='fixture' WHERE membership_id=?").run(at,actor.membership_id);
     const texts=new SqlitePersonTextSourceInboxV1(db);
     let decodes=0;const worker=new PersonDocumentProcessingV1({sourceAdmission:store,claimExtraction:()=>undefined,completeExtraction:()=>{throw new Error('text must not use file completion');}},async()=>{decodes++;throw new Error('text must not use decoder');},texts);

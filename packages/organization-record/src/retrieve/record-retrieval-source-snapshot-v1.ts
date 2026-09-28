@@ -277,9 +277,6 @@ function materialize(database: Database.Database): MaterializedSnapshot {
            FROM organization_record_log ORDER BY position ASC`,
       )
       .all() as StoredRecordRow[];
-    const hasProjectFacts = database.prepare(
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'organization_record_project_members_readable_person_fact'",
-    ).get() !== undefined;
     const facts = database
       .prepare(
         `SELECT 'member' AS fact_family,
@@ -299,7 +296,7 @@ function materialize(database: Database.Database): MaterializedSnapshot {
                 provider_action_sha256, authorization_proof_sha256,
                 reviewer_principal_id, reviewer_membership_id
            FROM organization_record_restricted_reviewer_person_fact
-           ${hasProjectFacts ? `UNION ALL
+         UNION ALL
          SELECT 'project' AS fact_family,
                 authority_id, organization_id, state_lineage_id, approval_id,
                 action, policy_id, policy_contract_sha256, record_position,
@@ -307,24 +304,20 @@ function materialize(database: Database.Database): MaterializedSnapshot {
                 audit_event_id, audit_sequence, audit_entry_sha256,
                 provider_action_sha256, authorization_proof_sha256,
                 NULL AS reviewer_principal_id, NULL AS reviewer_membership_id
-           FROM organization_record_project_members_readable_person_fact` : ""}
+           FROM organization_record_project_members_readable_person_fact
          ORDER BY record_position ASC, atom_order ASC, fact_family ASC`,
       )
       .all() as StoredFactRow[];
-    const projectAudiences = hasProjectFacts
-      ? database.prepare(
-          `SELECT record_position, project_id
-             FROM organization_record_project_members_readable_person_record_fact
-            ORDER BY record_position ASC, project_id ASC`,
-        ).all() as MaterializedSnapshot["projectAudiences"]
-      : [];
-    const projectAssociations = hasProjectFacts
-      ? database.prepare(
-          `SELECT record_position, project_id
-             FROM organization_record_project_association_v1
-            ORDER BY record_position ASC, project_id ASC`,
-        ).all() as MaterializedSnapshot["projectAssociations"]
-      : [];
+    const projectAudiences = database.prepare(
+      `SELECT record_position, project_id
+         FROM organization_record_project_members_readable_person_record_fact
+        ORDER BY record_position ASC, project_id ASC`,
+    ).all() as MaterializedSnapshot["projectAudiences"];
+    const projectAssociations = database.prepare(
+      `SELECT record_position, project_id
+         FROM organization_record_project_association_v1
+        ORDER BY record_position ASC, project_id ASC`,
+    ).all() as MaterializedSnapshot["projectAssociations"];
     database.exec("COMMIT");
     return { metadata, records, facts, projectAudiences, projectAssociations };
   } catch (error) {

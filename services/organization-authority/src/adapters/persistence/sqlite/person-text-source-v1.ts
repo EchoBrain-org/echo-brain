@@ -52,10 +52,7 @@ export class SqlitePersonTextSourceInboxV1 implements PersonTextSourceInboxV1 {
   next(): ReturnType<PersonTextSourceInboxV1['next']> {
     const result = this.database.transaction(() => {
       const failures: PersonTextSourceFailureObservationV1[] = [];
-      const current = this.database.pragma('user_version', { simple: true }) as number;
-      const v2 = current >= 9
-        ? `SELECT request_version AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,submitted_association_project_ids_json,audience_project_ids_json,received_at FROM authority_person_updates_v2`
-        : `SELECT 2 AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,NULL AS submitted_association_project_ids_json,NULL AS audience_project_ids_json,received_at FROM authority_person_updates_v2`;
+      const v2 = `SELECT request_version AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,audience_kind,audience_project_id,project_id,submitted_association_project_ids_json,audience_project_ids_json,received_at FROM authority_person_updates_v2`;
       for (let inspected = 0; inspected < 16; inspected += 1) {
         const row = this.database.prepare(`SELECT * FROM (
           SELECT 1 AS api_version,organization_id,principal_id,membership_id,request_id,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,NULL AS project_id,NULL AS submitted_association_project_ids_json,NULL AS audience_project_ids_json,received_at FROM authority_person_updates_v1

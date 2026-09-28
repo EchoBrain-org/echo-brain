@@ -10,9 +10,6 @@ require Slack approval. The current artifact is Authority V10, with project
 settings and project-scoped meeting approvals. Runtime opening never migrates
 state. This release requires fresh databases; existing disposable rehearsal
 state uses the [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state).
-The reviewed historical
-[V8-to-V9 staging migration](../../deploy/release/README.md#state-preserving-v8-to-v9-staging-migration)
-preserves an accepted V8 organization for a V9 candidate only.
 
 For any deployed staging initial-owner setup, do not run the lower-level setup
 commands in this service reference. Start with the
@@ -356,19 +353,12 @@ The immutable approval-delivery quarantine fences unrepresentable approval
 packages before any provider post and retains them for audit. A temporarily
 missing reviewer identity leaves its durable outbox queued for reconciliation.
 
-The checkout also retains the pinned Authority V5 to V9 baselines and the
-explicit offline [V5-to-V6](../../tools/copy-authority-v5-to-v6.mjs) and
-[V7-to-V8](../../tools/copy-authority-v7-to-v8.mjs) copiers. Each copier reads a
-stopped snapshot and writes a separate database, preserving existing rows.
-Neither activates a release or replaces live state. Earlier historical
-baselines and converters remain in Git history.
+The checkout carries only the current V10 baseline. Earlier Authority
+baselines and their offline converters remain in Git history.
 
 Routine releases use baseline-preserving image replacements through the
 [release procedure](../../deploy/release/README.md); that updater refuses
-schema changes. The historical `stage-v8-to-v9` lane retains the original state
-for rollback and applies only to a V9 candidate. It does not prepare current V10
-state. Rollback must restore the complete matching code/state snapshot; image
-rollback alone cannot reverse the schema change.
+schema changes and never migrates state.
 
 ## Verification
 

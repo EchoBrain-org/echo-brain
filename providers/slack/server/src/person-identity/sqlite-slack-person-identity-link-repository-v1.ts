@@ -799,14 +799,6 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
   }
 
   private activeConnection(): ActiveSlackConnection | null {
-    // This is an adapter-level guard only. The Authority pre-open lineage guard
-    // rejects a prepared state with the prior baseline digest before this
-    // repository is constructed. Fresh onboarding or an approved future
-    // migration is required; never reinterpret a public proof.
-    const destinationColumns = this.options.database.prepare(
-      "SELECT name FROM pragma_table_info('organization_person_slack_link_challenges') WHERE name IN ('dm_channel_id', 'recipient_user_id')",
-    ).all();
-    if (destinationColumns.length !== 2) return null;
     const row = this.options.database
       .prepare(
         `SELECT contract.contract_json, contract.contract_sha256, current_state.state_json, current_state.state_sha256

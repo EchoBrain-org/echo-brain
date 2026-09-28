@@ -21,8 +21,8 @@ The native Swift app is retired.
 It can:
 
 - begin Google OIDC login and install or refresh a Person session;
-- ask cited questions across everything the member may read, or within one
-  project;
+- ask cited questions across approved records and authorized upload/document
+  evidence, globally or within one project;
 - list and search approved records and read explicitly shared meeting
   transcripts;
 - create projects and manage their members, settings and associated context;
@@ -56,8 +56,8 @@ Tokens are never printed by successful commands.
 The server starts only from six byte-pinned baseline schemas, one per state
 role: Authority V10, control-plane V3, record-log V4, retrieval facts V3,
 retrieval lexical V2 and retrieval content V2. Startup refuses older state
-instead of migrating it; retained historical copies run only through named
-offline staging operations. Released retrieval
+instead of migrating it; historical baselines and converters remain in Git
+history. Released retrieval
 is the sole content-release boundary. The answer-composition generation path is one
 synchronous Person `ask` path: one bounded plan, one released-retrieval batch,
 at most one answer call, and

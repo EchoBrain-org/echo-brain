@@ -579,29 +579,20 @@ describe("workspace source boundaries", () => {
       .not.toContain("/migrations");
   });
 
-  it("ships the current Authority baseline and explicit compatibility inputs", () => {
+  it("ships only the current baselines", () => {
     const expectedByRoot: Record<string, string[]> = {
       "packages/organization-authority-kernel": [
-        "authority-baseline-v5.sql",
-        "authority-baseline-v6.sql",
-        "authority-baseline-v7.sql",
-        "authority-baseline-v8.sql",
-        "authority-baseline-v9.sql",
         "authority-baseline-v10.sql",
       ],
       "packages/organization-control-plane": [
         "organization-control-plane-baseline-v3.sql",
       ],
       "packages/organization-record": [
-        "organization-record-log-baseline-v3.sql",
         "organization-record-log-baseline-v4.sql",
       ],
       "packages/organization-retrieval": [
-        "readable-search-content-baseline-v1.sql",
         "readable-search-content-baseline-v2.sql",
-        "readable-search-facts-baseline-v2.sql",
         "readable-search-facts-baseline-v3.sql",
-        "readable-search-lexical-baseline-v1.sql",
         "readable-search-lexical-baseline-v2.sql",
       ],
     };

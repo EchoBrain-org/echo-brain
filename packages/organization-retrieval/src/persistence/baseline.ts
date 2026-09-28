@@ -9,82 +9,36 @@ import {
 } from './database-definition.js';
 
 /**
- * State-lineage baseline v1 for the three readable-search plane database roles.
+ * State-lineage baselines for the three readable-search plane database roles.
  *
  * One exact baseline per plane replaces the historical migration chain: the
- * applier stamps the plane's role application ID and `user_version = 1` on an
+ * applier stamps the plane's role application ID and schema version on an
  * empty database and the committed SQL file creates the complete behavior
  * schema. The legacy migration-ledger objects are deliberately absent. The
  * state-lineage manifest digest and pre-open guard bind each plane to its
- * readable-search runtime generation before it is opened.
+ * readable-search runtime generation before it is opened. Builders create fresh
+ * planes and never upgrade an existing plane.
  */
-export const READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1 = 1;
-export const READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2 = 2;
 export const READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3 = 3;
 
-export interface ReadableSearchPlaneBaselineV1 {
+export interface ReadableSearchPlaneBaseline {
   readonly plane: ReadableSearchPlane;
   readonly application_id: number;
+  readonly schema_version: 2 | 3;
   readonly baseline_sql_url: URL;
 }
 
-export interface ReadableSearchPlaneBaselineV2
-  extends ReadableSearchPlaneBaselineV1 {
-  readonly schema_version: 2;
-}
-export interface ReadableSearchPlaneBaselineV3
-  extends ReadableSearchPlaneBaselineV1 {
-  readonly schema_version: 3;
-}
-
-export type ReadableSearchPlaneBaseline =
-  | ReadableSearchPlaneBaselineV1
-  | ReadableSearchPlaneBaselineV2
-  | ReadableSearchPlaneBaselineV3;
-export const READABLE_SEARCH_FACTS_BASELINE_V3: ReadableSearchPlaneBaselineV3 = {
+export const READABLE_SEARCH_FACTS_BASELINE_V3: ReadableSearchPlaneBaseline = {
   plane: 'facts', application_id: READABLE_SEARCH_FACTS_DATABASE.application_id,
   schema_version: 3,
   baseline_sql_url: new URL('../../baselines/readable-search-facts-baseline-v3.sql', import.meta.url),
 };
-
-/**
- * Facts-plane v2 adds only the disposable, segment-local related-atom pairs.
- * Builders create fresh V2 facts planes and never upgrade an existing plane.
- * Historical SQL is retained in the checkout for recovery fixtures only.
- */
-export const READABLE_SEARCH_FACTS_BASELINE_V2: ReadableSearchPlaneBaselineV2 = {
-  plane: 'facts',
-  application_id: READABLE_SEARCH_FACTS_DATABASE.application_id,
-  schema_version: 2,
-  baseline_sql_url: new URL(
-    '../../baselines/readable-search-facts-baseline-v2.sql',
-    import.meta.url,
-  ),
-};
-
-export const READABLE_SEARCH_CONTENT_BASELINE_V1: ReadableSearchPlaneBaselineV1 = {
-  plane: 'content',
-  application_id: READABLE_SEARCH_CONTENT_DATABASE.application_id,
-  baseline_sql_url: new URL(
-    '../../baselines/readable-search-content-baseline-v1.sql',
-    import.meta.url,
-  ),
-};
-export const READABLE_SEARCH_CONTENT_BASELINE_V2: ReadableSearchPlaneBaselineV2 = {
+export const READABLE_SEARCH_CONTENT_BASELINE_V2: ReadableSearchPlaneBaseline = {
   plane: 'content', application_id: READABLE_SEARCH_CONTENT_DATABASE.application_id,
   schema_version: 2,
   baseline_sql_url: new URL('../../baselines/readable-search-content-baseline-v2.sql', import.meta.url),
 };
-
-export const READABLE_SEARCH_LEXICAL_BASELINE_V1: ReadableSearchPlaneBaselineV1 = {
-  plane: 'lexical',
-  application_id: READABLE_SEARCH_LEXICAL_DATABASE.application_id,
-  baseline_sql_url: new URL(
-    '../../baselines/readable-search-lexical-baseline-v1.sql',
-    import.meta.url,
-  ),
-};
-export const READABLE_SEARCH_LEXICAL_BASELINE_V2: ReadableSearchPlaneBaselineV2 = {
+export const READABLE_SEARCH_LEXICAL_BASELINE_V2: ReadableSearchPlaneBaseline = {
   plane: 'lexical', application_id: READABLE_SEARCH_LEXICAL_DATABASE.application_id,
   schema_version: 2,
   baseline_sql_url: new URL('../../baselines/readable-search-lexical-baseline-v2.sql', import.meta.url),
@@ -96,12 +50,6 @@ export function readableSearchPlaneBaselineSql(
   return readFileSync(baseline.baseline_sql_url, 'utf8');
 }
 
-export function readableSearchPlaneBaselineSha256V1(
-  baseline: ReadableSearchPlaneBaselineV1,
-): Sha256Digest {
-  return readableSearchPlaneBaselineSha256(baseline);
-}
-
 export function readableSearchPlaneBaselineSha256(
   baseline: ReadableSearchPlaneBaseline,
 ): Sha256Digest {
@@ -109,7 +57,7 @@ export function readableSearchPlaneBaselineSha256(
 }
 
 /**
- * Installs an exact V1 or V2 baseline into a completely empty writable
+ * Installs an exact baseline into a completely empty writable
  * database: no schema objects, `user_version = 0`, and `application_id = 0`.
  * Anything else is refused without mutation — a baseline never upgrades,
  * relabels, or claims an existing database, whatever lineage it belongs to.
@@ -119,10 +67,6 @@ export function applyReadableSearchPlaneBaseline(
   baseline: ReadableSearchPlaneBaseline,
 ): void {
   const sql = readableSearchPlaneBaselineSql(baseline);
-  const schemaVersion =
-    'schema_version' in baseline
-      ? baseline.schema_version
-      : READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1;
   database.exec('BEGIN IMMEDIATE');
   try {
     const userVersion = database.pragma('user_version', {
@@ -142,7 +86,7 @@ export function applyReadableSearchPlaneBaseline(
     }
     database.exec(sql);
     database.pragma(`application_id = ${baseline.application_id}`);
-    database.pragma(`user_version = ${schemaVersion}`);
+    database.pragma(`user_version = ${baseline.schema_version}`);
     database.exec('COMMIT');
   } catch (error) {
     try {

@@ -3,7 +3,7 @@ import { PRIVATE_APPROVAL_PENDING_KIND } from "../../src/organization-control-pl
 import { type PendingPrivateApprovalV1 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
 import { type PrivateApprovalSlackCardBindingV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import { describe, expect, it } from "vitest";
-import { applyAuthorityBaselineV5, applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import type { PendingPrivateApprovalV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "../../src/private-approval/resolve-private-slack-approval-reviewer-target-v1.js";
@@ -34,13 +34,13 @@ function candidate(): PrivateApprovalCandidateCommitmentV1 {
   };
 }
 
-function fixture(version: 5 | 10 = 5, delivery?: (pending: PendingPrivateApprovalV1) => PendingPrivateApprovalV2): {
+function fixture(delivery?: (pending: PendingPrivateApprovalV1) => PendingPrivateApprovalV2): {
   readonly database: ReturnType<typeof openAuthorityDatabase>;
   readonly pending: PendingPrivateApprovalV1;
   readonly card: PrivateApprovalSlackCardBindingV1;
 } {
   const database = openAuthorityDatabase(":memory:");
-  (version === 10 ? applyAuthorityBaselineV10 : applyAuthorityBaselineV5)(database);
+  applyAuthorityBaselineV10(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(
@@ -208,7 +208,7 @@ describe("SQLite stable private approval Authority fence v1", () => {
     const delivery = (legacy: PendingPrivateApprovalV1): PendingPrivateApprovalV2 => ({ ...legacy, schema_version: 2, kind: "echo-private-approval-pending-v2",
       eligible_projects: [{ project_id: project, project_membership_id: grant, name: "Original name" }],
       transcript_source: { source_id: "source", revision_id: "revision", source_sha256: canonicalSha256({ source: 1 }) } });
-    const { database, pending: legacy, card } = fixture(10, delivery);
+    const { database, pending: legacy, card } = fixture(delivery);
     try {
       const replacement = "pgm_00000000-0000-4000-8000-000000000002";
       database.prepare(`INSERT INTO authority_projects_v1(project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)

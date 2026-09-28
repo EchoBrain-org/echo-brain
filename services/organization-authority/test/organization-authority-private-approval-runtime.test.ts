@@ -2,8 +2,6 @@ import Database from 'better-sqlite3';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createCoherentWorktreeSnapshot } from '../../../tests/fixtures/coherent-worktree.js';
-import { applyAuthorityBaselineV5, authorityBaselineSha256V5 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline';
-import { copyAuthorityV5ToV6 } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/authority-v5-to-v6';
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v2";
@@ -1936,7 +1934,7 @@ it('runs submit/status from the exact packed Person CLI against a disposable Aut
   } finally { await runtime.close(); }
 });
 
-it('transitions a stopped V5 fixture with sessions, signed records, pending and ambiguous approval work', async () => {
+it('refuses pre-V10 state and resumes stopped V10 sessions, signed records, pending and ambiguous approval work', async () => {
   const fixture = await admittedFixture({ seed_private_slack_connection: true });
   const source = fakeSource(fixture.source.identity, 3);
   const originalPost = fixture.poster.postMarker.bind(fixture.poster);
@@ -1950,44 +1948,30 @@ it('transitions a stopped V5 fixture with sessions, signed records, pending and 
     await waitFor(() => fixture.poster.terminal.length === 1, 'legacy signed append');
     await runtime.close();
     const current = new Database(path, { readonly: true });
-    const legacyPath = join(root(), 'v5.sqlite'); const legacy = new Database(legacyPath); applyAuthorityBaselineV5(legacy);
-    // Build a genuine pinned V5 fixture using the unchanged V5 table shapes.
-    legacy.transaction(() => {
-      const triggers = legacy.prepare(`SELECT name, sql FROM sqlite_master WHERE type = 'trigger'`).all() as { name: string; sql: string }[];
-      for (const trigger of triggers) legacy.exec(`DROP TRIGGER ${trigger.name}`);
-      for (const { name } of legacy.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid`).all() as { name: string }[]) {
-        const rows = current.prepare(`SELECT * FROM ${name}`).all() as Record<string, unknown>[];
-        for (const row of rows) { const columns = (legacy.pragma(`table_info(${name})`) as { name: string }[]).map(column => column.name); legacy.prepare(`INSERT INTO ${name} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`).run(...columns.map(column => row[column])); }
-      }
-      const manifest = current.prepare('SELECT manifest_json FROM echo_state_lineage_manifest').pluck().get() as string;
-      const old = { ...JSON.parse(manifest), database_schema_version: 5, schema_sha256: authorityBaselineSha256V5() };
-      legacy.exec(current.prepare(`SELECT sql FROM sqlite_master WHERE name = 'echo_state_lineage_manifest'`).pluck().get() as string);
-      legacy.prepare('INSERT INTO echo_state_lineage_manifest VALUES (1, ?, ?)').run(canonicalJson(old), canonicalSha256(old));
-      for (const trigger of triggers) legacy.exec(trigger.sql);
-    })();
-    const oldRows = new Map((legacy.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'echo_state_lineage_manifest'`).all() as { name: string }[]).map(({ name }) => [name, legacy.prepare(`SELECT * FROM ${name}`).all()]));
-    expect(oldRows.get('authority_person_session_families')!.length).toBeGreaterThan(0);
-    expect(oldRows.get('authority_live_approval_outbox_v2')).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'posting' }), expect.objectContaining({ state: 'staged' })]));
-    expect(oldRows.get('authority_private_approval_terminal_receipts_v3')!.length).toBe(1);
-    current.close(); legacy.close();
+    const rows = (name: string) => current.prepare(`SELECT * FROM ${name}`).all() as Record<string, unknown>[];
+    expect(rows('authority_person_session_families').length).toBeGreaterThan(0);
+    expect(rows('authority_live_approval_outbox_v2')).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'posting' }), expect.objectContaining({ state: 'staged' })]));
+    expect(rows('authority_private_approval_terminal_receipts_v3').length).toBe(1);
+    // A current runtime must never accept pre-V10 state as active state: relabel
+    // a copy of the live file as V5 and exercise the strict V10 pre-open gate.
+    const legacyPath = join(root(), 'v5.sqlite'); current.exec(`VACUUM INTO '${legacyPath}'`); current.close();
+    const legacy = new Database(legacyPath);
+    const manifest = legacy.prepare('SELECT manifest_json FROM echo_state_lineage_manifest').pluck().get() as string;
+    const old = { ...JSON.parse(manifest), database_schema_version: 5, schema_sha256: canonicalSha256({ retired_authority_schema: 5 }) };
+    legacy.prepare('UPDATE echo_state_lineage_manifest SET manifest_json = ?, manifest_sha256 = ?').run(canonicalJson(old), canonicalSha256(old));
+    legacy.pragma('user_version = 5'); legacy.close();
     const recordPath = join(fixture.initialized.state_directory, 'record-log.sqlite'); const recordBefore = readFileSync(recordPath);
     const controlPath = join(fixture.initialized.state_directory, 'integrations.sqlite'); const controlBefore = readFileSync(controlPath);
-    const previous = new Database(legacyPath, { readonly: true }); const nextPath = join(root(), 'v6.sqlite'); const next = new Database(nextPath);
-    try { copyAuthorityV5ToV6(previous, next); for (const [name, rows] of oldRows) expect(next.prepare(`SELECT * FROM ${name}`).all(), name).toEqual(rows); }
-    finally { previous.close(); next.close(); }
-    expect(readFileSync(recordPath)).toEqual(recordBefore); expect(readFileSync(controlPath)).toEqual(controlBefore);
-    // The offline V5-to-V6 copier remains a frozen compatibility proof, but a
-    // current runtime must never accept its historical output as active state.
-    // Exercise the strict V10 pre-open gate before restoring the live V10 file.
     const preservedCurrentPath = join(root(), 'v10.sqlite');
     renameSync(path, preservedCurrentPath);
     try {
-      renameSync(nextPath, path); chmodSync(path, 0o600);
+      renameSync(legacyPath, path); chmodSync(path, 0o600);
       await expect(openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } })).rejects.toThrow('schema version is not exactly 10');
     } finally {
-      if (existsSync(path)) renameSync(path, nextPath);
+      if (existsSync(path)) renameSync(path, legacyPath);
       renameSync(preservedCurrentPath, path); chmodSync(path, 0o600);
     }
+    expect(readFileSync(recordPath)).toEqual(recordBefore); expect(readFileSync(controlPath)).toEqual(controlBefore);
     const count = fixture.poster.markers.length;
     runtime = await openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, { processing_adapter_overrides: { source, processor: fakeProcessor(fixture.processorIdentity), private_approval_card_poster: fixture.poster } });
     await runtime.drain(AbortSignal.timeout(5000));
