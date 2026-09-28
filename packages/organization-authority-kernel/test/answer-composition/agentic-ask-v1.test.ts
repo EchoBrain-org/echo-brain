@@ -178,6 +178,26 @@ describe("agentic Ask: research loop", () => {
     expect(evidence.list).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: "page-2" }));
   });
 
+  it("keeps actions that record no status, and filters actions by owner", async () => {
+    const actions = [
+      listedItem("dashboard", { kind: "action", attributes: { owner: "Jules", due_at: "2026-09-11" } }),
+      listedItem("addendum", { kind: "action", attributes: { owner: "Colin", due_at: "2026-09-05" } }),
+      listedItem("closed", { kind: "action", attributes: { owner: "Jules", status: "done" } }),
+    ];
+    const evidence = desk({ list: () => actions });
+    const script = scripted([
+      step([{ needs: [{ need: "open actions" }] }], [{ tool: "list", args: { source: "meetings", kind: "action", status: "open" } }, { tool: "list", args: { source: "meetings", owner: "jules" } }]),
+      finish([{ needs: [{ need: "open actions", status: "not_found" }] }]),
+      finish([{ needs: [{ need: "open actions", status: "not_found" }] }]),
+    ]);
+    await ask({ desk: evidence, model: script.model }).answer({ question: "What does Jules own?" });
+    const [byStatus, byOwner] = script.prompt(1).last_results;
+    expect(byStatus.items.map((item: { attributes: { owner: string } }) => item.attributes.owner)).toEqual(["Jules", "Colin"]);
+    expect(byStatus.note).toContain("do not record open or done");
+    expect(byOwner.items.map((item: { attributes: { owner: string } }) => item.attributes.owner)).toEqual(["Jules", "Jules"]);
+    expect(evidence.list).toHaveBeenLastCalledWith(expect.objectContaining({ source: "meeting", kinds: ["action"] }));
+  });
+
   it("normalizes list arguments and explains the ones it rejects", async () => {
     const script = scripted([
       step([{}], [

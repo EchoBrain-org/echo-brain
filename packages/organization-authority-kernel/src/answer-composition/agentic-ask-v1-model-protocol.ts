@@ -33,7 +33,7 @@ export class AgenticAskOutputErrorV1 extends Error {
 }
 
 export type StepTool = "search" | "open" | "list" | "finish";
-export type StepArgs = Readonly<Partial<Record<"query" | "id" | "source" | "kind" | "status" | "channel" | "since" | "until", string>>>;
+export type StepArgs = Readonly<Partial<Record<"query" | "id" | "source" | "kind" | "status" | "owner" | "channel" | "since" | "until", string>>>;
 export type StepAction = { readonly tool: StepTool; readonly args: StepArgs };
 export type NeedStatus = "open" | "found" | "not_found";
 export type StepNeed = { readonly need: string; readonly status: NeedStatus; readonly evidence: readonly string[] };
@@ -42,7 +42,7 @@ export type Step = { readonly parts: readonly StepPart[]; readonly actions: read
 export type AnswerSentence = { readonly text: string; readonly evidence: readonly string[] };
 export type Answer = { readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[] };
 
-const ARG_NAMES = ["query", "id", "source", "kind", "status", "channel", "since", "until"] as const;
+const ARG_NAMES = ["query", "id", "source", "kind", "status", "owner", "channel", "since", "until"] as const;
 const ids = { type: "array", maxItems: AGENTIC_ASK_MAX_EVIDENCE_IDS_V1, items: { type: "string", maxLength: 16 } } as const;
 const argString = { type: "string", maxLength: ARG_CHARS } as const;
 
@@ -264,13 +264,13 @@ export const STEP_PROMPT = [
   "  Related: ids come from search, list, or a previous open.",
   "  Examples: {\"id\": \"E8\"}",
   "",
-  "list, args {\"source\": \"meetings\" | \"documents\" | \"slack\", optional \"kind\", \"status\", \"channel\", \"since\", \"until\"}",
+  "list, args {\"source\": \"meetings\" | \"documents\" | \"slack\", optional \"kind\", \"status\", \"owner\", \"channel\", \"since\", \"until\"}",
   "  Purpose: see what exists in one source without keywords.",
-  "  When to use: broad questions (an overview, what happened this week, what is still open); when searches keep missing; to be sure you have every item of one kind, such as every open action.",
+  "  When to use: broad questions (an overview, what happened this week, what is still open); questions about a person (what someone owns or is doing: list meeting actions with their owner); when searches keep missing; to be sure you have every item of one kind, such as every action.",
   "  Returns: up to 25 items per call with id, title and date, plus owner, due date and status for meeting actions. No text: open what you need.",
-  "  Limits: one source per call; call again with the same args for the next page. kind (meetings): decision, action or rationale. status (meeting actions): open or done. Slack needs \"channel\", such as \"hw-dvt\". since and until take a date (2026-09-21) or an age (7d, 2w); Slack defaults to the last 14 days.",
+  "  Limits: one source per call; call again with the same args for the next page. kind (meetings): decision, action or rationale. owner (meeting actions): a person's name; names are not searchable text, so use this to find someone's actions. status (meeting actions): open or done, applied only where items record a status; approved actions usually record owner and due date but not completion. Slack needs \"channel\", such as \"hw-dvt\". since and until take a date (2026-09-21) or an age (7d, 2w); Slack defaults to the last 14 days.",
   "  Related: open reads items; search is faster when you have good keywords.",
-  "  Examples: {\"source\": \"meetings\", \"kind\": \"action\", \"status\": \"open\"}, {\"source\": \"slack\", \"channel\": \"hw-dvt\", \"since\": \"7d\"}, {\"source\": \"documents\"}",
+  "  Examples: {\"source\": \"meetings\", \"kind\": \"action\"}, {\"source\": \"meetings\", \"owner\": \"Jules\"}, {\"source\": \"slack\", \"channel\": \"hw-dvt\", \"since\": \"7d\"}, {\"source\": \"documents\"}",
   "",
   "finish, args {}",
   "  Purpose: end research and hand your notes to the answer writer.",

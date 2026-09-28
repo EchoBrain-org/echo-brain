@@ -270,7 +270,7 @@ function listDate(value: string, today: string): string | null {
   base.setUTCDate(base.getUTCDate() - amount * unit);
   return isoDay(base);
 }
-type ListArgs = { readonly source: EvidenceDeskSourceV1; readonly kinds?: readonly EvidenceDeskKindV1[]; readonly status?: "open" | "done"; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
+type ListArgs = { readonly source: EvidenceDeskSourceV1; readonly kinds?: readonly EvidenceDeskKindV1[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
 function normalizeListArgs(raw: StepArgs, today: string): ListArgs | { readonly error: string } {
   const source = LIST_SOURCES[(raw.source ?? "").trim().toLowerCase()];
   if (source === undefined) return { error: "source must be \"meetings\", \"documents\" or \"slack\"" };
@@ -289,6 +289,13 @@ function normalizeListArgs(raw: StepArgs, today: string): ListArgs | { readonly 
     else if (group === null) return { error: "status must be \"open\" or \"done\"" };
     else { status = group; kinds ??= ["action"]; }
   }
+  let owner: string | undefined;
+  if (raw.owner !== undefined) {
+    const name = raw.owner.trim().replace(/^@/u, "").trim();
+    if (source !== "meeting") notes.push("owner applies to meeting actions only; ignored");
+    else if (name.length === 0 || name.length > 80) return { error: "owner must be a person's name such as \"Dana\"" };
+    else { owner = name; kinds ??= ["action"]; }
+  }
   let channel: string | undefined;
   if (raw.channel !== undefined) {
     const name = raw.channel.trim().replace(/^#/u, "").trim();
@@ -303,7 +310,7 @@ function normalizeListArgs(raw: StepArgs, today: string): ListArgs | { readonly 
   const defaultSince = source === "slack" && since === undefined ? listDate("14d", today)! : since ?? undefined;
   return {
     source, notes,
-    ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(channel === undefined ? {} : { channel }),
+    ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(channel === undefined ? {} : { channel }),
     ...(defaultSince === undefined ? {} : { since: defaultSince }), ...(until === undefined || until === null ? {} : { until }),
   };
 }
@@ -429,8 +436,8 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
       const list = async (args: StepArgs): Promise<ToolResult> => {
         const normalized = normalizeListArgs(args, today());
         if ("error" in normalized) return { tool: "list", args, error: normalized.error };
-        const { notes, status, ...request } = normalized;
-        const key = JSON.stringify({ ...request, status: status ?? null });
+        const { notes, status, owner, ...request } = normalized;
+        const key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
         let state = lists.get(key);
         if (state === undefined) { state = { items: [], cursor: undefined, fetched: false, shown: 0, truncated: false }; lists.set(key, state); }
         listsRun += 1;
@@ -445,9 +452,17 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
           }
           observe(result);
           state.fetched = true; state.cursor = result.next_cursor; state.truncated = result.truncated;
+          // A status filter applies only where an item records a status; approved actions usually record owner and
+          // due date but not completion, so an item without a status is kept (never silently dropped as "not open").
           const statusOf = (item: EvidenceDeskItemV1) => item.attributes?.status === undefined ? null : statusGroup(item.attributes.status);
-          state.items.push(...result.items.filter(item => status === undefined || statusOf(item) === status));
-          if (status !== undefined && result.items.length > 0 && result.items.every(item => item.attributes?.status === undefined)) state.note = "these items carry no status";
+          const wanted = owner?.toLowerCase().split(/\s+/u).filter(Boolean) ?? [];
+          const ownerMatches = (item: EvidenceDeskItemV1) => {
+            const recorded = item.attributes?.owner?.toLowerCase();
+            return recorded !== undefined && wanted.every(part => recorded.includes(part));
+          };
+          state.items.push(...result.items.filter(item => (status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item))));
+          if (status !== undefined && result.items.some(item => item.attributes?.status === undefined)) state.note = "some items do not record open or done; they are included";
+          if (owner !== undefined && state.items.length === 0 && result.items.length > 0) state.note = `no listed item records ${owner} as owner; owners shown are exact names from the records`;
         }
         const page = state.items.slice(state.shown, state.shown + AGENTIC_ASK_LIST_PAGE_V1).map(item => register(item, true));
         state.shown += page.length;
