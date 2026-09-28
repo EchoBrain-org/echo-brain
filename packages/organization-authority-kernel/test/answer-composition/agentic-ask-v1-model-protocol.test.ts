@@ -29,7 +29,11 @@ function generator(seed: number) {
       const minimum = schema.minItems ?? 0; const maximum = Math.min(schema.maxItems ?? 4, 6);
       return Array.from({ length: minimum + Math.floor(next() * (maximum - minimum + 1)) }, () => value(schema.items));
     }
-    if (schema.type === "object") return Object.fromEntries((schema.required as string[]).map(key => [key, value(schema.properties[key])]));
+    if (schema.type === "object") {
+      const required = (schema.required ?? []) as string[];
+      const optional = Object.keys(schema.properties ?? {}).filter(key => !required.includes(key) && next() < 0.5);
+      return Object.fromEntries([...required, ...optional].map(key => [key, value(schema.properties[key])]));
+    }
     throw new Error("unsupported schema");
   };
   return value;
@@ -48,29 +52,44 @@ describe("agentic Ask model protocol parity", () => {
   it("never rejects an answer the answer schema permits", () => {
     for (let seed = 1; seed <= 400; seed += 1) {
       const value = generator(seed)(answerSchema);
-      expect(() => parseAnswer(value, 5)).not.toThrow();
+      expect(() => parseAnswer(value)).not.toThrow();
     }
   });
 
   it("names the actual keys when the root shape is wrong", () => {
     expect(() => parseStep({ answer_parts: [], actions: [] })).toThrow('"parts" must be an array (got keys "answer_parts", "actions")');
     expect(() => parseStep({ parts: [] })).toThrow('"actions" must be an array');
-    expect(() => parseStep({ parts: [], actions: [{ tool: "delete", input: "" }] })).toThrow('unknown tool "delete"');
-    expect(() => parseAnswer({ restatement: "x" }, 1)).toThrow('"parts" must be an array');
+    expect(() => parseStep({ parts: [], actions: [{ tool: "delete", args: {} }] })).toThrow('unknown tool "delete"');
+    expect(() => parseAnswer({ direct: { text: "x" }, parts: [] })).toThrow('"sentences" must be an array (got keys "direct", "parts")');
   });
 
-  it("normalizes the provider-permitted forms the last measured run rejected", () => {
-    // Trailing spaces in planner questions and an empty optional gap were rejected before.
-    expect(parseStep({ parts: [{ question: "Who owns it? ", status: "searching", notes: "", evidence: [] }], actions: [{ tool: "search", input: "owner " }] }))
-      .toEqual({ parts: [{ question: "Who owns it?", status: "searching", notes: "", evidence: [] }], actions: [{ tool: "search", input: "owner" }] });
-    expect(parseAnswer({ direct: { text: "", evidence: [] }, parts: [{ part: 1, statements: [], gap: "" }] }, 1))
-      .toEqual({ direct: null, parts: [{ part: 1, statements: [], gap: "" }] });
+  it("normalizes untidy but permitted forms", () => {
+    expect(parseStep({ parts: [{ question: "Who owns it? ", needs: [{ need: " owner ", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner " } }] }))
+      .toEqual({ parts: [{ question: "Who owns it?", needs: [{ need: "owner", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "owner" } }] });
+    expect(parseAnswer({ sentences: [{ text: " Done. ", evidence: ["e2", "[E3]"] }, { text: "", evidence: [] }], not_found: ["", "owner"] }))
+      .toEqual({ sentences: [{ text: "Done.", evidence: ["E2", "E3"] }], not_found: ["owner"] });
+  });
+
+  it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
+    const step = parseStep({ parts: [{ question: "q", needs: ["a fact"], notes: "" }], actions: [
+      { tool: "search", input: "fixture owner" }, { tool: "open", args: "E4" }, { tool: "browse", input: "" }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: 7 } },
+    ] });
+    expect(step.parts[0]!.needs).toEqual([{ need: "a fact", status: "open", evidence: [] }]);
+    expect(step.actions).toEqual([
+      { tool: "search", args: { query: "fixture owner" } }, { tool: "open", args: { id: "E4" } }, { tool: "list", args: {} }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: "7" } },
+    ]);
+  });
+
+  it("maps need status spellings and drops duplicate needs", () => {
+    const step = parseStep({ parts: [{ question: "q", needs: [{ need: "A", status: "Answered", evidence: [] }, { need: "a", status: "open", evidence: [] }, { need: "B", status: "not found", evidence: [] }, { need: "C", status: "??", evidence: [] }], notes: "" }], actions: [{ tool: "finish", args: {} }] });
+    expect(step.parts[0]!.needs.map(need => [need.need, need.status])).toEqual([["A", "found"], ["B", "not_found"], ["C", "open"]]);
   });
 
   it("truncates over-long text to its bound instead of rejecting it", () => {
-    const step = parseStep({ parts: [{ question: "q".repeat(900), status: "answered", notes: "n".repeat(5_000), evidence: [] }], actions: [{ tool: "finish", input: "" }] });
+    const step = parseStep({ parts: [{ question: "q".repeat(900), needs: [{ need: "n".repeat(900), status: "open", evidence: [] }], notes: "n".repeat(5_000) }], actions: [{ tool: "finish", args: {} }] });
     expect([...step.parts[0]!.question].length).toBeLessThanOrEqual(400);
-    expect([...step.parts[0]!.notes].length).toBeLessThanOrEqual(600);
+    expect([...step.parts[0]!.needs[0]!.need].length).toBeLessThanOrEqual(200);
+    expect([...step.parts[0]!.notes].length).toBeLessThanOrEqual(800);
   });
 
   it("accepts common id spellings and ignores the rest", () => {

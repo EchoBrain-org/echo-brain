@@ -135,7 +135,8 @@ Slack reads:
   and SHA-256 of the text. It never records the text.
 - The answer audit already records only hashes of the prompt, answer and
   response. It needs no change.
-- Logs, errors and metrics never include Slack text.
+- Logs, errors and metrics never include Slack text. Runtime content capture
+  is switched off for any model call whose prompt can contain Slack text.
 - Answers are returned only to the asker and are not stored. No other person
   ever sees Slack or DM content through Echo.
 - The Slack connect screen says, in plain words, that Echo searches the
@@ -172,7 +173,8 @@ The contract changes are additive to `EvidenceDeskPortV1`.
     notice. It is never terminal.
 - **`list({ source, kinds?, status?, channel?, since?, until?, page })`.** This
   operation is new.
-  - Results are newest first, 25 per page, with no text.
+  - Results are newest first, 25 per page. Meeting and document items carry
+    no text; Slack messages carry their text, which is their only title.
   - Meetings and documents come from the existing inventory path.
   - Slack requires `channel` and defaults to the last 14 days.
 - **`open({ item, neighbours })`.**
@@ -264,7 +266,8 @@ the question.
 ### Answer
 
 **The model's output.** One call returns
-`{ sentences: [{ text, evidence[] }], not_found[] }`.
+`{ sentences: [{ text, evidence[] }], not_found[] }`, with at most five
+sentences (the V4 bound on statements per part).
 
 **What code does with it.**
 
@@ -293,9 +296,9 @@ There is no authority field.
 
 - The model stays DeepSeek V3.2 through OpenRouter until the test set exists.
   After that, models are compared on it.
-- Once Slack text can reach a prompt, OpenRouter requests must set
-  `provider.data_collection: "deny"`, so that no host may train on or retain
-  prompts.
+- OpenRouter requests already set `provider.data_collection: "deny"`, so no
+  host that trains on or retains prompts is used. This becomes a hard
+  requirement once Slack text can reach a prompt.
 - A request that cannot be routed under that setting fails as provider
   unavailable. It is never retried on a host that allows data collection.
 

@@ -5,11 +5,12 @@ import {
   AGENTIC_ASK_ANSWER_RESERVE_MS_V1,
   AGENTIC_ASK_DEADLINE_MS_V1,
   AGENTIC_ASK_MAX_MODEL_CALLS_V1,
+  agenticAskContextBudgetBytesV1,
   createAgenticAskV1,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort } from "../../src/answer-composition/retrieval-grounded-answer-composition.js";
-import type { EvidenceDeskItemV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";
+import type { EvidenceDeskItemV1, EvidenceDeskListInputV1, EvidenceDeskPortV1, EvidenceDeskResultV1 } from "../../src/shared/evidence-desk-v1.js";
 
 const generation = { generation_adapter_id: "fixture", planner_model: "ignored", answer_model: "fixture-model", timeout_ms: 30_000 };
 const checked = "2026-09-27T00:00:00.000Z";
@@ -23,24 +24,30 @@ function item(id: string, text: string | undefined = `Released body for ${id}.`,
   });
 }
 
-/** An inventory (browse) entry: released metadata without text. */
+/** An inventory (list) entry: released metadata without text. */
 function listedItem(id: string, options: Partial<EvidenceDeskItemV1> = {}): EvidenceDeskItemV1 {
   const { text: _text, ...listed } = item(id, "unused", options);
   return Object.freeze(listed);
 }
 
-type Desk = EvidenceDeskPortV1 & { search: ReturnType<typeof vi.fn>; open: ReturnType<typeof vi.fn>; revalidate: ReturnType<typeof vi.fn> };
+type Desk = EvidenceDeskPortV1 & { search: ReturnType<typeof vi.fn>; open: ReturnType<typeof vi.fn>; list: ReturnType<typeof vi.fn>; revalidate: ReturnType<typeof vi.fn> };
 function desk(input: {
   readonly search?: (query: string) => readonly EvidenceDeskItemV1[];
   readonly inventory?: readonly EvidenceDeskItemV1[];
+  readonly list?: (request: EvidenceDeskListInputV1) => readonly EvidenceDeskItemV1[] | EvidenceDeskResultV1;
   readonly open?: (id: string) => readonly EvidenceDeskItemV1[];
   readonly revalidate?: () => Promise<{ readonly checked_at: string }>;
+  readonly scope?: EvidenceDeskPortV1["scope"];
 } = {}): Desk {
   const result = (items: readonly EvidenceDeskItemV1[], truncated = false): EvidenceDeskResultV1 => ({ items, truncated, receipt_digests: [canonicalSha256({ desk: items.length })] });
   return {
-    scope: { kind: "global" },
+    scope: input.scope ?? { kind: "global" },
     search: vi.fn(async (request: { readonly query?: string }) => request.query === undefined ? result(input.inventory ?? []) : result(input.search?.(request.query) ?? [])),
     open: vi.fn(async (request: { readonly item: string }) => result(input.open?.(request.item) ?? [])),
+    list: vi.fn(async (request: EvidenceDeskListInputV1) => {
+      const listed = input.list?.(request) ?? input.inventory ?? [];
+      return Array.isArray(listed) ? result(listed) : listed as EvidenceDeskResultV1;
+    }),
     revalidate: vi.fn(async () => input.revalidate?.() ?? { checked_at: checked }),
   } as unknown as Desk;
 }
@@ -60,37 +67,57 @@ function scripted(replies: readonly Reply[]) {
   return { model, inputs, prompt: (index: number) => JSON.parse(inputs[index]!.user_prompt) as Record<string, any> };
 }
 
-const step = (parts: readonly { question?: string; status?: string; notes?: string; evidence?: readonly string[] }[], actions: readonly { tool: string; input?: string }[]) => ({
-  parts: parts.map(part => ({ question: part.question ?? "When is launch?", status: part.status ?? "searching", notes: part.notes ?? "", evidence: part.evidence ?? [] })),
-  actions: actions.map(action => ({ tool: action.tool, input: action.input ?? "" })),
+type NeedSpec = { need?: string; status?: string; evidence?: readonly string[] };
+type PartSpec = { question?: string; needs?: readonly NeedSpec[]; notes?: string };
+type ActionSpec = { tool: string; args?: Record<string, unknown> };
+const step = (parts: readonly PartSpec[], actions: readonly ActionSpec[]) => ({
+  parts: parts.map(part => ({
+    question: part.question ?? "When is launch?",
+    needs: (part.needs ?? [{}]).map(need => ({ need: need.need ?? "launch date", status: need.status ?? "open", evidence: need.evidence ?? [] })),
+    notes: part.notes ?? "",
+  })),
+  actions: actions.map(action => ({ tool: action.tool, args: action.args ?? {} })),
 });
-const finish = (parts: readonly { question?: string; status?: string; notes?: string; evidence?: readonly string[] }[]) => step(parts, [{ tool: "finish" }]);
-const answer = (parts: readonly { part: number; statements: readonly { text: string; evidence: readonly string[] }[]; gap?: string }[], direct = { text: "Launch is Tuesday.", evidence: ["E1"] }) => ({
-  direct, parts: parts.map(part => ({ part: part.part, statements: part.statements, gap: part.gap ?? "" })),
-});
+const found = (evidence: readonly string[], need = "launch date"): PartSpec => ({ needs: [{ need, status: "found", evidence }] });
+const missing = (need = "launch date"): PartSpec => ({ needs: [{ need, status: "not_found" }] });
+const finish = (parts: readonly PartSpec[]) => step(parts, [{ tool: "finish" }]);
+const search = (query: string): ActionSpec => ({ tool: "search", args: { query } });
+const open = (id: string): ActionSpec => ({ tool: "open", args: { id } });
+const answer = (sentences: readonly { text: string; evidence: readonly string[] }[], notFound: readonly string[] = []) => ({ sentences, not_found: notFound });
 
-function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; shortcut?: boolean }) {
+function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; shortcut?: boolean; context_tokens?: number }) {
   const audit = options.audit ?? [];
   return createAgenticAskV1({
-    desk: options.desk, model: options.model, generation, audit: { append: entry => { audit.push(entry); } },
+    desk: options.desk, model: options.model, generation: { ...generation, ...(options.context_tokens === undefined ? {} : { context_tokens: options.context_tokens }) }, audit: { append: entry => { audit.push(entry); } },
+    today: () => "2026-09-28",
     ...(options.now === undefined ? {} : { now_ms: options.now }), ...(options.shortcut === true ? { small_scope_shortcut: true } : {}),
   });
 }
 
-describe("agentic Ask: three-tool loop", () => {
-  it("searches, finishes, writes one answer, and lays out a cited V4 response", async () => {
+function slackItem(ts: string, text: string, options: { channel?: string; kind?: "public_channel" | "im"; thread?: string } = {}): EvidenceDeskItemV1 {
+  const citation = { kind: "slack_message" as const, team_id: "T0001", channel_id: "C0001", message_ts: ts, ...(options.thread === undefined ? {} : { thread_ts: options.thread }), permalink: `https://acme.slack.com/archives/C0001/p${ts.replace(".", "")}`, text_sha256: canonicalSha256({ text }) };
+  return Object.freeze({
+    id: `desk_${canonicalSha256(citation).slice(7)}`, citation, kind: "slack_message" as const, text,
+    label: `#${options.channel ?? "hw-dvt"} · Priya · 2026-09-26`, visibility: options.kind === "im" ? "only_me" as const : "team" as const,
+    occurred_at: "2026-09-26", receipt_sha256: canonicalSha256({ receipt: ts }),
+  });
+}
+
+describe("agentic Ask: research loop", () => {
+  it("searches, finishes, writes one answer, and lays out one cited paragraph", async () => {
     const launch = item("launch", "Launch is approved for Tuesday.");
     const evidence = desk({ search: () => [launch] });
     const audit: AgenticAskAuditEntryV1[] = [];
     const script = scripted([
-      step([{}], [{ tool: "search", input: "launch date" }]),
-      finish([{ status: "answered", notes: "E1 says Tuesday.", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "Launch is Tuesday.", evidence: ["E1"] }] }]),
+      step([{}], [search("launch date")]),
+      finish([found(["E1"])]),
+      answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
     ]);
     const result = await ask({ desk: evidence, model: script.model, audit }).answer({ question: "When is launch?" });
 
     expect(validatePersonAnswerResponseV4(result)).toEqual(result);
-    expect(result).toMatchObject({ outcome: "answered", direct: { text: "Launch is Tuesday.", citation_indexes: [0], private: false } });
+    expect(result.direct).toBeUndefined();
+    expect(result).toMatchObject({ outcome: "answered" });
     expect(result.parts).toEqual([{ question: "When is launch?", status: "answered", statements: [{ text: "Launch is Tuesday.", citation_indexes: [0], private: false }] }]);
     expect(result.citations).toEqual([{ citation: launch.citation, kind: "decision", label: "Meeting launch", visibility: "team" }]);
     // Every model call and the release are fenced by a cumulative revalidation.
@@ -99,46 +126,88 @@ describe("agentic Ask: three-tool loop", () => {
     expect(audit[0]!.generations.map(value => value.role)).toEqual(["step", "step", "answer"]);
   });
 
-  it("shows the model only short ids, never desk identities or citations", async () => {
+  it("shows the model only short ids and sources, never desk identities or citations", async () => {
     const launch = item("launch", "Launch is approved for Tuesday.");
     const script = scripted([
-      step([{}], [{ tool: "search", input: "launch" }]),
-      finish([{ status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "Launch is Tuesday.", evidence: ["E1"] }] }]),
+      step([{}], [search("launch")]),
+      finish([found(["E1"])]),
+      answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
     ]);
     await ask({ desk: desk({ search: () => [launch] }), model: script.model }).answer({ question: "When is launch?" });
     for (const input of script.inputs) {
       expect(input.user_prompt).not.toContain(launch.id);
       expect(input.user_prompt).not.toContain(launch.citation.kind === "approved_record" ? launch.citation.atom_id : "");
     }
-    expect(script.prompt(1).last_results[0].results[0]).toMatchObject({ id: "E1", preview: "Launch is approved for Tuesday.", full: true });
+    expect(script.prompt(1).last_results[0].results[0]).toMatchObject({ id: "E1", source: "meeting", preview: "Launch is approved for Tuesday.", full: true });
+    expect(script.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ need: "launch date", status: "open", evidence: [] }] }]);
   });
 
-  it("browses a keyword-free scope, opens an item, and cites its full text", async () => {
+  it("lists a keyword-free source, opens an item, and cites its full text", async () => {
     const listed = listedItem("plan", { kind: "document_passage", label: "Atlas plan.md" });
     const passage = item("plan", `Atlas plan.md\n${"Background. ".repeat(40)}The launch window is October.`, { kind: "document_passage", label: "Atlas plan.md" });
-    const evidence = desk({ inventory: [listed], open: () => [passage] });
+    const evidence = desk({ list: () => [listed], open: () => [passage] });
     const script = scripted([
-      step([{ question: "Summarize this project" }], [{ tool: "browse" }]),
-      step([{ question: "Summarize this project" }], [{ tool: "open", input: "E1" }]),
-      finish([{ question: "Summarize this project", status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "The launch window is October.", evidence: ["E1"] }] }], { text: "Atlas launches in October.", evidence: ["E1"] }),
+      step([{ question: "Summarize this project", needs: [{ need: "project goal" }] }], [{ tool: "list", args: { source: "documents" } }]),
+      step([{ question: "Summarize this project", needs: [{ need: "project goal" }] }], [open("E1")]),
+      finish([{ question: "Summarize this project", needs: [{ need: "project goal", status: "found", evidence: ["E1"] }] }]),
+      answer([{ text: "Atlas launches in October.", evidence: ["E1"] }]),
     ]);
     const result = await ask({ desk: evidence, model: script.model }).answer({ question: "Summarize this project" });
-    expect(script.prompt(1).last_results[0]).toMatchObject({ tool: "browse", items: [{ id: "E1", title: "Atlas plan.md" }], more: false });
+    expect(evidence.list).toHaveBeenCalledWith(expect.objectContaining({ source: "document", limit: 50 }));
+    expect(script.prompt(1).last_results[0]).toMatchObject({ tool: "list", source: "document", items: [{ id: "E1", source: "document", title: "Atlas plan.md" }], more: false });
     expect(script.prompt(2).opened[0]).toMatchObject({ id: "E1", text: passage.text });
     expect(evidence.open).toHaveBeenCalledWith(expect.objectContaining({ item: listed.id }));
     expect(result.outcome).toBe("answered");
   });
 
+  it("pages list results by code and filters meeting actions by status", async () => {
+    const actions = Array.from({ length: 60 }, (_, index) => listedItem(`action-${index}`, { kind: "action", attributes: { status: index % 2 === 0 ? "open" : "Done" } }));
+    const evidence = desk({ list: () => ({ items: actions.slice(0, 50), truncated: false, receipt_digests: [], next_cursor: "page-2" }) });
+    const listArgs = { source: "Meetings", status: "open" };
+    const script = scripted([
+      step([{ needs: [{ need: "open actions" }] }], [{ tool: "list", args: listArgs }]),
+      step([{ needs: [{ need: "open actions" }] }], [{ tool: "list", args: listArgs }]),
+      finish([{ needs: [{ need: "open actions", status: "not_found" }] }]),
+    ]);
+    await ask({ desk: evidence, model: script.model }).answer({ question: "What is still open?" });
+    expect(evidence.list).toHaveBeenNthCalledWith(1, expect.objectContaining({ source: "meeting", kinds: ["action"] }));
+    const first = script.prompt(1).last_results[0];
+    expect(first.items).toHaveLength(25);
+    expect(first.more).toBe(true);
+    // The second call pages past the 25 open actions of the first fetch using the desk cursor.
+    expect(evidence.list).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: "page-2" }));
+  });
+
+  it("normalizes list arguments and explains the ones it rejects", async () => {
+    const script = scripted([
+      step([{}], [
+        { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: "7d" } },
+        { tool: "list", args: { source: "slack" } },
+        { tool: "list", args: { source: "wiki" } },
+        { tool: "list", args: { source: "meetings", kind: "ideas" } },
+      ]),
+      finish([missing()]),
+      finish([missing()]),
+    ]);
+    const evidence = desk();
+    await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
+    expect(evidence.list).toHaveBeenCalledTimes(1);
+    expect(evidence.list).toHaveBeenCalledWith(expect.objectContaining({ source: "slack", channel: "hw-dvt", since: "2026-09-21" }));
+    expect(script.prompt(1).last_results.slice(1)).toEqual([
+      expect.objectContaining({ error: expect.stringContaining("slack needs a channel") }),
+      expect.objectContaining({ error: expect.stringContaining("\"meetings\", \"documents\" or \"slack\"") }),
+      expect.objectContaining({ error: expect.stringContaining("kind must be") }),
+    ]);
+  });
+
   it("keeps long search hits as previews until opened, and refuses to cite unread text", async () => {
     const long = item("long", `${"Context. ".repeat(60)}Owner is Colin.`);
     const script = scripted([
-      step([{ question: "Who owns it?" }], [{ tool: "search", input: "owner" }]),
-      finish([{ question: "Who owns it?", status: "answered", evidence: ["E1"] }]),
-      step([{ question: "Who owns it?" }], [{ tool: "open", input: "E1" }]),
-      finish([{ question: "Who owns it?", status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "Colin owns it.", evidence: ["E1"] }] }], { text: "Colin.", evidence: ["E1"] }),
+      step([{ needs: [{ need: "owner" }] }], [search("owner")]),
+      finish([found(["E1"], "owner")]),
+      step([found(["E1"], "owner")], [open("E1")]),
+      finish([found(["E1"], "owner")]),
+      answer([{ text: "Colin owns it.", evidence: ["E1"] }]),
     ]);
     const result = await ask({ desk: desk({ search: () => [long], open: () => [long] }), model: script.model }).answer({ question: "Who owns it?" });
     expect(script.prompt(1).last_results[0].results[0].full).toBe(false);
@@ -146,23 +215,37 @@ describe("agentic Ask: three-tool loop", () => {
     expect(result.outcome).toBe("answered");
   });
 
-  it("rejects a not_found finish after fewer than two searches once, then accepts it", async () => {
+  it("rejects a not_found need searched fewer than twice once, then accepts it", async () => {
     const script = scripted([
-      step([{}], [{ tool: "search", input: "launch" }]),
-      finish([{ status: "not_found" }]),
-      finish([{ status: "not_found" }]),
+      step([{}], [search("launch")]),
+      finish([missing()]),
+      finish([missing()]),
     ]);
     const result = await ask({ desk: desk(), model: script.model }).answer({ question: "When is launch?" });
-    expect(script.prompt(2).last_results[0].error).toContain("fewer than two searches");
+    expect(script.prompt(2).last_results[0].error).toContain("fewer than two searches or a list");
     expect(result).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", gap: expect.any(String) }] });
     expect(script.inputs).toHaveLength(3); // no answer call without evidence
   });
 
+  it("keeps a need the model silently dropped, so finish names it", async () => {
+    const launch = item("launch", "Launch is Tuesday.");
+    const script = scripted([
+      step([{ needs: [{ need: "launch date" }, { need: "launch owner" }] }], [search("launch")]),
+      finish([found(["E1"])]),
+      finish([{ needs: [{ need: "launch date", status: "found", evidence: ["E1"] }, { need: "launch owner", status: "not_found" }] }]),
+      answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }], ["launch owner"]),
+    ]);
+    const result = await ask({ desk: desk({ search: () => [launch] }), model: script.model }).answer({ question: "When is launch and who owns it?" });
+    expect(script.prompt(2).last_results[0].error).toContain("need \"launch owner\" is still open");
+    expect(script.prompt(2).plan[0].needs.map((need: { need: string }) => need.need)).toEqual(["launch date", "launch owner"]);
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not found: launch owner." }] });
+  });
+
   it("returns tool errors for unknown ids and invalid queries instead of failing", async () => {
     const script = scripted([
-      step([{}], [{ tool: "open", input: "E99" }, { tool: "search", input: "!!!" }]),
-      finish([{ status: "not_found" }]),
-      finish([{ status: "not_found" }]),
+      step([{}], [open("E99"), search("!!!")]),
+      finish([missing()]),
+      finish([missing()]),
     ]);
     const evidence = desk();
     await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
@@ -176,10 +259,10 @@ describe("agentic Ask: three-tool loop", () => {
   it("does not rerun a search it already ran", async () => {
     const evidence = desk({ search: () => [item("a")] });
     const script = scripted([
-      step([{}], [{ tool: "search", input: "launch date" }]),
-      step([{}], [{ tool: "search", input: "Launch   date" }]),
-      finish([{ status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "Tuesday.", evidence: ["E1"] }] }]),
+      step([{}], [search("launch date")]),
+      step([{}], [search("Launch   date")]),
+      finish([found(["E1"])]),
+      answer([{ text: "Tuesday.", evidence: ["E1"] }]),
     ]);
     await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
     expect(evidence.search).toHaveBeenCalledTimes(1);
@@ -188,12 +271,11 @@ describe("agentic Ask: three-tool loop", () => {
 
   it("stops researching after two steps that find nothing new", async () => {
     const script = scripted([
-      step([{}], [{ tool: "search", input: "alpha" }]),
-      step([{}], [{ tool: "search", input: "beta" }]),
-      step([{}], [{ tool: "search", input: "gamma" }]),
+      step([{}], [search("alpha")]),
+      step([{}], [search("beta")]),
+      step([{}], [search("gamma")]),
     ]);
-    const evidence = desk();
-    const result = await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
+    const result = await ask({ desk: desk(), model: script.model }).answer({ question: "When is launch?" });
     expect(script.inputs).toHaveLength(2);
     expect(result.outcome).toBe("not_found");
   });
@@ -201,9 +283,9 @@ describe("agentic Ask: three-tool loop", () => {
   it("repairs once with the concrete parser reason and the shape", async () => {
     const script = scripted([
       { answer_parts: [{ question: "When is launch?" }] },
-      step([{}], [{ tool: "search", input: "launch" }]),
-      finish([{ status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "Tuesday.", evidence: ["E1"] }] }]),
+      step([{}], [search("launch")]),
+      finish([found(["E1"])]),
+      answer([{ text: "Tuesday.", evidence: ["E1"] }]),
     ]);
     const audit: AgenticAskAuditEntryV1[] = [];
     await ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" });
@@ -212,46 +294,78 @@ describe("agentic Ask: three-tool loop", () => {
     expect(audit[0]).toMatchObject({ repairs: 1, model_calls: 4 });
   });
 
-  it("accepts schema-permitted but untidy output (whitespace, casing, id spellings, empty gap)", async () => {
+  it("accepts schema-permitted but untidy output (whitespace, casing, id spellings, A2 input fields)", async () => {
     const script = scripted([
-      { parts: [{ question: "  When is launch?  ", status: "Searching", notes: "", evidence: [] }], actions: [{ tool: "Search", input: " launch " }] },
-      { parts: [{ question: "When is launch? ", status: "answered", notes: "line one\nline two", evidence: ["e1", "[E1]"] }], actions: [{ tool: "finish", input: "" }] },
-      { direct: { text: " Launch is Tuesday. ", evidence: ["1"] }, parts: [{ part: 1, statements: [{ text: "Launch is Tuesday. ", evidence: ["E1"] }], gap: "" }] },
+      { parts: [{ question: "  When is launch?  ", needs: [" launch date "], notes: "" }], actions: [{ tool: "Search", input: " launch " }] },
+      { parts: [{ question: "When is launch? ", needs: [{ need: "Launch date", status: "Answered", evidence: ["e1", "[E1]"] }], notes: "line one\nline two" }], actions: [{ tool: "finish" }] },
+      { sentences: [{ text: " Launch is Tuesday. ", evidence: ["1"] }], not_found: [""] },
     ]);
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model: script.model }).answer({ question: "When is launch?" });
-    expect(result).toMatchObject({ outcome: "answered", direct: { text: "Launch is Tuesday." }, parts: [{ question: "When is launch?", status: "answered" }] });
+    expect(result).toMatchObject({ outcome: "answered", parts: [{ question: "When is launch?", status: "answered", statements: [{ text: "Launch is Tuesday." }] }] });
   });
 
-  it("drops statements whose evidence is unknown or unread and keeps the rest", async () => {
+  it("drops sentences whose evidence is unknown or unread and keeps the rest", async () => {
     const script = scripted([
-      step([{}], [{ tool: "search", input: "launch" }]),
-      finish([{ status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "Invented.", evidence: ["E9"] }, { text: "Tuesday.", evidence: ["E1", "E9"] }] }], { text: "Tuesday.", evidence: ["E9"] }),
+      step([{}], [search("launch")]),
+      finish([found(["E1"])]),
+      answer([{ text: "Invented.", evidence: ["E9"] }, { text: "Tuesday.", evidence: ["E1", "E9"] }]),
     ]);
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model: script.model }).answer({ question: "When is launch?" });
     expect(result.parts[0]!.statements).toEqual([{ text: "Tuesday.", citation_indexes: [0], private: false }]);
-    expect(result.direct).toBeUndefined();
   });
 
-  it("marks a part partial when the answer names a gap", async () => {
+  it("marks sentences private when they cite private evidence", async () => {
     const script = scripted([
-      step([{ question: "When and who?" }], [{ tool: "search", input: "launch" }]),
-      finish([{ question: "When and who?", status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "Tuesday.", evidence: ["E1"] }], gap: "No owner is recorded." }]),
-    ]);
-    const result = await ask({ desk: desk({ search: () => [item("a")] }), model: script.model }).answer({ question: "When and who?" });
-    expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "No owner is recorded." }] });
-  });
-
-  it("marks statements and the direct answer private when they cite private evidence", async () => {
-    const script = scripted([
-      step([{}], [{ tool: "search", input: "launch" }]),
-      finish([{ status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "Tuesday.", evidence: ["E1"] }] }]),
+      step([{}], [search("launch")]),
+      finish([found(["E1"])]),
+      answer([{ text: "Tuesday.", evidence: ["E1"] }]),
     ]);
     const result = await ask({ desk: desk({ search: () => [item("a", "Tuesday.", { visibility: "only_me" })] }), model: script.model }).answer({ question: "When is launch?" });
     expect(result.parts[0]!.statements[0]!.private).toBe(true);
-    expect(result.direct?.private).toBe(true);
+  });
+
+  it("reads Slack like any source and cites it with a Slack citation", async () => {
+    const record = item("review", "DVT build starts Oct 12.", { label: "DVT review · Sep 24" });
+    const slack = slackItem("1758873600.000100", "Vendor says fixtures may slip to Oct 16.", { kind: "im" });
+    const script = scripted([
+      step([{ needs: [{ need: "approved start" }, { need: "latest vendor date" }] }], [search("DVT fixtures")]),
+      finish([{ needs: [{ need: "approved start", status: "found", evidence: ["E1"] }, { need: "latest vendor date", status: "found", evidence: ["E2"] }] }]),
+      answer([
+        { text: "The Sep 24 review approved a DVT start of Oct 12.", evidence: ["E1"] },
+        { text: "In a DM on Sep 26 the vendor said fixtures may slip to Oct 16; no new date is approved.", evidence: ["E2"] },
+      ]),
+    ]);
+    const result = await ask({ desk: desk({ search: () => [record, slack] }), model: script.model }).answer({ question: "Is DVT on track?" });
+    expect(script.prompt(1).last_results[0].results[1]).toMatchObject({ id: "E2", source: "slack", kind: "slack_message", date: "2026-09-26", full: true });
+    expect(validatePersonAnswerResponseV4(result)).toEqual(result);
+    expect(result.citations[1]).toMatchObject({ kind: "slack_message", citation: { kind: "slack_message", channel_id: "C0001" }, visibility: "only_me" });
+    expect(result.parts[0]!.statements.map(value => value.private)).toEqual([false, true]);
+  });
+
+  it("tells the model when the scope is one project and Slack is not limited to it", async () => {
+    const script = scripted([finish([missing()]), finish([missing()])]);
+    await ask({ desk: desk({ scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000002" } as EvidenceDeskPortV1["scope"] }), model: script.model }).answer({ question: "When is launch?" });
+    expect(script.prompt(0).scope).toContain("Slack is not");
+  });
+
+  it("sizes the scratchpad from the model's context window", async () => {
+    expect(agenticAskContextBudgetBytesV1(131_072, "x".repeat(9_000), 1_500)).toBeGreaterThan(300_000);
+    expect(agenticAskContextBudgetBytesV1(undefined, "", 1_500)).toBeLessThan(90_000);
+    const passages = Array.from({ length: 12 }, (_, index) => item(`p${index}`, `${index} `.repeat(1_400).trim(), { kind: "document_passage" }));
+    const actions = passages.map((_, index) => open(`E${index + 1}`));
+    const script = scripted([
+      step([{}], [search("atlas")]),
+      step([{}], actions.slice(0, 4)), step([{}], actions.slice(4, 8)), step([{}], actions.slice(8, 12)),
+      finish([missing()]), finish([missing()]),
+      answer([{ text: "x.", evidence: ["E1"] }]),
+    ]);
+    const evidence = desk({ search: () => passages, open: id => passages.filter(value => value.id === id) });
+    await ask({ desk: evidence, model: script.model, context_tokens: 16_000 }).answer({ question: "When is launch?" });
+    // A small window cannot hold 12 opened passages of about 3 KB each; the rest shrink back to previews.
+    const shown = script.prompt(4).opened.length;
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThan(12);
+    expect(script.prompt(4).seen.length).toBe(12 - shown);
   });
 });
 
@@ -260,22 +374,21 @@ describe("agentic Ask: failures never lose found evidence", () => {
 
   it("shows cited records when the answer call fails twice", async () => {
     const script = scripted([
-      step([{}], [{ tool: "search", input: "launch" }]),
-      finish([{ status: "answered", evidence: ["E1"] }]),
+      step([{}], [search("launch")]),
+      finish([found(["E1"])]),
       { wrong: true }, { still: "wrong" },
     ]);
     const result = await ask({ desk: desk({ search: () => [item("a", "Launch is Tuesday.")] }), model: script.model }).answer({ question: "When is launch?" });
     expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "records_only", records: [{ text: "Launch is Tuesday.", citation_indexes: [0] }] }] });
-    expect(result.direct).toBeUndefined();
   });
 
-  it("shows the most recently opened records when the answer fails and no part cited evidence", async () => {
+  it("shows the most recently opened records when the answer fails and nothing was cited", async () => {
     const passage = item("plan", "Atlas launches in October.", { kind: "document_passage" });
     const script = scripted([
-      step([{ question: "Summarize this project" }], [{ tool: "search", input: "atlas" }]),
-      step([{ question: "Summarize this project" }], [{ tool: "open", input: "E1" }]),
-      () => { throw Object.assign(new Error("slow"), { diagnostic: { failure_class: "adapter_timeout" } }); },
-      () => { throw Object.assign(new Error("slow"), { diagnostic: { failure_class: "adapter_timeout" } }); },
+      step([{ question: "Summarize this project" }], [search("atlas")]),
+      step([{ question: "Summarize this project" }], [open("E1")]),
+      () => { throw unavailable(); },
+      () => { throw unavailable(); },
       { wrong: true }, { still: "wrong" },
     ]);
     const result = await ask({ desk: desk({ search: () => [passage], open: () => [passage] }), model: script.model }).answer({ question: "Summarize this project" });
@@ -284,10 +397,10 @@ describe("agentic Ask: failures never lose found evidence", () => {
 
   it("retries a timed-out research step once unchanged, then answers from what was found", async () => {
     const script = scripted([
-      step([{}], [{ tool: "search", input: "launch" }]),
+      step([{}], [search("launch")]),
       () => { throw unavailable(); },
       () => { throw unavailable(); },
-      answer([{ part: 1, statements: [{ text: "Tuesday.", evidence: ["E1"] }] }]),
+      answer([{ text: "Tuesday.", evidence: ["E1"] }]),
     ]);
     const audit: AgenticAskAuditEntryV1[] = [];
     const result = await ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" });
@@ -299,12 +412,12 @@ describe("agentic Ask: failures never lose found evidence", () => {
   it("opens by title when the model passes a seen title instead of an id", async () => {
     const listed = listedItem("mrd", { kind: "document_passage", label: "SCOUT-MRD-v0.1.md" });
     const passage = item("mrd", "SCOUT is an indoor courier robot.", { kind: "document_passage", label: "SCOUT-MRD-v0.1.md" });
-    const evidence = desk({ inventory: [listed], open: () => [passage] });
+    const evidence = desk({ list: () => [listed], open: () => [passage] });
     const script = scripted([
-      step([{}], [{ tool: "browse" }]),
-      step([{}], [{ tool: "open", input: "SCOUT-MRD-v0.1" }]),
-      finish([{ status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "An indoor courier robot.", evidence: ["E1"] }] }]),
+      step([{}], [{ tool: "list", args: { source: "documents" } }]),
+      step([{}], [open("SCOUT-MRD-v0.1")]),
+      finish([found(["E1"])]),
+      answer([{ text: "An indoor courier robot.", evidence: ["E1"] }]),
     ]);
     await ask({ desk: evidence, model: script.model }).answer({ question: "What is SCOUT?" });
     expect(evidence.open).toHaveBeenCalledWith(expect.objectContaining({ item: listed.id, neighbours: 2 }));
@@ -318,10 +431,10 @@ describe("agentic Ask: failures never lose found evidence", () => {
       generate: vi.fn(async (input: StructuredGenerationInput) => {
         const role = input.system_prompt.startsWith("You write") ? "answer" : "step";
         timeouts.push({ role, timeout: input.timeout_ms, at: clock });
-        if (role === "answer") { clock += 5_000; return answer([{ part: 1, statements: [{ text: "Tuesday.", evidence: ["E1"] }] }]); }
+        if (role === "answer") { clock += 5_000; return answer([{ text: "Tuesday.", evidence: ["E1"] }]); }
         // A slow provider: every research step runs to its timeout.
         clock += input.timeout_ms;
-        if (timeouts.length === 1) return step([{}], [{ tool: "search", input: "launch" }]);
+        if (timeouts.length === 1) return step([{}], [search("launch")]);
         throw unavailable();
       }),
     };
@@ -335,8 +448,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
 
   it("never exceeds the model-call budget under repeated invalid output", async () => {
     const model: StructuredGenerationPort = { generate: vi.fn(async () => ({ nonsense: true })) };
-    const audit: AgenticAskAuditEntryV1[] = [];
-    const result = await ask({ desk: desk(), model, audit }).answer({ question: "When is launch?" });
+    const result = await ask({ desk: desk(), model }).answer({ question: "When is launch?" });
     expect((model.generate as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(AGENTIC_ASK_MAX_MODEL_CALLS_V1);
     expect(result.outcome).toBe("not_found");
   });
@@ -345,7 +457,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     let checks = 0;
     const evidence = desk({ search: () => [item("a")], revalidate: async () => { checks += 1; if (checks === 2) throw new Error("membership revoked"); return { checked_at: checked }; } });
     const audit: AgenticAskAuditEntryV1[] = [];
-    const script = scripted([step([{}], [{ tool: "search", input: "launch" }]), finish([{ status: "answered", evidence: ["E1"] }])]);
+    const script = scripted([step([{}], [search("launch")]), finish([found(["E1"])])]);
     await expect(ask({ desk: evidence, model: script.model, audit }).answer({ question: "When is launch?" })).rejects.toThrow("membership revoked");
     expect(script.inputs).toHaveLength(1);
     expect(audit).toEqual([]);
@@ -387,8 +499,8 @@ describe("agentic Ask: small-scope preload", () => {
     const opened = new Map([[listed[0]!.id, item("a", "Full text A.")], [listed[1]!.id, item("b", "Full text B.")]]);
     const evidence = desk({ inventory: listed, open: id => [opened.get(id)!] });
     const script = scripted([
-      finish([{ status: "answered", evidence: ["E1"] }]),
-      answer([{ part: 1, statements: [{ text: "A.", evidence: ["E1"] }] }]),
+      finish([found(["E1"])]),
+      answer([{ text: "A.", evidence: ["E1"] }]),
     ]);
     const result = await ask({ desk: evidence, model: script.model, shortcut: true }).answer({ question: "When is launch?" });
     expect(evidence.search).toHaveBeenCalledWith(expect.objectContaining({ inventory_mode: "items" }));

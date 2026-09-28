@@ -25,9 +25,27 @@ export const PERSON_EVIDENCE_LABEL_MAX_BYTES_V1 = 1024;
 /** The final response ceiling remains authoritative, including citation metadata. */
 export const PERSON_ANSWER_FALLBACK_TOTAL_MAX_BYTES_V4 = PERSON_ANSWER_RESPONSE_MAX_BYTES_V4;
 
-export type PersonEvidenceKindV1 = 'decision' | 'action' | 'rationale' | 'note' | 'document_passage';
+export type PersonEvidenceKindV1 = 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';
 export type PersonEvidenceVisibilityV1 = 'only_me' | 'team' | 'project' | 'projects' | 'approver_only';
 type ApprovedRecordPolicyV3 = Extract<PersonAnswerCitationV3, { readonly kind: 'approved_record' }>['policy_id'];
+
+/**
+ * A Slack message read live with the asker's own Slack token (RFC-0003).
+ * Echo never stores the message; the coordinates and a text digest identify
+ * it, and the permalink opens it in Slack for anyone Slack lets read it.
+ */
+export interface PersonSlackMessageCitationV1 {
+  readonly kind: 'slack_message';
+  readonly team_id: string;
+  readonly channel_id: string;
+  readonly message_ts: string;
+  readonly thread_ts?: string;
+  readonly permalink: string;
+  readonly text_sha256: `sha256:${string}`;
+}
+
+/** Every citation an Ask answer or an evidence desk item may carry. Open requests stay V3-only. */
+export type PersonAnswerEvidenceCitationV4 = PersonAnswerCitationV3 | PersonSlackMessageCitationV1;
 
 export interface PersonAnswerRequestV3 {
   readonly schema_version: 3;
@@ -53,7 +71,7 @@ export interface PersonAnswerPartV4 {
 }
 
 export interface PersonAnswerCitationV4 {
-  readonly citation: PersonAnswerCitationV3;
+  readonly citation: PersonAnswerEvidenceCitationV4;
   readonly kind: PersonEvidenceKindV1;
   readonly label: string;
   readonly visibility: PersonEvidenceVisibilityV1;
@@ -96,7 +114,7 @@ export interface PersonEvidenceAttributesV1 {
 export interface PersonEvidenceDeskItemV1 {
   /** Opaque, server-owned desk identity. It is never a model-authored coordinate. */
   readonly id: string;
-  readonly citation: PersonAnswerCitationV3;
+  readonly citation: PersonAnswerEvidenceCitationV4;
   readonly kind: PersonEvidenceKindV1;
   readonly text?: string;
   readonly label: string;
@@ -169,6 +187,31 @@ function scope(value: unknown): PersonAnswerScopeV3 {
   fail('Ask response scope is invalid');
 }
 
+const SLACK_TEAM_ID = /^[TE][A-Z0-9]{2,30}$/;
+const SLACK_CHANNEL_ID = /^[CDG][A-Z0-9]{2,30}$/;
+const SLACK_TS = /^\d{9,11}\.\d{6}$/;
+const SLACK_PERMALINK = /^https:\/\/[a-z0-9-]+(\.enterprise)?\.slack\.com\/archives\/[CDG][A-Z0-9]{2,30}\/p\d{15,17}(\?[A-Za-z0-9_=&.%-]{0,200})?$/;
+
+function slackCitation(input: Record<string, unknown>): PersonSlackMessageCitationV1 {
+  assertExactKeys(input, ['kind', 'team_id', 'channel_id', 'message_ts', 'permalink', 'text_sha256', ...(Object.hasOwn(input, 'thread_ts') ? ['thread_ts'] : [])], 'Ask citation');
+  if (typeof input.team_id !== 'string' || !SLACK_TEAM_ID.test(input.team_id)) fail('Ask Slack citation team_id is invalid');
+  if (typeof input.channel_id !== 'string' || !SLACK_CHANNEL_ID.test(input.channel_id)) fail('Ask Slack citation channel_id is invalid');
+  if (typeof input.message_ts !== 'string' || !SLACK_TS.test(input.message_ts)) fail('Ask Slack citation message_ts is invalid');
+  if (Object.hasOwn(input, 'thread_ts') && (typeof input.thread_ts !== 'string' || !SLACK_TS.test(input.thread_ts))) fail('Ask Slack citation thread_ts is invalid');
+  if (typeof input.permalink !== 'string' || input.permalink.length > 512 || !SLACK_PERMALINK.test(input.permalink)) fail('Ask Slack citation permalink is invalid');
+  assertDigest(input.text_sha256, 'Ask Slack citation text_sha256');
+  return Object.freeze({
+    kind: 'slack_message', team_id: input.team_id, channel_id: input.channel_id, message_ts: input.message_ts,
+    ...(Object.hasOwn(input, 'thread_ts') ? { thread_ts: input.thread_ts as string } : {}),
+    permalink: input.permalink, text_sha256: input.text_sha256 as `sha256:${string}`,
+  });
+}
+
+function evidenceCitation(value: unknown): PersonAnswerEvidenceCitationV4 {
+  const input = object(value, 'Ask citation');
+  return input.kind === 'slack_message' ? slackCitation(input) : citation(input);
+}
+
 function citation(value: unknown): PersonAnswerCitationV3 {
   const input = object(value, 'Ask citation');
   if (input.kind === 'approved_record') {
@@ -198,14 +241,15 @@ function citation(value: unknown): PersonAnswerCitationV3 {
   fail('Ask citation kind is invalid');
 }
 
-function citationKey(value: PersonAnswerCitationV3): string {
+function citationKey(value: PersonAnswerEvidenceCitationV4): string {
+  if (value.kind === 'slack_message') return `slack_message:${value.team_id}:${value.channel_id}:${value.message_ts}`;
   return value.kind === 'approved_record'
     ? `approved_record:${value.atom_id}`
     : `source_revision:${value.source_id}:${value.revision_id}:${value.representation_sha256}:${value.anchor_sha256}`;
 }
 
 function evidenceKind(value: unknown, label: string): asserts value is PersonEvidenceKindV1 {
-  if (!['decision', 'action', 'rationale', 'note', 'document_passage'].includes(value as string)) fail(`${label} is invalid`);
+  if (!['decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'].includes(value as string)) fail(`${label} is invalid`);
 }
 
 function visibility(value: unknown, label: string): asserts value is PersonEvidenceVisibilityV1 {
@@ -234,7 +278,9 @@ function answerCitation(value: unknown): PersonAnswerCitationV4 {
   evidenceKind(input.kind, 'Ask response citation kind');
   text(input.label, 'Ask response citation label', PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
   visibility(input.visibility, 'Ask response citation visibility');
-  return Object.freeze({ citation: citation(input.citation), kind: input.kind, label: input.label as string, visibility: input.visibility });
+  const cited = evidenceCitation(input.citation);
+  if ((cited.kind === 'slack_message') !== (input.kind === 'slack_message')) fail('Ask response citation kind is inconsistent');
+  return Object.freeze({ citation: cited, kind: input.kind, label: input.label as string, visibility: input.visibility });
 }
 
 function part(value: unknown, citations: readonly PersonAnswerCitationV4[]): PersonAnswerPartV4 {
@@ -272,7 +318,9 @@ function deskItem(value: unknown): PersonEvidenceDeskItemV1 {
     if (Object.hasOwn(raw, 'status')) text(raw.status, 'Evidence desk item status', 128);
     attributes = Object.freeze({ ...(Object.hasOwn(raw, 'owner') ? { owner: raw.owner as string } : {}), ...(Object.hasOwn(raw, 'due_at') ? { due_at: raw.due_at as string } : {}), ...(Object.hasOwn(raw, 'status') ? { status: raw.status as string } : {}) });
   }
-  return Object.freeze({ id: input.id as string, citation: citation(input.citation), kind: input.kind, ...(Object.hasOwn(input, 'text') ? { text: input.text as string } : {}), label: input.label as string, visibility: input.visibility, ...(attributes === undefined ? {} : { attributes }), receipt_sha256: input.receipt_sha256 as `sha256:${string}` });
+  const cited = evidenceCitation(input.citation);
+  if ((cited.kind === 'slack_message') !== (input.kind === 'slack_message')) fail('Evidence desk item kind is inconsistent');
+  return Object.freeze({ id: input.id as string, citation: cited, kind: input.kind, ...(Object.hasOwn(input, 'text') ? { text: input.text as string } : {}), label: input.label as string, visibility: input.visibility, ...(attributes === undefined ? {} : { attributes }), receipt_sha256: input.receipt_sha256 as `sha256:${string}` });
 }
 
 function boundedRequest<T>(result: T, label: string): T {
@@ -319,7 +367,7 @@ export function validatePersonEvidenceSearchRequestV1(value: unknown): PersonEvi
   const input = object(value, 'Evidence search request');
   assertExactKeys(input, ['schema_version', ...(Object.hasOwn(input, 'query') ? ['query'] : []), ...(Object.hasOwn(input, 'kinds') ? ['kinds'] : []), ...(Object.hasOwn(input, 'limit') ? ['limit'] : []), ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])], 'Evidence search request');
   if (input.schema_version !== 1) fail('Evidence search request schema_version is unsupported');
-  if (Object.hasOwn(input, 'kinds') && (!Array.isArray(input.kinds) || input.kinds.length === 0 || input.kinds.length > 5)) fail('Evidence search request kinds is invalid');
+  if (Object.hasOwn(input, 'kinds') && (!Array.isArray(input.kinds) || input.kinds.length === 0 || input.kinds.length > 6)) fail('Evidence search request kinds is invalid');
   const kinds = Object.hasOwn(input, 'kinds') ? (input.kinds as unknown[]).map((kind) => { evidenceKind(kind, 'Evidence search request kind'); return kind; }) : undefined;
   if (kinds !== undefined && new Set(kinds).size !== kinds.length) fail('Evidence search request kinds contains duplicates');
   const maximumLimit = Object.hasOwn(input, 'query') ? 10 : 50;

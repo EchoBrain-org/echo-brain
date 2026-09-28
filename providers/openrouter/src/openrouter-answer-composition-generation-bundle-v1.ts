@@ -7,6 +7,8 @@ export const OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1 =
 export const OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 =
   "deepseek/deepseek-v3.2" as const;
 export const OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 = 60_000;
+/** OpenRouter's top provider context for deepseek-v3.2 (the model lists 163,840; routing uses the smaller). */
+export const OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 = 131_072;
 
 /**
  * OpenRouter answer-composition adapter bundle. It is the only owner of the
@@ -31,6 +33,7 @@ export function createOpenRouterAnswerCompositionGenerationBundleV1(input: {
           planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
           answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
           timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+          context_tokens: OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1,
         }),
       });
     },

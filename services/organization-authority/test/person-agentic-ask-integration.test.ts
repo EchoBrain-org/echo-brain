@@ -21,7 +21,7 @@ type Prompt = {
   step?: number;
   last_results?: { tool: string; items?: Listing[]; results?: Listing[] }[];
   opened?: Listing[];
-  parts?: { part?: number; question: string; evidence: string[] }[];
+  plan?: { part?: number; question: string }[];
   evidence?: Listing[];
 };
 function fixture(options: { readonly small_scope_shortcut?: boolean } = {}) {
@@ -56,25 +56,25 @@ function fixture(options: { readonly small_scope_shortcut?: boolean } = {}) {
   const roles: string[] = [];
   let afterStep: ((step: number) => void) | undefined;
   let badAnswer = false;
-  // A small scripted agent: browse, open the first listing, then finish on what it read.
+  // A small scripted agent: list documents, open the first listing, then finish on what it read.
   const model: StructuredGenerationPort = { async generate(input: StructuredGenerationInput) {
     prompts.push(input.user_prompt);
     const prompt = JSON.parse(input.user_prompt) as Prompt;
     const properties = input.schema.properties as Readonly<Record<string, unknown>>;
-    if (properties?.direct !== undefined) {
+    if (properties?.sentences !== undefined) {
       roles.push("answer");
       if (badAnswer) return { unsupported: "Invalid answer shape" };
       const first = prompt.evidence![0]!.id;
-      return { direct: { text: "The launch window is October.", evidence: [first] }, parts: prompt.parts!.map(part => ({ part: part.part, statements: [{ text: "The launch window is October.", evidence: [first] }], gap: "" })) };
+      return { sentences: [{ text: "The launch window is October.", evidence: [first] }], not_found: [] };
     }
     roles.push("step");
     afterStep?.(prompt.step!);
-    const part = (status: string, evidence: string[] = []) => ({ question: prompt.question!, status, notes: "", evidence });
-    if ((prompt.opened ?? []).length > 0) return { parts: [part("answered", prompt.opened!.map(item => item.id))], actions: [{ tool: "finish", input: "" }] };
-    const browsed = prompt.last_results?.find(result => result.tool === "browse")?.items ?? [];
-    if (browsed.length > 0) return { parts: [part("searching")], actions: [{ tool: "open", input: browsed[0]!.id }] };
-    if (prompt.step === 1) return { parts: [part("searching")], actions: [{ tool: "browse", input: "" }] };
-    return { parts: [part("not_found")], actions: [{ tool: "finish", input: "" }] };
+    const part = (status: string, evidence: string[] = []) => ({ question: prompt.question!, needs: [{ need: "project summary", status, evidence }], notes: "" });
+    if ((prompt.opened ?? []).length > 0) return { parts: [part("found", prompt.opened!.map(item => item.id))], actions: [{ tool: "finish", args: {} }] };
+    const listed = prompt.last_results?.find(result => result.tool === "list")?.items ?? [];
+    if (listed.length > 0) return { parts: [part("open")], actions: [{ tool: "open", args: { id: listed[0]!.id } }] };
+    if (prompt.step === 1) return { parts: [part("open")], actions: [{ tool: "list", args: { source: "documents" } }] };
+    return { parts: [part("not_found")], actions: [{ tool: "finish", args: {} }] };
   } };
   const route = createPersonAnswerV3Route({
     authority_id: "oau_project_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
@@ -98,7 +98,7 @@ const auditRow = (database: Database.Database) => database.prepare("SELECT body_
 const openedTexts = (prompts: readonly string[]) => (JSON.parse(prompts[0]!) as Prompt).opened?.map(item => item.text) ?? [];
 
 describe("Agentic Ask with stored source evidence", () => {
-  it("browses keyword-free evidence, opens it, cites the exact source, and appends a bound terminal audit", async () => {
+  it("lists keyword-free evidence, opens it, cites the exact source, and appends a bound terminal audit", async () => {
     const f = fixture(); f.upload("Atlas plan", "The launch window is October.");
     const answer = await f.ask();
     expect(answer.outcome).toBe("answered");
@@ -122,7 +122,7 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(member.outcome).toBe("not_found"); expect(member.citations).toHaveLength(0);
     expect(f.prompts.join("\n")).not.toContain("97531");
     const owner = await f.ask();
-    expect(owner.parts[0]!.statements[0]!.private).toBe(true); expect(owner.direct?.private).toBe(true);
+    expect(owner.parts[0]!.statements[0]!.private).toBe(true); expect(owner.direct).toBeUndefined();
   });
 
   it("stops before the answer if access is revoked during research", async () => {

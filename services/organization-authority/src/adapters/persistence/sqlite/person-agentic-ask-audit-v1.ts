@@ -44,7 +44,7 @@ export class SqlitePersonAgenticAskAuditV1 {
       !entry.receipt_digests.every((digest) => /^sha256:[a-f0-9]{64}$/.test(digest)) ||
       ![entry.rounds, entry.model_calls, entry.repairs, entry.fallbacks, entry.citation_count]
         .every((value) => Number.isSafeInteger(value) && value >= 0) ||
-      entry.rounds > 6 || entry.model_calls > 12 || entry.repairs > 12 || entry.fallbacks > 16 || entry.citation_count > 40 ||
+      entry.rounds > 10 || entry.model_calls > 24 || entry.repairs > 24 || entry.fallbacks > 16 || entry.citation_count > 40 ||
       (entry.checked_at !== null && new Date(entry.checked_at).toISOString() !== entry.checked_at) ||
       ![entry.prompt_sha256, entry.answer_sha256, entry.response_sha256]
         .every((digest) => digest === null || /^sha256:[a-f0-9]{64}$/.test(digest)) ||

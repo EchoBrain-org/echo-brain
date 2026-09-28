@@ -133,4 +133,24 @@ describe('Agentic Ask V1 public contracts', () => {
       items: [{ id: 'unicode-source', citation: sourceCitation, kind: 'document_passage', label: '🧪'.repeat(200), visibility: 'team', receipt_sha256 }],
     }).items[0]?.label).toBe('🧪'.repeat(200));
   });
+
+  it('accepts a live Slack citation, marks DM statements private, and keeps open requests V3-only', () => {
+    const slack = {
+      kind: 'slack_message' as const, team_id: 'T01ABCDEF', channel_id: 'D02ABCDEF', message_ts: '1758873600.000100', thread_ts: '1758873600.000100',
+      permalink: 'https://acme.slack.com/archives/D02ABCDEF/p1758873600000100', text_sha256: `sha256:${'d'.repeat(64)}`,
+    };
+    const body = (citationValue: unknown, kind = 'slack_message', isPrivate = true) => ({
+      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+      citations: [{ citation: citationValue, kind, label: 'DM with Dana · Priya · 2025-09-26', visibility: 'only_me' }],
+      parts: [{ question: 'Is DVT on track?', status: 'answered', statements: [{ text: 'The vendor said Oct 16 in a DM.', citation_indexes: [0], private: isPrivate }] }],
+    });
+    expect(validatePersonAnswerResponseV4(body(slack)).citations[0]!.citation).toEqual(slack);
+    expect(() => validatePersonAnswerResponseV4(body(slack, 'slack_message', false))).toThrow('private is inconsistent');
+    expect(() => validatePersonAnswerResponseV4(body(slack, 'decision'))).toThrow('kind is inconsistent');
+    expect(() => validatePersonAnswerResponseV4(body({ ...slack, permalink: 'https://evil.example/archives/D02ABCDEF/p1' }))).toThrow('permalink is invalid');
+    expect(() => validatePersonAnswerResponseV4(body({ ...slack, message_ts: '17588' }))).toThrow('message_ts is invalid');
+    expect(() => validatePersonAnswerResponseV4(body({ ...slack, text: 'leaked' }))).toThrow();
+    expect(() => validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation: slack })).toThrow('Ask citation kind is invalid');
+    expect(validatePersonEvidenceSearchRequestV1({ schema_version: 1, query: 'fixtures', kinds: ['decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'] }).kinds).toHaveLength(6);
+  });
 });

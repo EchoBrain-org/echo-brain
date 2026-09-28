@@ -10,6 +10,8 @@ export interface AnswerCompositionGenerationProfileV1 {
   readonly planner_model: string;
   readonly answer_model: string;
   readonly timeout_ms: number;
+  /** The answer model's context window in tokens, when known. Agentic Ask sizes its scratchpad from it. */
+  readonly context_tokens?: number;
 }
 
 /**
