@@ -15,7 +15,15 @@ import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_CONTEXT_NOW, authorization, proje
 const databases: Database.Database[] = [];
 afterEach(() => { for (const database of databases.splice(0)) database.close(); });
 
-type Prompt = { question?: string; parts?: { id: string; statements?: { text: string; evidence_ids: string[] }[] }[]; evidence?: { id: string; text: string }[] };
+type Listing = { id: string; title?: string; text?: string };
+type Prompt = {
+  question?: string;
+  step?: number;
+  last_results?: { tool: string; items?: Listing[]; results?: Listing[] }[];
+  opened?: Listing[];
+  parts?: { part?: number; question: string; evidence: string[] }[];
+  evidence?: Listing[];
+};
 function fixture(options: { readonly small_scope_shortcut?: boolean } = {}) {
   const database = projectContextDatabase(); databases.push(database);
   database.prepare(`INSERT INTO authority_projects_v1
@@ -46,25 +54,27 @@ function fixture(options: { readonly small_scope_shortcut?: boolean } = {}) {
   let recordProbes = 0;
   const prompts: string[] = [];
   const roles: string[] = [];
-  let afterJudge: (() => void) | undefined;
-  let afterPlan: (() => void) | undefined;
-  let badWriter = false;
+  let afterStep: ((step: number) => void) | undefined;
+  let badAnswer = false;
+  // A small scripted agent: browse, open the first listing, then finish on what it read.
   const model: StructuredGenerationPort = { async generate(input: StructuredGenerationInput) {
     prompts.push(input.user_prompt);
     const prompt = JSON.parse(input.user_prompt) as Prompt;
     const properties = input.schema.properties as Readonly<Record<string, unknown>>;
-    if (properties?.scope !== undefined) {
-      roles.push("judge"); afterJudge?.();
-      return { scope: { matches_question: true, note: "" }, done: true, parts: prompt.parts!.map(part => ({ id: part.id, status: prompt.evidence!.length > 0 ? "answered" : "missing", evidence_ids: prompt.evidence!.map(item => item.id), new_queries: [] })) };
+    if (properties?.direct !== undefined) {
+      roles.push("answer");
+      if (badAnswer) return { unsupported: "Invalid answer shape" };
+      const first = prompt.evidence![0]!.id;
+      return { direct: { text: "The launch window is October.", evidence: [first] }, parts: prompt.parts!.map(part => ({ part: part.part, statements: [{ text: "The launch window is October.", evidence: [first] }], gap: "" })) };
     }
-    if (properties?.statements !== undefined) {
-      roles.push("writer");
-      return badWriter ? { unsupported: "Invalid writer shape" } : { statements: [{ text: "The launch window is October.", evidence_ids: [prompt.evidence![0]!.id] }] };
-    }
-    if (properties?.statement !== undefined) {
-      roles.push("summary"); return { statement: prompt.parts![0]!.statements![0] };
-    }
-    roles.push("plan"); afterPlan?.(); return { parts: [{ question: prompt.question, queries: ["overview"] }] };
+    roles.push("step");
+    afterStep?.(prompt.step!);
+    const part = (status: string, evidence: string[] = []) => ({ question: prompt.question!, status, notes: "", evidence });
+    if ((prompt.opened ?? []).length > 0) return { parts: [part("answered", prompt.opened!.map(item => item.id))], actions: [{ tool: "finish", input: "" }] };
+    const browsed = prompt.last_results?.find(result => result.tool === "browse")?.items ?? [];
+    if (browsed.length > 0) return { parts: [part("searching")], actions: [{ tool: "open", input: browsed[0]!.id }] };
+    if (prompt.step === 1) return { parts: [part("searching")], actions: [{ tool: "browse", input: "" }] };
+    return { parts: [part("not_found")], actions: [{ tool: "finish", input: "" }] };
   } };
   const route = createPersonAnswerV3Route({
     authority_id: "oau_project_fixture", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
@@ -78,21 +88,21 @@ function fixture(options: { readonly small_scope_shortcut?: boolean } = {}) {
   return {
     database, originals, route, upload, uploadChunks, ask, prompts, roles,
     recordProbes: () => recordProbes,
-    badWriter: () => { badWriter = true; },
-    revokeAfterJudge: () => { afterJudge = () => { revoked = true; }; },
-    revokeAfterPlan: () => { afterPlan = () => { revoked = true; }; },
-    abortAfterPlan: (controller: AbortController) => {
-      afterPlan = () => { controller.abort(); };
-    },
+    badAnswer: () => { badAnswer = true; },
+    revokeAfterStep: (step: number) => { afterStep = value => { if (value === step) revoked = true; }; },
+    abortAfterStep: (step: number, controller: AbortController) => { afterStep = value => { if (value === step) controller.abort(); }; },
   };
 }
 
+const auditRow = (database: Database.Database) => database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").get() as { body_json: string } | undefined;
+const openedTexts = (prompts: readonly string[]) => (JSON.parse(prompts[0]!) as Prompt).opened?.map(item => item.text) ?? [];
+
 describe("Agentic Ask with stored source evidence", () => {
-  it("discovers keyword-free evidence, cites exact source, and appends a bound terminal audit", async () => {
+  it("browses keyword-free evidence, opens it, cites the exact source, and appends a bound terminal audit", async () => {
     const f = fixture(); f.upload("Atlas plan", "The launch window is October.");
     const answer = await f.ask();
     expect(answer.outcome).toBe("answered");
-    expect(f.roles).toEqual(["plan", "judge", "writer", "summary"]);
+    expect(f.roles).toEqual(["step", "step", "step", "answer"]);
     expect(answer.notice).toContain("unavailable"); expect(f.recordProbes()).toBe(1);
     expect(answer.citations).toHaveLength(1);
     const citation = answer.citations[0]!.citation;
@@ -100,13 +110,13 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(f.originals.read({ access_token: "owner", scope: answer.scope, citation }).atom.text).toBe("Atlas plan.md\nThe launch window is October.");
     const opened = await f.route.openEvidence({ access_token: "owner", request: { schema_version: 1, citation, project_id: PROJECT_ALPHA } });
     expect(opened.items[0]!.text).toBe("Atlas plan.md\nThe launch window is October.");
-    const audit = f.database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").get() as { body_json: string };
-    const body = JSON.parse(audit.body_json) as Record<string, unknown>;
+    const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
     expect(body.response_sha256).toBe(canonicalSha256(answer)); expect(body.principal_id).toBe(OWNER.principal_id);
-    expect(body.model_calls).toBe(4); expect(audit.body_json).not.toContain("October");
+    expect(body).toMatchObject({ model_calls: 4, rounds: 3 }); expect(auditRow(f.database)!.body_json).not.toContain("October");
+    for (const prompt of f.prompts) expect(prompt).not.toMatch(/desk_[a-f0-9]{16}|source:[a-f0-9]{64}/);
   });
 
-  it("keeps private source text out of another member's discovery and marks the owner's statements private", async () => {
+  it("keeps private source text out of another member's research and marks the owner's statements private", async () => {
     const f = fixture(); f.upload("Atlas private", "The launch window is October. Confidential payload 97531.", "only_me");
     const member = await f.ask("member");
     expect(member.outcome).toBe("not_found"); expect(member.citations).toHaveLength(0);
@@ -115,90 +125,71 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(owner.parts[0]!.statements[0]!.private).toBe(true); expect(owner.direct?.private).toBe(true);
   });
 
-  it("stops before the writer if access is revoked after the judge", async () => {
-    const f = fixture(); f.upload("Atlas plan", "The launch window is October."); f.revokeAfterJudge();
-    await expect(f.ask()).rejects.toThrow("membership revoked"); expect(f.roles).toEqual(["plan", "judge"]);
-    expect(f.database.prepare("SELECT count(*) AS n FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").get()).toEqual({ n: 0 });
+  it("stops before the answer if access is revoked during research", async () => {
+    const f = fixture(); f.upload("Atlas plan", "The launch window is October."); f.revokeAfterStep(2);
+    await expect(f.ask()).rejects.toThrow("membership revoked"); expect(f.roles).toEqual(["step", "step"]);
+    expect(auditRow(f.database)).toBeUndefined();
   });
 
-  it("returns exact source text after both writer attempts produce malformed output", async () => {
-    const f = fixture(); const text = "The launch window is October."; f.upload("Atlas plan", text); f.badWriter();
+  it("returns exact source text after both answer attempts produce malformed output", async () => {
+    const f = fixture(); const text = "The launch window is October."; f.upload("Atlas plan", text); f.badAnswer();
     const answer = await f.ask();
     expect(answer.parts[0]!.status).toBe("records_only"); expect(answer.parts[0]!.records?.[0]?.text).toBe(`Atlas plan.md\n${text}`);
-    expect(f.roles.filter(role => role === "writer")).toHaveLength(2); expect(answer.direct).toBeUndefined();
+    expect(f.roles.filter(role => role === "answer")).toHaveLength(2); expect(answer.direct).toBeUndefined();
   });
 
-  it("uses the server-only shortcut only when the route enables it, while retaining released evidence and its terminal audit", async () => {
+  it("preloads a small scope only when the route enables it, so one step can finish", async () => {
     const f = fixture({ small_scope_shortcut: true });
     f.upload("Atlas plan", "The launch window is October.");
     const answer = await f.ask();
     expect(answer.outcome).toBe("answered");
-    expect(f.roles).toEqual(["plan", "writer", "summary"]);
-    const writer = f.prompts.map(prompt => JSON.parse(prompt) as Prompt)
-      .find(prompt => prompt.evidence !== undefined);
-    expect(writer?.evidence).toHaveLength(1);
-    expect(writer?.evidence?.[0]?.text).toContain("October");
-    const audit = f.database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").get() as { body_json: string };
-    expect(JSON.parse(audit.body_json)).toMatchObject({ outcome: "answered", model_calls: 3 });
+    expect(f.roles).toEqual(["step", "answer"]);
+    expect(openedTexts(f.prompts)).toEqual([expect.stringContaining("October")]);
+    expect(JSON.parse(auditRow(f.database)!.body_json)).toMatchObject({ outcome: "answered", model_calls: 2 });
   });
 
-  it("releases every readable passage to shortcut writers when the complete inventory fits the limits", async () => {
+  it("preloads every readable passage when the complete inventory fits", async () => {
     const f = fixture({ small_scope_shortcut: true });
     f.uploadChunks("Atlas plan", ["Passage one.", "Passage two.", "Passage three."]);
     await f.ask();
-    expect(f.roles).toEqual(["plan", "writer", "summary"]);
-    const writer = f.prompts.map(prompt => JSON.parse(prompt) as Prompt)
-      .find(prompt => prompt.evidence !== undefined);
-    expect(writer?.evidence).toHaveLength(3);
-    expect(writer?.evidence?.map(item => item.text)).toEqual(expect.arrayContaining([
-      expect.stringContaining("Passage one."),
-      expect.stringContaining("Passage two."),
-      expect.stringContaining("Passage three."),
+    expect(f.roles).toEqual(["step", "answer"]);
+    expect(openedTexts(f.prompts)).toEqual(expect.arrayContaining([
+      expect.stringContaining("Passage one."), expect.stringContaining("Passage two."), expect.stringContaining("Passage three."),
     ]));
   });
 
-  it("releases every canonical packet of a long extracted chunk to shortcut writers", async () => {
+  it("preloads every canonical packet of a long extracted chunk", async () => {
     const f = fixture({ small_scope_shortcut: true });
     f.uploadChunks("Atlas plan", [`${"head ".repeat(610)}distinct tail fact`]);
     await f.ask();
-    expect(f.roles).toEqual(["plan", "writer", "summary"]);
-    const writer = f.prompts.map(prompt => JSON.parse(prompt) as Prompt)
-      .find(prompt => prompt.evidence !== undefined);
-    expect(writer?.evidence?.length).toBeGreaterThan(1);
-    expect(writer?.evidence?.some(item => item.text.includes("distinct tail fact"))).toBe(true);
+    expect(openedTexts(f.prompts).length).toBeGreaterThan(1);
+    expect(openedTexts(f.prompts).some(text => text?.includes("distinct tail fact"))).toBe(true);
   });
 
-  it("does not shortcut when the complete readable-passage inventory exceeds twenty items", async () => {
+  it("does not preload when the complete readable-passage inventory exceeds twenty items", async () => {
     const f = fixture({ small_scope_shortcut: true });
     f.uploadChunks("Atlas plan", Array.from({ length: 21 }, (_, index) => `Passage ${index + 1}.`));
     await f.ask();
-    expect(f.roles).toEqual(["plan", "judge", "writer", "summary"]);
+    expect(openedTexts(f.prompts)).toEqual([]);
+    expect(f.roles).toEqual(["step", "step", "step", "answer"]);
   });
 
-  it("does not shortcut when the complete readable passages exceed the writer byte cap", async () => {
-    const f = fixture({ small_scope_shortcut: true });
-    f.uploadChunks("Atlas plan", Array.from({ length: 11 }, (_, index) => `passage-${index}`.padEnd(3_000, "x")));
-    await f.ask();
-    expect(f.roles).toEqual(["plan", "judge", "writer", "summary"]);
-  });
-
-  it("revalidates after shortcut planning before releasing any writer evidence", async () => {
+  it("revalidates after research before releasing evidence to the answer", async () => {
     const f = fixture({ small_scope_shortcut: true });
     f.upload("Atlas plan", "The launch window is October.");
-    f.revokeAfterPlan();
+    f.revokeAfterStep(1);
     await expect(f.ask()).rejects.toThrow("membership revoked");
-    expect(f.roles).toEqual(["plan"]);
-    expect(f.database.prepare("SELECT count(*) AS n FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").get()).toEqual({ n: 0 });
+    expect(f.roles).toEqual(["step"]);
+    expect(auditRow(f.database)).toBeUndefined();
   });
 
-  it("cancels the shortcut before publication and records one cancelled terminal audit", async () => {
+  it("cancels before publication and records one cancelled terminal audit", async () => {
     const f = fixture({ small_scope_shortcut: true });
     f.upload("Atlas plan", "The launch window is October.");
     const controller = new AbortController();
-    f.abortAfterPlan(controller);
+    f.abortAfterStep(1, controller);
     await expect(f.route.ask({ access_token: "owner", request: { schema_version: 3, question: "Summarize this project", project_id: PROJECT_ALPHA }, signal: controller.signal })).rejects.toThrow();
-    expect(f.roles).toEqual(["plan"]);
-    const audit = f.database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").get() as { body_json: string };
-    expect(JSON.parse(audit.body_json)).toMatchObject({ outcome: "cancelled", model_calls: 1 });
+    expect(f.roles).toEqual(["step"]);
+    expect(JSON.parse(auditRow(f.database)!.body_json)).toMatchObject({ outcome: "cancelled", model_calls: 1 });
   });
 });

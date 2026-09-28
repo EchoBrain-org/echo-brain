@@ -44,13 +44,13 @@ export class SqlitePersonAgenticAskAuditV1 {
       !entry.receipt_digests.every((digest) => /^sha256:[a-f0-9]{64}$/.test(digest)) ||
       ![entry.rounds, entry.model_calls, entry.repairs, entry.fallbacks, entry.citation_count]
         .every((value) => Number.isSafeInteger(value) && value >= 0) ||
-      entry.rounds > 3 || entry.model_calls > 12 || entry.repairs > 12 || entry.fallbacks > 16 || entry.citation_count > 40 ||
+      entry.rounds > 6 || entry.model_calls > 12 || entry.repairs > 12 || entry.fallbacks > 16 || entry.citation_count > 40 ||
       (entry.checked_at !== null && new Date(entry.checked_at).toISOString() !== entry.checked_at) ||
       ![entry.prompt_sha256, entry.answer_sha256, entry.response_sha256]
         .every((digest) => digest === null || /^sha256:[a-f0-9]{64}$/.test(digest)) ||
       ((entry.outcome === "cancelled" || entry.outcome === "timed_out") && (entry.prompt_sha256 !== null || entry.answer_sha256 !== null || entry.response_sha256 !== null)) ||
       !Array.isArray(entry.generations) || entry.generations.length !== entry.model_calls ||
-      entry.generations.some((generation) => !["plan", "judge", "writer", "summary"].includes(generation.role) ||
+      entry.generations.some((generation) => !["step", "answer"].includes(generation.role) ||
         (generation.finish_reason !== null && (typeof generation.finish_reason !== "string" || generation.finish_reason.length > 128)) ||
         (generation.usage !== null && ![generation.usage.input_tokens, generation.usage.output_tokens, generation.usage.total_tokens]
           .every((value) => value === null || (Number.isSafeInteger(value) && value >= 0)))) ||

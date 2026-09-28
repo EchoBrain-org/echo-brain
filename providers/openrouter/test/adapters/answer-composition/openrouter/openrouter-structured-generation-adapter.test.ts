@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createOpenRouterStructuredGenerationAdapter, OpenRouterStructuredGenerationError } from "../../../../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
+import { createOpenRouterStructuredGenerationAdapter, OpenRouterStructuredGenerationError, parseModelJson } from "../../../../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 
 const structuredRequest = {
   model: "openai/gpt-4.1-mini",
@@ -331,6 +331,33 @@ describe("OpenRouter structured generation", () => {
     });
     expect(JSON.stringify(error)).not.toContain("transport body secret");
     expect(JSON.stringify(error)).not.toContain("secret-not-in-errors");
+  });
+
+  it("labels the call's own timeout as adapter_timeout even when fetch reports an AbortError", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: ((_input: RequestInfo | URL, init?: RequestInit) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      })) as typeof fetch,
+    });
+    let failure: unknown;
+    try { await adapter.generate({ ...structuredRequest, timeout_ms: 20 }); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(OpenRouterStructuredGenerationError);
+    expect((failure as OpenRouterStructuredGenerationError).diagnostic.failure_class).toBe("adapter_timeout");
+  });
+
+  it("takes the JSON object out of a Markdown fence or short preamble, and still rejects non-JSON", async () => {
+    expect(parseModelJson('{"a":1}')).toEqual({ a: 1 });
+    expect(parseModelJson('```json\n{"a":1}\n```')).toEqual({ a: 1 });
+    expect(parseModelJson('Here is the JSON:\n{"a":{"b":2}}')).toEqual({ a: { b: 2 } });
+    expect(() => parseModelJson("no json here")).toThrow();
+    const adapter = createOpenRouterStructuredGenerationAdapter({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: (async () => new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: '```json\n{"queries":[]}\n```' } }] }), { status: 200 })) as typeof fetch,
+    });
+    await expect(adapter.generate(structuredRequest)).resolves.toEqual({ queries: [] });
   });
 
   it("distinguishes a local timeout from another transport failure", async () => {

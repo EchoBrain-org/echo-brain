@@ -296,6 +296,60 @@ A1 makes four changes:
 The principle: permission filtering is strict; a model's relevance judgment
 orders evidence and never hides it.
 
+### Amendment A2, 2026-09-28: three-tool research loop
+
+The A1 measurement was stopped after 93 of 450 attempts: both A1 variants
+failed 15–19 of about 30 attempts, almost all at the 60-second request
+deadline. Causes (Answer Lab `docs/v3-port-a1-timeout-diagnosis.md`):
+- Prompts never showed the JSON shape; 19 of 91 finished replies had the
+  wrong root keys, and repairs did not say what was wrong.
+- The schema allowed values the parser rejected (trailing spaces, an empty
+  optional gap, character versus byte limits).
+- Writers and the optional summary were given all remaining time, so a slow
+  call consumed the deadline and discarded finished parts.
+
+A2 replaces the plan → judge → writer → summary pipeline in Layer 4. The
+evidence desk, permissions, release audits, revalidation fence, citation
+checks, V4 response and 60-second hard deadline are unchanged.
+
+- **One loop, three read tools plus `finish`.** Each research step returns
+  per-part notes and up to four actions: `search(keywords)`, `open(id)`,
+  `browse()` (inventory, paged by code) and `finish`. The model chooses the
+  tools; code owns scope, permissions, limits, paging and de-duplication.
+  A new source adds a desk connector, never a model tool.
+- **Short ids.** The model sees only `E1`, `E2`…; desk identities and
+  citations never enter a prompt.
+- **Scratchpad.** Full text of opened items (64 KiB), one-line previews of
+  everything else seen (80 entries), and the model's notes per part. A short
+  search hit whose whole text fits its preview is citable without `open`.
+- **Stop rules.** `finish` is checked by code: every part must be answered
+  with an item whose full text was read, or `not_found` after two searches
+  or a browse. A rejected finish is returned once with the reason. `open`
+  also accepts a seen title, and returns two neighbouring passages. The loop
+  also stops after two steps that find nothing new, after six steps, or when
+  only the answer reserve remains.
+- **Time budget.** Research steps are capped at 10 s each and never start
+  inside the last 27 s; the final answer gets the remaining time minus 2 s for
+  revalidation and audit. A timed-out call is retried once unchanged when
+  time allows; a step that still fails ends research, and the answer uses
+  what was found. If the answer call fails, each part shows its cited
+  records, or the most recently opened ones. Only a hung desk or a model
+  that ignores its own timeout reaches the hard deadline.
+- **One answer call.** The model returns a direct answer and statements per
+  numbered part, each with evidence ids. Code drops statements without read
+  evidence, marks privacy from cited visibility, and lays out the V4
+  response.
+- **Protocol.** Two JSON shapes, both shown verbatim in the prompts. The
+  parser accepts everything the schema permits and normalizes untidy values;
+  only a wrong root shape is an error, and the one repair names it. The
+  adapter labels its own timeouts as `adapter_timeout` and accepts a JSON
+  object wrapped in a Markdown fence.
+- **Small-scope switch.** `small_scope_shortcut` now preloads a complete
+  inventory of at most 20 items into the scratchpad before step 1.
+
+Audit entries keep their shape; `rounds` counts research steps (≤ 6) and
+generation roles are `step` and `answer`.
+
 ### Answer format
 
 `POST /v3/person/ask` takes `{schema_version: 3, question, project_id?}` and
