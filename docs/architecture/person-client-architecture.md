@@ -32,16 +32,16 @@ runtime or automatic Person-request replay.
 
 ## Desktop app
 
-The Electron app in `product/echo-desktop` is the graphical interface on
-macOS; it replaced the retired Swift app. Its person host, an Electron utility
-process, loads this client's `composition.js` and runs the same commands in
-process, as the terminal CLI would. The host is the only process that reads the
-session or holds a token. It sends the app window token-free view models and
-failure codes, never a sign-in URL, grant, or provider body. Each
-account-scoped call is fenced: the host reads status before and after the
-command and refuses the result if the account changed, reporting a write's
-outcome as unknown. A packaged app carries the Person client package produced
-by `tools/pack-person-client.mjs`.
+The Electron app in `product/echo-desktop` is the graphical interface, packaged
+for macOS arm64 and Linux x64; it replaced the retired Swift app. Its person
+host, an Electron utility process, loads this client's `composition.js` and
+runs the same commands in process, as the terminal CLI would. The host is the
+only process that reads the session or holds a token. It sends the app window
+token-free view models and failure codes, never a sign-in URL, grant, or
+provider body. Each account-scoped call is fenced: the host reads status before
+and after the command and refuses the result if the account changed, reporting
+a write's outcome as unknown. A packaged app carries the Person client package
+produced by `tools/pack-person-client.mjs`.
 
 ## Local state authority
 
@@ -65,11 +65,8 @@ must not enter the Person session, CLI output, or package artifact.
 External OIDC establishes the human identity. The Authority binds the verified
 OIDC subject and approved email to an organization principal and membership,
 then issues a rotating Person session family. Each request re-resolves current
-membership/session state on the server.
-
-Legacy installation enrollment and access rows remain readable server-side
-while record and approval bindings are re-keyed. They are not a machine-client
-identity mode and no installation client ships in the product.
+membership/session state on the server. No installation client or
+installation identity mode ships in the product.
 
 ## Owner People interface
 
@@ -213,18 +210,27 @@ decodes that retained response there.
 ## Deliberate context uploads
 
 `person updates submit` saves one explicitly selected UTF-8 file unchanged,
-with `--visibility only-me|team` (default Only me). `status` returns the durable
-receipt and optional enrichment progress. `search` and `read` retrieve original
-uploads under current membership and stored visibility, without Slack approval
-or a model dependency. Content/search releases revalidate the session and audit
-before returning. Unknown submissions require the same request ID and exact
-file, title, and visibility on retry; no local queue or automatic upload exists.
+with `--visibility only-me|team|project` (default Only me; `project` requires
+`--audience-project-id`) and an optional `--project-id` association that does
+not change the audience. `updates submit-v3`, which the desktop app uses, takes
+`--audience only-me|team|project|projects` and independent project ID sets.
+`status` returns the durable receipt and optional enrichment progress. `search`
+and `read` retrieve original uploads under current membership and stored
+audience, without Slack approval or a model dependency. Content/search releases
+revalidate the session and audit before returning. Unknown submissions require
+the same request ID and exact file, title, audience, and project coordinates on
+retry; no local queue or automatic upload exists.
 
 The current bounded text carrier does not decide the context taxonomy. Optional
-LLM search hints remain derived metadata. Existing records/Ask/Sources
-continue to use approved decision records; connecting uploads to those surfaces
-requires a separately qualified retrieval/evidence contract. Shared source
-admission alone does not enable those reads. See the
+LLM search hints remain derived metadata. Uploads never become approved
+decision records; `person records` and the legacy `/v1/person/ask` read approved
+records only. The `/v2/person/ask` route behind `person ask` also retrieves
+authorized uploads and usable document extraction as unapproved original
+evidence, filtered by stored audience and, for project scope, project
+association
+([ADR-0015](../decisions/ADR-0015-global-and-project-scoped-person-ask.md)).
+Generic source admission alone grants no access to raw meeting snapshots or
+pending approvals. See the
 [historical upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
 In the desktop app, **Capture** wraps these commands through the Person

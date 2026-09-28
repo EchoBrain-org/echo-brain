@@ -334,9 +334,8 @@ function baselineFor(plane: Plane): ReadableSearchPlaneBaseline {
   return READABLE_SEARCH_LEXICAL_BASELINE_V2;
 }
 
-function baselineSchemaVersion(plane: Plane): 1 | 2 | 3 {
-  const baseline = baselineFor(plane);
-  return "schema_version" in baseline ? baseline.schema_version : 1;
+function baselineSchemaVersion(plane: Plane): 2 | 3 {
+  return baselineFor(plane).schema_version;
 }
 
 function policyBranch(atom: ReadableSearchAtomV1): SegmentKind {
@@ -2430,17 +2429,11 @@ export function searchReadableSearchGenerationV1(
 }
 
 export {
-  READABLE_SEARCH_CONTENT_BASELINE_V1,
   READABLE_SEARCH_CONTENT_BASELINE_V2,
-  READABLE_SEARCH_FACTS_BASELINE_V2,
   READABLE_SEARCH_FACTS_BASELINE_V3,
-  READABLE_SEARCH_LEXICAL_BASELINE_V1,
   READABLE_SEARCH_LEXICAL_BASELINE_V2,
-  READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V2,
   READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
-  READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
   readableSearchPlaneBaselineSha256,
-  readableSearchPlaneBaselineSha256V1,
 } from "./persistence/baseline.js";
 export {
   READABLE_SEARCH_BM25_B,

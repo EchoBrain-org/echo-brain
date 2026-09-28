@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-PERSON-CLIENT
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
   - ADR-0001
   - ADR-0002
@@ -19,6 +19,7 @@ decision_ids:
   - ADR-0016
   - ADR-0017
   - ADR-0018
+  - ADR-0020
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-RUNTIME-001
@@ -67,8 +68,10 @@ or imply that server-side provider processing is ready. See
 `INV-PERMISSIONS-013` and `FP-PERMISSIONS-001`.
 
 The `person updates` commands submit, inspect, search, and read original text
-uploads. `--visibility only-me|team` selects access at upload; Only me is the
-default. No Slack approval, provider code, background upload, or local queue is
-required. Search and exact reads return only authorized originals; submit/status
-remain content-free. The carrier and optional metadata do not settle the final
-context shape. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).
+uploads. `submit --visibility only-me|team|project` selects access at upload
+(`project` requires `--audience-project-id`); `submit-v3 --audience` also
+accepts `projects`. Only me is the default. No Slack approval, provider code,
+background upload, or local queue is required. Search and exact reads return
+only authorized originals; submit/status remain content-free. The carrier and
+optional metadata do not settle the final context shape. See the
+[Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).

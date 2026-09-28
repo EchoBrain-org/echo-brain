@@ -45,7 +45,7 @@ import {
   RecordRetrievalSourceSnapshotPortV1,
   type RecordRetrievalSourceVerifiedEnvelopeV1,
 } from "../../../../../packages/organization-record/src/retrieve/record-retrieval-source-snapshot-v1.js";
-import { COORDINATES, database, databaseV4, humanAct, policy, processorProvenance, protocolAuthority, receiptFactory, sourceProvenance, type ProtocolAuthority } from "../../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
+import { COORDINATES, database, humanAct, policy, processorProvenance, protocolAuthority, receiptFactory, sourceProvenance, type ProtocolAuthority } from "../../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 
 const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2]);
 const PRIVATE_APPROVAL_PROJECTORS = createRecordPolicyFactProjectorRegistryV1([
@@ -234,7 +234,7 @@ function privateSlackBlockAppendInput(input: {
 }
 describe("Private Slack V4 record append", () => {
   it("accepts the resolver's V2 project consequence through the actual writer and persists its exact grant", async () => {
-    const db = databaseV4();
+    const db = database();
     try {
       const authority = protocolAuthority();
       const approval_id = "apr_resolver_writer_v2";
@@ -355,7 +355,7 @@ describe("Private Slack V4 record append", () => {
   });
 
   it("projects a real V2 project approval into the current-project union and only grants its opted-in exact transcript", async () => {
-    const db = databaseV4();
+    const db = database();
     try {
       const authority = protocolAuthority();
       const approval_id = "private-v2-project";

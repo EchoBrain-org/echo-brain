@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-PROCESSING-ADAPTERS
 created_at: 2026-08-13
-reviewed_at: 2026-08-29
-reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
   - ADR-0003
   - ADR-0004
@@ -46,8 +46,7 @@ processing ports and external capabilities:
 
 - meeting sources;
 - decision processors, including LLM providers;
-- approval surfaces;
-- delivery surfaces; and
+- approval surfaces; and
 - shared provider clients such as Slack.
 
 Selecting composition bundles own external capabilities; provider-neutral

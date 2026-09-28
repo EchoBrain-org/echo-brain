@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-13
-reviewed_at: 2026-08-26
-reviewed_ref: d5b3b13c29e161c5d93f14ce3efdc9b0b818e5dc
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
   - ADR-0012
   - ADR-0001
@@ -27,6 +27,7 @@ decision_ids:
   - ADR-0016
   - ADR-0017
   - ADR-0018
+  - ADR-0020
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -56,20 +57,27 @@ qualification_ids:
 
 ## Responsibility
 
-The single-organization Authority process composes four central workspaces.
-Its hosting account and operator are selected under
+The single-organization Authority process runs a fourteen-workspace dependency
+closure, the set its image copies from the build stage. Its hosting account and
+operator are selected under
 [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md):
 
 | Workspace                    | Owns                                                                         |
 | ---------------------------- | ---------------------------------------------------------------------------- |
 | `organization-authority`     | Organization identity, access, HTTP boundary, and composition                |
+| `organization-authority-kernel` | Authority SQL baselines, persistence adapters, and state lineage          |
+| `organization-processing`    | Provider-neutral meeting processing and admitted-meeting workflow            |
 | `organization-control-plane` | Verified provider connection, Person identity links, and private approval persistence |
 | `organization-record`        | Append-only approved record and deterministic append-side projections        |
 | `organization-retrieval`     | Rebuildable permission-aware retrieval generations                           |
 
-Only `organization-authority` is a process entry point. The other three are
-libraries linked into the Authority runtime. The deployment also includes a
-separate reverse proxy.
+The rest of the closure is the shared `federation-protocol`,
+`organization-protocol` and `organization-api` contracts plus the composed
+providers: `providers/granola`, `providers/openrouter`,
+`providers/synthetic-demo`, `providers/slack/server` and
+`providers/slack/client`. Only `organization-authority` is a process entry
+point; the other thirteen are libraries linked into the Authority runtime. The
+deployment also includes a separate reverse proxy.
 
 ## Data authority
 
@@ -110,8 +118,8 @@ its complete compatible state generation as one qualification boundary.
 
 ## Original Person upload custody
 
-Authority retains authenticated original-text uploads with their selected
-audience and an immutable receipt. Upload-specific read/search verifies the
+Authority retains authenticated original text notes and document files with
+their selected audience and an immutable receipt. Upload-specific read/search verifies the
 current reader, enforces that audience, and audits before release. Optional
 search enrichment cannot change permissions or source text. The V1 upload
 route is retired; V1 originals already retained keep their Only me/Team
@@ -120,5 +128,5 @@ protected Authority custody/backups; they are not appended as approved decision
 records. See the [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md)
 for provisional transport limits, indefinite retention, and the offline V5 copy.
 The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persistence.md)
-describes the original V7 project storage. The current Authority is V9, and
-its project routes and client operations are live.
+describes the original V7 project storage. The current Authority is V10, which
+accepts only fresh state, and its project routes and client operations are live.

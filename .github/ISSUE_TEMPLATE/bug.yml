@@ -16,7 +16,7 @@ body:
     attributes:
       label: Area
       options:
-        - Mac client
+        - Desktop or CLI client
         - Central Authority
         - CI or release
         - Repository or documentation

@@ -8,11 +8,11 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 77b7744b46a912b9154c218b3a036e8552d7180e
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 normative: MUST
-enforcement_status: partial
-enforcement_scope: Legacy Slack app-identity promotion
+enforcement_status: retired
+enforcement_scope: None; the legacy Slack app-identity promotion was deleted
 failure_pattern_ids:
   - FP-IDENTITY-004
 ---
@@ -34,5 +34,12 @@ provider transition, and compatible prior tuple.
 
 ## Enforcement and verification
 
-The reviewed Slack migration and owner-authorized re-onboarding path implement
-this rule for historical null app IDs. It is not a generic migration engine.
+Retired. The Slack app-identity promotion migration, its integrations
+repository and re-onboarding path, and their tests were deleted with the
+retired server lineage in `59ee182b` (lean: delete retired server lineage).
+The clean control-plane baseline opens without a migration ledger, and the
+current Slack tool-connection contract requires `provider_app_id`, so no
+historical null app ID remains to repair and nothing current enforces this
+rule. The statement and scope above are kept as the historical rule. A future
+required identity field over existing connections reinstates it with new
+enforcement and proof.

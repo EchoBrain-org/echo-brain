@@ -53,9 +53,10 @@ function search(project_id: typeof PROJECT_ALPHA | typeof PROJECT_BETA) {
 }
 
 describe('document project associations', () => {
-  it('refuses V8 at both current runtime adapters before attempting V10 queries', () => {
+  it('refuses a pre-V10 schema header at both current runtime adapters before attempting V10 queries', () => {
     const db = new Database(':memory:'); databases.push(db); db.pragma('foreign_keys=ON');
-    db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v8.sql', import.meta.url), 'utf8'));
+    db.exec(readFileSync(new URL('../../../packages/organization-authority-kernel/baselines/authority-baseline-v10.sql', import.meta.url), 'utf8'));
+    db.pragma('user_version = 9');
     expect(() => new SqlitePersonDocumentRepositoryV1(db)).toThrow('Documents require Authority V10');
     expect(() => new SqliteProjectContextRepositoryV1(db)).toThrow('Project context requires Authority V10');
   });

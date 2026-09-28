@@ -1,8 +1,8 @@
 # Organization Authority release and update procedure
 
 This directory contains the small release boundary used after the first live
-organization release. It selects exact artifacts and provides explicit, state-preserving
-historical V8-to-V9 and V5-to-V6 staging transitions. It does not manage client fleets.
+organization release. It selects exact artifacts, never migrates state, and does
+not manage client fleets.
 
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
@@ -12,20 +12,30 @@ retrieval facts V3, retrieval content/lexical V2, and six-role V2 root lineage.
 For populated state, `stage` pulls the immutable
 candidate and runs its state-lineage and admitted-processor verifiers in an
 isolated read-only container before any runtime, configuration, or state
-mutation. The named [V5-to-V6 staging migration](#state-preserving-v5-to-v6-staging-migration)
-preserves an accepted V5 organization only for a historical V6 candidate. It
-cannot prepare state for V10. The explicit [V8-to-V9 staging migration](#state-preserving-v8-to-v9-staging-migration)
-preserves an accepted V8 organization for a historical V9 multi-project upload release.
-Neither operation prepares the combined project-settings and meeting-approval
-V10 release. This combined version uses fresh databases: the founder confirmed
-that existing development data is disposable and there are no live users.
-The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
+mutation. V10 is fresh-state only: the founder confirmed that existing
+development data is disposable and there are no live users, so the earlier
+pre-V10 staging conversions and offline copiers were removed (git history keeps
+them). The historical project-context sprint used fresh V7 state and PC-06 reset/reseed,
 as described in the [PC-01 handoff](../../docs/product/2026-09-21-project-context-pc01-persistence.md).
-Other incompatible baselines require an
-explicit migration design or an authorized reset. For an authorized reset with no live users,
+An incompatible baseline requires a new, explicitly designed migration or an
+authorized reset. For an authorized reset with no live users,
 run `onboard-clean-v1.sh
 replace-rehearsal --confirm-no-live-users`, then prepare the organization again
 with the new release record and matching profile. Ordinary `stage` never migrates an older baseline.
+
+Historical baseline verification now uses Git history. The retention statements
+in [ADR-0017](../../docs/decisions/ADR-0017-project-meeting-approval-v1.md)
+and [ADR-0018](../../docs/decisions/ADR-0018-project-settings-v1.md) describe
+the checkout before this cleanup; the exact SQL and loaders remain available at
+commit `83c8eb63aed78ba760678294ecf7fef863743e06`. They are no longer shipped
+in the current packages or image.
+
+Before installing this tooling over an older host wrapper, confirm that no
+staged candidate has a migration operation under
+`clean-data/release/state-v5-to-v6/` or `state-v8-to-v9/`. The current wrapper
+does not read those journals. An outstanding migration must be reconciled
+using its matching historical tooling before replacement; preserve its state
+and evidence. Source cleanup does not perform that host transition.
 
 ## Release record
 
@@ -244,120 +254,11 @@ recovery as unconfirmed.
 
 `./update-clean-v1.sh status` inspects the actual running Authority container
 and its image digest, not only `.env`; a stopped or drifted runtime fails. It
-does not query SQLite or print credentials. A change that needs a schema
-migration requires a separately named operation. The supported transitions
-are the historical V8-to-V9 and V5-to-V6 migrations below.
+does not query SQLite or print credentials. No state migration operation
+exists; a schema change requires fresh state.
 If persisted state lacks the candidate's exact V10/V3/V4 databases, current retrieval schemas, and
 V2 root lineage, `stage` refuses before activating or recording the candidate. It does
 not attempt to repair, infer, or migrate the state.
-
-### State-preserving V8-to-V9 staging migration
-
-Use `plan --action stage-v8-to-v9` through the reviewed release CLI after
-installing the merged migration tooling. It requires an already accepted,
-healthy staging host with exact V8 state and a V9 candidate. Supply the same
-accepted release, candidate release and candidate runtime-profile inputs as
-`stage`. Ordinary `stage` refuses V8 before publishing a candidate. No command
-implicitly changes the database version.
-
-```sh
-npm run authority:staging-release -- plan \
-  --action stage-v8-to-v9 \
-  --accepted-release /absolute/private/releases/accepted-v8.json \
-  --release /absolute/private/releases/candidate-v9.json \
-  --runtime-profile /absolute/private/releases/candidate-profile.json \
-  --output /absolute/private/releases/stage-v8-to-v9-operation.json
-npm run authority:staging-release -- execute \
-  --receipt /absolute/private/releases/stage-v8-to-v9-operation.json
-```
-
-The wrapper verifies the accepted tuple and complete lineage, stops Authority
-and proxy, and copies their stopped state. The exact candidate image invokes
-`copyAuthorityV8ToV9` with a read-only input and an empty output. It rebuilds
-only `authority.sqlite`, preserving existing rows while representing retained
-upload sharing and project associations in V9. The other five roles, root
-manifest, keys and sidecars are copied unchanged. The candidate's complete
-lineage and immutable processor-admission verifiers must accept the copy
-before atomic activation. The migration does not widen an upload's audience.
-
-The existing stopped-copy bounds apply: at most 4,096 entries and 1 GiB of
-source files, with twice the source size plus 64 MiB free. Symlinks, hardlinks,
-special files, unexpected ownership, cross-filesystem copies and files writable
-by others are refused. The private release-bound journal lives at
-`clean-data/release/state-v8-to-v9/<candidate-release-id>/`; its original
-`accepted-state` snapshot is retained through promotion. The V5-to-V6 and
-V8-to-V9 journals are distinct, and conflicting journals for one candidate are
-refused. Interrupted rename recovery uses recorded directory identities.
-
-Continue the normal canary, human Slack approval, exact candidate-client reads,
-human final release decision and promotion gates. A failed conversion, verifier
-or candidate start restores the original V8 directory and accepted tuple, then
-verifies the accepted runtime before claiming recovery. Explicit `rollback`
-does the same. **Rollback restores the pre-migration state:** candidate-period
-writes are retained in `failed-state`, not merged into V8. Keep normal user
-traffic out of this staging qualification window.
-
-An incomplete or unsafe journal blocks status, canary and promotion. Preserve
-the candidate marker and all journals, snapshots and locks; reconcile the
-existing remote command before recovery. Unknown state or unconfirmed runtime
-recovery requires investigation. This lane does not reset data, replace the
-host, authorize a final release, or permit a production transition.
-
-### State-preserving V5-to-V6 staging migration
-
-This retained operation applies to V5 and V6 release artifacts only. A current
-V9 candidate refuses its V6 output; it is not the project-context rollout path.
-
-Use `plan --action stage-v5-to-v6` through the reviewed release CLI after
-installing the merged migration tooling. Supply the same accepted release,
-candidate release and candidate runtime-profile inputs as `stage`. The
-installed host action is:
-
-```sh
-./update-clean-v1.sh stage-v5-to-v6 \
-  --release /absolute/private/candidate-release.json \
-  --runtime-profile /absolute/private/candidate-runtime-profile.json
-```
-
-This action is restricted to an already accepted, healthy
-`authority-staging.echobrain.org`. It preserves the organization, identities,
-sessions, records, pending approvals, keys, provider configuration and telemetry.
-It verifies the accepted tuple and lineage, stops Authority and proxy, and
-copies the stopped state. The exact candidate image's existing offline
-`copyAuthorityV5ToV6` copier rebuilds only `authority.sqlite`; the other five
-roles, root manifest, keys and sidecars are copied unchanged. The input database
-is read-only. The copier requires the exact pinned V5 schema, and the candidate's
-complete lineage and processor-admission verifiers must accept the copied state
-before it becomes active. Ordinary `stage` still refuses V5.
-
-The filesystem step allows at most 4,096 entries and 1 GiB of source files,
-requires twice the source size plus 64 MiB of free space, and refuses symlinks,
-hardlinks, special files, writable-by-others files, different filesystems or
-unexpected ownership. The stopped service UID/GID comes from the validated
-accepted environment. A root-owned, release-bound journal under
-`clean-data/release/state-v5-to-v6/<candidate-release-id>/` records the original
-and converted directory identities. Atomic renames retain the original as
-`accepted-state` and activate the verified copy. No state directory is deleted.
-
-After successful activation, follow the normal canary, human Slack approval,
-exact candidate-client reads, human final release decision and promotion gates.
-Promotion retains the original snapshot. The migration does not authorize a
-reset, infrastructure change, production transition or final release decision.
-
-On a confirmed conversion or startup failure, the wrapper stops the candidate,
-restores the original directory and accepted tuple, and checks the accepted
-runtime before reporting recovery. Explicit `rollback` uses the same path.
-**Rollback restores the pre-migration state:** writes made while testing V6 are
-retained in `failed-state` for inspection, but are not merged back into V5.
-Do not admit normal user traffic while evaluating this staging candidate.
-
-An incomplete journal blocks successful status, canary and promotion. Keep the
-candidate marker and recover with `rollback` after confirming the previous
-remote command has ended and following the existing operation-lock recovery
-procedure. Both rename interruption windows are recoverable by recorded inode
-identity; unknown replacements are refused. Never delete or edit a journal,
-state snapshot or lock to force progress. If accepted runtime recovery remains
-unconfirmed, stop and retain all evidence. Snapshot cleanup is separate work.
 
 ### Environment drift before staging
 
@@ -542,8 +443,6 @@ is installed; the new installed tools must match the executing reviewed source.
 | `inspect-install` | Checks the actual install guards and old-or-new reviewed tooling hashes without replacing tools or invoking runtime behavior. Returns a strictly allowlisted readiness/refusal diagnostic. |
 | `status` | Fresh installed-wrapper runtime check, not a cached polling receipt. |
 | `stage` | No staged candidate; uses exact candidate/profile. A drifted environment returns `environment_drift`. |
-| `stage-v8-to-v9` | Explicit stopped-state copy and migration on the accepted V8 staging host; retains original state for rollback. Same inputs as `stage`. |
-| `stage-v5-to-v6` | Explicit stopped-state copy and migration on the accepted V5 staging host; retains original state for rollback. Same inputs as `stage`. |
 | `canary` | Requires the exact staged candidate; stops for the human to approve its private Slack card. `delivery_pending` is safe to retry with a new canary operation after the first invocation has definitively completed. |
 | `rollback` | Requires the exact staged candidate and unchanged accepted record; existing wrapper recovery semantics apply. |
 | `promote` | Requires the exact staged candidate, its stored canary receipt, successful exact-client checks, and the separate final founder authorization below. |
@@ -801,8 +700,9 @@ Use the existing operator lane's release/image evidence and correlated request
 audit or telemetry to identify that Authority independently.
 
 The candidate implements [ADR-0012](../../docs/decisions/ADR-0012-person-public-response-privacy.md).
-Its matching clients decode `echo-clean-person-record-search-v2` and
-`echo-clean-person-answer-v2` (schema 2); older exact-shape clients are incompatible.
+Current clients decode `echo-clean-person-record-search-v2` and, from
+`person ask`, `echo-clean-person-answer-v3` (schema 3); older exact-shape
+clients are incompatible.
 Select clients by committed source and tarball SHA-256, not a reused product version.
 The implementation contract is accepted; coordinated live qualification and
 the exact candidate's release decision remain required.
