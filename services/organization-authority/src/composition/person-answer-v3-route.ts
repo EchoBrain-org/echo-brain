@@ -12,7 +12,7 @@ import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organizat
 import type { EvidenceDeskResultV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
 import type { PersonOriginalContextEvidenceDeskPortV1, PersonAskScopeV2 } from "../application/ports/person-original-context-retrieval-v1.js";
 import type { PersonEvidenceDeskRecordsV1 } from "./person-record-search-route.js";
-import { createPersonEvidenceDeskV1 } from "./person-evidence-desk-v1.js";
+import { createPersonEvidenceDeskV1, type CreatePersonEvidenceDeskV1Options } from "./person-evidence-desk-v1.js";
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import type { PersonAnswerV3HttpApplication } from "../presentation/person-answer-v3-http-application.js";
 import type { PersonIdentitySessionApplication } from "../application/person-identity-sessions.js";
@@ -30,6 +30,12 @@ export interface CreatePersonAnswerV3RouteOptions {
   readonly audit: SqlitePersonAgenticAskAuditV1;
   /** Server-only experiment; V3 remains behaviorally unchanged unless enabled. */
   readonly small_scope_shortcut?: boolean;
+  /**
+   * The asking Person's live Slack reads, when they have connected Slack (RFC-0003).
+   * Returning undefined leaves Slack out of that request. Only Ask uses it; the
+   * evidence HTTP doors stay Echo-only.
+   */
+  readonly slack_for?: (asker: { readonly principal_id: string; readonly membership_id: string }) => CreatePersonEvidenceDeskV1Options["slack"] | undefined;
 }
 
 function scopeOf(request: { readonly project_id?: string }): PersonAskScopeV2 {
@@ -38,12 +44,13 @@ function scopeOf(request: { readonly project_id?: string }): PersonAskScopeV2 {
     : Object.freeze({ kind: "project" as const, project_id: request.project_id });
 }
 
-function deskFor(options: CreatePersonAnswerV3RouteOptions, access_token: string, request: { readonly project_id?: string }) {
+function deskFor(options: CreatePersonAnswerV3RouteOptions, access_token: string, request: { readonly project_id?: string }, slack?: CreatePersonEvidenceDeskV1Options["slack"]) {
   return createPersonEvidenceDeskV1({
     access_token,
     scope: scopeOf(request),
     originals: options.originals,
     records: options.records,
+    ...(slack === undefined ? {} : { slack }),
   });
 }
 
@@ -63,7 +70,8 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
   return Object.freeze({
     async ask(input: { readonly access_token: string; readonly request: PersonAnswerRequestV3; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4> {
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
-      const desk = deskFor(options, input.access_token, input.request);
+      const slack = options.slack_for?.({ principal_id: authorization.principal_id, membership_id: authorization.membership_id });
+      const desk = deskFor(options, input.access_token, input.request, slack);
       return createAgenticAskV1({
         desk,
         model: options.model,

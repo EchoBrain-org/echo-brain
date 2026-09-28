@@ -291,6 +291,7 @@ export const ANSWER_PROMPT = [
   "- Every sentence cites the ids that support it, and only those. Use only the evidence; never guess or add outside knowledge.",
   "- Keep each fact's owner, date and status with it.",
   "- Approved meeting records and documents are the source of truth. Slack shows what was discussed, not what was decided: say so (\"discussed in #channel on Sep 26\") unless the message itself records a decision and who made it.",
+  "- Never state a Slack claim as settled, including in the lead sentence: if only Slack says something changed, write that it may change or is under discussion (\"at risk: the vendor said in #hw-dvt that fixtures may slip\"), not that it has.",
   "- If sources disagree, say both and where each comes from, for example: \"The Sep 24 review approved Oct 12, but in #hw-dvt on Sep 26 the vendor said Oct 16.\" Do not pick one, and do not suggest editing any source.",
   "- A proposal, open question or discussion is not a decision or a completed commitment.",
   "- The research notes are hints and may be incomplete; read the evidence itself.",

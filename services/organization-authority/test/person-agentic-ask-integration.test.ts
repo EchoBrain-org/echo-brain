@@ -24,7 +24,7 @@ type Prompt = {
   plan?: { part?: number; question: string }[];
   evidence?: Listing[];
 };
-function fixture(options: { readonly small_scope_shortcut?: boolean } = {}) {
+function fixture(options: { readonly small_scope_shortcut?: boolean; readonly slack_for?: (asker: { readonly principal_id: string; readonly membership_id: string }) => undefined } = {}) {
   const database = projectContextDatabase(); databases.push(database);
   database.prepare(`INSERT INTO authority_projects_v1
     (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
@@ -83,6 +83,7 @@ function fixture(options: { readonly small_scope_shortcut?: boolean } = {}) {
     model, generation: { generation_adapter_id: "fixture", planner_model: "unused", answer_model: "fixture", timeout_ms: 1000 },
     audit: new SqlitePersonAgenticAskAuditV1(database),
     ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+    ...(options.slack_for === undefined ? {} : { slack_for: options.slack_for }),
   });
   const ask = (access_token = "owner") => route.ask({ access_token, request: { schema_version: 3, question: "Summarize this project", project_id: PROJECT_ALPHA } });
   return {
@@ -114,6 +115,14 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(body.response_sha256).toBe(canonicalSha256(answer)); expect(body.principal_id).toBe(OWNER.principal_id);
     expect(body).toMatchObject({ model_calls: 4, rounds: 3 }); expect(auditRow(f.database)!.body_json).not.toContain("October");
     for (const prompt of f.prompts) expect(prompt).not.toMatch(/desk_[a-f0-9]{16}|source:[a-f0-9]{64}/);
+  });
+
+  it("binds live Slack to the authenticated asker, and answers from Echo when they have not connected it", async () => {
+    const askers: { principal_id: string; membership_id: string }[] = [];
+    const f = fixture({ slack_for: asker => { askers.push(asker); return undefined; } }); f.upload("Atlas plan", "The launch window is October.");
+    const answer = await f.ask();
+    expect(askers).toEqual([{ principal_id: OWNER.principal_id, membership_id: OWNER.membership_id }]);
+    expect(answer.outcome).toBe("answered");
   });
 
   it("keeps private source text out of another member's research and marks the owner's statements private", async () => {

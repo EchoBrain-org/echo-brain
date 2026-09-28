@@ -120,6 +120,8 @@ export interface PersonEvidenceDeskItemV1 {
   readonly label: string;
   readonly visibility: PersonEvidenceVisibilityV1;
   readonly attributes?: PersonEvidenceAttributesV1;
+  /** YYYY-MM-DD when the source knows the date (Slack messages). */
+  readonly occurred_at?: string;
   readonly receipt_sha256: `sha256:${string}`;
 }
 
@@ -301,7 +303,8 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV4[]): Per
 
 function deskItem(value: unknown): PersonEvidenceDeskItemV1 {
   const input = object(value, 'Evidence desk item');
-  assertExactKeys(input, ['id', 'citation', 'kind', 'label', 'visibility', 'receipt_sha256', ...(Object.hasOwn(input, 'text') ? ['text'] : []), ...(Object.hasOwn(input, 'attributes') ? ['attributes'] : [])], 'Evidence desk item');
+  assertExactKeys(input, ['id', 'citation', 'kind', 'label', 'visibility', 'receipt_sha256', ...(Object.hasOwn(input, 'text') ? ['text'] : []), ...(Object.hasOwn(input, 'attributes') ? ['attributes'] : []), ...(Object.hasOwn(input, 'occurred_at') ? ['occurred_at'] : [])], 'Evidence desk item');
+  if (Object.hasOwn(input, 'occurred_at') && (typeof input.occurred_at !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.occurred_at))) fail('Evidence desk item occurred_at is invalid');
   text(input.id, 'Evidence desk item id', 512);
   evidenceKind(input.kind, 'Evidence desk item kind');
   text(input.label, 'Evidence desk item label', PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
@@ -320,7 +323,7 @@ function deskItem(value: unknown): PersonEvidenceDeskItemV1 {
   }
   const cited = evidenceCitation(input.citation);
   if ((cited.kind === 'slack_message') !== (input.kind === 'slack_message')) fail('Evidence desk item kind is inconsistent');
-  return Object.freeze({ id: input.id as string, citation: cited, kind: input.kind, ...(Object.hasOwn(input, 'text') ? { text: input.text as string } : {}), label: input.label as string, visibility: input.visibility, ...(attributes === undefined ? {} : { attributes }), receipt_sha256: input.receipt_sha256 as `sha256:${string}` });
+  return Object.freeze({ id: input.id as string, citation: cited, kind: input.kind, ...(Object.hasOwn(input, 'text') ? { text: input.text as string } : {}), label: input.label as string, visibility: input.visibility, ...(attributes === undefined ? {} : { attributes }), ...(Object.hasOwn(input, 'occurred_at') ? { occurred_at: input.occurred_at as string } : {}), receipt_sha256: input.receipt_sha256 as `sha256:${string}` });
 }
 
 function boundedRequest<T>(result: T, label: string): T {
