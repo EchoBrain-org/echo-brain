@@ -601,9 +601,8 @@ is conclusively stopped. On the EC2 Authority host:
 
 After onboarding, use the exact-record replacement and checksum client reinstall
 procedure in [the clean-v1 release loop](../release/README.md), including
-[update-clean-v1.sh](./update-clean-v1.sh). Ordinary `stage` supports baseline-preserving `clean-v1` replacements. The
-separate [V5-to-V6 staging migration](../release/README.md#state-preserving-v5-to-v6-staging-migration)
-preserves accepted V5 state with a retained rollback snapshot. Client updates
+[update-clean-v1.sh](./update-clean-v1.sh). Ordinary `stage` supports baseline-preserving `clean-v1` replacements
+and never migrates state; a schema change requires fresh state. Client updates
 remain explicit. This routine path preserves the existing Google identity,
 Slack link and configuration, provider credentials, private-DM assignment, and
 Authority data; do not rerun initial-owner onboarding for an ordinary update. Use

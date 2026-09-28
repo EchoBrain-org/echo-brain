@@ -70,8 +70,8 @@ While it runs, the desktop app offers **Check status**, **Try again** and **Star
 
 ## Staging and validation
 
-Historical V7 SQL remains unchanged. New bootstrap uses a pinned additive V8 baseline. The founder confirmed the staging data is disposable and there are no live users, so retaining or migrating its old data is not a prerequisite for SCOUT qualification. A fresh exact V8 environment is the target through the existing operator lane; ordinary startup must never reset state implicitly.
+Historical V7 SQL remained unchanged. New bootstrap used a pinned additive V8 baseline. The founder confirmed the staging data is disposable and there are no live users, so retaining or migrating its old data is not a prerequisite for SCOUT qualification. A fresh exact V8 environment is the target through the existing operator lane; ordinary startup must never reset state implicitly.
 
-The optional offline V7-to-V8 copier validates source schema and lineage, preserves retained rows, sessions, sealed values and audits, and creates a separate validated V8 snapshot. It does not activate that snapshot on a host and is not a blocker for fresh staging. Exact candidate release, matched client/Authority installation and a bounded live rehearsal remain required.
+The optional offline V7-to-V8 copier was later removed with the other pre-V10 lanes, since current releases accept fresh V10 state only. Exact candidate release, matched client/Authority installation and a bounded live rehearsal remain required.
 
 Focused proofs cover larger Markdown, exact-limit rejection, real PDF/DOCX extraction, byte-exact download, immutable retry, shared-custody departure, new-member history, private association, minimal receipt recovery, keyset continuation, cross-operation request conflicts, project scope, bounded extraction, restart leases and interrupted transfer. The SCOUT kickoff acceptance must additionally run with four separate accounts on the installed client and target Authority before declaring the simulation ready. Link/video capture, OCR, legacy `.doc`, document Ask and cross-document semantic analysis remain outside this release.

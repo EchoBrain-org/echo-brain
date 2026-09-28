@@ -30,7 +30,6 @@ import {
   READABLE_SEARCH_FACTS_BASELINE_V3,
   READABLE_SEARCH_LEXICAL_BASELINE_V2,
   READABLE_SEARCH_FACTS_BASELINE_SCHEMA_VERSION_V3,
-  READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
   READABLE_SEARCH_BM25_B,
   READABLE_SEARCH_BM25_K1,
   READABLE_SEARCH_SCORE_SCALE,
@@ -455,8 +454,7 @@ function lineagePlane(
     "retrieval-facts" | "retrieval-content" | "retrieval-lexical"
   >,
   schemaSha256: Sha256Digest,
-  databaseSchemaVersion: 1 | 2 | 3 =
-    READABLE_SEARCH_PLANE_BASELINE_SCHEMA_VERSION_V1,
+  databaseSchemaVersion: 2 | 3,
 ): ReadableSearchLineagePlaneV1 {
   const body = validateStateLineageDatabaseManifestV1({
     schema_version: 1,

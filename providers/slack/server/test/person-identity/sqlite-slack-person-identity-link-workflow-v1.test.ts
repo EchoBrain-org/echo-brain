@@ -320,14 +320,6 @@ describe("Person Slack identity-link workflow", () => {
     for (const secret of ["provider-private-body", PRINCIPAL_ID, MEMBERSHIP_ID, "U12345679", CODE, TOKEN]) expect(output).not.toContain(secret);
   });
 
-  it("reports an old challenge schema as unavailable when constructed directly", async () => {
-    const context = await setup();
-    context.database.exec("DROP TRIGGER organization_person_slack_link_challenges_terminal_update; ALTER TABLE organization_person_slack_link_challenges DROP COLUMN dm_channel_id; ALTER TABLE organization_person_slack_link_challenges DROP COLUMN recipient_user_id");
-    expect((await context.application.tools("bearer")).tools[0]).toMatchObject({ availability: "unavailable", personal_status: "unavailable" });
-    await expect(context.application.begin(beginRequest(), "bearer")).rejects.toMatchObject({ code: "conflict" });
-    expect(context.slack.postIdentityLinkChallenge).not.toHaveBeenCalled();
-  });
-
   it("requires current authentication for tools status", async () => {
     const context = await setup(() => { throw new Error("synthetic denied"); });
     await expect(context.application.tools("bearer")).rejects.toMatchObject({ code: "unavailable" });

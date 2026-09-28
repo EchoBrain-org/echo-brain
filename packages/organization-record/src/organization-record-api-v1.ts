@@ -1,10 +1,7 @@
 /** Public API for record storage and retrieval-source composition. */
 export {
-  applyOrganizationRecordLogBaselineV3,
   applyOrganizationRecordLogBaselineV4,
-  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V3,
   ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
-  organizationRecordLogBaselineSha256V3,
   organizationRecordLogBaselineSha256V4,
 } from "./persistence/record-log-baseline.js";
 export { openOrganizationRecordDatabase } from "./persistence/open-organization-record-database.js";
