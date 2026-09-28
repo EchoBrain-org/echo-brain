@@ -8,11 +8,11 @@ component_ids:
   - CMP-PROTOCOLS-CRYPTO
   - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 280db80479a39ba51708b5923cc4b3eb3cfcd7ef
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 origin: review
 evidence_status: reproduced
-status: mitigating
+status: retired
 severity: high
 first_observed: 2026-08-12
 invariant_ids:
@@ -30,6 +30,20 @@ regression_test_refs:
 ---
 
 # FP-IDENTITY-002: Lease duration changes without protocol negotiation
+
+## Retirement
+
+Retired. Organization access leases no longer exist, so there is no lease
+duration to change. The Authority issuance path was deleted in `59ee182b`
+(lean: delete retired server lineage). The signed lease request contract, its
+V2 opt-in, and the linked request test were deleted in `9f181e15` (lean:
+delete retired machine protocol). The Mac coordinator that accepted leases,
+and its linked test, were deleted in `a254232c`. No path at the reviewed ref
+issues, accepts, or verifies an access lease.
+[`INV-IDENTITY-002`](../invariants/INV-IDENTITY-002-versioned-lease-duration.md)
+is retired with it. The pinned regression refs remain historical proof at
+their commit. The pattern below is kept as history. It applies again if a
+client-held access lifetime returns.
 
 ## Plain-English summary
 
@@ -57,5 +71,6 @@ Do not bind a short signed request to an unrelated longer state.
 
 Use signed versioned opt-in, preserve V1 behavior, verify history against a
 stable protocol maximum, and deploy the Authority before opting in clients.
-Tests cover old clients, request binding, policy lowering, and rollback. V2
-passed local and CI checks but was not issued in the stopped Job A proof.
+The pinned tests covered old clients, request binding, policy lowering, and
+rollback. V2 passed local and CI checks but was not issued in the stopped Job
+A proof. No qualification record shows V2 qualified live before its deletion.
