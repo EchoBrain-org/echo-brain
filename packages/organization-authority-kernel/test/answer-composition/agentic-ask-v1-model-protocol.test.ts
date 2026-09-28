@@ -7,6 +7,7 @@ import {
   parseAnswer,
   parseStep,
   stepSchema,
+  stripEvidenceIds,
 } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 
 type Schema = Readonly<Record<string, any>>;
@@ -90,6 +91,13 @@ describe("agentic Ask model protocol parity", () => {
     expect([...step.parts[0]!.question].length).toBeLessThanOrEqual(400);
     expect([...step.parts[0]!.needs[0]!.need].length).toBeLessThanOrEqual(200);
     expect([...step.parts[0]!.notes].length).toBeLessThanOrEqual(800);
+  });
+
+  it("keeps evidence ids out of the prose and allows ten sentences", () => {
+    expect(stripEvidenceIds("The contact was verified on Sep 8 (E25), and the addendum is unsigned [E27, E3].")).toBe("The contact was verified on Sep 8, and the addendum is unsigned.");
+    expect(stripEvidenceIds("Model E12 ships in October (e4 and E5).")).toBe("Model E12 ships in October.");
+    const many = parseAnswer({ sentences: Array.from({ length: 12 }, (_, index) => ({ text: `Fact ${index}.`, evidence: ["E1"] })), not_found: [] });
+    expect(many.sentences).toHaveLength(10);
   });
 
   it("accepts common id spellings and ignores the rest", () => {

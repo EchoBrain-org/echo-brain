@@ -153,4 +153,14 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(() => validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation: slack })).toThrow('Ask citation kind is invalid');
     expect(validatePersonEvidenceSearchRequestV1({ schema_version: 1, query: 'fixtures', kinds: ['decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'] }).kinds).toHaveLength(6);
   });
+
+  it('allows up to ten statements in a part (RFC-0003) and rejects more', () => {
+    const response = (count: number) => ({
+      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+      citations: [{ citation, kind: 'decision', label: 'Launch review', visibility: 'team' }],
+      parts: [{ question: 'What is the plan?', status: 'answered', statements: Array.from({ length: count }, (_, index) => ({ text: `Fact ${index}.`, citation_indexes: [0], private: false })) }],
+    });
+    expect(validatePersonAnswerResponseV4(response(10)).parts[0]!.statements).toHaveLength(10);
+    expect(() => validatePersonAnswerResponseV4(response(11))).toThrow('Ask response part is invalid');
+  });
 });

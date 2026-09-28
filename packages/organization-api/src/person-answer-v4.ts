@@ -13,6 +13,8 @@ import {
 } from './validation.js';
 
 /** Additive Agentic Ask endpoint. V1 and V2 Ask routes remain unchanged. */
+/** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
+export const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
 export const PERSON_ANSWER_PATH_V3 = '/v3/person/ask';
 export const PERSON_EVIDENCE_SEARCH_PATH_V1 = '/v3/person/evidence/search';
 export const PERSON_EVIDENCE_OPEN_PATH_V1 = '/v3/person/evidence/open';
@@ -289,7 +291,7 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV4[]): Per
   const input = object(value, 'Ask response part');
   assertExactKeys(input, ['question', 'status', 'statements', ...(Object.hasOwn(input, 'gap') ? ['gap'] : []), ...(Object.hasOwn(input, 'records') ? ['records'] : [])], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
-  if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || input.statements.length > 5) fail('Ask response part is invalid');
+  if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements) || input.statements.length > PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4) fail('Ask response part is invalid');
   if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', 2 * 1024, true);
   if (Object.hasOwn(input, 'records') && (!Array.isArray(input.records) || input.records.length > 40)) fail('Ask response part records is invalid');
   return Object.freeze({

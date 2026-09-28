@@ -266,8 +266,12 @@ the question.
 ### Answer
 
 **The model's output.** One call returns
-`{ sentences: [{ text, evidence[] }], not_found[] }`, with at most five
-sentences (the V4 bound on statements per part).
+`{ sentences: [{ text, evidence[] }], not_found[] }`, with at most ten
+sentences. This is the V4 bound on statements per part, raised from five: in
+the first smoke run a five-sentence cap made the writer list facts that
+research had found as "not found". The prompt asks for 2 to 6 sentences
+usually, and up to 10 when the question asks several things. Code removes
+evidence ids that leak into sentence text.
 
 **What code does with it.**
 
@@ -363,6 +367,9 @@ There is no authority field.
 - `PersonAnswerResponseV4` gains the `slack_message` citation kind. It is
   emitted only when the asker has connected Slack. Clients render it as a
   link chip.
+- `PersonAnswerResponseV4` allows up to 10 statements per part instead of 5.
+  Clients that validate with an older `@echo-brain/organization-api` reject
+  longer answers, so the desktop client updates with the server.
 - Audit rows keep their shape. `rounds` is at most 10.
 - The desk port changes are additive. The A2 loop code is replaced, not kept
   side by side. Git history holds it.
