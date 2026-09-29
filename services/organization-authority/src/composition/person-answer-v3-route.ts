@@ -7,6 +7,7 @@ import {
   type PersonEvidenceSearchRequestV1,
 } from "@echo-brain/organization-api";
 import { AgenticAskDeadlineErrorV1, createAgenticAskV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { classifyAskJourneyFailureV1, type AskJourneyFailureV1, type AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
 import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
@@ -158,6 +159,10 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
         // cancel), the answer call, the final fence or the audit.
         journey?.failOpen(V3_STAGES, researchStartedAt, input.signal?.aborted === true ? { failure_class: "cancelled", retryable: false } : askFailure(error));
         journey?.terminate(error, journeyStartedAt);
+        // The audit and journey retain timeout; the existing client code permits a manual retry.
+        if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) {
+          throw new AuthorityOperationError("unavailable", "Ask deadline exhausted");
+        }
         throw error;
       }
     },

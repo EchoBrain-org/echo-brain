@@ -98,7 +98,8 @@ const CONTEXT_MARGIN = 0.1;
 const MAX_SEEN_ENTRIES = 300;
 const OUTPUT_TOKENS = Object.freeze({ step: 1_500, answer: 1_500 } as const);
 const NOT_FOUND_GAP = "I couldn't find this in the sources you can access.";
-const RECORDS_GAP = "I found these records, but could not write a verified summary in time.";
+const RECORDS_GAP = "I found these records, but could not write a verified summary.";
+const INCOMPLETE_SEARCH_GAP = "I couldn't complete the search. Please try again.";
 
 /** Scratchpad bytes that fit beside a system prompt and an output reserve in the model's context window. */
 export function agenticAskContextBudgetBytesV1(contextTokens: number | undefined, systemPrompt: string, outputTokens: number): number {
@@ -115,9 +116,9 @@ export class AgenticAskDeadlineErrorV1 extends Error {
   }
 }
 
-/** A provider produced no usable value. `retry` is true only for invalid output. */
+/** Recovery stays inside this request: repeat, repair the output, or use released evidence. */
 class AgenticAskGenerationFailureV1 extends AgenticAskOutputErrorV1 {
-  constructor(message: string, readonly retry: boolean) { super(message); }
+  constructor(message: string, readonly recovery: "retry" | "repair" | "fallback") { super(message); }
 }
 
 export type AgenticAskStatementV1 = PersonAnswerStatementV4;
@@ -225,12 +226,24 @@ function errorDiagnostic(error: unknown): { readonly failure_class: string | nul
     usage: usage === null ? null : Object.freeze({ input_tokens: valid(usage.input_tokens), output_tokens: valid(usage.output_tokens), total_tokens: valid(usage.total_tokens), cached_input_tokens: valid(usage.cached_input_tokens), reasoning_tokens: valid(usage.reasoning_tokens) }),
   });
 }
+function finishFailure(reason: string | null): AgenticAskGenerationFailureV1 {
+  if (reason === "content_filter") return new AgenticAskGenerationFailureV1("the provider declined the reply", "fallback");
+  if (reason === "error") return new AgenticAskGenerationFailureV1("model was unavailable", "retry");
+  return new AgenticAskGenerationFailureV1("the reply did not finish; keep notes and sentences shorter", "repair");
+}
 function generationFailure(error: unknown): AgenticAskGenerationFailureV1 | null {
   const diagnostic = errorDiagnostic(error);
-  if (diagnostic.failure_class === "adapter_json") return new AgenticAskGenerationFailureV1("the reply was not valid JSON", true);
-  if (diagnostic.failure_class === "adapter_finish") return new AgenticAskGenerationFailureV1("the reply was cut off before it finished; keep notes and sentences shorter", true);
-  if (diagnostic.failure_class === "adapter_refusal" || (diagnostic.failure_class === "adapter_response" && diagnostic.http_status !== null && diagnostic.http_status >= 200 && diagnostic.http_status < 300)) return new AgenticAskGenerationFailureV1("the reply had no usable content", true);
-  if (["adapter_timeout", "adapter_transport", "adapter_http", "adapter_provider_error"].includes(diagnostic.failure_class ?? "")) return new AgenticAskGenerationFailureV1("model was unavailable", false);
+  if (diagnostic.failure_class === "adapter_json") return new AgenticAskGenerationFailureV1("the reply was not valid JSON", "repair");
+  if (diagnostic.failure_class === "adapter_finish") return finishFailure(diagnostic.finish_reason);
+  if (diagnostic.failure_class === "adapter_refusal") return new AgenticAskGenerationFailureV1("the provider declined the reply", "fallback");
+  if (diagnostic.failure_class === "adapter_response" && diagnostic.http_status !== null && diagnostic.http_status >= 200 && diagnostic.http_status < 300) return new AgenticAskGenerationFailureV1("the reply had no usable content", "repair");
+  if (["adapter_timeout", "adapter_transport"].includes(diagnostic.failure_class ?? "")) return new AgenticAskGenerationFailureV1("model was unavailable", "retry");
+  if (["adapter_http", "adapter_provider_error"].includes(diagnostic.failure_class ?? "")) {
+    const status = diagnostic.http_status;
+    const temporary = status === null || (status >= 200 && status < 300) || status === 408 || status === 429 || (status >= 500 && status < 600);
+    return new AgenticAskGenerationFailureV1("model was unavailable", temporary ? "retry" : "fallback");
+  }
+  // Local configuration/contract errors and unknown failures are terminal, not a model reply to repair.
   return null;
 }
 function abortReason(signal: AbortSignal): Error {
@@ -651,14 +664,22 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
       const slackInPrompt = () => [...entries.values()].some(entry => entry.item.citation.kind === "slack_message");
 
       // ---- model calls -----------------------------------------------------
-      const call = async (role: AgenticAskModelRoleV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeoutMs: number): Promise<unknown> => {
+      let generationStopped = false;
+      let researchIncomplete = true;
+      const call = async (role: AgenticAskModelRoleV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, recovery = false): Promise<unknown> => {
         assertLive();
-        if (calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("call budget exhausted", false);
+        if (calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("call budget exhausted", "fallback");
         // Every call is preceded by a cumulative desk revalidation of what it may carry.
         const validated = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal }));
         checkedAt = validated.checked_at;
         assertLive();
+        // Revalidation itself spends request time. Recompute the role budget after the fence,
+        // preserving the answer/finalization reserves even for a slow check before a retry.
+        const timeoutMs = timeout();
+        const minimum = role === "step" ? AGENTIC_ASK_MIN_STEP_MS_V1 : AGENTIC_ASK_MIN_ANSWER_MS_V1;
+        if (timeoutMs < minimum) throw new AgenticAskGenerationFailureV1("no time left for generation", "fallback");
         calls += 1;
+        if (recovery) repairs += 1;
         const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: OUTPUT_TOKENS[role], timeout_ms: Math.max(1, Math.floor(Math.min(options.generation.timeout_ms, timeoutMs, remaining()))), signal: activeSignal });
         invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));
         // Slack text must never reach runtime content capture (RFC-0003 retention).
@@ -674,35 +695,39 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
             const generate = options.model.generate_with_observation.bind(options.model);
             const observed = await raceAbort(activeSignal, contentSafe(() => generate(modelInput)));
             generations.push(Object.freeze({ role, finish_reason: observed.finish_reason, usage: observed.usage }));
-            if (observed.finish_reason === "length") throw new AgenticAskGenerationFailureV1("the reply was cut off before it finished; keep notes and sentences shorter", true);
-            if (observed.finish_reason !== null && observed.finish_reason !== "stop") throw new AgenticAskGenerationFailureV1("the reply did not finish normally", true);
+            if (observed.finish_reason !== null && observed.finish_reason !== "stop") throw finishFailure(observed.finish_reason);
             return observed.value;
           }
           const value = await raceAbort(activeSignal, contentSafe(() => options.model.generate(modelInput)));
           generations.push(Object.freeze({ role, finish_reason: null, usage: null }));
           return value;
         } catch (error) {
-          if (error instanceof AgenticAskGenerationFailureV1) throw error;
+          if (error instanceof AgenticAskGenerationFailureV1) {
+            if (error.recovery === "fallback") generationStopped = true;
+            throw error;
+          }
           // Every admitted call leaves exactly one content-free observation, including aborts.
           const diagnostic = errorDiagnostic(error);
           generations.push(Object.freeze({ role, finish_reason: diagnostic.finish_reason, usage: diagnostic.usage }));
           if (isAbort(error, input.signal) || deadlineExpired) throw error;
-          throw generationFailure(error) ?? error;
+          const failure = generationFailure(error);
+          // A permanent provider rejection must not be repeated under the writer role either.
+          if (failure?.recovery === "fallback") generationStopped = true;
+          throw failure ?? error;
         }
       };
-      /** One call plus at most one retry: an unavailable call is retried unchanged, invalid output is repaired with its reason. */
+      /** At most one extra call: temporary failures retry unchanged; invalid output gets repair guidance. */
       const withRepair = async <T>(role: AgenticAskModelRoleV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, timeout: () => number, parse: (value: unknown) => T): Promise<T> => {
         let reason: string | null;
-        try { return parse(await call(role, system, user, schema, timeout())); }
+        try { return parse(await call(role, system, user, schema, timeout)); }
         catch (error) {
           if (isAbort(error, input.signal) || deadlineExpired || !(error instanceof AgenticAskOutputErrorV1)) throw error;
-          if (error instanceof AgenticAskGenerationFailureV1 && error.message === "call budget exhausted") throw error;
-          reason = error instanceof AgenticAskGenerationFailureV1 && !error.retry ? null : error.message;
+          if (error instanceof AgenticAskGenerationFailureV1 && error.recovery === "fallback") throw error;
+          reason = error instanceof AgenticAskGenerationFailureV1 && error.recovery === "retry" ? null : error.message;
         }
         const minimum = role === "step" ? AGENTIC_ASK_MIN_STEP_MS_V1 : AGENTIC_ASK_MIN_ANSWER_MS_V1;
-        if (timeout() < minimum || calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("no time left to repair", false);
-        repairs += 1;
-        return parse(await call(role, reason === null ? system : repairPrompt(system, reason), user, schema, timeout()));
+        if (timeout() < minimum || calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("no time left to repair", "fallback");
+        return parse(await call(role, reason === null ? system : repairPrompt(system, reason), user, schema, timeout, true));
       };
       const audit = async (outcome: AgenticAskAuditEntryV1["outcome"], citations: number, result?: AgenticAskResultV1) => {
         const aggregate = (field: keyof StructuredGenerationUsageV1): number | null => {
@@ -774,7 +799,10 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
               }
             }
             if (plan.length === 0) problems.push("no parts were written");
-            if (problems.length === 0 || finishRejected || steps >= AGENTIC_ASK_MAX_STEPS_V1) break;
+            if (problems.length === 0 || finishRejected || steps >= AGENTIC_ASK_MAX_STEPS_V1) {
+              researchIncomplete = problems.length > 0;
+              break;
+            }
             finishRejected = true;
             results = [{ tool: "finish", error: `finish was not accepted: ${problems.slice(0, 8).join("; ")}. Search, list or open more, or fix the need status and evidence.` }];
             continue;
@@ -812,7 +840,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
 
         let answer: Answer | null = null;
         const answerTimeout = () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
-        if (evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
+        if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
           const user = {
             question: input.question, ...context(), scope,
             research_plan: plan.map((part, index) => ({ part: index + 1, question: part.question, notes: part.notes, needs: part.needs.map(need => ({ need: need.need, status: need.status, suggested_evidence: need.evidence.filter(short => allowed.has(short)) })) })),
@@ -852,12 +880,11 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
           draft = gapText === undefined ? { status: "answered", statements } : { status: "partial", statements, gap: gapText };
         } else {
           // No verified sentence: show what research found rather than "not found".
-          const opened = [...entries.values()].filter(entry => entry.opened && entry.full).sort((left, right) => right.touched - left.touched);
-          const fallback = (cited.length > 0 ? cited : answer === null ? opened : []).filter(entry => allowed.has(entry.short)).slice(0, 3);
+          const fallback = (answer === null ? evidence : cited.filter(entry => allowed.has(entry.short))).slice(0, 3);
           const records = fallback.map(entry => ({ text: entry.item.text!, citation_indexes: use([entry.short]), private: privateItem(entry.item) }));
           draft = records.length > 0
             ? { status: "records_only", statements: [], records, gap: RECORDS_GAP }
-            : { status: "not_found", statements: [], gap: gapText ?? NOT_FOUND_GAP };
+            : { status: "not_found", statements: [], gap: gapText ?? (researchIncomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
         }
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
         const outcome = !anyEvidence ? "not_found" as const : draft.status === "answered" ? "answered" as const : "partial" as const;
