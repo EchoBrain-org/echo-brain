@@ -8,11 +8,11 @@ component_ids:
   - CMP-PERMISSIONS
   - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 280db80479a39ba51708b5923cc4b3eb3cfcd7ef
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 origin: review
 evidence_status: scenario-defined
-status: mitigating
+status: retired
 severity: high
 first_observed: 2026-08-12
 invariant_ids:
@@ -31,6 +31,23 @@ regression_test_refs:
 ---
 
 # FP-IDENTITY-003: Central revocation is described as immediate on an offline Mac
+
+## Retirement
+
+Retired with organization access leases. The lease protocol was deleted in
+`9f181e15` (lean: delete retired machine protocol). The Mac runtime that
+cached leases, and the linked runtime-isolation test, were deleted in
+`a254232c`. The linked Authority runtime test was deleted with the retired
+server lineage in `59ee182b`. No client at the reviewed ref authorizes work
+from a cached signed grant, so there is no offline window to separate from the
+central one. The Person client holds only an opaque session token, and the
+Authority re-reads that credential, its session family, the identity binding,
+and the active membership on every request in
+[`person-identity-sessions.ts`](../../services/organization-authority/src/application/person-identity-sessions.ts).
+[`INV-IDENTITY-003`](../invariants/INV-IDENTITY-003-revocation-windows.md)
+is retired with it. The pinned regression refs remain historical proof at
+their commit. The pattern below is kept as history. It applies again if
+client-held authorization returns.
 
 ## Plain-English summary
 
@@ -60,4 +77,5 @@ recheck state. Do not silently disable offline work to make the prose true.
 State and test both windows explicitly. Central actions re-read current state
 at their consistency boundary; local work expires at the signed lease bound.
 Any changed duration updates threat analysis, qualification, and release
-communication. The longer V2 window remains unqualified live.
+communication. No qualification record shows the longer V2 window qualified
+live before the lease protocol was deleted.

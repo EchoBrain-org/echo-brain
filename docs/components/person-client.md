@@ -66,8 +66,13 @@ integration policy, and the organization record.
 - Tests: [`tests/person-client/`](../../tests/person-client)
 
 Client status and failed requests must not create session state, print tokens,
-or imply that server-side provider processing is ready. See
-`INV-PERMISSIONS-013` and `FP-PERMISSIONS-001`.
+or imply that server-side provider processing is ready. `status` reads only
+the local session: it makes no Authority request, prints no token or private
+path, and reports a session written by an older release as signed out
+([`person-client.test.ts`](../../tests/person-client/person-client.test.ts)).
+`INV-PERMISSIONS-013` does not govern this output. The Person client holds no
+pending approval work, and that invariant's diagnostic clause has no current
+enforcement point.
 
 The `person updates` commands submit, inspect, search, and read original text
 uploads. `submit --visibility only-me|team|project` selects access at upload
