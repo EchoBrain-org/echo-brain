@@ -248,6 +248,15 @@ function toolRefusal(error: unknown): string | null {
 function abort(): never { throw new DOMException("Ask cancelled", "AbortError"); }
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }
 function preview(text: string): string { return cleanLine(text, AGENTIC_ASK_PREVIEW_CHARS_V1); }
+/**
+ * What the model sees of an item's attributes. A meeting action with no
+ * confirmed owner says so ("none recorded") rather than leaving the owner out,
+ * so the model does not fill it in from who the action mentions (ADR-0021).
+ */
+function attributesOf(item: EvidenceDeskItemV1): EvidenceDeskItemV1["attributes"] {
+  if (item.kind !== "action" || item.attributes?.owner !== undefined) return item.attributes;
+  return Object.freeze({ ...item.attributes, owner: "none recorded" });
+}
 /** Characters a query preview keeps before its first matched word. */
 const PREVIEW_LEAD_CHARS = 60;
 /**
@@ -430,7 +439,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
       const describe = (entry: Entry): Record<string, unknown> => ({
         id: entry.short, source: evidenceDeskSourceV1(entry.item), kind: entry.item.kind, title: entry.item.label,
         ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at }),
-        ...(entry.item.attributes === undefined ? {} : { attributes: entry.item.attributes }),
+        ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
       });
       const listing = (entry: Entry, withPreview: boolean): Record<string, unknown> => ({
         ...describe(entry),

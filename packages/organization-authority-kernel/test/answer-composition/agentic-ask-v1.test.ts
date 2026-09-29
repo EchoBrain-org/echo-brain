@@ -184,6 +184,7 @@ describe("agentic Ask: research loop", () => {
       listedItem("dashboard", { kind: "action", attributes: { owner: "Jules", due_at: "2026-09-11" } }),
       listedItem("addendum", { kind: "action", attributes: { owner: "Colin", due_at: "2026-09-05" } }),
       listedItem("closed", { kind: "action", attributes: { owner: "Jules", status: "done" } }),
+      listedItem("unowned", { kind: "action", attributes: { due_at: "2026-09-04" } }),
     ];
     const evidence = desk({ list: () => actions });
     const script = scripted([
@@ -193,7 +194,8 @@ describe("agentic Ask: research loop", () => {
     ]);
     await ask({ desk: evidence, model: script.model }).answer({ question: "What does Jules own?" });
     const [byStatus, byOwner] = script.prompt(1).last_results;
-    expect(byStatus.items.map((item: { attributes: { owner: string } }) => item.attributes.owner)).toEqual(["Jules", "Colin"]);
+    // An action with no confirmed owner says so; it is never filled in from what it mentions.
+    expect(byStatus.items.map((item: { attributes: { owner: string } }) => item.attributes.owner)).toEqual(["Jules", "Colin", "none recorded"]);
     expect(byStatus.note).toContain("do not record open or done");
     expect(byOwner.items.map((item: { attributes: { owner: string } }) => item.attributes.owner)).toEqual(["Jules", "Jules"]);
     expect(evidence.list).toHaveBeenLastCalledWith(expect.objectContaining({ source: "meeting", kinds: ["action"] }));
