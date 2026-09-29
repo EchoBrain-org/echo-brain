@@ -475,6 +475,142 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(audit[0]).toMatchObject({ outcome: "answered", fallbacks: 1, repairs: 1, model_calls: 4 });
   });
 
+  it.each([
+    ["adapter_timeout", null], ["adapter_transport", null],
+    ["adapter_http", 408], ["adapter_http", 429], ["adapter_http", 503],
+    ["adapter_provider_error", 500], ["adapter_provider_error", 200],
+  ])("retries temporary %s/%s once without changing the prompt", async (failure_class, http_status) => {
+    const failure = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class, http_status } });
+    const script = scripted([
+      () => { throw failure; },
+      step([{}], [search("launch")]),
+      finish([found(["E1"])]),
+      answer([{ text: "Tuesday.", evidence: ["E1"] }]),
+    ]);
+    const evidence = desk({ search: () => [item("a")] });
+    const result = await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
+    expect(result.outcome).toBe("answered");
+    expect(script.inputs).toHaveLength(4);
+    expect(script.inputs[1]!.system_prompt).toBe(script.inputs[0]!.system_prompt);
+    expect(script.inputs[1]!.user_prompt).toBe(script.inputs[0]!.user_prompt);
+    expect(evidence.revalidate).toHaveBeenCalledTimes(5);
+  });
+
+  it.each([
+    ["adapter_http", 400, null], ["adapter_provider_error", 401, null],
+    ["adapter_http", 403, null], ["adapter_provider_error", 404, null],
+    ["adapter_refusal", 200, null], ["adapter_finish", 200, "content_filter"],
+  ])("does not repeat permanent %s/%s/%s and preserves full search evidence", async (failure_class, http_status, finish_reason) => {
+    const launch = item("a", "Launch is Tuesday.");
+    const failure = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class, http_status, finish_reason } });
+    const script = scripted([step([{}], [search("launch")]), () => { throw failure; }]);
+    const evidence = desk({ search: () => [launch] });
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const result = await ask({ desk: evidence, model: script.model, audit }).answer({ question: "When is launch?" });
+    expect(script.inputs).toHaveLength(2);
+    expect(evidence.open).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "records_only", records: [{ text: launch.text, citation_indexes: [0] }] }] });
+    expect(JSON.stringify(result)).not.toContain(failure.message);
+    expect(evidence.revalidate).toHaveBeenCalledTimes(3);
+    expect(audit[0]).toMatchObject({ model_calls: 2, repairs: 0, fallbacks: 1, citation_count: 1 });
+  });
+
+  it("keeps full search hits when both research and writing exhaust their retry", async () => {
+    const script = scripted([
+      step([{}], [search("launch")]),
+      () => { throw unavailable(); }, () => { throw unavailable(); },
+      () => { throw unavailable(); }, () => { throw unavailable(); },
+    ]);
+    const evidence = desk({ search: () => [item("a", "Launch is Tuesday.")] });
+    const result = await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
+    expect(result.parts[0]).toMatchObject({ status: "records_only", records: [{ text: "Launch is Tuesday." }] });
+    expect(script.inputs).toHaveLength(5);
+    expect(evidence.revalidate).toHaveBeenCalledTimes(6);
+  });
+
+  it("does not describe an interrupted search as evidence that no answer exists", async () => {
+    const script = scripted([() => { throw unavailable(); }, () => { throw unavailable(); }]);
+    const result = await ask({ desk: desk(), model: script.model }).answer({ question: "When is launch?" });
+    expect(result.parts[0]!.gap).toContain("couldn't complete the search");
+    expect(result.parts[0]!.gap).not.toContain("couldn't find");
+    expect(script.inputs).toHaveLength(2);
+  });
+
+  it("reports an incomplete search when slow retrieval consumes the research reserve", async () => {
+    let clock = 0;
+    const script = scripted([step([{}], [search("launch")])]);
+    const evidence = desk({ search: () => { clock = 60_000.25; return []; } });
+    const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: "When is launch?" });
+    expect(result.parts[0]!.gap).toContain("couldn't complete the search");
+    expect(script.inputs).toHaveLength(1);
+  });
+
+  it("reports an incomplete search when it reaches the step limit with only unread previews", async () => {
+    let queries = 0;
+    const model: StructuredGenerationPort = { generate: vi.fn(async () => step([{}], [search(`launch ${++queries}`)])) };
+    const evidence = desk({ search: query => [item(query, "Unread background. ".repeat(100))] });
+    const result = await ask({ desk: evidence, model }).answer({ question: "When is launch?" });
+    expect(result.parts[0]!.gap).toContain("couldn't complete the search");
+    expect(result.citations).toEqual([]);
+    expect(queries).toBe(10);
+  });
+
+  it.each([
+    Object.assign(new Error("local adapter contract"), { diagnostic: { failure_class: "adapter_response", http_status: null } }),
+    new Error("unknown programming failure"),
+  ])("keeps local or unknown errors terminal instead of hiding them in a fallback: %s", async failure => {
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const script = scripted([step([{}], [search("launch")]), () => { throw failure; }]);
+    await expect(ask({ desk: desk({ search: () => [item("a")] }), model: script.model, audit }).answer({ question: "When is launch?" })).rejects.toBe(failure);
+    expect(script.inputs).toHaveLength(2);
+    expect(audit).toEqual([]);
+  });
+
+  it("recomputes research and answer timeouts after slow permission revalidation", async () => {
+    let clock = 0;
+    let checks = 0;
+    const launch = item("a");
+    const evidence = desk({ search: () => [launch], open: () => [launch], revalidate: async () => {
+      checks += 1;
+      if (checks === 3) clock += 10_000.25;
+      if (checks === 4) clock += 15_000.25;
+      return { checked_at: checked };
+    } });
+    const timeouts: number[] = [];
+    const script = scripted([
+      () => { clock += 20_000; return step([{}], [search("launch")]); },
+      () => { clock += 20_000; return step([{}], [open("E1")]); },
+      (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); clock += 10_000; return finish([found(["E1"])]); },
+      (input: StructuredGenerationInput) => { timeouts.push(input.timeout_ms); return answer([{ text: "Tuesday.", evidence: ["E1"] }]); },
+    ]);
+    const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: "When is launch?" });
+    expect(result.outcome).toBe("answered");
+    expect(timeouts).toEqual([12_999, 12_999]);
+  });
+
+  it("skips a retry if its permission check consumes the remaining research budget", async () => {
+    let clock = 0;
+    let checks = 0;
+    const evidence = desk({ search: () => [item("a")], revalidate: async () => {
+      checks += 1;
+      if (checks === 3) clock = 60_000.25;
+      return { checked_at: checked };
+    } });
+    const script = scripted([
+      step([{}], [search("launch")]),
+      () => { throw unavailable(); },
+      (input: StructuredGenerationInput) => {
+        expect(input.system_prompt).toMatch(/^You write/);
+        return answer([{ text: "Tuesday.", evidence: ["E1"] }]);
+      },
+    ]);
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const result = await ask({ desk: evidence, model: script.model, now: () => clock, audit }).answer({ question: "When is launch?" });
+    expect(result.outcome).toBe("answered");
+    expect(script.inputs).toHaveLength(3);
+    expect(audit[0]).toMatchObject({ model_calls: 3, repairs: 0 });
+  });
+
   it("opens by title when the model passes a seen title instead of an id", async () => {
     const listed = listedItem("mrd", { kind: "document_passage", label: "SCOUT-MRD-v0.1.md" });
     const passage = item("mrd", "SCOUT is an indoor courier robot.", { kind: "document_passage", label: "SCOUT-MRD-v0.1.md" });

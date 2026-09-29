@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { request as httpRequest } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { PERSON_ANSWER_PATH_V3, PERSON_CAPABILITIES_PATH_V1 } from "@echo-brain/organization-api";
+import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 
 /** Retired Ask paths (ADR-0022): no route, so the canonical not-found reply. */
 const RETIRED_ASK_PATHS = ["/v1/person/ask", "/v2/person/ask"] as const;
@@ -27,6 +28,20 @@ async function server(input: { readonly application?: PersonAnswerV3HttpApplicat
 }
 
 describe("Agentic Ask HTTP capability gate", () => {
+  it("returns the existing unavailable response when Ask asks the client to try again", async () => {
+    const ask = vi.fn(async () => { throw new AuthorityOperationError("unavailable", "Ask deadline exhausted"); });
+    const value = await server({ application: { ask, searchEvidence: vi.fn(), openEvidence: vi.fn() } });
+    try {
+      const response = await fetch(`${value.url}${PERSON_ANSWER_PATH_V3}`, {
+        method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json" },
+        body: JSON.stringify({ schema_version: 3, question: "What changed?" }),
+      });
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({ error: { code: "unavailable", message: "request failed" } });
+      expect(ask).toHaveBeenCalledTimes(1);
+    } finally { await value.close(); }
+  });
+
   it("without an answer model reports no agentic capability and refuses Ask instead of falling back", async () => {
     const value = await server({});
     try {

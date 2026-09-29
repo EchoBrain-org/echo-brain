@@ -58,7 +58,30 @@ moves to its own module; its contract and path are unchanged.
 **A deadline that fits the proxy.** Cloudflare drops an origin response after
 100 s (HTTP 524), so the loop's hard deadline is 90 s, with 25 s reserved for
 the answer and 25 s per research step. The client waits 135 s so a server
-timeout is reported as one.
+timeout is reported as one. A hard server deadline returns the existing
+HTTP 503 `unavailable` response so the desktop offers a manual "Try again";
+its journey and audit still record a timeout. The client does not automatically
+restart the whole question.
+
+**Bounded recovery.** A model call may get one additional attempt, within the
+same 90-second request and 24-call limit. Timeouts, transport failures,
+408/429/5xx responses and provider errors inside a successful HTTP response
+retry unchanged; invalid JSON, schema or truncated output gets repair guidance.
+Other HTTP rejections, explicit refusals and content filtering stop further
+generation for that request. Local configuration/contract errors and unknown
+exceptions remain terminal. Retrying cannot repair invalid caller inputs.
+
+Every attempt revalidates the released evidence and then recomputes its timeout
+in whole milliseconds, retaining the answer and finalization reserves. When
+generation cannot finish, the response may show up to three fully released
+items from the bounded writer evidence set, in its existing citation-first
+order. This includes full search hits even if research stopped before opening
+or citing them. With no usable evidence, the existing V4 no-evidence outcome
+remains, but an interrupted search is identified in the visible gap instead of
+claiming that a completed search found nothing. Permission, snapshot, audit,
+cancellation and deadline failures still suppress publication. The audit's
+existing `repairs` count includes both unchanged retries and output repairs;
+only admitted extra model calls increment it.
 
 **Throughput routing.** The loop makes several sequential model calls, and
 OpenRouter's default routing picked slow providers. Ask model requests now set
@@ -88,3 +111,9 @@ gone and the capability follows the answer model;
 `person-client.test.ts` covers the client; the desktop unit and end-to-end
 suites cover V4 rendering; `npm run test:capacity` and `capacity:checkpoint`
 exercise the agentic route with a deterministic model.
+
+Recovery evidence: `agentic-ask-v1.test.ts` exercises failure classification,
+evidence fallback and slow permission checks; `agentic-ask-v1-finalization.test.ts`
+keeps the final authorization and audit boundaries terminal;
+`agentic-ask-openrouter-timeout-contract.test.ts` drives the real kernel and
+provider adapter with local scripted responses and a fractional clock.
