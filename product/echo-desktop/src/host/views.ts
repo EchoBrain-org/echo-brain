@@ -359,7 +359,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
       throw new ViewError();
     }
   }
-  return { text: text(value.answer), scope, sources };
+  return { text: text(value.answer), scope, sources, ...(value.outcome === 'authorship_unsupported' ? { outcome: 'authorship_unsupported' as const } : {}) };
 }
 
 /** Longest text the source pane shows, in characters; longer is cut and marked. */

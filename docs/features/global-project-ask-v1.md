@@ -9,7 +9,10 @@ Ask defaults to all context the signed-in person can access: personal material,
 organization-shared material, joined-project material, and approved records.
 Selecting a project narrows Ask to readable context actually associated with
 that project. The scope is visible and stays bound to the submitted question.
-An empty project result does not trigger a global fallback.
+An empty project result does not trigger a global fallback. The desktop says
+that nothing in the project matched and offers one tap to ask the same question
+across everything the person can see
+([ADR-0021](../decisions/ADR-0021-ask-reach-and-approval-owners.md)).
 
 The person's own private context is eligible within a project when explicitly
 associated with that project. This is the initial definition of related personal
@@ -52,7 +55,12 @@ the original and its project links once. See
 ## Evidence and permission boundaries
 
 Supported originals include saved editor text and usable extracted text from
-the existing text/Markdown, PDF, and DOCX upload path. The original upload and
+the existing text/Markdown, PDF, and DOCX upload path, and meeting transcripts
+the approver shared at approval
+([ADR-0021](../decisions/ADR-0021-ask-reach-and-approval-owners.md)). A
+transcript is read under its approval grant: the record's current audience and,
+for project Ask, its project association. Its packets are labeled
+"Transcript: <meeting title>". The original upload and
 extraction limits remain in [Project documents V1](project-documents-v1.md).
 Encrypted, scanned/no-text, failed, or still-extracting files do not acquire
 invented textual evidence. Partial extraction remains partial evidence.
@@ -86,9 +94,14 @@ evidence still requires current access when opened.
   ([ADR-0017](../decisions/ADR-0017-project-meeting-approval-v1.md)). Project
   Ask includes those records while their audience still admits the reader;
   Only me, Team and older records remain global-only. A project name appearing
-  in an approved record is not sufficient to include it.
-- Raw meeting snapshots and pending/rejected approvals are not exposed merely
-  because they exist in the shared source tables.
+  in an approved record is not sufficient to include it. The approval card
+  refuses projects chosen with another audience rather than dropping them.
+- Raw meeting snapshots, meetings approved with transcript sharing off, and
+  pending/rejected approvals are not exposed merely because they exist in the
+  shared source tables.
+- Transcript search scores every shared transcript the asker may read on each
+  query. That is sized for the current number of approved meetings, not for a
+  large archive.
 - V2 Ask sends the validated question directly to retrieval, without a model
   planner. It selects at most five original evidence packets and five approved
   records in either scope. The core retains its 16-atom / 49,152-byte ceiling

@@ -69,6 +69,15 @@ describe('view models copy only what the renderer may see', () => {
       .toThrow(ViewError);
   });
 
+  it('keeps only the authorship-unsupported outcome, which a wider ask would not help', () => {
+    const project = { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' } as const;
+    const base = { schema_version: 3, kind: 'echo-clean-person-answer-v3', answer: 'No.', scope: project, citations: [] };
+    expect(answerView({ ok: true, result: { ...base, outcome: 'authorship_unsupported' } }, project))
+      .toEqual({ text: 'No.', scope: project, sources: [], outcome: 'authorship_unsupported' });
+    expect(answerView({ ok: true, result: base }, project)).toEqual({ text: 'No.', scope: project, sources: [] });
+    expect(answerView({ ok: true, result: { ...base, outcome: 'something_else' } }, project)).not.toHaveProperty('outcome');
+  });
+
   it('accepts a receipt only for the request that was sent', () => {
     expect(() => receiptView({ request_id: 'other' }, 'mine', { kind: 'only-me' })).toThrow(ViewError);
     expect(receiptView({ request_id: 'mine' }, 'mine', { kind: 'team' })).toEqual({ request_id: 'mine', audience: { kind: 'team' } });

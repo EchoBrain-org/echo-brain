@@ -146,6 +146,12 @@ describe("V4 organization-record append", () => {
         }),
       ).toHaveLength(1);
       expect(new ApprovedMeetingTranscriptGrantReaderV1(db).find({ ...COORDINATES, approval_id: "approval-project-facts" })).toMatchObject({ source_id: "source-1", revision_id: "revision-1", source_sha256, audience_project_ids: ["prj_alpha", "prj_beta"], association_project_ids: ["prj_alpha", "prj_beta"] });
+      const reader = new ApprovedMeetingTranscriptGrantReaderV1(db);
+      const listed = reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id });
+      expect(listed).toEqual([reader.find({ ...COORDINATES, approval_id: "approval-project-facts" })]);
+      expect(reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1", revision_id: "revision-1", source_sha256 })).toEqual(listed);
+      expect(reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1", revision_id: "revision-2", source_sha256 })).toEqual([]);
+      expect(() => reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1" })).toThrow("exact source tuple");
     } finally { db.close(); }
   });
 

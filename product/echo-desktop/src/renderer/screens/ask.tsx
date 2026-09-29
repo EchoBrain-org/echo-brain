@@ -4,8 +4,8 @@ import { askText, queryTerms } from '../../shared/query.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  answerSources, ask, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, matchesShown, openCompose, openMatch, pageCovered, retryEvidence, retryRecord,
-  searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
+  answerSources, ask, askEverywhere, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, foundNothingInProject, matchesShown, openCompose, openMatch,
+  pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Plus, Up } from './icons.js';
 
@@ -151,6 +151,14 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
       <div class="question selectable" data-testid="question">{turn.question}</div>
       <div class="asked">{turn.scopeName}</div>
       <div class="answer selectable" data-testid="answer">{turn.answer.text}</div>
+      {foundNothingInProject(turn) && (
+        <div class="project-empty" data-testid="project-empty">
+          <span>Nothing in {turn.scopeName} matched.</span>
+          {!thread.failed && (
+            <button type="button" class="link-button" data-testid="ask-everywhere" onClick={askEverywhere}>Ask across everything you can see</button>
+          )}
+        </div>
+      )}
       <BasedOn state={state} />
       <div class="actions">
         {count > 0 && (

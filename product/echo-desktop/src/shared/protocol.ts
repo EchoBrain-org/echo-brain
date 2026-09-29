@@ -195,6 +195,8 @@ export interface Answer {
   readonly text: string;
   readonly scope: AskScope;
   readonly sources: readonly AnswerSource[];
+  /** The Authority could not answer who said what: asking elsewhere would not help. */
+  readonly outcome?: 'authorship_unsupported';
 }
 
 export interface SourceEvidence {

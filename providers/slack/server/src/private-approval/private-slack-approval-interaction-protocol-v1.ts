@@ -474,13 +474,14 @@ function completeStateV2(input: {
     } else return invalid();
   }
   if (policy === undefined || transcript === undefined || comment === undefined) return invalid();
-  // The picker remains visible when the approver changes back from Projects
-  // to either existing audience. Its values are still parsed and bounded, but
-  // are dormant for those policies and must never reach a durable command.
+  // Approve needs the audience and the projects to agree. Projects without
+  // the Projects audience are refused, never dropped: a silently dropped
+  // choice leaves the record out of every project's Ask while the approver
+  // believes its members can read it. Only me stays the narrow default; the
+  // approver fixes the card and approves again. A reject ignores both.
   if (
     input.action === "approve" &&
-    policy === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID &&
-    projects.length === 0
+    (policy === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) !== (projects.length > 0)
   ) return invalid();
   return Object.freeze({
     selected_policy_id: policy,
