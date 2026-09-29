@@ -63,16 +63,12 @@
         "name": "Person onboarding invitation I/O",
         "path": "src/product/person-client/onboarding-invitation.ts",
         "export": "readPersonOnboardingInvitation"
-      },
-      {
-        "name": "Person API request builders",
-        "path": "src/product/person-client/person-api-request-builders.ts",
-        "export": "createPersonMeetingIngestionExclusionChangeRequest"
       }
     ],
     "compatibility_entrypoints": [],
     "retired_source_paths": [
-      "src/product/person-client/requests.ts"
+      "src/product/person-client/requests.ts",
+      "src/product/person-client/person-api-request-builders.ts"
     ]
   },
   "layer_rules": [
@@ -160,17 +156,6 @@
         "src/product/person-client/**"
       ],
       "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "person-api-request-builders-use-public-contracts",
-      "from": "src/product/person-client/person-api-request-builders.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [
-        "@echo-brain/organization-api",
-        "@echo-brain/provider-slack-client"
-      ],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },

@@ -66,7 +66,7 @@ import {
   type PersonUpdateSubmitV3, type PersonUploadSearchV3,
 } from '@echo-brain/organization-api';
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH, ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isCanonicalPersonEmail, isExpectedPersonEmail, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonMeetingIngestionExclusionChangeRequest, validateOrganizationMeetingIngestionExclusionListResponse, validateOrganizationPersonMeetingIngestionExclusionListRequest, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationPersonMeetingIngestionExclusionChangeRequestV2, type OrganizationMeetingIngestionExclusionListResponseV2, type OrganizationPersonMeetingIngestionExclusionListRequestV2, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
+import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isCanonicalPersonEmail, isExpectedPersonEmail, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const ASK_TIMEOUT_MS = 135_000;
@@ -631,7 +631,6 @@ export class PersonAuthorityClient {
     readonly validate_response: (value: unknown) => T;
     readonly access_token?: string;
     readonly maximum_response_bytes?: number;
-    readonly require_canonical_response?: boolean;
     readonly expected_status?: number;
     readonly timeout_ms?: number;
     readonly method?: "POST" | "PUT";
@@ -696,16 +695,6 @@ export class PersonAuthorityClient {
     }
     if (input.expected_status !== undefined && response.status !== input.expected_status) {
       throw new PersonAuthorityClientError('invalid_response', response.status, 'Person Authority returned an unexpected status');
-    }
-    if (
-      input.require_canonical_response === true &&
-      canonicalJson(value) !== text
-    ) {
-      throw new PersonAuthorityClientError(
-        "invalid_response",
-        response.status,
-        "Person Authority returned noncanonical response bytes",
-      );
     }
     return validateSuccess(value, response.status, input.validate_response);
   }
@@ -1449,32 +1438,6 @@ export class PersonAuthorityClient {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different meeting transcript coordinates');
     }
     return response;
-  }
-
-  changeMeetingIngestionExclusion(
-    request: OrganizationPersonMeetingIngestionExclusionChangeRequestV2,
-    accessToken: string,
-  ): Promise<void> {
-    return this.noContent({
-      path: ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonMeetingIngestionExclusionChangeRequest,
-      access_token: accessToken,
-    });
-  }
-
-  meetingIngestionExclusions(
-    request: OrganizationPersonMeetingIngestionExclusionListRequestV2,
-    accessToken: string,
-  ): Promise<OrganizationMeetingIngestionExclusionListResponseV2> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonMeetingIngestionExclusionListRequest,
-      validate_response: validateOrganizationMeetingIngestionExclusionListResponse,
-      access_token: accessToken,
-      require_canonical_response: true,
-    });
   }
 
   /** A tool receives bounded methods tied to this Authority, without the bearer credential. */
