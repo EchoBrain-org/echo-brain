@@ -314,6 +314,9 @@ export async function startOrganizationAuthorityApiRuntime(
                 sessions,
                 originals,
                 records: recordSearch,
+                memberships: {
+                  membership: (id) => repository.read((transaction) => transaction.membership(id)),
+                },
                 model: dependencies.answer_composition_generation.structured_output,
                 generation: dependencies.answer_composition_generation.generation,
                 audit: new SqlitePersonAgenticAskAuditV1(database),

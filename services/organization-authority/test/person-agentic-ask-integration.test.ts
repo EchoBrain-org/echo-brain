@@ -24,7 +24,8 @@ type Prompt = {
   plan?: { part?: number; question: string }[];
   evidence?: Listing[];
 };
-function fixture(options: { readonly small_scope_shortcut?: boolean; readonly slack_for?: (asker: { readonly principal_id: string; readonly membership_id: string }) => undefined } = {}) {
+type Membership = { organization_id: string; principal_id: string; membership_id: string; display_name: string };
+function fixture(options: { readonly small_scope_shortcut?: boolean; readonly slack_for?: (asker: { readonly principal_id: string; readonly membership_id: string }) => undefined; readonly membership?: (id: string) => Membership | undefined } = {}) {
   const database = projectContextDatabase(); databases.push(database);
   database.prepare(`INSERT INTO authority_projects_v1
     (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
@@ -84,6 +85,7 @@ function fixture(options: { readonly small_scope_shortcut?: boolean; readonly sl
     audit: new SqlitePersonAgenticAskAuditV1(database),
     ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
     ...(options.slack_for === undefined ? {} : { slack_for: options.slack_for }),
+    ...(options.membership === undefined ? {} : { memberships: { membership: options.membership } }),
   });
   const ask = (access_token = "owner") => route.ask({ access_token, request: { schema_version: 3, question: "Summarize this project", project_id: PROJECT_ALPHA } });
   return {
@@ -123,6 +125,23 @@ describe("Agentic Ask with stored source evidence", () => {
     const answer = await f.ask();
     expect(askers).toEqual([{ principal_id: OWNER.principal_id, membership_id: OWNER.membership_id }]);
     expect(answer.outcome).toBe("answered");
+  });
+
+  it("names the authenticated asker to the model, only from their own directory entry, and never in the audit", async () => {
+    const looked: string[] = [];
+    const entries: Record<string, Membership> = {
+      [OWNER.membership_id]: { organization_id: OWNER.organization_id, principal_id: OWNER.principal_id, membership_id: OWNER.membership_id, display_name: "Zhen Ye" },
+      // A row that names another principal is never trusted for this asker.
+      [MEMBER.membership_id]: { organization_id: OWNER.organization_id, principal_id: "prn_someone_else", membership_id: MEMBER.membership_id, display_name: "Mallory" },
+    };
+    const f = fixture({ membership: id => { looked.push(id); return entries[id]; } }); f.upload("Atlas plan", "The launch window is October.");
+    await f.ask();
+    expect(looked).toEqual([OWNER.membership_id]);
+    for (const prompt of f.prompts) expect(JSON.parse(prompt)).toMatchObject({ asked_by: "Zhen Ye" });
+    expect(auditRow(f.database)!.body_json).not.toContain("Zhen");
+    f.prompts.length = 0;
+    await f.ask("member");
+    for (const prompt of f.prompts) expect(JSON.parse(prompt)).not.toHaveProperty("asked_by");
   });
 
   it("keeps private source text out of another member's research and marks the owner's statements private", async () => {

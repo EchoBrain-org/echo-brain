@@ -85,11 +85,12 @@ const search = (query: string): ActionSpec => ({ tool: "search", args: { query }
 const open = (id: string): ActionSpec => ({ tool: "open", args: { id } });
 const answer = (sentences: readonly { text: string; evidence: readonly string[] }[], notFound: readonly string[] = []) => ({ sentences, not_found: notFound });
 
-function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; shortcut?: boolean; context_tokens?: number }) {
+function ask(options: { desk: Desk; model: StructuredGenerationPort; audit?: AgenticAskAuditEntryV1[]; now?: () => number; shortcut?: boolean; context_tokens?: number; asker?: string }) {
   const audit = options.audit ?? [];
   return createAgenticAskV1({
     desk: options.desk, model: options.model, generation: { ...generation, ...(options.context_tokens === undefined ? {} : { context_tokens: options.context_tokens }) }, audit: { append: entry => { audit.push(entry); } },
     today: () => "2026-09-28",
+    ...(options.asker === undefined ? {} : { asker: { display_name: options.asker } }),
     ...(options.now === undefined ? {} : { now_ms: options.now }), ...(options.shortcut === true ? { small_scope_shortcut: true } : {}),
   });
 }
@@ -366,6 +367,26 @@ describe("agentic Ask: research loop", () => {
     const script = scripted([finish([missing()]), finish([missing()])]);
     await ask({ desk: desk({ scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000002" } as EvidenceDeskPortV1["scope"] }), model: script.model }).answer({ question: "When is launch?" });
     expect(script.prompt(0).scope).toContain("Slack is not");
+  });
+
+  it("tells every call who is asking and today's date, and no audit keeps the name", async () => {
+    const launch = item("launch", "Jules owns the vendor follow-up, due Oct 3.");
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const script = scripted([
+      step([{}], [search("Jules actions")]),
+      finish([found(["E1"])]),
+      answer([{ text: "You own the vendor follow-up, due Oct 3.", evidence: ["E1"] }]),
+    ]);
+    await ask({ desk: desk({ search: () => [launch] }), model: script.model, audit, asker: "  Jules Moreau " }).answer({ question: "What do I owe this week?" });
+    for (const index of [0, 1, 2]) expect(script.prompt(index)).toMatchObject({ asked_by: "Jules Moreau", today: "2026-09-28" });
+    expect(JSON.stringify(audit)).not.toContain("Jules");
+  });
+
+  it.each([["an empty name", "  "], ["a control character", "Jules\u0007"], ["an overlong name", "J".repeat(201)]])("leaves out %s, and says only today's date", async (_label, name) => {
+    const script = scripted([finish([missing()]), finish([missing()])]);
+    await ask({ desk: desk({}), model: script.model, asker: name }).answer({ question: "What do I owe?" });
+    expect(script.prompt(0)).not.toHaveProperty("asked_by");
+    expect(script.prompt(0).today).toBe("2026-09-28");
   });
 
   it("sizes the scratchpad from the model's context window", async () => {

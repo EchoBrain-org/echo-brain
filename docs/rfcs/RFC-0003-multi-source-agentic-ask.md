@@ -217,7 +217,7 @@ returns, limits, related tools and examples.
 | --- | --- | --- |
 | `search` | `query`: 2–8 keywords | ≤ 8 mixed items with previews |
 | `open` | `id`, or a title already shown | Full text plus context, and linked ids |
-| `list` | `source`, plus named optional filters: `kind`, `status`, `channel`, `since`, `until` | 25 titles per page; repeating the call returns the next page |
+| `list` | `source`, plus named optional filters: `kind`, `status`, `owner`, `channel`, `since`, `until` | 25 titles per page; repeating the call returns the next page |
 | `finish` | none | Accepted, or the reason once |
 
 **Filters for `list`.** They are named fields that the model fills in from
@@ -253,6 +253,16 @@ the question.
 - The 180 s request limit. Each model call has 60 s, and 60 s is reserved for
   the answer.
 - At the last run's speeds (4 s median and 7 s at p90 per step), 10 steps fit.
+
+**Who is asking.**
+
+- Every step and the answer call see `asked_by`, the asker's name from their
+  own directory entry, and `today`. The route looks up only the authenticated
+  membership, and uses the name only when that entry names the same principal.
+- The prompts read "I", "me" and "my" as that person: research searches for the
+  name and lists meeting actions with it as `owner`. Without a name, they do not
+  guess.
+- The name goes to the model only. Audits keep hashes, never the name.
 
 **Scratchpad.**
 

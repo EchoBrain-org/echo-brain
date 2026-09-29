@@ -161,6 +161,17 @@ export interface CreateAgenticAskV1Options {
   readonly today?: () => string;
   /** When the whole readable scope is small, open it all before step 1. */
   readonly small_scope_shortcut?: boolean;
+  /**
+   * Who is asking, as the organization's directory names them, so "I", "me"
+   * and "my" resolve to a person. Only the models see it; audits never do.
+   */
+  readonly asker?: { readonly display_name: string };
+}
+
+/** A directory name the prompts may carry: one trimmed line of 1 to 200 characters, or none. */
+function askerName(value: { readonly display_name: string } | undefined): string | undefined {
+  const name = typeof value?.display_name === "string" ? value.display_name.trim() : "";
+  return name.length === 0 || name.length > 200 || /[\p{Cc}\p{Cf}]/u.test(name) ? undefined : name;
 }
 
 /** One scratchpad entry. `short` is the only id a model ever sees. */
@@ -318,6 +329,9 @@ function normalizeListArgs(raw: StepArgs, today: string): ListArgs | { readonly 
 export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
   const now = options.now_ms ?? (() => performance.now());
   const today = options.today ?? (() => isoDay(new Date()));
+  const askedBy = askerName(options.asker);
+  /** Who is asking and today's date: context for "my", "this week" and "overdue". */
+  const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
   const stepBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, STEP_PROMPT, OUTPUT_TOKENS.step);
   const answerBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, ANSWER_PROMPT, OUTPUT_TOKENS.answer);
   return Object.freeze({
@@ -628,7 +642,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
           assertLive();
           // Leave room for the answer call and its possible repair.
           if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) break;
-          const header = { question: input.question, scope, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), last_results: results, searches_done: [...searchesRun] };
+          const header = { question: input.question, ...context(), scope, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), last_results: results, searches_done: [...searchesRun] };
           const pad = scratchpad(stepBudget - bytes(JSON.stringify(header)));
           const user = { ...header, opened: pad.opened, seen: pad.seen };
           let step: Step;
@@ -685,7 +699,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         const answerTimeout = () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
         if (evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
           const user = {
-            question: input.question, scope,
+            question: input.question, ...context(), scope,
             research_plan: plan.map((part, index) => ({ part: index + 1, question: part.question, notes: part.notes, needs: part.needs.map(need => ({ need: need.need, status: need.status, suggested_evidence: need.evidence.filter(short => allowed.has(short)) })) })),
             evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
           };

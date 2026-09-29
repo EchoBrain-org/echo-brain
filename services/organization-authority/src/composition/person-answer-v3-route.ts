@@ -36,6 +36,33 @@ export interface CreatePersonAnswerV3RouteOptions {
    * evidence HTTP doors stay Echo-only.
    */
   readonly slack_for?: (asker: { readonly principal_id: string; readonly membership_id: string }) => CreatePersonEvidenceDeskV1Options["slack"] | undefined;
+  /**
+   * The asker's own directory entry, so the loop reads "my" as a name. Only
+   * the authenticated membership is looked up; its name reaches the model and
+   * no audit.
+   */
+  readonly memberships?: {
+    membership(id: string): {
+      readonly organization_id: string;
+      readonly principal_id: string;
+      readonly membership_id: string;
+      readonly display_name: string;
+    } | undefined;
+  };
+}
+
+function askerOf(
+  options: CreatePersonAnswerV3RouteOptions,
+  authorization: { readonly principal_id: string; readonly membership_id: string },
+): { readonly display_name: string } | undefined {
+  const membership = options.memberships?.membership(authorization.membership_id);
+  if (
+    membership === undefined ||
+    membership.organization_id !== options.organization_id ||
+    membership.principal_id !== authorization.principal_id ||
+    membership.membership_id !== authorization.membership_id
+  ) return undefined;
+  return Object.freeze({ display_name: membership.display_name });
 }
 
 function scopeOf(request: { readonly project_id?: string }): PersonAskScopeV2 {
@@ -72,7 +99,9 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
       const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
       const slack = options.slack_for?.({ principal_id: authorization.principal_id, membership_id: authorization.membership_id });
       const desk = deskFor(options, input.access_token, input.request, slack);
+      const asker = askerOf(options, authorization);
       return createAgenticAskV1({
+        ...(asker === undefined ? {} : { asker }),
         desk,
         model: options.model,
         generation: options.generation,
