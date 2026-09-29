@@ -447,6 +447,17 @@ def installer_preconditions(request, root):
         accepted = regular(pathlib.Path('current.clean-v1.json'), True, 16384)
         accepted_id = json.loads(accepted)['release_id']
     require(sha(accepted) == request['accepted']['sha256'] and accepted_id == request['accepted']['release_id'], 'accepted_record_mismatch')
+    # The release directory is the already-opened, pinned working directory.
+    # lstat never follows a marker symlink, so every extant marker, including
+    # an unsafe or dangling symlink, stops before any tool is inspected or
+    # replaced without reading marker contents or a symlink target.
+    with checked('environment_invalid'):
+        try:
+            pathlib.Path('environment-repair.pending.json').lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise Refused('environment_invalid')
     with checked('environment_invalid'):
         environment = regular(root / '.env.clean-v1', True, 1024 * 1024)
         # Onboarding's write_exact_file uses printf %s, so its last literal

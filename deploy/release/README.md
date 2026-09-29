@@ -337,19 +337,24 @@ environment files, tokens, invitations, or credential material. URL metadata
 with userinfo, query or fragment is refused. The profile's four files must match
 the candidate's committed source exactly.
 
-Plan one named action. Before installing this tooling over older tooling,
-confirm that `clean-data/release/environment-repair.pending.json` is absent on
-the host; the updater no longer checks for it. If it is present, stop and leave
-it to the human host operator. For `install`, supply the full source SHA corresponding
+Plan one named action. Before installing this tooling over older tooling, run a
+separate `inspect-install` plan with the same inputs and
+`--previous-tooling-source` to confirm that
+`clean-data/release/environment-repair.pending.json` is absent. The reviewed
+runner checks the already-pinned release directory with `lstat`: any marker,
+including a regular file, unsafe symlink, or dangling symlink, returns the fixed
+`environment_invalid` refusal without reading marker contents or a target. A
+`ready` inspection is the supported confirmation. A present or unsafe marker
+requires the human host operator's repair lane; other inspection refusals follow
+their existing diagnostic and recovery rules. The updater no longer checks this
+marker. For `install`, supply the full source SHA corresponding
 to the independently reviewed *currently installed* tooling. Unknown installed
 bytes stop instead of being overwritten. Replacing tooling saves private old
 copies and hashes; it never edits the accepted release or environment.
 
-When an install returns only `precondition_failed`, create a separate
-`inspect-install` plan with the same inputs and `--previous-tooling-source`.
-Inspection shares the installer's identity, mount, ownership/control-path,
+`inspect-install` shares the installer's identity, mount, ownership/control-path,
 accepted-record, literal environment and hostname, candidate, and old-or-new
-tool hash guards. It returns `ready` or a fixed refusal
+tool hash guards, including the environment-repair-marker absence check. It returns `ready` or a fixed refusal
 category; `tool_missing`, `tool_file_invalid`, and `tool_hash_unknown` identify one of the six
 fixed reviewed tool names. Once the preceding identity, path, accepted-state
 and environment-format guards pass, the version-2 diagnostic also includes a
