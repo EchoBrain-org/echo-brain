@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { JOURNEY_TERMINAL_OUTCOMES_V1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -272,6 +273,10 @@ describe("staging journey observability overview stack", () => {
     );
     expect(metricSerialized).toContain('"outcome","insufficient_evidence"');
     expect(metricSerialized).toContain('"outcome","authorship_unsupported"');
+    // Every Ask response outcome the kernel can emit has a dashboard series.
+    for (const outcome of JOURNEY_TERMINAL_OUTCOMES_V1.ask_response) {
+      expect(metricSerialized).toContain(`"TerminalOutcome","workflow","ask","stage","ask_response","outcome","${outcome}"`);
+    }
     expect(metricSerialized).toContain('"outcome","actionable"');
     expect(metricSerialized).toContain('"outcome","staged"');
     expect(metricSerialized).toContain('"outcome","current"');

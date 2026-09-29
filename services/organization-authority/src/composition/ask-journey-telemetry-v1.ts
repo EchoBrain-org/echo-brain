@@ -28,6 +28,9 @@ type AskJourneyOutcomeV1 = Extract<
   | "insufficient_evidence"
   | "authorship_unsupported"
   | "completed"
+  | "partial"
+  | "not_found"
+  | "off_scope"
 >;
 
 const ASK_STAGES_V1: readonly AskJourneyStageV1[] = Object.freeze([
@@ -84,6 +87,12 @@ export interface AskJourneyTelemetryRecorderV1 {
     failure: AskJourneyFailureV1,
   ): void;
   skip(stage: Exclude<AskJourneyStageV1, "ask_response">): void;
+  /** Fails the first of these stages not yet closed; a no-op when all are. */
+  failOpen(
+    stages: readonly Exclude<AskJourneyStageV1, "ask_response">[],
+    started_at_ms: number,
+    failure: AskJourneyFailureV1,
+  ): void;
   observeComposition(event: AnswerCompositionStageObservationV1): void;
   /** No-op unless the factory was opened with a content observer. */
   observeContent(event: AnswerCompositionContentObservationV1): void;
@@ -370,6 +379,10 @@ export function createAskJourneyTelemetryFactoryV1(input: {
             outcome: "skipped",
             elapsed_ms: 0,
           });
+        },
+        failOpen(stages, startedAt, failure) {
+          const open = stages.find((stage) => !closed.has(stage));
+          if (open !== undefined) recorder.fail(open, startedAt, failure);
         },
         observeContent(event) {
           if (input.content_observer === undefined || journey === null) return;

@@ -1,16 +1,18 @@
 import { createHash } from "node:crypto";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import type {
-  EvidenceDeskCitationV1,
-  EvidenceDeskItemV1,
-  EvidenceDeskKindV1,
-  EvidenceDeskPortV1,
-  EvidenceDeskResultV1,
-  EvidenceDeskSearchInputV1,
-  EvidenceDeskListInputV1,
-  EvidenceDeskOpenInputV1,
-  EvidenceDeskScopeV1,
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeCountsV1, type CoreRuntimePhaseV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import {
+  evidenceDeskSourceV1,
+  type EvidenceDeskCitationV1,
+  type EvidenceDeskItemV1,
+  type EvidenceDeskKindV1,
+  type EvidenceDeskPortV1,
+  type EvidenceDeskResultV1,
+  type EvidenceDeskSearchInputV1,
+  type EvidenceDeskListInputV1,
+  type EvidenceDeskOpenInputV1,
+  type EvidenceDeskScopeV1,
 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
 import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 } from "@echo-brain/organization-api";
 import type { PersonSlackMessageV1, PersonSlackReaderV1, PersonSlackReleaseAuditV1, PersonSlackReleaseV1 } from "../application/ports/person-slack-reader-v1.js";
@@ -38,6 +40,29 @@ export interface CreatePersonEvidenceDeskV1Options {
   readonly slack?: { readonly reader: PersonSlackReaderV1; readonly audit: PersonSlackReleaseAuditV1 };
   /** Milliseconds clock for the Slack connection-check cache; tests pin it. */
   readonly now_ms?: () => number;
+}
+
+/**
+ * Observability only: what one desk call returned, by source. A shared
+ * transcript counts as a document item; the originals adapter adds
+ * transcript_items for that subset. Never text, ids or labels.
+ */
+function deskCounts(items: readonly EvidenceDeskItemV1[]): CoreRuntimeCountsV1 {
+  let meeting = 0; let document = 0; let slack = 0;
+  for (const item of items) {
+    const source = evidenceDeskSourceV1(item);
+    if (source === "meeting") meeting += 1; else if (source === "slack") slack += 1; else document += 1;
+  }
+  return { included_count: items.length, meeting_items: meeting, document_items: document, slack_items: slack };
+}
+
+/** Each desk call is one span under the current request, Ask step or evidence door. */
+function observedDeskCall<T extends EvidenceDeskResultV1>(phase: CoreRuntimePhaseV1, operation: () => Promise<T>): Promise<T> {
+  return observeCoreRuntimeV1(phase, async () => {
+    const result = await operation();
+    annotateCoreRuntimeV1({ counts: deskCounts(result.items) });
+    return result;
+  });
 }
 
 /** A Slack connection check stays valid this long (RFC-0003). */
@@ -354,31 +379,36 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     latestRecordTruncated = false;
     return result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]);
   };
+  const openCitation = async (input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }) => {
+    input.signal?.throwIfAborted();
+    initialize();
+    if ((input.citation as { readonly kind: string }).kind === "slack_message") throw new AuthorityOperationError("not_found", "Slack messages open in Slack");
+    if (input.citation.kind === "approved_record") {
+      const expanded = options.records.openDeskCitation({ access_token: options.access_token, atom_id: input.citation.atom_id, record_sha256: input.citation.record_sha256, policy_id: input.citation.policy_id, ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}) });
+      latestRecordTruncated = false;
+      return result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]);
+    }
+    const release = options.originals.deskOpen({ access_token: options.access_token, scope: options.scope, citation: input.citation, ...(input.neighbours === undefined ? {} : { neighbours: input.neighbours }) });
+    return result(originals(release), release.truncated, [release.receipt]);
+  };
+  const revalidate = async (input: { readonly signal?: AbortSignal }) => {
+    input.signal?.throwIfAborted();
+    let checkedAt: string | undefined = initialize();
+    for (const release of originalReleases) checkedAt = options.originals.revalidateDeskRelease({ access_token: options.access_token, release }).checked_at;
+    for (const release of recordReleases) checkedAt = options.records.revalidateBatchRelease({ access_token: options.access_token, release }).checked_at;
+    if (slackReleased && options.slack !== undefined && (slackCheckedAt === undefined || now() - slackCheckedAt >= PERSON_EVIDENCE_DESK_SLACK_CHECK_MS_V1)) {
+      // A revoked or disconnected Slack connection stops the request before Slack text reaches another model call.
+      await options.slack.reader.check({ ...(input.signal === undefined ? {} : { signal: input.signal }) });
+      slackCheckedAt = now();
+    }
+    return Object.freeze({ checked_at: checkedAt });
+  };
   return Object.freeze({
-    scope: publicScope(options.scope), search, open, list,
-    openCitation: async (input: { readonly citation: PersonAnswerCitationV3; readonly neighbours?: number; readonly signal?: AbortSignal }) => {
-      input.signal?.throwIfAborted();
-      initialize();
-      if ((input.citation as { readonly kind: string }).kind === "slack_message") throw new AuthorityOperationError("not_found", "Slack messages open in Slack");
-      if (input.citation.kind === "approved_record") {
-        const expanded = options.records.openDeskCitation({ access_token: options.access_token, atom_id: input.citation.atom_id, record_sha256: input.citation.record_sha256, policy_id: input.citation.policy_id, ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}) });
-        latestRecordTruncated = false;
-        return result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]);
-      }
-      const release = options.originals.deskOpen({ access_token: options.access_token, scope: options.scope, citation: input.citation, ...(input.neighbours === undefined ? {} : { neighbours: input.neighbours }) });
-      return result(originals(release), release.truncated, [release.receipt]);
-    },
-    revalidate: async (input: { readonly signal?: AbortSignal }) => {
-      input.signal?.throwIfAborted();
-      let checkedAt: string | undefined = initialize();
-      for (const release of originalReleases) checkedAt = options.originals.revalidateDeskRelease({ access_token: options.access_token, release }).checked_at;
-      for (const release of recordReleases) checkedAt = options.records.revalidateBatchRelease({ access_token: options.access_token, release }).checked_at;
-      if (slackReleased && options.slack !== undefined && (slackCheckedAt === undefined || now() - slackCheckedAt >= PERSON_EVIDENCE_DESK_SLACK_CHECK_MS_V1)) {
-        // A revoked or disconnected Slack connection stops the request before Slack text reaches another model call.
-        await options.slack.reader.check({ ...(input.signal === undefined ? {} : { signal: input.signal }) });
-        slackCheckedAt = now();
-      }
-      return Object.freeze({ checked_at: checkedAt });
-    },
+    scope: publicScope(options.scope),
+    search: (input: EvidenceDeskSearchInputV1) => observedDeskCall("evidence_search", () => search(input)),
+    open: (input: EvidenceDeskOpenInputV1) => observedDeskCall("evidence_open", () => open(input)),
+    list: (input: EvidenceDeskListInputV1) => observedDeskCall("evidence_list", () => list(input)),
+    openCitation: (input: Parameters<typeof openCitation>[0]) => observedDeskCall("evidence_open", () => openCitation(input)),
+    revalidate: (input: { readonly signal?: AbortSignal }) => observeCoreRuntimeV1("evidence_revalidate", () => revalidate(input)),
   });
 }

@@ -210,7 +210,10 @@ export type AnswerCompositionObservedStageV1 =
   | "planner"
   | "context"
   | "answer"
-  | "audit";
+  | "audit"
+  // The agentic loop (RFC-0003) reports its own desk time and final fence.
+  | "retrieval"
+  | "revalidation";
 
 export type AnswerCompositionObservedEventV1 =
   | "succeeded"

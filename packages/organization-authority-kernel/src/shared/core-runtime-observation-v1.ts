@@ -11,6 +11,8 @@ export const CORE_RUNTIME_PHASES_V1 = [
   "search_reconciliation", "search_snapshot", "search_enrichment", "search_build",
   "search_validation", "search_publication", "related_projection", "model_call",
   "model_parse", "model_schema", "model_grounding", "ask_request", "http_request", "ask_planner", "ask_answer",
+  // One evidence-desk call each (search, open, list, revalidate), from Ask or the evidence doors.
+  "evidence_search", "evidence_open", "evidence_list", "evidence_revalidate",
 ] as const;
 export type CoreRuntimePhaseV1 = (typeof CORE_RUNTIME_PHASES_V1)[number];
 export const CORE_RUNTIME_COUNT_KEYS_V1 = [
@@ -20,6 +22,8 @@ export const CORE_RUNTIME_COUNT_KEYS_V1 = [
   "captured_head", "current_head", "published_head", "http_status", "active_http",
   "input_tokens", "output_tokens", "total_tokens", "provider_latency_ms",
   "rss_bytes", "heap_used_bytes", "cpu_user_us", "cpu_system_us", "fs_read_count", "fs_write_count",
+  // Items an evidence call returned, by source; transcript_items is the shared-transcript subset of document_items.
+  "meeting_items", "document_items", "transcript_items", "slack_items",
 ] as const;
 export type CoreRuntimeCountsV1 = Partial<Record<(typeof CORE_RUNTIME_COUNT_KEYS_V1)[number], number | null>>;
 export const CORE_RUNTIME_RESULTS_V1 = ["current", "published", "superseded", "done", "uncertain", "failed", "cancelled", "periodic", "cycle_failure", "provider_failure", "invalid_output", "unavailable", "completed", "competing_action", "coalesced", "advanced", "retry_pending", "rate_limited", "timeout", "authorization", "parse_failure", "schema_failure", "grounding_failure"] as const;

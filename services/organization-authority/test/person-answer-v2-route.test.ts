@@ -105,6 +105,7 @@ function telemetryStages() {
       succeed: (stage) => { events.push([stage, 'succeeded']); },
       fail: (stage) => { events.push([stage, 'failed']); },
       skip: () => undefined,
+      failOpen: () => undefined,
       observeComposition: () => undefined,
       observeContent: () => undefined,
       complete: () => undefined,

@@ -319,6 +319,18 @@ There is no authority field.
 - A request that cannot be routed under that setting fails as provider
   unavailable. It is never retried on a host that allows data collection.
 
+### Observability
+
+- Staging records an agentic Ask as the same Ask journey as V2, so the
+  Explorer, dashboard and Ask alarms see it: retrieval is the research desk
+  time, planner the research step calls, then context, answer, final fence,
+  audit and the V4 outcome.
+- Each step, answer call and desk call is a linked core-runtime span; desk
+  spans count returned items by source, including shared transcripts.
+  RB-OPERATIONS-001 lists the fields.
+- Spans and journey events carry counts and timings only. Slack text never
+  enters them, and content capture stays off for calls that carry it.
+
 ### Evaluation
 
 **Test set.**

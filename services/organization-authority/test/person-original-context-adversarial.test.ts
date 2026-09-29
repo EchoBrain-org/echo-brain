@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { observeCoreRuntimeSyncV1, type CoreRuntimeObservationV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
@@ -453,7 +454,10 @@ describe("adversarial original-context retrieval", () => {
     // under its grant, cited by exact revision and a packet anchor.
     // Each turn is led by its speaker's display name, so "who will send the
     // quote" is answerable; identities stay out, and unnamed turns stay bare.
-    const asked = retrieval.retrieve({ access_token: "member", queries: ["Haddad revised quote"], scope: { kind: "global" } });
+    // Observability: the enclosing evidence span learns how many packets were transcripts.
+    const spans: CoreRuntimeObservationV1[] = [];
+    const asked = observeCoreRuntimeSyncV1("evidence_search", () => retrieval.retrieve({ access_token: "member", queries: ["Haddad revised quote"], scope: { kind: "global" } }), { observer: (event) => { spans.push(event); } });
+    expect(spans.find(span => span.event === "succeeded")?.counts.transcript_items).toBe(1);
     expect(asked.query_hit_counts).toEqual([1]);
     const packet = asked.release.released_atoms[0]!;
     expect(packet).toMatchObject({ source_id: source.source_id, revision_id: source.revision_id, label: "Transcript: Pricing sync" });
@@ -463,7 +467,8 @@ describe("adversarial original-context retrieval", () => {
     expect(retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: citationOf(packet) }).atom).toEqual(packet);
     expect(() => retrieval.revalidate({ access_token: "member", release: asked.release })).not.toThrow();
     // The agentic desk reads the same transcript as a labeled note, and opens it.
-    const desk = retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "revised quote" });
+    const desk = observeCoreRuntimeSyncV1("evidence_search", () => retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "revised quote" }), { observer: (event) => { spans.push(event); } });
+    expect(spans.filter(span => span.event === "succeeded").at(-1)?.counts.transcript_items).toBe(1);
     expect(desk.items).toEqual([expect.objectContaining({ kind: "note", label: "Transcript: Pricing sync", visibility: "projects", text: packet.text })]);
     expect(retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "revised quote", kinds: ["document_passage"] }).items).toEqual([]);
     const opened = retrieval.deskOpen({ access_token: "member", scope: { kind: "global" }, citation: desk.items[0]!.citation, neighbours: 2 });

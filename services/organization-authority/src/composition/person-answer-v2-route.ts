@@ -17,7 +17,7 @@ import type { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persisten
 import type { PersonOriginalContextRetrievalPortV1, PersonAskScopeV2 } from "../application/ports/person-original-context-retrieval-v1.js";
 import type { PersonRecordSearchBatchApplicationV1, PersonRecordSearchBatchReleaseV1 } from "./person-record-search-route.js";
 import type { PersonAnswerV2HttpApplication, PersonMeetingTranscriptHttpApplicationV1 } from "../presentation/person-answer-v2-http-application.js";
-import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { annotateCoreRuntimeV1, observeCoreRuntimeSyncV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { classifyAskJourneyFailureV1, type AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
 import { randomUUID } from "node:crypto";
 
@@ -160,84 +160,93 @@ export function createPersonAnswerV2Route(
           let authorizationCompleted = false;
           let retrievalStartedAt = authorizationStartedAt;
           try {
-            const originals = options.originals.retrieve({
-              access_token: input.access_token,
-              queries: request.queries,
-              scope,
-              ...(journey === undefined ? {} : { on_authorized: () => {
-                if (authorizationCompleted) return;
-                authorizationCompleted = true;
-                journey.succeed("ask_authorization", authorizationStartedAt);
-                retrievalStartedAt = journey.startTimer();
-              } }),
-            });
-            if (!authorizationCompleted) {
-              authorizationCompleted = true;
-              journey?.succeed("ask_authorization", authorizationStartedAt);
-              retrievalStartedAt = journey?.startTimer() ?? 0;
-            }
-            originalRelease = originals.release;
-            let records: ReturnType<PersonRecordSearchBatchApplicationV1["searchBatch"]> | undefined;
-            // The record release port filters by explicit association before
-            // scoring. Historical unassociated records remain global-only.
-            {
-              records = options.records.searchBatch({
+            // One evidence span per retrieval, by source; the originals adapter adds transcript_items.
+            return observeCoreRuntimeSyncV1("evidence_search", () => {
+              const originals = options.originals.retrieve({
                 access_token: input.access_token,
                 queries: request.queries,
-                ...(scope.kind === "project" ? { project_id: scope.project_id } : {}),
-                ...(request.exact_release_id === undefined ? {} : { exact_release_id: request.exact_release_id }),
-                // Keep combined record/original hits within the core's per-query
-                // audit budget. Both ports enforce the selected project scope.
-                limit: 5,
+                scope,
+                ...(journey === undefined ? {} : { on_authorized: () => {
+                  if (authorizationCompleted) return;
+                  authorizationCompleted = true;
+                  journey.succeed("ask_authorization", authorizationStartedAt);
+                  retrievalStartedAt = journey.startTimer();
+                } }),
               });
-              recordRelease = records.release;
-              if (!samePrincipal(originals.release.authorization, records.release.current_authorization)) unavailable();
-            }
-          const approved = records?.response.items.map((item) => Object.freeze({
-            kind: "approved_record" as const,
-            atom_id: item.atom_id as Sha256Digest,
-            record_sha256: item.record_sha256 as Sha256Digest,
-            policy_id: item.policy_id,
-            text: item.text,
-          })) ?? [];
-          const generation_id = records?.release.active_pointer.generation_id as Sha256Digest | undefined;
-          const record_head = records?.release.active_pointer.record_head;
-          const releaseId = canonicalSha256({
-            kind: "echo-person-answer-v2-release",
-            scope,
-            records_release: records?.release.record_read_audit_row_sha256 ?? null,
-            originals: originals.release.released_atoms.map((atom) => ({
-              source_id: atom.source_id,
-              revision_id: atom.revision_id,
-              source_sha256: atom.source_sha256,
-              representation_sha256: atom.representation_sha256,
-              anchor_sha256: atom.anchor_sha256,
-            })),
-          });
-            combined = Object.freeze({
-            release_id: releaseId,
-            authority_id: options.authority_id,
-            organization_id: options.organization_id,
-            state_lineage_id: options.state_lineage_id,
-            principal_id: originals.release.authorization.principal_id,
-            membership_id: originals.release.authorization.membership_id,
-            session_family_id: originals.release.authorization.session_family_id,
-            generation_id: generation_id ?? canonicalSha256({ kind: "echo-person-originals-v1", release_id: releaseId }),
-            record_head: Object.freeze({
-              position: record_head?.position ?? 0,
-              record_sha256: record_head?.record_sha256 as Sha256Digest | null ?? null,
-            }),
-            released_atoms: balancedEvidence(approved, originals.release.released_atoms),
-            query_hit_counts: Object.freeze(request.queries.map((_, index) =>
-              (records?.query_hit_counts[index] ?? 0) + (originals.query_hit_counts[index] ?? 0))),
-            checked_at: originals.release.authorization.checked_at,
-          });
-            journey?.succeed("ask_retrieval", retrievalStartedAt, {
-              planned_query_count: request.queries.length,
-              query_hit_count: combined.query_hit_counts.reduce((total, count) => total + count, 0),
-              released_atom_count: combined.released_atoms.length,
+              if (!authorizationCompleted) {
+                authorizationCompleted = true;
+                journey?.succeed("ask_authorization", authorizationStartedAt);
+                retrievalStartedAt = journey?.startTimer() ?? 0;
+              }
+              originalRelease = originals.release;
+              let records: ReturnType<PersonRecordSearchBatchApplicationV1["searchBatch"]> | undefined;
+              // The record release port filters by explicit association before
+              // scoring. Historical unassociated records remain global-only.
+              {
+                records = options.records.searchBatch({
+                  access_token: input.access_token,
+                  queries: request.queries,
+                  ...(scope.kind === "project" ? { project_id: scope.project_id } : {}),
+                  ...(request.exact_release_id === undefined ? {} : { exact_release_id: request.exact_release_id }),
+                  // Keep combined record/original hits within the core's per-query
+                  // audit budget. Both ports enforce the selected project scope.
+                  limit: 5,
+                });
+                recordRelease = records.release;
+                if (!samePrincipal(originals.release.authorization, records.release.current_authorization)) unavailable();
+              }
+            const approved = records?.response.items.map((item) => Object.freeze({
+              kind: "approved_record" as const,
+              atom_id: item.atom_id as Sha256Digest,
+              record_sha256: item.record_sha256 as Sha256Digest,
+              policy_id: item.policy_id,
+              text: item.text,
+            })) ?? [];
+            const generation_id = records?.release.active_pointer.generation_id as Sha256Digest | undefined;
+            const record_head = records?.release.active_pointer.record_head;
+            const releaseId = canonicalSha256({
+              kind: "echo-person-answer-v2-release",
+              scope,
+              records_release: records?.release.record_read_audit_row_sha256 ?? null,
+              originals: originals.release.released_atoms.map((atom) => ({
+                source_id: atom.source_id,
+                revision_id: atom.revision_id,
+                source_sha256: atom.source_sha256,
+                representation_sha256: atom.representation_sha256,
+                anchor_sha256: atom.anchor_sha256,
+              })),
             });
-            return combined;
+              combined = Object.freeze({
+              release_id: releaseId,
+              authority_id: options.authority_id,
+              organization_id: options.organization_id,
+              state_lineage_id: options.state_lineage_id,
+              principal_id: originals.release.authorization.principal_id,
+              membership_id: originals.release.authorization.membership_id,
+              session_family_id: originals.release.authorization.session_family_id,
+              generation_id: generation_id ?? canonicalSha256({ kind: "echo-person-originals-v1", release_id: releaseId }),
+              record_head: Object.freeze({
+                position: record_head?.position ?? 0,
+                record_sha256: record_head?.record_sha256 as Sha256Digest | null ?? null,
+              }),
+              released_atoms: balancedEvidence(approved, originals.release.released_atoms),
+              query_hit_counts: Object.freeze(request.queries.map((_, index) =>
+                (records?.query_hit_counts[index] ?? 0) + (originals.query_hit_counts[index] ?? 0))),
+              checked_at: originals.release.authorization.checked_at,
+            });
+              journey?.succeed("ask_retrieval", retrievalStartedAt, {
+                planned_query_count: request.queries.length,
+                query_hit_count: combined.query_hit_counts.reduce((total, count) => total + count, 0),
+                released_atom_count: combined.released_atoms.length,
+              });
+              annotateCoreRuntimeV1({ counts: {
+                included_count: combined.released_atoms.length,
+                meeting_items: combined.released_atoms.filter((atom) => atom.kind === "approved_record").length,
+                document_items: combined.released_atoms.filter((atom) => atom.kind !== "approved_record").length,
+                slack_items: 0,
+              } });
+              return combined;
+            });
           } catch (error) {
             const failure = request.signal?.aborted === true
               ? { failure_class: "cancelled" as const, retryable: false }

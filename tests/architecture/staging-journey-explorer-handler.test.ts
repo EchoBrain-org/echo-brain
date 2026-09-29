@@ -1,5 +1,6 @@
 import { TELEMETRY_FIXTURE_VOCABULARY_V1 } from "../support/telemetry-fixture-vocabulary-v1.js";
-import { CORE_RUNTIME_PHASES_V1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { CORE_RUNTIME_COUNT_KEYS_V1, CORE_RUNTIME_PHASES_V1, CORE_RUNTIME_RESULTS_V1, observeCoreRuntimeV1, observeCoreRuntimeSyncV1, annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { JOURNEY_TERMINAL_OUTCOMES_V1 } from "@echo-brain/organization-authority-kernel/shared/journey-telemetry-v1";
 import { createStagingJourneyTelemetryTransportV1 } from "../../services/organization-authority/src/composition/staging/observability/staging-journey-telemetry-transport-v1.js";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createRequire } from "node:module";
@@ -884,8 +885,10 @@ describe("staging Journey Explorer custom widget", () => {
         status: "Complete",
         results: [
           start,
+          // A retryable failure before the response leaves the journey open.
           event({
             sequence: 2,
+            stage: "ask_retrieval",
             event: "failed",
             retryable: "1",
             failure_class: "unavailable",
@@ -1617,6 +1620,42 @@ describe("core observation Explorer round trip", () => {
           }),
         ],
       });
+  });
+
+  // Kernel-to-Explorer drift: every value the kernel can emit must survive the
+  // deployed handler, or a whole list page fails or a count silently vanishes.
+  it.each(CORE_RUNTIME_RESULTS_V1)("reads the %s core-runtime result", async (result) => {
+    const diagnostic = JSON.stringify({ operation_id: id, span_id: "22222222-2222-4222-8222-222222222222", parent_span_id: null, phase: "http_request", purpose: "http_request", root: true, linked_journey_ids: [], counts: {}, result, generation: null });
+    const stageEvent = event({ schema_version: 2, workflow: "core_runtime", stage: "core_operation", event: "succeeded", outcome: null, elapsed_ms: 1, diagnostic_json: diagnostic });
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: [event({ schema_version: 2, workflow: "core_runtime", stage: "core_operation", event: "started", outcome: null, elapsed_ms: 0, diagnostic_json: diagnostic, observed_at: "2026-09-02T11:58:59.000Z" }), stageEvent] }]);
+    await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toMatchObject({
+      history_complete: true,
+      stages: expect.arrayContaining([expect.objectContaining({ diagnostic: expect.objectContaining({ result }) })]),
+    });
+  });
+
+  it("keeps every core-runtime count key the kernel can emit", async () => {
+    const counts = Object.fromEntries(CORE_RUNTIME_COUNT_KEYS_V1.map((key, index) => [key, index + 1]));
+    const diagnostic = JSON.stringify({ operation_id: id, span_id: "22222222-2222-4222-8222-222222222222", parent_span_id: null, phase: "evidence_search", purpose: "evidence_search", root: true, linked_journey_ids: [], counts, result: null, generation: null });
+    const stageEvent = event({ schema_version: 2, workflow: "core_runtime", stage: "core_operation", event: "started", outcome: null, elapsed_ms: 0, diagnostic_json: diagnostic });
+    const client = new Client([{ queryId: "q" }, { status: "Complete", results: [stageEvent] }]);
+    await expect(handler(client)({ operation: "detail", journey_id: id })).resolves.toMatchObject({
+      stages: [expect.objectContaining({ diagnostic: expect.objectContaining({ counts }) })],
+    });
+  });
+
+  it.each(JOURNEY_TERMINAL_OUTCOMES_V1.ask_response)("lists an Ask journey that ends %s as complete", async (outcome) => {
+    const list = new Client(listReplies([indexRow(id, now)], [event({ outcome })]));
+    await expect(handler(list)({ operation: "list" })).resolves.toMatchObject({
+      journeys: [expect.objectContaining({ journey_id: id, status: "complete", terminal_outcome: outcome })],
+    });
+  });
+
+  it("ends an Ask journey whose response failed, even when a retry may succeed", async () => {
+    const list = new Client(listReplies([indexRow(id, now)], [event({ event: "failed", outcome: null, failure_class: "timeout", retryable: true })]));
+    await expect(handler(list)({ operation: "list" })).resolves.toMatchObject({
+      journeys: [expect.objectContaining({ journey_id: id, status: "complete", terminal_outcome: "failed", terminal_failure_class: "timeout" })],
+    });
   });
 
   it("reads real emitted V2 spans, preserves diagnostic fields, and renders escaped content", async () => {

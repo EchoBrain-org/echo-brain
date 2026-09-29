@@ -326,6 +326,7 @@ export async function startOrganizationAuthorityApiRuntime(
                 model: dependencies.answer_composition_generation.structured_output,
                 generation: dependencies.answer_composition_generation.generation,
                 audit: new SqlitePersonAgenticAskAuditV1(database),
+                ...(dependencies.ask_journey_telemetry === undefined ? {} : { ask_journey_telemetry: dependencies.ask_journey_telemetry }),
                 ...(dependencies.agentic_ask_v1_small_scope_shortcut === true
                   ? { small_scope_shortcut: true }
                   : {}),

@@ -8,6 +8,9 @@ import type {
 } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import type {
+  AnswerCompositionGenerationObservationV1,
+  AnswerCompositionStageObservationV1,
+  StructuredGenerationFinishReasonV1,
   StructuredGenerationInput,
   StructuredGenerationJsonSchema,
   StructuredGenerationPort,
@@ -22,7 +25,7 @@ import {
   type EvidenceDeskResultV1,
   type EvidenceDeskSourceV1,
 } from "../shared/evidence-desk-v1.js";
-import { withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
+import { observeCoreRuntimeV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
 import {
   ANSWER_PROMPT,
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
@@ -166,7 +169,16 @@ export interface CreateAgenticAskV1Options {
    * and "my" resolve to a person. Only the models see it; audits never do.
    */
   readonly asker?: { readonly display_name: string };
+  /**
+   * Content-free stage timings for the Ask journey, in the same shape as the
+   * V2 composition: retrieval (desk time during research), planner (research
+   * step calls), context, answer, revalidation (final fence) and audit.
+   * Observer failures never alter the answer.
+   */
+  readonly on_stage?: (event: AnswerCompositionStageObservationV1) => void;
 }
+
+const FINISH_REASONS: readonly StructuredGenerationFinishReasonV1[] = ["stop", "length", "content_filter", "error", "other"];
 
 /** A directory name the prompts may carry: one trimmed line of 1 to 200 characters, or none. */
 function askerName(value: { readonly display_name: string } | undefined): string | undefined {
@@ -389,8 +401,45 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
       const deadlineTimer = setTimeout(() => { deadlineExpired = true; terminalAbort.abort(new AgenticAskDeadlineErrorV1()); }, AGENTIC_ASK_DEADLINE_MS_V1);
       deadlineTimer.unref?.();
       let calls = 0; let repairs = 0; let fallbacks = 0; let steps = 0; let checkedAt: string | null = null;
+      // ---- journey observation (content-free; never alters the answer) ----
+      let phase: "research" | "answer" | "final" = "research";
+      let deskMs = 0; let stepModelMs = 0; let answerModelMs = 0; let searchHits = 0;
+      const report = (event: Pick<AnswerCompositionStageObservationV1, "stage" | "event" | "elapsed_ms"> & Partial<AnswerCompositionStageObservationV1>): void => {
+        if (options.on_stage === undefined) return;
+        try {
+          options.on_stage(Object.freeze({ failure_class: null, http_status: null, generation_usage: null, retrieval: null, ...event, elapsed_ms: Math.max(0, Math.round(event.elapsed_ms)) }));
+        } catch { /* observation only */ }
+      };
+      /** Desk calls are timed so the journey can split research into desk and model time. */
+      const timed = <T>(operation: () => Promise<T>): Promise<T> => {
+        const started = now();
+        const settle = () => { if (phase === "research") deskMs += Math.max(0, now() - started); };
+        return operation().then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
+      };
+      const desk: EvidenceDeskPortV1 = Object.freeze({
+        scope: options.desk.scope,
+        search: (request: Parameters<EvidenceDeskPortV1["search"]>[0]) => timed(() => options.desk.search(request)),
+        open: (request: Parameters<EvidenceDeskPortV1["open"]>[0]) => timed(() => options.desk.open(request)),
+        list: (request: Parameters<EvidenceDeskPortV1["list"]>[0]) => timed(() => options.desk.list(request)),
+        revalidate: (request: Parameters<EvidenceDeskPortV1["revalidate"]>[0]) => timed(() => options.desk.revalidate(request)),
+      });
       let terminalAudited = false;
       const generations: AgenticAskGenerationObservationV1[] = [];
+      /** One role's calls summed, for the journey's LLM usage; any unreported part makes that total unknown. */
+      const usageOf = (role: AgenticAskModelRoleV1, elapsedMs: number): AnswerCompositionGenerationObservationV1 | null => {
+        const matching = generations.filter(entry => entry.role === role);
+        if (matching.length === 0) return null;
+        const sum = (field: keyof StructuredGenerationUsageV1): number | null =>
+          matching.every(entry => typeof entry.usage?.[field] === "number") ? matching.reduce((total, entry) => total + (entry.usage![field] as number), 0) : null;
+        const last = matching.at(-1)!.finish_reason;
+        return Object.freeze({
+          adapter_id: options.generation.generation_adapter_id, model: options.generation.answer_model,
+          provider_latency_ms: Math.max(0, Math.round(elapsedMs)),
+          input_tokens: sum("input_tokens"), output_tokens: sum("output_tokens"), total_tokens: sum("total_tokens"),
+          cached_input_tokens: sum("cached_input_tokens"), reasoning_tokens: sum("reasoning_tokens"),
+          finish_reason: last === null ? null : FINISH_REASONS.includes(last as StructuredGenerationFinishReasonV1) ? last as StructuredGenerationFinishReasonV1 : "other",
+        });
+      };
       const invocationDigests: Sha256Digest[] = [];
       const receipts: Sha256Digest[] = [];
       const notice = new Set<string>();
@@ -452,10 +501,11 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
         if (searchesRun.includes(query.toLowerCase())) return { tool: "search", query, note: "already searched; results are in your scratchpad" };
         searchesRun.push(query.toLowerCase());
-        const result = await raceAbort(activeSignal, options.desk.search({ query, limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
+        const result = await raceAbort(activeSignal, desk.search({ query, limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
         observe(result);
         const found = result.items.filter(item => item.text !== undefined).map(item => register(item, true));
         for (const entry of found) entry.query = query;
+        searchHits += found.length;
         return { tool: "search", query, results: found.map(entry => listing(entry, true)), ...(found.length === 0 ? { note: "no matches" } : {}) };
       };
       /** Models sometimes pass a title instead of an id; resolve it only when a seen title matches. */
@@ -473,7 +523,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         const entry = entryOf(raw) ?? entryByTitle(raw);
         if (entry === undefined) return { tool: "open", args, error: "unknown id; pass an id such as E4 from your scratchpad" };
         let result: EvidenceDeskResultV1;
-        try { result = await raceAbort(activeSignal, options.desk.open({ item: entry.item.id, neighbours: AGENTIC_ASK_OPEN_NEIGHBOURS_V1, signal: activeSignal })); }
+        try { result = await raceAbort(activeSignal, desk.open({ item: entry.item.id, neighbours: AGENTIC_ASK_OPEN_NEIGHBOURS_V1, signal: activeSignal })); }
         catch (error) {
           const refusal = toolRefusal(error);
           if (refusal === null) throw error;
@@ -503,7 +553,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         if (state.shown >= state.items.length && (!state.fetched || state.cursor !== undefined)) {
           const deskInput: EvidenceDeskListInputV1 = { ...request, limit: AGENTIC_ASK_LIST_FETCH_V1, ...(state.cursor === undefined ? {} : { cursor: state.cursor }), signal: activeSignal };
           let result: EvidenceDeskResultV1;
-          try { result = await raceAbort(activeSignal, options.desk.list(deskInput)); }
+          try { result = await raceAbort(activeSignal, desk.list(deskInput)); }
           catch (error) {
             const refusal = toolRefusal(error);
             if (refusal === null) throw error;
@@ -598,14 +648,20 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         assertLive();
         if (calls >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) throw new AgenticAskGenerationFailureV1("call budget exhausted", false);
         // Every call is preceded by a cumulative desk revalidation of what it may carry.
-        const validated = await raceAbort(activeSignal, options.desk.revalidate({ signal: activeSignal }));
+        const validated = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal }));
         checkedAt = validated.checked_at;
         assertLive();
         calls += 1;
         const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: OUTPUT_TOKENS[role], timeout_ms: Math.max(1, Math.min(options.generation.timeout_ms, timeoutMs, remaining())), signal: activeSignal });
         invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));
         // Slack text must never reach runtime content capture (RFC-0003 retention).
-        const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => slackInPrompt() ? withoutCoreRuntimeContentV1(operation) : operation();
+        const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => {
+          // Each call is its own span, so provider model calls carry the step or answer purpose.
+          const observed = () => observeCoreRuntimeV1(role === "step" ? "ask_planner" : "ask_answer", operation);
+          const started = now();
+          const settle = () => { const spent = Math.max(0, now() - started); if (role === "step") stepModelMs += spent; else answerModelMs += spent; };
+          return (slackInPrompt() ? withoutCoreRuntimeContentV1(observed) : observed()).then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
+        };
         try {
           if (options.model.generate_with_observation !== undefined) {
             const generate = options.model.generate_with_observation.bind(options.model);
@@ -663,13 +719,13 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
       try {
         // ---- optional small-scope preload -----------------------------------
         if (options.small_scope_shortcut === true) {
-          const inventory = await raceAbort(activeSignal, options.desk.search({ limit: AGENTIC_ASK_SHORTCUT_ITEMS_V1, inventory_mode: "items", signal: activeSignal }));
+          const inventory = await raceAbort(activeSignal, desk.search({ limit: AGENTIC_ASK_SHORTCUT_ITEMS_V1, inventory_mode: "items", signal: activeSignal }));
           observe(inventory);
           if (!inventory.truncated && inventory.items.length <= AGENTIC_ASK_SHORTCUT_ITEMS_V1) {
             let used = 0;
             for (const listed of inventory.items) {
               assertLive();
-              const opened = await raceAbort(activeSignal, options.desk.open({ item: listed.id, signal: activeSignal }));
+              const opened = await raceAbort(activeSignal, desk.open({ item: listed.id, signal: activeSignal }));
               observe(opened);
               const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
               if (exact === undefined || used + bytes(exact.text) > stepBudget / 2) continue;
@@ -728,6 +784,12 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         }
         if (plan.length === 0) plan = [newPart({ question: partQuestion(input.question), needs: [], notes: "" })];
 
+        // Research is over: its desk time is the journey's retrieval stage and its step calls the planner stage.
+        phase = "answer";
+        report({ stage: "retrieval", event: "succeeded", elapsed_ms: deskMs, retrieval: { planned_query_count: searchesRun.length, query_hit_count: searchHits, released_atom_count: entries.size } });
+        const stepUsage = usageOf("step", stepModelMs);
+        report(stepUsage === null ? { stage: "planner", event: "skipped", elapsed_ms: 0 } : { stage: "planner", event: "succeeded", elapsed_ms: stepModelMs, generation_usage: stepUsage });
+
         // ---- final answer ---------------------------------------------------
         const cited = [...citedShorts()].map(short => entryOf(short)!);
         const evidence: Entry[] = []; let evidenceBytes = 0;
@@ -739,6 +801,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         for (const entry of cited) admit(entry);
         for (const entry of [...entries.values()].filter(value => value.full).sort((left, right) => right.touched - left.touched)) admit(entry);
         const allowed = new Set(evidence.map(entry => entry.short));
+        report({ stage: "context", event: "succeeded", elapsed_ms: 0, retrieval: { context_atom_count: evidence.length } });
 
         let answer: Answer | null = null;
         const answerTimeout = () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
@@ -803,9 +866,17 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
           ...(notice.size === 0 ? {} : { notice: [...notice].join(" ") }),
         });
         const validated = compactAndValidateAgenticAskResponseV1(result);
+        // A failed answer call still ends in a response (records or not found); its span keeps the failure.
+        const answerUsage = usageOf("answer", answerModelMs);
+        report(answerUsage === null ? { stage: "answer", event: "skipped", elapsed_ms: 0 } : { stage: "answer", event: "succeeded", elapsed_ms: answerModelMs, generation_usage: answerUsage, retrieval: { citation_count: validated.citations.length } });
         assertLive();
-        const revalidated = await raceAbort(activeSignal, options.desk.revalidate({ signal: activeSignal })); checkedAt = revalidated.checked_at;
+        phase = "final";
+        const fenceStartedAt = now();
+        const revalidated = await raceAbort(activeSignal, desk.revalidate({ signal: activeSignal })); checkedAt = revalidated.checked_at;
+        report({ stage: "revalidation", event: "succeeded", elapsed_ms: now() - fenceStartedAt });
+        const auditStartedAt = now();
         await audit(validated.outcome, validated.citations.length, validated);
+        report({ stage: "audit", event: "succeeded", elapsed_ms: now() - auditStartedAt, retrieval: { citation_count: validated.citations.length } });
         // An abort that races the terminal audit still suppresses publication.
         if (input.signal?.aborted) abort();
         assertLive();

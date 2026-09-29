@@ -1,4 +1,5 @@
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
+import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { randomUUID } from "node:crypto";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
@@ -321,6 +322,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     this.assertScope(actor, input.scope);
     input.on_authorized?.();
     const selected = new Map<string, ReleasedSourceContextAtomV1>();
+    const transcriptKeys = new Set<string>();
     const counts: number[] = [];
     const transcripts = this.transcriptCandidates(actor, input.scope);
     for (const query of input.queries) {
@@ -343,8 +345,11 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
           : this.textAtom(row, terms);
         const key = `${atom.source_id}\u0000${atom.revision_id}\u0000${atom.representation_sha256}\u0000${atom.anchor_sha256}`;
         if (!selected.has(key)) selected.set(key, atom);
+        if ("transcript" in row) transcriptKeys.add(key);
       }
     }
+    // Observability only: how many released packets came from shared transcripts.
+    annotateCoreRuntimeV1({ counts: { transcript_items: transcriptKeys.size } });
     const release: OriginalContextReleaseV1 = Object.freeze({
       authorization: Object.freeze({
         principal_id: actor.principal_id,
@@ -426,7 +431,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     // bounded to limit+1 rows; every row has at least one packet, so expanding
     // then taking limit+1 is sufficient to prove truncation without an
     // unbounded source scan.
-    const expanded: { readonly score: number; readonly received_at: string; readonly atom: ReleasedSourceContextAtomV1; readonly item: () => OriginalContextDeskItemV1 }[] = input.inventory_mode === "items"
+    const expanded: { readonly score: number; readonly received_at: string; readonly atom: ReleasedSourceContextAtomV1; readonly item: () => OriginalContextDeskItemV1; readonly transcript?: true }[] = input.inventory_mode === "items"
       ? candidates.flatMap((row) => this.deskAtoms(row, [], true).map((atom) => ({ score: 0, received_at: row.received_at, atom, item: () => this.deskItem(row, atom, false) })))
       : candidates.map((row) => { const atom = this.deskAtom(row, terms); return { score: row.lexical_score, received_at: row.received_at, atom, item: () => this.deskItem(row, atom, input.query !== undefined) }; });
     // ADR-0021: a search also reads transcripts shared at approval, as notes
@@ -436,11 +441,12 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
         const score = wholeTermScore(transcript.title, transcript.body, terms);
         if (score === 0) continue;
         const atom = transcriptAtom(transcript, wholeMatchingPacket(transcript.title, transcript.body, terms));
-        expanded.push({ score, received_at: transcript.received_at, atom, item: () => transcriptDeskItem(transcript, atom, true) });
+        expanded.push({ score, received_at: transcript.received_at, atom, item: () => transcriptDeskItem(transcript, atom, true), transcript: true });
       }
       expanded.sort((left, right) => right.score - left.score || right.received_at.localeCompare(left.received_at));
     }
     const selected = expanded.slice(0, limit);
+    annotateCoreRuntimeV1({ counts: { transcript_items: selected.filter((entry) => entry.transcript === true).length } });
     const atoms = selected.map(({ atom }) => atom);
     const items = selected.map(({ item }) => item());
     return this.commitDeskRelease(actor, input.access_token, input.scope, items, atoms, expanded.length > limit);
@@ -475,6 +481,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
         const all = packets(found.transcript.title, found.transcript.body);
         const around = [found.index - 1, found.index + 1].filter((index) => index >= 0 && index < all.length).slice(0, neighbours);
         const atoms = [found.atom, ...around.map((index) => transcriptAtom(found.transcript, { index, text: all[index]! }))];
+        annotateCoreRuntimeV1({ counts: { transcript_items: atoms.length } });
         return this.commitDeskRelease(actor, input.access_token, input.scope,
           atoms.map((atom) => transcriptDeskItem(found.transcript, atom, true)), atoms);
       }
