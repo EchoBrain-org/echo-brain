@@ -136,6 +136,40 @@ async function fixture(options: { readonly active?: boolean; readonly corrupt?: 
 }
 
 describe('Person evidence desk over the real approved-record route', () => {
+  it.each([
+    { kind: 'note', includeRecords: false },
+    { kind: 'document_passage', includeRecords: false },
+    { kind: 'note', includeRecords: true },
+  ] as const)('searches $kind evidence with record kinds requested: $includeRecords', async ({ kind, includeRecords }) => {
+    const value = await fixture();
+    try {
+      const originals = emptyOriginals();
+      const release = {
+        ...originals.deskSearch({ access_token: 'token', scope: { kind: 'global' } }),
+        items: [{
+          kind, text: 'Decision from the original', visibility: 'team' as const, label: 'Original decision',
+          received_at: '2026-09-27T00:00:00.000Z', version: '1',
+          citation: { kind: 'source_revision' as const, source_id: 'source-original', revision_id: 'revision-original',
+            source_sha256: digest('source'), representation_sha256: digest('representation'), anchor_sha256: digest('anchor') },
+        }],
+        truncated: false,
+      };
+      const deskSearch = vi.fn(() => release);
+      const searchBatch = vi.fn((input: Parameters<typeof value.route.searchBatch>[0]) => value.route.searchBatch(input));
+      const desk = createPersonEvidenceDeskV1({
+        access_token: 'token', scope: { kind: 'global' }, originals: { ...originals, deskSearch }, records: { ...value.route, searchBatch },
+      });
+      const searched = await desk.search({ query: 'Decision', kinds: includeRecords ? [kind, 'decision'] : [kind] });
+      expect(deskSearch).toHaveBeenCalledWith(expect.objectContaining({ query: 'Decision', kinds: [kind] }));
+      expect(searched.items.map(item => item.kind)).toEqual(includeRecords ? [kind, 'decision'] : [kind]);
+      expect(searched.items[0]).toMatchObject({ text: 'Decision from the original', receipt_sha256: release.receipt });
+      expect(searched.receipt_digests).toContain(release.receipt);
+      if (includeRecords) expect(searchBatch).toHaveBeenCalledWith(expect.objectContaining({ kinds: ['decision'] }));
+      else expect(searchBatch).not.toHaveBeenCalled();
+      await desk.revalidate({});
+    } finally { value.close(); }
+  });
+
   it('returns real record search text, inventory metadata, and fresh-citation open packets', async () => {
     const value = await fixture();
     try {

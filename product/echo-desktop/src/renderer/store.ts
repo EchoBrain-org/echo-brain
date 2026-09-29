@@ -2258,8 +2258,15 @@ export function chooseSource(index: number): void {
   if (!sources || !source) return;
   set({ sources: { ...sources, open: index, selected: index, evidence: null } });
   if (source.kind === 'original') { void readEvidence(sources.gen, index); return; }
+  if (source.kind === 'slack') return;
   const read = sources.records[source.record.record_sha256];
   if (!read || (!read.loading && 'failure' in read)) void readRecord(sources.gen, source.record, false);
+}
+
+/** Slack keeps its live messages: the person opens the cited permalink under Slack's own access checks. */
+export async function openSlackSource(index: number): Promise<boolean> {
+  const source = answerSources()[index];
+  return !state.concealed && source?.kind === 'slack' && (await rpc('source.openSlack', { permalink: source.permalink })).ok;
 }
 
 /** Sources (n): opens the pane on the last source chosen, or closes it. */

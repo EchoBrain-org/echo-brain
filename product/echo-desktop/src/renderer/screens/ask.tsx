@@ -5,7 +5,7 @@ import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
   answerSources, ask, askEverywhere, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, foundNothingInProject, matchesShown, openCompose, openMatch,
-  pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
+  openSlackSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Plus, Up } from './icons.js';
 
@@ -93,7 +93,7 @@ export function Bar({ state }: { state: State }) {
 
 /** A chip: its place in the answer, and its meeting's title once its record is read. */
 function chipLabel(source: AnswerSource, sources: SourcesState | null): string {
-  if (source.kind === 'original') return source.label;
+  if (source.kind !== 'record') return source.label;
   const read = sources?.records[source.record.record_sha256];
   return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
@@ -112,7 +112,8 @@ function BasedOn({ state }: { state: State }) {
         {sources.map((source, index) => (
           <button type="button" key={index} class={`source-chip${open === index ? ' on' : ''}`} data-testid="source-chip"
             aria-pressed={open === index} onClick={() => chooseSource(index)}
-            title={source.kind === 'record' ? 'Show the approved record and supporting excerpts' : 'Show the verified evidence packet for this original source'}>
+            title={source.kind === 'record' ? 'Show the approved record and supporting excerpts'
+              : source.kind === 'slack' ? 'Show the cited Slack message' : 'Show the verified evidence packet for this original source'}>
             <span class="n">{index + 1}</span><span class="label">{chipLabel(source, state.sources)}</span>
           </button>
         ))}
@@ -317,10 +318,17 @@ function RecordDetail({ record }: { record: ApprovedRecord }) {
   );
 }
 
-/**
- * Beside the answer: the source a chip chose. An approved record, or an
- * original source's verified evidence packet, at most 2,000 characters.
- */
+function SlackSource({ source, index }: { source: Extract<AnswerSource, { kind: 'slack' }>; index: number }) {
+  const [failed, setFailed] = useState(false);
+  return <div class="source-detail">
+    <h2>{source.label}</h2>
+    <button type="button" class="link-button" data-testid="open-slack-source" title={source.permalink}
+      onClick={async () => { setFailed(false); setFailed(!(await openSlackSource(index))); }}>Open in Slack</button>
+    {failed && <div class="error">Slack could not be opened. Try again.</div>}
+  </div>;
+}
+
+/** Beside the answer: an approved record, verified original evidence, or a link to a live Slack message. */
 export function SourcePane({ state }: { state: State }) {
   const sources = state.sources!;
   const index = sources.open!;
@@ -336,6 +344,8 @@ export function SourcePane({ state }: { state: State }) {
           {read.failure.retryable && <button type="button" class="link-button" onClick={retryRecord}>Try again</button>}
         </div>
       ) : <RecordDetail record={read.value} />;
+  } else if (source.kind === 'slack') {
+    body = <SlackSource key={source.permalink} source={source} index={index} />;
   } else {
     const read = sources.evidence?.index === index ? sources.evidence.read : { loading: true } as const;
     const text = !read.loading && 'value' in read ? read.value.text : undefined;
@@ -358,7 +368,7 @@ export function SourcePane({ state }: { state: State }) {
   return (
     <aside class="source-pane" data-testid="source-pane" aria-label="Source">
       <div class="pane-head">
-        <div class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : 'Original source'}</div>
+        <div class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : source.kind === 'slack' ? 'Slack message' : 'Original source'}</div>
         <button type="button" class="icon-button" aria-label="Close sources" data-testid="source-close" onClick={toggleSources}><Close /></button>
       </div>
       {body}

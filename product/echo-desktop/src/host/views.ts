@@ -7,6 +7,7 @@ import type {
   ProjectChange, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   WriteStatus,
 } from '../shared/protocol.js';
+import { slackPermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
 
@@ -331,7 +332,8 @@ export function isRecordRef(value: unknown): value is RecordRef {
  * An Agentic Ask answer (V4, the only Ask since ADR-0022): its statements,
  * each with the exact sources that support it, in the answer's order. An
  * approved record is kept by its digest and policy, an original by its
- * revision and anchor; a source without a label is "Evidence n".
+ * revision and anchor, a live Slack message by its permalink; a source
+ * without a label is "Evidence n".
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const value = object(unwrap(raw));
@@ -363,6 +365,11 @@ function v4Source(raw: unknown, fallback: string): AnswerSource {
     return { kind: 'record', label: label || fallback, record };
   }
   if (citation.kind === 'source_revision') return { kind: 'original', label: label || fallback, ref: sourceRef(citation) };
+  if (citation.kind === 'slack_message') {
+    const permalink = slackPermalink(citation.permalink);
+    if (permalink === null) throw new ViewError();
+    return { kind: 'slack', label: label || fallback, permalink };
+  }
   throw new ViewError();
 }
 

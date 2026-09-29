@@ -718,6 +718,20 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const statements = text === undefined ? part!.statements : [{ ...part!.statements[0], text }];
         return json({ ...desktop.answer, scope, parts: [{ ...part, question, statements }] });
       };
+      if (mode === 'ask-slack') {
+        const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];
+        return json({ ...desktop.answer, scope,
+          citations: [...desktop.answer.citations as unknown[], {
+            kind: 'slack_message', label: '#launch · Maya', visibility: 'only_me', citation: {
+              kind: 'slack_message', team_id: 'T01ABCDEF', channel_id: 'C01ABCDEF', message_ts: '1758873600.000100',
+              permalink: 'https://acme.slack.com/archives/C01ABCDEF/p1758873600000100?thread_ts=1758873600.000100',
+              text_sha256: sha('The launch is ready.'),
+            },
+          }],
+          parts: [{ ...part, question, statements: [...part!.statements,
+            { text: 'Maya confirmed the launch in Slack.', citation_indexes: [2], private: true }] }],
+        });
+      }
       // Follow-ups: the second answer comes late, and the third question fails.
       if (mode === 'ask-follow-ups' && asks === 2) {
         // The test releases the reply after cancellation. A fixed delay races

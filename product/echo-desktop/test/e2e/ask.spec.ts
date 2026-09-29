@@ -238,6 +238,48 @@ test('a cited record the person can no longer read says so, with no Try again th
   expect(recordReads()).toHaveLength(2);
 });
 
+test('a Slack citation survives the client and IPC, keeps its label, and opens only its Slack permalink', async () => {
+  run = await launch('ask-slack');
+  const { page, app } = run;
+  const permalink = 'https://acme.slack.com/archives/C01ABCDEF/p1758873600000100?thread_ts=1758873600.000100';
+  // The actual main-process opener runs, but its browser call is captured by the test.
+  await app.evaluate(({ shell }) => {
+    (globalThis as { openedSlack?: string[] }).openedSlack = [];
+    shell.openExternal = async url => { (globalThis as { openedSlack?: string[] }).openedSlack!.push(url); };
+  });
+  const opened = () => app.evaluate(() => (globalThis as { openedSlack?: string[] }).openedSlack);
+  await askFromHome(page, 'What did Maya confirm?');
+  await expect(page.getByTestId('statement-text')).toHaveText([
+    'We agreed to ship Apollo with annual plans first.', 'Maya confirmed the launch in Slack.',
+  ]);
+  const chips = page.getByTestId('source-chip');
+  await expect(chips).toHaveText([/^1\s*Tuesday sync$/, /^2\s*Apollo update$/, /^3\s*#launch · Maya$/]);
+  await expect(page.getByTestId('private-mark')).toHaveCount(1);
+  await page.getByTestId('statement-citation').nth(2).click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane).toContainText('Slack message');
+  await expect(pane.locator('h2')).toHaveText('#launch · Maya');
+  await expect(pane.getByTestId('open-slack-source')).toHaveAttribute('title', permalink);
+  expect(evidenceReads()).toHaveLength(0);
+  expect(await opened()).toEqual([]);
+  await pane.getByTestId('open-slack-source').click();
+  await expect.poll(opened).toEqual([permalink]);
+  // Selecting a Slack source never sends its coordinates to the original-source endpoint.
+  expect(evidenceReads()).toHaveLength(0);
+  expect(recordReads()).toHaveLength(1);
+  // The renderer cannot turn this narrow IPC method into an arbitrary URL opener.
+  for (const url of ['javascript:alert(1)', 'file:///etc/passwd', 'https://example.com',
+    'https://acme.slack.com.evil.test/archives/C01ABCDEF/p1758873600000100']) {
+    expect(await page.evaluate(permalink =>
+      (window as unknown as { echo: { rpc(method: string, params: object): Promise<unknown> } })
+        .echo.rpc('source.openSlack', { permalink }), url))
+      .toEqual({ ok: false, failure: { code: 'invalid_request', retryable: false } });
+  }
+  expect(await opened()).toEqual([permalink]);
+  await chips.nth(1).click();
+  await expect(pane.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
+});
+
 test('evidence that could not be read says so, and Try again reads it again', async () => {
   run = await launch('evidence-fails-once');
   const { page } = run;

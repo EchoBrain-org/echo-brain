@@ -250,6 +250,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (recordsUnavailableAtStart) return [];
     try {
       const recordKinds = kinds?.filter((kind): kind is "decision" | "action" | "rationale" => kind === "decision" || kind === "action" || kind === "rationale");
+      if (recordKinds !== undefined && recordKinds.length === 0) return [];
       return records(options.records.searchBatch({ access_token: options.access_token, queries: [query], limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }));
     } catch (error) {
       if (pointer === undefined && unavailableAtStart(error)) { recordsUnavailableAtStart = true; return []; }

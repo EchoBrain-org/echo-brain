@@ -76,6 +76,24 @@ describe('view models copy only what the renderer may see', () => {
     expect(() => answerView({ ok: true, result: empty }, { kind: 'global' })).toThrow(ViewError);
   });
 
+  it('keeps a Slack citation label and permalink without exposing its other coordinates', () => {
+    const permalink = 'https://acme.slack.com/archives/C01ABCDEF/p1758873600000100?thread_ts=1758873600.000100';
+    const reply = (url: unknown) => ({ schema_version: 4, kind: 'echo-clean-person-answer-v4', outcome: 'answered',
+      citations: [{ kind: 'slack_message', label: '#launch · Maya', visibility: 'only_me', citation: {
+        kind: 'slack_message', team_id: 'T01ABCDEF', channel_id: 'C01ABCDEF', message_ts: '1758873600.000100',
+        permalink: url, text_sha256: sha('7'),
+      } }],
+      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch is ready.', citation_indexes: [0], private: true }] }],
+    });
+    const answer = answerView({ ok: true, result: reply(permalink) }, { kind: 'global' });
+    expect(answer.sources).toEqual([{ kind: 'slack', label: '#launch · Maya', permalink }]);
+    expect(answer.parts[0]?.statements[0]).toEqual({ text: 'The launch is ready.', citation_indexes: [0], private: true });
+    for (const url of ['javascript:alert(1)', 'https://acme.slack.com.evil.test/archives/C01ABCDEF/p1758873600000100',
+      'https://user:password@acme.slack.com/archives/C01ABCDEF/p1758873600000100', null]) {
+      expect(() => answerView(reply(url), { kind: 'global' })).toThrow(ViewError);
+    }
+  });
+
   it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace', () => {
     const citation = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' };
     const answer = answerView({ ok: true, result: {

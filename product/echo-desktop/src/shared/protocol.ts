@@ -186,10 +186,11 @@ export interface RecordRef {
   readonly policy_id: RecordPolicy;
 }
 
-/** What an answer is based on: an approved meeting record, or an original source. */
+/** What an answer is based on: an approved record, an original, or a live Slack message. */
 export type AnswerSource =
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef }
-  | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef };
+  | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef }
+  | { readonly kind: 'slack'; readonly label: string; readonly permalink: string };
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
 export interface AnswerStatement {
@@ -394,6 +395,8 @@ export interface HostMethods {
 }
 
 export interface MainMethods {
+  /** Opens one cited Slack message in the system browser; only Slack message permalinks are allowed. */
+  'source.openSlack': { params: { permalink: string }; result: null };
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
   /** Add files…, in New project: up to 20 documents at once. */
   'dialog.openDocuments': { params: Record<string, never>; result: ChosenFiles };
@@ -430,7 +433,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'employees.reissue', 'employees.revoke',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
+  'source.openSlack', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
   'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show',
 ];
 /** Host methods that change what the Authority stores. */
@@ -484,6 +487,13 @@ export function externalUrl(raw: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+/** The Ask contract's Slack permalink grammar, checked again before main opens a renderer request. */
+export function slackPermalink(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.length <= 512 &&
+    /^https:\/\/[a-z0-9-]+(\.enterprise)?\.slack\.com\/archives\/[CDG][A-Z0-9]{2,30}\/p\d{15,17}(\?[A-Za-z0-9_=&.%-]{0,200})?$/.test(raw)
+    ? raw : null;
 }
 
 /** Parameters larger than this are refused at the broker. */
