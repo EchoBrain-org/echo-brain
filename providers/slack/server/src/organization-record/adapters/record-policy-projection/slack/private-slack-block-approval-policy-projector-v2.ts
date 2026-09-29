@@ -7,8 +7,11 @@ import type { RecordPolicyFactEnvelopeV1, RecordPolicyFactProjectorV1 } from "@e
 import type { PersonPolicyFactItemKindV2, PersonPolicyFactProjectionV2, PersonPolicyFactRowV2 } from "@echo-brain/organization-record/application/person-policy-fact-contracts-v2";
 import {
   PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V2_FIELD,
+  PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V3_FIELD,
   PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND,
+  PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND,
   validatePrivateSlackBlockApprovalRecordInputV2,
+  validatePrivateSlackBlockApprovalRecordInputV3,
 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v2.js";
 
 export const PRIVATE_SLACK_BLOCK_APPROVAL_AUTHORIZATION_WITNESS_V2_KIND =
@@ -93,7 +96,11 @@ export function projectPrivateSlackBlockApprovalApproverV2(
   if (rawBody === null || typeof rawBody !== "object" || Array.isArray(rawBody)) {
     return undefined;
   }
-  const body = rawBody as Record<string, unknown>;
+  const original = rawBody as Record<string, unknown>;
+  let body = original;
+  if ((original.human_act_resolution_ref as { readonly kind?: unknown } | null)?.kind === PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND) {
+    try { body = asV2Body(original) as Record<string, unknown>; } catch { return undefined; }
+  }
   if (body.event === null || typeof body.event !== "object" ||
       Array.isArray(body.event) || (body.event as Record<string, unknown>).kind !== "approved") {
     return undefined;
@@ -121,4 +128,28 @@ export function projectPrivateSlackBlockApprovalApproverV2(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * A V3 record is a V2 record plus confirmed owners, which grant nothing. The
+ * V3 projector validates the whole V3 input, then projects exactly the V2
+ * policy facts: owners never change who can read a record.
+ */
+function asV2Body(body: Record<string, unknown>): RecordPolicyFactEnvelopeV1["body"] {
+  const parsed = validatePrivateSlackBlockApprovalRecordInputV3({ [PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V3_FIELD]: body.human_act_resolution_ref, event: body.event });
+  const { schema_version: _schema, kind: _kind, action_owners: _owners, ...common } = parsed.private_slack_block_approval_resolution_ref_v3;
+  return Object.freeze({ ...body, human_act_resolution_ref: Object.freeze({ ...common, schema_version: 2, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND }) }) as unknown as RecordPolicyFactEnvelopeV1["body"];
+}
+
+function asV2Envelope(envelope: RecordPolicyFactEnvelopeV1): RecordPolicyFactEnvelopeV1 {
+  return Object.freeze({ ...envelope, body: asV2Body(envelope.body as unknown as Record<string, unknown>) });
+}
+
+export function createPrivateSlackBlockApprovalPolicyProjectorV3(): RecordPolicyFactProjectorV1 {
+  const v2 = createPrivateSlackBlockApprovalPolicyProjectorV2();
+  return Object.freeze({ id: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND,
+    matches: (envelope: RecordPolicyFactEnvelopeV1) => (envelope.body.human_act_resolution_ref as { readonly kind?: unknown }).kind === PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND,
+    project: ({ envelope, record_position, witness }: { readonly envelope: RecordPolicyFactEnvelopeV1; readonly record_position: number; readonly witness: unknown }) => projectPrivateSlackBlockApprovalPolicyFactsV2({ envelope: asV2Envelope(envelope), record_position, witness }),
+    policyBinding: (envelope: RecordPolicyFactEnvelopeV1) => v2.policyBinding(asV2Envelope(envelope)),
+  });
 }

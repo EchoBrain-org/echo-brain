@@ -85,6 +85,15 @@ describe('view models copy only what the renderer may see', () => {
     });
   });
 
+  it('keeps only the authorship-unsupported outcome, which a wider ask would not help', () => {
+    const project = { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' } as const;
+    const base = { schema_version: 3, kind: 'echo-clean-person-answer-v3', answer: 'No.', scope: project, citations: [] };
+    expect(answerView({ ok: true, result: { ...base, outcome: 'authorship_unsupported' } }, project))
+      .toEqual({ text: 'No.', scope: project, sources: [], outcome: 'authorship_unsupported' });
+    expect(answerView({ ok: true, result: base }, project)).toEqual({ text: 'No.', scope: project, sources: [] });
+    expect(answerView({ ok: true, result: { ...base, outcome: 'something_else' } }, project)).not.toHaveProperty('outcome');
+  });
+
   it('accepts a receipt only for the request that was sent', () => {
     expect(() => receiptView({ request_id: 'other' }, 'mine', { kind: 'only-me' })).toThrow(ViewError);
     expect(receiptView({ request_id: 'mine' }, 'mine', { kind: 'team' })).toEqual({ request_id: 'mine', audience: { kind: 'team' } });
@@ -242,6 +251,19 @@ describe('an approved record shows only what the source pane needs', () => {
       rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [] }] },
     });
     expect(JSON.stringify(view)).not.toContain('private@example.test');
+  });
+
+  it('shows an action owner only as the approver confirmed it in the signed approval', () => {
+    const view = recordView(reply({
+      actions: [item('action', 'a1', 'Send the quote.', { owner: 'Unconfirmed proposal' }), item('action', 'a2', 'Book the venue.')],
+    }, record => {
+      const body = (record.envelope as { body: Record<string, unknown> }).body;
+      body.human_act_resolution_ref = { action_owners: [{ signal_id: 'a2', owner: 'Priya Shah' }, { signal_id: 'd9', owner: 'Nobody' }] };
+    }), asked);
+    expect(view.actions.items).toEqual([
+      { text: 'Send the quote.', excerpts: [] },
+      { text: 'Book the venue.', owner: 'Priya Shah', excerpts: [] },
+    ]);
   });
 
   it('shows at most 2,000 characters of any text, 32 items a section and 32 participants', () => {

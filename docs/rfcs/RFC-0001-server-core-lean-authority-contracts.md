@@ -13,11 +13,17 @@ component_ids:
 created_at: 2026-08-20
 reviewed_at: 2026-08-20
 reviewed_ref: 77a212134fce762fdffd30e028f3256ba6e75b42
-status: draft
-superseded_by: []
+status: superseded
+superseded_by:
+  - ADR-0004
 ---
 
 # RFC-0001: Server-core lean Authority contracts
+
+Disposition: never accepted. [ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md)
+superseded this unaccepted contract packet on 2026-08-22, and
+[ADR-0006](../decisions/ADR-0006-permission-aware-clean-v1-completion.md) now
+governs implementation. The proposal below is retained unchanged.
 
 ## Proposal state and review binding
 

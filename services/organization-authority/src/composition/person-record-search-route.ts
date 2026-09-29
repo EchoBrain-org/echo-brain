@@ -6,7 +6,7 @@ import {
   sha256Digest,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
-import { validateOrganizationRecordEnvelopeV4 } from "@echo-brain/organization-protocol";
+import { HUMAN_ACT_RECORD_INPUT_CODECS_V4, validateOrganizationRecordEnvelopeV4, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import {
   clearReadableSearchActiveGenerationV1,
   listReadableSearchGenerationV1,
@@ -230,6 +230,8 @@ export interface CreatePersonRecordSearchRouteV1Options {
   readonly search_generation?: SearchGeneration;
   /** Optional until the Layer 2 related-atom projector is installed. */
   readonly expand_related_atoms?: ExpandReadableSearchRelatedAtomsV1;
+  /** The Authority's record codecs; Slack-approved records need them to parse. */
+  readonly record_input_codecs?: RecordInputCodecRegistryV4;
 }
 
 function activeGeneration(
@@ -419,19 +421,38 @@ function deskLabel(title: string | undefined, time: { readonly scheduled_start_a
   return `${prefix}...`;
 }
 
-function deskItems(record: Database.Database, items: readonly ReadableSearchResultItemV1[]): readonly PersonRecordDeskItemV1[] {
+/**
+ * Owners an approver confirmed in the signed human act (ADR-0021), by signal
+ * ID. The approved brief never carries an owner; the search text of an owned
+ * action ends with " Owner: <name>." and must match exactly.
+ */
+function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
+  const owners = new Map<string, string>();
+  const entries = (reference as { readonly action_owners?: unknown }).action_owners;
+  if (entries === undefined) return owners;
+  if (!Array.isArray(entries)) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+  for (const entry of entries as readonly { readonly signal_id?: unknown; readonly owner?: unknown }[]) {
+    if (typeof entry?.signal_id !== "string" || typeof entry.owner !== "string") throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    owners.set(entry.signal_id, entry.owner);
+  }
+  return owners;
+}
+
+function deskItems(record: Database.Database, items: readonly ReadableSearchResultItemV1[], codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4): readonly PersonRecordDeskItemV1[] {
   const statement = record.prepare(`SELECT canonical_envelope, envelope_sha256, record_sha256 FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`);
   return Object.freeze(items.map((item) => {
     const row = statement.get(item.record_position, item.record_sha256) as { readonly canonical_envelope: string; readonly envelope_sha256: Sha256Digest; readonly record_sha256: Sha256Digest } | undefined;
     if (row === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
     let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
-    try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope)); } catch { throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable"); }
+    try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope), codecs); } catch { throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable"); }
     if (row.envelope_sha256 !== item.envelope_sha256 || sha256Digest(row.canonical_envelope) !== row.envelope_sha256 || envelope.record_sha256 !== item.record_sha256 || envelope.body.event.kind !== "approved") throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
     const brief = envelope.body.event.approved_snapshot.approved_payload.brief;
     if (item.atom_order === undefined || item.audience_project_count === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
     const signal = [...brief.decisions, ...brief.actions, ...brief.rationales][item.atom_order];
-    if (signal === undefined || signal.kind !== item.item_kind || signal.text !== item.text) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
-    const attributes = signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(signal.owner === null ? {} : { owner: signal.owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) } : undefined;
+    const owner = signal?.kind === "action" ? confirmedOwners(envelope.body.human_act_resolution_ref).get(signal.id) : undefined;
+    const indexedText = signal === undefined ? undefined : owner === undefined ? signal.text : `${signal.text} Owner: ${owner}.`;
+    if (signal === undefined || signal.kind !== item.item_kind || indexedText !== item.text) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
+    const attributes = signal.kind === "decision" ? { status: signal.status } : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) } : undefined;
     const visibility = item.policy_id === "restricted-reviewer-person-v2" ? "approver_only" : item.policy_id === "project-members-readable-person-v1" ? (item.audience_project_count === 1 ? "project" : "projects") : "team";
     if (item.policy_id === "project-members-readable-person-v1" && item.audience_project_count < 1) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
     return Object.freeze({ atom_id: item.atom_id, record_sha256: item.record_sha256, item_kind: item.item_kind, text: item.text, policy_id: item.policy_id, record_position: item.record_position, envelope_sha256: item.envelope_sha256, atom_order: item.atom_order, audience_project_count: item.audience_project_count, label: deskLabel(brief.meeting.title, brief.meeting.time), visibility, ...(attributes === undefined || Object.keys(attributes).length === 0 ? {} : { attributes: Object.freeze(attributes) }) });
@@ -444,11 +465,11 @@ function boundedDeskItems(items: readonly ReadableSearchResultItemV1[]): readonl
   );
 }
 
-function approvedRecordAtomCount(record: Database.Database, position: number, recordSha256: Sha256Digest): number {
+function approvedRecordAtomCount(record: Database.Database, position: number, recordSha256: Sha256Digest, codecs: RecordInputCodecRegistryV4 = HUMAN_ACT_RECORD_INPUT_CODECS_V4): number {
   const row = record.prepare(`SELECT canonical_envelope FROM organization_record_log WHERE position = ? AND record_sha256 = ? AND event_kind = 'approved'`).get(position, recordSha256) as { readonly canonical_envelope: string } | undefined;
   if (row === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
   let envelope: ReturnType<typeof validateOrganizationRecordEnvelopeV4>;
-  try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope)); } catch { throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable"); }
+  try { envelope = validateOrganizationRecordEnvelopeV4(parseCanonicalJson(row.canonical_envelope), codecs); } catch { throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable"); }
   if (envelope.record_sha256 !== recordSha256 || envelope.body.event.kind !== "approved") throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
   const brief = envelope.body.event.approved_snapshot.approved_payload.brief;
   return brief.decisions.length + brief.actions.length + brief.rationales.length;
@@ -733,7 +754,7 @@ export function createPersonRecordSearchRouteV1(
     const response = asResponse({ items: deskSourceItems ?? responseItems });
     const deskProjection = deskSourceItems === undefined
       ? undefined
-      : deskItems(options.record, deskSourceItems);
+      : deskItems(options.record, deskSourceItems, options.record_input_codecs);
     const recordReadAuditRowSha256 = options.audit.append({
       read_mode: "layer2",
       authority_id: options.authority_id,
@@ -838,11 +859,11 @@ export function createPersonRecordSearchRouteV1(
     if (!sameReleaseAuthorization(input.current, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== input.projects.grants_sha256 || !samePointer(input.pointer, activeGeneration(options.authority)) || !sameHead(input.pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
     const deskSourceItems = boundedDeskItems(items);
     const response = asResponse({ items: deskSourceItems });
-    const projection = deskItems(options.record, deskSourceItems);
+    const projection = deskItems(options.record, deskSourceItems, options.record_input_codecs);
     const receipt = options.audit.append({ read_mode: "layer2", authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id, principal_id: released.principal_id, membership_id: released.membership_id, session_family_id: released.session_family_id, result_count: response.items.length, response_sha256: canonicalSha256(JSON.parse(canonicalJson({ response, desk_items: projection })) as never), checked_at: released.checked_at });
     const release: PersonRecordSearchBatchReleaseV1 = Object.freeze({ initial_authorization: input.initial_authorization, current_authorization: releaseAuthorization(released), active_pointer: Object.freeze({ generation_id: input.pointer.generation_id, manifest_sha256: input.pointer.manifest_sha256, retrieval_contract_sha256: input.pointer.retrieval_contract_sha256, record_head: Object.freeze({ position: input.pointer.record_head_position, record_sha256: input.pointer.record_head_hash }) }), record_read_audit_row_sha256: receipt, project_authorization: input.projects, ...(input.project_id === undefined ? {} : { project_id: input.project_id }) });
     releaseWitnesses.add(release);
-    return Object.freeze({ response, release, query_hit_counts: Object.freeze([]), desk_items: projection, truncated: approvedRecordAtomCount(options.record, resolvedAnchor.record_position, resolvedAnchor.record_sha256) > 10 || deskSourceItems.length !== items.length });
+    return Object.freeze({ response, release, query_hit_counts: Object.freeze([]), desk_items: projection, truncated: approvedRecordAtomCount(options.record, resolvedAnchor.record_position, resolvedAnchor.record_sha256, options.record_input_codecs) > 10 || deskSourceItems.length !== items.length });
   }
 
   return Object.freeze({
@@ -909,7 +930,7 @@ export function createPersonRecordSearchRouteV1(
       if (!sameReleaseAuthorization(authorization, released) || captureRecordProjectsV1(options.capture_projects, released, input.project_id).grants_sha256 !== projects.grants_sha256 || !samePointer(pointer, activeGeneration(options.authority)) || !sameHead(pointer, recordHead(options.record))) throw new AuthorityOperationError("unauthorized", "person authentication failed");
       const deskSourceItems = boundedDeskItems(inventory.items);
       const response = asResponse({ items: deskSourceItems });
-      const projection = deskItems(options.record, deskSourceItems);
+      const projection = deskItems(options.record, deskSourceItems, options.record_input_codecs);
       const receipt = options.audit.append({ read_mode: "layer2", authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id, principal_id: released.principal_id, membership_id: released.membership_id, session_family_id: released.session_family_id, result_count: response.items.length, response_sha256: canonicalSha256(JSON.parse(canonicalJson({ response, desk_items: projection })) as never), checked_at: released.checked_at });
       const release: PersonRecordSearchBatchReleaseV1 = Object.freeze({ initial_authorization: releaseAuthorization(authorization), current_authorization: releaseAuthorization(released), active_pointer: Object.freeze({ generation_id: pointer.generation_id, manifest_sha256: pointer.manifest_sha256, retrieval_contract_sha256: pointer.retrieval_contract_sha256, record_head: Object.freeze({ position: pointer.record_head_position, record_sha256: pointer.record_head_hash }) }), record_read_audit_row_sha256: receipt, project_authorization: projects, ...(input.project_id === undefined ? {} : { project_id: input.project_id }) });
       releaseWitnesses.add(release);

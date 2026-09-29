@@ -24,7 +24,7 @@ body:
     attributes:
       label: Where did you notice it?
       description: Name the screen, command, workflow, service, file, or operational step.
-      placeholder: For example, Mac updater, Authority deployment, or release workflow
+      placeholder: For example, CLI updater, Authority deployment, or release workflow
     validations:
       required: true
 

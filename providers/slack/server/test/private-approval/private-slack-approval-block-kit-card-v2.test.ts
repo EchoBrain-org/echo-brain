@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPrivateSlackApprovalBlockKitCardV2,
+  buildPrivateSlackApprovalBlockKitCardV3,
+  canonicalPrivateSlackApprovalOwnerV3,
   privateSlackApprovalBlockKitActionIdV2,
+  privateSlackApprovalBlockKitOwnerActionIdV3,
 } from "../../src/private-approval/private-slack-approval-block-kit-card-v2.js";
 
 const INPUT = {
@@ -78,5 +81,41 @@ describe("private approval Block Kit card v2", () => {
     expect(projects.element.options[0]!.text.text.length).toBeLessThanOrEqual(75);
     expect(projects.element.options[0]!.text.text).toContain("11111111");
     expect(projects.element.max_selected_items).toBe(20);
+  });
+
+  it("V3 adds one editable owner field per proposal, starting at the proposal, and V3 button commitments", () => {
+    const { schema_version: _version, ...rest } = INPUT;
+    const card = buildPrivateSlackApprovalBlockKitCardV3({
+      ...rest, schema_version: 3,
+      ungrouped_actions: [{ text: "Send the revised quote", evidence_reference: "Transcript block b1" }, { text: "Book the venue", evidence_reference: "Transcript block b2" }],
+      owner_proposals: [{ action_index: 1, action_text: "Book the venue", owner: "Priya Shah" }],
+    });
+    expect(card).toMatchObject({ schema_version: 3, kind: "echo-private-approval-block-kit-card-v3" });
+    const field = card.blocks.find((block) => (block as { readonly block_id?: string }).block_id?.endsWith("-owner-1-v2")) as { readonly optional: boolean; readonly label: { readonly text: string }; readonly element: Record<string, unknown> };
+    expect(field.optional).toBe(true);
+    expect(field.label.text).toBe("Owner · Book the venue");
+    expect(field.element).toMatchObject({ type: "plain_text_input", action_id: privateSlackApprovalBlockKitOwnerActionIdV3(INPUT, 1), initial_value: "Priya Shah", max_length: 120 });
+    expect(privateSlackApprovalBlockKitOwnerActionIdV3(INPUT, 1)).toMatch(/^echo-private-approval-v2-[0-9a-f]{32}-owner-1-v3$/);
+    const ids = card.blocks.map((block) => (block as { readonly block_id?: string }).block_id ?? "");
+    expect(ids.findIndex((id) => id.endsWith("-owner-1-v2"))).toBeLessThan(ids.findIndex((id) => id.endsWith("-policy-v2")));
+    const actions = control(card as never, "actions") as { readonly elements: readonly { readonly value: string }[] };
+    expect(actions.elements.map((element) => element.value)).toEqual([JSON.stringify({ schema_version: 3, approval_id: INPUT.approval_id }), JSON.stringify({ schema_version: 3, approval_id: INPUT.approval_id })]);
+    expect(card.text).toContain('Owner of "Book the venue": Priya Shah');
+  });
+
+  it("V3 refuses an empty, unordered or uncanonical proposal list", () => {
+    const { schema_version: _version, ...rest } = INPUT;
+    const v3 = (owner_proposals: never) => buildPrivateSlackApprovalBlockKitCardV3({ ...rest, schema_version: 3, owner_proposals });
+    expect(() => v3([] as never)).toThrow("1 to 40");
+    expect(() => v3([{ action_index: 2, action_text: "A", owner: "X" }, { action_index: 1, action_text: "B", owner: "Y" }] as never)).toThrow("ordered");
+    expect(() => v3([{ action_index: 0, action_text: "A", owner: " X" }] as never)).toThrow("owner is invalid");
+    expect(() => v3([{ action_index: 0, action_text: "A", owner: "X", extra: 1 }] as never)).toThrow("unexpected fields");
+  });
+
+  it("canonicalizes an entered owner to one trimmed line, and refuses a long or control-bearing one", () => {
+    expect(canonicalPrivateSlackApprovalOwnerV3("  Priya   Shah \n")).toBe("Priya Shah");
+    expect(canonicalPrivateSlackApprovalOwnerV3("   ")).toBeNull();
+    expect(() => canonicalPrivateSlackApprovalOwnerV3("x".repeat(121))).toThrow();
+    expect(() => canonicalPrivateSlackApprovalOwnerV3("Priya\u200bShah")).toThrow();
   });
 });

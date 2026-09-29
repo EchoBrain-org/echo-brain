@@ -9,7 +9,7 @@
 import { validatePrivateApprovalResolutionCommandV1, type PrivateApprovalResolutionCommandV1 } from "../application/slack/private-approval-policy-resolution-v1.js";
 import { validatePrivateApprovalResolutionCommandV2, type PrivateApprovalResolutionCommandV2 } from "@echo-brain/organization-control-plane/application/private-approval-policy-resolution-core-v2";
 import { resolvePrivateApprovalPolicyV1, validatePendingPrivateApprovalV1, validatePrivateApprovalAuthorizationAllowV1, validatePrivateApprovalResolutionV1, type PendingPrivateApprovalV1, type PrivateApprovalAuthorizationAllowV1, type PrivateApprovalResolutionV1 } from "../application/slack/private-approval-policy-resolution-v1.js";
-import { resolvePrivateApprovalPolicyV2, validatePendingPrivateApprovalV2, validatePrivateApprovalAuthorizationAllowV2, validatePrivateApprovalResolutionV2, type PendingPrivateApprovalV2, type PrivateApprovalAuthorizationAllowV2, type PrivateApprovalResolutionV2 } from "../application/slack/private-approval-policy-resolution-v2.js";
+import { privateApprovalResolutionV3, resolvePrivateApprovalPolicyV2, validatePendingPrivateApprovalV2, validatePrivateApprovalActionOwnersV3, validatePrivateApprovalAuthorizationAllowV2, validatePrivateApprovalResolutionV2, validatePrivateApprovalResolutionV3, type PendingPrivateApprovalV2, type PrivateApprovalActionOwnerV3, type PrivateApprovalAuthorizationAllowV2, type PrivateApprovalResolutionV2, type PrivateApprovalResolutionV3 } from "../application/slack/private-approval-policy-resolution-v2.js";
 import { canonicalJson, canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import { validateOrganizationToolConnectionContractV2, validateOrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
 import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/application/record-visibility-policy-contracts-v1";
@@ -17,6 +17,7 @@ import type Database from "better-sqlite3";
 
 const RECEIPT_KIND = "echo-private-approval-signed-block-action-receipt-v1" as const;
 export const PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V2_KIND = "echo-private-approval-signed-block-action-receipt-v2" as const;
+export const PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V3_KIND = "echo-private-approval-signed-block-action-receipt-v3" as const;
 const AUDIT_KIND = "echo-private-approval-terminal-audit-v1" as const;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
@@ -113,7 +114,15 @@ export interface PrivateApprovalSignedTerminalActionV2 extends Omit<PrivateAppro
   readonly selected_project_ids: readonly string[];
   readonly share_transcript: boolean;
 }
-export type PrivateApprovalSignedTerminalAction = PrivateApprovalSignedTerminalActionV1 | PrivateApprovalSignedTerminalActionV2;
+/** V2 plus every owner field of a card that proposed owners, as the approver left it (ADR-0021). */
+export interface PrivateApprovalSignedTerminalActionV3 extends Omit<PrivateApprovalSignedTerminalActionV2, "schema_version" | "kind"> {
+  readonly schema_version: 3;
+  readonly kind: typeof PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V3_KIND;
+  readonly action_owners: readonly PrivateApprovalActionOwnerV3[];
+}
+export type PrivateApprovalSignedTerminalAction = PrivateApprovalSignedTerminalActionV1 | PrivateApprovalSignedTerminalActionV2 | PrivateApprovalSignedTerminalActionV3;
+/** A finalized V2 or V3 terminal: V3 adds only the confirmed owners. */
+export type DurablePrivateApprovalTerminalV2 = Readonly<{ readonly resolution: PrivateApprovalResolutionV2 | PrivateApprovalResolutionV3; readonly signed_action_receipt_sha256: ApprovalContractSha256; readonly outcome: "approved" | "rejected"; readonly audit: PrivateApprovalTerminalAuditV1 }>;
 
 export interface EnqueuePrivateApprovalInteractionV1 {
   readonly disposition: "presentation_change" | "resolution";
@@ -150,7 +159,7 @@ export interface QueuedPrivateApprovalSignedActionV1 {
 }
 export type QueuedPrivateApprovalSignedAction =
   | QueuedPrivateApprovalSignedActionV1
-  | Readonly<{ readonly receipt: PrivateApprovalSignedTerminalActionV2; readonly receipt_sha256: ApprovalContractSha256 }>;
+  | Readonly<{ readonly receipt: PrivateApprovalSignedTerminalActionV2 | PrivateApprovalSignedTerminalActionV3; readonly receipt_sha256: ApprovalContractSha256 }>;
 
 export type PrivateApprovalDeniedReceiptReasonV1 =
   | "authorization_denied"
@@ -352,6 +361,21 @@ export function validatePrivateApprovalSignedTerminalActionV2(value: unknown): P
   return Object.freeze({ ...base, schema_version: 2, kind: PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V2_KIND, selected_policy_id: command.selected_policy_id, selected_project_ids: command.selected_project_ids, share_transcript: command.share_transcript });
 }
 
+export function validatePrivateApprovalSignedTerminalActionV3(value: unknown): PrivateApprovalSignedTerminalActionV3 {
+  const r = exact(value, ["schema_version", "kind", "provider_action_key_sha256", "request", "approval_id", "action_id", "action", "selected_policy_id", "selected_project_ids", "share_transcript", "comment", "lookup", "received_at", "verified_at", "action_owners"], "signed action receipt v3");
+  if (r.schema_version !== 3 || r.kind !== PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V3_KIND) invalid("signed action receipt v3 schema is invalid");
+  const { action_owners: owners, ...rest } = r;
+  const { schema_version: _schema, kind: _kind, ...base } = validatePrivateApprovalSignedTerminalActionV2({ ...rest, schema_version: 2, kind: PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V2_KIND });
+  return Object.freeze({ ...base, schema_version: 3, kind: PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V3_KIND, action_owners: validatePrivateApprovalActionOwnersV3(owners, base.action, "signed action receipt v3") });
+}
+
+/** A stored V2 or V3 receipt, by its own schema version. */
+function versionedReceipt(value: unknown): PrivateApprovalSignedTerminalActionV2 | PrivateApprovalSignedTerminalActionV3 {
+  return (value as { readonly schema_version?: unknown }).schema_version === 3
+    ? validatePrivateApprovalSignedTerminalActionV3(value)
+    : validatePrivateApprovalSignedTerminalActionV2(value);
+}
+
 function receiptSha(receipt: PrivateApprovalSignedTerminalAction): ApprovalContractSha256 {
   /*
    * A Slack retry is the same authenticated action, but it is observed by the
@@ -395,11 +419,12 @@ function storedCard(row: { card_binding_json: string; card_binding_sha256: strin
 
 function storedReceipt(row: { normalized_receipt_json: string; normalized_receipt_sha256: string }): QueuedPrivateApprovalSignedAction {
   const value = parseCanonical(row.normalized_receipt_json, "stored signed action receipt");
-  const receipt = (value as { readonly schema_version?: unknown }).schema_version === 2
-    ? validatePrivateApprovalSignedTerminalActionV2(value)
+  const version = (value as { readonly schema_version?: unknown }).schema_version;
+  const receipt = version === 2 || version === 3
+    ? versionedReceipt(value)
     : validateReceipt(value);
   if (receiptSha(receipt) !== row.normalized_receipt_sha256) invalid("stored signed action receipt digest is invalid");
-  return receipt.schema_version === 2
+  return receipt.schema_version === 1
     ? Object.freeze({ receipt, receipt_sha256: row.normalized_receipt_sha256 as ApprovalContractSha256 })
     : Object.freeze({ receipt, receipt_sha256: row.normalized_receipt_sha256 as ApprovalContractSha256 });
 }
@@ -408,17 +433,20 @@ function commandFromReceipt(receipt: PrivateApprovalSignedTerminalActionV1): Pri
   return validatePrivateApprovalResolutionCommandV1({ schema_version: 1, command_id: resolutionCommandId(receipt.provider_action_key_sha256), approval_id: receipt.approval_id, action: receipt.action, selected_policy_id: receipt.selected_policy_id, comment: receipt.comment });
 }
 
-function terminalFromRow(row: Record<string, string | null>): DurablePrivateApprovalTerminalV1 | Readonly<{ readonly resolution: PrivateApprovalResolutionV2; readonly signed_action_receipt_sha256: ApprovalContractSha256; readonly outcome: "approved" | "rejected"; readonly audit: PrivateApprovalTerminalAuditV1 }> {
+function terminalFromRow(row: Record<string, string | null>): DurablePrivateApprovalTerminalV1 | DurablePrivateApprovalTerminalV2 {
   const resolutionValue = parseCanonical(row.resolution_json as string, "stored terminal resolution");
   if (canonicalSha256(resolutionValue) !== row.resolution_sha256) invalid("stored terminal resolution digest is invalid");
   const auditValue = parseCanonical(row.audit_entry_json as string, "stored terminal audit");
   if (canonicalSha256(auditValue) !== row.audit_entry_sha256) invalid("stored terminal audit digest is invalid");
   const audit = validateAudit(auditValue);
-  const resolution = (resolutionValue as { readonly schema_version?: unknown }).schema_version === 2
+  const resolutionVersion = (resolutionValue as { readonly schema_version?: unknown }).schema_version;
+  const resolution = resolutionVersion === 3
+    ? validatePrivateApprovalResolutionV3(resolutionValue)
+    : resolutionVersion === 2
     ? validatePrivateApprovalResolutionV2(resolutionValue)
     : validatePrivateApprovalResolutionV1(resolutionValue);
   return Object.freeze({
-    resolution: resolution as PrivateApprovalResolutionV1 & PrivateApprovalResolutionV2,
+    resolution: resolution as PrivateApprovalResolutionV1 & PrivateApprovalResolutionV2 & PrivateApprovalResolutionV3,
     signed_action_receipt_sha256: digest(row.signed_action_receipt_sha256, "stored terminal receipt"),
     outcome: row.outcome === "approved" ? "approved" : row.outcome === "rejected" ? "rejected" : invalid("stored terminal outcome is invalid"),
     audit,
@@ -514,12 +542,21 @@ export class SqliteSlackDmApprovalPersistenceV1 {
   }
 
   enqueueV2(receiptInput: PrivateApprovalSignedTerminalActionV2): Readonly<{ readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV2; readonly receipt_sha256: ApprovalContractSha256; readonly idempotent: boolean }> {
-    const receipt = validatePrivateApprovalSignedTerminalActionV2(receiptInput);
+    return this.enqueueVersioned(receiptInput, validatePrivateApprovalSignedTerminalActionV2);
+  }
+
+  /** A V3 receipt keeps the card's owner fields beside the V2 choices. */
+  enqueueV3(receiptInput: PrivateApprovalSignedTerminalActionV3): Readonly<{ readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV3; readonly receipt_sha256: ApprovalContractSha256; readonly idempotent: boolean }> {
+    return this.enqueueVersioned(receiptInput, validatePrivateApprovalSignedTerminalActionV3);
+  }
+
+  private enqueueVersioned<R extends PrivateApprovalSignedTerminalActionV2 | PrivateApprovalSignedTerminalActionV3>(receiptInput: R, validate: (value: unknown) => R): Readonly<{ readonly disposition: "resolution"; readonly receipt: R; readonly receipt_sha256: ApprovalContractSha256; readonly idempotent: boolean }> {
+    const receipt = validate(receiptInput);
     const sha = receiptSha(receipt); const database = this.input.database; database.exec("BEGIN IMMEDIATE");
     try {
       const receiptId = providerReceiptId(receipt.provider_action_key_sha256);
       const prior = database.prepare(`SELECT normalized_receipt_json, normalized_receipt_sha256 FROM organization_private_approval_signed_action_receipts_v2 WHERE provider_receipt_id = ? OR provider_action_key = ? OR raw_payload_sha256 = ?`).all(receiptId, receipt.provider_action_key_sha256, receipt.request.raw_body_sha256) as Array<{ normalized_receipt_json: string; normalized_receipt_sha256: string }>;
-      if (prior.length > 0) { if (prior.length !== 1 || prior[0]!.normalized_receipt_sha256 !== sha) throw new PrivateApprovalSignedActionConflictError(); const stored = validatePrivateApprovalSignedTerminalActionV2(parseCanonical(prior[0]!.normalized_receipt_json, "stored signed action receipt v2")); database.exec("COMMIT"); return Object.freeze({ disposition: "resolution" as const, receipt: stored, receipt_sha256: sha, idempotent: true }); }
+      if (prior.length > 0) { if (prior.length !== 1 || prior[0]!.normalized_receipt_sha256 !== sha) throw new PrivateApprovalSignedActionConflictError(); const stored = validate(parseCanonical(prior[0]!.normalized_receipt_json, `stored signed action receipt v${receipt.schema_version}`)); database.exec("COMMIT"); return Object.freeze({ disposition: "resolution" as const, receipt: stored, receipt_sha256: sha, idempotent: true }); }
       if (database.prepare(`SELECT 1 FROM organization_private_approval_pending_contracts_v2 WHERE approval_id = ?`).get(receipt.approval_id) === undefined) throw new PrivateApprovalSignedActionConflictError("signed action names no pending approval");
       database.prepare(`INSERT INTO organization_private_approval_signed_action_receipts_v2 (provider_receipt_id, provider_action_key, raw_payload_sha256, normalized_receipt_json, normalized_receipt_sha256, approval_id, action_id, action_kind, received_at, verified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(receiptId, receipt.provider_action_key_sha256, receipt.request.raw_body_sha256, canonicalJson(receipt), sha, receipt.approval_id, receipt.action_id, receipt.action, receipt.received_at, receipt.verified_at);
@@ -579,7 +616,7 @@ export class SqliteSlackDmApprovalPersistenceV1 {
    * immutable, so replaying this complete ordered feed is safe: Authority
    * records its own terminal receipt and Slack projection idempotently.
    */
-  listTerminals(): readonly (DurablePrivateApprovalTerminalV1 | Readonly<{ readonly resolution: PrivateApprovalResolutionV2; readonly signed_action_receipt_sha256: ApprovalContractSha256; readonly outcome: "approved" | "rejected"; readonly audit: PrivateApprovalTerminalAuditV1 }>)[] {
+  listTerminals(): readonly (DurablePrivateApprovalTerminalV1 | DurablePrivateApprovalTerminalV2)[] {
     const rows = this.input.database
       .prepare(
         `SELECT *
@@ -590,10 +627,11 @@ export class SqliteSlackDmApprovalPersistenceV1 {
     return Object.freeze(rows.map(terminalFromRow));
   }
 
-  async finalize(providerActionKeySha256: ApprovalContractSha256): Promise<DurablePrivateApprovalTerminalV1 | Readonly<{ readonly resolution: PrivateApprovalResolutionV2; readonly signed_action_receipt_sha256: ApprovalContractSha256; readonly outcome: "approved" | "rejected"; readonly audit: PrivateApprovalTerminalAuditV1 }>> {
+  async finalize(providerActionKeySha256: ApprovalContractSha256): Promise<DurablePrivateApprovalTerminalV1 | DurablePrivateApprovalTerminalV2> {
     const actionKey = digest(providerActionKeySha256, "provider action key");
     const raw = this.input.database.prepare(`SELECT normalized_receipt_json FROM organization_private_approval_signed_action_receipts_v2 WHERE provider_action_key = ?`).get(actionKey) as { normalized_receipt_json: string } | undefined;
-    if (raw !== undefined && (parseCanonical(raw.normalized_receipt_json, "stored signed action receipt") as { schema_version?: unknown }).schema_version === 2) {
+    const rawVersion = raw === undefined ? undefined : (parseCanonical(raw.normalized_receipt_json, "stored signed action receipt") as { schema_version?: unknown }).schema_version;
+    if (rawVersion === 2 || rawVersion === 3) {
       return this.input.authority_fence.withStablePrivateApprovalFence((fence) => this.finalizeV2(actionKey, fence));
     }
     return this.input.authority_fence.withStablePrivateApprovalFence((authority) => {
@@ -639,21 +677,22 @@ export class SqliteSlackDmApprovalPersistenceV1 {
     });
   }
 
-  private finalizeV2(providerActionKeySha256: ApprovalContractSha256, authority: PrivateApprovalAuthorityFenceV1): Readonly<{ readonly resolution: PrivateApprovalResolutionV2; readonly signed_action_receipt_sha256: ApprovalContractSha256; readonly outcome: "approved" | "rejected"; readonly audit: PrivateApprovalTerminalAuditV1 }> {
+  /** Finalizes a V2 receipt, or a V3 receipt whose resolution adds the confirmed owners. */
+  private finalizeV2(providerActionKeySha256: ApprovalContractSha256, authority: PrivateApprovalAuthorityFenceV1): DurablePrivateApprovalTerminalV2 {
     const key = digest(providerActionKeySha256, "provider action key");
     const database = this.input.database; database.exec("BEGIN IMMEDIATE");
     try {
       const row = database.prepare(`SELECT normalized_receipt_json, normalized_receipt_sha256 FROM organization_private_approval_signed_action_receipts_v2 WHERE provider_action_key = ?`).get(key) as { normalized_receipt_json: string; normalized_receipt_sha256: string } | undefined;
       if (!row) throw new PrivateApprovalFinalizationDeniedError("state_drift", "signed V2 receipt is absent");
-      const receipt = validatePrivateApprovalSignedTerminalActionV2(parseCanonical(row.normalized_receipt_json, "stored signed action receipt v2")); const receiptDigest = digest(row.normalized_receipt_sha256, "stored V2 receipt digest");
+      const receipt = versionedReceipt(parseCanonical(row.normalized_receipt_json, "stored signed action receipt v2")); const receiptDigest = digest(row.normalized_receipt_sha256, "stored V2 receipt digest");
       if (receiptSha(receipt) !== receiptDigest) invalid("stored V2 receipt digest is invalid");
       /* Replay precedes every current-state check: an immutable terminal keeps its meaning after revocation. */
       const existing = database.prepare(`SELECT * FROM organization_private_approval_terminal_evidence_v2 WHERE approval_id = ?`).get(receipt.approval_id) as Record<string, string | null> | undefined;
       if (existing !== undefined) {
         const durable = terminalFromRow(existing);
-        if (durable.signed_action_receipt_sha256 !== receiptDigest || durable.resolution.schema_version !== 2) throw new PrivateApprovalFinalizationConflictError();
+        if (durable.signed_action_receipt_sha256 !== receiptDigest || durable.resolution.schema_version !== receipt.schema_version) throw new PrivateApprovalFinalizationConflictError();
         database.exec("COMMIT");
-        return durable as Readonly<{ readonly resolution: PrivateApprovalResolutionV2; readonly signed_action_receipt_sha256: ApprovalContractSha256; readonly outcome: "approved" | "rejected"; readonly audit: PrivateApprovalTerminalAuditV1 }>;
+        return durable as DurablePrivateApprovalTerminalV2;
       }
       const staged = database.prepare(`SELECT pending_json, pending_sha256, card_binding_json, card_binding_sha256 FROM organization_private_approval_pending_contracts_v2 WHERE approval_id = ?`).get(receipt.approval_id) as { pending_json:string; pending_sha256:string; card_binding_json:string; card_binding_sha256:string } | undefined;
       if (!staged) throw new PrivateApprovalFinalizationDeniedError("state_drift", "pending V2 approval is absent");
@@ -669,7 +708,9 @@ export class SqliteSlackDmApprovalPersistenceV1 {
         throw new PrivateApprovalFinalizationDeniedError("authorization_denied", "selected project grant changed");
       }
       const allowRaw = authority.revalidatePrivateApprovalAuthorization({ pending, card_binding: card, lookup: receipt.lookup }); if (!allowRaw) throw new PrivateApprovalFinalizationDeniedError("authorization_denied");
-      const resolution = resolvePrivateApprovalPolicyV2({ pending, command: validatePrivateApprovalResolutionCommandV2({ schema_version:2, command_id:resolutionCommandId(key), approval_id:receipt.approval_id, action:receipt.action, selected_policy_id:receipt.selected_policy_id, selected_project_ids:receipt.selected_project_ids, share_transcript:receipt.share_transcript, comment:receipt.comment }), authorization_allow: validatePrivateApprovalAuthorizationAllowV2(allowRaw), selected_projects_current: grants });
+      const resolutionV2 = resolvePrivateApprovalPolicyV2({ pending, command: validatePrivateApprovalResolutionCommandV2({ schema_version:2, command_id:resolutionCommandId(key), approval_id:receipt.approval_id, action:receipt.action, selected_policy_id:receipt.selected_policy_id, selected_project_ids:receipt.selected_project_ids, share_transcript:receipt.share_transcript, comment:receipt.comment }), authorization_allow: validatePrivateApprovalAuthorizationAllowV2(allowRaw), selected_projects_current: grants });
+      // The owners ride beside the unchanged V2 policy decision; they grant nothing.
+      const resolution = receipt.schema_version === 3 ? privateApprovalResolutionV3(resolutionV2, receipt.action_owners) : resolutionV2;
       const audit = this.nextAudit(resolution); const outcome = resolution.action === "approve" ? "approved" as const : "rejected" as const;
       database.prepare(`INSERT INTO organization_private_approval_terminal_evidence_v2 (approval_id, resolution_json, resolution_sha256, signed_action_receipt_sha256, outcome, audit_event_id, audit_sequence, audit_entry_json, audit_entry_sha256, predecessor_entry_sha256, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(resolution.approval_id, canonicalJson(resolution), canonicalSha256(resolution), receiptDigest, outcome, audit.audit_event_id, audit.audit_sequence, canonicalJson(audit), canonicalSha256(audit), audit.predecessor_entry_sha256, this.input.now());
@@ -691,7 +732,7 @@ export class SqliteSlackDmApprovalPersistenceV1 {
     if (link === undefined || link.contract_sha256 !== pending.assigned_owner_slack_identity_link.external_identity_link_contract_sha256 || link.current_status !== "active" || link.provider_issuer !== "https://slack.com" || link.provider_tenant_kind !== "workspace" || link.provider_tenant_id !== card.slack_workspace_id || link.provider_enterprise_id !== card.slack_enterprise_id || link.provider_subject_id !== card.slack_subject_id || link.principal_id !== pending.assigned_owner.principal_id || link.membership_id !== pending.assigned_owner.membership_id) throw new PrivateApprovalFinalizationDeniedError("state_drift", "Slack identity link is not current");
   }
 
-  private nextAudit(resolution: PrivateApprovalResolutionV1 | PrivateApprovalResolutionV2): PrivateApprovalTerminalAuditV1 {
+  private nextAudit(resolution: PrivateApprovalResolutionV1 | PrivateApprovalResolutionV2 | PrivateApprovalResolutionV3): PrivateApprovalTerminalAuditV1 {
     const head = this.input.database.prepare(`SELECT audit_sequence, audit_entry_sha256 FROM organization_private_approval_terminal_evidence_v2 ORDER BY audit_sequence DESC LIMIT 1`).get() as { audit_sequence: number; audit_entry_sha256: string } | undefined;
     const auditSequence = head === undefined ? 1 : positive(head.audit_sequence, "stored audit sequence") + 1;
     const predecessor = head === undefined ? null : digest(head.audit_entry_sha256, "stored audit digest");

@@ -297,6 +297,7 @@ export async function openOrganizationAuthorityRuntime(
   };
   const baseApiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
     ...dependencies.api,
+    record_input_codecs: config.record_input_codecs,
     ...(config.agentic_ask_v1_enabled === true ? { agentic_ask_v1_enabled: true } : {}),
     ...(config.agentic_ask_v1_enabled === true &&
     config.agentic_ask_v1_small_scope_shortcut === true

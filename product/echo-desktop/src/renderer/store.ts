@@ -2151,6 +2151,29 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
   startSources();
 }
 
+/**
+ * A project question whose answer cites nothing: nothing in the project
+ * matched. Ask never widens on its own (ADR-0015); the reader may ask the same
+ * question across everything they can read, with one tap.
+ */
+export function foundNothingInProject(turn: AskTurn): boolean {
+  // Authorship-unsupported and off-scope answers would not change with a wider ask.
+  return turn.scope.kind === 'project' && turn.answer.sources.length === 0 &&
+    turn.answer.outcome !== 'authorship_unsupported' && turn.answer.outcome !== 'off_scope';
+}
+
+/**
+ * Ask across everything you can see: the current answer's question again, in
+ * all accessible context. The bar widens with it, as its × would, so the chip
+ * goes and follow-ups ask there too. The project answer stays in the thread.
+ */
+export function askEverywhere(): void {
+  const turn = state.ask?.shown;
+  if (!turn || state.ask?.asking || !foundNothingInProject(turn)) return;
+  widenScope();
+  void ask(turn.question, { kind: 'global' });
+}
+
 /** Cancel, while asking: the answer before comes back, or with none Ask closes. A late answer is dropped. */
 export function cancelAsk(): void {
   const thread = state.ask;

@@ -30,7 +30,7 @@ function audienceIds(row: CustodyRow): readonly ProjectIdV1[] {
 }
 function assertAudienceLinks(database: Database.Database, table: 'text'|'document', id: string, organizationId: string, row: CustodyRow): readonly ProjectIdV1[] {
   const ids = audienceIds(row);
-  if (ids.length === 0 || (database.pragma('user_version', { simple: true }) as number) < 9) return ids;
+  if (ids.length === 0) return ids;
   const joins = table === 'text'
     ? database.prepare('SELECT project_id FROM authority_person_update_audience_projects_v1 WHERE context_id=? AND organization_id=? ORDER BY project_id').pluck().all(id, organizationId)
     : database.prepare('SELECT project_id FROM authority_person_document_audience_projects_v1 WHERE document_id=? AND organization_id=? ORDER BY project_id').pluck().all(id, organizationId);
@@ -62,7 +62,7 @@ export function assertPersonSourceAdmissionV1(database:Database.Database,source:
     if(version!==1&&version!==2&&version!==3)throw new Error('Person text source version is invalid');
     const projection=version===1?'organization_id,principal_id,membership_id,membership_type,received_at,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,NULL AS audience_project_ids_json,NULL AS submitted_association_project_ids_json,NULL AS request_version,request_id':'*';
     const text=database.prepare(`SELECT ${projection} FROM authority_person_updates_v${version === 1 ? 1 : 2} WHERE organization_id=? AND context_id=?`).get(scope.organization_id,source.item.external_id) as TextRow|undefined;
-    if(!text || (version !== 1 && (database.pragma('user_version', {simple:true}) as number) >= 9 && text.request_version !== version))throw new Error('Person text source is not in accepted custody');
+    if(!text || (version !== 1 && text.request_version !== version))throw new Error('Person text source is not in accepted custody');
     row=text;table='text';external=text.context_id;revision=text.payload_sha256;
     if (version === 3) {
       const audience = text.audience_kind === 'projects'

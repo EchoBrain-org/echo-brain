@@ -260,6 +260,31 @@ function expectedSignals(
   return Object.freeze(signals);
 }
 
+/**
+ * Owners the approver confirmed in the signed human act (ADR-0021), by signal
+ * ID. The approved brief never carries them; a resolution without the field
+ * confirmed none. Read by field, so this workspace names no provider shape.
+ */
+function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
+  const owners = (reference as { readonly action_owners?: unknown }).action_owners;
+  if (owners === undefined) return new Map();
+  if (!Array.isArray(owners)) invalid("confirmed action owners must be an array");
+  const result = new Map<string, string>();
+  for (const entry of owners) {
+    const signalId = requiredText((entry as { readonly signal_id?: unknown })?.signal_id, "confirmed owner signal");
+    const owner = requiredText((entry as { readonly owner?: unknown })?.owner, "confirmed owner");
+    if (result.has(signalId)) invalid("confirmed action owners must name each action once");
+    result.set(signalId, owner);
+  }
+  return result;
+}
+
+/** An action's searchable text names its confirmed owner, so "what does Jules own" matches. */
+function atomText(signal: RecordRetrievalSourceSignalV1, owners: ReadonlyMap<string, string>): string {
+  const owner = signal.kind === "action" ? owners.get(signal.id) : undefined;
+  return owner === undefined ? signal.text : `${signal.text} Owner: ${owner}.`;
+}
+
 function materialize(database: Database.Database): MaterializedSnapshot {
   database.exec("BEGIN");
   try {
@@ -277,9 +302,6 @@ function materialize(database: Database.Database): MaterializedSnapshot {
            FROM organization_record_log ORDER BY position ASC`,
       )
       .all() as StoredRecordRow[];
-    const hasProjectFacts = database.prepare(
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'organization_record_project_members_readable_person_fact'",
-    ).get() !== undefined;
     const facts = database
       .prepare(
         `SELECT 'member' AS fact_family,
@@ -299,7 +321,7 @@ function materialize(database: Database.Database): MaterializedSnapshot {
                 provider_action_sha256, authorization_proof_sha256,
                 reviewer_principal_id, reviewer_membership_id
            FROM organization_record_restricted_reviewer_person_fact
-           ${hasProjectFacts ? `UNION ALL
+         UNION ALL
          SELECT 'project' AS fact_family,
                 authority_id, organization_id, state_lineage_id, approval_id,
                 action, policy_id, policy_contract_sha256, record_position,
@@ -307,24 +329,20 @@ function materialize(database: Database.Database): MaterializedSnapshot {
                 audit_event_id, audit_sequence, audit_entry_sha256,
                 provider_action_sha256, authorization_proof_sha256,
                 NULL AS reviewer_principal_id, NULL AS reviewer_membership_id
-           FROM organization_record_project_members_readable_person_fact` : ""}
+           FROM organization_record_project_members_readable_person_fact
          ORDER BY record_position ASC, atom_order ASC, fact_family ASC`,
       )
       .all() as StoredFactRow[];
-    const projectAudiences = hasProjectFacts
-      ? database.prepare(
-          `SELECT record_position, project_id
-             FROM organization_record_project_members_readable_person_record_fact
-            ORDER BY record_position ASC, project_id ASC`,
-        ).all() as MaterializedSnapshot["projectAudiences"]
-      : [];
-    const projectAssociations = hasProjectFacts
-      ? database.prepare(
-          `SELECT record_position, project_id
-             FROM organization_record_project_association_v1
-            ORDER BY record_position ASC, project_id ASC`,
-        ).all() as MaterializedSnapshot["projectAssociations"]
-      : [];
+    const projectAudiences = database.prepare(
+      `SELECT record_position, project_id
+         FROM organization_record_project_members_readable_person_record_fact
+        ORDER BY record_position ASC, project_id ASC`,
+    ).all() as MaterializedSnapshot["projectAudiences"];
+    const projectAssociations = database.prepare(
+      `SELECT record_position, project_id
+         FROM organization_record_project_association_v1
+        ORDER BY record_position ASC, project_id ASC`,
+    ).all() as MaterializedSnapshot["projectAssociations"];
     database.exec("COMMIT");
     return { metadata, records, facts, projectAudiences, projectAssociations };
   } catch (error) {
@@ -550,6 +568,10 @@ export class RecordRetrievalSourceSnapshotPortV1 {
       }
       let reviewerPrincipal: string | null = null;
       let reviewerMembership: string | null = null;
+      const owners = confirmedOwners(reference);
+      for (const id of owners.keys()) {
+        if (!signals.some((signal) => signal.kind === "action" && signal.id === id)) invalid("confirmed owner names no approved action");
+      }
       for (const [atomOrder, signal] of signals.entries()) {
         const fact = recordFacts[atomOrder];
         if (fact === undefined)
@@ -682,7 +704,7 @@ export class RecordRetrievalSourceSnapshotPortV1 {
             signal_id_sha256: fact.signal_id_sha256,
             atom_id: fact.atom_id,
             item_kind: signal.kind,
-            text: signal.text,
+            text: atomText(signal, owners),
             audit_event_id: reference.audit_event_id,
             audit_sequence: reference.audit_sequence,
             audit_entry_sha256: reference.audit_entry_sha256,

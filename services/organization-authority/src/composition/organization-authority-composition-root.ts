@@ -1,11 +1,11 @@
 import { composePersonExternalIdentityRuntimeBundlesV1 } from "@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime";
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
-import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v2";
-const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2]);
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v2";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
 import { composeRecordApproverProjectorsV1, createRecordPolicyFactProjectorRegistryV1, createPersonPolicyFactProjectorV2 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { createPrivateSlackBlockApprovalPolicyProjectorV1, projectPrivateSlackBlockApprovalApproverV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
-import { createPrivateSlackBlockApprovalPolicyProjectorV2, projectPrivateSlackBlockApprovalApproverV2 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2";
+import { createPrivateSlackBlockApprovalPolicyProjectorV2, createPrivateSlackBlockApprovalPolicyProjectorV3, projectPrivateSlackBlockApprovalApproverV2 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2";
 import {
   openOrganizationAuthorityRuntime,
   type OrganizationAuthorityRuntimeConfig,
@@ -182,6 +182,7 @@ export async function openOrganizationAuthorityService(
           createPersonPolicyFactProjectorV2(),
           createPrivateSlackBlockApprovalPolicyProjectorV1(),
           createPrivateSlackBlockApprovalPolicyProjectorV2(),
+          createPrivateSlackBlockApprovalPolicyProjectorV3(),
         ]),
       run_staging_synthetic_private_dm_canary: (input) =>
         runStagingSyntheticPrivateDmCanaryV1(input),

@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-13
-reviewed_at: 2026-08-29
-reviewed_ref: b9a9891209dfa2841fb9273671fdb93c540b201f
+reviewed_at: 2026-09-27
+reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
   - ADR-0001
   - ADR-0003
@@ -34,16 +34,18 @@ qualification_ids:
 ## Responsibility
 
 `packages/organization-processing/src/core/` owns the
-provider-neutral source admission and decision pipeline, domain contracts, ports, processing rules,
-approval state, delivery contracts, and storage interfaces.
+provider-neutral source admission, meeting-source bridge, and decision-brief
+compilation, plus their canonical contracts, validators, and ports.
 
-It does not own provider HTTP behavior, operating-system lifecycle,
-organization deployment, or concrete persistence.
+It does not own the processing cycle or approval workflow state (in
+`packages/organization-processing/src/admitted-meeting-processing/`), provider
+HTTP behavior, operating-system lifecycle, organization deployment, or concrete
+persistence.
 
 ## Data and dependency boundary
 
-The core operates on bounded domain values. It reaches sources, processors,
-approval surfaces, delivery surfaces, and storage only through ports. Concrete
+The core operates on bounded domain values. It reaches sources, decision
+processors, and source-admission storage only through ports. Concrete
 provider and infrastructure code depends inward on the core; the core must not
 depend outward on them. Provider selection belongs in explicit composition
 bundles for source, processor, answer composition, approval/interaction, and

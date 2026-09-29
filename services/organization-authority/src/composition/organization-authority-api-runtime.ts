@@ -83,6 +83,11 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Historical record protocol projection, independent of live ingress. */
   readonly record_approver?: RecordApproverProjectorV1;
+  /**
+   * The record codecs the Authority appends with. Ask's evidence desk reads
+   * approved records through them; without them only human-act records parse.
+   */
+  readonly record_input_codecs?: import("@echo-brain/organization-protocol").RecordInputCodecRegistryV4;
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
@@ -214,6 +219,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const projectRepository = new SqliteProjectContextRepositoryV1(database);
     const captureProjects = createRecordProjectAuthorizationV1(projectRepository);
     const recordSearch = createPersonRecordSearchRouteV1({
+      ...(dependencies.record_input_codecs === undefined ? {} : { record_input_codecs: dependencies.record_input_codecs }),
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
       organization_id: metadata.organization_id,

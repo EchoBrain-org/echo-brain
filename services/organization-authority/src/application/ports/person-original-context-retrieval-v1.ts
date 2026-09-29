@@ -63,6 +63,18 @@ export interface ApprovedMeetingTranscriptGrantReaderV1 {
     readonly state_lineage_id: string;
     readonly approval_id: string;
   }): ApprovedMeetingTranscriptGrantV1 | null;
+  /**
+   * Every grant in the lineage, or those for one exact source revision. Ask
+   * searches only transcripts it can list; without it, transcripts stay out.
+   */
+  list?(input: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly source_id?: string;
+    readonly revision_id?: string;
+    readonly source_sha256?: Sha256Digest;
+  }): readonly ApprovedMeetingTranscriptGrantV1[];
 }
 
 export interface ApprovedMeetingTranscriptReadV1 {

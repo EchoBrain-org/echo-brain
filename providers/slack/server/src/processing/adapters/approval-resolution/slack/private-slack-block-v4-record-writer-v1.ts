@@ -1,7 +1,7 @@
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v1.js";
-import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, privateSlackBlockApprovalConsequenceV2Sha256, buildPrivateSlackBlockApprovalRecordInputV2 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v2.js";
-const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2]);
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND, privateSlackBlockApprovalConsequenceV2Sha256, buildPrivateSlackBlockApprovalRecordInputV2, buildPrivateSlackBlockApprovalRecordInputV3, type PrivateSlackBlockApprovalResolutionRefV2 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v2.js";
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
 import { canonicalSha256, type JsonObject, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT, ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT, RESTRICTED_REVIEWER_PERSON_POLICY_ID, createOrganizationRecordEnvelopeV4, createOrganizationRecordReceiptV2, organizationAuthorityPinSha256, validateDecisionProcessorProvenanceV1, validateMeetingSourceProvenanceV1, verifyOrganizationAuthorityPin, verifyOrganizationRecordEnvelopeV4, verifyOrganizationRecordReceiptV2, validateOrganizationRecordReceiptBodyV2 } from "@echo-brain/organization-protocol";
 import { buildPrivateSlackBlockApprovalRecordInputV1 } from "../../../../organization-protocol/private-slack-block-approval-record-input-v1.js";
@@ -13,6 +13,25 @@ import type {
 import { type AppendV4RecordInput, type AppendedV4Record, type V4ReceiptFactory, type V4RecordEnvelopeFactory, type V4RecordEnvelopeView } from "@echo-brain/organization-record/organization-record-api-v1";
 import { type RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1 } from "../../../../organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1.js";
 import type { OrganizationAuthoritySigner } from "@echo-brain/organization-authority-kernel/application/ports/organization-authority-signer";
+
+/**
+ * Maps confirmed owners from the card's action places to the frozen brief's
+ * signal IDs. A place outside the brief cannot come from a delivered card, so
+ * it fails the append rather than recording an owner on the wrong action.
+ */
+function confirmedOwners(
+  candidate: FrozenPrivateSlackApprovalCandidateV1,
+  owners: readonly { readonly action_index: number; readonly owner: string }[],
+): readonly { readonly signal_id: string; readonly owner: string }[] {
+  const snapshot = candidate.approved_snapshot as { readonly approved_payload?: { readonly brief?: { readonly actions?: readonly { readonly id?: unknown }[] } } };
+  const actions = snapshot.approved_payload?.brief?.actions;
+  if (!Array.isArray(actions)) throw new Error("private V3 terminal frozen brief has no actions");
+  return Object.freeze(owners.map((owner) => {
+    const id = actions[owner.action_index]?.id;
+    if (typeof id !== "string") throw new Error("private V3 terminal owner names no approved action");
+    return Object.freeze({ signal_id: id, owner: owner.owner });
+  }));
+}
 
 /** Authority-owned frozen candidate, re-read before a terminal V4 append. */
 export interface FrozenPrivateSlackApprovalCandidateV1 {
@@ -75,6 +94,10 @@ export interface PrivateSlackBlockApprovalTerminalV2 {
   readonly outcome: "approved" | "rejected";
   readonly signed_action_receipt_sha256: Sha256Digest;
   readonly resolution: Omit<PrivateSlackBlockApprovalTerminalV1["resolution"], "canonical_record_policy"> & {
+    /** 3 when the approver confirmed owners on a V3 card (ADR-0021). */
+    readonly schema_version?: 2 | 3;
+    /** Confirmed owners by the action's place in the approved brief; V3 only. */
+    readonly action_owners?: readonly { readonly action_index: number; readonly owner: string }[];
     readonly canonical_record_policy: {
       readonly policy_id: typeof RESTRICTED_REVIEWER_PERSON_POLICY_ID | typeof ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID | typeof PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID;
       readonly policy_contract_sha256: Sha256Digest;
@@ -317,8 +340,7 @@ export class PrivateSlackBlockV4RecordWriterV1 {
       provider_action_sha256: terminal.signed_action_receipt_sha256,
     };
     const auditEntrySha256 = canonicalSha256(auditEntry);
-    const human = buildPrivateSlackBlockApprovalRecordInputV2({
-      private_slack_block_approval_resolution_ref_v2: {
+    const refV2: PrivateSlackBlockApprovalResolutionRefV2 = {
         schema_version: 2, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND,
         authority_id: candidate.authority_id, organization_id: candidate.organization_id, state_lineage_id: candidate.state_lineage_id,
         command_id: resolution.command_id, approval_id: resolution.approval_id,
@@ -333,12 +355,22 @@ export class PrivateSlackBlockV4RecordWriterV1 {
         authorization_proof_sha256: resolution.authorization_proof_sha256,
         audience_project_ids: policy.audience_project_ids, association_project_ids: policy.association_project_ids,
         share_transcript: policy.share_transcript, transcript_source: policy.transcript_source,
-      },
-      event: { kind: "approved", approved_snapshot: candidate.approved_snapshot as never,
+      };
+    const event = { kind: "approved" as const, approved_snapshot: candidate.approved_snapshot as never,
         approved_snapshot_sha256: candidate.approved_snapshot_sha256, policy_id: policy.policy_id,
         policy_contract_sha256: policy.policy_contract_sha256, policy_consequence: consequence,
-        policy_consequence_sha256: consequenceSha256 },
-    });
+        policy_consequence_sha256: consequenceSha256 };
+    // A V3 resolution names confirmed owners by the action's place in the
+    // frozen brief; the record names them by the approved signal ID.
+    const human = resolution.schema_version === 3
+      ? buildPrivateSlackBlockApprovalRecordInputV3({
+          private_slack_block_approval_resolution_ref_v3: { ...refV2, schema_version: 3, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND, action_owners: confirmedOwners(candidate, resolution.action_owners ?? []) },
+          event,
+        })
+      : buildPrivateSlackBlockApprovalRecordInputV2({ private_slack_block_approval_resolution_ref_v2: refV2, event });
+    const humanActRecordInput = "private_slack_block_approval_resolution_ref_v3" in human
+      ? { private_slack_block_approval_resolution_ref_v3: human.private_slack_block_approval_resolution_ref_v3, event: human.event }
+      : { private_slack_block_approval_resolution_ref_v2: human.private_slack_block_approval_resolution_ref_v2, event: human.event };
     const authorizationWitness = {
       authorization_allow: {
         authority_id: candidate.authority_id, organization_id: candidate.organization_id, state_lineage_id: candidate.state_lineage_id,
@@ -355,7 +387,7 @@ export class PrivateSlackBlockV4RecordWriterV1 {
     const issuedAt = this.options.now(); timestamp(issuedAt);
     return this.options.append.append({ approval_id: resolution.approval_id, action: "approve", semantic_idempotency_key: human.semantic_idempotency_key,
       receipt_issued_at: issuedAt, authorization_witness: authorizationWitness,
-      envelope_factory: this.envelopeFactory({ human_act_record_input: { private_slack_block_approval_resolution_ref_v2: human.private_slack_block_approval_resolution_ref_v2, event: human.event }, source_provenance: source, processor_provenance: processor, issued_at: issuedAt }), receipt_factory: this.receiptFactory() });
+      envelope_factory: this.envelopeFactory({ human_act_record_input: humanActRecordInput, source_provenance: source, processor_provenance: processor, issued_at: issuedAt }), receipt_factory: this.receiptFactory() });
   }
 
   private envelopeFactory(input: {

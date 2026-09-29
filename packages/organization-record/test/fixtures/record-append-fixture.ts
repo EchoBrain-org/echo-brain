@@ -57,10 +57,7 @@ import {
   type V4RecordEnvelopeView
 } from "../../src/log/record-log-v4-append.js";
 import { openOrganizationRecordDatabase } from "../../src/persistence/open-organization-record-database.js";
-import {
-  applyOrganizationRecordLogBaselineV3,
-  applyOrganizationRecordLogBaselineV4,
-} from "../../src/persistence/record-log-baseline.js";
+import { applyOrganizationRecordLogBaselineV4 } from "../../src/persistence/record-log-baseline.js";
 
 export const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1]);
 
@@ -114,19 +111,7 @@ export function protocolAuthority(): ProtocolAuthority {
 
 export function database(): ReturnType<typeof openOrganizationRecordDatabase> {
   const value = openOrganizationRecordDatabase(":memory:");
-  applyOrganizationRecordLogBaselineV3(value);
-  initializeMetadata(value);
-  return value;
-}
-
-export function databaseV4(): ReturnType<typeof openOrganizationRecordDatabase> {
-  const value = openOrganizationRecordDatabase(":memory:");
   applyOrganizationRecordLogBaselineV4(value);
-  initializeMetadata(value);
-  return value;
-}
-
-function initializeMetadata(value: ReturnType<typeof openOrganizationRecordDatabase>): void {
   value
     .prepare(
       `INSERT INTO organization_record_log_metadata (
@@ -139,6 +124,7 @@ function initializeMetadata(value: ReturnType<typeof openOrganizationRecordDatab
       COORDINATES.state_lineage_id,
       "2026-08-21T12:00:00.000Z",
     );
+  return value;
 }
 
 export function policy(policy_id: PersonPolicyIdV2) {

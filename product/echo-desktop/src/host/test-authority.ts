@@ -721,6 +721,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return json({ ...desktop.answer, answer: 'A late answer.', scope });
       }
       if (mode === 'ask-follow-ups' && asks === 3) return failure('unavailable', 503);
+      // Nothing in any project matches: the Authority's no-evidence answer, which cites nothing.
+      if (mode === 'ask-project-empty' && scope.kind === 'project') {
+        const authorship = typeof body?.question === 'string' && body.question.startsWith('Who said');
+        return json({
+          schema_version: 3, kind: 'echo-clean-person-answer-v3', citations: [], scope,
+          ...(authorship
+            ? { answer: 'Approved records do not say who said what.', outcome: 'authorship_unsupported' }
+            : { answer: 'Insufficient accessible evidence to answer this question.' }),
+        });
+      }
       return json({ ...desktop.answer, scope });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {

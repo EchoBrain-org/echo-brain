@@ -35,11 +35,63 @@ import {
   RecordRetrievalSourceSnapshotPortV1,
   type RecordRetrievalSourceVerifiedEnvelopeV1,
 } from "../src/retrieve/record-retrieval-source-snapshot-v1.js";
-import { COORDINATES, RECORD_INPUT_CODECS, appendInput, database, databaseV4, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
+import {
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
+  applyOrganizationRecordLogBaselineV4,
+  organizationRecordLogBaselineSha256V4,
+} from "../src/persistence/record-log-baseline.js";
+import { openOrganizationRecordDatabase } from "../src/persistence/open-organization-record-database.js";
+import { COORDINATES, RECORD_INPUT_CODECS, appendInput, database, protocolAuthority, receiptFactory } from './fixtures/record-append-fixture.js';
+
+describe("organization record log baseline V4", () => {
+  it("creates fresh immutable project audience, association, and transcript-grant facts", () => {
+    const db = openOrganizationRecordDatabase(":memory:");
+    try {
+      applyOrganizationRecordLogBaselineV4(db);
+      expect(db.pragma("user_version", { simple: true })).toBe(
+        ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V4,
+      );
+      expect(organizationRecordLogBaselineSha256V4()).toMatch(
+        /^sha256:[0-9a-f]{64}$/,
+      );
+      expect(
+        db.prepare(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name IN (
+              'organization_record_project_members_readable_person_record_fact',
+              'organization_record_project_association_v1',
+              'organization_record_meeting_transcript_grant_v1'
+            ) ORDER BY name`,
+        ).all(),
+      ).toHaveLength(3);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("never relabels occupied state as a V4 lineage", () => {
+    const occupied = openOrganizationRecordDatabase(":memory:");
+    const current = openOrganizationRecordDatabase(":memory:");
+    try {
+      occupied.exec("CREATE TABLE occupied (id INTEGER PRIMARY KEY)");
+      occupied.pragma("user_version = 1");
+      expect(() => applyOrganizationRecordLogBaselineV4(occupied)).toThrow(
+        "completely empty database",
+      );
+      applyOrganizationRecordLogBaselineV4(current);
+      expect(() => applyOrganizationRecordLogBaselineV4(current)).toThrow(
+        "completely empty database",
+      );
+    } finally {
+      occupied.close();
+      current.close();
+    }
+  });
+});
 
 describe("V4 organization-record append", () => {
   it("append-atomically stores project audience, association, and exact transcript grant facts", async () => {
-    const db = databaseV4();
+    const db = database();
     try {
       const semantic = sha256Digest("project-facts-semantic-key");
       const source_sha256 = sha256Digest("project-facts-source");
@@ -94,6 +146,12 @@ describe("V4 organization-record append", () => {
         }),
       ).toHaveLength(1);
       expect(new ApprovedMeetingTranscriptGrantReaderV1(db).find({ ...COORDINATES, approval_id: "approval-project-facts" })).toMatchObject({ source_id: "source-1", revision_id: "revision-1", source_sha256, audience_project_ids: ["prj_alpha", "prj_beta"], association_project_ids: ["prj_alpha", "prj_beta"] });
+      const reader = new ApprovedMeetingTranscriptGrantReaderV1(db);
+      const listed = reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id });
+      expect(listed).toEqual([reader.find({ ...COORDINATES, approval_id: "approval-project-facts" })]);
+      expect(reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1", revision_id: "revision-1", source_sha256 })).toEqual(listed);
+      expect(reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1", revision_id: "revision-2", source_sha256 })).toEqual([]);
+      expect(() => reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1" })).toThrow("exact source tuple");
     } finally { db.close(); }
   });
 

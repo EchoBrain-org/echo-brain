@@ -4,8 +4,8 @@ import { askText, queryTerms } from '../../shared/query.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  answerSources, ask, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, matchesShown, openCompose, openMatch, pageCovered, retryEvidence, retryRecord,
-  searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
+  answerSources, ask, askEverywhere, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, foundNothingInProject, matchesShown, openCompose, openMatch,
+  pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Plus, Up } from './icons.js';
 
@@ -194,6 +194,14 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
       {turn.answer.parts === undefined
         ? <div class="answer selectable" data-testid="answer">{turn.answer.text}</div>
         : <AgenticAnswer state={state} turn={turn} />}
+      {foundNothingInProject(turn) && (
+        <div class="project-empty" data-testid="project-empty">
+          <span>Nothing in {turn.scopeName} matched.</span>
+          {!thread.failed && (
+            <button type="button" class="link-button" data-testid="ask-everywhere" onClick={askEverywhere}>Ask across everything you can see</button>
+          )}
+        </div>
+      )}
       <BasedOn state={state} />
       <div class="actions">
         {count > 0 && (
@@ -269,6 +277,7 @@ function Item({ item }: { item: RecordItem }) {
     <div class="record-item">
       {item.status && <div class="status">{item.status === 'proposed' ? 'Proposed' : 'Unresolved'}</div>}
       <div>{item.text}</div>
+      {item.owner && <div class="owner" data-testid="record-owner">Owner: {item.owner}</div>}
       {item.excerpts.map((excerpt, index) => (
         <div key={index} class="excerpt">
           <div class="quote">“{excerpt.quote}”</div>

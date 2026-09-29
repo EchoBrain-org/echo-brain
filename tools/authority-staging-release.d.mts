@@ -1,6 +1,6 @@
 export type StagingReleaseAction =
-  | 'install' | 'inspect-install' | 'stage' | 'stage-v5-to-v6' | 'stage-v8-to-v9'
-  | 'canary' | 'status' | 'rollback' | 'promote';
+  | 'install' | 'inspect-install' | 'stage' | 'canary' | 'status' | 'rollback'
+  | 'promote';
 
 export type StagingReleaseCode =
   | 'installed' | 'installation_failed' | 'inspection_verified'

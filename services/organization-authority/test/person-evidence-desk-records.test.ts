@@ -29,6 +29,16 @@ import { createPersonEvidenceDeskV1 } from '../src/composition/person-evidence-d
 import { createPersonRecordSearchRouteV1 } from '../src/composition/person-record-search-route.js';
 import { COORDINATES, appendInput, database as recordDatabase, protocolAuthority } from '../../../packages/organization-record/test/fixtures/record-append-fixture.js';
 
+import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, type HumanActEventV1 } from '@echo-brain/organization-protocol';
+import { createPersonPolicyFactProjectorV2, createRecordPolicyFactProjectorRegistryV1 } from '@echo-brain/organization-record/organization-record-api-v1';
+import { approvedDecisionSnapshotV2Sha256 } from '../../../packages/organization-protocol/src/human-act-record-input-v1.js';
+import { resolvePinnedOrganizationAuthority } from '../../../packages/organization-protocol/src/authority-descriptor.js';
+import { humanAct, processorProvenance, sourceProvenance } from '../../../packages/organization-record/test/fixtures/record-append-fixture.js';
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3 } from '../../../providers/slack/server/src/organization-protocol/private-slack-block-approval-record-input-v2.js';
+import { createPrivateSlackBlockApprovalPolicyProjectorV2, createPrivateSlackBlockApprovalPolicyProjectorV3 } from '../../../providers/slack/server/src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.js';
+import { privateApprovalResolutionV3, resolvePrivateApprovalPolicyV2 } from '../../../providers/slack/server/src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js';
+import { createPrivateSlackBlockV4RecordWriterV1 } from '../../../providers/slack/server/src/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js';
+
 const roots: string[] = [];
 const digest = (value: string): Sha256Digest => canonicalSha256({ value });
 const RETRIEVAL_CONTRACT = digest('evidence-desk-retrieval-contract');
@@ -351,6 +361,58 @@ describe('Person evidence desk: live Slack (RFC-0003)', () => {
       expect(slack.reader.check).toHaveBeenCalledTimes(1);
       clock = 40_000; revoked = true;
       await expect(desk.revalidate({})).rejects.toThrow('Slack disconnected');
+    } finally { value.close(); }
+  });
+});
+
+describe('Person evidence desk over a Slack-approved record with a confirmed owner', () => {
+  const codecs = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
+  async function slackFixture(withCodecs: boolean) {
+    const authority = openAuthorityDatabase(':memory:');
+    applyAuthorityBaselineV10(authority);
+    authority.prepare("INSERT INTO authority_metadata(singleton,authority_id,organization_id,organization_display_name,descriptor_json,created_at,last_observed_at) VALUES(1,?,?, 'Clean','{}','2026-09-27T00:00:00.000Z','2026-09-27T00:00:00.000Z')").run(COORDINATES.authority_id, COORDINATES.organization_id);
+    const record = recordDatabase();
+    const signer = protocolAuthority();
+    const approval_id = 'apr_desk_owner_v3';
+    const snapshot = (humanAct(approval_id, 'approve', ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, 1, { decisions: 1, actions: 2 }).event as Extract<HumanActEventV1, { kind: 'approved' }>).approved_snapshot;
+    const approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(snapshot);
+    const owner = { principal_id: 'principal-owner', membership_id: 'membership-owner' };
+    const link = { provider: 'slack' as const, external_identity_link_id: 'clm_desk_owner', external_identity_link_contract_sha256: sha256Digest('link'), provider_subject_id: 'U123' };
+    const transcript_source = { source_id: 'source_desk_owner', revision_id: 'revision_desk_owner', source_sha256: sha256Digest('source') };
+    const pending = { schema_version: 2 as const, kind: 'echo-private-approval-pending-v2' as const, approval_id, organization_id: COORDINATES.organization_id, candidate_sha256: sha256Digest('candidate'), frozen_card_sha256: sha256Digest('card'), approved_snapshot_sha256, assigned_owner: owner, assigned_owner_slack_identity_link: link, eligible_projects: [], transcript_source };
+    const allow = { schema_version: 2 as const, kind: 'echo-private-approval-authorization-allow-v2' as const, approval_id, organization_id: COORDINATES.organization_id, candidate_sha256: pending.candidate_sha256, frozen_card_sha256: pending.frozen_card_sha256, approved_snapshot_sha256, authorized_assignee: owner, current_slack_identity_link: link, authorization_proof_sha256: sha256Digest('proof') };
+    const v2 = resolvePrivateApprovalPolicyV2({ pending, command: { schema_version: 2, command_id: 'command-desk-owner', approval_id, action: 'approve', selected_policy_id: 'organization-member-readable-person-v2', selected_project_ids: [], share_transcript: false, comment: null }, authorization_allow: allow, selected_projects_current: [] });
+    const projectors = createRecordPolicyFactProjectorRegistryV1([createPersonPolicyFactProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV2(), createPrivateSlackBlockApprovalPolicyProjectorV3()]);
+    const writer = await createPrivateSlackBlockV4RecordWriterV1({ append: new OrganizationRecordAppenderV4(record, COORDINATES, projectors), signer: { inspect: async () => resolvePinnedOrganizationAuthority(signer.pinned), sign: signer.sign }, state_lineage_id: COORDINATES.state_lineage_id, now: () => '2026-09-27T00:00:00.000Z', next_envelope_id: () => 'envelope-desk-owner' });
+    const appended = await writer.appendApprovedV2({ outcome: 'approved', signed_action_receipt_sha256: sha256Digest('signed'), resolution: privateApprovalResolutionV3(v2, [{ action_index: 1, owner: 'Jules' }]), audit: { audit_event_id: 'audit-desk-owner', audit_sequence: 1, approval_id, outcome: 'approved' } },
+      { ...COORDINATES, approval_id, candidate_sha256: pending.candidate_sha256, frozen_card_sha256: pending.frozen_card_sha256, approved_snapshot: snapshot, approved_snapshot_sha256, source_provenance: sourceProvenance(), processor_provenance: processorProvenance() });
+    const row = record.prepare('SELECT record_sha256, envelope_sha256 FROM organization_record_log WHERE position = 1').get() as { record_sha256: Sha256Digest; envelope_sha256: Sha256Digest };
+    expect(appended).toMatchObject({ outcome: 'appended' });
+    const text = 'Action 1 Owner: Jules.';
+    const recordAtom = { ...atom(row, text), approval_id, atom_order: 2, item_kind: 'action' as const, atom_id: sha256Digest('owner-atom'), signal_id_sha256: sha256Digest(`action-${approval_id}-1`) };
+    let checks = 0;
+    const state_directory = stateRoot();
+    const built = buildReadableSearchGenerationV1(generation(state_directory, [recordAtom]));
+    const active = { generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256, retrieval_contract_sha256: RETRIEVAL_CONTRACT, exact_head: { ...COORDINATES, position: 1, record_sha256: row.record_sha256 } };
+    warmReadableSearchActiveGenerationV1({ state_directory, active_generation: active });
+    authority.prepare('INSERT INTO authority_readable_search_active_generation(singleton,organization_id,generation_id,manifest_sha256,retrieval_contract_sha256,record_head_position,record_head_hash,published_at) VALUES(1,?,?,?,?,?,?,?)').run(COORDINATES.organization_id, active.generation_id, active.manifest_sha256, RETRIEVAL_CONTRACT, 1, row.record_sha256, '2026-09-27T00:00:00.000Z');
+    const route = createPersonRecordSearchRouteV1({ state_directory, ...COORDINATES, retrieval_contract_sha256: RETRIEVAL_CONTRACT, sessions: { authenticateAccess: () => ({ ...authorization(), checked_at: new Date(Date.UTC(2026, 8, 27, 1, 0, checks++)).toISOString() }) }, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority), expand_related_atoms: expandReadableSearchRelatedAtomsV1, ...(withCodecs ? { record_input_codecs: codecs } : {}) });
+    const desk = createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: route });
+    return { desk, close: () => { record.close(); authority.close(); } };
+  }
+
+  it('reads the confirmed owner from the signed approval, and matches the owned search text exactly', async () => {
+    const value = await slackFixture(true);
+    try {
+      const searched = await value.desk.search({ query: 'Jules', limit: 10 });
+      expect(searched.items.find(item => item.citation.kind === 'approved_record')).toMatchObject({ kind: 'action', text: 'Action 1 Owner: Jules.', attributes: { owner: 'Jules' } });
+    } finally { value.close(); }
+  });
+
+  it('needs the Authority record codecs to read a Slack-approved record at all', async () => {
+    const value = await slackFixture(false);
+    try {
+      await expect(value.desk.search({ query: 'Jules', limit: 10 })).rejects.toMatchObject({ code: 'unavailable' });
     } finally { value.close(); }
   });
 });

@@ -213,7 +213,8 @@ export interface Answer {
   /** V3 answers keep the existing compact presentation. */
   readonly direct?: AnswerStatement;
   readonly parts?: readonly AnswerPart[];
-  readonly outcome?: 'answered' | 'partial' | 'not_found' | 'off_scope';
+  /** V4 outcomes, or V3's authorship_unsupported: a wider ask would not help that one. */
+  readonly outcome?: 'answered' | 'partial' | 'not_found' | 'off_scope' | 'authorship_unsupported';
   readonly assumption?: string;
   readonly notice?: string;
 }
@@ -228,6 +229,8 @@ export interface RecordItem {
   readonly text: string;
   /** Only a decision still open says so. */
   readonly status?: 'proposed' | 'unresolved';
+  /** An action's owner, only as the approver confirmed it at approval. */
+  readonly owner?: string;
   readonly excerpts: readonly { readonly quote: string; readonly at?: string }[];
 }
 

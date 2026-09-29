@@ -61,9 +61,10 @@ External dependencies remain installed; workspace symlinks point only into the
 isolated tree. This isolated compile runs inside the architecture suite and
 needs no CI job of its own. Full source tests and the offline kit and artifact
 checks exercise the Person tarball and the Authority image. The root suite does
-not reach `product/echo-desktop`; the separate "macOS arm64 desktop app" CI job
-runs its typecheck, unit tests, Playwright suite, release leak check, packaging
-and packaged smoke.
+not reach `product/echo-desktop`; the separate `desktop-app` CI job runs it on
+native macOS arm64 and Linux x64 runners: typecheck, unit tests, Playwright
+suite, packaging with its release leak check, and packaged smoke. The Linux leg
+also installs and smokes the deb.
 
 Neutral package tests may import neutral workspace code, their own test
 fixtures, and shared neutral test support. The test-layer architecture check
@@ -125,24 +126,9 @@ but no embeddings and no canonical approved organization-record truth. The
 record and retrieval files are separate even though one Authority process
 composes them.
 
-Processing state, source configuration bindings, pending approvals, delivery
+Processing state, source configuration bindings, pending approvals, approval
 receipts, replay checkpoints, and singleton execution locks are server-owned.
 No corresponding mutable state exists in the Person client.
-
-## Compatibility boundary
-
-Historical migrations remain immutable. V1 installation enrollment, access
-state, record-ingest, and approval binding code remains server-side while
-surviving record/Slack operations still resolve those identities. It can be
-retired only after additive Person-based writer and approval bindings replace
-those call sites and existing rows are drained or preserved as read-only
-history.
-
-The machine fleet-update API is different: no deployed server component calls
-it and no current machine artifact consumes it, so its application and HTTP
-surface is retired. Migration `0004` and historical rows remain for schema
-compatibility; server deployment evidence does not masquerade as a fleet
-receipt.
 
 ## Deployment boundary
 

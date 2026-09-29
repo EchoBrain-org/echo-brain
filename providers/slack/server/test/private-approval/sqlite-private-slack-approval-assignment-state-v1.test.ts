@@ -3,10 +3,7 @@ import { RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256, RESTRICTED_REVIEWER_PERS
 import { type PrivateApprovalResolutionV1 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
 import type { PendingPrivateApprovalV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import { describe, expect, it } from "vitest";
-import {
-  applyAuthorityBaselineV5,
-  applyAuthorityBaselineV10,
-} from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
+import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "../../src/private-approval/resolve-private-slack-approval-reviewer-target-v1.js";
 import { SqlitePrivateSlackApprovalAssignmentStateV1, type PrivateApprovalCandidateCommitmentV1, type CanonicalPrivateApprovalV4ReceiptV1, type StagePrivateApprovalAssignmentInputV1 } from "../../src/private-approval/sqlite-private-slack-approval-assignment-state-v1.js";
@@ -22,9 +19,9 @@ const CONNECTION_CONTRACT_SHA256 = canonicalSha256({ connection: "contract" });
 const CONNECTION_STATE_SHA256 = canonicalSha256({ connection: "state" });
 const LINK_CONTRACT_SHA256 = canonicalSha256({ link: "contract" });
 
-function fixture(version: 5 | 10 = 5) {
+function fixture(outbox: "queued" | "posted" = "posted") {
   const database = openAuthorityDatabase(":memory:");
-  (version === 10 ? applyAuthorityBaselineV10 : applyAuthorityBaselineV5)(database);
+  applyAuthorityBaselineV10(database);
   database.pragma("foreign_keys = OFF");
   database
     .prepare(
@@ -65,7 +62,7 @@ function fixture(version: 5 | 10 = 5) {
        VALUES ('rli_private', ?, ?)`,
     )
     .run(CANDIDATE_ID, NOW);
-  if (version === 10) {
+  if (outbox === "queued") {
     database.prepare(`INSERT INTO authority_live_approval_outbox_v2
       (candidate_id,approval_id,stage_command_id,state,updated_at) VALUES (?, ?, 'pas_private', 'queued', ?)` )
       .run(CANDIDATE_ID, APPROVAL_ID, NOW);
@@ -247,7 +244,7 @@ function approvedReceipt(): CanonicalPrivateApprovalV4ReceiptV1 {
 
 describe("SQLite private approval assignment state v1", () => {
   it("freezes V2 delivery before posting and retains exactly the original choices on restart", () => {
-    const database = fixture(10);
+    const database = fixture("queued");
     try {
       const state = new SqlitePrivateSlackApprovalAssignmentStateV1(database, () => NOW);
       const contract: PendingPrivateApprovalV2 = {
@@ -281,6 +278,20 @@ describe("SQLite private approval assignment state v1", () => {
       expect(first.resolution).toEqual(resolution);
       expect(new SqlitePrivateSlackApprovalAssignmentStateV1(database).readTerminal(APPROVAL_ID)?.resolution).toEqual(resolution);
       expect(state.recordTerminal({ candidate_id: CANDIDATE_ID, resolution })).toEqual(first);
+    } finally { database.close(); }
+  });
+
+  it("persists and replays a V3 rejection as V3", () => {
+    const database = fixture();
+    try {
+      const state = new SqlitePrivateSlackApprovalAssignmentStateV1(database, () => NOW);
+      state.stage(input());
+      const resolution = { ...rejection(), schema_version: 3 as const, kind: "echo-private-approval-resolution-v3" as const,
+        selected_project_ids: [], share_transcript: false, canonical_record_policy: null, action_owners: [] };
+      const first = state.recordTerminal({ candidate_id: CANDIDATE_ID, resolution });
+      expect(first.resolution).toEqual(resolution);
+      expect(new SqlitePrivateSlackApprovalAssignmentStateV1(database).readTerminal(APPROVAL_ID)?.resolution).toEqual(resolution);
+      expect(() => state.recordTerminal({ candidate_id: CANDIDATE_ID, resolution: { ...resolution, action_owners: [{ action_index: 0, owner: "Jules" }] } })).toThrow();
     } finally { database.close(); }
   });
 

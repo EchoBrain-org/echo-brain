@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Exact-image clean-v1 release staging. Schema changes require the named,
-# stopped-state V5-to-V6 and V8-to-V9 migrations; ordinary stage never migrates.
+# Exact-image clean-v1 release staging. Stage never migrates state; a schema
+# change requires fresh onboarding.
 set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -163,7 +163,7 @@ verify_candidate_state_lineage() {
     --entrypoint node \
     --mount "type=bind,src=$STATE_DIR,dst=/echo-clean/state,readonly" \
     "$image" --input-type=module -e 'import { verifyAuthorityStateLineage } from "./packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js"; import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "./providers/openrouter/dist/verify-openrouter-decision-processor-admission-v1.js"; verifyAuthorityStateLineage("/echo-clean/state"); verifyPersistedOpenRouterDecisionProcessorAdmissionV1("/echo-clean/state");' || \
-    fail 'candidate Authority image rejected persisted state lineage; if this is a pre-live rehearsal with no live users, use onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users; otherwise use an explicit migration procedure'
+    fail 'candidate Authority image rejected persisted state lineage; state is never migrated, so with no live users use onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users for fresh state'
 }
 
 current_image() {
@@ -884,256 +884,16 @@ start_and_check() {
   safe_public_descriptor_check
 }
 
-# Staging-only, explicitly named conversions. The journal and both state
-# directories survive failure. Never run an older image against converted data.
-migration_kind() {
-  local requested="${1:-}" found='' kind parent operation release_id
-  case "$requested" in ''|v5-to-v6|v8-to-v9) ;; *) return 1 ;; esac
-  release_id="$(field "$CANDIDATE_RECORD" release-id)" || return 1
-  for kind in v5-to-v6 v8-to-v9; do
-    parent="$RELEASE_STATE_DIR/state-$kind"
-    [[ ! -L "$parent" && ( ! -e "$parent" || -d "$parent" ) ]] || return 1
-    operation="$parent/$release_id"
-    if [[ -e "$operation" || -L "$operation" ]]; then
-      [[ -z "$found" ]] || return 1
-      found="$kind"
-    fi
-  done
-  if [[ -n "$requested" ]]; then
-    [[ -z "$found" || "$found" == "$requested" ]] || return 1
-    printf '%s\n' "$requested"
-  else
-    printf '%s\n' "${found:-none}"
-  fi
-}
-
-migration_state() {
-  local kind
-  kind="$(migration_kind "${2:-}")" || return 1
-  case "$1" in
-    restore|check|complete|promote)
-      [[ "$kind" != none ]] || return 0 ;;
-  esac
-  python3 - "$1" "$STATE_DIR" "$RELEASE_STATE_DIR" "$CURRENT_RECORD" "$CANDIDATE_RECORD" "$(authority_runtime_identity)" "$kind" <<'ECHO_STATE_MIGRATION_PY'
-import hashlib, json, os, pathlib, shutil, stat, sys, uuid
-
-def require(value):
-    if not value:
-        raise ValueError('migration precondition')
-
-def sync(path):
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try: os.fsync(fd)
-    finally: os.close(fd)
-
-def identity(path):
-    try: info = path.lstat()
-    except FileNotFoundError: return None
-    require(stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode))
-    return [info.st_dev, info.st_ino]
-
-def private(path, directory=False):
-    info = path.lstat()
-    require((stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)) and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == (0o700 if directory else 0o600))
-    require(directory or (info.st_nlink == 1 and info.st_size <= 2 * 1024 * 1024))
-
-def digest(path):
-    result = hashlib.sha256()
-    with path.open('rb') as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b''): result.update(chunk)
-    return result.hexdigest()
-
-def inventory(root):
-    result, size = {}, 0
-    def visit(path):
-        nonlocal size
-        info = path.lstat()
-        require(info.st_uid == uid and info.st_gid == gid and info.st_dev == original[0] and not info.st_mode & 0o022)
-        relative = str(path.relative_to(root))
-        require(len(result) < 4096 and len(relative.encode()) <= 1024)
-        if stat.S_ISDIR(info.st_mode):
-            result[relative] = ['directory', stat.S_IMODE(info.st_mode)]
-            for child in sorted(path.iterdir()): visit(child)
-        else:
-            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
-            size += info.st_size
-            require(size <= 1024 * 1024 * 1024)
-            result[relative] = ['file', stat.S_IMODE(info.st_mode), info.st_size, digest(path)]
-    visit(root)
-    require('authority.sqlite' in result and result['authority.sqlite'][0] == 'file')
-    return result, size
-
-def save():
-    temporary = operation / ('.journal-' + str(uuid.uuid4()))
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    try:
-        with os.fdopen(fd, 'w') as stream:
-            json.dump(journal, stream, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
-            stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
-        os.replace(temporary, journal_path); sync(operation)
-    finally:
-        if os.path.exists(temporary): os.unlink(temporary)
-
-def move(source, target):
-    require(not target.exists() and not target.is_symlink())
-    os.rename(source, target); sync(source.parent); sync(target.parent)
-
-try:
-    action, raw_state, raw_release, raw_accepted, raw_candidate, runtime_identity, migration = sys.argv[1:]
-    require(migration in ('v5-to-v6', 'v8-to-v9'))
-    uid, gid = map(int, runtime_identity.split(':'))
-    state = pathlib.Path(os.path.abspath(raw_state))
-    release = pathlib.Path(raw_release)
-    absolute_release = pathlib.Path(os.path.abspath(raw_release))
-    require(state.parent == absolute_release.parent and state.name == 'state' and absolute_release.name == 'release')
-    require(identity(release) == identity(absolute_release))
-    # All existing ancestors must be real directories; the runner pins release.
-    for path in (absolute_release, *absolute_release.parents): require(identity(path) is not None)
-    private(release, True)
-    accepted, candidate = pathlib.Path(raw_accepted), pathlib.Path(raw_candidate)
-    private(accepted); private(candidate)
-    candidate_record = json.loads(candidate.read_bytes())
-    release_id = candidate_record['release_id']
-    import re
-    require(re.fullmatch(r'clean-v1-[a-z0-9][a-z0-9-]{2,63}', release_id) is not None)
-    parent = release / ('state-' + migration)
-    operation = parent / release_id
-    journal_path = operation / 'journal.json'
-    next_state, backup, failed = (operation / name for name in ('next-state', 'accepted-state', 'failed-state'))
-    if action != 'prepare' and not operation.exists() and not operation.is_symlink():
-        # Ordinary releases have no migration journal.
-        require(action in ('restore', 'check', 'complete', 'promote'))
-        raise SystemExit(0)
-    if action == 'prepare':
-        require(not operation.exists() and not operation.is_symlink())
-        if not parent.exists(): parent.mkdir(mode=0o700); sync(release)
-        private(parent, True)
-        original = identity(state)
-        require(original is not None and original[0] == release.stat().st_dev)
-        entries, size = inventory(state)
-        require(len(json.dumps(entries, ensure_ascii=False).encode()) <= 1024 * 1024)
-        require(shutil.disk_usage(state).free >= size * 2 + 64 * 1024 * 1024)
-        operation.mkdir(mode=0o700); sync(parent)
-        next_state.mkdir(mode=0o700); os.chown(next_state, uid, gid); sync(operation)
-        journal = {'schema_version': 1, 'kind': 'echo-staging-state-' + migration + '-v1', 'accepted_sha256': digest(accepted), 'candidate_sha256': digest(candidate), 'state': str(state), 'original': original, 'converted': identity(next_state), 'phase': 'copying', 'inventory': entries}
-        save()
-        # Copy each role, private key, manifest and sidecar. Only the Authority
-        # database is rebuilt by the candidate's exact offline copier.
-        for relative, entry in entries.items():
-            if relative == '.' or relative in ('authority.sqlite', 'authority.sqlite-wal', 'authority.sqlite-shm'): continue
-            source, target = state / relative, next_state / relative
-            if entry[0] == 'directory':
-                target.mkdir(mode=entry[1]); target.chmod(entry[1])
-            else:
-                with source.open('rb') as src, target.open('xb') as dst:
-                    shutil.copyfileobj(src, dst, 1024 * 1024)
-                    os.fchmod(dst.fileno(), entry[1]); dst.flush(); os.fsync(dst.fileno())
-            os.chown(target, uid, gid)
-        for relative, entry in reversed(list(entries.items())):
-            if entry[0] == 'directory': sync(next_state / relative)
-        require(inventory(state)[0] == entries)
-        journal['phase'] = 'copied'; save()
-        print(os.path.abspath(next_state))
-        raise SystemExit(0)
-    private(parent, True); private(operation, True); private(journal_path)
-    journal = json.loads(journal_path.read_bytes())
-    require(journal['schema_version'] == 1 and journal['kind'] == 'echo-staging-state-' + migration + '-v1' and journal['state'] == str(state) and journal['candidate_sha256'] == digest(candidate))
-    promoted = digest(accepted) == digest(candidate)
-    require(journal['accepted_sha256'] == digest(accepted) or (promoted and action in ('check', 'promote')))
-    original, converted = journal['original'], journal['converted']
-    require(original != converted)
-    live, old, new, archived = map(identity, (state, backup, next_state, failed))
-    if action == 'cutover':
-        require(journal['phase'] == 'copied' and live == original and new == converted and old is None and archived is None)
-        require(inventory(state)[0] == journal['inventory'])
-        # SQLite FULL sync protects DB pages; also persist the new file's final
-        # metadata and directory entry before the live-directory rename.
-        fd = os.open(next_state / 'authority.sqlite', os.O_RDONLY | os.O_NOFOLLOW)
-        try: os.fsync(fd)
-        finally: os.close(fd)
-        sync(next_state)
-        journal['phase'] = 'switching'; save()
-        move(state, backup)
-        move(next_state, state)
-        journal['phase'] = 'switched'; save()
-    elif action == 'ready':
-        require(journal['phase'] == 'switched' and live == converted and old == original and new is None and archived is None)
-        journal['phase'] = 'ready'; save()
-    elif action in ('check', 'promote'):
-        require(journal['phase'] in ('ready', 'promoted') and live == converted and old == original and new is None and archived is None)
-        if action == 'promote':
-            require(promoted)
-            journal['phase'] = 'promoted'; save()
-    elif action == 'restore':
-        require(not promoted and journal['phase'] != 'promoted')
-        # Recognize both interrupted rename windows by recorded inode identity.
-        # Unknown paths or replacements are refused, never removed to proceed.
-        require(live in (None, original, converted) and old in (None, original) and new in (None, converted) and archived in (None, converted))
-        require(sum(x == original for x in (live, old)) == 1)
-        require(sum(x == converted for x in (live, new, archived)) == 1)
-        journal['phase'] = 'restoring'; save()
-        if live == converted: move(state, failed); live = None
-        if new == converted: move(next_state, failed)
-        if live is None: move(backup, state)
-        require(identity(state) == original and identity(failed) == converted and identity(backup) is None and identity(next_state) is None)
-        journal['phase'] = 'restored'; save()
-    elif action == 'complete':
-        require(journal['phase'] == 'restored' and live == original and archived == converted and old is None and new is None)
-        journal['phase'] = 'rolled_back'; save()
-    else: require(False)
-except SystemExit:
-    raise
-except Exception:
-    raise SystemExit('state migration refused; preserve its journal and state directories')
-ECHO_STATE_MIGRATION_PY
-}
-
-stage_migrated_state() {
-  local next_state image source runtime_identity kind copy_function
-  kind="$1"
-  case "$kind" in
-    v5-to-v6) copy_function=copyAuthorityV5ToV6 ;;
-    v8-to-v9) copy_function=copyAuthorityV8ToV9 ;;
-    *) return 1 ;;
-  esac
-  compose_clean down || return 1
-  candidate_runtime_is_stopped || return 1
-  next_state="$(migration_state prepare "$kind")" || return 1
-  image="$(field "$CANDIDATE_RECORD" authority-image)" || return 1
-  source="$(field "$CANDIDATE_RECORD" source-sha)" || return 1
-  runtime_identity="$(authority_runtime_identity)" || return 1
-  docker pull "$image" || return 1
-  image_source_matches "$image" "$source" || return 1
-  docker run --rm --network none --read-only --cap-drop ALL \
-    --security-opt no-new-privileges --user "$runtime_identity" --workdir /app \
-    --entrypoint node \
-    --mount "type=bind,src=$STATE_DIR,dst=/source,readonly" \
-    --mount "type=bind,src=$next_state,dst=/candidate" \
-    "$image" --input-type=module -e "import Database from 'better-sqlite3'; import { chmodSync, existsSync } from 'node:fs'; import { $copy_function } from './packages/organization-authority-kernel/dist/adapters/persistence/sqlite/authority-$kind.js'; if (existsSync('/candidate/authority.sqlite')) throw new Error('output exists'); const source = new Database('/source/authority.sqlite', { readonly:true, fileMustExist:true }); const target = new Database('/candidate/authority.sqlite'); try { target.pragma('foreign_keys = ON'); target.pragma('synchronous = FULL'); $copy_function(source,target); } finally { target.close(); source.close(); } chmodSync('/candidate/authority.sqlite',0o600);" >/dev/null 2>&1 || return 1
-  (STATE_DIR="$next_state"; verify_candidate_state_lineage "$CANDIDATE_RECORD") >/dev/null 2>&1 || return 1
-  migration_state cutover
-}
-
 restore_accepted() {
   local accepted_record="$1"
-  local kind
-  kind="$(migration_kind)" || return 1
-  if [[ "$kind" != none ]]; then
-    compose_clean down || return 1
-    candidate_runtime_is_stopped || return 1
-    migration_state restore || return 1
-  fi
   activate_release_tuple "$accepted_record" || return 1
-  start_and_check "$accepted_record" || return 1
-  migration_state complete
+  start_and_check "$accepted_record"
 }
 
 usage() {
   cat >&2 <<'EOF'
 usage:
   update-clean-v1.sh stage --release <canonical-release.json> --runtime-profile <canonical-profile.json>
-  update-clean-v1.sh stage-v5-to-v6 --release <canonical-release.json> --runtime-profile <canonical-profile.json>
-  update-clean-v1.sh stage-v8-to-v9 --release <canonical-release.json> --runtime-profile <canonical-profile.json>
   update-clean-v1.sh canary
   update-clean-v1.sh promote --release <canonical-release.json> --canary-passed
   update-clean-v1.sh rollback
@@ -1149,13 +909,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 ensure_state_directories || fail 'Authority release-state directories are missing or unsafe'
-if [[ -f "$CANDIDATE_RECORD" ]]; then
-  case "$command" in
-    canary|promote|status) migration_state check || fail 'migration is incomplete; preserve state and recover through rollback' ;;
-  esac
-fi
 case "$command" in
-  stage|stage-v5-to-v6|stage-v8-to-v9)
+  stage)
     [[ "${2:-}" == '--release' && -n "${3:-}" && "${4:-}" == '--runtime-profile' && -n "${5:-}" && $# -eq 5 ]] || usage
     candidate="$(cd "$(dirname "$3")" && pwd -P)/$(basename "$3")"
     supplied_profile="$(cd "$(dirname "$5")" && pwd -P)/$(basename "$5")"
@@ -1181,21 +936,13 @@ case "$command" in
         fail 'first deployment refuses to replace an unrecorded running Authority'
       fi
     fi
-    if [[ "$command" != stage ]]; then
-      [[ "$first_deploy" == false && "$(authority_host)" == authority-staging.echobrain.org ]] || fail 'state migration requires an accepted staging host'
-      verify_candidate_state_lineage "$CURRENT_RECORD"
-    else
-      verify_candidate_state_lineage "$candidate"
-    fi
+    verify_candidate_state_lineage "$candidate"
     store_release_tuple "$candidate" "$supplied_profile"
     if ! copy_record "$candidate" "$CANDIDATE_RECORD" no-replace; then
       remove_release_tuple "$candidate" || true
       fail 'could not persist the staged candidate release record'
     fi
-    if { [[ "$command" == stage ]] || stage_migrated_state "${command#stage-}"; } && activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD"; then
-      if [[ "$command" != stage ]]; then
-        migration_state ready || fail 'migration readiness is unconfirmed; retain the candidate and recover through rollback'
-      fi
+    if activate_release_tuple "$CANDIDATE_RECORD" && start_and_check "$CANDIDATE_RECORD"; then
       printf '{"ok":true,"stage":"candidate_ready","accepted_release_present":%s,"next_action":"Run one bounded post-update canary, stop for founder Slack approval and the exact candidate-client record and answer checks, then promote with --canary-passed or run rollback."}\n' "$([[ "$first_deploy" == true ]] && printf false || printf true)"
       exit 0
     fi
@@ -1227,7 +974,6 @@ case "$command" in
     if [[ -f "$CURRENT_RECORD" ]]; then
       validate "$CURRENT_RECORD"
       if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
-        migration_state promote || fail 'migration promotion journal could not be completed'
         remove_record "$CANDIDATE_RECORD"
         printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","idempotent":true}\n'
         exit 0
@@ -1242,7 +988,6 @@ case "$command" in
       printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","first_deploy":true}\n'
       exit 0
     fi
-    migration_state promote || fail 'migration promotion journal could not be completed'
     remove_record "$CANDIDATE_RECORD"
     printf '{"ok":true,"stage":"promoted","baseline_compatibility_class":"clean-v1","first_deploy":false}\n'
     ;;
@@ -1260,7 +1005,6 @@ case "$command" in
     [[ -f "$CURRENT_RECORD" ]] || fail 'accepted current release record is unsafe'
     validate "$CURRENT_RECORD"
     if cmp -s "$CURRENT_RECORD" "$CANDIDATE_RECORD"; then
-      migration_state promote || fail 'migration promotion journal could not be completed'
       remove_record "$CANDIDATE_RECORD"
       printf '{"ok":true,"stage":"already_promoted","baseline_compatibility_class":"clean-v1"}\n'
       exit 0

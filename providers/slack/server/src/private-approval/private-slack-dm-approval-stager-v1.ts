@@ -16,8 +16,13 @@ import type Database from "better-sqlite3";
 import { buildPrivateSlackApprovalBlockKitCardV1, type PrivateSlackApprovalActionItemV1, type PrivateSlackApprovalDecisionGroupV1, type PrivateSlackApprovalReviewItemV1 } from "./private-slack-approval-block-kit-card-v1.js";
 import {
   buildPrivateSlackApprovalBlockKitCardV2,
+  buildPrivateSlackApprovalBlockKitCardV3,
+  canonicalPrivateSlackApprovalOwnerV3,
+  PRIVATE_SLACK_APPROVAL_OWNER_PROPOSALS_MAX_V3,
   type PrivateSlackApprovalBlockKitCardV2,
+  type PrivateSlackApprovalBlockKitCardV3,
   type PrivateSlackApprovalEligibleProjectV2,
+  type PrivateSlackApprovalOwnerProposalV3,
 } from "./private-slack-approval-block-kit-card-v2.js";
 import type { PrivateApprovalTranscriptSourceV1 } from "@echo-brain/organization-control-plane/application/private-approval-policy-resolution-core-v2";
 import { type PrivateSlackApprovalReviewerTargetResolverInputV1, type PrivateSlackApprovalReviewerTargetResolverV1, type PrivateSlackApprovalReviewerTargetV1 } from "./resolve-private-slack-approval-reviewer-target-v1.js";
@@ -87,7 +92,7 @@ interface PrivateCardAndSnapshotV1 {
 }
 
 interface PrivateCardAndSnapshotV2 {
-  readonly card: PrivateSlackApprovalBlockKitCardV2;
+  readonly card: PrivateSlackApprovalBlockKitCardV2 | PrivateSlackApprovalBlockKitCardV3;
   readonly frozen_card_sha256: Digest;
   readonly approved_snapshot: Readonly<Record<string, unknown>>;
   readonly approved_snapshot_sha256: Digest;
@@ -200,6 +205,36 @@ function frozenReview(
 }
 
 /**
+ * The brief an approval commits to. Extraction may propose action owners, but
+ * a proposal is never approved content: only an owner the approver confirms
+ * in the signed action is recorded (ADR-0021). Briefs with no proposals are
+ * returned unchanged, so their snapshots keep their exact bytes.
+ */
+function withoutProposedOwners(brief: CompiledDecisionBrief): CompiledDecisionBrief {
+  if (brief.actions.every((action) => action.owner === null)) return brief;
+  return Object.freeze({
+    ...brief,
+    actions: Object.freeze(brief.actions.map((action) => action.owner === null ? action : Object.freeze({ ...action, owner: null }))),
+  });
+}
+
+/** The actions whose owner extraction proposed, as a V3 card offers them. */
+function ownerProposals(brief: CompiledDecisionBrief): readonly PrivateSlackApprovalOwnerProposalV3[] {
+  const proposals: PrivateSlackApprovalOwnerProposalV3[] = [];
+  for (const [action_index, action] of brief.actions.entries()) {
+    if (action.owner === null || !isExactDisplayText(action.text)) continue;
+    let owner: string | null;
+    try { owner = canonicalPrivateSlackApprovalOwnerV3(action.owner); } catch { owner = null; }
+    if (owner !== null) proposals.push(Object.freeze({ action_index, action_text: action.text, owner }));
+  }
+  return Object.freeze(proposals);
+}
+
+function isCardLimitError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("private approval Block Kit card ");
+}
+
+/**
  * Projects the same complete approval card used by staging without performing
  * any I/O. `undefined` means the exact DecisionSet cannot be safely rendered
  * within the card's frozen limits.
@@ -242,7 +277,7 @@ function buildCardAndSnapshot(
     input.decisions,
   );
   const payload = Object.freeze({
-    brief,
+    brief: withoutProposedOwners(brief),
     source: Object.freeze({
       // The immutable meeting envelope is the provenance authority, even
       // when its source differs from the current admission context.
@@ -306,7 +341,7 @@ function buildCardAndSnapshotV2(
     input.decisions,
   );
   const payload = Object.freeze({
-    brief,
+    brief: withoutProposedOwners(brief),
     source: Object.freeze({
       adapter_id: input.meeting.provenance.source.adapter_id,
       instance_id: input.meeting.provenance.source.instance_id,
@@ -328,23 +363,36 @@ function buildCardAndSnapshotV2(
   });
   const review = frozenReview(brief);
   if (review === undefined) return undefined;
-  let card: PrivateSlackApprovalBlockKitCardV2;
-  try {
-    card = buildPrivateSlackApprovalBlockKitCardV2({
-      schema_version: 2,
-      approval_id: input.candidate.approval_id,
-      meeting_title: legacyMeetingTitle(input.meeting.title),
-      eligible_projects: eligibility,
-      ...review,
-    });
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith("private approval Block Kit card v2 ")) return undefined;
-    throw error;
+  const base = {
+    approval_id: input.candidate.approval_id,
+    meeting_title: legacyMeetingTitle(input.meeting.title),
+    eligible_projects: eligibility,
+    ...review,
+  };
+  // A card that cannot fit an owner field per proposal falls back to the V2
+  // card: those proposals are simply not offered, so nothing is recorded.
+  const proposals = ownerProposals(brief);
+  let card: PrivateSlackApprovalBlockKitCardV2 | PrivateSlackApprovalBlockKitCardV3 | undefined;
+  if (proposals.length > 0 && proposals.length <= PRIVATE_SLACK_APPROVAL_OWNER_PROPOSALS_MAX_V3) {
+    try {
+      card = buildPrivateSlackApprovalBlockKitCardV3({ schema_version: 3, ...base, owner_proposals: proposals });
+    } catch (error) {
+      if (!isCardLimitError(error)) throw error;
+    }
+  }
+  if (card === undefined) {
+    try {
+      card = buildPrivateSlackApprovalBlockKitCardV2({ schema_version: 2, ...base });
+    } catch (error) {
+      // V1 review errors raised inside the V2 build are the same card limit.
+      if (isCardLimitError(error)) return undefined;
+      throw error;
+    }
   }
   const approved_snapshot_sha256 = sha256(approved_snapshot);
   const frozen_card_sha256 = sha256({
-    schema_version: 2,
-    kind: "echo-private-owner-dm-approval-card-v2",
+    schema_version: card.schema_version,
+    kind: card.schema_version === 3 ? "echo-private-owner-dm-approval-card-v3" : "echo-private-owner-dm-approval-card-v2",
     card,
     eligible_projects: eligibility,
     transcript_source: transcriptSource,
@@ -386,14 +434,6 @@ function retainedTranscriptSourceV2(
     revision_id: source.revision.revision_id,
     source_sha256: `sha256:${row.revision_sha256}` as Digest,
   });
-}
-
-/** V10 stores an immutable V2 delivery contract. Earlier authority files keep V1 exact. */
-function supportsPrivateApprovalDeliveryV2(database: Database.Database): boolean {
-  return database.prepare(
-    `SELECT 1 FROM pragma_table_info('authority_live_approval_outbox_v2')
-     WHERE name='private_approval_card_v2_json'`,
-  ).get() !== undefined;
 }
 
 function candidateCommitment(
@@ -545,9 +585,8 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
     let target: PrivateSlackApprovalReviewerTargetV1 | undefined;
     let pendingV2: PendingPrivateApprovalV2 | undefined;
     let frozen: PrivateCardAndSnapshotV1 | PrivateCardAndSnapshotV2;
-    // Test and historical V1 adapters lack this capability. The production
-    // assignment adapter always has it, so every newly queued production
-    // candidate enters V2 while pre-V2 recoveries retain their exact path.
+    // Test V1 adapters lack this capability. The production assignment adapter
+    // always has it, so every queued production candidate enters V2.
     const deliveryV2 = this.options.assignments as unknown as {
       readonly readDeliveryV2?: (approvalId: string) => PendingPrivateApprovalV2 | undefined;
       readonly freezeDeliveryV2?: (input: {
@@ -558,9 +597,8 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       }) => PendingPrivateApprovalV2;
     };
     const v2DeliverySupported =
-      (deliveryV2.readDeliveryV2 !== undefined ||
-        deliveryV2.freezeDeliveryV2 !== undefined) &&
-      supportsPrivateApprovalDeliveryV2(this.options.authority_database);
+      deliveryV2.readDeliveryV2 !== undefined ||
+      deliveryV2.freezeDeliveryV2 !== undefined;
     const existingV2 = v2DeliverySupported
       ? deliveryV2.readDeliveryV2?.(outbox.approval_id)
       : undefined;

@@ -1,9 +1,10 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  applyAuthorityBaselineV9,
   applyAuthorityBaselineV10,
+  AUTHORITY_BASELINE_APPLICATION_ID_V1,
   AUTHORITY_BASELINE_SCHEMA_VERSION_V10,
+  authorityBaselineSha256V10,
 } from "../../../../src/adapters/persistence/sqlite/baseline.js";
 
 const databases: Database.Database[] = [];
@@ -14,6 +15,10 @@ const AUTHORITY = "oau_11111111-1111-4111-8111-111111111111";
 const PRINCIPAL = "prn_11111111-1111-4111-8111-111111111111";
 const MEMBERSHIP = "mem_11111111-1111-4111-8111-111111111111";
 const PROJECT = "prj_11111111-1111-4111-8111-111111111111";
+const PROJECT_B = "prj_22222222-2222-4222-8222-222222222222";
+const PROJECT_C = "prj_33333333-3333-4333-8333-333333333333";
+const CONTEXT = `ctx_${"b".repeat(64)}`;
+const DOCUMENT = `doc_${"c".repeat(64)}`;
 
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
@@ -26,6 +31,12 @@ function opened(): Database.Database {
   return database;
 }
 
+function seedProject(database: Database.Database, projectID: string, name: string): void {
+  database.prepare(`INSERT INTO authority_projects_v1
+    (project_id, organization_id, name, created_at, creator_principal_id, creator_membership_id, creator_membership_type)
+    VALUES (?, ?, ?, ?, ?, ?, 'owner')`).run(projectID, ORG, name, NOW, PRINCIPAL, MEMBERSHIP);
+}
+
 function seeded(): Database.Database {
   const database = opened();
   applyAuthorityBaselineV10(database);
@@ -33,23 +44,65 @@ function seeded(): Database.Database {
   database.prepare("INSERT INTO authority_principals VALUES (?, ?, 'PM', ?)").run(PRINCIPAL, ORG, NOW);
   database.prepare("INSERT INTO authority_memberships(membership_id, organization_id, principal_id, membership_type, status, provisioned_at) VALUES (?, ?, ?, 'owner', 'active', ?)").run(MEMBERSHIP, ORG, PRINCIPAL, NOW);
   database.prepare("INSERT INTO authority_project_authorization_state_v1 VALUES (?, 0, ?)").run(ORG, NOW);
-  database.prepare(`INSERT INTO authority_projects_v1
-    (project_id, organization_id, name, created_at, creator_principal_id, creator_membership_id, creator_membership_type)
-    VALUES (?, ?, 'Project', ?, ?, ?, 'owner')`).run(PROJECT, ORG, NOW, PRINCIPAL, MEMBERSHIP);
+  seedProject(database, PROJECT, "Project");
+  return database;
+}
+
+function seededWithSources(): Database.Database {
+  const database = seeded();
+  seedProject(database, PROJECT_B, "Project B");
+  seedProject(database, PROJECT_C, "Project C");
+  database.prepare(`INSERT INTO authority_person_updates_v2
+    (organization_id, principal_id, membership_id, membership_type, request_id, request_version, context_id, payload_sha256, title, text, audience_kind, submitted_association_project_ids_json, audience_project_ids_json, received_at)
+    VALUES (?, ?, ?, 'owner', 'text-v3', 3, ?, ?, 'Design note', 'Original text', 'projects', ?, ?, ?)`)
+    .run(ORG, PRINCIPAL, MEMBERSHIP, CONTEXT, SHA, JSON.stringify([PROJECT, PROJECT_B]), JSON.stringify([PROJECT, PROJECT_B]), NOW);
+  database.prepare("INSERT INTO authority_project_context_associations_v1 VALUES (?, ?, ?, ?, ?, 'owner', ?)").run(CONTEXT, PROJECT, ORG, PRINCIPAL, MEMBERSHIP, NOW);
+  database.prepare("INSERT INTO authority_project_context_associations_v1 VALUES (?, ?, ?, ?, ?, 'owner', ?)").run(CONTEXT, PROJECT_B, ORG, PRINCIPAL, MEMBERSHIP, NOW);
+  database.prepare("INSERT INTO authority_person_update_audience_projects_v1 VALUES (?, ?, ?)").run(CONTEXT, PROJECT, ORG);
+  database.prepare("INSERT INTO authority_person_update_audience_projects_v1 VALUES (?, ?, ?)").run(CONTEXT, PROJECT_B, ORG);
+  database.prepare(`INSERT INTO authority_person_documents_v1
+    (document_id, organization_id, principal_id, membership_id, membership_type, request_id, request_version, filename, title, detected_media_type, original_size, original_sha256, payload_sha256, audience_kind, submitted_association_project_ids_json, audience_project_ids_json, received_at)
+    VALUES (?, ?, ?, ?, 'owner', 'document-v2', 2, 'brief.txt', 'Brief', 'text/plain', 5, ?, ?, 'projects', ?, ?, ?)`)
+    .run(DOCUMENT, ORG, PRINCIPAL, MEMBERSHIP, SHA, SHA, JSON.stringify([PROJECT, PROJECT_B]), JSON.stringify([PROJECT, PROJECT_B]), NOW);
+  database.prepare("INSERT INTO authority_person_document_originals_v1 VALUES (?, ?)").run(DOCUMENT, Buffer.from("hello"));
+  database.prepare("INSERT INTO authority_person_document_associations_v1 VALUES (?, ?, ?, ?)").run(DOCUMENT, PROJECT, ORG, NOW);
+  database.prepare("INSERT INTO authority_person_document_associations_v1 VALUES (?, ?, ?, ?)").run(DOCUMENT, PROJECT_B, ORG, NOW);
+  database.prepare("INSERT INTO authority_person_document_audience_projects_v1 VALUES (?, ?, ?)").run(DOCUMENT, PROJECT, ORG);
+  database.prepare("INSERT INTO authority_person_document_audience_projects_v1 VALUES (?, ?, ?)").run(DOCUMENT, PROJECT_B, ORG);
   return database;
 }
 
 describe("Authority baseline V10", () => {
-  it("is fresh-only and leaves V9 pinned", () => {
-    const v9 = opened();
-    applyAuthorityBaselineV9(v9);
-    expect(v9.pragma("user_version", { simple: true })).toBe(9);
-    expect(() => applyAuthorityBaselineV10(v9)).toThrow("completely empty");
-
+  it("is fresh-only and stamps the Authority application id", () => {
+    expect(authorityBaselineSha256V10()).toBe("sha256:5a4054e97453f8b0abef844a1eda569b22ff54f2fbd8e4c41acda2ede1a2be76");
     const database = seeded();
+    expect(() => applyAuthorityBaselineV10(database)).toThrow("completely empty");
+    expect(database.pragma("application_id", { simple: true })).toBe(AUTHORITY_BASELINE_APPLICATION_ID_V1);
     expect(database.pragma("user_version", { simple: true })).toBe(AUTHORITY_BASELINE_SCHEMA_VERSION_V10);
     expect(database.prepare("SELECT status FROM authority_projects_v1 WHERE project_id = ?").pluck().get(PROJECT)).toBe("active");
     expect(database.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("refuses a nonempty database without mutating it", () => {
+    const database = opened();
+    database.exec("CREATE TABLE prior_state (id INTEGER PRIMARY KEY)");
+    expect(() => applyAuthorityBaselineV10(database)).toThrow("authority baseline requires a completely empty database");
+    expect(database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'prior_state'").get()).toEqual({ name: "prior_state" });
+  });
+
+  it("keeps upload-time audience grants immutable while allowing one original in multiple projects", () => {
+    const database = seededWithSources();
+    expect(database.pragma("foreign_key_check")).toEqual([]);
+    expect(database.prepare("SELECT project_id FROM authority_project_context_associations_v1 WHERE context_id = ? ORDER BY project_id").pluck().all(CONTEXT)).toEqual([PROJECT, PROJECT_B]);
+    expect(database.prepare("SELECT project_id FROM authority_person_document_associations_v1 WHERE document_id = ? ORDER BY project_id").pluck().all(DOCUMENT)).toEqual([PROJECT, PROJECT_B]);
+    expect(database.prepare("SELECT audience_project_ids_json FROM authority_person_updates_v2 WHERE context_id = ?").pluck().get(CONTEXT)).toBe(JSON.stringify([PROJECT, PROJECT_B]));
+    expect(() => database.prepare("DELETE FROM authority_person_update_audience_projects_v1 WHERE context_id = ? AND project_id = ?").run(CONTEXT, PROJECT)).toThrow("immutable");
+    expect(() => database.prepare("UPDATE authority_person_document_audience_projects_v1 SET project_id = ? WHERE document_id = ? AND project_id = ?").run(PROJECT, DOCUMENT, PROJECT_B)).toThrow("immutable");
+    expect(() => database.prepare("INSERT INTO authority_person_update_audience_projects_v1 VALUES (?, ?, ?)").run(CONTEXT, PROJECT_C, ORG)).toThrow("immutable custody");
+    expect(() => database.prepare("INSERT INTO authority_person_document_audience_projects_v1 VALUES (?, ?, ?)").run(DOCUMENT, PROJECT_C, ORG)).toThrow("immutable custody");
+    database.prepare("DELETE FROM authority_project_context_associations_v1 WHERE context_id = ? AND project_id = ?").run(CONTEXT, PROJECT_B);
+    expect(database.prepare("SELECT count(*) FROM authority_project_context_associations_v1 WHERE context_id = ?").pluck().get(CONTEXT)).toBe(1);
+    expect(database.prepare("SELECT count(*) FROM authority_person_update_audience_projects_v1 WHERE context_id = ?").pluck().get(CONTEXT)).toBe(2);
   });
 
   it("permits only name and status changes and advances the project authorization revision", () => {

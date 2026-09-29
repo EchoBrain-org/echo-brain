@@ -131,6 +131,7 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .turn { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
 .ask .question { font-size: 16px; font-weight: 600; }
 .ask .asked { margin-top: -6px; font-size: 12.5px; color: var(--faint); }
+.ask .project-empty { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 13px; color: var(--faint); }
 .ask .answer { font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
 .earlier { flex-shrink: 0; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 0; border-radius: 10px; text-align: left; background: rgba(240, 236, 230, 0.04); }
 .earlier:hover { background: rgba(240, 236, 230, 0.07); }
@@ -167,6 +168,7 @@ button.account-row:hover { background: rgba(240, 236, 230, 0.04); }
 .record-section { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .record-item { display: flex; flex-direction: column; gap: 6px; padding: 9px 10px; border-radius: 8px; font-size: 13px; line-height: 1.45; background: rgba(240, 236, 230, 0.05); }
 .record-item .status { font-size: 11px; font-weight: 600; color: var(--accent-text); }
+.record-item .owner { font-size: 12px; color: var(--faint); }
 .record-item .quote { font-size: 12.5px; color: var(--accent-text); }
 .record-item .at { font-size: 11px; color: var(--faint); }
 .source-failure { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }

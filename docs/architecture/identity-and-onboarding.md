@@ -67,9 +67,13 @@ exact thread, and creates or reuses that membership's external identity link.
 The Person flow creates no shared-channel/reaction adapter binding or
 approve/reject grant. Private meeting-owner approvals are instead delivered as
 signed Block Kit DMs. The visibility selector defaults to **Only me**
-(`restricted-reviewer-person-v2`); the owner may select **Team**
-(`organization-member-readable-person-v2`) before clicking Approve. The
-selected policy binds only at approval; Reject creates no V4 record.
+(`restricted-reviewer-person-v2`); before clicking Approve the owner may select
+**Team** (`organization-member-readable-person-v2`) or, with an active project,
+**Projects** (`project-members-readable-person-v1`) and one to twenty of their
+projects. A separate **Share transcript with the selected audience** checkbox,
+off by default, also releases the exact meeting transcript to that audience.
+The selected policy, projects and transcript choice bind only at approval;
+Reject creates no V4 record.
 
 ## Evidence boundary
 

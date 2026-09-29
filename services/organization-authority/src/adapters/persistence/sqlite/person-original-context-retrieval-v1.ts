@@ -75,6 +75,22 @@ type MeetingSourceRow = {
   readonly analysis_policy: string;
 };
 
+/** One approved, shared transcript the asker may read now, with its searchable text. */
+type TranscriptCandidate = {
+  readonly grant: ApprovedMeetingTranscriptGrantV1;
+  readonly title: string;
+  readonly body: string;
+  readonly representation_sha256: Sha256Digest;
+  readonly received_at: string;
+};
+/** The best-matching packet of one transcript for one query. */
+type TranscriptHit = {
+  readonly transcript: TranscriptCandidate;
+  readonly source_id: string;
+  readonly received_at: string;
+  readonly lexical_score: number;
+};
+
 interface Sessions {
   authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization;
 }
@@ -195,6 +211,37 @@ function transcriptPage(body: string, offset: number): { readonly text: string; 
   return Object.freeze({ text: points.slice(offset, end).join(""), next_offset: end === points.length ? null : end });
 }
 
+/** Each transcript's best packet for these terms, when it matches at all. */
+function transcriptHits(transcripts: readonly TranscriptCandidate[], terms: readonly string[]): readonly TranscriptHit[] {
+  const hits: TranscriptHit[] = [];
+  for (const transcript of transcripts) {
+    const score = lexicalScore(transcript.title, transcript.body, terms);
+    if (score > 0) hits.push(Object.freeze({ transcript, source_id: transcript.grant.source_id, received_at: transcript.received_at, lexical_score: score }));
+  }
+  return hits.sort((left, right) => right.lexical_score - left.lexical_score || right.received_at.localeCompare(left.received_at)).slice(0, MAXIMUM_RESULTS_PER_QUERY);
+}
+
+/** A transcript packet as released evidence. Its anchor binds the approval that shared it. */
+function transcriptAtom(transcript: TranscriptCandidate, packet: { readonly index: number; readonly text: string }): ReleasedSourceContextAtomV1 {
+  const { grant } = transcript;
+  return Object.freeze({
+    kind: "source_revision" as const, source_id: grant.source_id, revision_id: grant.revision_id, source_sha256: grant.source_sha256,
+    representation_sha256: transcript.representation_sha256,
+    anchor_sha256: canonicalSha256({ kind: "transcript", approval_id: grant.approval_id, segment: packet.index, text: packet.text }),
+    label: presentationLabel(transcript.title), text: packet.text,
+  });
+}
+
+/** A transcript passage on the desk: a note whose audience is its record's. */
+function transcriptDeskItem(transcript: TranscriptCandidate, atom: ReleasedSourceContextAtomV1, includeText: boolean): OriginalContextDeskItemV1 {
+  const { grant } = transcript;
+  const visibility = grant.policy_id === "restricted-reviewer-person-v2" ? "only_me"
+    : grant.policy_id === "project-members-readable-person-v1" ? (grant.audience_project_ids.length === 1 ? "project" : "projects")
+    : "team";
+  const citation: OriginalContextCitationV1 = Object.freeze({ kind: "source_revision", source_id: atom.source_id, revision_id: atom.revision_id, source_sha256: atom.source_sha256, representation_sha256: atom.representation_sha256, anchor_sha256: atom.anchor_sha256 });
+  return Object.freeze({ citation, kind: "note", ...(includeText ? { text: atom.text } : {}), visibility, label: atom.label ?? "Transcript", received_at: transcript.received_at, version: atom.revision_id });
+}
+
 /** Labels cross the public API boundary; evidence retains the full filename. */
 function presentationLabel(value: string): string {
   // Upload filenames deliberately permit a broader set of Unicode than Ask
@@ -207,9 +254,11 @@ function presentationLabel(value: string): string {
 }
 
 /**
- * Reads only immutable Person-upload source revisions. Meeting/source adapters
- * are intentionally excluded here: admission alone never makes raw meetings
- * readable through Ask.
+ * Reads immutable Person-upload source revisions and, since ADR-0017's
+ * 2026-09-28 amendment, the transcripts an approver shared at approval.
+ * Admission alone never makes a raw meeting readable through Ask: a
+ * transcript is searched only under its approval grant, its current audience
+ * and, for a project question, its recorded project association.
  */
 export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalContextEvidenceDeskPortV1 {
   private readonly releases = new WeakSet<OriginalContextReleaseV1>();
@@ -251,19 +300,23 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     input.on_authorized?.();
     const selected = new Map<string, ReleasedSourceContextAtomV1>();
     const counts: number[] = [];
+    const transcripts = this.transcriptCandidates(actor, input.scope);
     for (const query of input.queries) {
       const terms = queryTerms(query);
       if (terms.length === 0) { counts.push(0); continue; }
       const rows = [
         ...this.textRows(actor, input.scope, terms),
         ...this.documentRows(actor, input.scope, terms),
+        ...transcriptHits(transcripts, terms),
       ].sort((left, right) => right.lexical_score - left.lexical_score
         || right.received_at.localeCompare(left.received_at)
         || left.source_id.localeCompare(right.source_id)
         || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0)).slice(0, MAXIMUM_RESULTS_PER_QUERY);
       counts.push(rows.length);
       for (const row of rows) {
-        const atom = "document_id" in row
+        const atom = "transcript" in row
+          ? transcriptAtom(row.transcript, matchingPacket(row.transcript.title, row.transcript.body, terms))
+          : "document_id" in row
           ? this.documentAtom(row, terms)
           : this.textAtom(row, terms);
         const key = `${atom.source_id}\u0000${atom.revision_id}\u0000${atom.representation_sha256}\u0000${atom.anchor_sha256}`;
@@ -351,12 +404,23 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     // bounded to limit+1 rows; every row has at least one packet, so expanding
     // then taking limit+1 is sufficient to prove truncation without an
     // unbounded source scan.
-    const expanded = input.inventory_mode === "items"
-      ? candidates.flatMap((row) => this.deskAtoms(row, [], true).map((atom) => ({ row, atom })))
-      : candidates.map((row) => ({ row, atom: this.deskAtom(row, terms) }));
+    const expanded: { readonly score: number; readonly received_at: string; readonly atom: ReleasedSourceContextAtomV1; readonly item: () => OriginalContextDeskItemV1 }[] = input.inventory_mode === "items"
+      ? candidates.flatMap((row) => this.deskAtoms(row, [], true).map((atom) => ({ score: 0, received_at: row.received_at, atom, item: () => this.deskItem(row, atom, false) })))
+      : candidates.map((row) => { const atom = this.deskAtom(row, terms); return { score: row.lexical_score, received_at: row.received_at, atom, item: () => this.deskItem(row, atom, input.query !== undefined) }; });
+    // ADR-0021: a search also reads transcripts shared at approval, as notes
+    // labeled "Transcript: <meeting>", under their grant and current audience.
+    if (input.query !== undefined && (input.kinds === undefined || input.kinds.includes("note"))) {
+      for (const transcript of this.transcriptCandidates(actor, input.scope)) {
+        const score = wholeTermScore(transcript.title, transcript.body, terms);
+        if (score === 0) continue;
+        const atom = transcriptAtom(transcript, wholeMatchingPacket(transcript.title, transcript.body, terms));
+        expanded.push({ score, received_at: transcript.received_at, atom, item: () => transcriptDeskItem(transcript, atom, true) });
+      }
+      expanded.sort((left, right) => right.score - left.score || right.received_at.localeCompare(left.received_at));
+    }
     const selected = expanded.slice(0, limit);
     const atoms = selected.map(({ atom }) => atom);
-    const items = selected.map(({ row, atom }) => this.deskItem(row, atom, input.query !== undefined));
+    const items = selected.map(({ item }) => item());
     return this.commitDeskRelease(actor, input.access_token, input.scope, items, atoms, expanded.length > limit);
   }
 
@@ -382,7 +446,16 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     this.assertScope(actor, input.scope);
     if (input.citation.document_id === undefined) {
       const row = this.textBySource(actor, input.scope, input.citation.source_id, input.citation.revision_id);
-      if (row === undefined) denied();
+      if (row === undefined) {
+        // A transcript passage opens with its neighbouring passages.
+        const found = this.transcriptPacketForCitation(actor, input.scope, input.citation);
+        if (found === undefined) denied();
+        const all = packets(found.transcript.title, found.transcript.body);
+        const around = [found.index - 1, found.index + 1].filter((index) => index >= 0 && index < all.length).slice(0, neighbours);
+        const atoms = [found.atom, ...around.map((index) => transcriptAtom(found.transcript, { index, text: all[index]! }))];
+        return this.commitDeskRelease(actor, input.access_token, input.scope,
+          atoms.map((atom) => transcriptDeskItem(found.transcript, atom, true)), atoms);
+      }
       const atom = this.textAnchorForCitation(row, input.citation);
       if (atom === undefined) denied();
       return this.commitDeskRelease(actor, input.access_token, input.scope,
@@ -453,7 +526,9 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     let atom: ReleasedSourceContextAtomV1 | undefined;
     if (input.citation.document_id === undefined) {
       const row = this.textBySource(actor, input.scope, input.citation.source_id, input.citation.revision_id);
-      if (row !== undefined) atom = this.textAnchorForCitation(row, input.citation);
+      atom = row !== undefined
+        ? this.textAnchorForCitation(row, input.citation)
+        : this.transcriptAnchorForCitation(actor, input.scope, input.citation);
     } else {
       atom = this.documentAnchorByCitation(actor, input.scope, input.citation);
     }
@@ -621,6 +696,60 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(canonicalSha256(body), canonicalJson(body), actor.checked_at);
   }
 
+  /**
+   * The shared transcripts this asker may read now in this scope: each grant's
+   * policy contract, current audience and project association are checked,
+   * and its exact retained revision is re-verified before any text is scored.
+   */
+  private transcriptCandidates(
+    actor: PersonAccessAuthorization,
+    scope: PersonAskScopeV2,
+    source?: { readonly source_id: string; readonly revision_id: string; readonly source_sha256: Sha256Digest },
+  ): readonly TranscriptCandidate[] {
+    const options = this.transcriptOptions;
+    if (options?.grants.list === undefined) return Object.freeze([]);
+    const grants = options.grants.list({
+      authority_id: options.authority_id,
+      organization_id: this.organizationId,
+      state_lineage_id: options.state_lineage_id,
+      ...(source === undefined ? {} : source),
+    });
+    const candidates: TranscriptCandidate[] = [];
+    for (const grant of grants) {
+      if (!options.is_expected_policy_contract(grant) || !this.readableTranscriptGrant(actor, scope, grant)) continue;
+      const row = this.meetingSource({ kind: "approved_meeting_transcript", approval_id: grant.approval_id, source_id: grant.source_id as `source:${string}`, revision_id: grant.revision_id, source_sha256: grant.source_sha256 });
+      if (row === undefined) continue;
+      const meeting = this.meetingContent(row);
+      const body = meeting.content.filter(block => block.kind === "transcript").map(block => block.text).join("\n\n");
+      if (body.length === 0) continue;
+      const title = `Transcript: ${meeting.title?.trim() || "Untitled meeting"}`;
+      candidates.push(Object.freeze({
+        grant, title, body,
+        representation_sha256: canonicalSha256({ kind: "meeting-transcript-v1", approval_id: grant.approval_id, text: body }),
+        received_at: meeting.provenance.observed_at,
+      }));
+    }
+    return Object.freeze(candidates);
+  }
+
+  /** A transcript packet an existing citation names, if the asker may still read it here. */
+  private transcriptAnchorForCitation(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): ReleasedSourceContextAtomV1 | undefined {
+    return this.transcriptPacketForCitation(actor, scope, citation)?.atom;
+  }
+
+  private transcriptPacketForCitation(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): { readonly transcript: TranscriptCandidate; readonly index: number; readonly atom: ReleasedSourceContextAtomV1 } | undefined {
+    if (!SOURCE_ID.test(citation.source_id) || !SHA256.test(citation.source_sha256)) return undefined;
+    const source = { source_id: citation.source_id, revision_id: citation.revision_id, source_sha256: citation.source_sha256 };
+    for (const transcript of this.transcriptCandidates(actor, scope, source)) {
+      if (transcript.representation_sha256 !== citation.representation_sha256) continue;
+      for (const [index, text] of packets(transcript.title, transcript.body).entries()) {
+        const atom = transcriptAtom(transcript, { index, text });
+        if (this.citationMatches(atom, citation)) return Object.freeze({ transcript, index, atom });
+      }
+    }
+    return undefined;
+  }
+
   private acl(actor: PersonAccessAuthorization, prefix: "u" | "d"): { readonly sql: string; readonly args: readonly string[] } {
     const projects = this.database.prepare("SELECT project_id FROM authority_project_memberships_v1 WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active'").all(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type) as readonly { readonly project_id: string }[];
     const ids = projects.map((row) => row.project_id);
@@ -728,7 +857,11 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   private currentDeskItem(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1, includeText: boolean): OriginalContextDeskItemV1 {
     if (atom.document_id === undefined) {
       const row = this.textBySource(actor, scope, atom.source_id, atom.revision_id);
-      if (row === undefined) denied();
+      if (row === undefined) {
+        const found = this.transcriptPacketForCitation(actor, scope, atom);
+        if (found === undefined || found.atom.text !== atom.text) denied();
+        return transcriptDeskItem(found.transcript, atom, includeText);
+      }
       return this.deskItem(row, atom, includeText);
     }
     const row = this.documentSourceMeta(actor, scope, atom.source_id, atom.revision_id, atom.document_id, atom.representation_sha256);
@@ -850,7 +983,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     if (!SOURCE_ID.test(atom.source_id) || !SHA256.test(atom.source_sha256) || !SHA256.test(atom.representation_sha256) || !SHA256.test(atom.anchor_sha256)) denied();
     if (atom.document_id === undefined) {
       const row = this.textBySource(actor, scope, atom.source_id, atom.revision_id);
-      if (row === undefined || !this.hasTextAnchor(row, atom)) denied();
+      if (row !== undefined ? !this.hasTextAnchor(row, atom) : this.transcriptAnchorForCitation(actor, scope, atom)?.text !== atom.text) denied();
       return;
     }
     if (!this.hasDocumentAnchorByCitation(actor, scope, atom)) denied();

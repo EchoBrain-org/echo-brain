@@ -181,3 +181,71 @@ export function validatePrivateSlackBlockApprovalRecordInputV2(value: unknown): 
 }
 export function buildPrivateSlackBlockApprovalRecordInputV2(value: PrivateSlackBlockApprovalRecordInputV2): ValidatedPrivateSlackBlockApprovalRecordInputV2 { return validatePrivateSlackBlockApprovalRecordInputV2(value); }
 export const PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2: RecordInputCodecV4 = Object.freeze({ input_reference_field: PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V2_FIELD, reference_kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, reference_schema_version: 2, validateInput(value: unknown) { const input = validatePrivateSlackBlockApprovalRecordInputV2(value); return { human_act_resolution_ref: input.private_slack_block_approval_resolution_ref_v2, event: input.event, semantic_idempotency_key: input.semantic_idempotency_key }; }, fromReference(reference: unknown, event: unknown) { const input = validatePrivateSlackBlockApprovalRecordInputV2({ private_slack_block_approval_resolution_ref_v2: reference, event }); return { human_act_resolution_ref: input.private_slack_block_approval_resolution_ref_v2, event: input.event, semantic_idempotency_key: input.semantic_idempotency_key }; } });
+
+// ---- V3: approver-confirmed action owners (ADR-0021) ------------------------
+//
+// V3 is the V2 record with one addition to the signed human act: the owners
+// the approver confirmed, by the approved action's signal ID. The approved
+// snapshot itself never carries an owner; a proposal the approver did not
+// keep is not recorded anywhere.
+
+export const PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND =
+  "echo-private-slack-block-approval-resolution-ref-v3" as const;
+export const PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V3_FIELD =
+  "private_slack_block_approval_resolution_ref_v3" as const;
+export const PRIVATE_SLACK_BLOCK_APPROVAL_ACTION_OWNERS_MAX_V3 = 40;
+const OWNER_MAX_CHARACTERS_V3 = 120;
+const INPUT_KEYS_V3 = [PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V3_FIELD, "event"] as const;
+
+/** An owner the approver confirmed for one approved action. */
+export interface PrivateSlackBlockApprovalActionOwnerV3 {
+  readonly signal_id: string;
+  readonly owner: string;
+}
+export interface PrivateSlackBlockApprovalResolutionRefV3 extends Omit<PrivateSlackBlockApprovalResolutionRefV2, "schema_version" | "kind"> {
+  readonly schema_version: 3;
+  readonly kind: typeof PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND;
+  /** In the approved brief's action order; empty for a rejection. */
+  readonly action_owners: readonly PrivateSlackBlockApprovalActionOwnerV3[];
+}
+export interface PrivateSlackBlockApprovalRecordInputV3 { readonly private_slack_block_approval_resolution_ref_v3: PrivateSlackBlockApprovalResolutionRefV3; readonly event: PrivateSlackBlockApprovalEventV2; }
+export interface ValidatedPrivateSlackBlockApprovalRecordInputV3 extends PrivateSlackBlockApprovalRecordInputV3 { readonly semantic_idempotency_key: Sha256Digest; }
+
+function actionOwners(value: unknown, action: Action): readonly PrivateSlackBlockApprovalActionOwnerV3[] {
+  if (!Array.isArray(value) || value.length > PRIVATE_SLACK_BLOCK_APPROVAL_ACTION_OWNERS_MAX_V3 || (action === "reject" && value.length !== 0)) fail("resolution v3 action owners are invalid");
+  return Object.freeze(value.map((item, index) => {
+    const record = exact(item, ["signal_id", "owner"], `resolution v3 action owner ${index}`);
+    const owner = record.owner;
+    if (typeof owner !== "string" || owner.length === 0 || owner.length > OWNER_MAX_CHARACTERS_V3 || owner !== owner.normalize("NFC").replace(/\s+/gu, " ").trim() || /[\p{Cc}\p{Cf}]/u.test(owner)) fail(`resolution v3 action owner ${index} is invalid`);
+    return Object.freeze({ signal_id: identifier(record.signal_id, `resolution v3 action owner ${index} signal`), owner });
+  }));
+}
+
+export function validatePrivateSlackBlockApprovalResolutionRefV3(value: unknown): PrivateSlackBlockApprovalResolutionRefV3 {
+  const ref = exact(value, [...REF_KEYS, "action_owners"], "Private Slack block approval resolution ref v3");
+  if (ref.schema_version !== 3 || ref.kind !== PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND) fail("Private Slack block approval resolution ref v3 has an unsupported envelope");
+  const { action_owners: owners, ...rest } = ref;
+  const { schema_version: _schema, kind: _kind, ...base } = validatePrivateSlackBlockApprovalResolutionRefV2({ ...rest, schema_version: 2, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND });
+  return Object.freeze({ schema_version: 3, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND, ...base, action_owners: actionOwners(owners, base.action) });
+}
+
+export function validatePrivateSlackBlockApprovalRecordInputV3(value: unknown): ValidatedPrivateSlackBlockApprovalRecordInputV3 {
+  const input = exact(value, INPUT_KEYS_V3, "Private Slack block approval record input v3");
+  const ref = validatePrivateSlackBlockApprovalResolutionRefV3(input[PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V3_FIELD]);
+  const { schema_version: _schema, kind: _kind, action_owners: owners, ...common } = ref;
+  // Everything but the owners must be exactly a valid V2 record.
+  const v2 = validatePrivateSlackBlockApprovalRecordInputV2({ [PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V2_FIELD]: { ...common, schema_version: 2, kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND }, event: input.event });
+  if (v2.event.kind === "approved") {
+    const actions = v2.event.approved_snapshot.approved_payload.brief.actions;
+    let prior = -1;
+    for (const owner of owners) {
+      const at = actions.findIndex((action) => action.id === owner.signal_id);
+      if (at <= prior) fail("resolution v3 action owners must name approved actions once, in order");
+      if (actions[at]!.owner !== null) fail("resolution v3 approved snapshot must not carry an owner");
+      prior = at;
+    }
+  }
+  return Object.freeze({ private_slack_block_approval_resolution_ref_v3: ref, event: v2.event, semantic_idempotency_key: canonicalSha256(ref) });
+}
+export function buildPrivateSlackBlockApprovalRecordInputV3(value: PrivateSlackBlockApprovalRecordInputV3): ValidatedPrivateSlackBlockApprovalRecordInputV3 { return validatePrivateSlackBlockApprovalRecordInputV3(value); }
+export const PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3: RecordInputCodecV4 = Object.freeze({ input_reference_field: PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_V3_FIELD, reference_kind: PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V3_KIND, reference_schema_version: 3, validateInput(value: unknown) { const input = validatePrivateSlackBlockApprovalRecordInputV3(value); return { human_act_resolution_ref: input.private_slack_block_approval_resolution_ref_v3, event: input.event, semantic_idempotency_key: input.semantic_idempotency_key }; }, fromReference(reference: unknown, event: unknown) { const input = validatePrivateSlackBlockApprovalRecordInputV3({ private_slack_block_approval_resolution_ref_v3: reference, event }); return { human_act_resolution_ref: input.private_slack_block_approval_resolution_ref_v3, event: input.event, semantic_idempotency_key: input.semantic_idempotency_key }; } });

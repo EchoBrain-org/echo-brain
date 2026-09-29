@@ -128,6 +128,45 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await expect(page.getByTestId('question')).toHaveText('Third?');
 });
 
+test('a project question that finds nothing says so and offers, never makes, one tap to ask across everything', async () => {
+  run = await launch('ask-project-empty');
+  const { page } = run;
+  const asks = () => run.calls().filter(call => call.path === '/v2/person/ask').map(call => ({ question: call.body?.question, project: call.body?.project_id }));
+  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('ask-field').fill('What did we agree on pricing?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('answer')).toHaveText('Insufficient accessible evidence to answer this question.');
+  await expect(page.getByTestId('project-empty')).toContainText('Nothing in Apollo matched.');
+  await expect(page.getByTestId('source-chip')).toHaveCount(0);
+  // Nothing widened on its own: one question, to the project.
+  expect(asks()).toEqual([{ question: 'What did we agree on pricing?', project: 'prj_11111111-1111-4111-8111-111111111111' }]);
+  await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
+
+  await page.getByTestId('ask-everywhere').click();
+  await expect(page.getByTestId('question')).toHaveText('What did we agree on pricing?');
+  await expect(page.getByTestId('answer')).toHaveText('We agreed to ship Apollo with annual plans first.');
+  await expect(page.getByTestId('project-empty')).toHaveCount(0);
+  await expect(page.getByTestId('source-chip')).toHaveCount(2);
+  // The project answer stays in the thread; the bar widened with the question.
+  await expect(page.getByTestId('earlier-turn').locator('.q')).toHaveText(['What did we agree on pricing?']);
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
+  expect(asks()).toEqual([
+    { question: 'What did we agree on pricing?', project: 'prj_11111111-1111-4111-8111-111111111111' },
+    { question: 'What did we agree on pricing?', project: undefined },
+  ]);
+});
+
+test('a project question Ask cannot answer by its nature offers no wider ask', async () => {
+  run = await launch('ask-project-empty');
+  const { page } = run;
+  await page.getByTestId('project-row').nth(0).click();
+  await page.getByTestId('ask-field').fill('Who said we should ship?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('answer')).toHaveText('Approved records do not say who said what.');
+  await expect(page.getByTestId('project-empty')).toHaveCount(0);
+  await expect(page.getByTestId('ask-everywhere')).toHaveCount(0);
+});
+
 test('an approved record opens beside the answer: who approved it, who was there, who can read it, and what was approved', async () => {
   run = await launch();
   const { page, app } = run;
