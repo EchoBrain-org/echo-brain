@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { AnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
+import type { Answer, AnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
+import { documentName, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  answerSources, ask, askEverywhere, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, foundNothingInProject, matchesShown, openCompose, openMatch,
-  openSlackSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
+  answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipProject, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject,
+  matchesShown, openCompose, openMatch, openSlackSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, widenScope,
+  type AskTurn, type SourcesState, type State,
 } from '../store.js';
-import { Close, Doc, Plus, Up } from './icons.js';
+import { Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
 
 /** What an original source may show: 2,000 characters. The store keeps at most 32 sources. */
 const MAX_EVIDENCE = 2_000;
@@ -91,54 +93,70 @@ export function Bar({ state }: { state: State }) {
   );
 }
 
-/** A chip: its place in the answer, and its meeting's title once its record is read. */
-function chipLabel(source: AnswerSource, sources: SourcesState | null): string {
-  if (source.kind !== 'record') return source.label;
+/** What a source is called: a meeting's title once its record is read, a file's name as a person says it. */
+function sourceName(source: AnswerSource, sources: SourcesState | null): string {
+  if (source.kind === 'original') return documentName(source.label).name;
+  if (source.kind === 'slack') return source.label;
   const read = sources?.records[source.record.record_sha256];
   return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
 
 const UNTITLED = 'Untitled meeting';
 
-/** BASED ON: one chip per source. The chosen one is lit while the pane shows it. */
-function BasedOn({ state }: { state: State }) {
-  const sources = answerSources(state);
-  if (sources.length === 0) return null;
-  const open = state.sources?.open ?? null;
+/** A source's first citation stands for it: its kind, its label, its record or its Slack message. */
+function firstSource(state: State, group: SourceGroup): AnswerSource {
+  return answerSources(state)[group.indexes[0]!]!;
+}
+
+/** Every sentence of an answer, by the id the pane knows it by. */
+function sentences(answer: Answer): [string, AnswerStatement][] {
+  return [
+    ...(answer.direct ? [['direct', answer.direct] as [string, AnswerStatement]] : []),
+    ...answer.parts.flatMap((part, p) => [
+      ...part.statements.map((statement, i) => [`${p}.${i}`, statement] as [string, AnswerStatement]),
+      ...(part.records ?? []).map((statement, i) => [`${p}.r${i}`, statement] as [string, AnswerStatement]),
+    ]),
+  ];
+}
+
+/** A source's number after a sentence: it opens the pane on that source, for that sentence. */
+function Marker({ state, group, focus }: { state: State; group: number; focus: string }) {
+  const on = state.sources?.open === group && state.sources.focus === focus;
+  const name = sourceName(firstSource(state, answerGroups(state)[group]!), state.sources);
   return (
-    <div class="based-on" data-testid="based-on">
-      <div class="section-label">Based on</div>
-      <div class="chips">
-        {sources.map((source, index) => (
-          <button type="button" key={index} class={`source-chip${open === index ? ' on' : ''}`} data-testid="source-chip"
-            aria-pressed={open === index} onClick={() => chooseSource(index)}
-            title={source.kind === 'record' ? 'Show the approved record and supporting excerpts'
-              : source.kind === 'slack' ? 'Show the cited Slack message' : 'Show the verified evidence packet for this original source'}>
-            <span class="n">{index + 1}</span><span class="label">{chipLabel(source, state.sources)}</span>
-          </button>
-        ))}
-      </div>
-    </div>
+    <button type="button" class={`marker${on ? ' on' : ''}`} data-testid="citation" aria-pressed={on} aria-label={`Source ${group + 1}: ${name}`}
+      title={name} onClick={() => chooseSource(group, focus)}>{group + 1}</button>
   );
 }
 
-/** A V4 statement owns its citations, so readers can see exactly what supports it. */
-function Statement({ state, statement }: { state: State; statement: AnswerStatement }) {
-  const sources = answerSources(state);
+/** Numbers after a sentence, one per source it cites, and a lock when only you can read one of them. */
+function Markers({ state, statement, id }: { state: State; statement: AnswerStatement; id: string }) {
+  return <>
+    {statementGroups(statement.citation_indexes, answerGroups(state)).map(group => <Marker key={group} state={state} group={group} focus={id} />)}
+    {statement.private && (
+      <span class="private-mark" data-testid="private-mark" role="img" aria-label="Only you can read a source of this" title="Only you can read a source of this"><Lock /></span>
+    )}
+  </>;
+}
+
+/** A sentence and the numbers of its sources. The one whose number opened the pane is lit. */
+function Statement({ state, statement, id }: { state: State; statement: AnswerStatement; id: string }) {
+  const on = state.sources?.open != null && state.sources.focus === id;
   return (
-    <div class="answer-statement selectable">
-      <div data-testid="statement-text">{statement.text}</div>
-      <div class="chips">
-        {statement.citation_indexes.map(index => {
-          const source = sources[index];
-          if (!source) return null;
-          return <button type="button" key={index} class="source-chip" data-testid="statement-citation"
-            onClick={() => chooseSource(index)} title={`Show ${chipLabel(source, state.sources)}`}>
-            <span class="n">{index + 1}</span><span class="label">{chipLabel(source, state.sources)}</span>
-          </button>;
-        })}
-        {statement.private && <span class="private-mark" data-testid="private-mark">Private</span>}
-      </div>
+    <p class={`answer-statement selectable${on ? ' on' : ''}`} data-testid="statement">
+      <span data-testid="statement-text">{statement.text}</span>
+      <Markers state={state} statement={statement} id={id} />
+    </p>
+  );
+}
+
+/** No sentence could be written: what research found, as its passages read, with their sources' numbers. */
+function Found({ state, statement, id }: { state: State; statement: AnswerStatement; id: string }) {
+  const source = answerSources(state)[statement.citation_indexes[0]!];
+  return (
+    <div class="passage selectable" data-testid="found">
+      <Passage text={statement.text} label={source?.label ?? ''} />
+      <div><Markers state={state} statement={statement} id={id} /></div>
     </div>
   );
 }
@@ -150,16 +168,51 @@ function AgenticAnswer({ state, turn }: { state: State; turn: AskTurn }) {
       {answer.assumption && <div class="answer-banner" data-testid="answer-assumption">{answer.assumption}</div>}
       {answer.outcome === 'off_scope' && <div class="answer-banner" data-testid="answer-off-scope">The accessible evidence may be about a different subject.</div>}
       {answer.notice && <div class="answer-banner" data-testid="answer-notice">{answer.notice}</div>}
-      {answer.direct && <Statement state={state} statement={answer.direct} />}
+      {answer.direct && <Statement state={state} statement={answer.direct} id="direct" />}
       {answer.parts.map((part, index) => (
         <section class="answer-part" key={index}>
           {/* One part answers the question itself: its label would repeat it. */}
           {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
-          {part.statements.map((statement, statementIndex) => <Statement key={statementIndex} state={state} statement={statement} />)}
-          {part.records?.map((statement, statementIndex) => <Statement key={`record-${statementIndex}`} state={state} statement={statement} />)}
+          {part.statements.map((statement, place) => <Statement key={place} state={state} statement={statement} id={`${index}.${place}`} />)}
+          {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} statement={statement} id={`${index}.r${place}`} />)}
           {part.gap && <div class="answer-gap" data-testid="answer-gap">{part.gap}</div>}
         </section>
       ))}
+    </div>
+  );
+}
+
+/** An original's version, and how many of its passages the answer cites when more than one: "v0.1 · 3 passages". */
+function originalMeta(source: Extract<AnswerSource, { kind: 'original' }>, group: SourceGroup, passages: string): string {
+  const { version } = documentName(source.label);
+  const count = group.indexes.length;
+  return [version, count > 1 ? `${count} ${passages}` : undefined].filter(Boolean).join(' · ');
+}
+
+function KindIcon({ kind }: { kind: SourceGroup['kind'] }) {
+  return kind === 'record' ? <Meeting /> : kind === 'slack' ? <Hash /> : <Doc />;
+}
+
+/** One row per source, numbered as the sentences cite it. The one the pane shows is lit. */
+function SourceList({ state }: { state: State }) {
+  const groups = answerGroups(state);
+  if (groups.length === 0) return null;
+  const open = state.sources?.open ?? null;
+  return (
+    <div class="source-list" data-testid="source-list">
+      {groups.map((group, index) => {
+        const source = firstSource(state, group);
+        const meta = source.kind === 'original' ? originalMeta(source, group, 'passages') : '';
+        return (
+          <button type="button" key={index} class={`source-row${open === index ? ' on' : ''}`} data-testid="source-row" aria-pressed={open === index}
+            title={source.kind === 'original' ? source.label : undefined} onClick={() => chooseSource(index)}>
+            <span class="marker">{index + 1}</span>
+            <KindIcon kind={group.kind} />
+            <span class="label">{sourceName(source, state.sources)}</span>
+            {meta && <span class="meta">{meta}</span>}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -179,10 +232,9 @@ function EarlierTurn({ turn }: { turn: AskTurn }) {
 /** How long Copy answer says Copied. */
 const COPIED_MS = 1_600;
 
-/** The current answer: what it was based on, and what can be done with it. */
+/** The current answer: its sources, and what can be done with it. */
 function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
   const thread = state.ask!;
-  const count = answerSources(state).length;
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -202,12 +254,8 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
           )}
         </div>
       )}
-      <BasedOn state={state} />
+      <SourceList state={state} />
       <div class="actions">
-        {count > 0 && (
-          <button type="button" class="link-button" data-testid="sources-toggle" aria-pressed={state.sources?.open != null}
-            onClick={toggleSources}>Sources ({count})</button>
-        )}
         <button type="button" class="link-button" data-testid="copy-answer" aria-label={copied ? 'Answer copied' : 'Copy answer'}
           onClick={() => void copyAnswer().then(done => setCopied(done))}>{copied ? 'Copied' : 'Copy answer'}</button>
         {/* A question that failed below has its own Try again. */}
@@ -328,12 +376,67 @@ function SlackSource({ source, index }: { source: Extract<AnswerSource, { kind: 
   </div>;
 }
 
-/** Beside the answer: an approved record, verified original evidence, or a link to a live Slack message. */
+/** A run of a passage: bold and code as the document marks them. */
+function Runs({ runs }: { runs: readonly Inline[] }) {
+  return <>{runs.map((run, index) => run.bold ? <strong key={index}>{run.text}</strong> : run.code ? <code key={index}>{run.text}</code> : run.text)}</>;
+}
+
+/** A passage's markdown as its document reads: headings, lists, bold. Never markup from the text itself. */
+function Passage({ text, label }: { text: string; label: string }) {
+  return <>{passageBlocks(text, label).map((block, index) =>
+    block.kind === 'heading' ? <h3 key={index}><Runs runs={block.text} /></h3>
+      : block.kind === 'paragraph' ? <p key={index}><Runs runs={block.text} /></p>
+        : block.ordered ? <ol key={index}>{block.items.map((item, at) => <li key={at}><Runs runs={item} /></li>)}</ol>
+          : <ul key={index}>{block.items.map((item, at) => <li key={at}><Runs runs={item} /></li>)}</ul>)}</>;
+}
+
+/**
+ * An original's cited passages, each its verified evidence at most 2,000
+ * characters. A sentence's number lights the passages it cites, when it cites
+ * only some of them.
+ */
+function OriginalSource({ state, group, source }: { state: State; group: SourceGroup; source: Extract<AnswerSource, { kind: 'original' }> }) {
+  const sources = state.sources!;
+  const reads = sources.evidence?.group === sources.open ? sources.evidence.reads : {};
+  const count = group.indexes.length;
+  const meta = originalMeta(source, group, 'passages cited');
+  const focused = sentences(state.ask!.shown!.answer).find(([id]) => id === sources.focus)?.[1].citation_indexes ?? [];
+  const lit = group.indexes.filter(index => focused.includes(index));
+  const light = lit.length > 0 && lit.length < count;
+  const all = group.indexes.map(index => reads[index] ?? { loading: true } as const);
+  const failure = all.find(read => !read.loading && 'failure' in read);
+  return (
+    <div class="source-detail">
+      <h2>{documentName(source.label).name}</h2>
+      {meta && <div class="meta" data-testid="source-meta">{meta}</div>}
+      {failure && !failure.loading && 'failure' in failure && (
+        <div class="source-failure">
+          <div class="error" data-testid="source-error">{message(failure.failure)}</div>
+          <button type="button" class="link-button" data-testid="retry-evidence" onClick={retryEvidence}>Try again</button>
+        </div>
+      )}
+      {group.indexes.map((index, at) => {
+        const read = all[at]!;
+        if (read.loading || !('value' in read)) return null;
+        const text = read.value.text.length > MAX_EVIDENCE ? `${read.value.text.slice(0, MAX_EVIDENCE)}…` : read.value.text;
+        return (
+          <div key={index} class={`passage selectable${light && lit.includes(index) ? ' on' : ''}`} data-testid="evidence-text">
+            <Passage text={text} label={source.label} />
+          </div>
+        );
+      })}
+      {all.some(read => read.loading) && <div class="notice">Loading verified evidence…</div>}
+    </div>
+  );
+}
+
+/** Beside the answer: an approved record, an original's cited passages, or a link to a live Slack message. */
 export function SourcePane({ state }: { state: State }) {
   const sources = state.sources!;
-  const index = sources.open!;
-  const source = answerSources(state)[index];
-  if (!source) return null;
+  const open = sources.open!;
+  const group = answerGroups(state)[open];
+  if (!group) return null;
+  const source = firstSource(state, group);
   let body;
   if (source.kind === 'record') {
     const read = sources.records[source.record.record_sha256];
@@ -345,31 +448,18 @@ export function SourcePane({ state }: { state: State }) {
         </div>
       ) : <RecordDetail record={read.value} />;
   } else if (source.kind === 'slack') {
-    body = <SlackSource key={source.permalink} source={source} index={index} />;
+    body = <SlackSource key={source.permalink} source={source} index={group.indexes[0]!} />;
   } else {
-    const read = sources.evidence?.index === index ? sources.evidence.read : { loading: true } as const;
-    const text = !read.loading && 'value' in read ? read.value.text : undefined;
-    body = (
-      <div class="source-detail">
-        <h2>{!read.loading && 'value' in read ? read.value.label : source.label}</h2>
-        {read.loading && <div class="notice">Loading verified evidence…</div>}
-        {!read.loading && 'failure' in read && (
-          <div class="source-failure">
-            <div class="error" data-testid="source-error">{message(read.failure)}</div>
-            <button type="button" class="link-button" data-testid="retry-evidence" onClick={retryEvidence}>Try again</button>
-          </div>
-        )}
-        {text !== undefined && (
-          <div class="body selectable" data-testid="evidence-text">{text.length > MAX_EVIDENCE ? `${text.slice(0, MAX_EVIDENCE)}…` : text}</div>
-        )}
-      </div>
-    );
+    body = <OriginalSource state={state} group={group} source={source} />;
   }
   return (
     <aside class="source-pane" data-testid="source-pane" aria-label="Source">
       <div class="pane-head">
-        <div class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : source.kind === 'slack' ? 'Slack message' : 'Original source'}</div>
-        <button type="button" class="icon-button" aria-label="Close sources" data-testid="source-close" onClick={toggleSources}><Close /></button>
+        <div class="pane-kind">
+          <span class="marker on">{open + 1}</span>
+          <span class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : source.kind === 'slack' ? 'Slack message' : 'Original source'}</span>
+        </div>
+        <button type="button" class="icon-button" aria-label="Close sources" data-testid="source-close" onClick={closeSources}><Close /></button>
       </div>
       {body}
     </aside>
