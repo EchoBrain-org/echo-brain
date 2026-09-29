@@ -126,7 +126,7 @@ function Statement({ state, statement }: { state: State; statement: AnswerStatem
   const sources = answerSources(state);
   return (
     <div class="answer-statement selectable">
-      <div>{statement.text}</div>
+      <div data-testid="statement-text">{statement.text}</div>
       <div class="chips">
         {statement.citation_indexes.map(index => {
           const source = sources[index];
@@ -145,14 +145,15 @@ function Statement({ state, statement }: { state: State; statement: AnswerStatem
 function AgenticAnswer({ state, turn }: { state: State; turn: AskTurn }) {
   const answer = turn.answer;
   return (
-    <div class="agentic-answer" data-testid="agentic-answer">
+    <div class="agentic-answer" data-testid="answer">
       {answer.assumption && <div class="answer-banner" data-testid="answer-assumption">{answer.assumption}</div>}
       {answer.outcome === 'off_scope' && <div class="answer-banner" data-testid="answer-off-scope">The accessible evidence may be about a different subject.</div>}
       {answer.notice && <div class="answer-banner" data-testid="answer-notice">{answer.notice}</div>}
       {answer.direct && <Statement state={state} statement={answer.direct} />}
-      {answer.parts?.map((part, index) => (
+      {answer.parts.map((part, index) => (
         <section class="answer-part" key={index}>
-          <div class="section-label">{part.question}</div>
+          {/* One part answers the question itself: its label would repeat it. */}
+          {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
           {part.statements.map((statement, statementIndex) => <Statement key={statementIndex} state={state} statement={statement} />)}
           {part.records?.map((statement, statementIndex) => <Statement key={`record-${statementIndex}`} state={state} statement={statement} />)}
           {part.gap && <div class="answer-gap" data-testid="answer-gap">{part.gap}</div>}
@@ -191,9 +192,7 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
     <div class="turn">
       <div class="question selectable" data-testid="question">{turn.question}</div>
       <div class="asked">{turn.scopeName}</div>
-      {turn.answer.parts === undefined
-        ? <div class="answer selectable" data-testid="answer">{turn.answer.text}</div>
-        : <AgenticAnswer state={state} turn={turn} />}
+      <AgenticAnswer state={state} turn={turn} />
       {foundNothingInProject(turn) && (
         <div class="project-empty" data-testid="project-empty">
           <span>Nothing in {turn.scopeName} matched.</span>

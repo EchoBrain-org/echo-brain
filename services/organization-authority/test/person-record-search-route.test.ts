@@ -33,22 +33,13 @@ import {
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
-import {
-  ANSWER_COMPOSITION_MAX_CONTEXT_ATOMS,
-  ANSWER_COMPOSITION_MAX_CONTEXT_UTF8_BYTES,
-  type StructuredGenerationInput,
-} from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
 import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { createPersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
-import { createPersonAnswerRouteV1 } from "../src/composition/person-answer-route.js";
-import { createPersonAnswerV2Route } from "../src/composition/person-answer-v2-route.js";
 import { createRecordProjectAuthorizationV1 } from "../src/composition/person-record-project-scope-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
-import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { addMembership } from "./fixtures/project-context-sqlite.js";
 
@@ -293,7 +284,7 @@ function setup(pointer = true) {
 }
 
 describe("Person Layer 2 route", () => {
-  it("keeps approved project records searchable and Askable after archive, then removes their scope on leave", async () => {
+  it("keeps approved project records searchable after archive, then removes their scope on leave", async () => {
     const value = setup(false);
     const record = new Database(":memory:");
     record.exec("CREATE TABLE organization_record_log (position INTEGER PRIMARY KEY, record_sha256 TEXT NOT NULL)");
@@ -327,25 +318,10 @@ describe("Person Layer 2 route", () => {
       const archived = search();
       expect(archived.response.items.map(item => item.text)).toEqual([text]);
       expect(route.searchBatch({ access_token: "reader", queries: ["launch"] }).response.items.map(item => item.text)).toEqual([text]);
-      const ask = createPersonAnswerV2Route({
-        authority_id: "oau_clean", organization_id: reader.organization_id, state_lineage_id: "lineage_clean", records: route,
-        originals: new SqlitePersonOriginalContextRetrievalV1(value.authority, sessions, reader.organization_id),
-        model: { async generate(input) {
-          const prompt = JSON.parse(input.user_prompt) as { sources?: { citation_id: string; text: string }[] };
-          if (prompt.sources === undefined) return { queries: ["launch Monday"] };
-          expect(prompt.sources.map(source => source.text)).toContain(text);
-          return { answer: { text: "Launch remains scheduled for Monday.", citations: [prompt.sources[0]!.citation_id] } };
-        } },
-        generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 1000 },
-        audit: new SqlitePersonAnswerCompositionAuditV1(value.authority),
-      });
-      const answer = await ask.ask({ access_token: "reader", request: { schema_version: 2, question: "When is launch scheduled?", project_id: projectId } });
-      expect(answer.citations).toEqual([expect.objectContaining({ record_sha256: atom.record_sha256, policy_id: PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1 })]);
       projects.leaveProject("reader", { schema_version: 1, kind: "echo-project-leave-v1", request_id: randomUUID(), project_id: projectId });
       expect(search).toThrow("person authentication failed");
       expect(() => route.revalidateBatchRelease({ access_token: "reader", release: archived.release })).toThrow("person authentication failed");
       expect(route.searchBatch({ access_token: "reader", queries: ["launch"] }).response.items).toEqual([]);
-      await expect(ask.ask({ access_token: "reader", request: { schema_version: 2, question: "When is launch scheduled?", project_id: projectId } })).rejects.toThrow();
     } finally { record.close(); value.record.close(); value.authority.close(); }
   });
   it("uses trusted project grants for union visibility, association scope, and the final release fence", () => {
@@ -462,34 +438,12 @@ describe("Person Layer 2 route", () => {
       }
       expect(packet.response.items).toHaveLength(RELATED_ATOM_PACKET_MAX_ITEMS_V1);
       expect(new Set(packet.response.items.map(item => item.atom_id)).size).toBe(16);
-      expect(packet.response.items.length).toBeLessThanOrEqual(ANSWER_COMPOSITION_MAX_CONTEXT_ATOMS);
-      const contextBytes = packet.response.items.reduce((bytes, { atom_id, record_sha256, policy_id, text }) =>
-        bytes + Buffer.byteLength(canonicalJson({ atom_id, record_sha256, policy_id, text }), "utf8"), 0);
-      expect(contextBytes).toBeLessThanOrEqual(ANSWER_COMPOSITION_MAX_CONTEXT_UTF8_BYTES);
       expect(packet.release.active_pointer.generation_id).toBe(active_generation.generation_id);
       expect(packet.release.active_pointer.record_head).toEqual({ position: exact_head.position, record_sha256: exact_head.record_sha256 });
       expect(route.searchBatch({ ...request, include_related_atom_packet: true }).response).toEqual(packet.response);
 
-      // Exercise the actual Layer 4 adapter/context bound with an in-process
-      // model stub. Retrieval success is measured in the prompt, not citations.
-      const modelInputs: StructuredGenerationInput[] = [];
-      const answerRoute = createPersonAnswerRouteV1({
-        authority_id: "oau_clean", organization_id: "org_clean", state_lineage_id: "lineage_clean",
-        search: route,
-        model: { generate: async input => {
-          modelInputs.push(input);
-          return modelInputs.length === 1 ? { queries: request.queries.slice(1) }
-            : { answer: null };
-        } },
-        generation: { generation_adapter_id: "test-structured-output", planner_model: "test-planner", answer_model: "test-answer", timeout_ms: 60_000 },
-        audit: new SqlitePersonAnswerCompositionAuditV1(value.authority),
-      });
-      await answerRoute.ask({ access_token: request.access_token, question: request.queries[0] });
-      expect(modelInputs).toHaveLength(2);
-      const prompt = JSON.parse(modelInputs[1]!.user_prompt) as { sources: { citation_id: string; text: string }[] };
-      expect(prompt.sources.map(source => source.text)).toEqual(packet.response.items.map(item => item.text));
-      for (const fact of required) expect(prompt.sources.map(source => source.text)).toContain(fact.text);
-      expect(search.mock.calls.map(([call]) => call.query)).toEqual(Array.from({ length: 4 }, () => [...request.queries]).flat());
+      // Three batch reads above (lexical, packet, packet again), each running every query.
+      expect(search.mock.calls.map(([call]) => call.query)).toEqual(Array.from({ length: 3 }, () => [...request.queries]).flat());
       for (const [call] of [...search.mock.calls, ...expand.mock.calls]) {
         expect(call.reader).toEqual({ principal_id: reader.principal_id, membership_id: reader.membership_id });
         expect(call.active_generation).toEqual(active_generation);
@@ -501,7 +455,7 @@ describe("Person Layer 2 route", () => {
         // Owner role alone also cannot grant the exact reviewer's private scope.
         const observed = [...perQuery.flat(), ...expand.mock.results.flatMap(result => result.value.items), ...packet.response.items];
         expect(observed.every(item => item.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2)).toBe(true);
-        for (const atom of privateAtoms) expect(modelInputs[1]!.user_prompt).not.toContain(atom.text);
+        for (const atom of privateAtoms) expect(packet.response.items.map(item => item.text)).not.toContain(atom.text);
       }
     } finally {
       record.close();

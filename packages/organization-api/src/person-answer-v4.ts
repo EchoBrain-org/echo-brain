@@ -12,7 +12,7 @@ import {
   MAX_ORGANIZATION_API_BODY_BYTES,
 } from './validation.js';
 
-/** Additive Agentic Ask endpoint. V1 and V2 Ask routes remain unchanged. */
+/** The Agentic Ask endpoint: the only Ask since ADR-0022 retired V1 and V2. */
 /** Statements (and cited sentences) per answer part; raised from 5 by RFC-0003 so one-paragraph answers can cover multi-part questions. */
 export const PERSON_ANSWER_MAX_STATEMENTS_PER_PART_V4 = 10;
 export const PERSON_ANSWER_PATH_V3 = '/v3/person/ask';

@@ -202,7 +202,11 @@ the canonical candidate bytes, default to `false` for legacy records that
 predate them, and are materialized as `ECHO_AGENTIC_ASK_V1=true|false` and
 `ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true|false` in that candidate's saved
 environment tuple. A true `small_scope_shortcut` requires
-`agentic_ask_v1=true`. The candidate record SHA already bound to the staging
+`agentic_ask_v1=true`. Since
+[ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md) the Authority
+ignores `ECHO_AGENTIC_ASK_V1`: agentic Ask is the only Ask and is on whenever
+an answer model is configured. The field stays in the record so earlier
+records keep their bytes; set it to `true` in new records. The candidate record SHA already bound to the staging
 request covers both values. Rollback restores the accepted tuple verbatim,
 including earlier flag values or legacy absence. No command accepts arbitrary
 environment names or values.

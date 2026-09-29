@@ -525,7 +525,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     if (!this.deskReleases.has(input.release)) unavailable();
     const checked = this.revalidate({ access_token: input.access_token, release: input.release.release });
     const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
-    // V1/V2 retain their historical per-atom revalidation semantics.  The
+    // Batch releases keep their per-atom revalidation semantics.  The
     // request-bound desk additionally pins the authorization revision so a
     // later desk call cannot mix project-association snapshots.
     if (this.authorizationRevision(actor.organization_id) !== input.release.release.authorization_revision) denied();

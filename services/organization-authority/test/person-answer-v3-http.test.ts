@@ -2,15 +2,18 @@ import { once } from "node:events";
 import { request as httpRequest } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { PERSON_ANSWER_PATH_V3, PERSON_CAPABILITIES_PATH_V1 } from "@echo-brain/organization-api";
+
+/** Retired Ask paths (ADR-0022): no route, so the canonical not-found reply. */
+const RETIRED_ASK_PATHS = ["/v1/person/ask", "/v2/person/ask"] as const;
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV3HttpApplication } from "../src/presentation/person-answer-v3-http-application.js";
 
-async function server(input: { readonly enabled: boolean; readonly application?: PersonAnswerV3HttpApplication }) {
+async function server(input: { readonly application?: PersonAnswerV3HttpApplication }) {
   const sessions = { authenticateAccess: vi.fn(() => ({})) };
   const instance = createOrganizationAuthorityHttpServer({
     descriptor: {} as never, sessions: sessions as never, oidc_provider: {} as never,
-    expected_issuer: "https://issuer.example", agentic_ask_v1_enabled: input.enabled,
-    person_answer_v3: input.application,
+    expected_issuer: "https://issuer.example",
+    ...(input.application === undefined ? {} : { person_answer_v3: input.application }),
   });
   instance.listen(0, "127.0.0.1");
   await once(instance, "listening");
@@ -24,8 +27,8 @@ async function server(input: { readonly enabled: boolean; readonly application?:
 }
 
 describe("Agentic Ask HTTP capability gate", () => {
-  it("returns the authenticated explicit false capability and does not downgrade a direct V3 request", async () => {
-    const value = await server({ enabled: false });
+  it("without an answer model reports no agentic capability and refuses Ask instead of falling back", async () => {
+    const value = await server({});
     try {
       const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
       expect(capabilities.status).toBe(200);
@@ -39,8 +42,23 @@ describe("Agentic Ask HTTP capability gate", () => {
     } finally { await value.close(); }
   });
 
+  it("reports agentic Ask to installed clients that still probe, and no longer serves the retired Ask paths", async () => {
+    const value = await server({ application: { ask: vi.fn(), searchEvidence: vi.fn(), openEvidence: vi.fn() } as never });
+    try {
+      const capabilities = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`, { headers: { authorization: "Bearer token" } });
+      await expect(capabilities.json()).resolves.toEqual({ schema_version: 1, kind: "echo-person-capabilities-v1", agentic_ask_v1: true });
+      for (const path of RETIRED_ASK_PATHS) {
+        const retired = await fetch(`${value.url}${path}`, {
+          method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json" },
+          body: JSON.stringify({ schema_version: 2, question: "What changed?" }),
+        });
+        expect(retired.status).toBe(404);
+      }
+    } finally { await value.close(); }
+  });
+
   it("requires authentication for capability discovery", async () => {
-    const value = await server({ enabled: false });
+    const value = await server({});
     try {
       const response = await fetch(`${value.url}${PERSON_CAPABILITIES_PATH_V1}`);
       expect(response.status).toBe(401);
@@ -64,7 +82,7 @@ describe("Agentic Ask HTTP capability gate", () => {
       searchEvidence: vi.fn(),
       openEvidence: vi.fn(),
     } as unknown as PersonAnswerV3HttpApplication;
-    const value = await server({ enabled: true, application });
+    const value = await server({ application });
     try {
       const request = httpRequest(`${value.url}${PERSON_ANSWER_PATH_V3}`, {
         method: "POST",

@@ -250,9 +250,12 @@ the question.
 
 - 10 research steps.
 - Two steps in a row that find nothing new.
-- The 180 s request limit. Each model call has 60 s, and 60 s is reserved for
-  the answer.
-- At the last run's speeds (4 s median and 7 s at p90 per step), 10 steps fit.
+- The 90 s request limit. Cloudflare drops an origin response after 100 s
+  (HTTP 524), so the earlier 180 s limit could not reach the client
+  ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md)). Each research step
+  has 25 s, and 25 s is reserved for the answer.
+- At the last run's speeds (4 s median and 7 s at p90 per step), 10 steps fit
+  in the 65 s of research at the median and about 9 at p90.
 
 **Who is asking.**
 
@@ -318,10 +321,13 @@ There is no authority field.
   requirement once Slack text can reach a prompt.
 - A request that cannot be routed under that setting fails as provider
   unavailable. It is never retried on a host that allows data collection.
+- Requests also set `provider.sort: "throughput"`: the default price-weighted
+  routing picked slow providers, and the loop's calls are sequential
+  ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md)).
 
 ### Observability
 
-- Staging records an agentic Ask as the same Ask journey as V2, so the
+- Staging records an agentic Ask as the Ask journey, so the
   Explorer, dashboard and Ask alarms see it: retrieval is the research desk
   time, planner the research step calls, then context, answer, final fence,
   audit and the V4 outcome.
@@ -388,7 +394,8 @@ There is no authority field.
 
 ### Compatibility
 
-- `/v3/person/ask` is unchanged.
+- `/v3/person/ask` is unchanged, and it is the only Ask: V1 and V2 are
+  retired ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md)).
 - `PersonAnswerResponseV4` gains the `slack_message` citation kind. It is
   emitted only when the asker has connected Slack. Clients render it as a
   link chip.
@@ -411,7 +418,10 @@ There is no authority field.
    once open question 1 is answered.
 
 Rollback is to disconnect the Slack connector (Ask answers from Echo sources
-only), or to revert the loop commit.
+only), or to revert the loop commit. There is no V2 to fall back to: the
+agentic Ask is on wherever an answer model is configured, and the tag
+`ask-v2-final` is the last release with V2
+([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md)).
 
 ### Qualification
 
@@ -438,7 +448,8 @@ only), or to revert the loop commit.
    answer is released? The candidate is re-fetching cited Slack items only,
    once, at answer time.
 3. The desktop client needs a change to render a single-part answer as one
-   paragraph.
+   paragraph. It no longer repeats the question as the part's label; each
+   statement is still its own line.
 4. Which `*:history` user scopes are needed for `list` and `open` on each
    channel type? To be confirmed at manifest review.
 5. What grader agreement with human grades is required before grader numbers

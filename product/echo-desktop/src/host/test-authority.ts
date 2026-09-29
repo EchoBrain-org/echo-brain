@@ -706,11 +706,18 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    if (method === 'POST' && path === '/v2/person/ask') {
+    if (method === 'POST' && path === '/v3/person/ask') {
       asks += 1;
       if (mode === 'ask-unavailable') return failure('unavailable', 503);
       if (mode === 'ask-hangs') return new Promise<Response>(() => undefined);
       const scope = typeof body?.project_id === 'string' ? { kind: 'project', project_id: body.project_id } : { kind: 'global' };
+      const question = typeof body?.question === 'string' ? body.question : 'Question';
+      // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
+      const answered = (text?: string) => {
+        const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];
+        const statements = text === undefined ? part!.statements : [{ ...part!.statements[0], text }];
+        return json({ ...desktop.answer, scope, parts: [{ ...part, question, statements }] });
+      };
       // Follow-ups: the second answer comes late, and the third question fails.
       if (mode === 'ask-follow-ups' && asks === 2) {
         // The test releases the reply after cancellation. A fixed delay races
@@ -718,20 +725,19 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         while (!existsSync(join(home, 'release-follow-up'))) {
           await new Promise(resolveLater => setTimeout(resolveLater, 25));
         }
-        return json({ ...desktop.answer, answer: 'A late answer.', scope });
+        return answered('A late answer.');
       }
       if (mode === 'ask-follow-ups' && asks === 3) return failure('unavailable', 503);
-      // Nothing in any project matches: the Authority's no-evidence answer, which cites nothing.
+      // Nothing in any project matches: the Authority's not-found answer, which
+      // cites nothing. A question about another subject is off scope.
       if (mode === 'ask-project-empty' && scope.kind === 'project') {
-        const authorship = typeof body?.question === 'string' && body.question.startsWith('Who said');
+        const offScope = question.startsWith('What is the weather');
         return json({
-          schema_version: 3, kind: 'echo-clean-person-answer-v3', citations: [], scope,
-          ...(authorship
-            ? { answer: 'Approved records do not say who said what.', outcome: 'authorship_unsupported' }
-            : { answer: 'Insufficient accessible evidence to answer this question.' }),
+          schema_version: 4, kind: 'echo-clean-person-answer-v4', scope, outcome: offScope ? 'off_scope' : 'not_found', citations: [],
+          parts: [{ question, status: 'not_found', statements: [], gap: "I couldn't find this in the sources you can access." }],
         });
       }
-      return json({ ...desktop.answer, scope });
+      return answered();
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       evidenceReads += 1;

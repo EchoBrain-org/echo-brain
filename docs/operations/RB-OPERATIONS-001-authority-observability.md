@@ -538,8 +538,8 @@ are unavailable; filesystem counters are neither latency nor physical bytes.
 
 #### Reading an agentic Ask (V3) and evidence-desk calls
 
-An agentic Ask (RFC-0003, `ECHO_AGENTIC_ASK_V1=true`) uses the same Ask
-journey as V2, so it is listed, counted and alarmed the same way:
+Ask is the agentic loop (RFC-0003; the only Ask since ADR-0022). It uses the
+Ask journey, so it is listed, counted and alarmed like any Ask:
 
 | Stage | What it measures in the loop |
 | --- | --- |
@@ -563,10 +563,9 @@ is an `ask_planner` or `ask_answer` span with its provider `model_call` inside
 `evidence_search`, `evidence_open`, `evidence_list` or `evidence_revalidate`.
 Desk spans carry `included_count` and, by source, `meeting_items`,
 `document_items` and `slack_items`; `transcript_items` is the shared-transcript
-subset of `document_items`. V2 retrieval is one `evidence_search` span with the
-same counts, and the evidence HTTP doors use the same desk spans. Model request
-and response content is captured per call under the content switch, except
-calls whose prompt carries Slack text.
+subset of `document_items`. The evidence HTTP doors use the same desk spans.
+Model request and response content is captured per call under the content
+switch, except calls whose prompt carries Slack text.
 
 #### Opt-in development content and transport completeness
 

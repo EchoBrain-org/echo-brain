@@ -1,14 +1,16 @@
 /**
  * Provider-free read-path construction for the single-meeting core smoke.
  * It deliberately opens the real Authority and record databases and uses the
- * real Person search/answer routes. Caller sessions come from core-identity;
- * this module never accepts a reader tuple or manufactures authorization.
+ * real Person search route and the agentic Ask route (the only Ask since
+ * ADR-0022). Caller sessions come from core-identity; this module never
+ * accepts a reader tuple or manufactures authorization.
  */
 import { join } from "node:path";
 import { openAuthorityDatabase } from "../../../packages/organization-authority-kernel/dist/adapters/persistence/sqlite/open-authority-database.js";
-import { SqlitePersonAnswerCompositionAuditV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
+import { SqlitePersonAgenticAskAuditV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
+import { SqlitePersonOriginalContextRetrievalV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../../../services/organization-authority/dist/adapters/persistence/sqlite/person-record-read-audit-v1.js";
-import { createPersonAnswerRouteV1 } from "../../../services/organization-authority/dist/composition/person-answer-route.js";
+import { createPersonAnswerV3Route } from "../../../services/organization-authority/dist/composition/person-answer-v3-route.js";
 import { createPersonRecordSearchRouteV1 } from "../../../services/organization-authority/dist/composition/person-record-search-route.js";
 import { readableSearchGenerationContractV1 } from "../../../services/organization-authority/dist/composition/readable-search-generation-composition.js";
 import { verifyAuthorityStateLineage } from "../../../packages/organization-authority-kernel/dist/composition/verify-authority-state-lineage.js";
@@ -35,28 +37,44 @@ function parseJson(value) {
   try { return record(JSON.parse(value)); } catch { return null; }
 }
 
-function plannerResponse(userPrompt) {
-  const question = parseJson(userPrompt)?.question;
-  if (typeof question !== "string") throw new Error("deterministic planner did not receive a question");
+/** The question's words, as the one keyword search the deterministic agent runs. */
+function questionQuery(question) {
   const terms = [...new Set(question.match(/[\p{L}\p{N}]+/gu)?.map((term) => term.toLowerCase()) ?? [])];
-  // The original question is always the first real retrieval query. This is
-  // only a bounded lexical refinement and never a hidden answer lookup.
-  const query = terms.slice(-3).join(" ");
-  return Object.freeze({ queries: query.length === 0 ? [] : [query] });
+  return terms.slice(-8).join(" ");
+}
+
+/**
+ * One deterministic research step: search the question once, finish on the
+ * first result whose full text was shown, otherwise finish as not found (the
+ * loop asks once more before it accepts that). It reads only the current
+ * prompt: no corpus map, response fixture or caller-controlled citation.
+ */
+function stepResponse(userPrompt) {
+  const prompt = parseJson(userPrompt);
+  const question = prompt?.question;
+  if (typeof question !== "string") throw new Error("deterministic agent did not receive a question");
+  const part = (status, evidence = []) => ({ question, needs: [{ need: "the answer", status, evidence }], notes: "" });
+  const seen = (Array.isArray(prompt.last_results) ? prompt.last_results : []).flatMap((result) => Array.isArray(record(result)?.results) ? result.results : []);
+  const full = seen.find((item) => record(item)?.full === true && typeof item.id === "string");
+  if (full !== undefined) return Object.freeze({ parts: [part("found", [full.id])], actions: [{ tool: "finish", args: {} }] });
+  if (prompt.step === 1) {
+    const query = questionQuery(question);
+    if (query.length > 0) return Object.freeze({ parts: [part("open")], actions: [{ tool: "search", args: { query } }] });
+  }
+  return Object.freeze({ parts: [part("not_found")], actions: [{ tool: "finish", args: {} }] });
 }
 
 function answerResponse(userPrompt) {
-  const sources = parseJson(userPrompt)?.sources;
-  if (!Array.isArray(sources) || sources.length === 0) throw new Error("deterministic answerer received no released evidence");
-  const first = record(sources[0]);
-  if (first === null || typeof first.citation_id !== "string" || first.citation_id.length === 0 || typeof first.text !== "string" || first.text.length === 0) {
+  const evidence = parseJson(userPrompt)?.evidence;
+  if (!Array.isArray(evidence) || evidence.length === 0) throw new Error("deterministic answerer received no released evidence");
+  const first = record(evidence[0]);
+  if (first === null || typeof first.id !== "string" || first.id.length === 0 || typeof first.text !== "string" || first.text.length === 0) {
     throw new Error("deterministic answerer received invalid released evidence");
   }
-  // Return only a released text value and its released alias. There is no
-  // corpus map, response fixture, or caller-controlled citation path.
-  const answer = first.text.slice(0, 4_000).trim();
-  if (answer.length === 0) throw new Error("deterministic answerer received empty released evidence");
-  return Object.freeze({ answer: { text: answer, citations: [first.citation_id] } });
+  // Return only released text and its released id.
+  const text = first.text.slice(0, 500).trim();
+  if (text.length === 0) throw new Error("deterministic answerer received empty released evidence");
+  return Object.freeze({ sentences: [{ text, evidence: [first.id] }], not_found: [] });
 }
 
 /**
@@ -71,10 +89,8 @@ export function createCoreDeterministicStructuredGenerationPort() {
       if (properties === null || typeof input?.user_prompt !== "string") {
         throw new Error("deterministic structured generation input is invalid");
       }
-      if (Object.hasOwn(properties, "queries")) return plannerResponse(input.user_prompt);
-      if (Object.hasOwn(properties, "answer")) {
-        return answerResponse(input.user_prompt);
-      }
+      if (Object.hasOwn(properties, "actions")) return stepResponse(input.user_prompt);
+      if (Object.hasOwn(properties, "sentences")) return answerResponse(input.user_prompt);
       if (Object.hasOwn(properties, "relationships")) {
         // No relation can be inferred safely from lexical overlap alone.
         return Object.freeze({ relationships: [] });
@@ -89,7 +105,7 @@ export function createCoreDeterministicStructuredGenerationPort() {
  * Authority state. The returned projector binding must also be passed to the
  * real reconciler that publishes the generation this route reads.
  */
-export function createCoreReadRoutes({ state_directory, sessions } = {}) {
+export function createCoreReadRoutes({ state_directory, sessions, record_input_codecs } = {}) {
   text(state_directory, "state_directory");
   if (sessions === null || typeof sessions !== "object" || typeof sessions.authenticateAccess !== "function") {
     throw new TypeError("sessions must be the real core identity application");
@@ -124,15 +140,18 @@ export function createCoreReadRoutes({ state_directory, sessions } = {}) {
       record: recordDatabase,
       audit: new SqlitePersonRecordReadAuditV1(authority),
       expand_related_atoms: expandReadableSearchRelatedAtomsV1,
+      ...(record_input_codecs === undefined ? {} : { record_input_codecs }),
     });
-    const answer = createPersonAnswerRouteV1({
+    const answer = createPersonAnswerV3Route({
       authority_id: lineage.root.authority_id,
       organization_id: lineage.root.organization_id,
       state_lineage_id: lineage.root.state_lineage_id,
-      search,
+      sessions,
+      originals: new SqlitePersonOriginalContextRetrievalV1(authority, sessions, lineage.root.organization_id),
+      records: search,
       model: structured_output,
       generation,
-      audit: new SqlitePersonAnswerCompositionAuditV1(authority),
+      audit: new SqlitePersonAgenticAskAuditV1(authority),
     });
     return Object.freeze({
       search,

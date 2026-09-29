@@ -179,7 +179,7 @@ export interface PersonRecordSearchBatchApplicationV1 {
 
 /**
  * The V3 evidence desk has no compatibility mode.  Keep its complete
- * request-bound surface separate from the V1/V2 batch contract, whose
+ * request-bound surface separate from the record-search batch contract, whose
  * callers intentionally do not need inventory or bounded-open operations.
  */
 export interface PersonEvidenceDeskRecordsV1 extends Pick<

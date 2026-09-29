@@ -459,6 +459,8 @@ fixes apply to the desk path only.
   environment tuple on rollback. Legacy records omit the field and mean false.
   See the [current-host release lane](../../deploy/release/README.md).
 - Clients use V3 when the capability is present and V2 otherwise.
+  (Retired by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): V3 is the
+  only Ask, and the flag and capability no longer select a path.)
 - Authenticated `GET /v3/person/capabilities` reports `agentic_ask_v1`.
   Explicit false, or a canonical missing capability route on an older server,
   selects V2. A V3 execution, authorization, cancellation or validation failure

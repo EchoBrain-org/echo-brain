@@ -4,7 +4,7 @@ import {
   type StructuredGenerationObservedResultV1,
   type StructuredGenerationPort,
   type StructuredGenerationUsageV1,
-} from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
+} from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 
 export const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
 
@@ -336,6 +336,10 @@ export function createOpenRouterStructuredGenerationAdapter(
         provider: {
           require_parameters: true,
           data_collection: "deny",
+          // ADR-0022: the loop makes several sequential calls under a 90 s
+          // deadline, and OpenRouter's default price-weighted routing picked
+          // slow providers; route to the fastest provider that qualifies.
+          sort: "throughput",
         },
       }),
     };

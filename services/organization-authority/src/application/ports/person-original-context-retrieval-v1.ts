@@ -118,8 +118,8 @@ export interface PersonOriginalContextRetrievalPortV1 {
   }): ApprovedMeetingTranscriptReadV1;
 }
 
-/** Desk-only, request-bound original evidence release.  V1/V2 Ask continue to
- * use PersonOriginalContextRetrievalPortV1 and cannot invoke these methods. */
+/** Desk-only, request-bound original evidence release.  Callers of the
+ * single-batch PersonOriginalContextRetrievalPortV1 cannot invoke these methods. */
 export type OriginalContextDeskKindV1 = "note" | "document_passage";
 export type OriginalContextDeskVisibilityV1 = "only_me" | "team" | "project" | "projects";
 

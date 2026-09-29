@@ -3,15 +3,12 @@ import { validatePersonUploadContextId } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
-  PERSON_ANSWER_PATH_V2,
   PERSON_ANSWER_PATH_V3,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   PERSON_MEETING_TRANSCRIPT_PATH_V1,
-  validatePersonAnswerRequestV2,
-  validatePersonAnswerResponseV3,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV4,
   validatePersonCapabilitiesV1,
@@ -23,7 +20,6 @@ import {
   validatePersonMeetingTranscriptReadRequestV1,
   validatePersonMeetingTranscriptV1,
   type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
-  type PersonAnswerResponseV3 as OrganizationPersonAnswerV3,
   type PersonAnswerResponseV4 as OrganizationPersonAnswerV4,
   type PersonCapabilitiesV1,
   type PersonEvidenceSearchRequestV1,
@@ -130,11 +126,10 @@ export interface PersonRecordSearchItemV1 {
 }
 
 /** Current global-or-project Ask response. V1 remains available for old installed clients. */
-export type PersonAnswerV3 = OrganizationPersonAnswerV3;
 export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
 /** The Agentic Ask response, selected only after the authenticated capability probe. */
 export type PersonAnswerV4 = OrganizationPersonAnswerV4;
-export type PersonAnswer = PersonAnswerV3 | PersonAnswerV4;
+export type PersonAnswer = PersonAnswerV4;
 export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
 export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
 export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
@@ -1361,39 +1356,7 @@ export class PersonAuthorityClient {
     });
   }
 
-  /** Global by default; a supplied project ID is a strict project-only scope. */
-  /** Legacy one-shot Ask, retained for Authorities without Agentic Ask. */
-  async askV2(accessToken: string, question: string, projectId?: ProjectIdV1, signal?: AbortSignal): Promise<PersonAnswerV3> {
-    const request = validatePersonAnswerRequestV2({
-      schema_version: 2,
-      question,
-      ...(projectId === undefined ? {} : { project_id: projectId }),
-    });
-    const response = await this.json({
-      path: PERSON_ANSWER_PATH_V2,
-      body: request,
-      validate_request: validatePersonAnswerRequestV2,
-      validate_response: validatePersonAnswerResponseV3,
-      access_token: accessToken,
-      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
-      timeout_ms: ASK_TIMEOUT_MS,
-      signal,
-    });
-    const expectedScope = projectId === undefined
-      ? { kind: 'global' as const }
-      : { kind: 'project' as const, project_id: projectId };
-    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
-      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
-    }
-    return response;
-  }
-
-  /** @deprecated Use askV2 for explicit legacy routing or PersonClient.ask for capability routing. */
-  ask(accessToken: string, question: string, projectId?: ProjectIdV1, signal?: AbortSignal): Promise<PersonAnswerV3> {
-    return this.askV2(accessToken, question, projectId, signal);
-  }
-
-  /** A canonical 404 here is the sole permitted V2 downgrade signal. */
+  /** Authenticated capability discovery; every current Authority reports agentic Ask. */
   capabilities(accessToken: string, signal?: AbortSignal): Promise<PersonCapabilitiesV1> {
     return this.getJson({
       path: PERSON_CAPABILITIES_PATH_V1,
@@ -1404,7 +1367,7 @@ export class PersonAuthorityClient {
     });
   }
 
-  /** Agentic Ask, selected by the authenticated capability response. */
+  /** Agentic Ask; global by default, and a supplied project ID is a strict project-only scope. */
   async askV3(accessToken: string, question: string, projectId?: ProjectIdV1, signal?: AbortSignal): Promise<PersonAnswerV4> {
     const request = validatePersonAnswerRequestV3({
       schema_version: 3,

@@ -9,7 +9,7 @@ test.afterEach(async () => { await run?.close(); });
 const RECORD = `sha256:${'5'.repeat(64)}`;
 const recordReads = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v1/person/records');
 const evidenceReads = () => run.calls().filter(call => call.path === '/v2/person/ask/source');
-const questions = () => run.calls().filter(call => call.path === '/v2/person/ask').map(call => call.body?.question);
+const questions = () => run.calls().filter(call => call.path === '/v3/person/ask').map(call => call.body?.question);
 
 async function askFromHome(page: Page, question: string): Promise<void> {
   await expect(page.getByTestId('project-row')).toHaveCount(2);
@@ -49,7 +49,7 @@ test('follow-ups stack in a thread, newest at the bottom: earlier answers collap
   await expect(earlier.nth(4)).toHaveAttribute('aria-expanded', 'true');
   await expect(earlier.nth(4)).toContainText('We agreed to ship Apollo with annual plans first.');
   // Every follow-up asked the project, as the chip said.
-  const asks = run.calls().filter(call => call.path === '/v2/person/ask');
+  const asks = run.calls().filter(call => call.path === '/v3/person/ask');
   expect(asks.map(call => call.body?.project_id)).toEqual(Array(7).fill('prj_11111111-1111-4111-8111-111111111111'));
 
   // Back leaves the thread; the next question starts a new one.
@@ -113,7 +113,7 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await expect(earlier).toHaveCount(0);
   await page.getByTestId('ask-retry').click();
   await expect(page.getByTestId('question')).toHaveText('Third?');
-  await expect(page.getByTestId('answer')).toHaveText('We agreed to ship Apollo with annual plans first.');
+  await expect(page.getByTestId('statement-text')).toHaveText('We agreed to ship Apollo with annual plans first.');
   await expect(earlier.locator('.q')).toHaveText(['First?']);
   await expect(page.getByTestId('ask-failed')).toHaveCount(0);
   expect(questions()).toEqual(['First?', 'Second?', 'Third?', 'Third?']);
@@ -131,11 +131,12 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
 test('a project question that finds nothing says so and offers, never makes, one tap to ask across everything', async () => {
   run = await launch('ask-project-empty');
   const { page } = run;
-  const asks = () => run.calls().filter(call => call.path === '/v2/person/ask').map(call => ({ question: call.body?.question, project: call.body?.project_id }));
+  const asks = () => run.calls().filter(call => call.path === '/v3/person/ask').map(call => ({ question: call.body?.question, project: call.body?.project_id }));
   await page.getByTestId('project-row').nth(0).click();
   await page.getByTestId('ask-field').fill('What did we agree on pricing?');
   await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('answer')).toHaveText('Insufficient accessible evidence to answer this question.');
+  await expect(page.getByTestId('answer-gap')).toHaveText("I couldn't find this in the sources you can access.");
+  await expect(page.getByTestId('statement-text')).toHaveCount(0);
   await expect(page.getByTestId('project-empty')).toContainText('Nothing in Apollo matched.');
   await expect(page.getByTestId('source-chip')).toHaveCount(0);
   // Nothing widened on its own: one question, to the project.
@@ -144,7 +145,7 @@ test('a project question that finds nothing says so and offers, never makes, one
 
   await page.getByTestId('ask-everywhere').click();
   await expect(page.getByTestId('question')).toHaveText('What did we agree on pricing?');
-  await expect(page.getByTestId('answer')).toHaveText('We agreed to ship Apollo with annual plans first.');
+  await expect(page.getByTestId('statement-text')).toHaveText('We agreed to ship Apollo with annual plans first.');
   await expect(page.getByTestId('project-empty')).toHaveCount(0);
   await expect(page.getByTestId('source-chip')).toHaveCount(2);
   // The project answer stays in the thread; the bar widened with the question.
@@ -156,13 +157,13 @@ test('a project question that finds nothing says so and offers, never makes, one
   ]);
 });
 
-test('a project question Ask cannot answer by its nature offers no wider ask', async () => {
+test('a project question about another subject offers no wider ask', async () => {
   run = await launch('ask-project-empty');
   const { page } = run;
   await page.getByTestId('project-row').nth(0).click();
-  await page.getByTestId('ask-field').fill('Who said we should ship?');
+  await page.getByTestId('ask-field').fill('What is the weather in Lisbon?');
   await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('answer')).toHaveText('Approved records do not say who said what.');
+  await expect(page.getByTestId('answer-off-scope')).toHaveText('The accessible evidence may be about a different subject.');
   await expect(page.getByTestId('project-empty')).toHaveCount(0);
   await expect(page.getByTestId('ask-everywhere')).toHaveCount(0);
 });

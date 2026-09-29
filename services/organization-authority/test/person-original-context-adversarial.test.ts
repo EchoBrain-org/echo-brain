@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { validatePersonAnswerResponseV3, validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
+import { validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
 import { PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID } from "@echo-brain/organization-record/organization-record-api-v1";
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
@@ -14,8 +14,6 @@ import { SqliteSourceAdmissionStoreV1 } from "../src/adapters/persistence/sqlite
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
-import { SqlitePersonAnswerCompositionAuditV1 } from "../src/adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
-import { createPersonAnswerV2Route } from "../src/composition/person-answer-v2-route.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import type { OriginalContextCitationV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, addMembership, authorization } from "./fixtures/project-context-sqlite.js";
@@ -173,7 +171,7 @@ function meteredReads(database: Database.Database, maximumBytes: number) {
 }
 
 describe("adversarial original-context retrieval", () => {
-  it("supplies SCOUT evidence for all seven recorded questions using real upload, extraction and scoped Ask", async () => {
+  it("supplies SCOUT evidence for all seven recorded questions using real upload, extraction and scoped retrieval", async () => {
     const f = fixture();
     const worker = new PersonDocumentProcessingV1(f.repository);
     for (const filename of ["SCOUT-MRD-v0.1.md", "SCOUT-PRD-v0.2.md"]) {
@@ -195,44 +193,12 @@ describe("adversarial original-context retrieval", () => {
       ["Do the uploaded MRD and PRD reference matching versions? Identify any mismatch?", ["Version: 0.1", "Parent: SCOUT-MRD v0.2"]],
     ] as const;
     for (const [question, required] of questions) {
-      let calls = 0;
-      const app = createPersonAnswerV2Route({
-        authority_id: "oau_original_context", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
-        originals: f.retrieval,
-        records: {
-          searchBatch: (input: { readonly project_id?: string; readonly queries: readonly string[] }) => {
-            expect(input.project_id).toBe(PROJECT_ALPHA);
-            return {
-              response: { items: [] }, query_hit_counts: input.queries.map(() => 0),
-              release: {
-                current_authorization: authorization(MEMBER),
-                active_pointer: { generation_id: canonicalSha256("empty project records"), record_head: { position: 0, record_sha256: null } },
-                record_read_audit_row_sha256: canonicalSha256("empty record release"),
-              },
-            };
-          },
-          revalidateBatchRelease: () => authorization(MEMBER),
-        } as never,
-        model: { async generate(input) {
-          calls += 1;
-          const prompt = JSON.parse(input.user_prompt) as { sources: { citation_id: string; text: string }[] };
-          const evidence = prompt.sources.map(source => source.text).join("\n");
-          for (const value of required) expect(evidence, question).toContain(value);
-          // A deterministic answer proves the route/citation boundary, not model answer quality.
-          return { answer: { text: "Evidence is available for review.", citations: [prompt.sources[0]!.citation_id] } };
-        } },
-        generation: { generation_adapter_id: "fixture", planner_model: "unused", answer_model: "fixture", timeout_ms: 1000 },
-        audit: new SqlitePersonAnswerCompositionAuditV1(f.database),
-      });
-      const result = await app.ask({ access_token: "member", request: { schema_version: 2, question, project_id: PROJECT_ALPHA } });
-      expect(calls).toBe(1);
-      expect(result.scope).toEqual({ kind: "project", project_id: PROJECT_ALPHA });
-      expect(result.citations).toHaveLength(1);
-      const citation = result.citations[0]!;
-      expect(citation.kind).toBe("source_revision");
-      if (citation.kind === "source_revision") {
-        expect(f.retrieval.read({ access_token: "member", scope: result.scope, citation }).atom.anchor_sha256).toBe(citation.anchor_sha256);
-      }
+      // Layer-3 retrieval for the question, then each packet opens at its exact citation.
+      const result = f.retrieval.retrieve({ access_token: "member", queries: [question], scope: { kind: "project", project_id: PROJECT_ALPHA } });
+      const evidence = texts(result).join("\n");
+      for (const value of required) expect(evidence, question).toContain(value);
+      const atom = result.release.released_atoms[0]!;
+      expect(f.retrieval.read({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, citation: citationOf(atom) }).atom.anchor_sha256).toBe(atom.anchor_sha256);
     }
   });
 
@@ -263,40 +229,18 @@ describe("adversarial original-context retrieval", () => {
     expect(texts(result)[0]).toContain("PRD-14");
   });
 
-  it("keeps archived-project Ask evidence and its citation readable until the member grant is removed", async () => {
+  it("keeps archived-project evidence and its citation readable until the member grant is removed", async () => {
     const f = fixture();
     f.upload("Archive evidence", "archive-ask-marker remains valid after project archive", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
     const projects = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
     projects.archiveProject("owner", { schema_version: 1, kind: "echo-project-archive-v1", request_id: randomUUID(), project_id: PROJECT_ALPHA, archived: true });
-    const app = createPersonAnswerV2Route({
-      authority_id: "oau_original_context", organization_id: OWNER.organization_id, state_lineage_id: "lineage_fixture",
-      originals: f.retrieval,
-      records: {
-        searchBatch: (input: { readonly project_id?: string; readonly queries: readonly string[] }) => {
-          expect(input.project_id).toBe(PROJECT_ALPHA);
-          return { response: { items: [] }, query_hit_counts: input.queries.map(() => 0), release: {
-            current_authorization: authorization(MEMBER),
-            active_pointer: { generation_id: canonicalSha256("empty project records"), record_head: { position: 0, record_sha256: null } },
-            record_read_audit_row_sha256: canonicalSha256("empty record release"),
-          } };
-        },
-        revalidateBatchRelease: () => authorization(MEMBER),
-      } as never,
-      model: { async generate(input) {
-        const prompt = JSON.parse(input.user_prompt) as { sources: { citation_id: string; text: string }[] };
-        expect(prompt.sources.map(source => source.text).join("\n")).toContain("archive-ask-marker");
-        return { answer: { text: "Archived evidence remains available.", citations: [prompt.sources[0]!.citation_id] } };
-      } },
-      generation: { generation_adapter_id: "fixture", planner_model: "unused", answer_model: "fixture", timeout_ms: 1000 },
-      audit: new SqlitePersonAnswerCompositionAuditV1(f.database),
-    });
-    const answer = await app.ask({ access_token: "member", request: { schema_version: 2, question: "Where is archive ask marker?", project_id: PROJECT_ALPHA } });
-    expect(answer.citations).toHaveLength(1);
-    const citation = answer.citations[0]!;
-    if (citation.kind !== "source_revision") throw new Error("expected source evidence citation");
-    expect(f.retrieval.read({ access_token: "member", scope: answer.scope, citation }).atom.text).toContain("archive-ask-marker");
+    const scope = { kind: "project" as const, project_id: PROJECT_ALPHA };
+    const released = f.retrieval.retrieve({ access_token: "member", queries: ["Where is archive ask marker?"], scope });
+    expect(texts(released).join("\n")).toContain("archive-ask-marker");
+    const citation = citationOf(released.release.released_atoms[0]!);
+    expect(f.retrieval.read({ access_token: "member", scope, citation }).atom.text).toContain("archive-ask-marker");
     f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
-    expect(() => f.retrieval.read({ access_token: "member", scope: answer.scope, citation })).toThrow();
+    expect(() => f.retrieval.read({ access_token: "member", scope, citation })).toThrow();
   });
 
   it("does not release private or other-project evidence when only some question terms match", () => {
@@ -630,13 +574,6 @@ describe("adversarial original-context retrieval", () => {
     const citation = citationOf(atom);
     const proof = f.retrieval.read({ access_token: "member", scope, citation }).atom;
     expect(proof).toMatchObject({ label, text: atom.text, anchor_sha256: atom.anchor_sha256 });
-    expect(() => validatePersonAnswerResponseV3({
-      schema_version: 3,
-      kind: "echo-clean-person-answer-v3",
-      answer: "Found it.",
-      citations: [{ ...citation, label }],
-      scope,
-    })).not.toThrow();
     expect(() => validatePersonSourceEvidenceV1({
       schema_version: 1,
       kind: "echo-person-source-evidence-v1",

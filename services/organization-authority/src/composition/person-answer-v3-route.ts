@@ -9,7 +9,7 @@ import {
 import { AgenticAskDeadlineErrorV1, createAgenticAskV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { annotateCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { classifyAskJourneyFailureV1, type AskJourneyFailureV1, type AskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.js";
-import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
+import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import type { EvidenceDeskResultV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
 import type { PersonOriginalContextEvidenceDeskPortV1, PersonAskScopeV2 } from "../application/ports/person-original-context-retrieval-v1.js";
@@ -38,13 +38,13 @@ export interface CreatePersonAnswerV3RouteOptions {
    * evidence HTTP doors stay Echo-only.
    */
   readonly slack_for?: (asker: { readonly principal_id: string; readonly membership_id: string }) => CreatePersonEvidenceDeskV1Options["slack"] | undefined;
+  /** Staging-only request-local Ask journey factory. */
+  readonly ask_journey_telemetry?: AskJourneyTelemetryFactoryV1;
   /**
    * The asker's own directory entry, so the loop reads "my" as a name. Only
    * the authenticated membership is looked up; its name reaches the model and
    * no audit.
    */
-  /** Staging-only request-local Ask journey factory, shared with V1 and V2. */
-  readonly ask_journey_telemetry?: AskJourneyTelemetryFactoryV1;
   readonly memberships?: {
     membership(id: string): {
       readonly organization_id: string;

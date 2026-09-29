@@ -775,31 +775,13 @@ export class PersonClient {
     );
   }
 
-  /** Select Agentic Ask only after its authenticated capability probe says it is live. */
+  /** Agentic Ask (RFC-0003), the only Ask since the one-shot routes were retired (ADR-0022). */
   async ask(question: string, projectId?: ProjectIdV1, signal?: AbortSignal): Promise<PersonAnswer> {
     // Preserve the public query error type before transport schema validation.
     validatePersonQueryText(question);
     if (projectId !== undefined) validateProjectIdV1(projectId, 'Ask project_id');
     const stored = await this.accessSession();
-    const authority = this.authority(stored.authority_origin);
-    let capabilities;
-    try {
-      capabilities = await authority.capabilities(stored.session.access_token, signal);
-    } catch (error) {
-      // Older Authorities have no capabilities endpoint. A canonical API 404
-      // is intentionally the only downgrade; Ask failures never silently
-      // become a legacy request.
-      if (error instanceof PersonAuthorityClientError && error.status === 404 && error.code === 'not_found') {
-        const result = await authority.askV2(stored.session.access_token, question, projectId, signal);
-        this.assertCurrentSession(stored);
-        return result;
-      } else {
-        throw error;
-      }
-    }
-    const result = capabilities.agentic_ask_v1
-      ? await authority.askV3(stored.session.access_token, question, projectId, signal)
-      : await authority.askV2(stored.session.access_token, question, projectId, signal);
+    const result = await this.authority(stored.authority_origin).askV3(stored.session.access_token, question, projectId, signal);
     this.assertCurrentSession(stored);
     return result;
   }

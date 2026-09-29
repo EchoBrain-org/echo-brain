@@ -47,7 +47,6 @@ import {
 import type { OrganizationAuthorityApiRuntimeConfig } from "./organization-authority-api-runtime.js";
 import type { OrganizationAuthorityApiRuntimeDependencies } from "./organization-authority-api-runtime.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import type { AnswerCompositionFailureEventV1 } from "./person-answer-route.js";
 import type { MeetingProcessingWorkerPhaseRunnerV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 import {
   assertStagingSyntheticMeetingCanary,
@@ -74,9 +73,7 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly oidc: PersonSessionOidcConfiguration;
   readonly client_authentication: OrganizationAuthorityApiRuntimeConfig["client_authentication"];
   readonly pkce_key_file: string;
-  /** Per-organization V3 Ask capability. Serving profiles leave it disabled by default. */
-  readonly agentic_ask_v1_enabled?: boolean;
-  /** Server-only V3 experiment, off unless the serving profile opts in. */
+  /** Server-only agentic Ask experiment, off unless the serving profile opts in. */
   readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Explicit provider/source bundle. This generic root does not select one. */
   readonly meeting_source_bundle: MeetingSourceBundleV1;
@@ -95,10 +92,6 @@ export interface OrganizationAuthorityRuntimeConfig {
   /** Observational only: bounded, content-free worker lifecycle events. */
   readonly on_worker_telemetry?: (
     event: import("@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle").MeetingProcessingWorkerTelemetryEventV1,
-  ) => void;
-  /** Observational only: redacted answer-composition model-stage failures. */
-  readonly on_answer_composition_failure?: (
-    event: AnswerCompositionFailureEventV1,
   ) => void;
   /** Staging-only Ask telemetry; omitted from every production runtime. */
   readonly ask_journey_telemetry?:
@@ -298,9 +291,7 @@ export async function openOrganizationAuthorityRuntime(
   const baseApiDependencies: OrganizationAuthorityApiRuntimeDependencies = {
     ...dependencies.api,
     record_input_codecs: config.record_input_codecs,
-    ...(config.agentic_ask_v1_enabled === true ? { agentic_ask_v1_enabled: true } : {}),
-    ...(config.agentic_ask_v1_enabled === true &&
-    config.agentic_ask_v1_small_scope_shortcut === true
+    ...(config.agentic_ask_v1_small_scope_shortcut === true
       ? { agentic_ask_v1_small_scope_shortcut: true }
       : {}),
     ...(config.core_runtime_observation === undefined ? {} : { core_runtime_observation: config.core_runtime_observation }),
@@ -489,11 +480,6 @@ export async function openOrganizationAuthorityRuntime(
           answer_composition_generation: answerGeneration,
           readable_search_retrieval_contract_sha256:
             readableSearchContract.retrieval_contract_sha256,
-          ...(dependencies.api?.answer_failure !== undefined
-            ? { answer_failure: dependencies.api.answer_failure }
-            : config.on_answer_composition_failure === undefined
-              ? {}
-              : { answer_failure: config.on_answer_composition_failure }),
           ...(dependencies.api?.private_approval_interaction_ingress !==
           undefined
             ? {}

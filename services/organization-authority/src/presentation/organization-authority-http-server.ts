@@ -60,18 +60,12 @@ import {
   type PersonEmployeeHttpApplication,
 } from "./person-employee-http-application.js";
 import {
-  PERSON_ANSWER_PATH_V1,
-  type PersonAnswerHttpApplicationV1,
-} from "./person-answer-http-application.js";
-import {
-  PERSON_ANSWER_PATH_V2,
   PERSON_ANSWER_PATH_V3,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   PERSON_MEETING_TRANSCRIPT_PATH_V1,
-  validatePersonAnswerRequestV2,
   validatePersonAnswerRequestV3,
   validatePersonCapabilitiesV1,
   validatePersonEvidenceOpenRequestV1,
@@ -79,7 +73,7 @@ import {
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonMeetingTranscriptReadRequestV1,
 } from "@echo-brain/organization-api";
-import type { PersonAnswerV2HttpApplication, PersonMeetingTranscriptHttpApplicationV1 } from "./person-answer-v2-http-application.js";
+import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
@@ -106,8 +100,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `DELETE ${PERSON_EMPLOYEES_PATH_V1}`,
   `GET ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
-  `POST ${PERSON_ANSWER_PATH_V1}`,
-  `POST ${PERSON_ANSWER_PATH_V2}`,
   `POST ${PERSON_ANSWER_PATH_V3}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
@@ -142,14 +134,13 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_record_search?: PersonRecordSearchHttpApplicationV1;
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees?: PersonEmployeeHttpApplication;
-  /** Optional until the active Organization Authority runtime has a configured answer model. */
-  readonly person_answer?: PersonAnswerHttpApplicationV1;
-  /** V2 keeps scope and typed source provenance inside the Authority boundary. */
-  readonly person_answer_v2?: PersonAnswerV2HttpApplication;
-  /** V3 agentic Ask and the evidence desk are mounted only when enabled. */
+  /**
+   * Agentic Ask (RFC-0003) and the evidence desk: the only Ask (ADR-0022).
+   * Optional until the active Organization Authority runtime has a configured answer model.
+   */
   readonly person_answer_v3?: PersonAnswerV3HttpApplication;
-  /** Authenticated capability discovery is the only permitted client downgrade signal. */
-  readonly agentic_ask_v1_enabled?: boolean;
+  /** Opening a cited original; it needs no answer model. */
+  readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
   /** Explicit transcript release uses the same originals gate but no Ask model. */
   readonly person_meeting_transcript?: PersonMeetingTranscriptHttpApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
@@ -506,18 +497,6 @@ function recordSearchInput(value: unknown): {
       ? {}
       : { limit: record.limit as number }),
   });
-}
-
-function answerInput(value: unknown): { readonly question: string } {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new AuthorityOperationError("invalid_request", "request is invalid");
-  }
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).length !== 1 || !Object.hasOwn(record, "question")) {
-    throw new AuthorityOperationError("invalid_request", "request is invalid");
-  }
-  try { return Object.freeze({ question: validatePersonQueryText(record.question) }); }
-  catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
 }
 
 /** Validate transport input without exposing codec diagnostics to the caller. */
@@ -997,50 +976,6 @@ export function createOrganizationAuthorityHttpServer(
         return;
       }
       if (
-        method === "POST" &&
-        url.pathname === PERSON_ANSWER_PATH_V1 &&
-        url.search === ""
-      ) {
-        if (options.person_answer === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        json(
-          response,
-          200,
-          await options.person_answer.ask({
-            access_token: accessToken(request.headers.authorization),
-            ...answerInput(await body(request)),
-          }),
-        );
-        return;
-      }
-      if (
-        method === "POST" &&
-        url.pathname === PERSON_ANSWER_PATH_V2 &&
-        url.search === ""
-      ) {
-        if (options.person_answer_v2 === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        let requestBody;
-        try {
-          requestBody = validatePersonAnswerRequestV2(await body(request));
-        } catch {
-          throw new AuthorityOperationError("invalid_request", "request is invalid");
-        }
-        json(
-          response,
-          200,
-          await options.person_answer_v2.ask({
-            access_token: accessToken(request.headers.authorization),
-            request: requestBody,
-          }),
-        );
-        return;
-      }
-      if (
         method === "GET" &&
         url.pathname === PERSON_CAPABILITIES_PATH_V1 &&
         url.search === ""
@@ -1052,7 +987,8 @@ export function createOrganizationAuthorityHttpServer(
         json(response, 200, validatePersonCapabilitiesV1({
           schema_version: 1,
           kind: "echo-person-capabilities-v1",
-          agentic_ask_v1: options.agentic_ask_v1_enabled === true,
+          // Kept for installed clients that still probe before asking; always true with an answer model.
+          agentic_ask_v1: options.person_answer_v3 !== undefined,
         }));
         return;
       }
@@ -1061,7 +997,7 @@ export function createOrganizationAuthorityHttpServer(
         url.pathname === PERSON_ANSWER_PATH_V3 &&
         url.search === ""
       ) {
-        if (options.agentic_ask_v1_enabled !== true || options.person_answer_v3 === undefined) {
+        if (options.person_answer_v3 === undefined) {
           fail(response, 503, "unavailable");
           return;
         }
@@ -1088,7 +1024,7 @@ export function createOrganizationAuthorityHttpServer(
         (url.pathname === PERSON_EVIDENCE_SEARCH_PATH_V1 || url.pathname === PERSON_EVIDENCE_OPEN_PATH_V1) &&
         url.search === ""
       ) {
-        if (options.agentic_ask_v1_enabled !== true || options.person_answer_v3 === undefined) {
+        if (options.person_answer_v3 === undefined) {
           fail(response, 503, "unavailable");
           return;
         }
@@ -1122,7 +1058,7 @@ export function createOrganizationAuthorityHttpServer(
         url.pathname === PERSON_SOURCE_EVIDENCE_PATH_V1 &&
         url.search === ""
       ) {
-        if (options.person_answer_v2 === undefined) {
+        if (options.person_source_evidence === undefined) {
           fail(response, 503, "unavailable");
           return;
         }
@@ -1132,7 +1068,7 @@ export function createOrganizationAuthorityHttpServer(
         } catch {
           throw new AuthorityOperationError("invalid_request", "request is invalid");
         }
-        json(response, 200, options.person_answer_v2.readSource({
+        json(response, 200, options.person_source_evidence.readSource({
           access_token: accessToken(request.headers.authorization),
           request: requestBody,
         }));

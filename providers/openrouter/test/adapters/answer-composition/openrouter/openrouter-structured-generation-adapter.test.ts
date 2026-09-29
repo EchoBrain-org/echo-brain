@@ -68,7 +68,7 @@ describe("OpenRouter structured generation", () => {
       response_format: { type: "json_schema", json_schema: {
         name: "echo_layer4", strict: true, schema: structuredRequest.schema,
       } },
-      provider: { require_parameters: true, data_collection: "deny" },
+      provider: { require_parameters: true, data_collection: "deny", sort: "throughput" },
     });
   });
 

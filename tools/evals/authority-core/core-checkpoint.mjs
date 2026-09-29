@@ -160,8 +160,9 @@ function verifyStoppedState(stateDirectory, input, response, answers, policy) {
         audit.principal_id === member.principal_id && audit.membership_id === member.membership_id &&
         audit.response_sha256 === canonicalSha256(answer));
       assert.equal(matches.length, 1, `${actor} answer has no unique persisted release audit`);
-      assert.equal(matches[0].generation_id, pointer.generation_id);
-      assert.deepEqual(matches[0].record_head, log);
+      assert.equal(matches[0].kind, "echo-person-agentic-ask-audit-v1");
+      assert.equal(matches[0].outcome, answer.outcome);
+      assert.ok(matches[0].receipt_digests.length > 0, `${actor} answer audit binds no released evidence`);
       assert.equal(matches[0].citation_count, answer.citations.length);
     }
     return { candidates: 1, approved_records: 1, signed_record_receipts: 1, atoms: facts.length, denied_wrong_reviewer: 1, matched_answer_audits: answers.length };
@@ -209,13 +210,21 @@ async function scenario(policy, index) {
     const answerOffered = performance.now();
     const ownerAnswer = await candidate.call("answer", { actor: "owner", question: "launch" });
     const answerMs = performance.now() - answerOffered;
-    assert.equal(ownerAnswer.answer, response.items[0].text);
-    assert.deepEqual(ownerAnswer.citations, [{ atom_id: response.items[0].atom_id, record_sha256: response.items[0].record_sha256, policy_id: policy }]);
+    // Agentic Ask (ADR-0022): one cited statement whose text is the cited approved record item.
+    assert.equal(ownerAnswer.outcome, "answered");
+    assert.equal(ownerAnswer.citations.length, 1);
+    const cited = ownerAnswer.citations[0].citation;
+    assert.equal(cited.kind, "approved_record");
+    assert.equal(cited.policy_id, policy);
+    const citedItem = response.items.find((item) => item.atom_id === cited.atom_id);
+    assert.ok(citedItem, "the answer cites an approved record item the owner can search");
+    assert.equal(cited.record_sha256, citedItem.record_sha256);
+    assert.equal(ownerAnswer.parts[0].statements[0].text, citedItem.text);
     const employeeAnswer = await candidate.call("answer", { actor: "employee", question: "launch" });
     if (policy === POLICIES[0]) assert.deepEqual(employeeAnswer.citations, ownerAnswer.citations);
     else {
       assert.equal(employeeAnswer.citations.length, 0);
-      assert.equal(employeeAnswer.answer, "Insufficient accessible evidence to answer this question.");
+      assert.equal(employeeAnswer.outcome, "not_found");
     }
     const replay = await candidate.call("approve", { input: approval });
     assert.equal(replay.idempotent, true);

@@ -1,12 +1,8 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-type AnswerCompositionFailureObserver = (event: object) => void;
-
 const runtimeState = vi.hoisted(() => ({
-  answer_composition_failure: undefined as
-    | AnswerCompositionFailureObserver
-    | undefined,
+  opened: false,
 }));
 
 vi.mock("../src/composition/organization-authority-setup-cli.js", () => ({
@@ -31,11 +27,8 @@ vi.mock("../src/composition/organization-authority-person-administration-cli.js"
 vi.mock(
   "../src/composition/synthetic-demo-organization-authority-composition-root-v1.js",
   () => ({
-    openSyntheticDemoOrganizationAuthorityServiceV1: async (config: {
-      readonly on_answer_composition_failure?: AnswerCompositionFailureObserver;
-    }) => {
-      runtimeState.answer_composition_failure =
-        config.on_answer_composition_failure;
+    openSyntheticDemoOrganizationAuthorityServiceV1: async () => {
+      runtimeState.opened = true;
       return {
         processing: "active" as const,
         close: async () => undefined,
@@ -49,7 +42,7 @@ const { runSyntheticDemoOrganizationAuthorityCliV1 } = await import(
 );
 
 afterEach(() => {
-  runtimeState.answer_composition_failure = undefined;
+  runtimeState.opened = false;
 });
 
 function start(io: { readonly stderr: (value: string) => void }) {
@@ -72,58 +65,19 @@ function start(io: { readonly stderr: (value: string) => void }) {
 }
 
 describe("synthetic demo runtime CLI events", () => {
-  it("writes only the closed answer-composition failure schema", async () => {
+  it("writes only the closed ready event to the server log", async () => {
+    // The one-shot Ask failure log was retired with that Ask (ADR-0022).
     const stderr: string[] = [];
     const running = start({ stderr: (value) => stderr.push(value) });
-    await vi.waitFor(() =>
-      expect(runtimeState.answer_composition_failure).toBeDefined(),
-    );
-
-    runtimeState.answer_composition_failure!({
-      schema_version: 1,
-      kind: "echo-clean-layer4-failure-v1",
-      stage: "answer",
-      failure_class: "adapter_response",
-      elapsed_ms: 120_000,
-      http_status: 503,
-      finish_reason: "error",
-      adapter_id: "private-adapter-sentinel",
-      adapter_request_id: "private-request-sentinel",
-      retrieval_generation_id: "private-retrieval-sentinel",
-      question: "private-question-sentinel",
-      evidence: "private-evidence-sentinel",
-      answer: "private-answer-sentinel",
-    });
+    await vi.waitFor(() => expect(runtimeState.opened).toBe(true));
     process.emit("SIGTERM");
     await expect(running).resolves.toBe(0);
-
     expect(stderr).toEqual([
       `${canonicalJson({
         schema_version: 1,
         kind: "echo-synthetic-demo-runtime-ready-v1",
         processing: "active",
       } as never)}\n`,
-      `${canonicalJson({
-        schema_version: 1,
-        kind: "echo-clean-layer4-failure-v1",
-        stage: "answer",
-        failure_class: "adapter_response",
-        elapsed_ms: 120_000,
-        http_status: 503,
-        finish_reason: "error",
-      } as never)}\n`,
     ]);
-
-    const output = stderr.join("");
-    for (const sentinel of [
-      "private-adapter-sentinel",
-      "private-request-sentinel",
-      "private-retrieval-sentinel",
-      "private-question-sentinel",
-      "private-evidence-sentinel",
-      "private-answer-sentinel",
-    ]) {
-      expect(output).not.toContain(sentinel);
-    }
   });
 });

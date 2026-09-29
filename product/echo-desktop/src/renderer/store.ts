@@ -2157,9 +2157,8 @@ export async function ask(question: string, scope: AskScope = state.barScope): P
  * question across everything they can read, with one tap.
  */
 export function foundNothingInProject(turn: AskTurn): boolean {
-  // Authorship-unsupported and off-scope answers would not change with a wider ask.
-  return turn.scope.kind === 'project' && turn.answer.sources.length === 0 &&
-    turn.answer.outcome !== 'authorship_unsupported' && turn.answer.outcome !== 'off_scope';
+  // An off-scope answer would not change with a wider ask.
+  return turn.scope.kind === 'project' && turn.answer.sources.length === 0 && turn.answer.outcome !== 'off_scope';
 }
 
 /**

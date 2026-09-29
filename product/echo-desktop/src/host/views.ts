@@ -328,39 +328,29 @@ export function isRecordRef(value: unknown): value is RecordRef {
 }
 
 /**
- * An answer and what it is based on, in the answer's order, each source once:
- * an approved record by its digest and policy, an original by its revision
- * and anchor. Labels are "Approved record 1", or the original's own label
- * ("Original source 2" without one).
+ * An Agentic Ask answer (V4, the only Ask since ADR-0022): its statements,
+ * each with the exact sources that support it, in the answer's order. An
+ * approved record is kept by its digest and policy, an original by its
+ * revision and anchor; a source without a label is "Evidence n".
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const value = object(unwrap(raw));
-  if (value.kind === 'echo-clean-person-answer-v4') return answerV4View(value, scope);
-  if (value.kind !== 'echo-clean-person-answer-v3') throw new ViewError();
-  const sources: AnswerSource[] = [];
-  const seen = new Set<string>();
-  for (const entry of list(value.citations)) {
-    const citation = object(entry);
-    const place = sources.length + 1;
-    if (citation.kind === 'approved_record') {
-      const record = { record_sha256: citation.record_sha256, policy_id: citation.policy_id };
-      if (!isRecordRef(record)) throw new ViewError();
-      const key = `record|${record.record_sha256}|${record.policy_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      sources.push({ kind: 'record', label: `Approved record ${place}`, record });
-    } else if (citation.kind === 'source_revision') {
-      const ref = sourceRef(citation);
-      const key = `original|${ref.source_id}|${ref.revision_id}|${ref.anchor_sha256}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const label = optionalText(citation.label)?.trim();
-      sources.push({ kind: 'original', label: label ? label : `Original source ${place}`, ref });
-    } else {
-      throw new ViewError();
-    }
-  }
-  return { text: text(value.answer), scope, sources, ...(value.outcome === 'authorship_unsupported' ? { outcome: 'authorship_unsupported' as const } : {}) };
+  if (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4') throw new ViewError();
+  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`));
+  const direct = value.direct === undefined ? undefined : v4Statement(value.direct, sources.length);
+  const parts = list(value.parts).map(part => v4Part(part, sources.length));
+  if (parts.length === 0) throw new ViewError();
+  const outcome = value.outcome;
+  if (outcome !== 'answered' && outcome !== 'partial' && outcome !== 'not_found' && outcome !== 'off_scope') throw new ViewError();
+  const assumption = optionalText(value.assumption);
+  const notice = optionalText(value.notice);
+  // One part answers the question itself, so its question is not repeated.
+  const single = parts.length === 1;
+  const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
+    ...(part.records?.map(record => record.text) ?? []), part.gap])]
+    .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
+  return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
+    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }) };
 }
 
 function v4Source(raw: unknown, fallback: string): AnswerSource {
@@ -395,21 +385,6 @@ function v4Part(raw: unknown, sourceCount: number): AnswerPart {
   const records = item.records === undefined ? undefined : list(item.records).map(value => v4Statement(value, sourceCount));
   return { question: text(item.question), status, statements: list(item.statements).map(value => v4Statement(value, sourceCount)),
     ...(gap === undefined ? {} : { gap }), ...(records === undefined ? {} : { records }) };
-}
-
-/** Preserve V3 unchanged while exposing V4's statement-level cited result to the renderer. */
-function answerV4View(value: Json, scope: AskScope): Answer {
-  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`));
-  const direct = value.direct === undefined ? undefined : v4Statement(value.direct, sources.length);
-  const parts = list(value.parts).map(part => v4Part(part, sources.length));
-  const outcome = value.outcome;
-  if (outcome !== 'answered' && outcome !== 'partial' && outcome !== 'not_found' && outcome !== 'off_scope') throw new ViewError();
-  const assumption = optionalText(value.assumption);
-  const notice = optionalText(value.notice);
-  const textValue = [direct?.text, ...parts.flatMap(part => [part.question, ...part.statements.map(statement => statement.text), ...(part.records?.map(record => record.text) ?? []), part.gap])]
-    .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
-  return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
-    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }) };
 }
 
 /** Longest text the source pane shows, in characters; longer is cut and marked. */

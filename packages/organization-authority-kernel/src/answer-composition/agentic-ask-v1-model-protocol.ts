@@ -1,5 +1,5 @@
 import { validatePersonQueryText } from "@echo-brain/organization-api";
-import type { StructuredGenerationJsonSchema } from "./retrieval-grounded-answer-composition.js";
+import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.js";
 
 /**
  * Model protocol for the multi-source Ask loop (RFC-0003).

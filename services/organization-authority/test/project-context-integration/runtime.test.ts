@@ -93,11 +93,17 @@ it('uses default API composition and real Person session checks through CLI, inc
     // This runtime has no answer model. The direct path is nevertheless
     // composed and reaches its approval gate instead of returning 503.
     expect(transcriptWithoutGrant.status).toBe(401);
-    const askWithoutModel = await fetch(`http://127.0.0.1:${runtime.address.port}/v2/person/ask`, {
+    const askWithoutModel = await fetch(`http://127.0.0.1:${runtime.address.port}/v3/person/ask`, {
+      method: 'POST', headers: { authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ schema_version: 3, question: 'What changed?' }),
+    });
+    expect(askWithoutModel.status).toBe(503);
+    // The retired one-shot Ask has no route at all (ADR-0022).
+    const retired = await fetch(`http://127.0.0.1:${runtime.address.port}/v2/person/ask`, {
       method: 'POST', headers: { authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' },
       body: JSON.stringify({ schema_version: 2, question: 'What changed?' }),
     });
-    expect(askWithoutModel.status).toBe(503);
+    expect(retired.status).toBe(404);
     const home = join(root, 'person'); mkdirSync(home, { mode: 0o700 });
     new PersonSessionStore(home).install('https://authority.example', initialized.authority_id, session);
     const cli = async (argv: string[]) => {

@@ -3,11 +3,11 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
 import { MeetingProcessingWorkerLifecycleV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
 
 type WorkerErrorObserver = (error: Error) => void;
-type AnswerCompositionFailureObserver = (event: object) => void;
 type WorkerTelemetryObserver = (event: object) => void;
 type ApprovedSearchBacklogObserver = (event: {
   readonly observed_at: string;
@@ -21,8 +21,6 @@ const runtimeState = vi.hoisted(() => ({
   worker_telemetry: undefined as WorkerTelemetryObserver | undefined,
   approved_search_backlog: undefined as
     ApprovedSearchBacklogObserver | undefined,
-  answer_composition_failure: undefined as
-    AnswerCompositionFailureObserver | undefined,
   startup_error: undefined as Error | undefined,
   open_gate: undefined as Promise<void> | undefined,
   slack_signing_secret_file: undefined as string | undefined,
@@ -31,6 +29,7 @@ const runtimeState = vi.hoisted(() => ({
   staging_synthetic_meetings_directory: undefined as string | undefined,
   staging_synthetic_owner_email: undefined as string | undefined,
   ask_journey_telemetry: undefined as object | undefined,
+  core_runtime_observation: undefined as CoreRuntimeObservationScopeV1 | undefined,
   meeting_approval_journey_telemetry: undefined as object | undefined,
   staging_meeting_approval_journey_telemetry_enabled: undefined as
     | true
@@ -76,8 +75,8 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
   openOrganizationAuthorityService: async (config: {
     readonly on_worker_error?: WorkerErrorObserver;
     readonly on_worker_telemetry?: WorkerTelemetryObserver;
-    readonly on_answer_composition_failure?: AnswerCompositionFailureObserver;
     readonly ask_journey_telemetry?: object;
+    readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
     readonly meeting_approval_journey_telemetry?: {
       readonly approved_search_backlog_observer?: ApprovedSearchBacklogObserver;
     };
@@ -102,9 +101,8 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.approved_search_backlog =
       config.meeting_approval_journey_telemetry
         ?.approved_search_backlog_observer;
-    runtimeState.answer_composition_failure =
-      config.on_answer_composition_failure;
     runtimeState.ask_journey_telemetry = config.ask_journey_telemetry;
+    runtimeState.core_runtime_observation = config.core_runtime_observation;
     runtimeState.meeting_approval_journey_telemetry =
       config.meeting_approval_journey_telemetry;
     runtimeState.staging_meeting_approval_journey_telemetry_enabled =
@@ -180,7 +178,6 @@ afterEach(() => {
   runtimeState.worker_error = undefined;
   runtimeState.worker_telemetry = undefined;
   runtimeState.approved_search_backlog = undefined;
-  runtimeState.answer_composition_failure = undefined;
   runtimeState.startup_error = undefined;
   runtimeState.open_gate = undefined;
   runtimeState.slack_signing_secret_file = undefined;
@@ -226,7 +223,7 @@ function start(
 }
 
 describe("admitted runtime CLI events", () => {
-  it("keeps the shortcut off by default and passes it only with the V3 capability", async () => {
+  it("serves agentic Ask without a flag and passes the shortcut only when it is switched on", async () => {
     for (const input of [
       { agentic: undefined, shortcut: undefined },
       { agentic: "false", shortcut: "true" },
@@ -244,13 +241,10 @@ describe("admitted runtime CLI events", () => {
       }
       const running = start({ stderr: () => undefined });
       await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-      expect(runtimeState.agentic_ask_v1_enabled).toBe(
-        input.agentic === "true" ? true : undefined,
-      );
+      // ECHO_AGENTIC_ASK_V1 is retired (ADR-0022): older profiles still set it, to no effect.
+      expect(runtimeState.agentic_ask_v1_enabled).toBeUndefined();
       expect(runtimeState.agentic_ask_v1_small_scope_shortcut).toBe(
-        input.agentic === "true" && input.shortcut === "true"
-          ? true
-          : undefined,
+        input.shortcut === "true" ? true : undefined,
       );
       process.emit("SIGTERM");
       await expect(running).resolves.toBe(0);
@@ -384,15 +378,12 @@ describe("admitted runtime CLI events", () => {
         },
       });
       await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
-      const factory = runtimeState.ask_journey_telemetry as
-        | { start(): { observeContent(event: unknown): void } }
-        | undefined;
-      expect(factory).toBeDefined();
-      factory?.start().observeContent({
-        stage: "validation",
-        content_kind: "question",
-        content: { question: "CONTENT-SWITCH-QUESTION" },
-      });
+      // Ask content is the model request of each agentic step, captured under its span.
+      const scope = runtimeState.core_runtime_observation;
+      expect(scope).toBeDefined();
+      await observeCoreRuntimeV1("ask_planner", async () => {
+        captureCoreRuntimeContentV1("model_request", { question: "CONTENT-SWITCH-QUESTION" });
+      }, scope);
       process.emit("SIGTERM");
       await expect(run).resolves.toBe(0);
       const records = stderr
@@ -403,11 +394,11 @@ describe("admitted runtime CLI events", () => {
         expect(records[0]).toMatchObject({
           schema_version: 2,
           environment: "staging",
-          workflow: "ask",
+          workflow: "core_runtime",
           release_sha: releaseSha,
           build_number: 33_689_731_778,
-          stage: "ask_validation",
-          content_kind: "question",
+          stage: "core_operation",
+          content_kind: "model_request",
           truncated: false,
           content: JSON.stringify({ question: "CONTENT-SWITCH-QUESTION" }),
         });
@@ -668,18 +659,6 @@ describe("admitted runtime CLI events", () => {
           "Authorization: Bearer bearer-sentinel",
       ),
     );
-    runtimeState.answer_composition_failure!({
-      schema_version: 1,
-      kind: "echo-clean-layer4-failure-v1",
-      stage: "answer",
-      failure_class: "adapter_response",
-      elapsed_ms: 120_000,
-      http_status: 504,
-      adapter_id: "private-adapter-sentinel",
-      finish_reason: "error",
-      adapter_request_id: "private-request-sentinel",
-      retrieval_generation_id: "private-retrieval-sentinel",
-    });
     process.emit("SIGTERM");
     await expect(running).resolves.toBe(0);
 
@@ -690,9 +669,6 @@ describe("admitted runtime CLI events", () => {
       "prompt-sentinel",
       "answer-sentinel",
       "bearer-sentinel",
-      "private-adapter-sentinel",
-      "private-request-sentinel",
-      "private-retrieval-sentinel",
     ]) {
       expect(output).not.toContain(sentinel);
     }
@@ -705,15 +681,6 @@ describe("admitted runtime CLI events", () => {
       `${canonicalJson({
         schema_version: 1,
         kind: "echo-clean-live-worker-failed-v1",
-      } as never)}\n`,
-      `${canonicalJson({
-        schema_version: 1,
-        kind: "echo-clean-layer4-failure-v1",
-        stage: "answer",
-        failure_class: "adapter_response",
-        elapsed_ms: 120_000,
-        http_status: 504,
-        finish_reason: "error",
       } as never)}\n`,
     ]);
     expect(output).not.toContain("127.0.0.1");

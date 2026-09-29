@@ -206,15 +206,16 @@ export interface AnswerPart {
   readonly records?: readonly AnswerStatement[];
 }
 
+/** An Agentic Ask answer. `text` is its plain reading, for Copy answer and earlier turns. */
 export interface Answer {
   readonly text: string;
   readonly scope: AskScope;
   readonly sources: readonly AnswerSource[];
-  /** V3 answers keep the existing compact presentation. */
   readonly direct?: AnswerStatement;
-  readonly parts?: readonly AnswerPart[];
-  /** V4 outcomes, or V3's authorship_unsupported: a wider ask would not help that one. */
-  readonly outcome?: 'answered' | 'partial' | 'not_found' | 'off_scope' | 'authorship_unsupported';
+  /** At least one. */
+  readonly parts: readonly AnswerPart[];
+  /** Off-scope: the evidence is about another subject, so a wider ask would not help. */
+  readonly outcome: 'answered' | 'partial' | 'not_found' | 'off_scope';
   readonly assumption?: string;
   readonly notice?: string;
 }

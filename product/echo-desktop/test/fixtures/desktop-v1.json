@@ -4,24 +4,53 @@
     { "project_id": "prj_44444444-4444-4444-8444-444444444444", "name": "Beacon", "role": "member" }
   ],
   "answer": {
-    "schema_version": 3,
-    "kind": "echo-clean-person-answer-v3",
-    "answer": "We agreed to ship Apollo with annual plans first.",
+    "schema_version": 4,
+    "kind": "echo-clean-person-answer-v4",
+    "scope": {
+      "kind": "global"
+    },
+    "outcome": "answered",
     "citations": [
       {
-        "kind": "approved_record",
-        "atom_id": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-        "record_sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-        "policy_id": "organization-member-readable-person-v2"
+        "citation": {
+          "kind": "approved_record",
+          "atom_id": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "record_sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+          "policy_id": "organization-member-readable-person-v2"
+        },
+        "kind": "decision",
+        "label": "Approved record 1",
+        "visibility": "team"
       },
       {
-        "kind": "source_revision",
-        "source_id": "source:1111111111111111111111111111111111111111111111111111111111111111",
-        "revision_id": "rev-1",
-        "source_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "representation_sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-        "anchor_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
-        "label": "Apollo update"
+        "citation": {
+          "kind": "source_revision",
+          "source_id": "source:1111111111111111111111111111111111111111111111111111111111111111",
+          "revision_id": "rev-1",
+          "source_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "representation_sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "anchor_sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+          "label": "Apollo update"
+        },
+        "kind": "document_passage",
+        "label": "Apollo update",
+        "visibility": "team"
+      }
+    ],
+    "parts": [
+      {
+        "question": "What did we agree?",
+        "status": "answered",
+        "statements": [
+          {
+            "text": "We agreed to ship Apollo with annual plans first.",
+            "citation_indexes": [
+              0,
+              1
+            ],
+            "private": false
+          }
+        ]
       }
     ]
   },

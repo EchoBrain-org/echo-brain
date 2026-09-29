@@ -1,4 +1,4 @@
-import type { StructuredGenerationPort } from "../answer-composition/retrieval-grounded-answer-composition.js";
+import type { StructuredGenerationPort } from "../answer-composition/structured-generation-v1.js";
 
 /**
  * The complete non-secret selection that binds answer composition to its

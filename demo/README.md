@@ -117,6 +117,12 @@ on stderr. A launch exception such as `ERR_INVALID_ARG_VALUE` (NUL argv) or
 `E2BIG` has null exit and its launch code; it cannot qualify an answer or be
 counted as an Authority outage. The evaluator prints fixed diagnostics only.
 
+> **Out of date.** Since
+> [ADR-0022](../docs/decisions/ADR-0022-agentic-ask-only.md), `person ask`
+> prints V4 answers (`echo-clean-person-answer-v4`), so the answer gate below
+> fails every live capture until it is rewritten for V4. Until then a live
+> rehearsal cannot qualify a candidate through this evaluator.
+
 Successful stdout must contain the complete `echo-clean-person-answer-v3`
 response, including schema/kind, citations and its global `scope`. Every
 citation must be an `approved_record` citation. Missing or extra fields, retired

@@ -65,9 +65,9 @@
       "types": "./dist/domain/person-email-binding.d.ts",
       "import": "./dist/domain/person-email-binding.js"
     },
-    "./answer-composition/retrieval-grounded-answer-composition": {
-      "types": "./dist/answer-composition/retrieval-grounded-answer-composition.d.ts",
-      "import": "./dist/answer-composition/retrieval-grounded-answer-composition.js"
+    "./answer-composition/structured-generation-v1": {
+      "types": "./dist/answer-composition/structured-generation-v1.d.ts",
+      "import": "./dist/answer-composition/structured-generation-v1.js"
     },
     "./answer-composition/agentic-ask-v1": {
       "types": "./dist/answer-composition/agentic-ask-v1.d.ts",

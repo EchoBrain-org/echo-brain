@@ -6,10 +6,9 @@ import { describe, expect, it } from 'vitest';
 const REPO = resolve(import.meta.dirname, '../..');
 const read = (path: string): string => readFileSync(join(REPO, path), 'utf8');
 const ANSWER_ROOT = 'packages/organization-authority-kernel/src/answer-composition';
-const ANSWER_ROUTE = 'services/organization-authority/src/composition/person-answer-route.ts';
-const ANSWER_V2_ROUTE = 'services/organization-authority/src/composition/person-answer-v2-route.ts';
+// Agentic Ask is the only Ask (ADR-0022); the V1/V2 routes and their audit adapter were retired.
 const ANSWER_V3_ROUTE = 'services/organization-authority/src/composition/person-answer-v3-route.ts';
-const AUDIT = 'services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts';
+const SOURCE_EVIDENCE_ROUTE = 'services/organization-authority/src/composition/person-source-evidence-route.ts';
 const AGENTIC_AUDIT = 'services/organization-authority/src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.ts';
 function files(root: string): string[] {
   return readdirSync(join(REPO, root)).flatMap(name => {
@@ -49,13 +48,13 @@ describe('retrieval and answer-composition boundaries', () => {
     expect(visited.size).toBeGreaterThan(10);
   });
   it('keeps answer composition behind released contracts without direct record, retrieval or storage access', () => {
-    const implementation = [...files(ANSWER_ROOT), ANSWER_ROUTE, ANSWER_V2_ROUTE, ANSWER_V3_ROUTE];
+    const implementation = [...files(ANSWER_ROOT), ANSWER_V3_ROUTE, SOURCE_EVIDENCE_ROUTE];
     expect(implementation.length).toBeGreaterThan(1);
     for (const path of implementation) for (const target of graph.targets(path)) {
-      if (target === AUDIT || target === AGENTIC_AUDIT) continue; // Routes may write their dedicated audit event.
+      if (target === AGENTIC_AUDIT) continue; // The route may write its dedicated audit event.
       expect(relative(REPO, join(REPO, target))).not.toMatch(/^packages\/organization-(?:record|retrieval)\/|\/(?:adapters\/persistence|storage)\//);
     }
-    expect(read(AUDIT)).toContain('context_kind: "answer_composition"');
+    expect(read(AGENTIC_AUDIT)).toContain('"answer_composition"');
   });
   it('keeps the entire answer kernel closure free of provider, record and storage implementations', () => {
     // Route composition may bind the desk and audit adapters. The kernel and
@@ -71,7 +70,7 @@ describe('retrieval and answer-composition boundaries', () => {
     }
     expect(visited.size).toBeGreaterThan(files(ANSWER_ROOT).length);
   });
-  it('keeps legacy composition free of agent modules and all Ask paths non-streaming', () => {
+  it('keeps the answer kernel free of undeclared agent modules and all Ask paths non-streaming', () => {
     const implementation = files(ANSWER_ROOT);
     expect(implementation.length).toBeGreaterThan(0);
     for (const path of implementation) {

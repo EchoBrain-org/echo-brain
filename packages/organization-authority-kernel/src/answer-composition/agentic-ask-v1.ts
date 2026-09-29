@@ -15,7 +15,7 @@ import type {
   StructuredGenerationJsonSchema,
   StructuredGenerationPort,
   StructuredGenerationUsageV1,
-} from "./retrieval-grounded-answer-composition.js";
+} from "./structured-generation-v1.js";
 import {
   evidenceDeskSourceV1,
   type EvidenceDeskItemV1,
@@ -63,13 +63,20 @@ export {
 export const AGENTIC_ASK_MAX_STEPS_V1 = 10;
 /** Request-wide model-call budget, including retries and repairs. */
 export const AGENTIC_ASK_MAX_MODEL_CALLS_V1 = 24;
-/** Quality first: generous enough that a slow provider call can finish (per-call time is also capped by the generation profile). */
-export const AGENTIC_ASK_DEADLINE_MS_V1 = 180_000;
+/**
+ * The whole request, research through audit (ADR-0022). The Authority is
+ * reached through Cloudflare, whose proxy drops an origin response that takes
+ * more than 100 s (HTTP 524), so a longer loop could never return. 90 s
+ * leaves room for the network; per-call time is also capped by the
+ * generation profile.
+ */
+export const AGENTIC_ASK_DEADLINE_MS_V1 = 90_000;
 /** Time kept for the final answer call; research never starts inside it. */
-export const AGENTIC_ASK_ANSWER_RESERVE_MS_V1 = 60_000;
+export const AGENTIC_ASK_ANSWER_RESERVE_MS_V1 = 25_000;
 /** Time kept after the answer call for final revalidation and the audit. */
 export const AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 = 2_000;
-export const AGENTIC_ASK_STEP_TIMEOUT_MS_V1 = 60_000;
+/** One research step's model call; a stalled host fails fast and research goes on. */
+export const AGENTIC_ASK_STEP_TIMEOUT_MS_V1 = 25_000;
 export const AGENTIC_ASK_MIN_STEP_MS_V1 = 4_000;
 export const AGENTIC_ASK_MIN_ANSWER_MS_V1 = 3_000;
 export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 8;

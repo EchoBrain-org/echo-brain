@@ -46,27 +46,34 @@ describe('view models copy only what the renderer may see', () => {
     expect(page.items.map(item => item.audience)).toEqual(['only-me', 'team', 'project']);
   });
 
-  it('keeps an approved record\'s digest and policy, and an original\'s coordinates, each source once', () => {
-    const record = { kind: 'approved_record', record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' };
+  it('keeps each cited approved record by digest and policy, and each original by its coordinates, in citation order', () => {
+    const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' };
     const original = { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
       representation_sha256: sha('5'), anchor_sha256: sha('6') };
-    const answer = answerView({ ok: true, result: {
-      schema_version: 3, kind: 'echo-clean-person-answer-v3', answer: 'Ship it.', scope: { kind: 'global' },
-      citations: [
-        { ...record, atom_id: sha('1') }, { ...record, atom_id: sha('7') },
-        { ...original, label: ' Pricing call ' }, { ...original, representation_sha256: sha('8') },
-        { ...original, anchor_sha256: sha('9') },
-      ],
-    } }, { kind: 'global' });
+    const v4 = (citations: unknown[]) => ({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+      citations, parts: [{ question: 'What did we ship?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }] }] });
+    const answer = answerView({ ok: true, result: v4([
+      { citation: record, kind: 'decision', label: 'Tuesday sync', visibility: 'team' },
+      { citation: { ...original, label: 'Pricing call' }, kind: 'document_passage', label: 'Pricing call', visibility: 'team' },
+      { citation: original, kind: 'note', label: '', visibility: 'only_me' },
+    ]) }, { kind: 'global' });
     expect(answer.sources).toEqual([
-      { kind: 'record', label: 'Approved record 1', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' } },
+      { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' } },
       { kind: 'original', label: 'Pricing call', ref: { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
         representation_sha256: sha('5'), anchor_sha256: sha('6') } },
-      { kind: 'original', label: 'Original source 3', ref: expect.objectContaining({ anchor_sha256: sha('9') }) },
+      { kind: 'original', label: 'Evidence 3', ref: expect.objectContaining({ anchor_sha256: sha('6') }) },
     ]);
-    const unknownPolicy = { ...record, atom_id: sha('1'), policy_id: 'someone-else' };
-    expect(() => answerView({ ok: true, result: { kind: 'echo-clean-person-answer-v3', answer: 'a', citations: [unknownPolicy] } }, { kind: 'global' }))
-      .toThrow(ViewError);
+    // One part answers the question itself: its plain text does not repeat it.
+    expect(answer.text).toBe('Ship it.');
+    const unknownPolicy = { citation: { ...record, policy_id: 'someone-else' }, kind: 'decision', label: 'x', visibility: 'team' };
+    expect(() => answerView({ ok: true, result: v4([unknownPolicy]) }, { kind: 'global' })).toThrow(ViewError);
+  });
+
+  it('refuses the retired answer shapes and an answer with no part', () => {
+    const v3 = { schema_version: 3, kind: 'echo-clean-person-answer-v3', answer: 'Ship it.', scope: { kind: 'global' }, citations: [] };
+    expect(() => answerView({ ok: true, result: v3 }, { kind: 'global' })).toThrow(ViewError);
+    const empty = { schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'not_found', citations: [], parts: [] };
+    expect(() => answerView({ ok: true, result: empty }, { kind: 'global' })).toThrow(ViewError);
   });
 
   it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace', () => {
@@ -85,13 +92,16 @@ describe('view models copy only what the renderer may see', () => {
     });
   });
 
-  it('keeps only the authorship-unsupported outcome, which a wider ask would not help', () => {
+  it('keeps not-found and off-scope outcomes, and reads a not-found answer as its gap', () => {
     const project = { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' } as const;
-    const base = { schema_version: 3, kind: 'echo-clean-person-answer-v3', answer: 'No.', scope: project, citations: [] };
-    expect(answerView({ ok: true, result: { ...base, outcome: 'authorship_unsupported' } }, project))
-      .toEqual({ text: 'No.', scope: project, sources: [], outcome: 'authorship_unsupported' });
-    expect(answerView({ ok: true, result: base }, project)).toEqual({ text: 'No.', scope: project, sources: [] });
-    expect(answerView({ ok: true, result: { ...base, outcome: 'something_else' } }, project)).not.toHaveProperty('outcome');
+    const empty = (outcome: string) => ({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: project, outcome, citations: [],
+      parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }] });
+    expect(answerView({ ok: true, result: empty('not_found') }, project)).toEqual({
+      text: 'Not found.', scope: project, sources: [], outcome: 'not_found',
+      parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }],
+    });
+    expect(answerView({ ok: true, result: empty('off_scope') }, project)).toMatchObject({ outcome: 'off_scope' });
+    expect(() => answerView({ ok: true, result: empty('authorship_unsupported') }, project)).toThrow(ViewError);
   });
 
   it('accepts a receipt only for the request that was sent', () => {

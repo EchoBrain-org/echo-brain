@@ -131,12 +131,12 @@ evidence still requires current access when opened.
 
 ## Compatibility and validation
 
-The new client uses `POST /v2/person/ask` with request schema 2 and response
-schema 3. The response carries global/project scope and typed citations. The
-CLI accepts `person ask --question <text> [--project <project-id>]`. Old clients
-can continue using `/v1/person/ask` for the original approved-record-only
-contract. The new client does not silently downgrade a project request to
-global or approved-record-only Ask.
+This version shipped as `POST /v2/person/ask` (request schema 2, response
+schema 3), beside the approved-record-only `/v1/person/ask`. Both were retired
+by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): Ask is now
+`POST /v3/person/ask` with V4 answers, and the scope rules here still apply to
+it. The CLI accepts `person ask --question <text> [--project <project-id>]`. The
+client does not silently downgrade a project request to global Ask.
 
 Cited original evidence is read through `POST /v2/person/ask/source` or
 `person ask-source`, using the answer's scope and exact source, revision,
