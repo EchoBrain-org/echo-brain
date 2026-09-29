@@ -36,13 +36,52 @@ record head, search generation or relevant configuration changes. A completed
 Slack setup, SNS confirmation or Explorer access grant is not a new handoff on
 every round. Fresh runtime and journey evidence is still required for each run.
 
+## Coordinated server and client release
+
+For a release that changes both the Authority and its Person clients, use the
+[coordinated server and client release guide](../../deploy/release/README.md#coordinated-server-and-client-release).
+It coordinates the existing server and feed CLIs; it is not a new orchestrator
+or a new authorization format.
+
+Evaluate server-client compatibility before `stage`. Staging changes the current
+live host, so compatibility is a pre-stage condition, not a check deferred until
+`promote`. Stage and test the exact server candidate and both matching CLI kits,
+then review their evidence. After the existing private Slack-card approval and
+candidate-client checks, a human makes the final decision on the exact release.
+Only then may the operator promote the server and publish the signed feed using
+their existing, separate commands. A staged candidate never implies permission
+to publish it.
+
+One final human review may approve the exact release and Person-client hashes
+together with the prepared manifest hash, channel, both targets, and the
+expected predecessor feed hash when there is one. Record those approvals using
+the existing release authorization and exact digest approvals required by the
+server and feed CLIs. The review does not replace the separate private
+Slack-card approval, create either authorization automatically, or turn general
+workflow approval into consent for a different candidate, manifest or feed
+predecessor.
+
+Report completion only after all applicable evidence is present:
+
+| Result | Meaning |
+| --- | --- |
+| Stage-only | The server candidate was staged or tested, but neither server promotion nor feed publication is complete. |
+| Promoted-only | The server was promoted, but the matching signed CLI feed has not been published and verified. |
+| Published-not-verified | The signed feed was published, but one or both representative native seats have not completed the required A-to-B activation, authenticated read and cited Ask proof. |
+| Released | The server was promoted, a fresh server `status` confirms the accepted release, and the signed feed containing both Linux x64/glibc and macOS arm64 CLI kits was published. A representative macOS arm64 seat and a representative Linux x64/glibc seat must each activate from A to B and produce authenticated read plus cited Ask evidence using B. This proves those representative client paths, not fleet-wide activation. If the desktop distribution is affected, record its separate distribution and verification evidence too. |
+
+Keep incomplete results explicit and resume through the receipt/status path that
+owns the unfinished operation. Do not call a Git head, a running server, or a
+prepared manifest the client "latest"; the client-visible release is the exact
+entry in its signed feed.
+
 ## Choose the lane
 
 | Goal | Supported path |
 | --- | --- |
 | Compile or test locally | `npm run authority:local`. For the simulated staging journey, run `npm run test:staging-journey`, fix failures and run `npm run check` before review. Local tests are not live delivery proof. |
 | Inspect staging | `authority:staging status` for the slot; the release CLI's fresh `status` action for a current-host release; human host-wrapper `status` during initial onboarding. |
-| Update the current accepted host | Follow the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane): install reviewed tooling, stage, canary, human Slack approval, operator client checks, human final decision, promote. Execute reviewed merged tooling from a clean checkout. `stage` accepts only the current persisted baseline and never migrates older state. |
+| Update the current accepted host | Follow the [automated release lane](../../deploy/release/README.md#automated-current-host-staging-lane): install reviewed tooling, stage, canary, human Slack approval, operator client checks, human final decision, promote. For a matching client release, also follow [coordinated server and client release](../../deploy/release/README.md#coordinated-server-and-client-release). Execute reviewed merged tooling from a clean checkout. `stage` accepts only the current persisted baseline and never migrates older state. |
 | Move staging from an older baseline to a V10 release | V10 is fresh-state only; no migration reaches it ([release guide](../../deploy/release/README.md)). With no live users, the human host operator runs the [authorized reset](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state) `./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users`, then prepares the organization again with the V10 release record and matching runtime profile. To keep provider credentials, use the provider-reuse row below instead. Continue with onboarding and the canary gates. |
 | First onboarding | Follow [resumable onboarding](../../deploy/organization-authority/README.md#resumable-initial-owner-onboarding) and the actor table below. Host-local onboarding remains in the human Session Manager lane. |
 | Transfer initial inputs | Onboarding-transfer `preflight`, `plan`, review the named change set, then `execute`. Run `cleanup` only when execute retains the receipt and reports `cleanup_required`. |
@@ -87,7 +126,7 @@ Use the actor below; preserve the underlying identity, approval and health check
 | Unreleased rehearsal replacement and `prepare-rehearsal` using retained provider inputs | Human in Session Manager after the nonsecret transfer completes. Credentials stay on the host; use the exact operation ID from its receipt. |
 | Private Slack-card approval | Human, for each card. |
 | Infrastructure change set or private handoff not yet approved for its exact scope | Human reviews the prepared result once. |
-| Final decision on the exact candidate release | Human, after successful candidate-client checks. |
+| Final decision on the exact candidate release and, when applicable, its exact signed-feed inputs | Human, after successful candidate-client checks. The existing private Slack-card approval remains separate. |
 
 For browser onboarding, the local operator privately transfers the invitation
 and accepted record through the reviewed export CLI, verifies the matching
@@ -128,9 +167,12 @@ private Slack-card approval. The local operator installs the verified candidate
 client and runs its checks. Only after both checks pass, show their evidence
 and ask the founder for the final decision on that exact candidate.
 Preserve the separate release- and client-digest-bound authorization before
-`promote`. Never create it merely because the PR was approved or the founder
-authorized automation. If checks fail, run a fresh release `status` action
-and roll back the exact candidate.
+`promote`. For a coordinated release, retain the exact prepared manifest,
+channel, both targets and predecessor binding in the existing feed approval
+records as well. Never create it merely because the PR was approved or the
+founder authorized automation. Nor create either approval because the candidate
+was staged. If checks fail, run a fresh release `status` action and roll back
+the exact candidate.
 
 ## Evidence and completion
 
@@ -152,6 +194,15 @@ each run's proof; report missing evidence rather than removing a check.
 The setup CLI's `runtime_observation=not_observed` and
 `runtime_status=ready_to_start` describe setup output; use the host wrapper's
 running/healthy/image/profile checks and live telemetry for runtime proof.
+
+For a coordinated release, retain the post-promotion fresh server status and
+the confirmed signed-feed publication receipt for both supported CLI targets.
+Retain separately for representative macOS arm64 and Linux x64/glibc seats the
+A-to-B activation, authenticated read and cited Ask evidence using B. The feed
+receipt alone does not show that either installed client activated the release,
+and the two-seat proof does not claim fleet-wide activation. Desktop packaging
+and distribution remain a separate lane; include its evidence when the release
+affects the desktop app.
 
 ## Exceptions and recovery
 
