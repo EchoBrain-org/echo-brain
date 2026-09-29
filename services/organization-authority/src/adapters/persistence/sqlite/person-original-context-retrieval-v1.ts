@@ -211,6 +211,28 @@ function transcriptPage(body: string, offset: number): { readonly text: string; 
   return Object.freeze({ text: points.slice(offset, end).join(""), next_offset: end === points.length ? null : end });
 }
 
+/** Longest speaker name a transcript turn is led by, in characters. */
+const MAXIMUM_SPEAKER_NAME_CHARACTERS = 120;
+
+/**
+ * A shared transcript as Ask reads it: each turn led by its speaker's display
+ * name, so who said or took on what survives into search and citations
+ * (ADR-0021). The names are the meeting's own participants, which the approved
+ * record already shows its readers; identities (emails, provider ids) stay out.
+ * A turn without a named speaker keeps its bare text.
+ */
+function speakerTranscript(meeting: MeetingDocument): string {
+  const names = new Map<string, string>();
+  for (const participant of meeting.participants) {
+    const name = participant.display_name?.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/\s+/gu, " ").trim();
+    if (name !== undefined && name.length > 0) names.set(participant.id, [...name].slice(0, MAXIMUM_SPEAKER_NAME_CHARACTERS).join(""));
+  }
+  return meeting.content.filter(block => block.kind === "transcript").map(block => {
+    const name = block.speaker_participant_id === undefined ? undefined : names.get(block.speaker_participant_id);
+    return name === undefined ? block.text : `${name}: ${block.text}`;
+  }).join("\n\n");
+}
+
 /** Each transcript's best packet for these terms, when it matches at all. */
 function transcriptHits(transcripts: readonly TranscriptCandidate[], terms: readonly string[]): readonly TranscriptHit[] {
   const hits: TranscriptHit[] = [];
@@ -720,7 +742,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       const row = this.meetingSource({ kind: "approved_meeting_transcript", approval_id: grant.approval_id, source_id: grant.source_id as `source:${string}`, revision_id: grant.revision_id, source_sha256: grant.source_sha256 });
       if (row === undefined) continue;
       const meeting = this.meetingContent(row);
-      const body = meeting.content.filter(block => block.kind === "transcript").map(block => block.text).join("\n\n");
+      const body = speakerTranscript(meeting);
       if (body.length === 0) continue;
       const title = `Transcript: ${meeting.title?.trim() || "Untitled meeting"}`;
       candidates.push(Object.freeze({

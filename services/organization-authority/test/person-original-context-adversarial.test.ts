@@ -395,9 +395,14 @@ describe("adversarial original-context retrieval", () => {
     const meeting = {
       schema_version: 1 as const, id: "meeting-transcript-1",
       provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-transcript-1", canonical_revision: "revision-1", observed_at: PROJECT_CONTEXT_NOW, normalizer_version: "1" },
-      capture: { state: "complete" as const, components: [{ kind: "transcript" as const, state: "available" as const }] }, participants: [], artifacts: [],
+      capture: { state: "complete" as const, components: [{ kind: "transcript" as const, state: "available" as const }] },
+      participants: [{ id: "omar", display_name: "Omar\u200b  Haddad\n", identities: [{ kind: "email" as const, value: "omar@example.test" }] }, { id: "unnamed" }], artifacts: [],
       title: "Pricing sync",
-      content: [{ id: "transcript-1", kind: "transcript" as const, text: "approved transcript marker: Omar will send the revised quote by Friday" }],
+      content: [
+        { id: "transcript-1", kind: "transcript" as const, text: "approved transcript marker: I will send the revised quote by Friday", speaker_participant_id: "omar" },
+        { id: "transcript-2", kind: "transcript" as const, text: "Thanks.", speaker_participant_id: "unnamed" },
+        { id: "transcript-3", kind: "transcript" as const, text: "An unattributed line." },
+      ],
     };
     const bridge = new MeetingSourceBridgeV1({
       identity: meeting.provenance.source,
@@ -446,11 +451,14 @@ describe("adversarial original-context retrieval", () => {
     const citation = { kind: "approved_meeting_transcript" as const, approval_id: "apr_transcript_fixture", ...source };
     // ADR-0017 amendment: a transcript shared at approval is Ask evidence
     // under its grant, cited by exact revision and a packet anchor.
-    const asked = retrieval.retrieve({ access_token: "member", queries: ["revised quote Omar"], scope: { kind: "global" } });
+    // Each turn is led by its speaker's display name, so "who will send the
+    // quote" is answerable; identities stay out, and unnamed turns stay bare.
+    const asked = retrieval.retrieve({ access_token: "member", queries: ["Haddad revised quote"], scope: { kind: "global" } });
     expect(asked.query_hit_counts).toEqual([1]);
     const packet = asked.release.released_atoms[0]!;
     expect(packet).toMatchObject({ source_id: source.source_id, revision_id: source.revision_id, label: "Transcript: Pricing sync" });
-    expect(packet.text).toBe("Transcript: Pricing sync\napproved transcript marker: Omar will send the revised quote by Friday");
+    expect(packet.text).toBe("Transcript: Pricing sync\nOmar Haddad: approved transcript marker: I will send the revised quote by Friday\n\nThanks.\n\nAn unattributed line.");
+    expect(packet.text).not.toContain("omar@example.test");
     expect(retrieval.retrieve({ access_token: "member", queries: ["revised quote"], scope: { kind: "project", project_id: PROJECT_ALPHA } }).query_hit_counts).toEqual([1]);
     expect(retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: citationOf(packet) }).atom).toEqual(packet);
     expect(() => retrieval.revalidate({ access_token: "member", release: asked.release })).not.toThrow();
