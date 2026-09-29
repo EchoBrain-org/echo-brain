@@ -183,6 +183,8 @@ type Entry = {
   /** Opened explicitly (or preloaded); full text stays in the prompt while budget allows. */
   opened: boolean;
   touched: number;
+  /** The latest search that returned this item; its preview shows where that search matched. */
+  query?: string;
 };
 type ToolResult = Readonly<Record<string, unknown>>;
 /** Code-owned plan state. A need leaves the plan only by being marked found or not_found. */
@@ -246,6 +248,39 @@ function toolRefusal(error: unknown): string | null {
 function abort(): never { throw new DOMException("Ask cancelled", "AbortError"); }
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }
 function preview(text: string): string { return cleanLine(text, AGENTIC_ASK_PREVIEW_CHARS_V1); }
+/** Characters a query preview keeps before its first matched word. */
+const PREVIEW_LEAD_CHARS = 60;
+/**
+ * A search hit's preview: the window where the query's words cluster, not
+ * only the item's head, so a long transcript or document shows why it matched
+ * ("… Jules: I will publish the dashboard by September 11 …"). Words match at
+ * a word start, ignoring case; the head wins ties, and with no match the
+ * preview is the head.
+ */
+function queryPreview(text: string, query: string | undefined): string {
+  const head = preview(text);
+  if (query === undefined) return head;
+  const line = cleanLine(text, Number.MAX_SAFE_INTEGER);
+  // Terms are letters and digits only, so they need no escaping.
+  const terms = [...new Set(query.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(term => [...term].length >= 3))].slice(0, 32);
+  const hits: { readonly at: number; readonly term: number }[] = [];
+  terms.forEach((term, index) => {
+    for (const match of line.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])${term}`, "giu"))) hits.push({ at: match.index, term: index });
+  });
+  const width = AGENTIC_ASK_PREVIEW_CHARS_V1 - 1;
+  const matched = (start: number) => new Set(hits.filter(hit => hit.at >= start && hit.at < start + width).map(hit => hit.term)).size;
+  let best = { start: 0, first: 0, count: matched(0) };
+  for (const hit of [...hits].sort((left, right) => left.at - right.at)) {
+    const start = Math.max(0, hit.at - PREVIEW_LEAD_CHARS);
+    const count = matched(start);
+    if (count > best.count) best = { start, first: hit.at, count };
+  }
+  if (best.start === 0) return head;
+  // Begin at a whole word: skip the word the lead cut into.
+  const space = line.indexOf(" ", best.start);
+  const start = line[best.start - 1] === " " ? best.start : space >= 0 && space < best.first ? space + 1 : best.first;
+  return cleanLine(`…${line.slice(start)}`, AGENTIC_ASK_PREVIEW_CHARS_V1);
+}
 function partQuestion(value: string): string {
   // V4 bounds part questions to 1 KiB of single-line text.
   let text = cleanLine(value, 400);
@@ -399,7 +434,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
       });
       const listing = (entry: Entry, withPreview: boolean): Record<string, unknown> => ({
         ...describe(entry),
-        ...(withPreview && entry.item.text !== undefined ? { preview: preview(entry.item.text), full: entry.full } : {}),
+        ...(withPreview && entry.item.text !== undefined ? { preview: entry.full ? preview(entry.item.text) : queryPreview(entry.item.text, entry.query), full: entry.full } : {}),
       });
 
       // ---- tools ---------------------------------------------------------
@@ -411,6 +446,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         const result = await raceAbort(activeSignal, options.desk.search({ query, limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
         observe(result);
         const found = result.items.filter(item => item.text !== undefined).map(item => register(item, true));
+        for (const entry of found) entry.query = query;
         return { tool: "search", query, results: found.map(entry => listing(entry, true)), ...(found.length === 0 ? { note: "no matches" } : {}) };
       };
       /** Models sometimes pass a title instead of an id; resolve it only when a seen title matches. */

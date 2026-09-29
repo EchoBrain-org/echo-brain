@@ -268,6 +268,9 @@ the question.
 
 - It holds the notes per part, the full text of opened items, and one-line
   previews of everything else seen.
+- A search hit's preview is the 240-character window where that search's
+  words cluster, not only the item's head, so a long transcript or document
+  shows why it matched. With no word in the text, it is the head.
 - The budget is the model's context window, from the generation profile,
   minus the prompt, an output reserve and a 10% margin.
 - On overflow, the oldest opened items that no need cites shrink back to

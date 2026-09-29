@@ -236,6 +236,28 @@ describe("agentic Ask: research loop", () => {
     expect(result.outcome).toBe("answered");
   });
 
+  it("previews a long search hit where the query matched, not only its head", async () => {
+    const transcript = item("transcript", `Transcript: Calibration\n${"Anika: We reviewed the pilot numbers. ".repeat(12)}Jules: I will publish the dashboard by September 11.\n\nZhen: Thanks.`, { kind: "note", label: "Transcript: Calibration" });
+    const unmatched = item("unmatched", `${"Nothing relevant here at all. ".repeat(12)}The end.`);
+    const script = scripted([
+      step([{ needs: [{ need: "what Jules took on" }] }], [search("Jules dashboard")]),
+      finish([missing()]),
+      finish([missing()]),
+    ]);
+    await ask({ desk: desk({ search: () => [transcript, unmatched] }), model: script.model }).answer({ question: "What is Jules working on?" });
+    const [hit, other] = script.prompt(1).last_results[0].results;
+    expect(hit.full).toBe(false);
+    // It starts at a whole word, with some lead before the match.
+    expect(transcript.text).toContain(` ${hit.preview.slice(1, 30)}`);
+    expect(hit.preview.indexOf("Jules")).toBeGreaterThan(20);
+    expect(hit.preview).toContain("Jules: I will publish the dashboard by September 11.");
+    expect([...hit.preview].length).toBeLessThanOrEqual(240);
+    // No query word: the head, as before.
+    expect(other.preview.startsWith("Nothing relevant here")).toBe(true);
+    // Later steps keep the matched window for items not yet opened.
+    expect(script.prompt(2).seen.find((entry: { id: string }) => entry.id === hit.id).preview).toBe(hit.preview);
+  });
+
   it("rejects a not_found need searched fewer than twice once, then accepts it", async () => {
     const script = scripted([
       step([{}], [search("launch")]),
