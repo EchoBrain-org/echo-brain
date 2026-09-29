@@ -70,6 +70,10 @@ grant (share transcript on at approval), under the same checks as the direct
 transcript read: the grant's policy contract, the record's current audience,
 and for project Ask the record's project association and the asker's project
 grant. The exact retained revision is re-verified before any text is scored.
+Ask reads each turn led by its speaker's display name ("Jules: I will publish
+the dashboard"), so who said or took on what is searchable; the names are the
+meeting's participants, which the approved record already shows its readers,
+and participant identities stay out. The direct transcript read is unchanged.
 Packets are cited as source revisions whose anchor binds the approval, and
 every read, revalidation and final fence re-derives the packet from the grant.
 A raw meeting without a grant, a pending or rejected approval, and a meeting
