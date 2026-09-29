@@ -659,7 +659,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         checkedAt = validated.checked_at;
         assertLive();
         calls += 1;
-        const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: OUTPUT_TOKENS[role], timeout_ms: Math.max(1, Math.min(options.generation.timeout_ms, timeoutMs, remaining())), signal: activeSignal });
+        const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: OUTPUT_TOKENS[role], timeout_ms: Math.max(1, Math.floor(Math.min(options.generation.timeout_ms, timeoutMs, remaining()))), signal: activeSignal });
         invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));
         // Slack text must never reach runtime content capture (RFC-0003 retention).
         const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => {

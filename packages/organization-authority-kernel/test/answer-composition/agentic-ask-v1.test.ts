@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AGENTIC_ASK_ANSWER_RESERVE_MS_V1,
   AGENTIC_ASK_DEADLINE_MS_V1,
+  AGENTIC_ASK_FINALIZE_RESERVE_MS_V1,
   AGENTIC_ASK_MAX_MODEL_CALLS_V1,
   agenticAskContextBudgetBytesV1,
   createAgenticAskV1,
@@ -509,6 +510,51 @@ describe("agentic Ask: failures never lose found evidence", () => {
     for (const call of timeouts.filter(value => value.role === "step")) expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_ANSWER_RESERVE_MS_V1);
     expect(timeouts.at(-1)!.role).toBe("answer");
     expect(audit[0]!.outcome).toBe("answered");
+  });
+
+  it("keeps fractional-clock research and answer budgets valid for an integer-only adapter", async () => {
+    const startedAt = 100.125;
+    let clock = startedAt;
+    const monotonic = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const launch = item("launch", "Launch is Tuesday.");
+    const evidence = desk({ search: () => [launch], open: () => [launch] });
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const script = scripted([
+      () => { clock += 20_000.25; return step([{}], [search("launch")]); },
+      () => { clock += 20_000.125; return step([{}], [open("E1")]); },
+      () => { clock += 21_000.25; return finish([found(["E1"])]); },
+      answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
+    ]);
+    const calls: Array<{ timeout: number; at: number }> = [];
+    const model: StructuredGenerationPort = {
+      generate: async input => {
+        // Enforce the adapter boundary before any provider request, as OpenRouter does.
+        if (!Number.isSafeInteger(input.timeout_ms) || input.timeout_ms < 1) {
+          throw Object.assign(new Error("adapter requires a positive integer timeout"), {
+            diagnostic: { failure_class: "adapter_response", http_status: null },
+          });
+        }
+        calls.push({ timeout: input.timeout_ms, at: clock - startedAt });
+        return script.model.generate(input);
+      },
+    };
+    try {
+      // Use the default performance.now clock, including its fractional milliseconds.
+      const result = await ask({ desk: evidence, model, audit }).answer({ question: "When is launch?" });
+      expect(result).toMatchObject({ outcome: "answered", citations: [{ citation: launch.citation }] });
+      expect(calls).toHaveLength(4);
+      expect(calls[2]!.timeout).toBeLessThan(25_000);
+      expect(calls[3]!.timeout).toBeLessThan(generation.timeout_ms);
+      for (const call of calls.slice(0, 3)) {
+        expect(call.at + call.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_ANSWER_RESERVE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
+      }
+      expect(calls[3]!.at + calls[3]!.timeout).toBeLessThanOrEqual(AGENTIC_ASK_DEADLINE_MS_V1 - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1);
+      expect(evidence.revalidate).toHaveBeenCalledTimes(5);
+      expect(audit[0]).toMatchObject({ outcome: "answered", model_calls: 4, repairs: 0, fallbacks: 0 });
+      expect(audit[0]!.generations.map(value => value.role)).toEqual(["step", "step", "step", "answer"]);
+    } finally {
+      monotonic.mockRestore();
+    }
   });
 
   it("never exceeds the model-call budget under repeated invalid output", async () => {
