@@ -224,6 +224,7 @@ function Item({ item }: { item: RecordItem }) {
     <div class="record-item">
       {item.status && <div class="status">{item.status === 'proposed' ? 'Proposed' : 'Unresolved'}</div>}
       <div>{item.text}</div>
+      {item.owner && <div class="owner" data-testid="record-owner">Owner: {item.owner}</div>}
       {item.excerpts.map((excerpt, index) => (
         <div key={index} class="excerpt">
           <div class="quote">“{excerpt.quote}”</div>

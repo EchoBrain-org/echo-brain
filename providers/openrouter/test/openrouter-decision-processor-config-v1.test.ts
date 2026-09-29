@@ -22,10 +22,10 @@ describe("fixed OpenRouter processor runtime commitments", () => {
     );
     expect(OPENROUTER_DECISION_PROCESSOR_ADAPTER_VERSION_V1).toBe("1.9.0");
     expect(OPENROUTER_DECISION_PROCESSOR_PROMPT_VERSION_V1).toBe(
-      "decision-extraction-v9",
+      "decision-extraction-v10",
     );
     expect(OPENROUTER_DECISION_PROCESSOR_SCHEMA_VERSION_V1).toBe(
-      "decision-extraction-schema-v6",
+      "decision-extraction-schema-v7",
     );
     expect(OPENROUTER_DECISION_PROCESSOR_MODEL_V1).toBe(
       "anthropic/claude-sonnet-4.6",

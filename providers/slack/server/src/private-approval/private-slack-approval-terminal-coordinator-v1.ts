@@ -19,7 +19,7 @@ import { PrivateApprovalFinalizationConflictError, PrivateApprovalFinalizationDe
 import type { CanonicalPrivateApprovalV4ReceiptV1, PrivateApprovalPresentationRecoveryV1, PrivateApprovalTerminalReceiptV1, RecordPrivateApprovalTerminalReceiptInputV1 } from "./sqlite-private-slack-approval-assignment-state-v1.js";
 import type { FrozenPrivateSlackApprovalCandidateV1, PrivateSlackBlockApprovalTerminalV1, PrivateSlackBlockV4RecordWriterV1 } from "../processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js";
 import type { PrivateSlackBlockApprovalTerminalV2 } from "../processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js";
-import type { PrivateApprovalResolutionV2 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
+import type { PrivateApprovalResolutionV2, PrivateApprovalResolutionV3 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import type { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import type {
   MeetingApprovalJourneyStageAttemptV1,
@@ -28,7 +28,7 @@ import type {
 
 type Awaitable<T> = T | Promise<T>;
 type DurablePrivateApprovalTerminal = Omit<DurablePrivateApprovalTerminalV1, "resolution"> & {
-  readonly resolution: DurablePrivateApprovalTerminalV1["resolution"] | PrivateApprovalResolutionV2;
+  readonly resolution: DurablePrivateApprovalTerminalV1["resolution"] | PrivateApprovalResolutionV2 | PrivateApprovalResolutionV3;
 };
 
 /** The strictly minimal durable Control Plane worker port. */
@@ -215,7 +215,8 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     const appendAttempt = this.beginStageForApproval(approvalId, "meeting_record_append");
     let appended: Awaited<ReturnType<PrivateSlackBlockV4RecordWriterV1["appendApproved"]>>;
     try {
-      if (terminal.resolution.schema_version === 2) {
+      // V3 is V2 plus confirmed owners; the V2 writer records both shapes.
+      if (terminal.resolution.schema_version === 2 || terminal.resolution.schema_version === 3) {
         if (this.options.record_writer.appendApprovedV2 === undefined) {
           throw new Error("private V2 terminal requires its versioned record writer");
         }

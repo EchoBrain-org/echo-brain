@@ -260,6 +260,31 @@ function expectedSignals(
   return Object.freeze(signals);
 }
 
+/**
+ * Owners the approver confirmed in the signed human act (ADR-0021), by signal
+ * ID. The approved brief never carries them; a resolution without the field
+ * confirmed none. Read by field, so this workspace names no provider shape.
+ */
+function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
+  const owners = (reference as { readonly action_owners?: unknown }).action_owners;
+  if (owners === undefined) return new Map();
+  if (!Array.isArray(owners)) invalid("confirmed action owners must be an array");
+  const result = new Map<string, string>();
+  for (const entry of owners) {
+    const signalId = requiredText((entry as { readonly signal_id?: unknown })?.signal_id, "confirmed owner signal");
+    const owner = requiredText((entry as { readonly owner?: unknown })?.owner, "confirmed owner");
+    if (result.has(signalId)) invalid("confirmed action owners must name each action once");
+    result.set(signalId, owner);
+  }
+  return result;
+}
+
+/** An action's searchable text names its confirmed owner, so "what does Jules own" matches. */
+function atomText(signal: RecordRetrievalSourceSignalV1, owners: ReadonlyMap<string, string>): string {
+  const owner = signal.kind === "action" ? owners.get(signal.id) : undefined;
+  return owner === undefined ? signal.text : `${signal.text} Owner: ${owner}.`;
+}
+
 function materialize(database: Database.Database): MaterializedSnapshot {
   database.exec("BEGIN");
   try {
@@ -543,6 +568,10 @@ export class RecordRetrievalSourceSnapshotPortV1 {
       }
       let reviewerPrincipal: string | null = null;
       let reviewerMembership: string | null = null;
+      const owners = confirmedOwners(reference);
+      for (const id of owners.keys()) {
+        if (!signals.some((signal) => signal.kind === "action" && signal.id === id)) invalid("confirmed owner names no approved action");
+      }
       for (const [atomOrder, signal] of signals.entries()) {
         const fact = recordFacts[atomOrder];
         if (fact === undefined)
@@ -675,7 +704,7 @@ export class RecordRetrievalSourceSnapshotPortV1 {
             signal_id_sha256: fact.signal_id_sha256,
             atom_id: fact.atom_id,
             item_kind: signal.kind,
-            text: signal.text,
+            text: atomText(signal, owners),
             audit_event_id: reference.audit_event_id,
             audit_sequence: reference.audit_sequence,
             audit_entry_sha256: reference.audit_entry_sha256,

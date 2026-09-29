@@ -77,13 +77,30 @@ approved with sharing off stay out of Ask. Transcript text keeps its custody:
 it is not copied into records, indexes or audits; audits keep digests only.
 
 **Owners need the approver.** Extraction proposes an owner only for an
-explicit assignment ("Jules will send the quote"), and code keeps a proposal
-only when the name appears in the action's cited evidence. The card shows each
-proposal in an editable field; the approver keeps, edits or clears it. Only
-the owner in the signed approval action is recorded and indexed. A proposal is
-never recorded on its own. The card, interaction, receipt, command,
-resolution and record input carry this in new versions; historical versions
-keep their meaning.
+explicit assignment ("Jules will send the quote"). Code keeps a proposal only
+when the cited evidence supports it: the name appears in a cited quote, or the
+cited speaker, known by that name, commits in the first person ("I'll send
+it"). The model's judgment alone never sets an owner.
+
+- The approved snapshot never carries an owner. The stager clears every
+  proposal from the brief it commits to, so a brief without proposals keeps its
+  exact bytes and hash.
+- A card with proposals is a V3 card: the V2 card plus one editable owner field
+  per proposed action, starting at the proposal. If the fields would not fit
+  Slack's 50-block limit, the card falls back to V2 and offers no owners.
+- The approver keeps, edits or clears each field. The signed V3 action carries
+  every field as left; the V3 receipt keeps it; finalization binds the same V2
+  policy decision and adds only the owners still filled in (a V3 resolution).
+- The record's V3 human-act reference names each confirmed owner by the
+  approved action's signal ID. Its policy facts are exactly the V2 facts:
+  owners grant nothing.
+- Search indexes an owned action as "<action> Owner: <name>.", and the source
+  pane shows the owner beside the action.
+
+V1 and V2 cards, receipts, resolutions and records keep their meaning and
+bytes. Extraction's prompt and schema versions change (processor identity
+changes; signal IDs do not), so meetings processed again after deploy produce
+new candidates, which supersede cards still pending.
 
 ## Migration, rollback, and evidence
 
@@ -98,4 +115,8 @@ Evidence: `person-original-context-adversarial.test.ts` covers transcript
 search, project association, revalidation after leaving every audience
 project, and exclusion without a grant.
 `private-slack-approval-interaction-handler-v1.test.ts` covers the refused
-project choices. The desktop Ask end-to-end suite covers the offered wider ask.
+project choices and the V3 owner fields. `private-slack-dm-approval-stager-v3`,
+`private-slack-approval-block-kit-card-v2`, the persistence and coordinator
+tests, and `private-slack-record-append.test.ts` cover owners from proposal to
+searchable record. The desktop Ask end-to-end suite covers the offered wider
+ask.

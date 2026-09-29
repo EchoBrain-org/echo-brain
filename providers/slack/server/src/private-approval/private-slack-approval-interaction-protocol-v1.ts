@@ -8,7 +8,7 @@ import {
   type PersonApprovalPolicyIdV2,
 } from "../organization-control-plane/slack-approval-integration-v1.js";
 import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "./private-slack-approval-block-kit-card-v1.js";
-import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V2, privateSlackApprovalBlockKitActionIdV2 } from "./private-slack-approval-block-kit-card-v2.js";
+import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V2, PRIVATE_SLACK_APPROVAL_OWNER_PROPOSALS_MAX_V3, canonicalPrivateSlackApprovalOwnerV3, privateSlackApprovalBlockKitActionIdV2, privateSlackApprovalBlockKitOwnerActionIdV3 } from "./private-slack-approval-block-kit-card-v2.js";
 
 /** The largest Slack interactivity request this pure boundary will retain. */
 export const PRIVATE_SLACK_APPROVAL_INTERACTION_MAX_BODY_BYTES = 64 * 1024;
@@ -43,6 +43,9 @@ const SLACK_CARD_INPUT_ACTION =
   /^echo-private-approval-v1-[0-9a-f]{32}-(policy|comment)-v1$/;
 const SLACK_CARD_V2_INPUT_ACTION =
   /^echo-private-approval-v2-[0-9a-f]{32}-(policy|projects|share-transcript|comment)-v2$/;
+/** A V3 card's owner field; the index is the action's canonical place in the brief. */
+const SLACK_CARD_V3_OWNER_ACTION =
+  /^echo-private-approval-v2-[0-9a-f]{32}-owner-(0|[1-9][0-9]{0,2})-v3$/;
 const DISALLOWED_COMMENT_CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F]/;
 interface VerifiedSlackRequestEvidenceV1 {
   readonly body: Uint8Array;
@@ -152,10 +155,25 @@ export interface PrivateSlackApprovalResolutionIntentV2 {
   readonly lookup: PrivateSlackApprovalLookupHintsV1;
 }
 
+/** One owner field as the approver left it: the proposal, an edit, or null when cleared. */
+export interface PrivateSlackApprovalActionOwnerV3 {
+  readonly action_index: number;
+  readonly owner: string | null;
+}
+
+/** V3 is V2 plus the owner fields of a card that proposed owners (ADR-0021). */
+export interface PrivateSlackApprovalResolutionIntentV3 extends Omit<PrivateSlackApprovalResolutionIntentV2, "schema_version" | "kind"> {
+  readonly schema_version: 3;
+  readonly kind: "echo-private-approval-slack-interaction-v3";
+  /** Every owner field on the card, in action order; empty for reject. */
+  readonly action_owners: readonly PrivateSlackApprovalActionOwnerV3[];
+}
+
 export type PrivateSlackApprovalInteractionV1 =
   | PrivateSlackApprovalPresentationChangeV1
   | PrivateSlackApprovalResolutionIntentV1
-  | PrivateSlackApprovalResolutionIntentV2;
+  | PrivateSlackApprovalResolutionIntentV2
+  | PrivateSlackApprovalResolutionIntentV3;
 
 /** Deliberately generic so errors never reflect a secret or raw Slack body. */
 export class PrivateSlackApprovalInteractionError extends Error {
@@ -340,7 +358,7 @@ function canonicalComment(value: unknown): string | null {
 
 function actionValue(value: unknown): {
   readonly approval_id: string;
-  readonly schema_version: 1 | 2;
+  readonly schema_version: 1 | 2 | 3;
 } {
   if (typeof value !== "string" || value.length > 1_024) return invalid();
   let parsed: unknown;
@@ -353,7 +371,7 @@ function actionValue(value: unknown): {
     "schema_version",
     "approval_id",
   ]);
-  if (record.schema_version !== 1 && record.schema_version !== 2) return invalid();
+  if (record.schema_version !== 1 && record.schema_version !== 2 && record.schema_version !== 3) return invalid();
   return Object.freeze({
     approval_id: text(record.approval_id, IDENTIFIER),
     schema_version: record.schema_version,
@@ -438,23 +456,51 @@ function completeStateV2(input: {
   readonly state: unknown;
   readonly approval_id: string;
   readonly action: "approve" | "reject";
-}): { readonly selected_policy_id: PersonApprovalPolicyIdV2; readonly selected_project_ids: readonly string[]; readonly share_transcript: boolean; readonly comment: string | null } {
+  /** 3 accepts the owner fields of a card that proposed owners. */
+  readonly schema_version?: 2 | 3;
+}): { readonly selected_policy_id: PersonApprovalPolicyIdV2; readonly selected_project_ids: readonly string[]; readonly share_transcript: boolean; readonly comment: string | null; readonly action_owners: readonly PrivateSlackApprovalActionOwnerV3[] } {
+  const version = input.schema_version ?? 2;
   const state = exactRecord(input.state, ["values"]);
   const values = plainRecord(state.values);
   const ids = Object.values(PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V2).map((action) => privateSlackApprovalBlockKitActionIdV2(input, action));
   const blocks = Object.values(values);
+  const ownerPrefix = privateSlackApprovalBlockKitOwnerActionIdV3(input, 0).slice(0, -"0-v3".length);
+  const ownerIndex = (key: string): number | undefined => {
+    if (version !== 3 || !key.startsWith(ownerPrefix)) return undefined;
+    const index = SLACK_CARD_V3_OWNER_ACTION.exec(key)?.[1];
+    return index === undefined ? undefined : Number(index);
+  };
   // A card with no eligible projects intentionally has no static selector:
   // Slack rejects an empty option list. Its state therefore has three fields.
-  if (blocks.length < 3 || blocks.length > 4) return invalid();
+  // A V3 card adds one field per proposed owner.
+  const ownerFields = blocks.filter((block) => {
+    const keys = Object.keys(plainRecord(block));
+    return keys.length === 1 && ownerIndex(keys[0]!) !== undefined;
+  }).length;
+  if (version === 3 && (ownerFields === 0 || ownerFields > PRIVATE_SLACK_APPROVAL_OWNER_PROPOSALS_MAX_V3)) return invalid();
+  if (blocks.length - ownerFields < 3 || blocks.length - ownerFields > 4) return invalid();
   let policy: PersonApprovalPolicyIdV2 | undefined;
   let projects: readonly string[] = Object.freeze([]);
   let transcript: boolean | undefined;
   let comment: string | null | undefined;
+  const owners: PrivateSlackApprovalActionOwnerV3[] = [];
   for (const block of blocks) {
     const element = plainRecord(block);
     const keys = Object.keys(element);
-    if (keys.length !== 1 || !ids.includes(keys[0]!)) return invalid();
+    if (keys.length !== 1) return invalid();
     const key = keys[0]!;
+    const index = ownerIndex(key);
+    if (index !== undefined) {
+      const field = exactRecord(element[key], ["type", "value"]);
+      if (field.type !== "plain_text_input") return invalid();
+      if (field.value !== null && (typeof field.value !== "string" || field.value.length > 3_000)) return invalid();
+      let owner: string | null;
+      try { owner = field.value === null ? null : canonicalPrivateSlackApprovalOwnerV3(field.value); } catch { return invalid(); }
+      if (owners.some((value) => value.action_index === index)) return invalid();
+      owners.push(Object.freeze({ action_index: index, owner }));
+      continue;
+    }
+    if (!ids.includes(key)) return invalid();
     if (key === privateSlackApprovalBlockKitActionIdV2(input, "policy")) {
       const selector = exactRecord(element[key], ["type", "selected_option"]);
       if (selector.type !== "static_select") return invalid();
@@ -491,6 +537,7 @@ function completeStateV2(input: {
         : Object.freeze([]),
     share_transcript: transcript,
     comment,
+    action_owners: Object.freeze(owners.sort((left, right) => left.action_index - right.action_index)),
   });
 }
 
@@ -757,6 +804,18 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
         lookup,
       });
     }
+    if (SLACK_CARD_V3_OWNER_ACTION.test(actionId)) {
+      // Editing an owner field is a signed, content-free no-op like a comment edit.
+      if (selected.type !== "plain_text_input") return invalid();
+      return Object.freeze({
+        schema_version: 1,
+        kind: PRIVATE_SLACK_APPROVAL_INTERACTION_KIND,
+        disposition: "presentation_change",
+        action: "comment",
+        request,
+        lookup,
+      });
+    }
     if (v2InputAction === "policy" || v2InputAction === "projects" || v2InputAction === "share-transcript" || v2InputAction === "comment") {
       if (
         (v2InputAction === "policy" && selected.type !== "static_select") ||
@@ -797,8 +856,27 @@ export function parseVerifiedPrivateSlackApprovalInteractionV1(
       return invalid();
     }
     rejectionStage = "state";
+    if (card.schema_version === 3) {
+      const state = completeStateV2({ ...card, schema_version: 3, state: payload.state, action: resolutionAction });
+      return Object.freeze({
+        schema_version: 3,
+        kind: "echo-private-approval-slack-interaction-v3" as const,
+        disposition: "resolution" as const,
+        action: resolutionAction,
+        action_id: actionId,
+        approval_id: card.approval_id,
+        selected_policy_id: resolutionAction === "approve" ? state.selected_policy_id : null,
+        selected_project_ids: resolutionAction === "approve" ? state.selected_project_ids : Object.freeze([]),
+        share_transcript: resolutionAction === "approve" ? state.share_transcript : false,
+        comment: state.comment,
+        action_owners: resolutionAction === "approve" ? state.action_owners : Object.freeze([]),
+        provider_action_key_sha256: providerActionKey({ api_app_id: lookup.api_app_id, workspace_id: lookup.workspace_id, slack_user_id: lookup.slack_user_id, channel_id: lookup.channel_id, message_ts: lookup.message_ts, trigger_id: triggerId, action_ts: actionTs, action_id: actionId }),
+        request,
+        lookup,
+      });
+    }
     if (card.schema_version === 2) {
-      const state = completeStateV2({ ...card, state: payload.state, action: resolutionAction });
+      const state = completeStateV2({ ...card, schema_version: 2, state: payload.state, action: resolutionAction });
       return Object.freeze({
         schema_version: 2,
         kind: "echo-private-approval-slack-interaction-v2" as const,

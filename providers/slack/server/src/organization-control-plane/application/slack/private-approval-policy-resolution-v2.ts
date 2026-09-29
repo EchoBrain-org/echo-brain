@@ -55,3 +55,53 @@ export function validatePrivateApprovalResolutionV2(value: unknown): PrivateAppr
   if(r.canonical_record_policy!==null){ const x=privateApprovalExactRecord(r.canonical_record_policy,["policy_id","policy_contract_sha256","policy_consequence_sha256","restricted_reader","audience_project_ids","association_project_ids","share_transcript","transcript_source"],"resolution policy"); const reader=x.restricted_reader===null?null:privateApprovalAssignee(x.restricted_reader,"resolution reader"); const source=privateApprovalTranscriptSourceV1(x.transcript_source,"resolution source"); const rebuilt=privateApprovalPolicyBindingV2({policy_id:x.policy_id as never,approver:approver,audience_project_ids:x.audience_project_ids as readonly string[],association_project_ids:x.association_project_ids as readonly string[],share_transcript:x.share_transcript as boolean,transcript_source:source,policy_consequence_sha256:x.policy_consequence_sha256 as ApprovalContractSha256}); const expectedConsequence=canonicalSha256({schema_version:2,kind:"echo-private-slack-block-approval-consequence-v2",policy_id:rebuilt.policy_id,audience_project_ids:rebuilt.audience_project_ids,association_project_ids:rebuilt.association_project_ids,share_transcript:rebuilt.share_transcript,transcript_source:rebuilt.transcript_source}); if(rebuilt.policy_contract_sha256!==x.policy_contract_sha256||rebuilt.policy_consequence_sha256!==x.policy_consequence_sha256||rebuilt.policy_consequence_sha256!==expectedConsequence||((reader===null)!==(rebuilt.restricted_reader===null))||(reader!==null&&!samePrivateApprovalAssignee(reader,rebuilt.restricted_reader!))||rebuilt.policy_id!==command.selected_policy_id||rebuilt.audience_project_ids.length!==command.selected_project_ids.length||rebuilt.audience_project_ids.some((id,index)=>id!==command.selected_project_ids[index])||rebuilt.association_project_ids.length!==command.selected_project_ids.length||rebuilt.association_project_ids.some((id,index)=>id!==command.selected_project_ids[index])||rebuilt.share_transcript!==command.share_transcript)bad("resolution policy"); policy=rebuilt; }
   return Object.freeze({schema_version:2,kind:PRIVATE_APPROVAL_RESOLUTION_V2_KIND,command_id:command.command_id,...commitment,final_approver:approver,current_slack_identity_link:link(r.current_slack_identity_link,"resolution actor"),authorization_proof_sha256:r.authorization_proof_sha256,action:command.action,comment:command.comment,selected_project_ids:command.selected_project_ids,share_transcript:command.share_transcript,canonical_record_policy:policy});
 }
+
+// ---- V3: approver-confirmed action owners (ADR-0021) ------------------------
+
+export const PRIVATE_APPROVAL_RESOLUTION_V3_KIND = "echo-private-approval-resolution-v3" as const;
+/** At most this many owner fields a card offers. */
+export const PRIVATE_APPROVAL_ACTION_OWNERS_MAX_V3 = 40;
+const OWNER_MAX_CHARACTERS = 120;
+
+/** An owner field as the approver left it; null means cleared. */
+export interface PrivateApprovalActionOwnerV3 { readonly action_index:number; readonly owner:string|null }
+/** An owner the approver approved, by the action's place in the approved brief. */
+export interface PrivateApprovalConfirmedOwnerV3 { readonly action_index:number; readonly owner:string }
+export interface PrivateApprovalResolutionV3 extends Omit<PrivateApprovalResolutionV2,"schema_version"|"kind"> {
+  readonly schema_version:3; readonly kind:typeof PRIVATE_APPROVAL_RESOLUTION_V3_KIND;
+  /** Only confirmed owners; cleared fields and every reject carry none. */
+  readonly action_owners:readonly PrivateApprovalConfirmedOwnerV3[];
+}
+
+function canonicalOwner(value:unknown,label:string):string {
+  if(typeof value!=="string"||value.length===0||value.length>OWNER_MAX_CHARACTERS||value!==value.normalize("NFC").replace(/\s+/gu," ").trim()||/[\p{Cc}\p{Cf}]/u.test(value)) bad(`${label} owner invalid`);
+  return value;
+}
+
+/**
+ * The owner fields of a signed V3 action: in action order, each index once,
+ * each owner canonical or null. A reject carries none.
+ */
+export function validatePrivateApprovalActionOwnersV3(value:unknown,action:"approve"|"reject",label:string):readonly PrivateApprovalActionOwnerV3[] {
+  if(!Array.isArray(value)||value.length>PRIVATE_APPROVAL_ACTION_OWNERS_MAX_V3||(action==="reject"&&value.length!==0)) bad(`${label} owners invalid`);
+  let prior=-1;
+  return Object.freeze(value.map((item,index)=>{ const r=privateApprovalExactRecord(item,["action_index","owner"],`${label} owner ${index}`); if(!Number.isSafeInteger(r.action_index)||(r.action_index as number)<=prior||(r.action_index as number)>999) bad(`${label} owners must be ordered and unique`); prior=r.action_index as number; return Object.freeze({action_index:prior,owner:r.owner===null?null:canonicalOwner(r.owner,label)}); }));
+}
+
+/** The V2 resolution plus the owners the approver kept or entered. */
+export function privateApprovalResolutionV3(resolution:PrivateApprovalResolutionV2,owners:readonly PrivateApprovalActionOwnerV3[]):PrivateApprovalResolutionV3 {
+  const fields=validatePrivateApprovalActionOwnersV3(owners,resolution.action,"resolution V3");
+  const { schema_version:_schema, kind:_kind, ...rest }=validatePrivateApprovalResolutionV2(resolution);
+  return Object.freeze({schema_version:3,kind:PRIVATE_APPROVAL_RESOLUTION_V3_KIND,...rest,action_owners:Object.freeze(fields.filter((field):field is PrivateApprovalConfirmedOwnerV3=>field.owner!==null).map(field=>Object.freeze({action_index:field.action_index,owner:field.owner})))});
+}
+
+export function validatePrivateApprovalResolutionV3(value:unknown):PrivateApprovalResolutionV3 {
+  const r=privateApprovalExactRecord(value,["schema_version","kind","command_id","approval_id","organization_id","candidate_sha256","frozen_card_sha256","approved_snapshot_sha256","final_approver","current_slack_identity_link","authorization_proof_sha256","action","comment","selected_project_ids","share_transcript","canonical_record_policy","action_owners"],"resolution V3");
+  if(r.schema_version!==3||r.kind!==PRIVATE_APPROVAL_RESOLUTION_V3_KIND) bad("resolution V3 schema");
+  const { action_owners:owners, ...rest }=r;
+  const base=validatePrivateApprovalResolutionV2({...rest,schema_version:2,kind:PRIVATE_APPROVAL_RESOLUTION_V2_KIND});
+  const fields=validatePrivateApprovalActionOwnersV3(owners,base.action,"resolution V3");
+  if(fields.some(field=>field.owner===null)) bad("resolution V3 records only confirmed owners");
+  const { schema_version:_schema, kind:_kind, ...common }=base;
+  return Object.freeze({schema_version:3,kind:PRIVATE_APPROVAL_RESOLUTION_V3_KIND,...common,action_owners:Object.freeze(fields as readonly PrivateApprovalConfirmedOwnerV3[])});
+}

@@ -281,6 +281,20 @@ describe("SQLite private approval assignment state v1", () => {
     } finally { database.close(); }
   });
 
+  it("persists and replays a V3 rejection as V3", () => {
+    const database = fixture();
+    try {
+      const state = new SqlitePrivateSlackApprovalAssignmentStateV1(database, () => NOW);
+      state.stage(input());
+      const resolution = { ...rejection(), schema_version: 3 as const, kind: "echo-private-approval-resolution-v3" as const,
+        selected_project_ids: [], share_transcript: false, canonical_record_policy: null, action_owners: [] };
+      const first = state.recordTerminal({ candidate_id: CANDIDATE_ID, resolution });
+      expect(first.resolution).toEqual(resolution);
+      expect(new SqlitePrivateSlackApprovalAssignmentStateV1(database).readTerminal(APPROVAL_ID)?.resolution).toEqual(resolution);
+      expect(() => state.recordTerminal({ candidate_id: CANDIDATE_ID, resolution: { ...resolution, action_owners: [{ action_index: 0, owner: "Jules" }] } })).toThrow();
+    } finally { database.close(); }
+  });
+
   it("stages one immutable current-owner assignment and replays only exact input", () => {
     const database = fixture();
     try {

@@ -134,6 +134,7 @@ function modelSignal(overrides: Record<string, unknown>) {
     kind: 'decision',
     text: 'Signal',
     status: 'unresolved',
+    owner: null,
     due_at: null,
     confidence: null,
     evidence: [{ evidence_id: 'e1', quote: 'Vendor selection' }],
@@ -340,6 +341,9 @@ describe('llm decision processor extraction', () => {
     );
     expect(client.requests[0]!.systemPrompt).toContain(
       'owner-neutral task',
+    );
+    expect(client.requests[0]!.systemPrompt).toContain(
+      'Never infer an owner from who spoke',
     );
     expect(JSON.stringify(client.requests[0]!.schema)).not.toContain(
       'minItems',
@@ -615,7 +619,7 @@ describe('llm decision processor extraction', () => {
     });
   });
 
-  it('keeps an action unassigned when the transcript names a responsible participant', async () => {
+  it('keeps an action unassigned when the model proposes no owner, even if the transcript names one', async () => {
     const output = modelOutput([
       modelSignal({
         kind: 'action',
@@ -632,6 +636,54 @@ describe('llm decision processor extraction', () => {
     const result = await instance.extract(meeting, extractionContext(instance));
 
     expect(result.signals).toMatchObject([{ kind: 'action', owner: null }]);
+  });
+
+  it('keeps a proposed owner only when the cited evidence names them', async () => {
+    const action = (owner: unknown, quote = 'Zhen will send the contract by Friday') => modelSignal({
+      kind: 'action', text: 'Send the contract', owner, evidence: [{ evidence_id: 'e1', quote }],
+    });
+    const output = modelOutput([
+      action('  Zhen '),
+      action('Priya'),
+      action('Zhe'),
+      action(''),
+      action('x'.repeat(121)),
+      modelSignal({ kind: 'decision', text: 'Use vendor X for hosting', owner: 'Zhen', evidence: [{ evidence_id: 'e1', quote: 'The team agreed to use vendor X for hosting' }] }),
+    ]);
+    const instance = processor(new FakeLlmClient(output));
+    const result = await instance.extract(meeting, extractionContext(instance));
+
+    expect(result.signals.map(signal => signal.kind === 'action' ? signal.owner : 'no-owner-field')).toEqual([
+      'Zhen', null, null, null, null, 'no-owner-field',
+    ]);
+    expect(result.signals[5]).not.toHaveProperty('owner');
+  });
+
+  it('keeps a proposed owner who commits in the first person as the cited speaker', async () => {
+    const spoken = {
+      ...meeting,
+      content: [
+        ...meeting.content,
+        { id: 'transcript-2', kind: 'transcript' as const, text: "I'll send the signed copy tonight.", speaker_participant_id: 'participant-zhen' },
+        { id: 'transcript-3', kind: 'transcript' as const, text: 'Someone should send the signed copy.', speaker_participant_id: 'participant-zhen' },
+      ],
+    };
+    const output = modelOutput([
+      modelSignal({ kind: 'action', text: 'Send the signed copy', owner: 'Zhen', evidence: [{ evidence_id: 'e3', quote: "I'll send the signed copy tonight." }] }),
+      modelSignal({ kind: 'action', text: 'Send the signed copy', owner: 'Zhen', evidence: [{ evidence_id: 'e4', quote: 'Someone should send the signed copy.' }] }),
+    ]);
+    const instance = processor(new FakeLlmClient(output));
+    const result = await instance.extract(spoken, { ...extractionContext(instance), input_fingerprint: spoken.provenance.canonical_revision });
+
+    expect(result.signals.map(signal => signal.kind === 'action' ? signal.owner : undefined)).toEqual(['Zhen', null]);
+  });
+
+  it('rejects an owner that is not text or null', async () => {
+    const output = modelOutput([modelSignal({ kind: 'action', text: 'Send the contract', owner: 7, evidence: [{ evidence_id: 'e1', quote: 'Zhen will send the contract by Friday' }] })]);
+    const instance = processor(new FakeLlmClient(output));
+    await expect(instance.extract(meeting, extractionContext(instance))).rejects.toMatchObject({
+      message: 'LLM output did not match the extraction schema at stage: owner',
+    });
   });
 
   it('rejects model-supplied action attribution as an unexpected field', async () => {

@@ -389,7 +389,7 @@ function isoTime(value: unknown): string | undefined {
  * with its own id and some text, or the whole record is refused. The first 32
  * show, each with its first three distinct excerpts.
  */
-function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale'): RecordSection {
+function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale', owners: ReadonlyMap<string, string> = new Map()): RecordSection {
   const ids = new Set<string>();
   const items: RecordItem[] = [];
   const entries = list(raw);
@@ -411,9 +411,22 @@ function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale'):
       if (excerpts.length === 3) break;
     }
     const status = kind === 'decision' && (item.status === 'proposed' || item.status === 'unresolved') ? item.status : undefined;
-    items.push({ text: itemText, ...(status === undefined ? {} : { status }), excerpts });
+    const owner = kind === 'action' ? owners.get(item.id) : undefined;
+    items.push({ text: itemText, ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), excerpts });
   }
   return { items, more: entries.length > MAX_RECORD_ITEMS };
+}
+
+/** Owners the approver confirmed in the signed approval, by action id; the brief itself never has them. */
+function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
+  const owners = new Map<string, string>();
+  const entries = reference !== null && typeof reference === 'object' ? (reference as Json).action_owners : undefined;
+  for (const entry of Array.isArray(entries) ? entries.slice(0, 40) : []) {
+    const found = entry !== null && typeof entry === 'object' ? entry as Json : {};
+    const owner = sourceText(found.owner);
+    if (typeof found.signal_id === 'string' && owner !== undefined && owner.length <= 120) owners.set(found.signal_id, owner);
+  }
+  return owners;
 }
 
 /**
@@ -436,12 +449,13 @@ export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
       record.record_sha256 !== asked.record_sha256 || envelope.record_sha256 !== asked.record_sha256) {
     throw new ViewError();
   }
-  const event = object(object(envelope.body).event);
+  const body = object(envelope.body);
+  const event = object(body.event);
   if (event.kind !== 'approved' || event.policy_id !== asked.policy_id) throw new ViewError();
   const brief = object(object(object(event.approved_snapshot).approved_payload).brief);
   const meeting = object(brief.meeting);
   const decisions = recordSection(brief.decisions, 'decision');
-  const actions = recordSection(brief.actions, 'action');
+  const actions = recordSection(brief.actions, 'action', confirmedOwners(body.human_act_resolution_ref));
   const rationales = recordSection(brief.rationales, 'rationale');
 
   const participants: string[] = [];

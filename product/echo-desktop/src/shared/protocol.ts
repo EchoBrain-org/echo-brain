@@ -209,6 +209,8 @@ export interface RecordItem {
   readonly text: string;
   /** Only a decision still open says so. */
   readonly status?: 'proposed' | 'unresolved';
+  /** An action's owner, only as the approver confirmed it at approval. */
+  readonly owner?: string;
   readonly excerpts: readonly { readonly quote: string; readonly at?: string }[];
 }
 

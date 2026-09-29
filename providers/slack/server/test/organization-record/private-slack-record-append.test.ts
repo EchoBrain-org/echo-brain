@@ -6,10 +6,10 @@ import {
 } from "@echo-brain/federation-protocol";
 import { HUMAN_ACT_RECORD_INPUT_CODEC_V1, createRecordInputCodecRegistryV4, PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, projectMembersReadablePersonPolicyContractSha256 } from "@echo-brain/organization-protocol";
 import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, SIGNED_SLACK_BLOCK_ACTION_V1_KIND, buildPrivateSlackBlockApprovalRecordInputV1 } from "@echo-brain/provider-slack-server/organization-protocol/private-slack-block-approval-record-input-v1";
-import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, buildPrivateSlackBlockApprovalRecordInputV2, privateSlackBlockApprovalConsequenceV2Sha256 } from "../../src/organization-protocol/private-slack-block-approval-record-input-v2.js";
+import { PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3, PRIVATE_SLACK_BLOCK_APPROVAL_CONSEQUENCE_V2_KIND, PRIVATE_SLACK_BLOCK_APPROVAL_RESOLUTION_REF_V2_KIND, buildPrivateSlackBlockApprovalRecordInputV2, privateSlackBlockApprovalConsequenceV2Sha256, validatePrivateSlackBlockApprovalRecordInputV3 } from "../../src/organization-protocol/private-slack-block-approval-record-input-v2.js";
 import { createPrivateSlackBlockApprovalPolicyProjectorV1, type RevalidatedPrivateSlackBlockApprovalAuthorizationWitnessV1 } from "@echo-brain/provider-slack-server/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v1";
-import { createPrivateSlackBlockApprovalPolicyProjectorV2, projectPrivateSlackBlockApprovalApproverV2 } from "../../src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.js";
-import { resolvePrivateApprovalPolicyV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
+import { createPrivateSlackBlockApprovalPolicyProjectorV2, createPrivateSlackBlockApprovalPolicyProjectorV3, projectPrivateSlackBlockApprovalApproverV2 } from "../../src/organization-record/adapters/record-policy-projection/slack/private-slack-block-approval-policy-projector-v2.js";
+import { privateApprovalResolutionV3, resolvePrivateApprovalPolicyV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import { createPrivateSlackBlockV4RecordWriterV1 } from "../../src/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js";
 import { describe, expect, it } from "vitest";
 import {
@@ -47,11 +47,12 @@ import {
 } from "../../../../../packages/organization-record/src/retrieve/record-retrieval-source-snapshot-v1.js";
 import { COORDINATES, database, humanAct, policy, processorProvenance, protocolAuthority, receiptFactory, sourceProvenance, type ProtocolAuthority } from "../../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 
-const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2]);
+const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([HUMAN_ACT_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2, PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V3]);
 const PRIVATE_APPROVAL_PROJECTORS = createRecordPolicyFactProjectorRegistryV1([
   createPersonPolicyFactProjectorV2(),
   createPrivateSlackBlockApprovalPolicyProjectorV1(),
   createPrivateSlackBlockApprovalPolicyProjectorV2(),
+  createPrivateSlackBlockApprovalPolicyProjectorV3(),
 ]);
 
 function privateApprovalAppend(
@@ -349,6 +350,48 @@ describe("Private Slack V4 record append", () => {
         audience_project_ids: [project.project_id],
         association_project_ids: [project.project_id],
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("records only confirmed owners through the actual writer, grants what V2 grants, and makes them searchable", async () => {
+    const db = database();
+    try {
+      const authority = protocolAuthority();
+      const approval_id = "apr_resolver_writer_v3";
+      const snapshot = (humanAct(approval_id, "approve", RESTRICTED_REVIEWER_PERSON_POLICY_ID, 1, { decisions: 1, actions: 2 }).event as Extract<HumanActEventV1, { kind: "approved" }>).approved_snapshot;
+      const approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(snapshot);
+      const transcript_source = { source_id: "source_resolver_writer_v3", revision_id: "revision_resolver_writer_v3", source_sha256: sha256Digest("source-resolver-writer-v3") };
+      const owner = { principal_id: "principal-resolver-writer", membership_id: "membership-resolver-writer" };
+      const link = { provider: "slack" as const, external_identity_link_id: "clm_resolver_writer_v3", external_identity_link_contract_sha256: sha256Digest("link-resolver-writer-v3"), provider_subject_id: "U123" };
+      const pending = { schema_version: 2 as const, kind: "echo-private-approval-pending-v2" as const, approval_id, organization_id: COORDINATES.organization_id, candidate_sha256: sha256Digest("candidate-resolver-writer-v3"), frozen_card_sha256: sha256Digest("card-resolver-writer-v3"), approved_snapshot_sha256, assigned_owner: owner, assigned_owner_slack_identity_link: link, eligible_projects: [], transcript_source };
+      const authorization_allow = { schema_version: 2 as const, kind: "echo-private-approval-authorization-allow-v2" as const, approval_id, organization_id: COORDINATES.organization_id, candidate_sha256: pending.candidate_sha256, frozen_card_sha256: pending.frozen_card_sha256, approved_snapshot_sha256, authorized_assignee: owner, current_slack_identity_link: link, authorization_proof_sha256: sha256Digest("proof-resolver-writer-v3") };
+      const v2 = resolvePrivateApprovalPolicyV2({ pending, command: { schema_version: 2, command_id: "command-resolver-writer-v3", approval_id, action: "approve", selected_policy_id: "organization-member-readable-person-v2", selected_project_ids: [], share_transcript: false, comment: null }, authorization_allow, selected_projects_current: [] });
+      const writerFor = async (envelope: string) => createPrivateSlackBlockV4RecordWriterV1({
+        append: new OrganizationRecordAppenderV4(db, COORDINATES, PRIVATE_APPROVAL_PROJECTORS),
+        signer: { inspect: async () => resolvePinnedOrganizationAuthority(authority.pinned), sign: authority.sign },
+        state_lineage_id: COORDINATES.state_lineage_id, now: () => "2026-08-21T12:04:00.000Z", next_envelope_id: () => envelope,
+      });
+      const candidate = { ...COORDINATES, approval_id, candidate_sha256: pending.candidate_sha256, frozen_card_sha256: pending.frozen_card_sha256, approved_snapshot: snapshot, approved_snapshot_sha256, source_provenance: sourceProvenance(), processor_provenance: processorProvenance() };
+      const terminal = (owners: readonly { action_index: number; owner: string | null }[]) => ({ outcome: "approved" as const, signed_action_receipt_sha256: sha256Digest("signed-action-resolver-writer-v3"), resolution: privateApprovalResolutionV3(v2, owners), audit: { audit_event_id: "audit-resolver-writer-v3", audit_sequence: 1, approval_id, outcome: "approved" as const } });
+
+      // A place outside the frozen brief cannot name an action: nothing is appended.
+      await expect((await writerFor("envelope-resolver-writer-v3-bad")).appendApprovedV2(terminal([{ action_index: 2, owner: "Jules" }]), candidate)).rejects.toThrow("names no approved action");
+      await expect((await writerFor("envelope-resolver-writer-v3")).appendApprovedV2(terminal([{ action_index: 0, owner: null }, { action_index: 1, owner: "Jules" }]), candidate)).resolves.toMatchObject({ outcome: "appended", position: 1 });
+
+      const stored = JSON.parse((db.prepare("SELECT canonical_envelope FROM organization_record_log WHERE position = 1").get() as { canonical_envelope: string }).canonical_envelope);
+      expect(stored.body.human_act_resolution_ref).toMatchObject({ schema_version: 3, kind: "echo-private-slack-block-approval-resolution-ref-v3", action_owners: [{ signal_id: `action-${approval_id}-1`, owner: "Jules" }] });
+      expect(stored.body.event.approved_snapshot.approved_payload.brief.actions.map((action: { owner: unknown }) => action.owner)).toEqual([null, null]);
+      expect(projectPrivateSlackBlockApprovalApproverV2(stored)).toMatchObject({ approval_id, principal_id: owner.principal_id });
+      // The V3 input refuses a snapshot that itself carries an owner.
+      const withOwner = structuredClone(stored.body.event); withOwner.approved_snapshot.approved_payload.brief.actions[1].owner = "Mallory"; withOwner.approved_snapshot_sha256 = approvedDecisionSnapshotV2Sha256(withOwner.approved_snapshot);
+      expect(() => validatePrivateSlackBlockApprovalRecordInputV3({ private_slack_block_approval_resolution_ref_v3: { ...stored.body.human_act_resolution_ref, approved_snapshot_sha256: withOwner.approved_snapshot_sha256 }, event: withOwner })).toThrow();
+
+      const snapshotPort = new RecordRetrievalSourceSnapshotPortV1(db).snapshot({ ...COORDINATES, policy_projectors: PRIVATE_APPROVAL_PROJECTORS,
+        verify_envelope: value => verifyOrganizationRecordEnvelopeV4(value, authority.pinned, COORDINATES.state_lineage_id, RECORD_INPUT_CODECS) as unknown as RecordRetrievalSourceVerifiedEnvelopeV1 });
+      expect(snapshotPort.atoms.map(atom => atom.text)).toEqual(["Decision 0", "Action 0", "Action 1 Owner: Jules."]);
+      expect(snapshotPort.atoms.every(atom => atom.policy_id === "organization-member-readable-person-v2")).toBe(true);
     } finally {
       db.close();
     }

@@ -237,6 +237,19 @@ describe('an approved record shows only what the source pane needs', () => {
     expect(JSON.stringify(view)).not.toContain('private@example.test');
   });
 
+  it('shows an action owner only as the approver confirmed it in the signed approval', () => {
+    const view = recordView(reply({
+      actions: [item('action', 'a1', 'Send the quote.', { owner: 'Unconfirmed proposal' }), item('action', 'a2', 'Book the venue.')],
+    }, record => {
+      const body = (record.envelope as { body: Record<string, unknown> }).body;
+      body.human_act_resolution_ref = { action_owners: [{ signal_id: 'a2', owner: 'Priya Shah' }, { signal_id: 'd9', owner: 'Nobody' }] };
+    }), asked);
+    expect(view.actions.items).toEqual([
+      { text: 'Send the quote.', excerpts: [] },
+      { text: 'Book the venue.', owner: 'Priya Shah', excerpts: [] },
+    ]);
+  });
+
   it('shows at most 2,000 characters of any text, 32 items a section and 32 participants', () => {
     const decisions = Array.from({ length: 33 }, (_, index) => item('decision', `d${index}`, index === 0 ? 'x'.repeat(2_001) : `Decision ${index}`));
     const participants = Array.from({ length: 40 }, (_, index) => ({ id: `p${index}`, display_name: `Person ${index}` }));
