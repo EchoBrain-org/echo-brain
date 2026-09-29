@@ -2,11 +2,12 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, CreatedProject, DocumentPage,
+  Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, CreatedProject, DocumentPage,
   DocumentSummary, DocumentText, Employee, Employees, Extraction, Failure, FeedItem, FeedPage, InvitationSaved, Match, Matches, Member, MemberPage,
   ProjectChange, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   WriteStatus,
 } from '../shared/protocol.js';
+import { slackPermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
 
@@ -318,7 +319,7 @@ function sourceRef(citation: Json): SourceRef {
 }
 
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
-const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['organization-member-readable-person-v2', 'restricted-reviewer-person-v2']);
+const POLICIES: ReadonlySet<string> = new Set<RecordPolicy>(['organization-member-readable-person-v2', 'restricted-reviewer-person-v2', 'project-members-readable-person-v1']);
 
 /** A record the page may ask the host to read: a well-formed digest and a known policy. */
 export function isRecordRef(value: unknown): value is RecordRef {
@@ -328,38 +329,69 @@ export function isRecordRef(value: unknown): value is RecordRef {
 }
 
 /**
- * An answer and what it is based on, in the answer's order, each source once:
- * an approved record by its digest and policy, an original by its revision
- * and anchor. Labels are "Approved record 1", or the original's own label
- * ("Original source 2" without one).
+ * An Agentic Ask answer (V4, the only Ask since ADR-0022): its statements,
+ * each with the exact sources that support it, in the answer's order. An
+ * approved record is kept by its digest and policy, an original by its
+ * revision and anchor, a live Slack message by its permalink; a source
+ * without a label is "Evidence n".
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const value = object(unwrap(raw));
-  if (value.kind !== 'echo-clean-person-answer-v3') throw new ViewError();
-  const sources: AnswerSource[] = [];
-  const seen = new Set<string>();
-  for (const entry of list(value.citations)) {
-    const citation = object(entry);
-    const place = sources.length + 1;
-    if (citation.kind === 'approved_record') {
-      const record = { record_sha256: citation.record_sha256, policy_id: citation.policy_id };
-      if (!isRecordRef(record)) throw new ViewError();
-      const key = `record|${record.record_sha256}|${record.policy_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      sources.push({ kind: 'record', label: `Approved record ${place}`, record });
-    } else if (citation.kind === 'source_revision') {
-      const ref = sourceRef(citation);
-      const key = `original|${ref.source_id}|${ref.revision_id}|${ref.anchor_sha256}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const label = optionalText(citation.label)?.trim();
-      sources.push({ kind: 'original', label: label ? label : `Original source ${place}`, ref });
-    } else {
-      throw new ViewError();
-    }
+  if (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4') throw new ViewError();
+  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`));
+  const direct = value.direct === undefined ? undefined : v4Statement(value.direct, sources.length);
+  const parts = list(value.parts).map(part => v4Part(part, sources.length));
+  if (parts.length === 0) throw new ViewError();
+  const outcome = value.outcome;
+  if (outcome !== 'answered' && outcome !== 'partial' && outcome !== 'not_found' && outcome !== 'off_scope') throw new ViewError();
+  const assumption = optionalText(value.assumption);
+  const notice = optionalText(value.notice);
+  // One part answers the question itself, so its question is not repeated.
+  const single = parts.length === 1;
+  const textValue = [direct?.text, ...parts.flatMap(part => [single ? undefined : part.question, ...part.statements.map(statement => statement.text),
+    ...(part.records?.map(record => record.text) ?? []), part.gap])]
+    .filter((line): line is string => typeof line === 'string' && line !== '').join('\n');
+  return { text: textValue, scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome,
+    ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }) };
+}
+
+function v4Source(raw: unknown, fallback: string): AnswerSource {
+  const item = object(raw);
+  const citation = object(item.citation);
+  const label = text(item.label);
+  if (citation.kind === 'approved_record') {
+    const record = { record_sha256: citation.record_sha256, policy_id: citation.policy_id };
+    if (!isRecordRef(record)) throw new ViewError();
+    return { kind: 'record', label: label || fallback, record };
   }
-  return { text: text(value.answer), scope, sources };
+  if (citation.kind === 'source_revision') return { kind: 'original', label: label || fallback, ref: sourceRef(citation) };
+  if (citation.kind === 'slack_message') {
+    const permalink = slackPermalink(citation.permalink);
+    if (permalink === null) throw new ViewError();
+    return { kind: 'slack', label: label || fallback, permalink };
+  }
+  throw new ViewError();
+}
+
+function v4Statement(raw: unknown, sourceCount: number): AnswerStatement {
+  const item = object(raw);
+  if (typeof item.private !== 'boolean') throw new ViewError();
+  const indexes = list(item.citation_indexes).map(value => {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value >= sourceCount) throw new ViewError();
+    return value;
+  });
+  if (indexes.length === 0 || new Set(indexes).size !== indexes.length) throw new ViewError();
+  return { text: text(item.text), citation_indexes: indexes, private: item.private };
+}
+
+function v4Part(raw: unknown, sourceCount: number): AnswerPart {
+  const item = object(raw);
+  const status = item.status;
+  if (status !== 'answered' && status !== 'partial' && status !== 'not_found' && status !== 'records_only') throw new ViewError();
+  const gap = optionalText(item.gap);
+  const records = item.records === undefined ? undefined : list(item.records).map(value => v4Statement(value, sourceCount));
+  return { question: text(item.question), status, statements: list(item.statements).map(value => v4Statement(value, sourceCount)),
+    ...(gap === undefined ? {} : { gap }), ...(records === undefined ? {} : { records }) };
 }
 
 /** Longest text the source pane shows, in characters; longer is cut and marked. */
@@ -389,7 +421,7 @@ function isoTime(value: unknown): string | undefined {
  * with its own id and some text, or the whole record is refused. The first 32
  * show, each with its first three distinct excerpts.
  */
-function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale'): RecordSection {
+function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale', owners: ReadonlyMap<string, string> = new Map()): RecordSection {
   const ids = new Set<string>();
   const items: RecordItem[] = [];
   const entries = list(raw);
@@ -411,9 +443,22 @@ function recordSection(raw: unknown, kind: 'decision' | 'action' | 'rationale'):
       if (excerpts.length === 3) break;
     }
     const status = kind === 'decision' && (item.status === 'proposed' || item.status === 'unresolved') ? item.status : undefined;
-    items.push({ text: itemText, ...(status === undefined ? {} : { status }), excerpts });
+    const owner = kind === 'action' ? owners.get(item.id) : undefined;
+    items.push({ text: itemText, ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), excerpts });
   }
   return { items, more: entries.length > MAX_RECORD_ITEMS };
+}
+
+/** Owners the approver confirmed in the signed approval, by action id; the brief itself never has them. */
+function confirmedOwners(reference: unknown): ReadonlyMap<string, string> {
+  const owners = new Map<string, string>();
+  const entries = reference !== null && typeof reference === 'object' ? (reference as Json).action_owners : undefined;
+  for (const entry of Array.isArray(entries) ? entries.slice(0, 40) : []) {
+    const found = entry !== null && typeof entry === 'object' ? entry as Json : {};
+    const owner = sourceText(found.owner);
+    if (typeof found.signal_id === 'string' && owner !== undefined && owner.length <= 120) owners.set(found.signal_id, owner);
+  }
+  return owners;
 }
 
 /**
@@ -436,12 +481,13 @@ export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
       record.record_sha256 !== asked.record_sha256 || envelope.record_sha256 !== asked.record_sha256) {
     throw new ViewError();
   }
-  const event = object(object(envelope.body).event);
+  const body = object(envelope.body);
+  const event = object(body.event);
   if (event.kind !== 'approved' || event.policy_id !== asked.policy_id) throw new ViewError();
   const brief = object(object(object(event.approved_snapshot).approved_payload).brief);
   const meeting = object(brief.meeting);
   const decisions = recordSection(brief.decisions, 'decision');
-  const actions = recordSection(brief.actions, 'action');
+  const actions = recordSection(brief.actions, 'action', confirmedOwners(body.human_act_resolution_ref));
   const rationales = recordSection(brief.rationales, 'rationale');
 
   const participants: string[] = [];
@@ -466,7 +512,7 @@ export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
     all_day: time.all_day === true,
     ...(approver === undefined ? {} : { approved_by: approver }),
     participants, participants_more: participantsMore,
-    visibility: asked.policy_id === 'organization-member-readable-person-v2' ? 'organization' : 'approver',
+    visibility: asked.policy_id === 'restricted-reviewer-person-v2' ? 'approver' : 'organization',
     decisions, actions, rationales,
   };
 }

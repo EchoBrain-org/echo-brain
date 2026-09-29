@@ -1204,12 +1204,18 @@ export interface ReadableSearchResultItemV1 {
   readonly item_kind: ReadableSearchAtomV1["item_kind"];
   readonly text: string;
   readonly policy_id: ReadableSearchPolicyIdV1;
+  /** Immutable coordinates retained for desk-only record presentation. */
+  readonly atom_order?: number;
+  /** Immutable audience fact, never inferred from the current reader. */
+  readonly audience_project_count?: number;
 }
 
 export interface ReadableSearchResultV1 {
   readonly generation_id: Sha256Digest;
   readonly exact_head: ReadableSearchExactHeadV1;
   readonly items: readonly ReadableSearchResultItemV1[];
+  /** There were further admitted rows after the caller's requested cap. */
+  readonly truncated?: boolean;
 }
 
 export interface SearchReadableSearchGenerationV1Input {
@@ -1221,6 +1227,33 @@ export interface SearchReadableSearchGenerationV1Input {
   readonly project_id?: string;
   /** Defaults to 10 and is deliberately bounded to the V1 response ceiling. */
   readonly limit?: number;
+  /** Desk-only kind narrowing, applied before relevance slicing. */
+  readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
+}
+
+/**
+ * Metadata-only discovery over the already warmed immutable generation.  The
+ * Authority caller still supplies the current reader and optional strict
+ * project scope; this helper never opens the record log or an Authority DB.
+ */
+export interface ListReadableSearchGenerationV1Input {
+  readonly state_directory: string;
+  readonly active_generation: ReadableSearchActiveGenerationV1;
+  readonly reader: ReadableSearchReaderV1;
+  readonly project_id?: string;
+  /** Deliberately larger than search, but bounded for an evidence inventory. */
+  readonly limit?: number;
+  /** Desk-only kind narrowing, applied before inventory slicing. */
+  readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
+}
+
+/** Opens named immutable atoms after Authority has accepted their coordinates. */
+export interface ReadReadableSearchGenerationAtomsV1Input {
+  readonly state_directory: string;
+  readonly active_generation: ReadableSearchActiveGenerationV1;
+  readonly reader: ReadableSearchReaderV1;
+  readonly project_id?: string;
+  readonly atom_ids: readonly Sha256Digest[];
 }
 
 /** Expands direct, already-authorized related facts from at most three anchors. */
@@ -1274,6 +1307,27 @@ interface ReadableSearchContentRow {
   readonly text_sha256: Sha256Digest;
   readonly content_binding_sha256: Sha256Digest;
   readonly provenance_binding_sha256: Sha256Digest;
+}
+
+function resultItem(
+  fact: ReadableSearchFactRow,
+  content: ReadableSearchContentRow,
+): ReadableSearchResultItemV1 {
+  let audience: unknown;
+  try { audience = JSON.parse(fact.audience_project_ids_json); } catch { throw new Error("readable-search audience projects are invalid"); }
+  if (!Array.isArray(audience) || !audience.every((value) => typeof value === "string"))
+    throw new Error("readable-search audience projects are invalid");
+  return Object.freeze({
+    atom_id: fact.atom_id,
+    record_position: fact.log_position,
+    record_sha256: fact.record_hash,
+    envelope_sha256: fact.envelope_sha256,
+    item_kind: content.item_kind,
+    text: content.text,
+    policy_id: fact.policy_id,
+    atom_order: fact.atom_order,
+    audience_project_count: audience.length,
+  });
 }
 
 interface ReadableSearchLexicalDocumentRow {
@@ -2210,17 +2264,7 @@ function validateAndWarmReadableSearchGenerationV1(
     generation_id: manifest.generation_id,
     exact_head: manifest.exact_head,
     items: Object.freeze(
-      candidates.slice(0, limit).map((candidate) =>
-        Object.freeze({
-          atom_id: candidate.fact.atom_id,
-          record_position: candidate.fact.log_position,
-          record_sha256: candidate.fact.record_hash,
-          envelope_sha256: candidate.fact.envelope_sha256,
-          item_kind: candidate.content.item_kind,
-          text: candidate.content.text,
-          policy_id: candidate.fact.policy_id,
-        }),
-      ),
+      candidates.slice(0, limit).map((candidate) => resultItem(candidate.fact, candidate.content)),
     ),
   });
 }
@@ -2293,17 +2337,7 @@ export function expandReadableSearchRelatedAtomsV1(
   const select = (candidate: RelatedCandidate): void => {
     if (items.length === limit || expanded.has(candidate.fact.atom_id)) return;
     expanded.add(candidate.fact.atom_id);
-    items.push(
-      Object.freeze({
-        atom_id: candidate.fact.atom_id,
-        record_position: candidate.fact.log_position,
-        record_sha256: candidate.fact.record_hash,
-        envelope_sha256: candidate.fact.envelope_sha256,
-        item_kind: candidate.content.item_kind,
-        text: candidate.content.text,
-        policy_id: candidate.fact.policy_id,
-      }),
-    );
+    items.push(resultItem(candidate.fact, candidate.content));
   };
   for (const anchor of input.anchor_atom_ids) {
     const segment = segmentsByAnchor.get(anchor);
@@ -2392,7 +2426,9 @@ export function searchReadableSearchGenerationV1(
     input.reader,
     input.project_id,
   );
-  const candidates = scoreAdmittedCandidates(admitted, terms);
+  const candidates = scoreAdmittedCandidates(admitted, terms).filter((candidate) =>
+    input.kinds === undefined || input.kinds.includes(candidate.content.item_kind),
+  );
   candidates.sort((left, right) =>
     compareReadableSearchCandidates(
       {
@@ -2413,19 +2449,76 @@ export function searchReadableSearchGenerationV1(
     generation_id: handle.manifest.generation_id,
     exact_head: handle.manifest.exact_head,
     items: Object.freeze(
-      candidates.slice(0, limit).map(({ fact, content }) =>
-        Object.freeze({
-          atom_id: fact.atom_id,
-          record_position: fact.log_position,
-          record_sha256: fact.record_hash,
-          envelope_sha256: fact.envelope_sha256,
-          item_kind: content.item_kind,
-          text: content.text,
-          policy_id: fact.policy_id,
-        }),
-      ),
+      candidates.slice(0, limit).map(({ fact, content }) => resultItem(fact, content)),
     ),
+    truncated: candidates.length > limit,
   });
+}
+
+/**
+ * Lists readable atoms without scoring their body text.  It is intentionally
+ * separate from search: callers may use the returned immutable coordinates to
+ * present an inventory, but must not infer the existence of atoms outside the
+ * reader's current audience and strict project association.
+ */
+export function listReadableSearchGenerationV1(
+  input: ListReadableSearchGenerationV1Input,
+): ReadableSearchResultV1 {
+  text(input.reader.principal_id, "reader principal_id");
+  text(input.reader.membership_id, "reader membership_id");
+  readerProjectIds(input.reader);
+  const limit = input.limit ?? 50;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)
+    throw new Error("readable-search inventory limit must be a safe integer from one through fifty");
+  const handle = validatedActiveGenerationHandleV1;
+  if (
+    handle === null ||
+    handle.key !== activeGenerationKey(input.active_generation)
+  )
+    throw new Error("readable-search engine active-generation handle is unavailable");
+  const admitted = scopedSegments(
+    handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
+    input.reader,
+    input.project_id,
+  );
+  const candidates: { readonly fact: ReadableSearchFactRow; readonly content: ReadableSearchContentRow }[] = [];
+  for (const segment of admitted) {
+    for (const fact of segment.facts) {
+      const content = segment.content_by_atom.get(fact.atom_id);
+      if (content !== undefined && (input.kinds === undefined || input.kinds.includes(content.item_kind))) candidates.push({ fact, content });
+    }
+  }
+  candidates.sort((left, right) =>
+    right.fact.log_position - left.fact.log_position ||
+    left.fact.atom_order - right.fact.atom_order ||
+    left.fact.atom_id.localeCompare(right.fact.atom_id),
+  );
+  return Object.freeze({
+    generation_id: handle.manifest.generation_id,
+    exact_head: handle.manifest.exact_head,
+    items: Object.freeze(candidates.slice(0, limit).map(({ fact, content }) => resultItem(fact, content))),
+    truncated: candidates.length > limit,
+  });
+}
+
+export function readReadableSearchGenerationAtomsV1(
+  input: ReadReadableSearchGenerationAtomsV1Input,
+): ReadableSearchResultV1 {
+  text(input.reader.principal_id, "reader principal_id");
+  text(input.reader.membership_id, "reader membership_id");
+  readerProjectIds(input.reader);
+  if (!Array.isArray(input.atom_ids) || input.atom_ids.length < 1 || input.atom_ids.length > 10 || new Set(input.atom_ids).size !== input.atom_ids.length) throw new Error("readable-search atom read requires one through ten unique atoms");
+  for (const atomId of input.atom_ids) validDigest(atomId, "readable-search atom id");
+  const handle = validatedActiveGenerationHandleV1;
+  if (handle === null || handle.key !== activeGenerationKey(input.active_generation)) throw new Error("readable-search engine active-generation handle is unavailable");
+  const admitted = scopedSegments(handle.segments.filter((segment) => admittedSegment(segment, input.reader)), input.reader, input.project_id);
+  const byAtom = new Map<Sha256Digest, ReadableSearchResultItemV1>();
+  for (const segment of admitted) for (const atomId of input.atom_ids) {
+    const fact = segment.facts_by_atom.get(atomId);
+    const content = segment.content_by_atom.get(atomId);
+    if (fact !== undefined && content !== undefined) byAtom.set(atomId, resultItem(fact, content));
+  }
+  return Object.freeze({ generation_id: handle.manifest.generation_id, exact_head: handle.manifest.exact_head, items: Object.freeze(input.atom_ids.flatMap((atomId) => { const item = byAtom.get(atomId); return item === undefined ? [] : [item]; })) });
 }
 
 export {

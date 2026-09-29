@@ -101,12 +101,13 @@ not claim that the employee is currently online or has a live device session.
 
 ## Account and answer Sources
 
-The [global/project Ask extension](../features/global-project-ask-v1.md) uses
-the versioned `/v2/person/ask` transport and typed schema-3 citations. Global
+Ask is the agentic `/v3/person/ask` route with V4 answers
+([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md)); the earlier `/v1` and
+`/v2/person/ask` routes are retired. It keeps the
+[global/project Ask](../features/global-project-ask-v1.md) scope rules: global
 scope includes authorized originals and approved records; explicit project
 scope is restricted to readable associated context. Uploaded sources remain
-unapproved evidence. The `/v1/person/ask` endpoint retains its legacy
-approved-record-only contract. The source-card behavior below describes approved
+unapproved evidence. The source-card behavior below describes approved
 records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
@@ -223,11 +224,10 @@ retry; no local queue or automatic upload exists.
 
 The current bounded text carrier does not decide the context taxonomy. Optional
 LLM search hints remain derived metadata. Uploads never become approved
-decision records; `person records` and the legacy `/v1/person/ask` read approved
-records only. The `/v2/person/ask` route behind `person ask` also retrieves
-authorized uploads and usable document extraction as unapproved original
-evidence, filtered by stored audience and, for project scope, project
-association
+decision records; `person records` reads approved records only. The
+`/v3/person/ask` route behind `person ask` also retrieves authorized uploads
+and usable document extraction as unapproved original evidence, filtered by
+stored audience and, for project scope, project association
 ([ADR-0015](../decisions/ADR-0015-global-and-project-scoped-person-ask.md)).
 Generic source admission alone grants no access to raw meeting snapshots or
 pending approvals. See the

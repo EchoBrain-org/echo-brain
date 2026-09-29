@@ -89,14 +89,15 @@ async function open(state_directory) {
     },
     owner: identity.owner, employee: identity.employee, sessions: identity.sessions,
   });
-  reads = createCoreReadRoutes({ state_directory, sessions: identity.sessions });
+  const record_input_codecs = createRecordInputCodecRegistryV4([
+    HUMAN_ACT_RECORD_INPUT_CODEC_V1,
+    PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1,
+    PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2,
+  ]);
+  reads = createCoreReadRoutes({ state_directory, sessions: identity.sessions, record_input_codecs });
   const search = createReadableSearchGenerationReconcilerV1({
     state_directory, root, authority, record, signer,
-    record_input_codecs: createRecordInputCodecRegistryV4([
-      HUMAN_ACT_RECORD_INPUT_CODEC_V1,
-      PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V1,
-      PRIVATE_SLACK_BLOCK_APPROVAL_RECORD_INPUT_CODEC_V2,
-    ]),
+    record_input_codecs,
     policy_projectors: projectors, related_atom_projector: reads.related_atom_projector,
   });
   const source = new AdmittedMeetingProcessingCycleV1({
@@ -152,7 +153,7 @@ async function command(message) {
     }
     case "status": return status(message.approval_id);
     case "search": return reads.search.search({ access_token: identity[message.actor].access_token, query: message.query });
-    case "answer": return reads.answer.ask({ access_token: identity[message.actor].access_token, question: message.question });
+    case "answer": return reads.answer.ask({ access_token: identity[message.actor].access_token, request: { schema_version: 3, question: message.question } });
     case "drain":
       await runtime.drain(AbortSignal.timeout(30_000));
       if (workerError) throw new Error(`core worker failed: ${workerError.message}`);

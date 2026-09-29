@@ -16,6 +16,7 @@ decision_ids:
   - ADR-0010
   - ADR-0015
   - ADR-0017
+  - ADR-0019
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, and the Layer 4 request-local release and citation boundary
@@ -67,11 +68,21 @@ and the exact content policy, binds Layer 2 to an exact generation and record
 head, rechecks the caller at the release fence, commits the minimized response
 digest, and only then returns the audited bytes. Missing, stale, mismatched, or
 non-Person authority MUST release no content. Search construction MUST NOT be
-triggered by a query. Layer 4 is limited to one plan, one Layer 3 batch, and at
-most one answer call; it receives no lower-layer handles and may pass citations
+triggered by a query. For the V1 and V2 routes, Layer 4 is limited to one plan, one Layer 3 batch,
+and at most one answer call; it receives no lower-layer handles and may pass citations
 only after checking that they are a subset of the batch release. Planner or
 answer-model failure, malformed model output, or an invalid citation MUST stop
 the request without releasing an answer.
+
+ADR-0019 permits the V3 route to make bounded desk calls and at most twelve
+model calls, including repairs, in one request. The desk pins the record
+snapshot or fixes an explicitly original-only mode when the index starts
+behind. Every desk release is audited before bytes leave Layer 3. Revalidate
+all released items and metadata, including the upcoming model input, before
+each model call and final response. Malformed output permits one repair within
+the hard budget and then a deterministic cited-evidence fallback. Unknown or
+out-of-part citations never establish support. Authorization, audit, snapshot
+and cancellation failures release no answer. V1 and V2 remain unchanged.
 
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
 Both original and approved-record citations bind the exact released evidence.

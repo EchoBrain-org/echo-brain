@@ -75,6 +75,10 @@ export const JOURNEY_OUTCOMES_V1 = Object.freeze([
   "answered",
   "insufficient_evidence",
   "authorship_unsupported",
+  // Agentic Ask (RFC-0003) V4 outcomes.
+  "partial",
+  "not_found",
+  "off_scope",
   "actionable",
   "no_signals",
   "coalesced",
@@ -302,12 +306,16 @@ const STAGES_BY_WORKFLOW = Object.freeze({
       "meeting_search_publication",
     ] as const),
   } satisfies Readonly<Record<JourneyWorkflowV1, readonly JourneyStageV1[]>>);
-const TERMINAL_OUTCOMES = Object.freeze({
+/** The outcomes each stage may close with; the staging Explorer must accept every one. */
+export const JOURNEY_TERMINAL_OUTCOMES_V1 = Object.freeze({
     ask_response: Object.freeze([
       "answered",
       "insufficient_evidence",
       "authorship_unsupported",
       "completed",
+      "partial",
+      "not_found",
+      "off_scope",
     ] as const),
     meeting_candidate_persist: Object.freeze(["actionable", "no_signals", "coalesced"] as const),
     meeting_approval_staging: Object.freeze([
@@ -506,7 +514,7 @@ function normalizeOutcome(
     return null;
   }
   const allowed = (
-    TERMINAL_OUTCOMES as Readonly<
+    JOURNEY_TERMINAL_OUTCOMES_V1 as Readonly<
       Partial<Record<JourneyStageV1, readonly JourneyOutcomeV1[]>>
     >
   )[stage];

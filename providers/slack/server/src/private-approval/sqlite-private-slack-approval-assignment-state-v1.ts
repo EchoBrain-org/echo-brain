@@ -8,7 +8,7 @@ import {
 } from "@echo-brain/organization-protocol";
 import { type ApprovalContractSha256, type PrivateApprovalAssigneeV1 } from "../organization-control-plane/slack-approval-integration-v1.js";
 import { validatePrivateApprovalResolutionV1, type PrivateApprovalResolutionV1, type PrivateApprovalSlackIdentityLinkV1 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v1.js";
-import { validatePendingPrivateApprovalV2, validatePrivateApprovalResolutionV2, type PendingPrivateApprovalV2, type PrivateApprovalResolutionV2 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
+import { validatePendingPrivateApprovalV2, validatePrivateApprovalResolutionV2, validatePrivateApprovalResolutionV3, type PendingPrivateApprovalV2, type PrivateApprovalResolutionV2, type PrivateApprovalResolutionV3 } from "../organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import type Database from "better-sqlite3";
 import type { PrivateSlackApprovalReviewerTargetV1 } from "./resolve-private-slack-approval-reviewer-target-v1.js";
 
@@ -27,10 +27,13 @@ const SLACK_MESSAGE_TIMESTAMP = /^[0-9]{1,16}\.[0-9]{1,9}$/;
 
 type Digest = ApprovalContractSha256;
 type UnknownRecord = Record<string, unknown>;
-type PrivateApprovalResolution = PrivateApprovalResolutionV1 | PrivateApprovalResolutionV2;
+type PrivateApprovalResolution = PrivateApprovalResolutionV1 | PrivateApprovalResolutionV2 | PrivateApprovalResolutionV3;
 
 function validateTerminalResolution(value: unknown): PrivateApprovalResolution {
-  return value !== null && typeof value === "object" && "schema_version" in value && value.schema_version === 2
+  const version = value !== null && typeof value === "object" && "schema_version" in value ? value.schema_version : undefined;
+  return version === 3
+    ? validatePrivateApprovalResolutionV3(value)
+    : version === 2
     ? validatePrivateApprovalResolutionV2(value)
     : validatePrivateApprovalResolutionV1(value);
 }

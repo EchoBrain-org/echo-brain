@@ -178,7 +178,7 @@ export interface SourceRef {
 }
 
 /** Who may read an approved record: the organization's members, or its reviewer only. */
-export type RecordPolicy = 'organization-member-readable-person-v2' | 'restricted-reviewer-person-v2';
+export type RecordPolicy = 'organization-member-readable-person-v2' | 'restricted-reviewer-person-v2' | 'project-members-readable-person-v1';
 
 /** An approved record an answer cites, read with `person records --record-sha256`. */
 export interface RecordRef {
@@ -186,15 +186,39 @@ export interface RecordRef {
   readonly policy_id: RecordPolicy;
 }
 
-/** What an answer is based on: an approved meeting record, or an original source. */
+/** What an answer is based on: an approved record, an original, or a live Slack message. */
 export type AnswerSource =
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef }
-  | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef };
+  | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef }
+  | { readonly kind: 'slack'; readonly label: string; readonly permalink: string };
 
+/** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
+export interface AnswerStatement {
+  readonly text: string;
+  readonly citation_indexes: readonly number[];
+  readonly private: boolean;
+}
+
+export interface AnswerPart {
+  readonly question: string;
+  readonly status: 'answered' | 'partial' | 'not_found' | 'records_only';
+  readonly statements: readonly AnswerStatement[];
+  readonly gap?: string;
+  readonly records?: readonly AnswerStatement[];
+}
+
+/** An Agentic Ask answer. `text` is its plain reading, for Copy answer and earlier turns. */
 export interface Answer {
   readonly text: string;
   readonly scope: AskScope;
   readonly sources: readonly AnswerSource[];
+  readonly direct?: AnswerStatement;
+  /** At least one. */
+  readonly parts: readonly AnswerPart[];
+  /** Off-scope: the evidence is about another subject, so a wider ask would not help. */
+  readonly outcome: 'answered' | 'partial' | 'not_found' | 'off_scope';
+  readonly assumption?: string;
+  readonly notice?: string;
 }
 
 export interface SourceEvidence {
@@ -207,6 +231,8 @@ export interface RecordItem {
   readonly text: string;
   /** Only a decision still open says so. */
   readonly status?: 'proposed' | 'unresolved';
+  /** An action's owner, only as the approver confirmed it at approval. */
+  readonly owner?: string;
   readonly excerpts: readonly { readonly quote: string; readonly at?: string }[];
 }
 
@@ -347,7 +373,9 @@ export interface HostMethods {
     params: { expect: Expect; request_id: string; file_handle: string; title: string; audience: Audience; project_ids: readonly string[] };
     result: Receipt;
   };
-  'ask.run': { params: { expect: Expect; question: string; scope: AskScope }; result: Answer };
+  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string }; result: Answer };
+  /** Cancels an active Ask by its renderer-issued opaque id. */
+  'ask.cancel': { params: { cancel_id: string }; result: null };
   /** The bar's live search, within its scope: a project, or all context. */
   'search.run': { params: { expect: Expect; query: string; scope: AskScope }; result: Matches };
   /** Reads a saved note found in all context. A project's match is read with projects.readContext. */
@@ -367,6 +395,8 @@ export interface HostMethods {
 }
 
 export interface MainMethods {
+  /** Opens one cited Slack message in the system browser; only Slack message permalinks are allowed. */
+  'source.openSlack': { params: { permalink: string }; result: null };
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
   /** Add files…, in New project: up to 20 documents at once. */
   'dialog.openDocuments': { params: Record<string, never>; result: ChosenFiles };
@@ -397,13 +427,13 @@ export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
   'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
-  'notes.submit', 'documents.upload', 'ask.run', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
+  'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'search.read', 'documents.list', 'documents.read', 'documents.save', 'projects.read',
   'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
   'employees.reissue', 'employees.revoke',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
+  'source.openSlack', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
   'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show',
 ];
 /** Host methods that change what the Authority stores. */
@@ -457,6 +487,13 @@ export function externalUrl(raw: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+/** The Ask contract's Slack permalink grammar, checked again before main opens a renderer request. */
+export function slackPermalink(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.length <= 512 &&
+    /^https:\/\/[a-z0-9-]+(\.enterprise)?\.slack\.com\/archives\/[CDG][A-Z0-9]{2,30}\/p\d{15,17}(\?[A-Za-z0-9_=&.%-]{0,200})?$/.test(raw)
+    ? raw : null;
 }
 
 /** Parameters larger than this are refused at the broker. */

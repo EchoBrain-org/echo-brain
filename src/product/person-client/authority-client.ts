@@ -3,17 +3,28 @@ import { validatePersonUploadContextId } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
-  PERSON_ANSWER_PATH_V2,
+  PERSON_ANSWER_PATH_V3,
+  PERSON_CAPABILITIES_PATH_V1,
+  PERSON_EVIDENCE_SEARCH_PATH_V1,
+  PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   PERSON_MEETING_TRANSCRIPT_PATH_V1,
-  validatePersonAnswerRequestV2,
-  validatePersonAnswerResponseV3,
+  validatePersonAnswerRequestV3,
+  validatePersonAnswerResponseV4,
+  validatePersonCapabilitiesV1,
+  validatePersonEvidenceSearchRequestV1,
+  validatePersonEvidenceOpenRequestV1,
+  validatePersonEvidenceDeskResponseV1,
   validatePersonSourceEvidenceReadRequestV1,
   validatePersonSourceEvidenceV1,
   validatePersonMeetingTranscriptReadRequestV1,
   validatePersonMeetingTranscriptV1,
   type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
-  type PersonAnswerResponseV3 as OrganizationPersonAnswerV3,
+  type PersonAnswerResponseV4 as OrganizationPersonAnswerV4,
+  type PersonCapabilitiesV1,
+  type PersonEvidenceSearchRequestV1,
+  type PersonEvidenceOpenRequestV1,
+  type PersonEvidenceDeskResponseV1,
   type PersonSourceEvidenceReadRequestV1,
   type PersonSourceEvidenceV1,
   type PersonMeetingTranscriptReadRequestV1,
@@ -115,8 +126,13 @@ export interface PersonRecordSearchItemV1 {
 }
 
 /** Current global-or-project Ask response. V1 remains available for old installed clients. */
-export type PersonAnswerV3 = OrganizationPersonAnswerV3;
 export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
+/** The Agentic Ask response, selected only after the authenticated capability probe. */
+export type PersonAnswerV4 = OrganizationPersonAnswerV4;
+export type PersonAnswer = PersonAnswerV4;
+export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
+export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
+export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonMeetingTranscriptReadV1 = PersonMeetingTranscriptV1;
 
@@ -590,12 +606,13 @@ export class PersonAuthorityClient {
     path: string,
     init: Omit<RequestInit, "redirect" | "signal">,
     timeoutMs = this.timeoutMs,
+    signal?: AbortSignal,
   ): Promise<Response> {
     try {
       return await this.fetchImpl(new URL(path, this.origin), {
         ...init,
         redirect: "error",
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: signal === undefined ? AbortSignal.timeout(timeoutMs) : AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]),
       });
     } catch (error) {
       throw new PersonAuthorityClientError(
@@ -619,6 +636,8 @@ export class PersonAuthorityClient {
     readonly timeout_ms?: number;
     readonly method?: "POST" | "PUT";
     readonly headers?: Readonly<Record<string, string>>;
+    /** A caller cancellation disconnects the request; the timeout still applies. */
+    readonly signal?: AbortSignal;
   }): Promise<T> {
     const request = input.validate_request(input.body);
     const body = canonicalJson(request);
@@ -640,6 +659,7 @@ export class PersonAuthorityClient {
         body,
       },
       input.timeout_ms,
+      input.signal,
     );
     const contentType = response.headers.get("content-type");
     if (
@@ -696,6 +716,7 @@ export class PersonAuthorityClient {
     readonly validate_response: (value: unknown) => T;
     readonly maximum_response_bytes: number;
     readonly headers?: Readonly<Record<string, string>>;
+    readonly signal?: AbortSignal;
   }): Promise<T> {
     const response = await this.send(input.path, {
       method: "GET",
@@ -704,7 +725,7 @@ export class PersonAuthorityClient {
         accept: "application/json",
         authorization: `Bearer ${input.access_token}`,
       },
-    });
+    }, undefined, input.signal);
     const contentType = response.headers.get("content-type");
     if (
       contentType === null ||
@@ -1335,21 +1356,33 @@ export class PersonAuthorityClient {
     });
   }
 
-  /** Global by default; a supplied project ID is a strict project-only scope. */
-  async ask(accessToken: string, question: string, projectId?: ProjectIdV1): Promise<PersonAnswerV3> {
-    const request = validatePersonAnswerRequestV2({
-      schema_version: 2,
+  /** Authenticated capability discovery; every current Authority reports agentic Ask. */
+  capabilities(accessToken: string, signal?: AbortSignal): Promise<PersonCapabilitiesV1> {
+    return this.getJson({
+      path: PERSON_CAPABILITIES_PATH_V1,
+      access_token: accessToken,
+      validate_response: validatePersonCapabilitiesV1,
+      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+      signal,
+    });
+  }
+
+  /** Agentic Ask; global by default, and a supplied project ID is a strict project-only scope. */
+  async askV3(accessToken: string, question: string, projectId?: ProjectIdV1, signal?: AbortSignal): Promise<PersonAnswerV4> {
+    const request = validatePersonAnswerRequestV3({
+      schema_version: 3,
       question,
       ...(projectId === undefined ? {} : { project_id: projectId }),
     });
     const response = await this.json({
-      path: PERSON_ANSWER_PATH_V2,
+      path: PERSON_ANSWER_PATH_V3,
       body: request,
-      validate_request: validatePersonAnswerRequestV2,
-      validate_response: validatePersonAnswerResponseV3,
+      validate_request: validatePersonAnswerRequestV3,
+      validate_response: validatePersonAnswerResponseV4,
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
       timeout_ms: ASK_TIMEOUT_MS,
+      signal,
     });
     const expectedScope = projectId === undefined
       ? { kind: 'global' as const }
@@ -1357,6 +1390,26 @@ export class PersonAuthorityClient {
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
     }
+    return response;
+  }
+
+  async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
+    const request = validatePersonEvidenceSearchRequestV1(value);
+    const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
+      validate_request: validatePersonEvidenceSearchRequestV1, validate_response: validatePersonEvidenceDeskResponseV1,
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
+    const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
+    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');
+    return response;
+  }
+
+  async evidenceOpen(accessToken: string, value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
+    const request = validatePersonEvidenceOpenRequestV1(value);
+    const response = await this.json({ path: PERSON_EVIDENCE_OPEN_PATH_V1, body: request,
+      validate_request: validatePersonEvidenceOpenRequestV1, validate_response: validatePersonEvidenceDeskResponseV1,
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
+    const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
+    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');
     return response;
   }
 

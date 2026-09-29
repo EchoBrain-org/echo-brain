@@ -74,21 +74,17 @@ export function canonicalJson(value) {
 
 export function validateCleanV1Release(value) {
   const record = object(value, '$');
-  exactKeys(
-    record,
-    [
-      'authority_image',
-      'baseline_compatibility_class',
-      'kind',
-      'person_client',
-      'release_id',
-      'released_at',
-      'runtime_profile',
-      'schema_version',
-      'source_sha',
-    ],
-    '$',
-  );
+  const required = [
+    'authority_image', 'baseline_compatibility_class', 'kind', 'person_client',
+    'release_id', 'released_at', 'runtime_profile', 'schema_version', 'source_sha',
+  ];
+  const keys = Object.keys(record).sort();
+  if (
+    JSON.stringify(keys) !== JSON.stringify([...required].sort()) &&
+    JSON.stringify(keys) !== JSON.stringify([...required, 'agentic_ask_v1'].sort()) &&
+    JSON.stringify(keys) !== JSON.stringify([...required, 'small_scope_shortcut'].sort()) &&
+    JSON.stringify(keys) !== JSON.stringify([...required, 'agentic_ask_v1', 'small_scope_shortcut'].sort())
+  ) fail(`$ must contain exactly: ${[...required, 'agentic_ask_v1', 'small_scope_shortcut'].sort().join(', ')}`);
   if (!Number.isInteger(record.schema_version) || record.schema_version !== 1) {
     fail('schema_version must equal integer 1');
   }
@@ -128,8 +124,17 @@ export function validateCleanV1Release(value) {
   if (runtimeProfile.profile_version !== 'clean-v1-profile-1') {
     fail('runtime_profile.profile_version must equal clean-v1-profile-1');
   }
+  if (Object.hasOwn(record, 'agentic_ask_v1') && typeof record.agentic_ask_v1 !== 'boolean') {
+    fail('agentic_ask_v1 must be boolean');
+  }
+  if (Object.hasOwn(record, 'small_scope_shortcut') && typeof record.small_scope_shortcut !== 'boolean') {
+    fail('small_scope_shortcut must be boolean');
+  }
+  if (record.small_scope_shortcut === true && record.agentic_ask_v1 !== true) {
+    fail('small_scope_shortcut requires agentic_ask_v1=true');
+  }
 
-  return Object.freeze({
+  const validated = {
     schema_version: 1,
     kind: 'echo-clean-v1-release',
     release_id: releaseId,
@@ -148,6 +153,17 @@ export function validateCleanV1Release(value) {
       artifact_sha256: runtimeProfileSha256,
       profile_version: 'clean-v1-profile-1',
     }),
+  };
+  // Retain legacy absence so readCleanV1Release continues to verify the exact
+  // canonical bytes of records accepted before either allowlisted switch.
+  return Object.freeze({
+    ...validated,
+    ...(Object.hasOwn(record, 'agentic_ask_v1')
+      ? { agentic_ask_v1: record.agentic_ask_v1 }
+      : {}),
+    ...(Object.hasOwn(record, 'small_scope_shortcut')
+      ? { small_scope_shortcut: record.small_scope_shortcut }
+      : {}),
   });
 }
 
@@ -210,6 +226,8 @@ function main(argv) {
     'runtime-profile-url': record.runtime_profile.artifact_url,
     'runtime-profile-sha256': record.runtime_profile.artifact_sha256,
     'runtime-profile-version': record.runtime_profile.profile_version,
+    'agentic-ask-v1': record.agentic_ask_v1 === true ? 'true' : 'false',
+    'small-scope-shortcut': record.small_scope_shortcut === true ? 'true' : 'false',
     'source-sha': record.source_sha,
   };
   if (!Object.hasOwn(fields, field)) fail(usage());

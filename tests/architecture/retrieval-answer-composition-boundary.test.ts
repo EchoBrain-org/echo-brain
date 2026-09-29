@@ -6,9 +6,10 @@ import { describe, expect, it } from 'vitest';
 const REPO = resolve(import.meta.dirname, '../..');
 const read = (path: string): string => readFileSync(join(REPO, path), 'utf8');
 const ANSWER_ROOT = 'packages/organization-authority-kernel/src/answer-composition';
-const ANSWER_ROUTE = 'services/organization-authority/src/composition/person-answer-route.ts';
-const ANSWER_V2_ROUTE = 'services/organization-authority/src/composition/person-answer-v2-route.ts';
-const AUDIT = 'services/organization-authority/src/adapters/persistence/sqlite/person-answer-composition-audit-v1.ts';
+// Agentic Ask is the only Ask (ADR-0022); the V1/V2 routes and their audit adapter were retired.
+const ANSWER_V3_ROUTE = 'services/organization-authority/src/composition/person-answer-v3-route.ts';
+const SOURCE_EVIDENCE_ROUTE = 'services/organization-authority/src/composition/person-source-evidence-route.ts';
+const AGENTIC_AUDIT = 'services/organization-authority/src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.ts';
 function files(root: string): string[] {
   return readdirSync(join(REPO, root)).flatMap(name => {
     const path = posix.join(root, name);
@@ -34,6 +35,7 @@ describe('retrieval and answer-composition boundaries', () => {
       ...['person-record-read-route', 'person-record-search-route'].map(name => `services/organization-authority/src/composition/${name}.ts`),
       'services/organization-authority/src/application/ports/person-original-context-retrieval-v1.ts',
       'services/organization-authority/src/adapters/persistence/sqlite/person-original-context-retrieval-v1.ts',
+      'services/organization-authority/src/composition/person-evidence-desk-v1.ts',
     ];
     const visited = new Set<string>();
     while (pending.length) {
@@ -46,19 +48,33 @@ describe('retrieval and answer-composition boundaries', () => {
     expect(visited.size).toBeGreaterThan(10);
   });
   it('keeps answer composition behind released contracts without direct record, retrieval or storage access', () => {
-    const implementation = [...files(ANSWER_ROOT), ANSWER_ROUTE, ANSWER_V2_ROUTE];
+    const implementation = [...files(ANSWER_ROOT), ANSWER_V3_ROUTE, SOURCE_EVIDENCE_ROUTE];
     expect(implementation.length).toBeGreaterThan(1);
     for (const path of implementation) for (const target of graph.targets(path)) {
-      if (target === AUDIT) continue; // The route may write its bounded, dedicated audit event.
+      if (target === AGENTIC_AUDIT) continue; // The route may write its dedicated audit event.
       expect(relative(REPO, join(REPO, target))).not.toMatch(/^packages\/organization-(?:record|retrieval)\/|\/(?:adapters\/persistence|storage)\//);
     }
-    expect(read(AUDIT)).toContain('context_kind: "answer_composition"');
+    expect(read(AGENTIC_AUDIT)).toContain('"answer_composition"');
   });
-  it('retains bounded answer composition without agent loops or streaming', () => {
+  it('keeps the entire answer kernel closure free of provider, record and storage implementations', () => {
+    // Route composition may bind the desk and audit adapters. The kernel and
+    // every helper it imports may consume only their released contracts.
+    const pending = files(ANSWER_ROOT);
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const path = pending.pop()!;
+      if (visited.has(path)) continue;
+      visited.add(path);
+      expect(path).not.toMatch(/^providers\/|^services\/|^packages\/organization-(?:record|retrieval)\/|\/(?:adapters\/persistence|storage)\//);
+      pending.push(...graph.targets(path));
+    }
+    expect(visited.size).toBeGreaterThan(files(ANSWER_ROOT).length);
+  });
+  it('keeps the answer kernel free of undeclared agent modules and all Ask paths non-streaming', () => {
     const implementation = files(ANSWER_ROOT);
     expect(implementation.length).toBeGreaterThan(0);
     for (const path of implementation) {
-      expect(path).not.toMatch(/\/(?:agents?|tools?|memory|iterations?|vector|hybrid|rerank(?:ing)?|streaming)(?:[\/_\-.]|$)/i);
+      if (!path.endsWith('/agentic-ask-v1.ts')) expect(path).not.toMatch(/\/(?:agents?|tools?|memory|iterations?|vector|hybrid|rerank(?:ing)?|streaming)(?:[\/_\-.]|$)/i);
       expect(read(path)).not.toMatch(/ReadableStream|text\/event-stream|stream\s*:\s*true/);
     }
   });

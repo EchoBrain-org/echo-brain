@@ -28,7 +28,10 @@ import {
   unknownContextMutation,
   unknownDocumentMutation,
   type EmployeeRosterV1,
-  type PersonAnswerV3,
+  type PersonAnswer,
+  type PersonEvidenceDeskV1,
+  type PersonEvidenceOpenV1,
+  type PersonEvidenceSearchV1,
   type PersonAskSourceEvidenceV1,
   type PersonMeetingTranscriptReadV1,
   type PersonRecordListV1,
@@ -772,16 +775,29 @@ export class PersonClient {
     );
   }
 
-  async ask(question: string, projectId?: ProjectIdV1): Promise<PersonAnswerV3> {
+  /** Agentic Ask (RFC-0003), the only Ask since the one-shot routes were retired (ADR-0022). */
+  async ask(question: string, projectId?: ProjectIdV1, signal?: AbortSignal): Promise<PersonAnswer> {
     // Preserve the public query error type before transport schema validation.
     validatePersonQueryText(question);
     if (projectId !== undefined) validateProjectIdV1(projectId, 'Ask project_id');
     const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).ask(
-      stored.session.access_token,
-      question,
-      projectId,
-    );
+    const result = await this.authority(stored.authority_origin).askV3(stored.session.access_token, question, projectId, signal);
+    this.assertCurrentSession(stored);
+    return result;
+  }
+
+  /** Each evidence invocation creates a new authenticated, scope-bound desk request. */
+  async evidenceSearch(value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
+    const stored = await this.accessSession();
+    const result = await this.authority(stored.authority_origin).evidenceSearch(stored.session.access_token, value, signal);
+    this.assertCurrentSession(stored);
+    return result;
+  }
+
+  /** Opens only the supplied server-owned citation under a fresh authorized request. */
+  async evidenceOpen(value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
+    const stored = await this.accessSession();
+    const result = await this.authority(stored.authority_origin).evidenceOpen(stored.session.access_token, value, signal);
     this.assertCurrentSession(stored);
     return result;
   }

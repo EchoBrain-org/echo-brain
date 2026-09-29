@@ -158,6 +158,44 @@ export class ApprovedMeetingTranscriptGrantReaderV1 {
     });
   }
 
+  /**
+   * Every grant in the lineage, oldest record first, or those for one exact
+   * source revision. Each is read and checked exactly as `find` reads it.
+   */
+  list(input: Omit<ApprovedMeetingTranscriptGrantLookupV1, "approval_id">): readonly ApprovedMeetingTranscriptGrantV1[] {
+    text(input.authority_id, "transcript grant authority_id");
+    text(input.organization_id, "transcript grant organization_id");
+    text(input.state_lineage_id, "transcript grant state_lineage_id");
+    const exactSource = input.source_id !== undefined || input.revision_id !== undefined || input.source_sha256 !== undefined;
+    if (exactSource && (input.source_id === undefined || input.revision_id === undefined || input.source_sha256 === undefined)) {
+      throw new Error("transcript grant source lookup requires an exact source tuple");
+    }
+    const rows = this.database.prepare(
+      `SELECT grant.approval_id
+         FROM organization_record_meeting_transcript_grant_v1 AS grant
+        WHERE grant.authority_id = ?
+          AND grant.organization_id = ?
+          AND grant.state_lineage_id = ?
+          ${exactSource ? "AND grant.source_id = ? AND grant.revision_id = ? AND grant.source_sha256 = ?" : ""}
+        ORDER BY grant.record_position ASC`,
+    ).all(
+      input.authority_id,
+      input.organization_id,
+      input.state_lineage_id,
+      ...(exactSource ? [input.source_id!, input.revision_id!, input.source_sha256!] : []),
+    ) as Array<{ readonly approval_id: unknown }>;
+    return Object.freeze(rows.map((row) => {
+      const grant = this.find({
+        authority_id: input.authority_id,
+        organization_id: input.organization_id,
+        state_lineage_id: input.state_lineage_id,
+        approval_id: text(row.approval_id, "transcript grant approval_id"),
+      });
+      if (grant === null) throw new Error("transcript grant disappeared while listing");
+      return grant;
+    }));
+  }
+
   private projectIds(table: "organization_record_project_members_readable_person_record_fact" | "organization_record_project_association_v1", record_position: number, record_sha256: unknown): readonly string[] {
     const rows = this.database.prepare(
       `SELECT project_id FROM ${table}

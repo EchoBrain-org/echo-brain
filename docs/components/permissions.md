@@ -26,7 +26,9 @@ decision_ids:
   - ADR-0016
   - ADR-0017
   - ADR-0018
+  - ADR-0019
   - ADR-0020
+  - ADR-0021
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-IDENTITY-005
@@ -76,3 +78,7 @@ Permission claims must name their enforcement scope. A bounded pilot or one
 retrieval operation is not evidence of a globally enforced permission system.
 Every served path must link its invariant, enforcement point, denial behavior,
 audit evidence, and qualification case.
+
+Agentic Ask V1 is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md)
+and [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md). Its V3 route and shared evidence
+desk are capability-gated; implementation and live qualification are separate.

@@ -6,6 +6,8 @@ import {
   verifyOrganizationRecordReceiptV2, validateOrganizationRecordReceiptBodyV2,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
   restrictedReviewerPersonPolicyContractSha256, restrictedReviewerPersonConsequenceSha256,
+  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID, ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
+  organizationMemberReadablePersonPolicyContractSha256, organizationMemberReadablePersonConsequenceSha256,
 } from "@echo-brain/organization-protocol";
 import type { V4RecordEnvelopeView, RevalidatedPersonPolicyAuthorizationWitnessV2 } from "@echo-brain/organization-record/organization-record-api-v1";
 import type { ApprovalWorkflowBundleV1, ApprovalWorkflowContextV1 } from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
@@ -20,6 +22,7 @@ interface Presentation {
   phase: "presented" | "queued" | "finalized" | "appended" | "rejected" | "retired";
   action?: "approve" | "reject";
   issued_at: string;
+  policy: "restricted" | "team";
 }
 
 /** Offline seam proof: durable adapter state, real Authority state and signed append. */
@@ -30,6 +33,8 @@ export function persistedApprovalWorkflowFixtureV1(options: {
   stop_after_present?: () => boolean;
   /** Simulates a process stopping after record commit but before receipt signing. */
   stop_before_receipt?: () => boolean;
+  /** Defaults to the historical exact-approver policy. */
+  policyFor?: (input: ApprovalWorkflowStageInputV1) => "restricted" | "team";
 }) {
   const read = (): Presentation[] => existsSync(options.path) ? JSON.parse(readFileSync(options.path, "utf8")) as Presentation[] : [];
   const save = (rows: Presentation[]) => {
@@ -64,7 +69,8 @@ export function persistedApprovalWorkflowFixtureV1(options: {
             staged_content_sha256: canonicalSha256({ meeting: input.meeting, decisions: input.decisions }), final_content_sha256: canonicalSha256(payload),
             payload_contract_id: "organization-record-approval-payload-v1", approved_payload: payload };
           row = { approval_id: input.candidate.approval_id, candidate_id: input.candidate.candidate_id, snapshot,
-            card_sha256: canonicalSha256(snapshot), phase: "presented", issued_at: input.decisions.generated_at };
+            card_sha256: canonicalSha256(snapshot), phase: "presented", issued_at: input.decisions.generated_at,
+            policy: options.policyFor?.(input) ?? "restricted" };
         }
         const prepared = context.state.prepareApprovalPost({ candidate_id: row.candidate_id, frozen_card_sha256: row.card_sha256, approved_snapshot: row.snapshot });
         if (prepared.outbox.state === "superseded") return { kind: "state_drift" as const };
@@ -81,8 +87,10 @@ export function persistedApprovalWorkflowFixtureV1(options: {
       async function append(row: Presentation) {
         const frozen = context.state.readFrozenCandidateForApproval(row.approval_id);
         if (!frozen || frozen.candidate_id !== row.candidate_id || frozen.approved_snapshot_sha256 !== canonicalSha256(row.snapshot)) throw new Error("fixture frozen candidate drift");
-        const policy_id = RESTRICTED_REVIEWER_PERSON_POLICY_ID;
-        const policy_contract_sha256 = restrictedReviewerPersonPolicyContractSha256();
+        const policy_id = row.policy === "team" ? ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID : RESTRICTED_REVIEWER_PERSON_POLICY_ID;
+        const policy_contract_sha256 = row.policy === "team" ? organizationMemberReadablePersonPolicyContractSha256() : restrictedReviewerPersonPolicyContractSha256();
+        const policy_consequence_text = row.policy === "team" ? ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT : RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT;
+        const policy_consequence_sha256 = row.policy === "team" ? organizationMemberReadablePersonConsequenceSha256() : restrictedReviewerPersonConsequenceSha256();
         const provider_action_sha256 = canonicalSha256({ row, actor: options.actor });
         const authorization_proof_sha256 = canonicalSha256({ ...context.coordinates, approval_id: row.approval_id, actor: options.actor });
         const audit_entry = { ...context.coordinates, audit_event_id: `fixture-audit:${row.approval_id}`, audit_sequence: 1,
@@ -95,8 +103,8 @@ export function persistedApprovalWorkflowFixtureV1(options: {
             provider_action_kind: "echo-provider-human-action-v2", provider_action_schema_version: 2,
             provider_action_sha256, authorization_proof_sha256 },
           event: { kind: "approved", approved_snapshot: row.snapshot as never, approved_snapshot_sha256: canonicalSha256(row.snapshot),
-            policy_id, policy_contract_sha256, policy_consequence_text: RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
-            policy_consequence_sha256: restrictedReviewerPersonConsequenceSha256() },
+            policy_id, policy_contract_sha256, policy_consequence_text,
+            policy_consequence_sha256 },
         });
         const authorization_witness: RevalidatedPersonPolicyAuthorizationWitnessV2 = {
           authorization_allow: { ...context.coordinates, approval_id: row.approval_id, action: "approve", policy_id,
@@ -175,9 +183,20 @@ export function persistedApprovalWorkflowFixtureV1(options: {
             { route_id: "challenge", method: "GET", path: "/v2/integrations/test-approval/actions", accepts_query: true }] as const,
           async accept(request) {
             if (request.route_id === "challenge") return { status: 200 as const, body: { validated: request.query?.get("challenge") === "fixture-challenge" } };
-            const action = Buffer.from(request.raw_body).toString("utf8");
+            const body = Buffer.from(request.raw_body).toString("utf8");
+            // Historical fixture callers send the bare action.  The local
+            // multi-meeting harness may bind its action to one durable
+            // presentation, which avoids an ambiguous "first row" action
+            // when several approval cards are pending at once.
+            let action = body;
+            let approval_id: string | undefined;
+            try {
+              const parsed = JSON.parse(body) as { action?: unknown; approval_id?: unknown };
+              if (typeof parsed.action === "string") action = parsed.action;
+              if (typeof parsed.approval_id === "string") approval_id = parsed.approval_id;
+            } catch { /* bare historical action */ }
             if (action !== "approve" && action !== "reject") throw new Error("fixture action unsupported");
-            const row = read()[0];
+            const row = approval_id === undefined ? read()[0] : read().find((value) => value.approval_id === approval_id);
             if (!row || context.state.readCandidateByApprovalId(row.approval_id)?.state !== "staged") throw new Error("fixture approval is not current");
             if (row.action && row.action !== action) throw new Error("fixture competing action");
             if (row.phase === "presented") update({ ...row, action, phase: "queued" });

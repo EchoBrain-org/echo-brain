@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createOpenRouterAnswerCompositionGenerationBundleV1, OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1 } from "../src/openrouter-answer-composition-generation-bundle-v1.js";
+import { createOpenRouterAnswerCompositionGenerationBundleV1, OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSITION_MODEL_V1, OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1, OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1 } from "../src/openrouter-answer-composition-generation-bundle-v1.js";
 
 const directories: string[] = [];
 
@@ -36,6 +36,7 @@ describe("OpenRouter answer-composition generation bundle", () => {
       planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
       answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
       timeout_ms: OPENROUTER_ANSWER_COMPOSITION_TIMEOUT_MS_V1,
+      context_tokens: OPENROUTER_ANSWER_COMPOSITION_CONTEXT_TOKENS_V1,
     });
     expect(runtime.structured_output.generate).toBeTypeOf("function");
   });

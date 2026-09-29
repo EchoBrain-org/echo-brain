@@ -706,11 +706,32 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    if (method === 'POST' && path === '/v2/person/ask') {
+    if (method === 'POST' && path === '/v3/person/ask') {
       asks += 1;
       if (mode === 'ask-unavailable') return failure('unavailable', 503);
       if (mode === 'ask-hangs') return new Promise<Response>(() => undefined);
       const scope = typeof body?.project_id === 'string' ? { kind: 'project', project_id: body.project_id } : { kind: 'global' };
+      const question = typeof body?.question === 'string' ? body.question : 'Question';
+      // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
+      const answered = (text?: string) => {
+        const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];
+        const statements = text === undefined ? part!.statements : [{ ...part!.statements[0], text }];
+        return json({ ...desktop.answer, scope, parts: [{ ...part, question, statements }] });
+      };
+      if (mode === 'ask-slack') {
+        const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];
+        return json({ ...desktop.answer, scope,
+          citations: [...desktop.answer.citations as unknown[], {
+            kind: 'slack_message', label: '#launch · Maya', visibility: 'only_me', citation: {
+              kind: 'slack_message', team_id: 'T01ABCDEF', channel_id: 'C01ABCDEF', message_ts: '1758873600.000100',
+              permalink: 'https://acme.slack.com/archives/C01ABCDEF/p1758873600000100?thread_ts=1758873600.000100',
+              text_sha256: sha('The launch is ready.'),
+            },
+          }],
+          parts: [{ ...part, question, statements: [...part!.statements,
+            { text: 'Maya confirmed the launch in Slack.', citation_indexes: [2], private: true }] }],
+        });
+      }
       // Follow-ups: the second answer comes late, and the third question fails.
       if (mode === 'ask-follow-ups' && asks === 2) {
         // The test releases the reply after cancellation. A fixed delay races
@@ -718,10 +739,19 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         while (!existsSync(join(home, 'release-follow-up'))) {
           await new Promise(resolveLater => setTimeout(resolveLater, 25));
         }
-        return json({ ...desktop.answer, answer: 'A late answer.', scope });
+        return answered('A late answer.');
       }
       if (mode === 'ask-follow-ups' && asks === 3) return failure('unavailable', 503);
-      return json({ ...desktop.answer, scope });
+      // Nothing in any project matches: the Authority's not-found answer, which
+      // cites nothing. A question about another subject is off scope.
+      if (mode === 'ask-project-empty' && scope.kind === 'project') {
+        const offScope = question.startsWith('What is the weather');
+        return json({
+          schema_version: 4, kind: 'echo-clean-person-answer-v4', scope, outcome: offScope ? 'off_scope' : 'not_found', citations: [],
+          parts: [{ question, status: 'not_found', statements: [], gap: "I couldn't find this in the sources you can access." }],
+        });
+      }
+      return answered();
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       evidenceReads += 1;

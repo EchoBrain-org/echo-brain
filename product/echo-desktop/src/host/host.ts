@@ -79,7 +79,7 @@ modules.catch(error => { console.error('person host failed to load the client:',
 const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
   'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  'ask.run': 145_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
+  'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000, 'documents.list': 45_000,
   'documents.read': 45_000, 'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000, 'projects.directory': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
@@ -96,10 +96,13 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12
 const PROJECT_ID = new RegExp(`^prj_${UUID}$`);
 const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
 const DOCUMENT_ID = /^doc_[0-9a-f]{64}$/;
+const ASK_CANCEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** A page cursor, as the API writes one. */
 const CURSOR = /^[A-Za-z0-9_-]{1,1024}$/;
 /** Writes this host has handed to the client and not yet heard back on. */
 const inFlight = new Set<string>();
+/** Active Ask aborts, keyed by a renderer-issued id that never reaches the Authority. */
+const activeAsks = new Map<string, AbortController>();
 
 /** A project's name as the API takes it: one line, trimmed, NFC, at most 200 UTF-8 bytes. */
 function projectName(value: unknown): string | null {
@@ -166,9 +169,9 @@ async function gated<T>(run: () => Promise<T>, network: boolean, refreshFailed?:
   }
 }
 
-async function cli(argv: readonly string[], onLine?: (line: string) => void): Promise<CliRun> {
+async function cli(argv: readonly string[], onLine?: (line: string) => void, extra: Record<string, unknown> = {}): Promise<CliRun> {
   const { cli: run, dependencies } = await modules;
-  return runCli(run, argv, dependencies, onLine);
+  return runCli(run, argv, { ...dependencies, ...extra }, onLine);
 }
 
 function ok<T>(value: T): Result<T> { return { ok: true, value }; }
@@ -216,14 +219,14 @@ function sameAccount(current: AppStatus | null, expect: Expect): boolean {
 
 /** Runs a command for the account the renderer is showing, never another. */
 async function forAccount<T>(
-  method: HostMethodName, expect: Expect, argv: readonly string[], view: (stdout: string) => T, requestId?: string,
+  method: HostMethodName, expect: Expect, argv: readonly string[], view: (stdout: string) => T, requestId?: string, abortSignal?: AbortSignal,
 ): Promise<Result<T>> {
   const write = WRITE_METHODS.has(method);
   if (!sameAccount(await status(), expect)) return code('account_changed', write, requestId);
   if (write && requestId !== undefined) inFlight.add(requestId);
   let run: CliRun;
   try {
-    run = await cli(argv);
+    run = await cli(argv, undefined, abortSignal === undefined ? {} : { abort_signal: abortSignal });
   } finally {
     if (write && requestId !== undefined) inFlight.delete(requestId);
   }
@@ -343,7 +346,7 @@ function changeArgs(change: ProjectChange | undefined, requestId: string, expect
 
 type Params<M extends HostMethodName> = HostMethods[M]['params'];
 
-async function handle(method: HostMethodName, params: unknown): Promise<Result<unknown>> {
+async function handle(method: HostMethodName, params: unknown, abortSignal?: AbortSignal): Promise<Result<unknown>> {
   switch (method) {
     case 'app.status': {
       const current = await status();
@@ -540,8 +543,10 @@ async function handle(method: HostMethodName, params: unknown): Promise<Result<u
       const text = askText(question);
       if (text === '') return code('invalid_request');
       return forAccount(method, expect, ['ask', option('question', text), ...scopeArgs(scope)],
-        stdout => answerView(lastJson(stdout), scope));
+        stdout => answerView(lastJson(stdout), scope), undefined, abortSignal);
     }
+    case 'ask.cancel':
+      return ok(null);
     case 'ask.source': {
       const { expect, scope, ref } = params as Params<'ask.source'>;
       return forAccount(method, expect, [
@@ -622,12 +627,21 @@ port.on('message', ({ data }) => {
   }
   const requestId = typeof (request.params as { request_id?: unknown })?.request_id === 'string'
     ? (request.params as { request_id: string }).request_id : undefined;
+  const cancelId = (request.params as { cancel_id?: unknown })?.cancel_id;
+  if (request.method === 'ask.cancel') {
+    const controller = typeof cancelId === 'string' ? activeAsks.get(cancelId) : undefined;
+    controller?.abort();
+    port.postMessage({ id: request.id, result: ok(null) });
+    return;
+  }
   const write = WRITE_METHODS.has(request.method);
+  const abort = request.method === 'ask.run' && typeof cancelId === 'string' && ASK_CANCEL_ID.test(cancelId) ? new AbortController() : undefined;
+  if (abort && typeof cancelId === 'string') activeAsks.set(cancelId, abort);
   // A call still queued behind a refresh when its time runs out never starts.
   let expired = false;
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<Result<unknown>>(resolve => {
-    timer = setTimeout(() => { expired = true; resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[request.method]);
+    timer = setTimeout(() => { expired = true; abort?.abort(); resolve(code('timeout', write, requestId)); }, TIMEOUT_MS[request.method]);
   });
   // Sign-in still runs after a refresh with no answer: it replaces the
   // session, and sign-out ends it either way. Any other call was not made,
@@ -638,7 +652,7 @@ port.on('message', ({ data }) => {
       return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);
     };
   // Status goes through the gate too: mid-refresh the client reports signed out.
-  const work = gated(() => expired ? timeout : handle(request.method, request.params), !LOCAL.has(request.method), refreshFailed)
+  const work = gated(() => expired ? timeout : handle(request.method, request.params, abort?.signal), !LOCAL.has(request.method), refreshFailed)
     // A write that threw after reaching the client may have landed.
     .catch((error: unknown) => {
       if (__ECHO_TEST_HOOK__) console.error(`[client] ${request.method} threw:`, error);
@@ -646,5 +660,5 @@ port.on('message', ({ data }) => {
       ...(requestId === undefined ? {} : { request_id: requestId }) }) : code('failed');
     });
   void Promise.race([work, timeout])
-    .then(result => { clearTimeout(timer); port.postMessage({ id: request.id, result }); });
+    .then(result => { clearTimeout(timer); if (typeof cancelId === 'string') activeAsks.delete(cancelId); port.postMessage({ id: request.id, result }); });
 });

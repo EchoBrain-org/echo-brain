@@ -46,27 +46,80 @@ describe('view models copy only what the renderer may see', () => {
     expect(page.items.map(item => item.audience)).toEqual(['only-me', 'team', 'project']);
   });
 
-  it('keeps an approved record\'s digest and policy, and an original\'s coordinates, each source once', () => {
-    const record = { kind: 'approved_record', record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' };
+  it('keeps each cited approved record by digest and policy, and each original by its coordinates, in citation order', () => {
+    const record = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' };
     const original = { kind: 'source_revision', source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
       representation_sha256: sha('5'), anchor_sha256: sha('6') };
-    const answer = answerView({ ok: true, result: {
-      schema_version: 3, kind: 'echo-clean-person-answer-v3', answer: 'Ship it.', scope: { kind: 'global' },
-      citations: [
-        { ...record, atom_id: sha('1') }, { ...record, atom_id: sha('7') },
-        { ...original, label: ' Pricing call ' }, { ...original, representation_sha256: sha('8') },
-        { ...original, anchor_sha256: sha('9') },
-      ],
-    } }, { kind: 'global' });
+    const v4 = (citations: unknown[]) => ({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+      citations, parts: [{ question: 'What did we ship?', status: 'answered', statements: [{ text: 'Ship it.', citation_indexes: [0], private: false }] }] });
+    const answer = answerView({ ok: true, result: v4([
+      { citation: record, kind: 'decision', label: 'Tuesday sync', visibility: 'team' },
+      { citation: { ...original, label: 'Pricing call' }, kind: 'document_passage', label: 'Pricing call', visibility: 'team' },
+      { citation: original, kind: 'note', label: '', visibility: 'only_me' },
+    ]) }, { kind: 'global' });
     expect(answer.sources).toEqual([
-      { kind: 'record', label: 'Approved record 1', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' } },
+      { kind: 'record', label: 'Tuesday sync', record: { record_sha256: sha('2'), policy_id: 'organization-member-readable-person-v2' } },
       { kind: 'original', label: 'Pricing call', ref: { source_id: `source:${'3'.repeat(64)}`, revision_id: 'r1', source_sha256: sha('4'),
         representation_sha256: sha('5'), anchor_sha256: sha('6') } },
-      { kind: 'original', label: 'Original source 3', ref: expect.objectContaining({ anchor_sha256: sha('9') }) },
+      { kind: 'original', label: 'Evidence 3', ref: expect.objectContaining({ anchor_sha256: sha('6') }) },
     ]);
-    const unknownPolicy = { ...record, atom_id: sha('1'), policy_id: 'someone-else' };
-    expect(() => answerView({ ok: true, result: { kind: 'echo-clean-person-answer-v3', answer: 'a', citations: [unknownPolicy] } }, { kind: 'global' }))
-      .toThrow(ViewError);
+    // One part answers the question itself: its plain text does not repeat it.
+    expect(answer.text).toBe('Ship it.');
+    const unknownPolicy = { citation: { ...record, policy_id: 'someone-else' }, kind: 'decision', label: 'x', visibility: 'team' };
+    expect(() => answerView({ ok: true, result: v4([unknownPolicy]) }, { kind: 'global' })).toThrow(ViewError);
+  });
+
+  it('refuses the retired answer shapes and an answer with no part', () => {
+    const v3 = { schema_version: 3, kind: 'echo-clean-person-answer-v3', answer: 'Ship it.', scope: { kind: 'global' }, citations: [] };
+    expect(() => answerView({ ok: true, result: v3 }, { kind: 'global' })).toThrow(ViewError);
+    const empty = { schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'not_found', citations: [], parts: [] };
+    expect(() => answerView({ ok: true, result: empty }, { kind: 'global' })).toThrow(ViewError);
+  });
+
+  it('keeps a Slack citation label and permalink without exposing its other coordinates', () => {
+    const permalink = 'https://acme.slack.com/archives/C01ABCDEF/p1758873600000100?thread_ts=1758873600.000100';
+    const reply = (url: unknown) => ({ schema_version: 4, kind: 'echo-clean-person-answer-v4', outcome: 'answered',
+      citations: [{ kind: 'slack_message', label: '#launch · Maya', visibility: 'only_me', citation: {
+        kind: 'slack_message', team_id: 'T01ABCDEF', channel_id: 'C01ABCDEF', message_ts: '1758873600.000100',
+        permalink: url, text_sha256: sha('7'),
+      } }],
+      parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch is ready.', citation_indexes: [0], private: true }] }],
+    });
+    const answer = answerView({ ok: true, result: reply(permalink) }, { kind: 'global' });
+    expect(answer.sources).toEqual([{ kind: 'slack', label: '#launch · Maya', permalink }]);
+    expect(answer.parts[0]?.statements[0]).toEqual({ text: 'The launch is ready.', citation_indexes: [0], private: true });
+    for (const url of ['javascript:alert(1)', 'https://acme.slack.com.evil.test/archives/C01ABCDEF/p1758873600000100',
+      'https://user:password@acme.slack.com/archives/C01ABCDEF/p1758873600000100', null]) {
+      expect(() => answerView(reply(url), { kind: 'global' })).toThrow(ViewError);
+    }
+  });
+
+  it('maps Agentic Ask statements to their exact sources, including project records and fallback whitespace', () => {
+    const citation = { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' };
+    const answer = answerView({ ok: true, result: {
+      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'partial',
+      citations: [{ citation, kind: 'decision', label: 'Project review', visibility: 'project' }],
+      direct: { text: 'A private summary.', citation_indexes: [0], private: true },
+      parts: [{ question: 'What changed?', status: 'records_only', statements: [], gap: 'No prose was available.',
+        records: [{ text: 'Exact\n  fallback', citation_indexes: [0], private: false }] }],
+      assumption: 'Ecko means Echo', notice: 'Meeting records were unavailable.',
+    } }, { kind: 'global' });
+    expect(answer).toMatchObject({ outcome: 'partial', assumption: 'Ecko means Echo', notice: 'Meeting records were unavailable.',
+      direct: { private: true, citation_indexes: [0] }, parts: [{ status: 'records_only', records: [{ text: 'Exact\n  fallback' }] }],
+      sources: [{ kind: 'record', label: 'Project review', record: { policy_id: 'project-members-readable-person-v1' } }],
+    });
+  });
+
+  it('keeps not-found and off-scope outcomes, and reads a not-found answer as its gap', () => {
+    const project = { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' } as const;
+    const empty = (outcome: string) => ({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: project, outcome, citations: [],
+      parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }] });
+    expect(answerView({ ok: true, result: empty('not_found') }, project)).toEqual({
+      text: 'Not found.', scope: project, sources: [], outcome: 'not_found',
+      parts: [{ question: 'Who owns pricing?', status: 'not_found', statements: [], gap: 'Not found.' }],
+    });
+    expect(answerView({ ok: true, result: empty('off_scope') }, project)).toMatchObject({ outcome: 'off_scope' });
+    expect(() => answerView({ ok: true, result: empty('authorship_unsupported') }, project)).toThrow(ViewError);
   });
 
   it('accepts a receipt only for the request that was sent', () => {
@@ -226,6 +279,19 @@ describe('an approved record shows only what the source pane needs', () => {
       rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [] }] },
     });
     expect(JSON.stringify(view)).not.toContain('private@example.test');
+  });
+
+  it('shows an action owner only as the approver confirmed it in the signed approval', () => {
+    const view = recordView(reply({
+      actions: [item('action', 'a1', 'Send the quote.', { owner: 'Unconfirmed proposal' }), item('action', 'a2', 'Book the venue.')],
+    }, record => {
+      const body = (record.envelope as { body: Record<string, unknown> }).body;
+      body.human_act_resolution_ref = { action_owners: [{ signal_id: 'a2', owner: 'Priya Shah' }, { signal_id: 'd9', owner: 'Nobody' }] };
+    }), asked);
+    expect(view.actions.items).toEqual([
+      { text: 'Send the quote.', excerpts: [] },
+      { text: 'Book the venue.', owner: 'Priya Shah', excerpts: [] },
+    ]);
   });
 
   it('shows at most 2,000 characters of any text, 32 items a section and 32 participants', () => {

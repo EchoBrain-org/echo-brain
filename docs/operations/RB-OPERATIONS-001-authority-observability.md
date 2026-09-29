@@ -536,6 +536,37 @@ active HTTP/model counts and event-loop delay can overlap other operations.
 Event-loop maximum is since transport startup. SQLite lock and disk-I/O latency
 are unavailable; filesystem counters are neither latency nor physical bytes.
 
+#### Reading an agentic Ask (V3) and evidence-desk calls
+
+Ask is the agentic loop (RFC-0003; the only Ask since ADR-0022). It uses the
+Ask journey, so it is listed, counted and alarmed like any Ask:
+
+| Stage | What it measures in the loop |
+| --- | --- |
+| `ask_validation`, `ask_authorization` | Request admission and the session check. |
+| `ask_retrieval` | Summed evidence-desk time during research. Counts: searches run (`planned_query_count`), search hits, distinct items released. |
+| `ask_planner` | Summed research-step model time and the steps' combined token usage. |
+| `ask_context` | Items handed to the answer call (`context_atom_count`). |
+| `ask_answer` | The answer call (and its repair), usage and citations. A failed answer call that still ends in records or not found stays `succeeded`; its span shows the failure. |
+| `ask_revalidation`, `ask_audit` | The final fence and the terminal audit. |
+| `ask_response` | `answered`, `partial`, `not_found` or `off_scope`. |
+
+A request that fails marks the first research-to-audit stage still open as
+failed with the request's failure class, then fails `ask_response`. The deadline
+is `timeout`; a closed client connection is `cancelled`. A failed `ask_response`
+ends its journey in the Explorer even when the failure is retryable; a retry is
+a new journey. Before this change such a journey stayed pending.
+
+**Linked core operations** hold the detail. Each research step and answer call
+is an `ask_planner` or `ask_answer` span with its provider `model_call` inside
+(purpose `ask_planner` or `ask_answer`). Each desk call is one span:
+`evidence_search`, `evidence_open`, `evidence_list` or `evidence_revalidate`.
+Desk spans carry `included_count` and, by source, `meeting_items`,
+`document_items` and `slack_items`; `transcript_items` is the shared-transcript
+subset of `document_items`. The evidence HTTP doors use the same desk spans.
+Model request and response content is captured per call under the content
+switch, except calls whose prompt carries Slack text.
+
 #### Opt-in development content and transport completeness
 
 `ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true` extends Ask capture to meeting

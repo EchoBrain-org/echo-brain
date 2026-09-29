@@ -28,9 +28,11 @@ import {
 export const LLM_DECISION_PROCESSOR_ADAPTER_ID = 'llm';
 export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '1.9.0';
 /** Bump with the adapter version whenever prompt/output semantics change. */
-export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v9';
+export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v10';
 export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
-  'decision-extraction-schema-v6';
+  'decision-extraction-schema-v7';
+/** Longest proposed action owner kept, in characters. */
+export const LLM_DECISION_PROCESSOR_OWNER_MAX_CHARACTERS = 120;
 
 /** JSON schema handed to the provider as a structured-output constraint. */
 const EXTRACTION_FORMAT: JsonObject = {
@@ -46,6 +48,7 @@ const EXTRACTION_FORMAT: JsonObject = {
           'kind',
           'text',
           'status',
+          'owner',
           'due_at',
           'confidence',
           'evidence',
@@ -59,6 +62,7 @@ const EXTRACTION_FORMAT: JsonObject = {
             type: 'string',
             enum: ['proposed', 'decided', 'unresolved'],
           },
+          owner: { type: ['string', 'null'] },
           due_at: { type: ['string', 'null'] },
           confidence: { type: ['number', 'null'] },
           evidence: {
@@ -94,7 +98,10 @@ const SYSTEM_PROMPT = [
   'passages together. If support spans multiple passages in one block, quote the intervening text too;',
   'cite each block only once per signal. Check every quote against its source block before returning.',
   'Mark a decision decided only for an explicit completed choice; otherwise use proposed or unresolved.',
-  'Actions are unassigned: state only the owner-neutral task. Resolve dates from',
+  'State each action as its owner-neutral task. Set owner only when the meeting explicitly assigns the',
+  'action to a named person ("Jules will send the quote"; "Jules, can you send it?" answered yes), using',
+  'the name as said; otherwise null. Never infer an owner from who spoke or who seems responsible.',
+  'Decisions and rationales always have owner null. An approver confirms each owner. Resolve dates from',
   'meeting_time.date_reference_local_date: YYYY-MM-DD if no time is stated, ISO 8601 with an offset if a',
   'time is stated, otherwise null. Link rationales to decisions by zero-based signal index.',
   'Return only the structured response.',
@@ -105,6 +112,8 @@ interface RawSignal {
   kind: 'decision' | 'action' | 'rationale';
   text: string;
   status: 'proposed' | 'decided' | 'unresolved';
+  /** Proposed only: kept after grounding, and recorded only when an approver confirms it. */
+  owner: string | null;
   dueAt: string | null;
   confidence: number | null;
   evidence: readonly RawEvidence[];
@@ -335,6 +344,7 @@ export const EXTRACTION_SCHEMA_FAILURE_STAGES = [
   'evidence_shape',
   'evidence_item',
   'irrelevant_fields',
+  'owner',
 ] as const;
 
 export type ExtractionSchemaFailureStage =
@@ -367,6 +377,7 @@ const SIGNAL_FIELDS = [
   'kind',
   'text',
   'status',
+  'owner',
   'due_at',
   'confidence',
   'evidence',
@@ -499,6 +510,10 @@ function rawSignals(
     ) {
       extractionSchemaFailure('status');
     }
+    const ownerValue = record['owner'];
+    if (ownerValue !== null && typeof ownerValue !== 'string') {
+      extractionSchemaFailure('owner');
+    }
     const dueAt = record['due_at'];
     if (
       dueAt !== null &&
@@ -561,6 +576,7 @@ function rawSignals(
       kind,
       text: record['text'].trim(),
       status: kind === 'decision' ? status : 'unresolved',
+      owner: kind === 'action' ? proposedOwner(ownerValue) : null,
       dueAt: normalizedDue,
       confidence: normalizedConfidence(confidence),
       evidence,
@@ -568,6 +584,55 @@ function rawSignals(
     });
   }
   return { declaredCount: items.length, signals };
+}
+
+/**
+ * A proposal the approval card can show: one trimmed line of at most 120
+ * characters, or none. A malformed proposal is dropped, never an extraction
+ * failure: the approver confirms owners, and nothing unconfirmed is recorded.
+ */
+function proposedOwner(value: string | null): string | null {
+  if (value === null) return null;
+  const owner = value.normalize('NFC').replace(/\s+/gu, ' ').trim();
+  return owner.length === 0 ||
+    owner.length > LLM_DECISION_PROCESSOR_OWNER_MAX_CHARACTERS ||
+    /[\p{Cc}\p{Cf}]/u.test(owner)
+    ? null
+    : owner;
+}
+
+function comparable(value: string): string {
+  return value.normalize('NFC').toLocaleLowerCase('en-US').replace(/\s+/gu, ' ').trim();
+}
+
+/** The whole name, at word boundaries, in the text. */
+function namesOwner(text: string, owner: string): boolean {
+  const escaped = comparable(owner).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])${escaped}(?:$|[^\\p{L}\\p{N}])`, 'u').test(comparable(text));
+}
+
+const FIRST_PERSON_COMMITMENT = /\b(?:i['’]ll|i will|i['’]m going to|i am going to|i can take|let me|i own)\b/iu;
+
+/**
+ * Code keeps a proposed owner only when the cited evidence supports it: the
+ * name appears in a cited quote, or the cited speaker, known by that name,
+ * commits in the first person ("I'll send it"). The model's judgment alone
+ * never sets an owner.
+ */
+function groundedOwner(
+  owner: string | null,
+  evidence: readonly { readonly quote: string; readonly block: MeetingContentBlock }[],
+  meeting: MeetingDocument,
+): string | null {
+  if (owner === null) return null;
+  if (evidence.some((span) => namesOwner(span.quote, owner))) return owner;
+  const speakers = new Map(meeting.participants.map((participant) => [participant.id, participant.display_name ?? '']));
+  return evidence.some((span) => {
+    const speaker = span.block.speaker_participant_id === undefined ? undefined : speakers.get(span.block.speaker_participant_id);
+    return speaker !== undefined && speaker.length > 0 && namesOwner(speaker, owner) && FIRST_PERSON_COMMITMENT.test(span.quote);
+  })
+    ? owner
+    : null;
 }
 
 function stableSignalId(
@@ -897,11 +962,13 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       raw: RawSignal;
       id: string;
       evidence: EvidenceSpan[];
+      owner: string | null;
     }[] = [];
     observeCoreRuntimeSyncV1("model_grounding", () => {
     for (const raw of extracted.signals) {
       const seenEvidenceIds = new Set<string>();
       const evidence: EvidenceSpan[] = [];
+      const cited: { quote: string; block: MeetingContentBlock }[] = [];
       for (const citation of raw.evidence) {
         const block = renderedMeeting.evidenceById.get(citation.evidenceId);
         if (block === undefined) extractionGroundingFailure('evidence_id');
@@ -912,6 +979,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
           extractionGroundingFailure('evidence_quote');
         }
         seenEvidenceIds.add(citation.evidenceId);
+        cited.push({ quote: citation.quote, block });
         evidence.push({
           meeting_id: meeting.id,
           block_id: block.id,
@@ -936,6 +1004,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         raw,
         id: stableSignalId(meeting, raw, evidence),
         evidence,
+        owner: groundedOwner(raw.owner, cited, meeting),
       });
     }
     });
@@ -954,7 +1023,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         extractionGroundingFailure('rationale_supports');
       }
     }
-    const signals: ExtractedSignal[] = verified.map(({ raw, id, evidence }) => {
+    const signals: ExtractedSignal[] = verified.map(({ raw, id, evidence, owner }) => {
       const base = {
         id,
         text: raw.text,
@@ -973,7 +1042,7 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
           return {
             ...base,
             kind: 'action' as const,
-            owner: null,
+            owner,
             due_at: raw.dueAt,
           };
         case 'rationale':

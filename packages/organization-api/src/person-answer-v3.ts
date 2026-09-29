@@ -1,5 +1,4 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { validatePersonQueryText } from './person-query.js';
 import { validatePersonDocumentIdV1 } from './person-documents-v1.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import {
@@ -11,18 +10,14 @@ import {
   MAX_ORGANIZATION_API_BODY_BYTES,
 } from './validation.js';
 
-/** Versioned Ask endpoint. The V1 route remains approved-record-only. */
-export const PERSON_ANSWER_PATH_V2 = '/v2/person/ask';
+/**
+ * Shared Ask citation and scope shapes, and the cited-original read. The V2
+ * Ask request and its V3 answer were retired with the one-shot Ask
+ * (ADR-0022); agentic Ask answers are V4 (person-answer-v4.ts). The source
+ * path keeps its V2 name because installed clients open citations there.
+ */
 export const PERSON_SOURCE_EVIDENCE_PATH_V1 = '/v2/person/ask/source';
-export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V3 = 64 * 1024;
 export const PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 = 3 * 1024;
-
-export interface PersonAnswerRequestV2 {
-  readonly schema_version: 2;
-  readonly question: string;
-  /** Omitted selects every context the caller may read. Present is a strict project scope. */
-  readonly project_id?: ProjectIdV1;
-}
 
 export type PersonAnswerScopeV3 =
   | { readonly kind: 'global' }
@@ -51,15 +46,6 @@ export type PersonAnswerCitationV3 =
       readonly document_id?: `doc_${string}`;
       readonly label?: string;
     };
-
-export interface PersonAnswerResponseV3 {
-  readonly schema_version: 3;
-  readonly kind: 'echo-clean-person-answer-v3';
-  readonly answer: string;
-  readonly citations: readonly PersonAnswerCitationV3[];
-  readonly scope: PersonAnswerScopeV3;
-  readonly outcome?: 'authorship_unsupported';
-}
 
 /** Immutable source coordinates deliberately exclude the display label. */
 export interface PersonSourceEvidenceCitationV1 {
@@ -103,19 +89,6 @@ function boundedText(value: unknown, label: string, maximumCodePoints: number): 
     [...value].length > maximumCodePoints
   ) {
     fail(`${label} is invalid`);
-  }
-}
-
-/** Answers may contain intentional paragraphs, lists, and tabs; citations may not. */
-function answerText(value: unknown): asserts value is string {
-  if (
-    typeof value !== 'string' ||
-    value.length === 0 ||
-    value.trim() !== value ||
-    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) ||
-    [...value].length > 12_000
-  ) {
-    fail('Ask response answer is invalid');
   }
 }
 
@@ -164,61 +137,6 @@ function scope(value: unknown): PersonAnswerScopeV3 {
   fail('Ask response scope is invalid');
 }
 
-function citation(value: unknown): PersonAnswerCitationV3 {
-  const input = object(value, 'Ask citation');
-  if (input.kind === 'approved_record') {
-    assertExactKeys(input, ['kind', 'atom_id', 'record_sha256', 'policy_id'], 'Ask citation');
-    assertDigest(input.atom_id, 'Ask approved-record citation atom_id');
-    assertDigest(input.record_sha256, 'Ask approved-record citation record_sha256');
-    if (
-      input.policy_id !== 'organization-member-readable-person-v2' &&
-      input.policy_id !== 'restricted-reviewer-person-v2' &&
-      input.policy_id !== 'project-members-readable-person-v1'
-    ) {
-      fail('Ask approved-record citation policy_id is invalid');
-    }
-    return Object.freeze({
-      kind: 'approved_record',
-      atom_id: input.atom_id as `sha256:${string}`,
-      record_sha256: input.record_sha256 as `sha256:${string}`,
-      policy_id: input.policy_id,
-    });
-  }
-  if (input.kind === 'source_revision') {
-    const keys = [
-      'kind',
-      'source_id',
-      'revision_id',
-      'source_sha256',
-      'representation_sha256',
-      'anchor_sha256',
-    ];
-    if (Object.hasOwn(input, 'document_id')) keys.push('document_id');
-    if (Object.hasOwn(input, 'label')) keys.push('label');
-    assertExactKeys(input, keys, 'Ask citation');
-    sourceId(input.source_id);
-    sourceRevision(input.revision_id);
-    assertDigest(input.source_sha256, 'Ask source citation source_sha256');
-    assertDigest(input.representation_sha256, 'Ask source citation representation_sha256');
-    assertDigest(input.anchor_sha256, 'Ask source citation anchor_sha256');
-    const document_id = Object.hasOwn(input, 'document_id')
-      ? validatePersonDocumentIdV1(input.document_id)
-      : undefined;
-    if (Object.hasOwn(input, 'label')) boundedText(input.label, 'Ask source citation label', 200);
-    return Object.freeze({
-      kind: 'source_revision',
-      source_id: input.source_id,
-      revision_id: input.revision_id,
-      source_sha256: input.source_sha256 as `sha256:${string}`,
-      representation_sha256: input.representation_sha256 as `sha256:${string}`,
-      anchor_sha256: input.anchor_sha256 as `sha256:${string}`,
-      ...(document_id === undefined ? {} : { document_id }),
-      ...(input.label === undefined ? {} : { label: input.label as string }),
-    });
-  }
-  fail('Ask citation kind is invalid');
-}
-
 function sourceEvidenceCitation(value: unknown, labelRequired: boolean): PersonSourceEvidenceCitationV1 | (PersonSourceEvidenceCitationV1 & { readonly label: string }) {
   const input = object(value, 'Ask source evidence citation');
   assertExactKeys(
@@ -255,70 +173,6 @@ function sourceEvidenceCitation(value: unknown, labelRequired: boolean): PersonS
     ...(document_id === undefined ? {} : { document_id }),
     ...(labelRequired ? { label: input.label as string } : {}),
   });
-}
-
-export function validatePersonAnswerRequestV2(value: unknown): PersonAnswerRequestV2 {
-  const input = object(value, 'Ask request');
-  assertExactKeys(
-    input,
-    ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])],
-    'Ask request',
-  );
-  if (input.schema_version !== 2) fail('Ask request schema_version is unsupported');
-  const result: PersonAnswerRequestV2 = {
-    schema_version: 2,
-    question: validatePersonQueryText(input.question),
-    ...(Object.hasOwn(input, 'project_id')
-      ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') }
-      : {}),
-  };
-  if (canonicalJsonBytes(result).byteLength > MAX_ORGANIZATION_API_BODY_BYTES) {
-    fail('Ask request exceeds JSON byte bound');
-  }
-  return Object.freeze(result);
-}
-
-export function validatePersonAnswerResponseV3(value: unknown): PersonAnswerResponseV3 {
-  const input = object(value, 'Ask response');
-  assertExactKeys(
-    input,
-    ['schema_version', 'kind', 'answer', 'citations', 'scope', ...(Object.hasOwn(input, 'outcome') ? ['outcome'] : [])],
-    'Ask response',
-  );
-  if (
-    input.schema_version !== 3 ||
-    input.kind !== 'echo-clean-person-answer-v3' ||
-    !Array.isArray(input.citations) ||
-    input.citations.length > 16 ||
-    (Object.hasOwn(input, 'outcome') && input.outcome !== 'authorship_unsupported')
-  ) {
-    fail('Ask response is invalid');
-  }
-  answerText(input.answer);
-  const citations = input.citations.map(citation);
-  const citationKeys = new Set<string>();
-  for (const item of citations) {
-    const key = item.kind === 'approved_record'
-      ? `approved_record:${item.atom_id}`
-      : `source_revision:${item.source_id}:${item.revision_id}:${item.representation_sha256}:${item.anchor_sha256}`;
-    if (citationKeys.has(key)) fail('Ask response contains duplicate citations');
-    citationKeys.add(key);
-  }
-  if (input.outcome === 'authorship_unsupported' && citations.length !== 0) {
-    fail('Ask authorship-unsupported response must not cite evidence');
-  }
-  const result: PersonAnswerResponseV3 = {
-    schema_version: 3,
-    kind: 'echo-clean-person-answer-v3',
-    answer: input.answer,
-    citations: Object.freeze(citations),
-    scope: scope(input.scope),
-    ...(Object.hasOwn(input, 'outcome') ? { outcome: 'authorship_unsupported' as const } : {}),
-  };
-  if (canonicalJsonBytes(result).byteLength > PERSON_ANSWER_RESPONSE_MAX_BYTES_V3) {
-    fail('Ask response exceeds JSON byte bound');
-  }
-  return Object.freeze(result);
 }
 
 export function validatePersonSourceEvidenceReadRequestV1(value: unknown): PersonSourceEvidenceReadRequestV1 {

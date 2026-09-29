@@ -91,6 +91,23 @@ function json(value: unknown, status = 200): Response {
   });
 }
 
+/** A valid agentic Ask (V4) response: one answered statement per citation, or not found. */
+function v4Answer(input: { readonly scope?: unknown; readonly text?: string; readonly citations?: readonly unknown[] } = {}) {
+  const citations = input.citations ?? [];
+  return {
+    schema_version: 4, kind: "echo-clean-person-answer-v4", scope: input.scope ?? { kind: "global" },
+    outcome: citations.length === 0 ? "not_found" : "answered",
+    citations,
+    parts: [citations.length === 0
+      ? { question: "Question", status: "not_found", statements: [], gap: "I couldn't find this in the sources you can access." }
+      : { question: "Question", status: "answered", statements: [{ text: input.text ?? "Answer.", citation_indexes: citations.map((_, index) => index), private: false }] }],
+  };
+}
+const RECORD_CITATION = {
+  citation: { kind: "approved_record", atom_id: `sha256:${"c".repeat(64)}`, record_sha256: `sha256:${"b".repeat(64)}`, policy_id: "organization-member-readable-person-v2" },
+  kind: "decision", label: "Pricing review", visibility: "team",
+};
+
 async function withHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-")));
   try {
@@ -572,64 +589,36 @@ describe("Person client", () => {
       await client.installSession("https://authority.example", ROTATED_SESSION);
 
       const timeout = vi.spyOn(AbortSignal, "timeout");
+      const answer = v4Answer({ text: "Use simple pricing.", citations: [RECORD_CITATION] });
       const result = await runCli(
         ["ask", "--question", "What is our pricing decision?"],
         {
           home_directory: home,
           now: () => NOW,
           fetch: async (input, init) => {
-            expect(new URL(String(input)).pathname).toBe("/v2/person/ask");
+            // Agentic Ask is the only Ask: no capability probe, no legacy path.
+            expect(new URL(String(input)).pathname).toBe("/v3/person/ask");
             expect(init?.method).toBe("POST");
             expect(JSON.parse(String(init?.body))).toEqual({
-              schema_version: 2,
+              schema_version: 3,
               question: "What is our pricing decision?",
             });
             expect(new Headers(init?.headers).get("authorization")).toBe(
               `Bearer ${ROTATED_SESSION.access_token}`,
             );
-            return json({
-              schema_version: 3,
-              kind: "echo-clean-person-answer-v3",
-              answer: "Use simple pricing.",
-              scope: { kind: "global" },
-              citations: [
-                {
-                  kind: "approved_record",
-                  atom_id: `sha256:${"c".repeat(64)}`,
-                  record_sha256: `sha256:${"b".repeat(64)}`,
-                  policy_id: "organization-member-readable-person-v2",
-                },
-              ],
-            });
+            return json(answer);
           },
         },
       );
 
       expect(result.code).toBe(0);
-      expect(timeout).toHaveBeenCalledOnce();
+      expect(timeout).toHaveBeenCalledTimes(1);
       expect(timeout).toHaveBeenCalledWith(135_000);
       expect(result.stderr).toBe("");
-      expect(JSON.parse(result.stdout)).toEqual({
-        ok: true,
-        result: {
-          schema_version: 3,
-          kind: "echo-clean-person-answer-v3",
-          answer: "Use simple pricing.",
-          scope: { kind: "global" },
-          citations: [
-            {
-              kind: "approved_record",
-              atom_id: `sha256:${"c".repeat(64)}`,
-              record_sha256: `sha256:${"b".repeat(64)}`,
-              policy_id: "organization-member-readable-person-v2",
-            },
-          ],
-        },
-      });
+      expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: answer });
     });
   });
-
-  it("maps --project to a strict V2 Ask coordinate and accepts immutable source evidence", async () => {
+  it("maps --project to a strict Ask coordinate and accepts immutable source evidence", async () => {
     await withHome(async home => {
       const projectId = "prj_00000000-0000-4000-8000-000000000019";
       const client = new PersonClient({
@@ -639,31 +628,68 @@ describe("Person client", () => {
           if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
             return json({ authority_descriptor: authorityDescriptor() });
           }
-          expect(new URL(String(input)).pathname).toBe("/v2/person/ask");
-          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 2, question: "What is in this project?", project_id: projectId });
-          return json({
-            schema_version: 3,
-            kind: "echo-clean-person-answer-v3",
-            answer: "The MRD is available.",
+          expect(new URL(String(input)).pathname).toBe("/v3/person/ask");
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: "What is in this project?", project_id: projectId });
+          return json(v4Answer({
             scope: { kind: "project", project_id: projectId },
+            text: "The MRD is available.",
             citations: [{
-              kind: "source_revision",
-              source_id: `source:${"a".repeat(64)}`,
-              revision_id: `sha256:${"b".repeat(64)}`,
-              source_sha256: `sha256:${"c".repeat(64)}`,
-              representation_sha256: `sha256:${"d".repeat(64)}`,
-              anchor_sha256: `sha256:${"e".repeat(64)}`,
-              document_id: `doc_${"f".repeat(64)}`,
-              label: "MRD",
+              citation: {
+                kind: "source_revision",
+                source_id: `source:${"a".repeat(64)}`,
+                revision_id: `sha256:${"b".repeat(64)}`,
+                source_sha256: `sha256:${"c".repeat(64)}`,
+                representation_sha256: `sha256:${"d".repeat(64)}`,
+                anchor_sha256: `sha256:${"e".repeat(64)}`,
+                document_id: `doc_${"f".repeat(64)}`,
+                label: "MRD",
+              },
+              kind: "document_passage", label: "MRD", visibility: "project",
             }],
-          });
+          }));
         },
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(client.ask("What is in this project?", projectId as `prj_${string}`)).resolves.toMatchObject({
         scope: { kind: "project", project_id: projectId },
-        citations: [{ kind: "source_revision", label: "MRD" }],
+        citations: [{ citation: { kind: "source_revision", label: "MRD" } }],
       });
+    });
+  });
+  it("never falls back to a retired Ask path when agentic Ask returns a canonical 404", async () => {
+    await withHome(async home => {
+      let legacyCalled = false;
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async input => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+        if (path === '/v3/person/ask') return json({ error: { code: 'not_found', message: 'removed while request was running' } }, 404);
+        if (path === '/v2/person/ask' || path === '/v3/person/capabilities') legacyCalled = true;
+        throw new Error(`unexpected path ${path}`);
+      } });
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await expect(client.ask('What is current?')).rejects.toMatchObject({ code: 'not_found', status: 404 });
+      expect(legacyCalled).toBe(false);
+    });
+  });
+  it("asks agentic Ask and validates its V4 response before returning it", async () => {
+    await withHome(async home => {
+      const digest = `sha256:${'a'.repeat(64)}`;
+      let sawV3 = false;
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+        if (path !== '/v3/person/ask') throw new Error(`unexpected path ${path}`);
+        sawV3 = true;
+        expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'What changed?' });
+        return json({ schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',
+          citations: [{ citation: { kind: 'approved_record', atom_id: digest, record_sha256: digest, policy_id: 'organization-member-readable-person-v2' }, kind: 'decision', label: 'Planning meeting', visibility: 'team' }],
+          direct: { text: 'The launch date moved.', citation_indexes: [0], private: false },
+          parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch date moved.', citation_indexes: [0], private: false }] }],
+        });
+      } });
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await expect(client.ask('What changed?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v4', direct: { citation_indexes: [0] } });
+      expect(sawV3).toBe(true);
     });
   });
 
@@ -750,7 +776,7 @@ describe("Person client", () => {
       const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async (input) => {
         const path = new URL(String(input)).pathname;
         if (path === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
-        if (path === "/v2/person/ask") return json({ schema_version: 3, kind: "echo-clean-person-answer-v3", answer: "Answer.", citations: [], scope: { kind: "global" } });
+        if (path === "/v3/person/ask") return json(v4Answer());
         return json({ schema_version: 1, kind: "echo-person-source-evidence-v1", scope: { kind: "global" }, citation: { ...citation, label: "MRD" }, text: "MRD" });
       } });
       await client.installSession("https://authority.example", ROTATED_SESSION);
@@ -780,10 +806,7 @@ describe("Person client", () => {
         ...ROTATED_SESSION,
         membership_id: fixtureId("mem", 2), principal_id: fixtureId("prn", 2), session_family_id: fixtureId("psf", 2),
       });
-      resolveResponse?.(json({
-        schema_version: 3, kind: "echo-clean-person-answer-v3", answer: "Prior account answer.",
-        citations: [], scope: { kind: "global" },
-      }));
+      resolveResponse?.(json(v4Answer({ text: "Prior account answer.", citations: [RECORD_CITATION] })));
       await expect(answer).rejects.toThrow("current account");
     });
   });
@@ -837,13 +860,7 @@ describe("Person client", () => {
             return json({ authority_descriptor: authority });
           }
           asks += 1;
-          return json({
-            schema_version: 3,
-            kind: "echo-clean-person-answer-v3",
-            answer: "Bounded answer.",
-            scope: { kind: "global" },
-            citations: [],
-          });
+          return json(v4Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
         },
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
@@ -851,7 +868,7 @@ describe("Person client", () => {
         Array.from({ length: count }, (_, index) => `term${index}`).join(" ");
 
       await expect(client.ask(question(32))).resolves.toMatchObject({
-        answer: "Bounded answer.",
+        parts: [{ statements: [{ text: "Bounded answer." }] }],
       });
       await expect(client.ask(question(33))).rejects.toMatchObject({ code: "query_term_count" });
       expect(asks).toBe(1);
@@ -862,9 +879,9 @@ describe("Person client", () => {
     await withHome(async (home) => {
       const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async (input) => {
         if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
-        return json({ schema_version: mode === "ask" ? 3 : 2, ...(mode === "ask"
-          ? { kind: "echo-clean-person-answer-v3", answer: "Insufficient accessible evidence to answer this question.", citations: [], scope: { kind: "global" } }
-          : { kind: "echo-clean-person-record-search-v2", items: [] }),
+        return json({ ...(mode === "ask"
+          ? v4Answer()
+          : { schema_version: 2, kind: "echo-clean-person-record-search-v2", items: [] }),
         generation_id: `sha256:${"a".repeat(64)}`, record_head: { position: 9, record_sha256: `sha256:${"b".repeat(64)}` } });
       } });
       await client.installSession("https://authority.example", ROTATED_SESSION);
@@ -886,21 +903,7 @@ describe("Person client", () => {
             return json({ authority_descriptor: authority });
           }
           asks += 1;
-          return json({
-            schema_version: 3,
-            kind: "echo-clean-person-answer-v3",
-            answer: "Use simple pricing.",
-            scope: { kind: "global" },
-            citations: [
-              {
-                kind: "approved_record",
-                atom_id: `sha256:${"c".repeat(64)}`,
-                record_sha256: `sha256:${"b".repeat(64)}`,
-                policy_id: "organization-member-readable-person-v2",
-                unexpected: true,
-              },
-            ],
-          });
+          return json(v4Answer({ text: "Use simple pricing.", citations: [{ ...RECORD_CITATION, citation: { ...RECORD_CITATION.citation, unexpected: true } }] }));
         },
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
@@ -911,34 +914,6 @@ describe("Person client", () => {
           "malformed response",
       );
       expect(asks).toBe(1);
-    });
-  });
-
-  it("accepts only the machine-readable authorship-unsupported outcome", async () => {
-    await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const client = new PersonClient({
-        home_directory: home,
-        now: () => NOW,
-        fetch: async (input, init) => {
-          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          expect(new Headers(init?.headers).get("x-echo-person-answer-version")).toBeNull();
-          return json({
-            schema_version: 3,
-            kind: "echo-clean-person-answer-v3",
-            answer: "I can summarize decisions in accessible records, but cannot determine whether you personally made them.",
-            citations: [],
-            scope: { kind: "global" },
-            outcome: "authorship_unsupported",
-          });
-        },
-      });
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(client.ask("Which decisions did I make?")).resolves.toMatchObject({
-        outcome: "authorship_unsupported",
-      });
     });
   });
 
@@ -1077,7 +1052,7 @@ describe("Person client", () => {
         expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
-        if (path === "/v2/person/ask") return json({ schema_version: 3, kind: "echo-clean-person-answer-v3", answer: "No approved records.", citations: [], scope: { kind: "global" } });
+        if (path === "/v3/person/ask") return json(v4Answer());
         expect(path).toBe("/v3/person/tools");
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
         return json({ schema_version: 3, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });
@@ -1085,11 +1060,13 @@ describe("Person client", () => {
       await client.installSession("https://authority.example", ROTATED_SESSION);
       expect((await client.tools()).tools).toEqual([]);
       expect(await client.records(1)).toMatchObject({ records: [] });
-      expect((await client.ask("What is approved?")).answer).toBe("No approved records.");
+      const firstAnswer = await client.ask("What is approved?");
+      expect(firstAnswer).toMatchObject({ kind: 'echo-clean-person-answer-v4', outcome: 'not_found' });
       tools = [{ tool_id: "calendar", display_name: "Calendar", availability: "enabled", personal_status: "linked", external_scope_id: "calendar-workspace", external_subject_id: "calendar-user" }];
       expect((await client.tools()).tools[0]?.personal_status).toBe("linked");
       expect(await client.records(1)).toMatchObject({ records: [] });
-      expect((await client.ask("What is approved?")).answer).toBe("No approved records.");
+      const secondAnswer = await client.ask("What is approved?");
+      expect(secondAnswer).toMatchObject({ kind: 'echo-clean-person-answer-v4', outcome: 'not_found' });
       tools = "failure";
       await expect(client.tools()).rejects.toThrow();
       expect(calls).not.toContain("/v2/integration-links/slack/challenges");

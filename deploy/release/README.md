@@ -188,12 +188,28 @@ status, but does not accept it yet.
   --runtime-profile /absolute/private/candidate-runtime-profile.json
 ```
 
-Apart from its release identity, the candidate's saved environment carries
-forward every accepted setting, including the staging
+Apart from its release identity and the release-bound `agentic_ask_v1` and
+`small_scope_shortcut` switches,
+the candidate's saved environment carries forward every accepted setting, including the staging
 `ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1` value that onboarding sets. It never
 modifies the accepted snapshot. Do not change telemetry or any other setting by
 editing `.env.clean-v1` after promotion: that creates environment drift and
 blocks the next release.
+
+`agentic_ask_v1` and `small_scope_shortcut` are the only candidate
+configuration settings accepted by this release record. They are booleans in
+the canonical candidate bytes, default to `false` for legacy records that
+predate them, and are materialized as `ECHO_AGENTIC_ASK_V1=true|false` and
+`ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT=true|false` in that candidate's saved
+environment tuple. A true `small_scope_shortcut` requires
+`agentic_ask_v1=true`. Since
+[ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md) the Authority
+ignores `ECHO_AGENTIC_ASK_V1`: agentic Ask is the only Ask and is on whenever
+an answer model is configured. The field stays in the record so earlier
+records keep their bytes; set it to `true` in new records. The candidate record SHA already bound to the staging
+request covers both values. Rollback restores the accepted tuple verbatim,
+including earlier flag values or legacy absence. No command accepts arbitrary
+environment names or values.
 
 Run the bounded private-DM canary through the selected running release. It
 prefers a staged candidate, otherwise uses the accepted release. It refuses any
@@ -321,19 +337,24 @@ environment files, tokens, invitations, or credential material. URL metadata
 with userinfo, query or fragment is refused. The profile's four files must match
 the candidate's committed source exactly.
 
-Plan one named action. Before installing this tooling over older tooling,
-confirm that `clean-data/release/environment-repair.pending.json` is absent on
-the host; the updater no longer checks for it. If it is present, stop and leave
-it to the human host operator. For `install`, supply the full source SHA corresponding
+Plan one named action. Before installing this tooling over older tooling, run a
+separate `inspect-install` plan with the same inputs and
+`--previous-tooling-source` to confirm that
+`clean-data/release/environment-repair.pending.json` is absent. The reviewed
+runner checks the already-pinned release directory with `lstat`: any marker,
+including a regular file, unsafe symlink, or dangling symlink, returns the fixed
+`environment_invalid` refusal without reading marker contents or a target. A
+`ready` inspection is the supported confirmation. A present or unsafe marker
+requires the human host operator's repair lane; other inspection refusals follow
+their existing diagnostic and recovery rules. The updater no longer checks this
+marker. For `install`, supply the full source SHA corresponding
 to the independently reviewed *currently installed* tooling. Unknown installed
 bytes stop instead of being overwritten. Replacing tooling saves private old
 copies and hashes; it never edits the accepted release or environment.
 
-When an install returns only `precondition_failed`, create a separate
-`inspect-install` plan with the same inputs and `--previous-tooling-source`.
-Inspection shares the installer's identity, mount, ownership/control-path,
+`inspect-install` shares the installer's identity, mount, ownership/control-path,
 accepted-record, literal environment and hostname, candidate, and old-or-new
-tool hash guards. It returns `ready` or a fixed refusal
+tool hash guards, including the environment-repair-marker absence check. It returns `ready` or a fixed refusal
 category; `tool_missing`, `tool_file_invalid`, and `tool_hash_unknown` identify one of the six
 fixed reviewed tool names. Once the preceding identity, path, accepted-state
 and environment-format guards pass, the version-2 diagnostic also includes a

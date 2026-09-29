@@ -4,7 +4,7 @@ import {
   type StructuredGenerationObservedResultV1,
   type StructuredGenerationPort,
   type StructuredGenerationUsageV1,
-} from "@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition";
+} from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 
 export const OPENROUTER_STRUCTURED_GENERATION_MAX_TIMEOUT_MS = 120_000;
 
@@ -186,6 +186,23 @@ function finishReason(value: unknown): OpenRouterFinishReason | null {
   return typeof value === "string" ? "other" : null;
 }
 
+/**
+ * Parses model content as JSON. Some routed providers wrap a schema-valid
+ * object in a Markdown fence or a short preamble even under json_schema
+ * mode; the enclosed object is taken only when the whole content is not JSON.
+ * Callers still validate the parsed value against their own protocol.
+ */
+export function parseModelJson(content: string): unknown {
+  try { return JSON.parse(content) as unknown; } catch (error) {
+    const fenced = /^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/iu.exec(content);
+    if (fenced !== null) return JSON.parse(fenced[1]!) as unknown;
+    const start = content.indexOf("{");
+    const end = content.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(content.slice(start, end + 1)) as unknown;
+    throw error;
+  }
+}
+
 function isTimeoutFailure(value: unknown): boolean {
   return value instanceof Error && value.name === "TimeoutError";
 }
@@ -290,7 +307,8 @@ export function createOpenRouterStructuredGenerationAdapter(
         "OpenRouter credential is unavailable",
       );
     }
-    const signals: AbortSignal[] = [AbortSignal.timeout(input.timeout_ms)];
+    const timeoutSignal = AbortSignal.timeout(input.timeout_ms);
+    const signals: AbortSignal[] = [timeoutSignal];
     if (input.signal !== undefined) signals.push(input.signal);
     const request: RequestInit = {
       method: "POST",
@@ -318,6 +336,10 @@ export function createOpenRouterStructuredGenerationAdapter(
         provider: {
           require_parameters: true,
           data_collection: "deny",
+          // ADR-0022: the loop makes several sequential calls under a 90 s
+          // deadline, and OpenRouter's default price-weighted routing picked
+          // slow providers; route to the fastest provider that qualifies.
+          sort: "throughput",
         },
       }),
     };
@@ -329,7 +351,9 @@ export function createOpenRouterStructuredGenerationAdapter(
       response = await fetchImpl(url, request);
     } catch (error) {
       fail("OpenRouter request failed", {
-        failure_class: isTimeoutFailure(error)
+        // The call's own timeout can surface as an AbortError through
+        // AbortSignal.any; the timeout signal itself is the reliable witness.
+        failure_class: isTimeoutFailure(error) || timeoutSignal.aborted
           ? "adapter_timeout"
           : "adapter_transport",
         provider_latency_ms: elapsed(providerStartedAt, nowMs),
@@ -349,7 +373,7 @@ export function createOpenRouterStructuredGenerationAdapter(
           ? "OpenRouter response is invalid"
           : "OpenRouter request failed",
         {
-          failure_class: isTimeoutFailure(error)
+          failure_class: isTimeoutFailure(error) || timeoutSignal.aborted
             ? "adapter_timeout"
             : response.ok
               ? "adapter_transport"
@@ -462,7 +486,7 @@ export function createOpenRouterStructuredGenerationAdapter(
     }
     try {
       return Object.freeze({
-        value: observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(content) as unknown),
+        value: observeCoreRuntimeSyncV1("model_parse", () => parseModelJson(content)),
         usage: generationUsage,
         finish_reason: completed,
         provider_latency_ms: providerLatency,

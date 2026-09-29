@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type Database from 'better-sqlite3';
 import type { PersonUpdateSubmitV2 } from '@echo-brain/organization-api';
-import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/retrieval-grounded-answer-composition';
+import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { SqlitePersonUpdateEnrichmentWorkV2 } from '../src/adapters/persistence/sqlite/person-update-enrichment-work-v2.js';
 import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { SqliteProjectUploadEnrichmentAuthorizationV1 } from '../src/adapters/persistence/sqlite/project-upload-enrichment-v1.js';

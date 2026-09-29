@@ -165,6 +165,10 @@ export async function runOrganizationAuthorityServiceCli(
     });
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
+    // Agentic Ask is the only Ask (ADR-0022). ECHO_AGENTIC_ASK_V1 is still
+    // written by older release records and profiles; it no longer has an effect.
+    const agenticAskSmallScopeShortcut =
+      process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT === "true";
     const environmentSyntheticMeetingsDirectory =
       process.env.ECHO_STAGING_SYNTHETIC_MEETINGS_DIR;
     const requestedSyntheticMeetingsDirectory =
@@ -206,9 +210,6 @@ export async function runOrganizationAuthorityServiceCli(
             build_number: stagingJourneyTelemetry.identity.build_number,
             planner_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
             answer_model: OPENROUTER_ANSWER_COMPOSITION_MODEL_V1,
-            ...(stagingJourneyTelemetry.content_enabled
-              ? { content_observer: stagingJourneyTelemetry.content_observer }
-              : {}),
           });
     const meetingApprovalJourneyTelemetry =
       stagingJourneyTelemetry?.identity === null ||
@@ -245,6 +246,9 @@ export async function runOrganizationAuthorityServiceCli(
               ),
             },
       pkce_key_file: manifest.pkce_key_file,
+      ...(agenticAskSmallScopeShortcut
+        ? { agentic_ask_v1_small_scope_shortcut: true }
+        : {}),
       slack_signing_secret_file: required(
         parsed,
         "--slack-signing-secret-file",
@@ -272,19 +276,6 @@ export async function runOrganizationAuthorityServiceCli(
       on_worker_telemetry: (event) => {
         // The lifecycle reporter constructs this closed, content-free schema.
         io.stderr(`${canonicalJson(event as never)}\n`);
-      },
-      on_answer_composition_failure: (event) => {
-        io.stderr(
-          `${canonicalJson({
-            schema_version: event.schema_version,
-            kind: event.kind,
-            stage: event.stage,
-            failure_class: event.failure_class,
-            elapsed_ms: event.elapsed_ms,
-            http_status: event.http_status,
-            finish_reason: event.finish_reason,
-          } as never)}\n`,
-        );
       },
       on_private_approval_slack_rejection: (event) => {
         io.stderr(

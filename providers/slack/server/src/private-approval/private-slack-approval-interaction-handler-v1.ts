@@ -7,9 +7,11 @@ import type {
 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
 import {
   PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V2_KIND,
+  PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V3_KIND,
   type EnqueuePrivateApprovalInteractionResultV1,
   type PrivateApprovalSignedTerminalActionV1,
   type PrivateApprovalSignedTerminalActionV2,
+  type PrivateApprovalSignedTerminalActionV3,
 } from "../organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import type { PrivateSlackApprovalInteractionHttpPortV1 } from "../presentation/private-slack-approval-interaction-http-port-v1.js";
 import { PrivateSlackApprovalInteractionError, parseVerifiedPrivateSlackApprovalInteractionV1, type PrivateSlackApprovalInteractionRejectionStageV1, verifyPrivateSlackApprovalRequestV1 } from "./private-slack-approval-interaction-protocol-v1.js";
@@ -30,6 +32,10 @@ export interface PrivateSlackApprovalInteractionResolutionPersistenceV1 {
   enqueueV2?(receipt: PrivateApprovalSignedTerminalActionV2):
     | { readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV2; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean }
     | Promise<{ readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV2; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean }>;
+  /** V3 keeps the owner fields of a card that proposed owners (ADR-0021). */
+  enqueueV3?(receipt: PrivateApprovalSignedTerminalActionV3):
+    | { readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV3; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean }
+    | Promise<{ readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV3; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean }>;
 }
 
 export interface PrivateSlackApprovalInteractionHandlerInputV1 {
@@ -260,7 +266,7 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
           "meeting_approval_action_queue",
           captureJourneyClock(input.journey_telemetry),
         );
-        let result: EnqueuePrivateApprovalInteractionResultV1 | { readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV2; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean };
+        let result: EnqueuePrivateApprovalInteractionResultV1 | { readonly disposition: "resolution"; readonly receipt: PrivateApprovalSignedTerminalActionV2 | PrivateApprovalSignedTerminalActionV3; readonly receipt_sha256: `sha256:${string}`; readonly idempotent: boolean };
         if (interaction.schema_version === 1) {
           const receipt: PrivateApprovalSignedTerminalActionV1 = Object.freeze({
               schema_version: 1 as const,
@@ -277,6 +283,28 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
               verified_at: observedAt,
           });
           result = await input.persistence.enqueue({ disposition: "resolution", receipt });
+        } else if (interaction.schema_version === 3) {
+          const receipt: PrivateApprovalSignedTerminalActionV3 = Object.freeze({
+              schema_version: 3 as const,
+              kind: PRIVATE_APPROVAL_SIGNED_BLOCK_ACTION_RECEIPT_V3_KIND,
+              provider_action_key_sha256: interaction.provider_action_key_sha256,
+              request: interaction.request,
+              approval_id: interaction.approval_id,
+              action_id: interaction.action_id,
+              action: interaction.action,
+              selected_policy_id: interaction.selected_policy_id,
+              selected_project_ids: interaction.selected_project_ids,
+              share_transcript: interaction.share_transcript,
+              comment: interaction.comment,
+              action_owners: interaction.action_owners,
+              lookup: interaction.lookup,
+              received_at: observedAt,
+              verified_at: observedAt,
+          });
+          if (input.persistence.enqueueV3 === undefined) {
+            throw new Error("private approval V3 receipt persistence is not configured");
+          }
+          result = await input.persistence.enqueueV3(receipt);
         } else {
           const receipt: PrivateApprovalSignedTerminalActionV2 = Object.freeze({
               schema_version: 2 as const,

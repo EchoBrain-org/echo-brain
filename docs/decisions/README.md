@@ -40,7 +40,10 @@ separately.
 | [ADR-0016](ADR-0016-organization-people-directory.md) | Organization people directory for any active member | accepted |
 | [ADR-0017](ADR-0017-project-meeting-approval-v1.md) | Project audiences and explicit transcript release for meeting approval | accepted |
 | [ADR-0018](ADR-0018-project-settings-v1.md) | Minimum project settings with reversible archive | accepted |
+| [ADR-0019](ADR-0019-agentic-ask-v1.md) | Bounded agentic Ask and the evidence desk | accepted |
 | [ADR-0020](ADR-0020-minimized-person-layer-1-record-projection.md) | Minimized Person Layer 1 record projection | proposed |
+| [ADR-0021](ADR-0021-ask-reach-and-approval-owners.md) | Ask over shared transcripts, refused project choices, and confirmed action owners | accepted |
+| [ADR-0022](ADR-0022-agentic-ask-only.md) | Agentic Ask is the only Ask | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

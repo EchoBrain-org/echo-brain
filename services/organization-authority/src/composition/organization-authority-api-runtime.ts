@@ -26,7 +26,6 @@ import {
 import type { AddressInfo } from "node:net";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import { SqlitePersonSessionRepository } from "../adapters/persistence/sqlite/sqlite-person-session-repository.js";
-import { SqlitePersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/person-answer-composition-audit-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
@@ -43,11 +42,9 @@ import { PersonEmployeeLifecycleApplication } from "../application/person-employ
 import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
-import {
-  createPersonAnswerRouteV1,
-  type AnswerCompositionFailureEventV1,
-} from "./person-answer-route.js";
-import { createPersonAnswerV2Route, createPersonMeetingTranscriptReadRouteV1 } from "./person-answer-v2-route.js";
+import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
+import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
+import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import type { AnswerCompositionGenerationBindingV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
@@ -75,8 +72,15 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 }
 
 export interface OrganizationAuthorityApiRuntimeDependencies {
+  /** Server-only agentic Ask experiment: open the whole readable scope first when it is small. */
+  readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Historical record protocol projection, independent of live ingress. */
   readonly record_approver?: RecordApproverProjectorV1;
+  /**
+   * The record codecs the Authority appends with. Ask's evidence desk reads
+   * approved records through them; without them only human-act records parse.
+   */
+  readonly record_input_codecs?: import("@echo-brain/organization-protocol").RecordInputCodecRegistryV4;
   readonly core_runtime_observation?: CoreRuntimeObservationScopeV1;
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   /** Optional external identity provider, omitted until it is configured. */
@@ -85,8 +89,6 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   readonly answer_composition_generation?: AnswerCompositionGenerationBindingV1;
   /** Bound by the active rebuild runtime so serving accepts the same model profile. */
   readonly readable_search_retrieval_contract_sha256?: import("@echo-brain/federation-protocol").Sha256Digest;
-  /** Metadata-only answer-composition failure observer for the API server log. */
-  readonly answer_failure?: (event: AnswerCompositionFailureEventV1) => void;
   /** Content-free document and retained-text worker failure observer. */
   readonly person_source_failure?: (event: PersonDocumentProcessingFailureObservationV1) => void;
   /** Staging-only request-local Ask journey factory. */
@@ -208,6 +210,7 @@ export async function startOrganizationAuthorityApiRuntime(
     const projectRepository = new SqliteProjectContextRepositoryV1(database);
     const captureProjects = createRecordProjectAuthorizationV1(projectRepository);
     const recordSearch = createPersonRecordSearchRouteV1({
+      ...(dependencies.record_input_codecs === undefined ? {} : { record_input_codecs: dependencies.record_input_codecs }),
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
       organization_id: metadata.organization_id,
@@ -264,38 +267,28 @@ export async function startOrganizationAuthorityApiRuntime(
       }),
       person_record_search: recordSearch,
       person_meeting_transcript: createPersonMeetingTranscriptReadRouteV1({ originals }),
+      person_source_evidence: createPersonSourceEvidenceRouteV1({ originals }),
+      // Agentic Ask is the only Ask (ADR-0022); it needs the bound answer model.
       ...(dependencies.answer_composition_generation === undefined
         ? {}
         : {
-            person_answer: createPersonAnswerRouteV1({
+            person_answer_v3: createPersonAnswerV3Route({
               authority_id: metadata.authority_id,
               organization_id: metadata.organization_id,
               state_lineage_id: lineage.root.state_lineage_id,
-              search: recordSearch,
-              model: dependencies.answer_composition_generation.structured_output,
-              generation: dependencies.answer_composition_generation.generation,
-              audit: new SqlitePersonAnswerCompositionAuditV1(database),
-              ...(dependencies.ask_journey_telemetry === undefined
-                ? {}
-                : {
-                    ask_journey_telemetry:
-                      dependencies.ask_journey_telemetry,
-                  }),
-              ...(dependencies.answer_failure === undefined
-                ? {}
-                : { on_failure: dependencies.answer_failure }),
-            }),
-            person_answer_v2: createPersonAnswerV2Route({
-              authority_id: metadata.authority_id,
-              organization_id: metadata.organization_id,
-              state_lineage_id: lineage.root.state_lineage_id,
-              records: recordSearch,
+              sessions,
               originals,
+              records: recordSearch,
+              memberships: {
+                membership: (id) => repository.read((transaction) => transaction.membership(id)),
+              },
               model: dependencies.answer_composition_generation.structured_output,
               generation: dependencies.answer_composition_generation.generation,
-              audit: new SqlitePersonAnswerCompositionAuditV1(database),
+              audit: new SqlitePersonAgenticAskAuditV1(database),
               ...(dependencies.ask_journey_telemetry === undefined ? {} : { ask_journey_telemetry: dependencies.ask_journey_telemetry }),
-              ...(dependencies.answer_failure === undefined ? {} : { on_failure: dependencies.answer_failure }),
+              ...(dependencies.agentic_ask_v1_small_scope_shortcut === true
+                ? { small_scope_shortcut: true }
+                : {}),
             }),
           }),
       person_documents: createPersonDocumentApplicationV1({

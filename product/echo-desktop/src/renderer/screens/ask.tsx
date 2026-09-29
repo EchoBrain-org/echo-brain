@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { AnswerSource, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
+import type { AnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  answerSources, ask, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, matchesShown, openCompose, openMatch, pageCovered, retryEvidence, retryRecord,
-  searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
+  answerSources, ask, askEverywhere, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, foundNothingInProject, matchesShown, openCompose, openMatch,
+  openSlackSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Plus, Up } from './icons.js';
 
@@ -93,7 +93,7 @@ export function Bar({ state }: { state: State }) {
 
 /** A chip: its place in the answer, and its meeting's title once its record is read. */
 function chipLabel(source: AnswerSource, sources: SourcesState | null): string {
-  if (source.kind === 'original') return source.label;
+  if (source.kind !== 'record') return source.label;
   const read = sources?.records[source.record.record_sha256];
   return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
@@ -112,11 +112,54 @@ function BasedOn({ state }: { state: State }) {
         {sources.map((source, index) => (
           <button type="button" key={index} class={`source-chip${open === index ? ' on' : ''}`} data-testid="source-chip"
             aria-pressed={open === index} onClick={() => chooseSource(index)}
-            title={source.kind === 'record' ? 'Show the approved record and supporting excerpts' : 'Show the verified evidence packet for this original source'}>
+            title={source.kind === 'record' ? 'Show the approved record and supporting excerpts'
+              : source.kind === 'slack' ? 'Show the cited Slack message' : 'Show the verified evidence packet for this original source'}>
             <span class="n">{index + 1}</span><span class="label">{chipLabel(source, state.sources)}</span>
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** A V4 statement owns its citations, so readers can see exactly what supports it. */
+function Statement({ state, statement }: { state: State; statement: AnswerStatement }) {
+  const sources = answerSources(state);
+  return (
+    <div class="answer-statement selectable">
+      <div data-testid="statement-text">{statement.text}</div>
+      <div class="chips">
+        {statement.citation_indexes.map(index => {
+          const source = sources[index];
+          if (!source) return null;
+          return <button type="button" key={index} class="source-chip" data-testid="statement-citation"
+            onClick={() => chooseSource(index)} title={`Show ${chipLabel(source, state.sources)}`}>
+            <span class="n">{index + 1}</span><span class="label">{chipLabel(source, state.sources)}</span>
+          </button>;
+        })}
+        {statement.private && <span class="private-mark" data-testid="private-mark">Private</span>}
+      </div>
+    </div>
+  );
+}
+
+function AgenticAnswer({ state, turn }: { state: State; turn: AskTurn }) {
+  const answer = turn.answer;
+  return (
+    <div class="agentic-answer" data-testid="answer">
+      {answer.assumption && <div class="answer-banner" data-testid="answer-assumption">{answer.assumption}</div>}
+      {answer.outcome === 'off_scope' && <div class="answer-banner" data-testid="answer-off-scope">The accessible evidence may be about a different subject.</div>}
+      {answer.notice && <div class="answer-banner" data-testid="answer-notice">{answer.notice}</div>}
+      {answer.direct && <Statement state={state} statement={answer.direct} />}
+      {answer.parts.map((part, index) => (
+        <section class="answer-part" key={index}>
+          {/* One part answers the question itself: its label would repeat it. */}
+          {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
+          {part.statements.map((statement, statementIndex) => <Statement key={statementIndex} state={state} statement={statement} />)}
+          {part.records?.map((statement, statementIndex) => <Statement key={`record-${statementIndex}`} state={state} statement={statement} />)}
+          {part.gap && <div class="answer-gap" data-testid="answer-gap">{part.gap}</div>}
+        </section>
+      ))}
     </div>
   );
 }
@@ -150,7 +193,15 @@ function CurrentAnswer({ state, turn }: { state: State; turn: AskTurn }) {
     <div class="turn">
       <div class="question selectable" data-testid="question">{turn.question}</div>
       <div class="asked">{turn.scopeName}</div>
-      <div class="answer selectable" data-testid="answer">{turn.answer.text}</div>
+      <AgenticAnswer state={state} turn={turn} />
+      {foundNothingInProject(turn) && (
+        <div class="project-empty" data-testid="project-empty">
+          <span>Nothing in {turn.scopeName} matched.</span>
+          {!thread.failed && (
+            <button type="button" class="link-button" data-testid="ask-everywhere" onClick={askEverywhere}>Ask across everything you can see</button>
+          )}
+        </div>
+      )}
       <BasedOn state={state} />
       <div class="actions">
         {count > 0 && (
@@ -188,10 +239,7 @@ export function AskView({ state }: { state: State }) {
         <div class="turn">
           <div class="question selectable" data-testid="question">{asking.question}</div>
           <div class="asked">{asking.scopeName}</div>
-          <div class="asking" data-testid="asking">
-            <i /><i /><i /><span>Thinking…</span>
-            <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
-          </div>
+          <Asking />
         </div>
       )}
       {failed && (
@@ -210,12 +258,26 @@ export function AskView({ state }: { state: State }) {
   );
 }
 
+function Asking() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const timer = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 250);
+    return () => clearInterval(timer);
+  }, []);
+  return <div class="asking" data-testid="asking">
+    <i /><i /><i /><span>Thinking… {elapsed}s</span>
+    <button type="button" class="link-button" data-testid="ask-cancel" onClick={cancelAsk}>Cancel</button>
+  </div>;
+}
+
 /** A decision, action or rationale, and the excerpts that support it. */
 function Item({ item }: { item: RecordItem }) {
   return (
     <div class="record-item">
       {item.status && <div class="status">{item.status === 'proposed' ? 'Proposed' : 'Unresolved'}</div>}
       <div>{item.text}</div>
+      {item.owner && <div class="owner" data-testid="record-owner">Owner: {item.owner}</div>}
       {item.excerpts.map((excerpt, index) => (
         <div key={index} class="excerpt">
           <div class="quote">“{excerpt.quote}”</div>
@@ -256,10 +318,17 @@ function RecordDetail({ record }: { record: ApprovedRecord }) {
   );
 }
 
-/**
- * Beside the answer: the source a chip chose. An approved record, or an
- * original source's verified evidence packet, at most 2,000 characters.
- */
+function SlackSource({ source, index }: { source: Extract<AnswerSource, { kind: 'slack' }>; index: number }) {
+  const [failed, setFailed] = useState(false);
+  return <div class="source-detail">
+    <h2>{source.label}</h2>
+    <button type="button" class="link-button" data-testid="open-slack-source" title={source.permalink}
+      onClick={async () => { setFailed(false); setFailed(!(await openSlackSource(index))); }}>Open in Slack</button>
+    {failed && <div class="error">Slack could not be opened. Try again.</div>}
+  </div>;
+}
+
+/** Beside the answer: an approved record, verified original evidence, or a link to a live Slack message. */
 export function SourcePane({ state }: { state: State }) {
   const sources = state.sources!;
   const index = sources.open!;
@@ -275,6 +344,8 @@ export function SourcePane({ state }: { state: State }) {
           {read.failure.retryable && <button type="button" class="link-button" onClick={retryRecord}>Try again</button>}
         </div>
       ) : <RecordDetail record={read.value} />;
+  } else if (source.kind === 'slack') {
+    body = <SlackSource key={source.permalink} source={source} index={index} />;
   } else {
     const read = sources.evidence?.index === index ? sources.evidence.read : { loading: true } as const;
     const text = !read.loading && 'value' in read ? read.value.text : undefined;
@@ -297,7 +368,7 @@ export function SourcePane({ state }: { state: State }) {
   return (
     <aside class="source-pane" data-testid="source-pane" aria-label="Source">
       <div class="pane-head">
-        <div class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : 'Original source'}</div>
+        <div class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : source.kind === 'slack' ? 'Slack message' : 'Original source'}</div>
         <button type="button" class="icon-button" aria-label="Close sources" data-testid="source-close" onClick={toggleSources}><Close /></button>
       </div>
       {body}

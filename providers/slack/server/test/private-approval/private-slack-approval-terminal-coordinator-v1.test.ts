@@ -238,6 +238,39 @@ describe("private Slack approval terminal coordinator v1", () => {
     expect(harness.records[0]?.resolution).toEqual(value.resolution);
     expect(renders).toEqual([expect.objectContaining({ outcome: "approved", policy_label: "Projects" })]);
   });
+  it("recovers a V3 approval with confirmed owners through the same versioned writer", async () => {
+    const v1 = terminal("approved");
+    const value = {
+      ...v1,
+      resolution: {
+        ...v1.resolution,
+        schema_version: 3,
+        kind: "echo-private-approval-resolution-v3",
+        selected_project_ids: [],
+        share_transcript: false,
+        canonical_record_policy: {
+          ...v1.resolution.canonical_record_policy!,
+          audience_project_ids: [], association_project_ids: [], share_transcript: false,
+          transcript_source: { source_id: "meeting", revision_id: "revision", source_sha256: digest("source") },
+        },
+        action_owners: [{ action_index: 0, owner: "Jules" }],
+      } as unknown as PrivateApprovalResolutionV2,
+    };
+    const harness = authorityHarness(value);
+    let appended: unknown;
+    const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
+      control_plane: { listQueued: () => [], listDenied: () => [], listTerminals: () => [value], finalize: async () => value, recordDenied: () => undefined },
+      authority: harness.authority,
+      poster: { renderTerminal: async () => ({ kind: "done" as const }) },
+      record_writer: {
+        appendApproved: async () => { throw new Error("V3 cannot use V1 writer"); },
+        appendApprovedV2: async (input: unknown) => { appended = input; return { receipt: { body: {}, receipt_sha256: digest("receipt"), signing_key_descriptor: {}, signature: "signature" } }; },
+      } as never,
+    });
+    await coordinator.appendFinalizedApprovalsToV4(new AbortController().signal);
+    expect(appended).toEqual(value);
+    expect(harness.records[0]?.resolution).toEqual(value.resolution);
+  });
   it("durably consumes finalization denials and competing terminal clicks", async () => {
     const denied: Array<readonly [string, string]> = [];
     const queued = [

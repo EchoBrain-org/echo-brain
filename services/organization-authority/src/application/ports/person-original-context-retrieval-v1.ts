@@ -27,6 +27,8 @@ export interface OriginalContextReleaseV1 {
 
 export interface OriginalContextRetrievalResultV1 {
   readonly release: OriginalContextReleaseV1;
+  /** Digest of the content-free Layer-3 release audit committed before bytes return. */
+  readonly receipt: Sha256Digest;
   /** One count for every requested query, before cross-query deduplication. */
   readonly query_hit_counts: readonly number[];
 }
@@ -61,6 +63,18 @@ export interface ApprovedMeetingTranscriptGrantReaderV1 {
     readonly state_lineage_id: string;
     readonly approval_id: string;
   }): ApprovedMeetingTranscriptGrantV1 | null;
+  /**
+   * Every grant in the lineage, or those for one exact source revision. Ask
+   * searches only transcripts it can list; without it, transcripts stay out.
+   */
+  list?(input: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly source_id?: string;
+    readonly revision_id?: string;
+    readonly source_sha256?: Sha256Digest;
+  }): readonly ApprovedMeetingTranscriptGrantV1[];
 }
 
 export interface ApprovedMeetingTranscriptReadV1 {
@@ -102,6 +116,55 @@ export interface PersonOriginalContextRetrievalPortV1 {
     readonly citation: PersonMeetingTranscriptCitationV1;
     readonly offset?: number;
   }): ApprovedMeetingTranscriptReadV1;
+}
+
+/** Desk-only, request-bound original evidence release.  Callers of the
+ * single-batch PersonOriginalContextRetrievalPortV1 cannot invoke these methods. */
+export type OriginalContextDeskKindV1 = "note" | "document_passage";
+export type OriginalContextDeskVisibilityV1 = "only_me" | "team" | "project" | "projects";
+
+export interface OriginalContextDeskItemV1 {
+  readonly citation: OriginalContextCitationV1;
+  readonly kind: OriginalContextDeskKindV1;
+  readonly text?: string;
+  readonly visibility: OriginalContextDeskVisibilityV1;
+  readonly label: string;
+  readonly received_at: string;
+  readonly version: string;
+}
+
+export interface OriginalContextDeskReleaseV1 {
+  readonly release: OriginalContextReleaseV1;
+  readonly receipt: Sha256Digest;
+  readonly items: readonly OriginalContextDeskItemV1[];
+  readonly truncated: boolean;
+}
+
+export interface PersonOriginalContextEvidenceDeskPortV1 extends PersonOriginalContextRetrievalPortV1 {
+  /** Authenticates the request-bound desk before its first model call. */
+  deskAuthorize(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+  }): { readonly checked_at: string };
+  deskSearch(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+    readonly query?: string;
+    readonly kinds?: readonly OriginalContextDeskKindV1[];
+    readonly limit?: number;
+    /** Server-internal complete passage inventory, valid only without a query. */
+    readonly inventory_mode?: "items";
+  }): OriginalContextDeskReleaseV1;
+  deskOpen(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+    readonly citation: OriginalContextCitationV1;
+    readonly neighbours?: number;
+  }): OriginalContextDeskReleaseV1;
+  revalidateDeskRelease(input: {
+    readonly access_token: string;
+    readonly release: OriginalContextDeskReleaseV1;
+  }): { readonly checked_at: string };
 }
 
 /** A source citation omits evidence text and presentation-only labels. */

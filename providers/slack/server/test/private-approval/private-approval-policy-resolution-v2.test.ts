@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePrivateApprovalPolicyV2, validatePrivateApprovalResolutionV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
+import { privateApprovalResolutionV3, resolvePrivateApprovalPolicyV2, validatePrivateApprovalResolutionV2, validatePrivateApprovalResolutionV3 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 const d=(n:string)=>`sha256:${n.repeat(64).slice(0,64)}` as `sha256:${string}`;
 const project={project_id:"prj_11111111-1111-4111-8111-111111111111",project_membership_id:"pgm_11111111-1111-4111-8111-111111111111",name:"Apollo"};
 const pending={schema_version:2 as const,kind:"echo-private-approval-pending-v2" as const,approval_id:"apr_1",organization_id:"org_1",candidate_sha256:d("a"),frozen_card_sha256:d("b"),approved_snapshot_sha256:d("c"),assigned_owner:{principal_id:"prn_1",membership_id:"mem_1"},assigned_owner_slack_identity_link:{provider:"slack" as const,external_identity_link_id:"clm_1",external_identity_link_contract_sha256:d("d"),provider_subject_id:"U123"},eligible_projects:[project],transcript_source:{source_id:"src_1",revision_id:"rev_1",source_sha256:d("e")}};
@@ -24,5 +24,24 @@ describe("private approval resolution v2",()=>{
    const policy=resolution.canonical_record_policy!;
    expect(()=>validatePrivateApprovalResolutionV2({...resolution,canonical_record_policy:{...policy,policy_consequence_sha256:d("0")}})).toThrow("resolution policy");
    expect(()=>validatePrivateApprovalResolutionV2({...resolution,canonical_record_policy:{...policy,restricted_reader:{principal_id:"prn_other",membership_id:"mem_other"}}})).toThrow("resolution policy");
+ });
+ it("V3 records only the owners the approver kept or entered, and grants nothing new",()=>{
+   const v2=resolvePrivateApprovalPolicyV2({pending,command,authorization_allow:allow,selected_projects_current:[project]});
+   const v3=privateApprovalResolutionV3(v2,[{action_index:0,owner:"Jules"},{action_index:2,owner:null},{action_index:5,owner:"Priya Shah"}]);
+   expect(v3).toMatchObject({schema_version:3,kind:"echo-private-approval-resolution-v3",action_owners:[{action_index:0,owner:"Jules"},{action_index:5,owner:"Priya Shah"}]});
+   const {schema_version:_a,kind:_b,action_owners:_c,...rest}=v3; const {schema_version:_d,kind:_e,...base}=v2;
+   expect(rest).toEqual(base);
+   expect(validatePrivateApprovalResolutionV3(v3)).toEqual(v3);
+ });
+ it("V3 refuses unordered, uncanonical, cleared or rejected owners",()=>{
+   const v2=resolvePrivateApprovalPolicyV2({pending,command,authorization_allow:allow,selected_projects_current:[project]});
+   expect(()=>privateApprovalResolutionV3(v2,[{action_index:2,owner:"A"},{action_index:1,owner:"B"}])).toThrow("ordered");
+   expect(()=>privateApprovalResolutionV3(v2,[{action_index:1,owner:" Jules"}])).toThrow("owner invalid");
+   expect(()=>privateApprovalResolutionV3(v2,[{action_index:1,owner:"x".repeat(121)}])).toThrow("owner invalid");
+   const v3=privateApprovalResolutionV3(v2,[{action_index:1,owner:"Jules"}]);
+   expect(()=>validatePrivateApprovalResolutionV3({...v3,action_owners:[{action_index:1,owner:null}]})).toThrow("only confirmed owners");
+   const rejected=resolvePrivateApprovalPolicyV2({pending,command:{...command,action:"reject",selected_policy_id:null,selected_project_ids:[],share_transcript:false},authorization_allow:allow,selected_projects_current:[]});
+   expect(()=>privateApprovalResolutionV3(rejected,[{action_index:1,owner:"Jules"}])).toThrow("owners invalid");
+   expect(privateApprovalResolutionV3(rejected,[]).action_owners).toEqual([]);
  });
 });
