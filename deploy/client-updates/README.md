@@ -5,6 +5,13 @@ This dedicated hosting stack prepares an HTTPS endpoint for the signed
 the Authority staging stack and onboarding-transfer storage. Creating the
 endpoint does not publish a release, enroll a client, or authorize a candidate.
 
+For matching server/client changes, use the
+[coordinated release procedure](../release/README.md#coordinated-server-and-client-release).
+Server staging and promotion do not change this feed. `echo-brain update`
+discovers only the eligible release in its configured, valid signed feed, even
+when a newer server or Git commit exists. Promotion and publication remain
+separate operations within that required workflow.
+
 The S3-only target is the repository-pinned staging account, region `us-west-2`,
 stack `echo-client-update-staging-s3-v1`, using the `echo-prod` IAM Identity Center
 profile. The stack contains only an encrypted, versioned S3 bucket and its bucket
@@ -99,11 +106,23 @@ sequence floor, `automatic: true`, and `installation: "cli-kit"`. No client,
 kit, feed, repository or publication receipt receives the private key.
 
 Run the [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed)
-with the exact accepted release and both platform kits: macOS arm64 and Linux
+with the exact canonical release and both platform kits: macOS arm64 and Linux
 x64/glibc. The preparation, signer, seal and publication commands require the
 complete pair with the same source SHA and Person-client artifact. Keep the
 prepared bundle, authorization and receipts in private mode-0700 directories
-with mode-0600 files. Preview signing before approving its exact manifest digest:
+with mode-0600 files.
+
+Unsigned preparation may use a candidate release before final acceptance; it
+requires no release authorization. Review the resulting manifest bytes and
+digest with the candidate's release/read evidence. One final human review may
+approve the release and that exact manifest together, including its channel,
+sequence, expiry, targets and predecessor when replacing a feed. Preserve the
+existing release authorization format and separate exact-manifest approval.
+
+The signing preview below requires the completed final release authorization
+even though it does not sign. Never create that authorization just to obtain a
+preview. After final release approval, preview signing if the manifest has not
+already been reviewed:
 
 ```sh
 npm run client-update:sign -- sign \
@@ -113,14 +132,17 @@ npm run client-update:sign -- sign \
   --signature /absolute/private/new-manifest.sig
 ```
 
-After review, repeat that command with `--approve-manifest <manifest-sha256>`.
-Existing user authorization for the same release, channel and operation remains
-valid. The signer revalidates the release, kits, founder authorization and pinned
+After exact manifest approval, run that command with
+`--approve-manifest <manifest-sha256>`. If the combined review already approved
+those unchanged bytes and scope, reuse that approval without another prompt.
+The signer revalidates the release, kits, founder authorization and pinned
 public key; it signs the original manifest bytes and writes a new detached
 signature exclusively. Run `client-update-feed.mjs seal` with that signature
 and the same authorization to create `feed.json`.
 
-From a reviewed, clean committed checkout, prepare the first publication:
+From a reviewed, clean committed checkout, prepare the first publication with
+`plan`. After server promotion and a passing fresh host status, execute and
+verify it:
 
 ```sh
 npm run client-update:publish -- plan \
@@ -128,12 +150,23 @@ npm run client-update:publish -- plan \
   --prepared /absolute/private/new-feed-bundle \
   --authorization /absolute/private/founder-authorization.json \
   --output /absolute/private/first-publication.json
+```
+
+After promotion and the fresh status check:
+
+```sh
 npm run client-update:publish -- execute \
   --receipt /absolute/private/first-publication.json \
   --approve-manifest '<exact-reviewed-manifest-sha256>'
 npm run client-update:publish -- status \
   --receipt /absolute/private/first-publication.json
 ```
+
+For an already accepted first release, verify that accepted runtime with a
+fresh host status before publication. The publisher validates release
+authorization, signatures and artifact identity; it does not query host
+promotion or API compatibility. This ordering is an operator gate. A prepared
+or sealed bundle is not publication and does not update enrolled clients.
 
 This publisher supports only the first release in the dedicated S3 stack. It
 rechecks the account, completed hosting receipt, deployed template, resources,
@@ -163,6 +196,7 @@ but clients still reject that expired feed. Status cannot authorize an expired
 write or renew metadata. Signing, sealing and publication remain strict about
 freshness. Receipts remain bound to their exact tooling commit; never edit an
 old receipt's source binding to run newer tooling against it.
+
 ## Replace an existing feed
 
 The original first-publication receipt remains historical evidence for its
@@ -195,6 +229,12 @@ npm run client-update:publish -- replace-plan \
   --authorization /absolute/private/B-founder-authorization.json \
   --expected-predecessor '<exact-64-lowercase-hex-feed-sha256>' \
   --output /absolute/private/B-feed-replacement.json
+```
+
+Planning may precede promotion. Execute only after promotion and a fresh host
+status confirm the exact accepted release:
+
+```sh
 npm run client-update:publish -- replace-execute \
   --receipt /absolute/private/B-feed-replacement.json \
   --approve-manifest '<exact-reviewed-B-manifest-sha256>'
@@ -251,7 +291,50 @@ When the installed client already matches the first published release,
 It does not prove installation of a different release. Preserve the existing
 Person session and verify authenticated reads after enrollment.
 
-Live acceptance requires a Mac on release A to start a normal Person command,
-automatically install signed release B, and complete authenticated document
-reads with the existing session. Local packaging and updater tests do not
-establish that live acceptance has occurred.
+## Verify Mac and Linux client activation
+
+For a coordinated release, require live A-to-B acceptance separately on a native
+macOS arm64 seat and a native Linux x64/glibc seat. Both kits appearing in a
+manifest proves availability, not activation. Use enrolled installations with
+the reviewed bootstrap; Linux normally uses
+`${XDG_DATA_HOME:-$HOME/.local/share}/echo/person/bin/echo-brain`. Preserve the
+existing Person sessions. Enrollment/bootstrap changes have their own review
+boundary; do not reconfigure a client merely to bypass a failed update.
+
+On each platform:
+
+1. Before publication, record the actual wrapper and release A's `person status`
+   build identity; preserve that baseline for the post-publication test.
+   `person status` can itself trigger automatic activation, so do not use it
+   after publication to establish the old-client baseline. After publication,
+   run `update --check --json`, which reports installed/available releases
+   without activation. Require the expected signed successor from the pinned
+   feed and target. `update --status` alone is cached evidence.
+2. After `--check` reports `available`, start a normal Person command from release
+   A with automatic updating enabled. The `available` result permits immediate
+   activation without waiting for the hourly interval; `person status` may be
+   this first command. Retain the
+   update notice and resulting build identity to verify activation and
+   re-execution on release B. An
+   explicit `update` can exercise manual recovery, but record which path passed
+   rather than claiming automatic delivery from a manual/offline installation.
+3. Check `person status` from that same wrapper. Match its source SHA to the
+   canonical release, and retain the verified installer/update artifact evidence.
+   The displayed product version alone may be identical between releases.
+   The managed wrapper normally points directly into a versioned release;
+   that is supported. A custom wrapper outside the managed launcher path may
+   remain pinned to the old release, even if the shared installation updated.
+   Verify the executable that actually serves this seat's commands.
+4. Complete an authenticated record/document read and a positive cited Ask
+   against a known readable fixture with that account. Include a Linux member
+   path when members are affected; do not substitute the owner's private canary
+   or widen permissions. Retain bounded identities and outcomes, not private
+   document content. A 404, an empty expected read or a failed Ask is not a pass.
+
+Retain the latest publication/replacement receipt with `state: "succeeded"` and
+`metadata_fresh: true`, both platform activation/read proofs, and any affected
+desktop evidence with the coordinated release handoff. Until both client paths
+pass, report "client published; verification incomplete." State the seats
+tested and those outstanding rather than claiming fleet-wide completion.
+Local packaging/updater tests and an already-current client do not prove a live
+A-to-B update. Desktop distribution remains outside this CLI channel.

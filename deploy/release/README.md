@@ -4,6 +4,11 @@ This directory contains the small release boundary used after the first live
 organization release. It selects exact artifacts, never migrates state, and does
 not manage client fleets.
 
+For a change that needs matching server and client versions, follow
+[Coordinated server and client release](#coordinated-server-and-client-release).
+Staging alone does not finish that workflow or make a client available to
+`echo-brain update`.
+
 The runtime-profile field is current-only. A pre-beta Authority prepared with
 an older release record has no compatibility bridge. `clean-v1` describes an
 artifact replacement loop, not a database migration: it accepts only the
@@ -36,6 +41,137 @@ staged candidate has a migration operation under
 does not read those journals. An outstanding migration must be reconciled
 using its matching historical tooling before replacement; preserve its state
 and evidence. Source cleanup does not perform that host transition.
+
+## Coordinated server and client release
+
+This is the end-to-end **staging** release procedure under the
+[Authority operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
+It joins the existing host-release and signed-feed commands into one operator
+workflow. They keep separate receipts and recovery rules; there is no atomic
+transaction between the server and feed. This procedure does not authorize
+production/client-live deployment or change their approval boundaries.
+
+| Phase | What it proves |
+| --- | --- |
+| Prepared | Exact candidate artifacts and unsigned feed inputs exist for review. Nothing has been accepted or published. |
+| Staged | The candidate is running on the staging host. The prior record remains accepted. Existing clients already reach the candidate. |
+| Server accepted | Promotion completed and a fresh host status confirms the candidate as accepted. The client feed may still advertise the prior release. |
+| Client published | The signed feed and both platform artifacts are verified and currently installable. This does not prove a client has updated. |
+| Client verified | Representative native Mac and Linux clients activated the published release and passed authenticated read and cited-Ask checks. |
+
+Report a coordinated release complete only after the last phase and any affected
+desktop distribution checks. State the environment and seats actually verified;
+representative acceptance is not proof that every enrolled seat updated.
+
+### Prepare the transition before staging
+
+1. Record the accepted server, candidate, currently published feed and actual
+   clients that use this Authority. Compare API routes, request/response schemas
+   and installation types using source SHA and artifact identity, not just the
+   displayed product version. A version string may be reused. `update --status`
+   is saved local state; `update --check` contacts the configured signed feed.
+2. Review compatibility **before `stage`**, because it replaces the running
+   server on the shared staging host. Prefer a transition that keeps existing
+   clients working while updates arrive. If compatibility is absent, require
+   an explicitly coordinated maintenance/update window with the affected seats
+   and recovery plan identified before activation. A candidate canary after
+   staging cannot protect those seats from a breaking API change.
+3. Prepare one canonical release record, immutable image, matching runtime
+   profile and exact Person-client tarball using the sections below. Build both
+   CLI kits from that release: macOS arm64 and Linux x64/glibc. Preserve the
+   accepted baseline and operation receipts. Prepare any affected Electron
+   desktop artifact through its own packaging lane; the CLI feed does not
+   distribute desktop apps.
+4. Prepare the unsigned feed bundle using the existing
+   [feed preparation command](../../docs/features/client-updates-v1.md#preparing-an-approved-feed).
+   `prepare` needs no final authorization and can use the candidate's canonical
+   record. Keep the enrolled feed URL, channel and public key, advance the
+   sequence, and choose sufficient validity for approval and distribution.
+   For replacement, bind the predecessor to the preserved most-recent succeeded
+   publication/replacement receipt's `hashes.feed.json`, not a guessed value
+   from the mutable endpoint. Ensure the existing hosting and signer are ready.
+
+Current Ask follows [ADR-0022](../../docs/decisions/ADR-0022-agentic-ask-only.md):
+`/v1/person/ask` and `/v2/person/ask` are retired and return 404; matching clients
+use `/v3/person/ask`. There is no implemented legacy bridge or dedicated
+"update required" response to rely on. A transition plan must reflect that
+contract. Do not treat this guide as implementing such a bridge.
+
+### Qualify and review the exact release once
+
+Use the [automated current-host lane](#automated-current-host-staging-lane) to
+stage, run the synthetic canary, obtain the human's private Slack-card approval,
+and install/check the exact candidate client. Preserve the candidate's positive
+record search and cited Ask evidence. A failing required check stops acceptance.
+
+After those checks, present one final review containing the candidate release
+record hash, Person-client artifact hash, canary/read evidence, prepared manifest
+hash, channel, sequence, expiry, both platform targets, and expected predecessor
+hash for a replacement. Include the compatibility plan and any affected desktop
+artifact identity. The human may approve server acceptance and these exact feed
+inputs together; reuse that approval while its scope and bytes remain unchanged.
+The earlier Slack-card approval remains a separate human action.
+
+Only after that decision create the existing release authorization JSON shown
+in the automated lane. Keep its schema unchanged. The separate manifest digest
+approval goes to the existing signer/publisher arguments. Unsigned preparation
+is available before this decision; **signing preview also requires final
+release authorization**, so do not set `release_authorized: true` merely to get
+a preview. Review the prepared manifest bytes and digest directly instead.
+
+Sign and seal the approved manifest, then prepare the first-publication or
+replacement plan using the [feed guide](../client-updates/README.md). Planning
+can establish publication prerequisites before promotion without uploading
+objects. If manifest expiry requires new bytes, obtain approval for the new
+digest; do not silently substitute it under the prior approval.
+
+### Promote, publish, and verify delivery
+
+1. Plan and execute `promote` through `authority:staging-release` with the exact
+   release authorization. Confirm completion through its receipt. Then create
+   and execute a **fresh** `status` action using the new record for both
+   `--accepted-release` and `--release`, with its matching runtime profile.
+   Polling the promotion receipt alone is not a fresh runtime check.
+2. After that status passes, execute the approved feed publication/replacement
+   and inspect its own `status`/`replace-status`. Require `state: "succeeded"`,
+   `metadata_fresh: true`, and the reviewed release, manifest and both targets.
+   The feed validator verifies authorization and artifact identity but does
+   **not** inspect the host's accepted release. Promotion-before-publication is
+   an operator requirement, not a cross-service guard implemented by the CLI.
+3. On representative native Mac and Linux seats still running release A, verify
+   the real A-to-B update through the configured signed feed, then run the
+   [client acceptance checks](../client-updates/README.md#verify-mac-and-linux-client-activation).
+   Preserve existing sessions and use the account's actual permissions. A
+   Linux employee's check must use that employee's account and readable
+   fixtures; the private owner canary is not an employee test. Record source,
+   artifact/release identity, actor, command path and bounded read/Ask outcomes.
+4. For an affected desktop app, complete its separate artifact installation and
+   authenticated acceptance checks. If the installed desktop is already
+   compatible, record that evidence and why an installation is unnecessary.
+   Do not infer desktop delivery from a successful CLI update.
+
+Keep one private handoff record linking the release authorization, server action
+receipts and fresh status, prepared manifest and publication receipt, both
+platform activation/read proofs, and desktop evidence when applicable. Record
+remaining seats explicitly. Publication makes the release available; automatic
+CLI checks run on later commands and do not instantly upgrade the fleet.
+
+### Resume a partial release
+
+| Observed result | Required continuation |
+| --- | --- |
+| Remote operation submitted or unconfirmed | Poll the same receipt with its original tooling source. Reconcile that action before creating another; never resend to bypass uncertainty. |
+| Staged candidate fails required checks | Run a fresh host status and use the existing exact-candidate rollback lane. Do not publish its feed. |
+| Server accepted; publication incomplete | Preserve the accepted record and both lanes' receipts. Diagnose/resume the existing publication operation under its status rules. Report the partial result; do not restage or edit accepted state to make it look complete. |
+| Feed published; activation/read proof incomplete | Keep the publication receipt, installation locks and prior releases. Diagnose the actual client/wrapper and resume its supported updater path. Account for already-upgraded seats before another server/feed change. |
+| Published metadata expired | Historical `succeeded` with `metadata_fresh: false` is not current delivery proof. Prepare and approve a fresh manifest with a higher sequence through the existing replacement lane. |
+
+The host rollback action requires a staged candidate and unchanged accepted
+record. After promotion it is not a general undo button; a required server
+recovery needs a separately reviewed compatible release/recovery plan. The feed
+has no lower-sequence rollback command. Never delete locks, mutate receipts,
+overwrite feed objects manually, or infer a new authorization from partial
+success.
 
 ## Release record
 
@@ -722,7 +858,7 @@ audit or telemetry to identify that Authority independently.
 
 The candidate implements [ADR-0012](../../docs/decisions/ADR-0012-person-public-response-privacy.md).
 Current clients decode `echo-clean-person-record-search-v2` and, from
-`person ask`, `echo-clean-person-answer-v3` (schema 3); older exact-shape
+`person ask`, `echo-clean-person-answer-v4` (schema 4); older exact-shape
 clients are incompatible.
 Select clients by committed source and tarball SHA-256, not a reused product version.
 The implementation contract is accepted; coordinated live qualification and
