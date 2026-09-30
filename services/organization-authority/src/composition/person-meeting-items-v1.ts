@@ -9,7 +9,7 @@ import {
 import type { OrganizationRecordDecisionBriefV1, OrganizationRecordMeetingTimeV1 } from "@echo-brain/organization-protocol";
 import type { RecordApproverProjectorV1 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import { boundedTextV1 } from "./person-item-text-v1.js";
+import { boundedTextV1, releasableBodyV1 } from "./person-item-text-v1.js";
 
 /**
  * Pure meeting presentation for the person list and open (ADR-0024). Every
@@ -99,13 +99,15 @@ export interface MeetingAtomPartV1 {
 
 /**
  * Every approved signal in brief order (decisions, actions, rationales),
- * split into parts rather than dropped. Attributes sit on the first part
- * only; an owner comes only from the signed human act, never the brief.
- * Evidence spans are verbatim transcript quotes and are never released.
+ * split into parts rather than dropped. Text the open contract refuses in a
+ * body is replaced before the split, so the parts join to the released text.
+ * Attributes sit on the first part only; an owner comes only from the signed
+ * human act, never the brief. Evidence spans are verbatim transcript quotes
+ * and are never released.
  */
 export function meetingAtomsV1(brief: OrganizationRecordDecisionBriefV1, owners: ReadonlyMap<string, string>): readonly MeetingAtomPartV1[] {
   return Object.freeze([...brief.decisions, ...brief.actions, ...brief.rationales].flatMap((signal, atom_order) => {
-    const texts = splitAtomTextV1(signal.text);
+    const texts = splitAtomTextV1(releasableBodyV1(signal.text));
     const owner = signal.kind === "action" ? owners.get(signal.id) : undefined;
     const attributes = signal.kind === "decision" ? { status: signal.status }
       : signal.kind === "action" ? { ...(owner === undefined ? {} : { owner }), ...(signal.due_at === null ? {} : { due_at: signal.due_at }) }

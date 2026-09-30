@@ -16,3 +16,15 @@ export function boundedTextV1(value: string | undefined | null, maxBytes: number
   }
   return `${prefix.trimEnd()}…`;
 }
+
+/**
+ * Released body text keeps its bytes except the characters the Person open
+ * contract refuses in a body: C0 controls other than tab, LF and CR, DEL and
+ * C1 controls become spaces, and a lone surrogate becomes U+FFFD. One stray
+ * control in an approved brief must not make its meeting unopenable.
+ */
+export function releasableBodyV1(value: string): string {
+  return value
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, " ")
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "�");
+}

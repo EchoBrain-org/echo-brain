@@ -11,6 +11,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import type { PersonMeetingPartPositionV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
+import { releasableBodyV1 } from "../src/composition/person-item-text-v1.js";
+import { validatePersonOpenResponseV1 } from "@echo-brain/organization-api";
 import { COORDINATES } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { EMP_A, EMP_B, OWNER, SHARED, T, UNJOINED, admittedTranscriptV1, meetingWorld, type ReaderToken } from "./fixtures/person-meeting-world.js";
 import { SIGNED_APPROVAL_SLACK_SUBJECT } from "./fixtures/signed-slack-approval-v2.js";
@@ -24,6 +26,7 @@ const TRANSCRIPT = Array.from({ length: 700 }, (_, index) => `word${index}`).joi
 const QUOTE = "QUOTE-SECRET-EVIDENCE";
 /** 2 + 3,499 × 2 bytes: parts of 3,072, 3,072 and 856 bytes. */
 const LONG_ACTION = `ab${"é".repeat(3_499)}`;
+const CONTROLS = "Ship\fit\u0092s plan\r\n\tnow\u007f";
 
 const withMeeting = (change: (brief: OrganizationRecordDecisionBriefV1) => Partial<OrganizationRecordDecisionBriefV1>) =>
   (brief: OrganizationRecordDecisionBriefV1): OrganizationRecordDecisionBriefV1 => ({ ...brief, ...change(brief) });
@@ -79,6 +82,11 @@ async function world(options: { readonly long?: boolean } = {}) {
       action_owners: [{ signal_id: "action-apr_long-0", owner: "Jules" }],
       brief: withMeeting((brief) => ({ actions: brief.actions.map((signal) => ({ ...signal, text: LONG_ACTION, due_at: "2026-10-01T00:00:00.000Z" })) })),
     });
+    // A form feed and a cp1252 C1 character in approved text.
+    await w.approve({
+      name: "controls", approval_id: "apr_controls", projects: "team", final_approver: EMP_B, issued_at: T(20), signals: { decisions: 1 },
+      brief: withMeeting((brief) => ({ decisions: brief.decisions.map((signal) => ({ ...signal, text: CONTROLS })) })),
+    });
   }
   const originals = new SqlitePersonOriginalContextRetrievalV1(w.authority, w.sessions, COORDINATES.organization_id, {
     authority_id: COORDINATES.authority_id, state_lineage_id: COORDINATES.state_lineage_id,
@@ -111,6 +119,18 @@ function pages(route: PersonRecordSearchRouteV1, token: ReaderToken, record_sha2
 }
 
 const NOT_FOUND = { code: "not_found", message: "item is not available" };
+
+/** The page as the list route shapes it, through the public open contract. */
+function validated(page: ReturnType<PersonRecordSearchRouteV1["openMeeting"]>) {
+  const { row } = page;
+  const ref = `meeting:${row.id}` as const;
+  return validatePersonOpenResponseV1({
+    schema_version: 1, kind: "echo-person-open-v1", ref,
+    item: { ref, kind: "meeting", title: row.title ?? "Approved meeting", added_at: row.added_at, visibility: row.visibility === "approver_only" ? "only_me" : row.visibility === "projects" ? "project" : row.visibility, projects: [], ...(row.meeting_date === undefined ? {} : { meeting_date: row.meeting_date }) },
+    ...(page.meeting === undefined ? {} : { meeting: page.meeting }), atoms: page.atoms,
+    next_cursor: page.next === null ? null : "next",
+  });
+}
 
 describe("Person meetings open: one record by its digest (ADR-0024)", () => {
   it("releases the row, a names-only meeting, the approver's name and every atom in brief order", async () => {
@@ -186,6 +206,14 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     const mallory = route.openMeeting({ access_token: "emp_b", record_sha256: w.digest("mallory") });
     expect(mallory.atoms).toEqual([{ kind: "action", text: "Action 0" }]);
     expect(JSON.stringify(mallory)).not.toContain("Mallory");
+  });
+
+  it("replaces the characters the open contract refuses in approved text, so the meeting still opens", async () => {
+    const w = await world({ long: true });
+    const [opened] = pages(w.route(), "emp_b", w.digest("controls"));
+    expect(opened!.atoms).toEqual([{ kind: "decision", text: "Ship it s plan\r\n\tnow ", status: "decided" }]);
+    expect(validated(opened!).kind).toBe("echo-person-open-v1");
+    expect(releasableBodyV1("a\uD800b\uDC00c😀")).toBe("a�b�c😀");
   });
 
   it("gives one not_found, and writes no audit, for every record or position it cannot release", async () => {
