@@ -82,6 +82,11 @@ async function world(options: { readonly long?: boolean } = {}) {
       action_owners: [{ signal_id: "action-apr_long-0", owner: "Jules" }],
       brief: withMeeting((brief) => ({ actions: brief.actions.map((signal) => ({ ...signal, text: LONG_ACTION, due_at: "2026-10-01T00:00:00.000Z" })) })),
     });
+    // 24 short decisions, then the split action: its first part ends the 25-part page.
+    await w.approve({
+      name: "boundary", approval_id: "apr_boundary", projects: "team", final_approver: EMP_B, issued_at: T(19), signals: { decisions: 24, actions: 1 },
+      brief: withMeeting((brief) => ({ actions: brief.actions.map((signal) => ({ ...signal, text: LONG_ACTION })) })),
+    });
     // A form feed and a cp1252 C1 character in approved text.
     await w.approve({
       name: "controls", approval_id: "apr_controls", projects: "team", final_approver: EMP_B, issued_at: T(20), signals: { decisions: 1 },
@@ -203,6 +208,15 @@ describe("Person meetings open: one record by its digest (ADR-0024)", () => {
     ]);
     const rest = route.openMeeting({ access_token: "emp_b", record_sha256: w.digest("long"), from: { atom_order: 0, part: 2 } });
     expect(rest.atoms.map((atom) => atom.part)).toEqual([{ index: 2, count: 3 }, { index: 3, count: 3 }]);
+    // A split part that straddles the 25-part page end resumes at its next part (N-15).
+    const walked = pages(route, "emp_b", w.digest("boundary"));
+    expect(walked.map((opened) => opened.atoms.length)).toEqual([25, 2]);
+    expect(walked[0]!.next).toEqual({ atom_order: 24, part: 2 });
+    expect(walked.flatMap((opened) => opened.atoms.map((atom) => atom.part ?? null))).toEqual([
+      ...Array.from({ length: 24 }, () => null), { index: 1, count: 3 }, { index: 2, count: 3 }, { index: 3, count: 3 },
+    ]);
+    expect(walked.flatMap((opened) => opened.atoms).slice(24).map((atom) => atom.text).join("")).toBe(LONG_ACTION);
+    for (const opened of [...walked, page!]) expect(validated(opened).kind).toBe("echo-person-open-v1");
     const mallory = route.openMeeting({ access_token: "emp_b", record_sha256: w.digest("mallory") });
     expect(mallory.atoms).toEqual([{ kind: "action", text: "Action 0" }]);
     expect(JSON.stringify(mallory)).not.toContain("Mallory");
