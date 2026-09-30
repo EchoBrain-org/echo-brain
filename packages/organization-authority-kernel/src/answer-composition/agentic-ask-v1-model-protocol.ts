@@ -315,6 +315,7 @@ export const ANSWER_PROMPT = [
   pendingChoiceOwnership,
   "- The research notes are hints and may be incomplete; read the evidence itself.",
   "- \"not_found\": short phrases for what the question asks that the evidence does not answer; [] when nothing is missing. Never list something the evidence answers.",
+  "- List only a specific requested fact that the evidence does not answer. Never list missing source categories, searches, or hypothetical additional work. An empty or non-additive source does not make an otherwise supported answer partial. Do not imply that one found item is exhaustive unless the evidence establishes completeness.",
   "",
   "Reply with ONLY a JSON object in exactly this shape:",
   "{\"sentences\":[{\"text\":\"<sentence>\",\"evidence\":[\"E1\"]}],\"not_found\":[]}",
