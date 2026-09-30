@@ -77,12 +77,14 @@ path, and reports a session written by an older release as signed out
 pending approval work, and that invariant's diagnostic clause has no current
 enforcement point.
 
-The `person updates` commands submit, inspect, search, and read original text
-uploads. `submit --visibility only-me|team|project` selects access at upload
-(`project` requires `--audience-project-id`); `submit-v3 --audience` also
-accepts `projects`. Only me is the default. No Slack approval, provider code,
-background upload, or local queue is required. Search and exact reads return
-only authorized originals; submit/status remain content-free. The carrier and
+The `person updates` commands submit, inspect and search original text
+uploads, and `person open --ref note:<context-id>` reads one.
+`submit-v3 --audience only-me|team|project|projects` selects access at upload
+(`project` requires `--audience-project-id`, `projects` requires
+`--audience-project-ids-json`); `status-v3` reports the saved receipt. Only me
+is the default. No Slack approval, provider code, background upload, or local
+queue is required. Search and exact reads return only authorized originals;
+submit-v3/status-v3 remain content-free. The carrier and
 optional metadata do not settle the final context shape. See the
 [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
