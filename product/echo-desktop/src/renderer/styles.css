@@ -313,7 +313,8 @@ button.marker:hover { background: rgba(240, 236, 230, 0.18); }
 /* Mine's rows name the projects each is filed in, faintly; a project row's empty mark keeps the times in line. */
 .row .projects { flex-shrink: 1; min-width: 0; max-width: 40%; font-size: 12.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-row .mark { width: 12px; justify-content: center; }
-.item-row .meta { width: 44px; text-align: right; }
+/* Wide enough for "Yesterday", the longest English date label, so every date ends at the same edge. */
+.item-row .meta { min-width: 60px; white-space: nowrap; text-align: right; }
 /* Mine's list runs from the top, the full height of the page. */
 .page.top { align-items: flex-start; padding-top: 38px; }
 .page.top .column { height: 100%; }

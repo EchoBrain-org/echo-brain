@@ -256,4 +256,16 @@ test('a project\'s page lists its approved meetings too, and an owner\'s Mine ho
   await expect(page.getByTestId('reader')).toHaveCount(0);
   await expect(page.getByTestId('mine-row').filter({ hasText: 'Pricing review' })).toHaveCount(1);
   await expect(page.getByTestId('mine-row').filter({ hasText: 'Beacon kickoff' })).toHaveCount(0);
+
+  // "Yesterday", the longest date a row shows, fits its place: nothing is cut, and the list never scrolls sideways.
+  const fit = await page.getByTestId('mine-row').first().locator('.meta').evaluate((meta) => {
+    const other = meta.closest('.column')!.querySelectorAll('.item-row .meta')[1]!;
+    meta.textContent = 'Yesterday';
+    const column = meta.closest('.column')!;
+    return {
+      cut: meta.scrollWidth > meta.clientWidth, sideways: column.scrollWidth > column.clientWidth,
+      edges: meta.getBoundingClientRect().right - other.getBoundingClientRect().right,
+    };
+  });
+  expect(fit).toEqual({ cut: false, sideways: false, edges: 0 });
 });
