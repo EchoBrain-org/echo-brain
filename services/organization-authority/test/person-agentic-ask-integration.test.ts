@@ -25,7 +25,7 @@ type Prompt = {
   evidence?: Listing[];
 };
 type Membership = { organization_id: string; principal_id: string; membership_id: string; display_name: string };
-function fixture(options: { readonly small_scope_shortcut?: boolean; readonly slack_for?: (asker: { readonly principal_id: string; readonly membership_id: string }) => undefined; readonly membership?: (id: string) => Membership | undefined } = {}) {
+function fixture(options: { readonly small_scope_shortcut?: boolean; readonly slack_for?: (asker: { readonly principal_id: string; readonly membership_id: string }) => undefined; readonly membership?: (id: string) => Membership | undefined; readonly generate?: StructuredGenerationPort["generate"] } = {}) {
   const database = projectContextDatabase(); databases.push(database);
   database.prepare(`INSERT INTO authority_projects_v1
     (project_id,organization_id,name,created_at,creator_principal_id,creator_membership_id,creator_membership_type)
@@ -42,16 +42,18 @@ function fixture(options: { readonly small_scope_shortcut?: boolean; readonly sl
   const originals = new SqlitePersonOriginalContextRetrievalV1(database, { authenticateAccess }, OWNER.organization_id);
   const repository = new SqlitePersonDocumentRepositoryV1(database, () => new Date(tick += 1000).toISOString());
   const documents = createPersonDocumentApplicationV1({ repository, authenticate: () => authorization(OWNER) });
-  const uploadChunks = (title: string, texts: readonly string[], audience: "team" | "only_me" = "team") => {
+  const uploadChunks = (title: string, texts: readonly string[], audience: "team" | "only_me" | "project" = "team") => {
     const bytes = Buffer.from(texts.join("\n"));
-    documents.upload("owner", { schema_version: 1, kind: "echo-person-document-upload-v1", request_id: randomUUID(), filename: `${title}.md`, title, content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: audience }, project_id: PROJECT_ALPHA }, bytes);
+    const metadata = { request_id: randomUUID(), filename: `${title}.md`, title, content_length: bytes.length, sha256: sha256Digest(bytes) };
+    if (audience === "project") documents.uploadV2("owner", { ...metadata, schema_version: 2, kind: "echo-person-document-upload-v2", audience: { kind: "projects", project_ids: [PROJECT_ALPHA] }, association_project_ids: [PROJECT_ALPHA] }, bytes);
+    else documents.upload("owner", { ...metadata, schema_version: 1, kind: "echo-person-document-upload-v1", audience: { kind: audience }, project_id: PROJECT_ALPHA }, bytes);
     const claim = repository.claimExtraction(); if (claim === undefined) throw new Error("missing extraction claim");
     expect(repository.completeExtraction(claim, {
       status: "ready", sourceSha256: claim.source_sha256, extractorVersion: "fixture-1",
       chunks: texts.map((text, index) => ({ anchor_kind: "paragraph", anchor_start: index + 1, text })), message: null,
     })).toBe(true);
   };
-  const upload = (title: string, text: string, audience: "team" | "only_me" = "team") => uploadChunks(title, [text], audience);
+  const upload = (title: string, text: string, audience: "team" | "only_me" | "project" = "team") => uploadChunks(title, [text], audience);
   let recordProbes = 0;
   const prompts: string[] = [];
   const roles: string[] = [];
@@ -60,6 +62,7 @@ function fixture(options: { readonly small_scope_shortcut?: boolean; readonly sl
   // A small scripted agent: list documents, open the first listing, then finish on what it read.
   const model: StructuredGenerationPort = { async generate(input: StructuredGenerationInput) {
     prompts.push(input.user_prompt);
+    if (options.generate !== undefined) return options.generate(input);
     const prompt = JSON.parse(input.user_prompt) as Prompt;
     const properties = input.schema.properties as Readonly<Record<string, unknown>>;
     if (properties?.sentences !== undefined) {
@@ -101,6 +104,47 @@ const auditRow = (database: Database.Database) => database.prepare("SELECT body_
 const openedTexts = (prompts: readonly string[]) => (JSON.parse(prompts[0]!) as Prompt).opened?.map(item => item.text) ?? [];
 
 describe("Agentic Ask with stored source evidence", () => {
+  it("answers globally from unread project search passages without releasing another member's private text", async () => {
+    const software = `SCOUT Software Review. ${"Background for this proposal. ".repeat(20)}Software needs an explicit transition table.`;
+    const hardware = `SCOUT Hardware Review. ${"Background for this proposal. ".repeat(20)}Hardware needs battery endurance measurements.`;
+    const f = fixture({ generate: async input => {
+      const prompt = JSON.parse(input.user_prompt) as Prompt;
+      const properties = input.schema.properties as Readonly<Record<string, unknown>>;
+      if (properties?.sentences !== undefined) {
+        const softwareItem = prompt.evidence?.find(item => item.title === "SCOUT Software Review.md");
+        const hardwareItem = prompt.evidence?.find(item => item.title === "SCOUT Hardware Review.md");
+        expect(softwareItem?.text).toBe(`SCOUT Software Review.md\n${software}`);
+        expect(hardwareItem?.text).toBe(`SCOUT Hardware Review.md\n${hardware}`);
+        return { sentences: [
+          { text: "Software needs an explicit transition table.", evidence: [softwareItem!.id] },
+          { text: "Hardware needs battery endurance measurements.", evidence: [hardwareItem!.id] },
+        ], not_found: [] };
+      }
+      expect(prompt.opened).toEqual([]);
+      const parts = [{ question: "Compare the SCOUT reviews", needs: [{ need: "review concerns", status: prompt.step === 1 ? "open" : "not_found", evidence: [] }], notes: "" }];
+      return { parts, actions: prompt.step === 1
+        ? [{ tool: "search", args: { query: "SCOUT Software Review" } }, { tool: "search", args: { query: "SCOUT Hardware Review" } }]
+        : [{ tool: "finish", args: {} }] };
+    } });
+    f.upload("SCOUT Software Review", software, "project");
+    f.upload("SCOUT Hardware Review", hardware, "project");
+    f.upload("SCOUT confidential review", "SCOUT Software Hardware Review. Private marker 97531.", "only_me");
+    const answer = await f.route.ask({ access_token: "member", request: { schema_version: 3, question: "Compare the SCOUT Software Review and Hardware Review" } });
+    expect(answer.scope).toEqual({ kind: "global" });
+    expect(answer.outcome).toBe("answered");
+    expect(answer.citations).toHaveLength(2);
+    expect(f.prompts.join("\n")).not.toContain("97531");
+    expect(f.prompts.join("\n")).not.toContain("SCOUT confidential review");
+    for (const citation of answer.citations) {
+      if (citation.citation.kind !== "source_revision") throw new Error("wrong citation kind");
+      expect(f.originals.read({ access_token: "member", scope: answer.scope, citation: citation.citation }).atom.text).toMatch(/SCOUT (Software|Hardware) Review/);
+    }
+    const body = JSON.parse(auditRow(f.database)!.body_json) as Record<string, unknown>;
+    expect(body).toMatchObject({ principal_id: MEMBER.principal_id, outcome: "answered", model_calls: 3, rounds: 2 });
+    expect(body.response_sha256).toBe(canonicalSha256(answer));
+    expect(auditRow(f.database)!.body_json).not.toContain("transition table");
+  });
+
   it("lists keyword-free evidence, opens it, cites the exact source, and appends a bound terminal audit", async () => {
     const f = fixture(); f.upload("Atlas plan", "The launch window is October.");
     const answer = await f.ask();

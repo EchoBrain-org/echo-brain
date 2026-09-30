@@ -281,6 +281,21 @@ the question.
 
 ### Answer
 
+**Evidence the writer reads.** Within the answer context budget, code admits
+items research read in full and cited first, then other items it read in full,
+then remaining search hits with text already released by the desk. The
+writer receives each admitted item's full released text. A search preview
+alone does not limit the writer to that preview or exclude the item because
+research never opened it. Inventory entries without text remain excluded.
+
+The research scratchpad and finish check are unchanged: research may mark a
+need `found` only with evidence whose full text it read. The writer may cite
+any item whose full text is in its own prompt. Desk receipts, revalidation
+before model calls, and the final permission check still cover these items.
+Adding search hits to the writer's input does not add them to the
+records-only fallback: its eligibility remains limited to evidence research
+read in full, with the existing citation-based selection rules preserved.
+
 **The model's output.** One call returns
 `{ sentences: [{ text, evidence[] }], not_found[] }`, with at most ten
 sentences. This is the V4 bound on statements per part, raised from five: in
