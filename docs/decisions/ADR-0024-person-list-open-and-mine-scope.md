@@ -219,12 +219,14 @@ failures.
   carries the meeting detail and, when the approver shared the transcript and
   the reader may read it, `transcript_ref`; later pages carry neither. Atom
   text is split at 3,072 bytes into numbered parts and never dropped. A page
-  holds at most 25 parts and 32 KiB of atoms, and always at least one part.
+  holds at most 25 parts and 32 KiB of atoms, and at least one part, except
+  the first page of a zero-signal record, which opens with no atoms.
 - **No evidence excerpts.** A brief's evidence spans are verbatim transcript
   quotes, and the approver's Slack card never shows them, so open releases
   decision, action and rationale text only.
 - **Transcripts** are read only after the meeting passes the same Layer 1
-  exact read, then through the ADR-0021 transcript grant at global scope.
+  exact read, then through the ADR-0017 transcript grant, read at global
+  scope by the store ADR-0021 gave Ask.
 
 Every open response fits the client's ordinary 64 KiB bound.
 
@@ -277,13 +279,17 @@ Both are read at query time.
 
 The desktop app adds a Mine page, opened from a sidebar row under New project,
 that shows `list --mine` 25 rows at a time, with More. A Mine chip in the bar
-scopes Ask to mine. The project page reads `list --project`, and readers open
-every row and citation by ref, joining split meeting parts across pages. Save
-toasts open Mine, and signing out leaves the Mine page and clears it. A 401 on
+scopes Ask to mine. The project page reads `list --project`, and the reader
+opens every list row and live match by ref, joining split meeting parts across
+pages. Ask citations do not open by ref yet: a cited original is read with
+`ask-source` under global scope (a mine answer's too, since global contains
+mine), and a cited meeting with `person records`, until a follow-up moves the
+source pane to open by ref. The "Saved for you" and "Shared with your
+organization" toasts, whose items no project page shows, open Mine; "Saved to
+<project>" does not. Signing out leaves the Mine page and clears it. A 401 on
 a project page means the caller is no longer a member: the page shows "This is
 no longer available to you." instead of "Sign in again", and status and
-projects are re-read once. The Ask source pane still reads the full record
-from `person records` until a follow-up moves it to open by ref.
+projects are re-read once.
 
 ### Refinements of the 2026-09-29 choices
 
@@ -321,8 +327,9 @@ Specifying the approved choices against the code refined them as follows:
   limited to current members. Headers and rows name only the caller's joined
   projects, and a non-member and a missing project get the same denial.
 - [ADR-0015](ADR-0015-global-and-project-scoped-person-ask.md): global list
-  covers what global Ask may read, and project list uses the same membership
-  and association rule with no fallback. ADR-0015 removed Find saved context
+  covers the notes, documents and approved meetings global Ask may read, but
+  not the Slack messages or shared transcripts Ask may also read, and project
+  list uses the same membership and association rule with no fallback. ADR-0015 removed Find saved context
   without a replacement file browser; list adds a newest-first view with no
   query, filter or count, and Ask remains the way to search.
 - [ADR-0017](ADR-0017-project-meeting-approval-v1.md): only approved meetings
@@ -371,10 +378,13 @@ Specifying the approved choices against the code refined them as follows:
   item's audience names other projects. `person records` already exposes the
   full audience. ADR-0023 deferred the same desk label. Collapsing them is a
   follow-up alongside ADR-0020.
-- **Measured cost.** Page 1 over 1,024 single-atom approved records, on one
-  development Mac: global 20.9 ms cold and 1.4 ms warm; mine 213.2 ms cold and
-  1.5 ms warm. All four are inside the revisit thresholds (50 ms warm, 3 s cold
-  mine), so approval time and approver stay query-time reads.
+- **Measured cost.** The meetings collect for page 1 (`collectMeetings`
+  alone: no originals, commits, revalidation or audits) over 1,024
+  single-atom approved records, on one development Mac: global 20.9 ms cold
+  and 1.4 ms warm; mine 213.2 ms cold and 1.5 ms warm. All four are inside the
+  revisit thresholds (50 ms warm, 3 s cold mine), so approval time and
+  approver stay query-time reads. The benchmark asserts no threshold; a full
+  route page adds the originals reads, commits and audits.
 - Each of these needs its own decision: placeholders for items lost with a
   left project, counts, a since filter, Slack in mine, pending meetings,
   unjoined projects, persisted approver facts, and listing meetings past the
@@ -383,11 +393,24 @@ Specifying the approved choices against the code refined them as follows:
 ## Migration, rollback, and evidence
 
 There is no database migration and no SQL, baseline or lineage change.
-Rollback reverts server, CLI and desktop together.
+
+There is no joint rollback. Before promotion, the release lane's
+exact-candidate rollback returns the host to the previous server, and the CLI
+feed must not have been published. After promotion or feed publication the
+host rollback is not a general undo, the feed has no lower-sequence rollback,
+and desktops do not update themselves, so recovery is a reviewed forward fix
+or a compatible recovery release
+([coordinated release rules](../../deploy/release/README.md)). Updated CLI and
+desktop seats keep calling `/v1/person/list` and `/v1/person/open`, so a
+server without them fails their project pages and Mine.
 
 Merge checklist, in the change that merges the implementation:
 
-- `status` here and this ADR's row in the decision index change to `accepted`.
+- `status`, the Disposition section and this ADR's row in the decision index
+  change to `accepted`, and "proposed" goes from the Person list sentence in
+  [organization-authority.md](../components/organization-authority.md) and
+  from the ADR-0024 served-path rows in
+  [permissions.md](../components/permissions.md).
 - Done: the change that stops releasing `request_id` to readers other than the
   uploader merged as [ADR-0023](ADR-0023-reader-scoped-upload-releases.md).
   This ADR's server, Person client and desktop app ship in a release that
@@ -397,7 +420,7 @@ Merge checklist, in the change that merges the implementation:
 Evidence:
 
 - `services/organization-authority/test/person-list-disclosure.test.ts`
-  covers the negative disclosure cases for owner and employee readers,
+  covers the negative disclosure cases below for owner and employee readers,
   including Ask with mine. It composes the runtime's own stores and routes over
   SQLite and signed approvals, served by the real HTTP server.
 - `services/organization-authority/test/person-list-route.test.ts` and
@@ -425,3 +448,43 @@ Evidence:
 - `tests/person-client/person-list-cli.test.ts` covers the CLI.
 - `product/echo-desktop/test/unit/views.test.ts` and
   `product/echo-desktop/test/e2e/mine.spec.ts` cover the desktop app.
+
+Negative disclosure cases, as the tests name them:
+
+- N-1: another member's Only me note, document and meeting never list in any
+  scope, and open gives the 404 a random ref gets.
+- N-2: items reachable only through a project the reader left, the reader's
+  own included, leave every scope and give 404; a team item stays, with no
+  project.
+- N-3: unjoined project ids and names appear in no row, header, open item,
+  decoded cursor or notice.
+- N-4: no body carries counts, totals, log positions, generation ids, audit
+  sequences, approval or request ids, the envelope, member or principal ids,
+  or source coordinates.
+- N-5: a cursor is refused (400) for another person, tenure, scope, ref or
+  operation.
+- N-6: mine and every project list are subsets of global.
+- N-7: mine holds the meetings the reader finally approved, not the ones the
+  reader can only read.
+- N-8: a guessed ref of each kind gets the same 404 body as an existing
+  unreadable one.
+- N-9: pending and rejected meetings never list and give 404.
+- N-10: no note or document `request_id` appears in any body, the
+  uploader's included.
+- N-11: every cursor of a walk holds only ids that walk emitted.
+- N-12: an approval the reader cannot see, or under mine did not make, never
+  holds meetings or adds the notice; a readable one does.
+- N-13: a transcript opens only through a shared, readable record, and every
+  other transcript ref is the same 404.
+- N-14: a session or grant change between collect and response releases and
+  audits nothing.
+- N-15: document chunks, meeting parts and transcript pages join to exactly
+  the stored sequence, with no duplicate at a page end.
+- N-16: Ask with mine cites only the caller's items, each citation opens, it
+  cites no Slack or transcript, and mine with a project is a 400.
+- N-17: no evidence quote appears in any list, open or Ask body.
+- N-18: the contract validators refuse every never-released field.
+- N-19: a project the reader has not joined and one that does not exist get
+  the same 401 before any store runs.
+- N-20: the desktop copies no project id or header field into the renderer,
+  and its host refuses a malformed scope, ref or cursor without a CLI call.
