@@ -180,8 +180,10 @@ generation's 1,024-atom admission ceiling bounds at 1,024 records.
 
 Meetings are held, never skipped, while the search generation lags the record
 log. They are held only when the lag is verified **and** a record the reader
-can read in this scope was appended after the generation's head; that probe
-reads only the log after the head. A held page carries
+can read in this scope (under mine, one the reader approved) was appended
+after the generation's head; that probe reads only the log after the head, and
+a Mine lag of more than 100 readable records holds without reading further.
+A held page carries
 `notice: "meetings_unavailable"` and keeps the meeting position. A lag with no
 readable new record lists from the generation with no notice. If a search, a
 superseded rebuild or a restart dropped the process handle during the lag, the

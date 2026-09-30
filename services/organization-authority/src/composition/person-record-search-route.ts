@@ -548,6 +548,8 @@ function isUnavailableGenerationError(error: unknown): boolean {
 }
 
 const MEETING_COLLECT_MAX = 26;
+/** The Layer 1 reader page limit: a longer lag holds Mine without reading further. */
+const MEETING_WAITING_MINE_MAX = 100;
 const MEETING_PART_MAX = 65_535;
 const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
 const CANONICAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -800,17 +802,25 @@ export function createPersonRecordSearchRouteV1(
 
   /**
    * Whether a record this reader can read in this scope was appended after the
-   * published head. An approval the reader cannot see never changes what the
-   * reader sees. The probe reads only the log after the published head.
+   * published head. An approval the reader cannot see, or under mine one the
+   * reader did not approve, never changes what the reader sees. The probe
+   * reads only the log after the published head.
    */
   function meetingWaiting(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: { readonly mine: boolean; readonly project_id?: string }, publishedHead: number): boolean {
-    return new PersonRecordReaderV1(options.record).list({
+    const waiting = new PersonRecordReaderV1(options.record).list({
       authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
       principal_id: authorization.principal_id, membership_id: authorization.membership_id,
       ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
       ...(scope.project_id === undefined ? {} : { project_id: scope.project_id }),
-      after_position: publishedHead, limit: 1,
-    }).length > 0;
+      after_position: publishedHead, limit: scope.mine ? MEETING_WAITING_MINE_MAX : 1,
+    });
+    if (!scope.mine) return waiting.length > 0;
+    // A lag longer than one probe holds, rather than list a stale Mine.
+    if (waiting.length === MEETING_WAITING_MINE_MAX) return true;
+    return waiting.some((record) => {
+      const approver = approverTupleV1(record.envelope, record.approval_id, options, options.record_approver);
+      return approver !== undefined && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id;
+    });
   }
 
   function meetingCollection(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: PersonAskScopeV2, rows: readonly PersonStoreMeetingRowV1[]): PersonMeetingCollectionV1 {

@@ -137,6 +137,27 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(ids(walk(route, "owner", MINE))).toEqual([w.digest("r8"), w.digest("r3"), w.digest("r2")]);
   });
 
+  it("holds Mine only for the reader's own new approval, and faces the owner with another member's Only me approval", async () => {
+    const w = await world();
+    const route = w.route();
+    // EMP_B's team approval: every reader can read it, but it is nobody's Mine but EMP_B's.
+    await w.approve({ name: "r10", approval_id: "apr_r10", projects: "team", final_approver: EMP_B, issued_at: T(10) });
+    expect(route.collectMeetings({ access_token: "emp_a", scope: GLOBAL, after: null, limit: 26 })).toEqual({ status: "held" });
+    expect(ids(walk(route, "emp_a", MINE))).toEqual([w.digest("r4")]);
+    expect(ids(walk(route, "owner", MINE))).toEqual([w.digest("r3"), w.digest("r2")]);
+    expect(route.collectMeetings({ access_token: "emp_b", scope: MINE, after: null, limit: 26 })).toEqual({ status: "held" });
+    w.rebuild();
+    // EMP_A's Only me approval: the owner can neither read it nor tell it is waiting.
+    const ownerGlobal = ids(walk(route, "owner", GLOBAL));
+    await w.approve({ name: "r11", approval_id: "apr_r11", projects: [], final_approver: EMP_A, issued_at: T(11) });
+    expect(ids(walk(route, "owner", GLOBAL))).toEqual(ownerGlobal);
+    expect(ids(walk(route, "owner", MINE))).toEqual([w.digest("r3"), w.digest("r2")]);
+    expect(route.collectMeetings({ access_token: "emp_a", scope: MINE, after: null, limit: 26 })).toEqual({ status: "held" });
+    w.rebuild();
+    expect(ids(walk(route, "owner", GLOBAL))).not.toContain(w.digest("r11"));
+    expect(ids(walk(route, "emp_a", MINE))).toEqual([w.digest("r11"), w.digest("r4")]);
+  });
+
   it("keeps listing the published generation through a lag after the process handle is dropped", async () => {
     const w = await world();
     const route = w.route();

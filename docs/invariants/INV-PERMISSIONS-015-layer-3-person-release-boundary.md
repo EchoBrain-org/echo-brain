@@ -116,7 +116,8 @@ never the envelope, a log position, a count, an uploader or approver identity,
 or an unjoined project. A cursor holds only positions the caller already
 received and is bound to the operation, scope, organization and membership.
 An open of anything the caller cannot read is one fixed `not_found`, and list
-holds meetings only when a record the reader can read is waiting to be indexed.
+holds meetings only when a record the reader can read in that scope (under
+mine, one the reader approved) is waiting to be indexed.
 
 ## Verification and change procedure
 
