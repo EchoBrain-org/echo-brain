@@ -6,9 +6,10 @@ may claim success before the corresponding route exists.
 
 `operations.json` contains one accepted request/response pair for every
 project and V2 original-context operation. `invalid.json` contains inputs that
-the public codecs must reject before any mutation. A row whose command the CLI
-has retired stays, for the server HTTP test and the desktop test Authority,
-until its route is removed; the CLI test skips it. Success is written by the
+the public codecs must reject before any mutation. An `operations.json` row
+whose command the CLI has retired stays, for the server HTTP test and the
+desktop test Authority, until its route is removed; the CLI test skips it. The
+`invalid.json` error rows and `visibility.json` cases name only kept commands. Success is written by the
 CLI as the exact response JSON on stdout followed by one newline; it has no
 extra `{ "ok": true }` envelope, matching the existing Person update commands.
 

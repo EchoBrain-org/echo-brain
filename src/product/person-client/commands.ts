@@ -49,7 +49,6 @@ const OPTIONS = {
   "expected-authority": { type: "string" },
   "request-id": { type: "string" },
   "context-id": { type: "string" },
-  visibility: { type: "string" },
   "project-id": { type: "string" },
   project: { type: "string" },
   "source-id": { type: "string" },
@@ -284,11 +283,11 @@ Reads V2 metadata and its immutable initial association set. Current association
 `,
   "documents-search-v2": `usage: echo-brain person documents search-v2 [--project-id <id>] [--query <text>] [--limit <1-20>] [--cursor <opaque>]
 
-Lists or searches accessible V2 documents. Results preserve multi-project audience and current association coordinates.
+Lists or searches the documents you may read, whichever upload version saved them. Results preserve multi-project audience and current association coordinates.
 `,
   "documents-download-v2": `usage: echo-brain person documents download-v2 --document-id <id> --out <new-file> [--project-id <id>]
 
-Streams a V2 document's exact saved original to a new file and verifies its length and SHA-256 before publishing it atomically.
+Streams a document's exact saved original, whichever upload version saved it, to a new file and verifies its length and SHA-256 before publishing it atomically.
 `,
   projects: `usage: echo-brain person projects <list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2> [options]
 

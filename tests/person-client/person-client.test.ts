@@ -1147,6 +1147,50 @@ describe("Person client", () => {
     });
   });
 
+  it("cancels its own Slack browser attempt when the browser cannot open", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const attempt = fixtureId("sbl", 10);
+      const authorizationUrl = "https://slack.com/openid/connect/authorize?client_id=client&state=private-state";
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+      const paths: string[] = [];
+      const { code: status, stdout, stderr } = await runCli(["slack-connect-begin"], {
+        home_directory: home,
+        now: () => NOW,
+        open_authorization_url: () => false,
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          paths.push(path);
+          if (path === "/v2/person/external-identities/slack/browser/begin") return json({
+            schema_version: 1,
+            kind: "echo-person-slack-browser-link-v1",
+            attempt_id: attempt,
+            authorization_url: authorizationUrl,
+            expires_at: "2026-08-18T00:17:00.000Z",
+          }, 201);
+          expect(path).toBe("/v2/person/external-identities/slack/browser/cancel");
+          expect(JSON.parse(String(init?.body))).toEqual({ attempt_id: attempt });
+          return json({
+            schema_version: 1,
+            kind: "echo-person-slack-browser-link-status-v1",
+            attempt_id: attempt,
+            status: "cancelled",
+            failure_reason: null,
+          });
+        },
+      });
+      expect(status).toBe(1);
+      expect(stdout).toBe("");
+      expect(paths).toEqual(["/v2/person/external-identities/slack/browser/begin", "/v2/person/external-identities/slack/browser/cancel"]);
+      expect(JSON.parse(stderr)).toMatchObject({ ok: false, error: "Slack authorization browser could not be opened" });
+      expect(stderr).not.toContain("private-state");
+    });
+  });
+
   it("refuses untrusted or malformed Slack browser authorization URLs before opening them", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();

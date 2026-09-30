@@ -318,6 +318,8 @@ the original source pathname. `documents pending` lists local retained requests
 without a network call or revealing paths. A matching full or minimal saved
 receipt resolves the local attempt. A minimal receipt confirms admission after
 project access is lost without returning document content or access coordinates.
+A full `status-v2` receipt never matches a snapshot an older client kept from a
+V1 upload; `retry` or `abandon` settles that one.
 
 `documents abandon --request-id` explicitly removes only local retry material.
 It cannot cancel or delete a possibly completed Authority upload. The desktop
@@ -328,9 +330,9 @@ non-submissions, not uncertain saves.
 
 Document linking and unlinking keep their exact account-bound request ID, so an
 uncertain change is retried as the same request. Dismissing the local reminder
-does not cancel a server mutation. Reader refresh tolerates extraction
-completing between its metadata/text requests only while immutable original
-identity and session fences still match. No fetched search corpus, decision
+does not cancel a server mutation. `person open` returns a document's metadata
+and text page from one server read, and the client withholds it if the session
+changed meanwhile. No fetched search corpus, decision
 model or approval state is made authoritative on the client. See
 [project documents](../features/project-documents-v1.md) and
 [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md).
