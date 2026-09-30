@@ -1,5 +1,5 @@
 import { runPersonClientCli } from "../../src/product/person-client/composition.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 async function help(argv: readonly string[]): Promise<string> {
   let stdout = "";
@@ -114,5 +114,27 @@ describe("Person client help", () => {
     await expect(help(["updates", "--help"])).resolves.toContain("<submit-v3|status-v3|search|search-v3>");
     await expect(help(["documents", "--help"])).resolves.toContain("<upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate>");
     await expect(help(["projects", "--help"])).resolves.toContain("<list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2>");
+  });
+
+  it("refuses each retired command, and its help, as unknown before any session or network use", async () => {
+    const retired = [
+      ["documents", "upload"], ["documents", "status"], ["documents", "read"], ["documents", "read-v2"], ["documents", "search"], ["documents", "download"],
+      ["projects", "list"], ["projects", "read"], ["projects", "feed"], ["projects", "feed-v2"], ["projects", "search"], ["projects", "read-context"], ["projects", "read-context-v2"],
+      ["updates", "submit"], ["updates", "status"], ["updates", "read"], ["updates", "read-v3"],
+      ["slack-connect-cancel"],
+    ];
+    for (const argv of retired.flatMap(command => [command, [...command, "--help"]])) {
+      let stdout = "";
+      let stderr = "";
+      const network = vi.fn();
+      await expect(runPersonClientCli(argv, {
+        fetch: network,
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: (value) => ((stderr += String(value)), true) },
+      }), argv.join(" ")).resolves.toBe(2);
+      expect(stdout).toBe("");
+      expect(JSON.parse(stderr)).toEqual({ ok: false, error: "usage: echo-brain person <command> [options]" });
+      expect(network).not.toHaveBeenCalled();
+    }
   });
 });
