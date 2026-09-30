@@ -70,7 +70,7 @@ export function Bar({ state }: { state: State }) {
   const verb = state.ask ? 'Ask' : 'Search or ask';
   const name = `${verb} ${chip?.name ?? 'ECHO'}`;
   return (
-    <div class="bar-wrap">
+    <div class={`bar-wrap${state.ask && !covered ? ' with-ask' : ''}`}>
       {matchesShown(state) && <Matches state={state} scopeName={chip?.name ?? null} />}
       <form class="bar" onSubmit={event => { event.preventDefault(); submitBar(); }}>
         <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
