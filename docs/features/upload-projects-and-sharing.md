@@ -85,10 +85,10 @@ audiences retain their meaning. Legacy request versions remain supported.
 The CLI exposes `person updates submit-v3|status-v3|read-v3|search-v3` and
 `person documents upload-v2|status-v2|search-v2|download-v2`, and
 `person open --ref` reads a note's text or a document's extracted text.
-Project content uses `person projects feed-v2|search-v2|read-context-v2`. The
-desktop app's project page instead reads `person list --project <project-id>`
-and opens each row with `person open --ref`
-([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). New
+`person list --project <project-id>` browses a project's content,
+`person projects search-v2` searches it and `person open --ref` opens one row
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)); the
+desktop app's project page does the same. New
 admission commands accept `--association-project-ids-json`; a projects
 audience also uses `--audience-project-ids-json`. Document retry selects the
 retained snapshot's version automatically. In the desktop app, only **Save**

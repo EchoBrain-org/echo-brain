@@ -128,9 +128,10 @@ it('uses default API composition and real Person session checks through CLI, inc
     const receipt = JSON.parse(submitted.stdout);
     await runtime.close();
     runtime = await startOrganizationAuthorityApiRuntime({ ...config, port: await port() }, { oidc_provider: provider });
-    const read = await cli(['projects', 'read-context', '--project-id', project, '--context-id', receipt.context_id]);
+    const read = await cli(['open', '--ref', `note:${receipt.context_id}`]);
     expect(read.stderr).toBe(''); expect(read.code).toBe(0);
-    expect(JSON.parse(read.stdout)).toMatchObject({ text: 'PC06 original meridian.\n', audience: { kind: 'project', project_id: project } });
+    expect(JSON.parse(read.stdout)).toMatchObject({ ok: true, result: { text: 'PC06 original meridian.\n',
+      item: { visibility: 'project', projects: [{ project_id: project, name: 'Synthetic Alpha' }] } } });
     const status = await cli(['updates', 'status', '--request-id', requestId]);
     expect(status.code).toBe(0); expect(JSON.parse(status.stdout)).toMatchObject({ context_id: receipt.context_id, metadata: 'pending' });
     const logout = await cli(['logout']); expect(logout.code).toBe(0);

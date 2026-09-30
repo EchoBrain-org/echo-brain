@@ -46,7 +46,7 @@ import {
 } from '@echo-brain/organization-api';
 import {
   PERSON_PROJECTS_PATH_V2,
-  validateProjectContextFeedV2, validateProjectContextSearchResultV2, validateProjectContextReadV2,
+  validateProjectContextSearchResultV2,
   validateProjectPageRequestV2, validateProjectListV2, validateProjectSummaryV2, type ProjectPageRequestV2,
 } from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
@@ -1080,22 +1080,10 @@ export class PersonAuthorityClient {
       validate: validateProjectContextReadV1, matches: result => result.project_id === request.project_id && result.context_id === request.context_id });
   }
 
-  async projectFeedV2(accessToken: string, value: ProjectContextBrowseV1) {
-    const request = validateProjectContextBrowseV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/context/feed`, body: request, validate: validateProjectContextFeedV2,
-      matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
-  }
-
   async searchProjectContextV2(accessToken: string, value: ProjectContextSearchV1) {
     const request = validateProjectContextSearchV1(value);
     return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/context/search`, body: request, validate: validateProjectContextSearchResultV2,
       matches: result => result.project_id === request.project_id && result.items.length <= (request.limit ?? 10) });
-  }
-
-  async readProjectContextV2(accessToken: string, value: ProjectContextReadRequestV1) {
-    const request = validateProjectContextReadRequestV1(value);
-    return this.contextRequest(accessToken, { path: `${PERSON_PROJECTS_PATH_V2}/${request.project_id}/context/${request.context_id}`,
-      validate: validateProjectContextReadV2, matches: result => result.project_id === request.project_id && result.context_id === request.context_id });
   }
 
   async submitUpdateV2(accessToken: string, value: PersonUpdateSubmitV2) {

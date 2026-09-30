@@ -107,15 +107,13 @@ describe("Person client help", () => {
       ["documents", "status-v2", "--help", "--request-id <uuid>"],
       ["documents", "search-v2", "--help", "--query <text>"],
       ["documents", "download-v2", "--help", "--document-id <id>"],
-      ["projects", "feed-v2", "--help", "--project-id <project-id>"],
       ["projects", "search-v2", "--help", "--query <text>"],
-      ["projects", "read-context-v2", "--help", "--context-id <context-id>"],
     ] as const;
     for (const [parent, action, flag, required] of modern) {
       await expect(help([parent, action, flag])).resolves.toContain(required);
     }
     await expect(help(["updates", "--help"])).resolves.toContain("submit-v3|status|status-v3|search|search-v3|read|read-v3");
     await expect(help(["documents", "--help"])).resolves.toContain("<upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate>");
-    await expect(help(["projects", "--help"])).resolves.toContain("feed|feed-v2|search|search-v2|read-context|read-context-v2");
+    await expect(help(["projects", "--help"])).resolves.toContain("<list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2>");
   });
 });

@@ -99,10 +99,8 @@ const RULES: Readonly<
   "documents-status-v2": { accepts: ["request-id"], requires: ["request-id"] },
   "documents-search-v2": { accepts: ["project-id", "query", "limit", "cursor"] },
   "documents-download-v2": { accepts: ["document-id", "out", "project-id"], requires: ["document-id", "out"] },
-  "projects-list": { accepts: ["limit", "cursor"] },
   "projects-list-v2": { accepts: ["limit", "cursor", "status"] },
   "projects-create": { accepts: ["request-id", "name"], requires: ["request-id", "name"] },
-  "projects-read": { accepts: ["project-id"], requires: ["project-id"] },
   "projects-read-v2": { accepts: ["project-id"], requires: ["project-id"] },
   "projects-rename": { accepts: ["request-id", "project-id", "name"], requires: ["request-id", "project-id", "name"] },
   "projects-archive": { accepts: ["request-id", "project-id"], requires: ["request-id", "project-id"] },
@@ -116,12 +114,7 @@ const RULES: Readonly<
   "projects-member-remove": { accepts: ["request-id", "project-id", "membership-id"], requires: ["request-id", "project-id", "membership-id"] },
   "projects-associate": { accepts: ["request-id", "project-id", "context-id"], requires: ["request-id", "project-id", "context-id"] },
   "projects-dissociate": { accepts: ["request-id", "project-id", "context-id"], requires: ["request-id", "project-id", "context-id"] },
-  "projects-feed": { accepts: ["project-id", "limit", "cursor"], requires: ["project-id"] },
-  "projects-feed-v2": { accepts: ["project-id", "limit", "cursor"], requires: ["project-id"] },
-  "projects-search": { accepts: ["project-id", "query", "limit", "cursor"], requires: ["project-id", "query"] },
   "projects-search-v2": { accepts: ["project-id", "query", "limit", "cursor"], requires: ["project-id", "query"] },
-  "projects-read-context": { accepts: ["project-id", "context-id"], requires: ["project-id", "context-id"] },
-  "projects-read-context-v2": { accepts: ["project-id", "context-id"], requires: ["project-id", "context-id"] },
   "updates-submit": { accepts: ["request-id", "title", "file", "visibility", "audience-project-id", "project-id"], requires: ["request-id", "title", "file"] },
   "updates-submit-v3": { accepts: ["request-id", "title", "file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json"], requires: ["request-id", "title", "file"] },
   "updates-status-v3": { accepts: ["request-id"], requires: ["request-id"] },
@@ -301,13 +294,9 @@ Lists or searches accessible V2 documents. Results preserve multi-project audien
 
 Streams a V2 document's exact saved original to a new file and verifies its length and SHA-256 before publishing it atomically.
 `,
-  projects: `usage: echo-brain person projects <list|list-v2|create|read|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|feed|feed-v2|search|search-v2|read-context|read-context-v2> [options]
+  projects: `usage: echo-brain person projects <list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2> [options]
 
-Projects organize original context. Association does not change its audience. Only projects list is the capability probe; a canonical 404 there means Not live yet. Use person ask --project for a strict project-scoped answer.
-`,
-  "projects-list": `usage: echo-brain person projects list [--limit <1-10>] [--cursor <opaque-base64url>]
-
-Lists your current projects. This is the sole capability probe; an individual project's not_found response is not a capability result.
+Projects organize original context. Association does not change its audience. Browse a project with person list --project <project-id> and read each item with person open --ref. Use person ask --project for a strict project-scoped answer.
 `,
   "projects-list-v2": `usage: echo-brain person projects list-v2 [--status <active|archived>] [--limit <1-10>] [--cursor <opaque-base64url>]
 
@@ -316,10 +305,6 @@ Lists active projects by default, or archived projects when selected. V2 include
   "projects-create": `usage: echo-brain person projects create --request-id <uuid> --name <name>
 
 Creates a project with you as its initial lead. Retain the request ID for exact replay after an unknown outcome.
-`,
-  "projects-read": `usage: echo-brain person projects read --project-id <project-id>
-
-Read one currently accessible project.
 `,
   "projects-read-v2": `usage: echo-brain person projects read-v2 --project-id <project-id>
 
@@ -367,31 +352,11 @@ Associate one readable original with a project. Association does not change its 
 `,
   "projects-dissociate": `usage: echo-brain person projects dissociate --request-id <uuid> --project-id <project-id> --context-id <context-id>
 
-Remove the association without changing the original or its audience. Refresh the project feed; old upload receipts retain their initial association.
-`,
-  "projects-feed": `usage: echo-brain person projects feed --project-id <project-id> [--limit <1-10>] [--cursor <opaque-base64url>]
-
-Browse currently permitted originals in this project. Each page checks access again; pages do not form a stable snapshot.
-`,
-  "projects-feed-v2": `usage: echo-brain person projects feed-v2 --project-id <project-id> [--limit <1-10>] [--cursor <opaque-base64url>]
-
-Browse project originals including V3 multi-project uploads. Results preserve their exact audience union.
-`,
-  "projects-search": `usage: echo-brain person projects search --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
-
-Search permitted originals within this project. An empty query is invalid; use feed to browse.
+Remove the association without changing the original or its audience. Refresh person list --project; old upload receipts retain their initial association.
 `,
   "projects-search-v2": `usage: echo-brain person projects search-v2 --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
 
-Search project originals including V3 multi-project uploads. An empty query is invalid; use feed-v2 to browse.
-`,
-  "projects-read-context": `usage: echo-brain person projects read-context --project-id <project-id> --context-id <context-id>
-
-Read the original under current project and audience access checks.
-`,
-  "projects-read-context-v2": `usage: echo-brain person projects read-context-v2 --project-id <project-id> --context-id <context-id>
-
-Read an original with its exact V3 audience union under current project and audience checks.
+Search project originals including V3 multi-project uploads. An empty query is invalid; use person list --project to browse.
 `,
   updates: `usage: echo-brain person updates <submit|submit-v3|status|status-v3|search|search-v3|read|read-v3> [options]
 
@@ -979,18 +944,12 @@ export async function runPersonClientCli(
       case 'documents-download-v2':
         printDocument(stdout, await client.downloadDocumentV2(requiredText(values, 'document-id'), requiredText(values, 'out'), values['project-id'] === undefined ? undefined : requiredText(values, 'project-id')));
         break;
-      case 'projects-list':
-        print(stdout, await client.projects(contextPaging(values)));
-        break;
       case 'projects-list-v2':
         print(stdout, await client.projectsV2({ ...contextPaging(values), ...(values.status === undefined ? {} : { status: requiredText(values, 'status') as 'active' | 'archived' }) }));
         break;
       case 'projects-create':
         print(stdout, await client.createProject(validateProjectCreateV1({ schema_version: 1, kind: 'echo-project-create-v1',
           request_id: requiredText(values, 'request-id'), name: requiredText(values, 'name') })));
-        break;
-      case 'projects-read':
-        print(stdout, await client.readProject(requiredText(values, 'project-id')));
         break;
       case 'projects-read-v2':
         print(stdout, await client.readProjectV2(requiredText(values, 'project-id')));
@@ -1035,23 +994,8 @@ export async function runPersonClientCli(
         print(stdout, await client.dissociateProjectContext(validateProjectContextDissociateV1({ schema_version: 1, kind: 'echo-project-context-dissociate-v1',
           request_id: requiredText(values, 'request-id'), project_id: requiredText(values, 'project-id'), context_id: requiredText(values, 'context-id') })));
         break;
-      case 'projects-feed':
-        print(stdout, await client.projectFeed({ project_id: validateProjectIdV1(values['project-id']), ...contextPaging(values) }));
-        break;
-      case 'projects-feed-v2':
-        print(stdout, await client.projectFeedV2({ project_id: validateProjectIdV1(values['project-id']), ...contextPaging(values) }));
-        break;
-      case 'projects-search':
-        print(stdout, await client.searchProjectContext({ project_id: validateProjectIdV1(values['project-id']), query: requiredText(values, 'query'), ...contextPaging(values) }));
-        break;
       case 'projects-search-v2':
         print(stdout, await client.searchProjectContextV2({ project_id: validateProjectIdV1(values['project-id']), query: requiredText(values, 'query'), ...contextPaging(values) }));
-        break;
-      case 'projects-read-context':
-        print(stdout, await client.readProjectContext({ project_id: validateProjectIdV1(values['project-id']), context_id: requiredText(values, 'context-id') }));
-        break;
-      case 'projects-read-context-v2':
-        print(stdout, await client.readProjectContextV2({ project_id: validateProjectIdV1(values['project-id']), context_id: requiredText(values, 'context-id') }));
         break;
       case 'updates-submit': {
         const requestId = validatePersonUpdateRequestId(requiredText(values, 'request-id'));
