@@ -35,16 +35,6 @@
         "export": "OrganizationPersonSessionV2"
       },
       {
-        "name": "Person meeting-ingestion exclusion change contract",
-        "path": "packages/organization-api/src/person-meeting-ingestion-exclusion-change.ts",
-        "export": "validateOrganizationPersonMeetingIngestionExclusionChangeRequest"
-      },
-      {
-        "name": "Person meeting-ingestion exclusion read contract",
-        "path": "packages/organization-api/src/person-meeting-ingestion-exclusion-read.ts",
-        "export": "validateOrganizationPersonMeetingIngestionExclusionListRequest"
-      },
-      {
         "name": "Person update contracts",
         "path": "packages/organization-api/src/person-updates.ts",
         "export": "validatePersonUpdateSubmitV1"
@@ -64,6 +54,8 @@
     "retired_source_paths": [
       "packages/organization-api/src/person-member-exclusion-change.ts",
       "packages/organization-api/src/person-member-exclusion-read.ts",
+      "packages/organization-api/src/person-meeting-ingestion-exclusion-change.ts",
+      "packages/organization-api/src/person-meeting-ingestion-exclusion-read.ts",
       "packages/organization-api/src/person-slack-link.ts",
       "packages/organization-api/src/person-tools.ts",
       "packages/organization-api/src/person-slack-identity-link.ts",

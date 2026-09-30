@@ -2,13 +2,6 @@ export type {
   OrganizationApiErrorV1,
   OrganizationApiSha256Digest,
   OrganizationAuthorityDescriptorResponseV1,
-  OrganizationPersonMeetingIngestionExclusionChangeRequestV2,
-  OrganizationAdminMeetingIngestionExclusionBreakGlassReadRequestV2,
-  OrganizationMeetingIngestionExclusionListResponseV2,
-  OrganizationPersonMeetingIngestionExclusionListRequestV2,
-  OrganizationPersonMeetingIngestionExclusionMeetingSelectorV2,
-  OrganizationPersonMeetingIngestionExclusionSelectorV2,
-  OrganizationPersonMeetingIngestionExclusionSourceSelectorV2,
   OrganizationPersonOidcBeginRequestV2,
   OrganizationPersonOidcBeginResponseV2,
   OrganizationPersonSessionRefreshRequestV2,
@@ -25,26 +18,11 @@ export {
 } from './validation.js';
 export {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
-  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSION_LIST_PATH,
-  ORGANIZATION_API_PERSON_MEETING_INGESTION_EXCLUSIONS_PATH,
-  ORGANIZATION_API_ADMIN_MEETING_INGESTION_EXCLUSION_BREAK_GLASS_PATH,
   ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH,
   ORGANIZATION_API_PERSON_OIDC_CALLBACK_PATH,
   ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
 } from './http.js';
-export {
-  canonicalOrganizationPersonMeetingIngestionExclusionChangeRequestBytes,
-  validateOrganizationPersonMeetingIngestionExclusionChangeRequest,
-} from './person-meeting-ingestion-exclusion-change.js';
-export {
-  canonicalOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequestBytes,
-  canonicalOrganizationMeetingIngestionExclusionListResponseBytes,
-  canonicalOrganizationPersonMeetingIngestionExclusionListRequestBytes,
-  validateOrganizationAdminMeetingIngestionExclusionBreakGlassReadRequest,
-  validateOrganizationMeetingIngestionExclusionListResponse,
-  validateOrganizationPersonMeetingIngestionExclusionListRequest,
-} from './person-meeting-ingestion-exclusion-read.js';
 export {
   isCanonicalPersonEmail,
   isExpectedPersonEmail,
