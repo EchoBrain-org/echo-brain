@@ -1,13 +1,8 @@
 #!/usr/bin/env node
-// AC4 — Enforce the product boundary natively.
-//
-// Resolves the transitive internal module graph from the product entry points in
-// product/source-boundary.v1.json against the repository worktree. Rejects any
-// edge outside allowed_internal_paths, into a forbidden_internal_root, or that
-// escapes the repository; classifies node: / bare-core specifiers against the
-// pinned Node 22 built-in set (never as npm rows); requires the full transitive
-// closure to resolve locally and enforces product-wide and per-layer package
-// and Node-builtin allowlists.
+// Enforce complete workspace ownership, inward dependency directions, public
+// exports, and layer allowlists against source. The retired machine manifest
+// supplies source tombstones and provider ownership; it cannot reactivate a
+// second product graph beside the registered workspace boundaries.
 //
 import { existsSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
@@ -321,7 +316,7 @@ function checkComponentIndexContract(tree, manifest, errors) {
 function checkWorkspaceBoundaries(tree, errors) {
   const registry = parseJsonFile(tree, WORKSPACE_BOUNDARY_REGISTRY, errors);
   if (registry === null) {
-    return { report: [], productWorkspaceSourceRoots: [] };
+    return { report: [] };
   }
   if (
     registry.registry_version !== 1 ||
@@ -330,7 +325,7 @@ function checkWorkspaceBoundaries(tree, errors) {
     !isStringArray(registry.retired_workspace_roots)
   ) {
     errors.push(`invalid workspace boundary registry: ${WORKSPACE_BOUNDARY_REGISTRY}`);
-    return { report: [], productWorkspaceSourceRoots: [] };
+    return { report: [] };
   }
   if (new Set(registry.manifests).size !== registry.manifests.length) {
     errors.push(`workspace boundary registry contains duplicate manifest paths`);
@@ -775,66 +770,29 @@ function checkWorkspaceBoundaries(tree, errors) {
         layer_rules: (manifest.layer_rules ?? []).map((rule) => rule.name).sort(),
       }))
       .sort((left, right) => left.name.localeCompare(right.name)),
-    productWorkspaceSourceRoots: boundaries
-      .filter(
-        ({ manifest }) =>
-          manifest.workspace === true && isWithin(manifest.source_root, 'src/product'),
-      )
-      .map(({ manifest }) => manifest.source_root),
   };
 }
 
 function main() {
   const tree = repositoryWorktree(REPO);
   const boundary = JSON.parse(textFile(tree, PRODUCT_BOUNDARY_MANIFEST));
-  const allowed = boundary.allowed_internal_paths;
-  const forbidden = boundary.forbidden_internal_roots;
-  const removed = boundary.removed_internal_roots ?? [];
-  const external = new Set(boundary.allowed_external_runtime_packages);
-  const layerRules = boundary.layer_rules ?? [];
-  const adapterArchitecture = boundary.adapter_architecture;
   const errors = [];
-  const {
-    report: workspaceBoundaries,
-    productWorkspaceSourceRoots,
-  } = checkWorkspaceBoundaries(tree, errors);
-  const runtimeAssets = boundary.runtime_assets ?? [];
-  for (const asset of runtimeAssets) {
-    if (!tree.has(asset)) errors.push(`runtime asset missing from worktree: ${asset}`);
-  }
+  const { report: workspaceBoundaries } = checkWorkspaceBoundaries(tree, errors);
 
-  const isAllowed = (p) =>
-    allowed.some((g) => matchesGlob(p, g)) &&
-    !productWorkspaceSourceRoots.some((root) => isWithin(p, root));
-  const isForbidden = (p) => forbidden.some((g) => matchesGlob(p, g));
-
-  for (const rule of layerRules) {
-    if (
-      !isStringArray(rule.allowed_imports) ||
-      !isStringArray(rule.allowed_packages) ||
-      !isStringArray(rule.allowed_node_builtins)
-    ) {
-      errors.push(`layer rule '${String(rule.name)}' has an invalid allowlist`);
-      continue;
-    }
-    for (const dependency of rule.allowed_packages) {
-      if (!external.has(dependency)) {
-        errors.push(
-          `layer rule '${rule.name}' allows package outside the product boundary: ${dependency}`,
-        );
-      }
-    }
-    for (const builtin of rule.allowed_node_builtins.map((name) =>
-      name.replace(/^node:/, ''),
-    )) {
-      if (!NODE22_BUILTINS.has(builtin)) {
-        errors.push(
-          `layer rule '${rule.name}' allows unknown Node builtin: ${builtin}`,
-        );
-      }
+  // Active products have workspace boundaries. The retired machine manifest
+  // retains source tombstones and provider ownership, never another build graph.
+  for (const field of [
+    'entry_points', 'allowed_internal_paths', 'forbidden_internal_roots',
+    'allowed_external_runtime_packages', 'runtime_assets', 'layer_rules',
+  ]) {
+    if (!Array.isArray(boundary[field]) || boundary[field].length !== 0) {
+      errors.push(`retired machine boundary ${field} must remain empty; declare active products in workspace boundaries`);
     }
   }
-
+  if (boundary.child_process_owner !== null) {
+    errors.push('retired machine boundary child_process_owner must remain null');
+  }
+  const removed = boundary.removed_internal_roots ?? [];
   for (const [path] of tree) {
     if (removed.some((root) => matchesGlob(path, root))) {
       errors.push(`module remains under removed internal root: ${path}`);
@@ -842,140 +800,20 @@ function main() {
   }
 
   let providerOwnership = null;
-  try { providerOwnership = checkProviderOwnership(tree, adapterArchitecture, resolveRelative, errors); }
-  catch (error) { errors.push('provider ownership manifest is invalid: ' + error.message); }
-
-  // Layer rules apply to every matching worktree module, not only modules that
-  // happen to be reachable from today's public entry points. This makes the
-  // dependency direction durable as new core files are added.
-  for (const [path] of tree) {
-    if (!SOURCE_FILE_RE.test(path)) continue;
-    const matchingRules = layerRules.filter((rule) => matchesGlob(path, rule.from));
-    if (matchingRules.length === 0) {
-      if (isAllowed(path)) {
-        errors.push(`product source file has no layer rule: ${path}`);
-      }
-      continue;
-    }
-    const source = textFile(tree, path);
-    for (const reference of moduleReferences(path, source)) {
-      const spec = reference.specifier;
-      if (spec === null) {
-        errors.push(
-          `layer rule rejects non-literal module loading from ${path}:${reference.line}`,
-        );
-        continue;
-      }
-      if (spec.startsWith('.')) {
-        const resolved = resolveRelative(tree, path, spec);
-        if (resolved === null) continue;
-        for (const rule of matchingRules) {
-          if (
-            !rule.allowed_imports.some((pattern) =>
-              matchesGlob(resolved, pattern),
-            )
-          ) {
-            errors.push(
-              `layer rule '${rule.name}' rejects edge: ${path} -> ${resolved}`,
-            );
-          }
-        }
-        continue;
-      }
-
-      const builtin = spec.replace(/^node:/, '');
-      if (spec.startsWith('node:') || NODE22_BUILTINS.has(spec)) {
-        for (const rule of matchingRules) {
-          if (
-            !(rule.allowed_node_builtins ?? [])
-              .map((name) => name.replace(/^node:/, ''))
-              .includes(builtin)
-          ) {
-            errors.push(
-              `layer rule '${rule.name}' rejects Node builtin ${spec} in ${path}`,
-            );
-          }
-        }
-        continue;
-      }
-
-      const importedPackage = packageName(spec);
-      for (const rule of matchingRules) {
-        if (!(rule.allowed_packages ?? []).includes(importedPackage)) {
-          errors.push(
-            `layer rule '${rule.name}' rejects package ${importedPackage} in ${path}`,
-          );
-        }
-      }
-    }
-  }
-
-  const seen = new Set();
-  const work = [...boundary.entry_points];
-  const closure = new Set();
-  const externalSeen = new Set();
-
-  while (work.length) {
-    const p = work.pop();
-    if (seen.has(p)) continue;
-    seen.add(p);
-    if (!tree.has(p)) { errors.push(`entry/edge not tracked in target HEAD: ${p}`); continue; }
-    if (isForbidden(p)) { errors.push(`closure module in forbidden root: ${p}`); continue; }
-    if (!isAllowed(p) && !boundary.entry_points.includes(p)) {
-      errors.push(`closure module outside allowlist: ${p}`);
-      continue;
-    }
-    closure.add(p);
-    const text = textFile(tree, p);
-    for (const reference of moduleReferences(p, text)) {
-      const spec = reference.specifier;
-      if (spec === null) {
-        errors.push(`non-literal module loading from ${p}:${reference.line} (${reference.kind})`);
-        continue;
-      }
-      // A single module owns child process creation for the whole product, so
-      // the closure may reach child_process through that module and no other.
-      if (spec.replace(/^node:/, '') === 'child_process' && p !== boundary.child_process_owner) {
-        errors.push(`child_process is owned by ${boundary.child_process_owner}, not ${p}`);
-      }
-      if (spec.startsWith('.')) {
-        const r = resolveRelative(tree, p, spec);
-        if (!r) { errors.push(`unresolved repository-local edge ${spec} from ${p}`); continue; }
-        if (r.startsWith('../') || !r.startsWith('src/')) {
-          errors.push(`edge escapes source tree: ${spec} from ${p} -> ${r}`);
-          continue;
-        }
-        if (isForbidden(r)) { errors.push(`edge into forbidden root: ${p} -> ${r}`); continue; }
-        if (!isAllowed(r)) { errors.push(`edge outside allowlist: ${p} -> ${r}`); continue; }
-        work.push(r);
-      } else if (spec.startsWith('node:')) {
-        const bare = spec.slice(5);
-        if (!NODE22_BUILTINS.has(bare)) errors.push(`unknown node: builtin ${spec} from ${p}`);
-      } else if (NODE22_BUILTINS.has(spec)) {
-        // bare core module — classified as builtin, never an npm row
-      } else {
-        const pkg = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
-        externalSeen.add(pkg);
-        if (!external.has(pkg)) errors.push(`undeclared external package ${pkg} from ${p}`);
-      }
-    }
-  }
-
-  // An allowlisted module no entry point can reach is dead weight: nothing
-  // imports it, yet it still ships inside the packed artifact.
-  for (const [path] of tree) {
-    if (!SOURCE_FILE_RE.test(path) || !isAllowed(path) || closure.has(path)) continue;
-    errors.push(`allowlisted module is unreachable from the product entry points: ${path}`);
+  try {
+    providerOwnership = checkProviderOwnership(tree, boundary.adapter_architecture, resolveRelative, errors);
+  } catch (error) {
+    errors.push('provider ownership manifest is invalid: ' + error.message);
   }
 
   const result = {
     ok: errors.length === 0,
-    entry_points: boundary.entry_points,
-    closure: [...closure].sort(),
-    external_packages: [...externalSeen].sort(),
-    runtime_assets: runtimeAssets,
+    entry_points: [],
+    closure: [],
+    external_packages: [],
+    runtime_assets: [],
     removed_internal_roots: removed,
-    layer_rules: layerRules.map((rule) => rule.name),
+    layer_rules: [],
     provider_architecture: providerOwnership,
     workspace_boundaries: workspaceBoundaries,
     errors,

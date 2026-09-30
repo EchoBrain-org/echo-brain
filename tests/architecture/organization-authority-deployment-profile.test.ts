@@ -17,11 +17,12 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { canonicalJsonForTest as canonicalJson } from "../support/test-canonical-json.js";
 
 const REPO = resolve(import.meta.dirname, "../..");
 const DEPLOYMENT = "deploy/organization-authority";
+const fixtureRoots: string[] = [];
 const RUNTIME_PROFILE_FILES = [
   "Caddyfile.clean-v1",
   "Caddyfile.clean-v1.ec2",
@@ -93,6 +94,7 @@ async function waitForFile(path: string): Promise<void> {
 
 function preparedStatusFixture() {
   const root = mkdtempSync(join(tmpdir(), "echo-clean-status-"));
+  fixtureRoots.push(root);
   const deploy = join(root, "deploy", "organization-authority");
   const release = join(deploy, "release");
   const privateDir = join(deploy, "clean-data", "private");
@@ -411,6 +413,12 @@ function stageRehearsalInputs(
   return inputs;
 }
 
+afterEach(() => {
+  while (fixtureRoots.length) {
+    rmSync(fixtureRoots.pop()!, { force: true, recursive: true });
+  }
+});
+
 describe("clean-v1 Organization Authority deployment profile", () => {
   it("keeps server onboarding in one resumable wrapper with fixed private inputs", () => {
     const wrapper = resolve(REPO, DEPLOYMENT, "onboard-clean-v1.sh");
@@ -517,7 +525,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
   it("keeps credential-bearing release URLs out of the founder handoff", () => {
     const fixture = preparedStatusFixture();
     const urlToken = "founder-handoff-url-token-must-not-be-logged";
-    try {
+    {
       const releasePath = join(
         fixture.releaseDir,
         "current.clean-v1.json",
@@ -555,14 +563,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       expect(result.stdout).not.toContain("echo-brain person logout");
       expect(result.stdout).not.toContain("echo-brain person login");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("prints a founder kit build and install the command-line kit accepts", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const onboarding = join(
         fixture.deploy,
         "clean-data",
@@ -615,14 +621,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(built.stderr).not.toContain("usage:");
       expect(built.stderr).toContain("Person onboarding kit: release record is missing");
       expect(existsSync(placeholders)).toBe(false);
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("uses the kit-installed client for the founder Slack handoff", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const result = fixture.run("resume", {
         ECHO_FAKE_SETUP_STATUS:
           '{"next_step":"complete_founder_slack_link"}',
@@ -633,14 +637,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         '"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person slack-link',
       );
       expect(result.stdout).not.toContain("run echo-brain person slack-link");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("separates human Slack approval from delegated kit-installed client checks", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const result = fixture.run("resume", {
         ECHO_FAKE_SETUP_STATUS: '{"next_step":"ready_to_start"}',
       });
@@ -676,14 +678,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(result.stdout).not.toMatch(
         /HOST ACTION:[^\n]*Library\/Application Support\/ECHO\/bin\/echo-brain/,
       );
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it.each([false, true])("finalizes and hands off the prepared source (synthetic=%s)", (synthetic) => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       if (synthetic) {
         const setup = join(fixture.privateDir, "onboard-clean-v1.conf");
         writeFileSync(setup, readFileSync(setup, "utf8") +
@@ -725,14 +725,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(mismatch.status).not.toBe(0);
       expect(mismatch.stderr).toContain("synthetic meeting input differs");
       expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/compose .* (up|run)/);
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("reports a complete canary safely when the Authority is stopped or drifted", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const stopped = fixture.run("status", { ECHO_FAKE_RUNNING: "false" });
       expect(stopped.status).toBe(0);
       expect(stopped.stdout).toContain("authority_running=false");
@@ -754,14 +752,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(sourceDrift.status).toBe(0);
       expect(sourceDrift.stdout).toContain("authority_exact_accepted_image=false");
       expect(sourceDrift.stdout).toContain("terminal_green=false");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("hands a staged candidate to the update command without running it as accepted onboarding", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       writeFileSync(
         join(fixture.releaseDir, "candidate.clean-v1.json"),
         readFileSync(join(fixture.releaseDir, "current.clean-v1.json")),
@@ -790,14 +786,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
         "durable-work-must-survive",
       );
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("installs private Slack browser OAuth configuration and reloads the accepted runtime", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const input = join(fixture.root, "slack-browser-oidc.json");
       const source = '{ "client_id": "1234567890.1234567890", "client_secret": "browser-secret" }';
       writeFileSync(input, source, { mode: 0o600 });
@@ -816,14 +810,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(fixture.calls, "utf8")).toContain(
         "up -d --no-build --force-recreate --wait --wait-timeout 90",
       );
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("refuses malformed Slack browser OAuth input before changing runtime state", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const input = join(fixture.root, "slack-browser-oidc.json");
       writeFileSync(input, '{"client_id":"only"}', { mode: 0o600 });
       chmodSync(input, 0o600);
@@ -834,14 +826,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(result.stderr).toContain("Slack browser OAuth input must contain exactly");
       expect(existsSync(join(fixture.privateDir, "slack-browser-oidc.json"))).toBe(false);
       expect(readFileSync(fixture.calls, "utf8")).not.toContain("force-recreate");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("restores the prior Slack browser OAuth configuration when reload fails", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const previous = '{"client_id":"123.456","client_secret":"previous-secret"}';
       const installed = join(fixture.privateDir, "slack-browser-oidc.json");
       writeFileSync(installed, previous, { mode: 0o600 });
@@ -864,14 +854,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(result.stderr).toContain("prior configuration was restored and verified");
       expect(readFileSync(installed, "utf8")).toBe(previous);
       expect(readFileSync(fixture.calls, "utf8").match(/force-recreate/g)?.length).toBe(2);
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("restarts the accepted runtime when rehearsal archival fails after shutdown", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const environment = readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8");
       const sentinel = join(fixture.deploy, "clean-data", "rehearsal-sentinel");
       writeFileSync(sentinel, "live-data-must-survive");
@@ -898,8 +886,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       const restarted = calls.indexOf(" up -d --no-build --wait --wait-timeout 90");
       expect(down).toBeGreaterThanOrEqual(0);
       expect(restarted).toBeGreaterThan(down);
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
@@ -947,7 +933,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     const fixture = preparedStatusFixture();
     const operationId = "onboarding-rehearsal-diagnostics";
     const contentSentinel = "private-status-content-must-not-be-printed";
-    try {
+    {
       const { stage } = stageRehearsalInputs(fixture, operationId);
       configureReusableProviderInputs(fixture);
       const stageBefore = readFileSync(join(stage, "stage.json"));
@@ -985,8 +971,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(result.stderr).toContain(`unmet_preconditions=${missing.join(",")}\n`);
       expect(result.stderr).toContain("next_action=");
       expect(result.stderr).toContain(action ?? "Human host operator");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
@@ -1000,7 +984,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     const fixture = preparedStatusFixture();
     const operationId = "onboarding-rehearsal-guards";
     const providerSentinel = "provider-fixture-must-not-appear-in-output";
-    try {
+    {
       const { stage } = stageRehearsalInputs(fixture, operationId);
       configureReusableProviderInputs(fixture);
       writeFileSync(join(fixture.privateDir, "llm-credential-source"), providerSentinel);
@@ -1032,8 +1016,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(existsSync(join(fixture.deploy, "retired-rehearsals"))).toBe(false);
       expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
       expect(readFileSync(fixture.calls, "utf8")).not.toContain(`${stage}/input`);
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
@@ -1041,7 +1023,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     const fixture = preparedStatusFixture();
     const operationId = "onboarding-rehearsal-20260908";
     const providerSentinel = "provider-secret-must-never-appear-in-output";
-    try {
+    {
       const nonsecret = join(fixture.root, "rehearsal-nonsecret");
       const meetings = join(fixture.root, "rehearsal-meetings");
       mkdirSync(nonsecret, { mode: 0o700 });
@@ -1119,15 +1101,13 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       const retry = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
       expect(retry.status).toBe(0);
       expect(retry.stdout).toContain("rehearsal_prepared=true");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("binds all staged rehearsal material through reset and retains it for a safe retry", () => {
     const fixture = preparedStatusFixture();
     const operationId = "onboarding-rehearsal-tamper";
-    try {
+    {
       const { stage } = stageRehearsalInputs(fixture, operationId);
       configureReusableProviderInputs(fixture);
       expect(fixture.run("replace-rehearsal", {}, [
@@ -1186,8 +1166,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       const staleCompleted = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
       expect(staleCompleted.status).toBe(1);
       expect(staleCompleted.stderr).toContain("completed rehearsal material does not match the prepared Authority");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
@@ -1196,7 +1174,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     for (const kind of cases) {
       const fixture = preparedStatusFixture();
       const operationId = `onboarding-rehearsal-${kind}`;
-      try {
+      {
         stageRehearsalInputs(fixture, operationId);
         configureReusableProviderInputs(fixture);
         const source = join(fixture.privateDir, "llm-credential-source");
@@ -1219,8 +1197,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         expect(result.stderr).toMatch(/(fixed private input|existing provider input)/);
         expect(readFileSync(fixture.durableSentinel, "utf8")).toBe("durable-work-must-survive");
         expect(readFileSync(fixture.calls, "utf8")).not.toContain(" down --remove-orphans");
-      } finally {
-        rmSync(fixture.root, { force: true, recursive: true });
       }
     }
   });
@@ -1228,7 +1204,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
   it("fails closed for telemetry drift and a held lock without discarding a staged operation", () => {
     const fixture = preparedStatusFixture();
     const operationId = "onboarding-rehearsal-telemetry";
-    try {
+    {
       const { stage } = stageRehearsalInputs(fixture, operationId);
       configureReusableProviderInputs(fixture);
       const drifted = fixture.run("replace-rehearsal", { ECHO_FAKE_CONTENT_TELEMETRY: "true" }, [
@@ -1277,15 +1253,13 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(prepared.status, prepared.stderr).toBe(0);
       expect(readFileSync(join(stage, "stage.json"), "utf8")).toContain('"content_telemetry":false');
       expect(readFileSync(environment, "utf8")).toContain("ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=false");
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("binds an explicit provider-reuse telemetry selection across replacement and prepare retries", () => {
     const fixture = preparedStatusFixture();
     const operationId = "onboarding-rehearsal-explicit-telemetry";
-    try {
+    {
       const { stage } = stageRehearsalInputs(fixture, operationId);
       configureReusableProviderInputs(fixture);
 
@@ -1346,14 +1320,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8")).toContain(
         "ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true",
       );
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("refuses provider activation while another Authority operation holds the shared lock", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const lock = join(
         fixture.deploy,
         "clean-data",
@@ -1375,14 +1347,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "another Authority activation or release operation is already in progress",
       );
       expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("keeps a dead-owner operation lock fail-closed for deliberate recovery", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const lock = join(
         fixture.deploy,
         "clean-data",
@@ -1406,14 +1376,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(activation.stderr).toContain("README operation-lock recovery");
       expect(existsSync(lock)).toBe(true);
       expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("activates validated provider credentials through one healthy accepted-image restart", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const inputDir = join(fixture.root, "provider-credentials");
       const nextGranola = `grn_${"g".repeat(40)}`;
       const nextLlm = "l".repeat(43);
@@ -1486,14 +1454,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
         "durable-work-must-survive",
       );
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("restores and verifies both previous provider credentials when replacement startup fails", () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const inputDir = join(fixture.root, "provider-credentials");
       const nextGranola = `grn_${"r".repeat(40)}`;
       const nextLlm = "q".repeat(43);
@@ -1562,14 +1528,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
         "durable-work-must-survive",
       );
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 
   it("restores the previous provider credentials and runtime when activation is interrupted", async () => {
     const fixture = preparedStatusFixture();
-    try {
+    {
       const inputDir = join(fixture.root, "provider-credentials");
       const nextGranola = `grn_${"i".repeat(40)}`;
       const nextLlm = "j".repeat(43);
@@ -1653,8 +1617,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(stderr).toContain(
         "activation was interrupted; previous credentials were restored and verified",
       );
-    } finally {
-      rmSync(fixture.root, { force: true, recursive: true });
     }
   }, 10_000);
 

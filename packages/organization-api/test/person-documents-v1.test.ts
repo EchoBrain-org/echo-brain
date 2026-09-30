@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   PERSON_DOCUMENT_MAX_ORIGINAL_BYTES, PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_DOCUMENT_TRANSFER_IDLE_TIMEOUT_MS, assertPersonDocumentOriginalV1,
   detectPersonDocumentMediaTypeV1, validatePersonDocumentTextV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentSavedV1, validatePersonDocumentUploadResultV1, validatePersonDocumentStatusV1,
+  validatePersonDocumentUploadMetadataV2, validatePersonDocumentSavedV2,
+  validatePersonDocumentMetadataV1, validatePersonDocumentMetadataV2,
+  validatePersonDocumentSearchV1, validatePersonDocumentSearchV2,
+  validatePersonDocumentSearchResultV1, validatePersonDocumentSearchResultV2,
 } from '../src/person-documents-v1.js';
 
 const bytes = new TextEncoder().encode(`# SCOUT PRD\n${'robot requirement\n'.repeat(700)}`);
@@ -73,5 +77,56 @@ describe('minimal document admission proof',()=>{
     expect(validatePersonDocumentUploadResultV1(value)).toEqual(value);expect(validatePersonDocumentStatusV1(value)).toEqual(value);
     for(const extra of [{title:'private'},{audience:{kind:'team'}},{project_id:null},{sha256:`sha256:${'b'.repeat(64)}`}])expect(()=>validatePersonDocumentSavedV1({...value,...extra})).toThrow();
     expect(()=>validatePersonDocumentSavedV1({...value,request_id:'wrong'})).toThrow();expect(()=>validatePersonDocumentSavedV1({...value,document_id:'doc_wrong'})).toThrow();expect(()=>validatePersonDocumentSavedV1({...value,schema_version:2})).toThrow();
+  });
+});
+
+describe.each([1, 2] as const)('document V%i shared validation', (version) => {
+  const validateUpload = version === 1 ? validatePersonDocumentUploadMetadataV1 : validatePersonDocumentUploadMetadataV2;
+  const validateSaved = version === 1 ? validatePersonDocumentSavedV1 : validatePersonDocumentSavedV2;
+  const validateMetadata = version === 1 ? validatePersonDocumentMetadataV1 : validatePersonDocumentMetadataV2;
+  const validateSearch = version === 1 ? validatePersonDocumentSearchV1 : validatePersonDocumentSearchV2;
+  const validateResults = version === 1 ? validatePersonDocumentSearchResultV1 : validatePersonDocumentSearchResultV2;
+  const { project_id: _projectId, ...common } = metadata();
+  const upload = {
+    ...common, schema_version: version, kind: `echo-person-document-upload-v${version}`,
+    ...(version === 1 ? { project_id: null } : { association_project_ids: [] }),
+  };
+  const saved = {
+    schema_version: version, kind: `echo-person-document-saved-v${version}`,
+    request_id: upload.request_id, document_id: `doc_${'a'.repeat(64)}`,
+    received_at: '2026-09-21T22:01:00.000Z', state: 'saved',
+  };
+
+  it('preserves versioned upload mutability, minimal proof identity and normalized search fields', () => {
+    expect(Object.isFrozen(validateUpload(upload))).toBe(version === 2);
+    expect(validateSaved(saved)).toBe(saved);
+    const search = { schema_version: version, kind: `echo-person-document-search-v${version}`, project_id: null, query: '  cafe\u0301  ', limit: 1, cursor: null };
+    expect(validateSearch(search)).toEqual({ ...search, query: 'café' });
+    for (const validate of [validateUpload, validateSaved, validateSearch]) {
+      const value = validate === validateUpload ? upload : validate === validateSaved ? saved : search;
+      expect(() => validate({ ...value, schema_version: version === 1 ? 2 : 1 })).toThrow();
+    }
+  });
+
+  it('preserves withheld request IDs and checks metadata, excerpts, anchors and cursor before release', () => {
+    const document = {
+      ...upload, ...saved, kind: `echo-person-document-metadata-v${version}`, request_id: null,
+      detected_media_type: 'text/markdown', extraction_state: 'ready', extraction_detail: null,
+      extractor: 'fixture', extracted_text_bytes: 1,
+    };
+    expect(validateMetadata(document)).toBe(document);
+    const results = {
+      schema_version: version, kind: `echo-person-document-search-result-v${version}`,
+      documents: [{ ...document, excerpt: 'Found text', anchor: { kind: 'paragraph', start: 1 } }], next_cursor: null,
+    };
+    expect(validateResults(results)).toBe(results);
+    for (const invalid of [
+      { extraction_detail: '\u0000' }, { extractor: '' }, { extracted_text_bytes: -1 },
+      { request_id: 'wrong' }, { received_at: 'not-a-time' },
+    ]) expect(() => validateMetadata({ ...document, ...invalid })).toThrow();
+    for (const invalid of [{ excerpt: 'x'.repeat(241) }, { anchor: { kind: 'paragraph', start: 0 } }]) {
+      expect(() => validateResults({ ...results, documents: [{ ...results.documents[0], ...invalid }] })).toThrow();
+    }
+    expect(() => validateResults({ ...results, next_cursor: 'bad=' })).toThrow();
   });
 });

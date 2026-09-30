@@ -418,7 +418,7 @@ function assertAtom(
     );
 }
 function segmentIdentity(
-  lineage: ReadableSearchLineageV1,
+  lineage: Pick<ReadableSearchLineageV1, "authority_id" | "organization_id" | "state_lineage_id">,
   policy_id: ReadableSearchPolicyIdV1,
   policy_contract_sha256: Sha256Digest,
   reviewer_principal_id: string | null,
@@ -570,9 +570,30 @@ function rows(
 function root(
   kind: string,
   segment_id: Sha256Digest,
-  values: readonly Record<string, unknown>[],
+  values: readonly object[],
 ): Sha256Digest {
   return canonicalSha256({ schema_version: 1, kind, segment_id, rows: values });
+}
+function generationRoots(
+  segments: ReadableSearchGenerationManifestV1["segments"],
+): ReadableSearchGenerationManifestV1["roots"] {
+  return {
+    facts_root: canonicalSha256({
+      schema_version: 1,
+      kind: "clean-readable-search-generation-facts-root-v2",
+      segments,
+    }),
+    content_root: canonicalSha256({
+      schema_version: 1,
+      kind: "clean-readable-search-generation-content-root-v1",
+      segments,
+    }),
+    lexical_root: canonicalSha256({
+      schema_version: 1,
+      kind: "clean-readable-search-generation-lexical-root-v1",
+      segments,
+    }),
+  };
 }
 function relatedPairsBySegment(
   input: BuildReadableSearchGenerationV1Input,
@@ -1080,23 +1101,7 @@ export function buildReadableSearchGenerationV1(
         ) ?? [],
       ),
     );
-    const roots = {
-      facts_root: canonicalSha256({
-        schema_version: 1,
-        kind: "clean-readable-search-generation-facts-root-v2",
-        segments,
-      }),
-      content_root: canonicalSha256({
-        schema_version: 1,
-        kind: "clean-readable-search-generation-content-root-v1",
-        segments,
-      }),
-      lexical_root: canonicalSha256({
-        schema_version: 1,
-        kind: "clean-readable-search-generation-lexical-root-v1",
-        segments,
-      }),
-    };
+    const roots = generationRoots(segments);
     const policies: ReadableSearchGenerationManifestV1["policies"] = [
       {
         policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
@@ -1403,6 +1408,25 @@ interface ReadableSearchSegmentRows {
   readonly length_by_atom: ReadonlyMap<Sha256Digest, number>;
 }
 
+/** Recompute statistics from exactly the postings admitted to this segment. */
+function segmentStatistics(
+  postings: readonly ReadableSearchTermPostingRow[],
+  document_count: number,
+): Pick<ReadableSearchSegmentRows, "statistics" | "length_by_atom"> {
+  const document_frequency = new Map<string, number>();
+  const length_by_atom = new Map<Sha256Digest, number>();
+  let total_term_count = 0;
+  for (const posting of postings) {
+    document_frequency.set(posting.term, (document_frequency.get(posting.term) ?? 0) + 1);
+    length_by_atom.set(posting.atom_id, (length_by_atom.get(posting.atom_id) ?? 0) + posting.term_frequency);
+    total_term_count += posting.term_frequency;
+  }
+  return {
+    statistics: { document_count, total_term_count, document_frequency },
+    length_by_atom,
+  };
+}
+
 /** Sum the statistics of the segments a reader is admitted to. */
 function unionStatistics(
   segments: readonly ReadableSearchSegmentRows[],
@@ -1474,11 +1498,12 @@ function admittedSegment(
   return (segment.manifest.audience_project_ids ?? []).some((id) => grants.has(id));
 }
 function scopedSegments(
-  admitted: readonly ReadableSearchSegmentRows[],
+  segments: readonly ReadableSearchSegmentRows[],
   reader: ReadableSearchReaderV1,
   project_id: string | undefined,
   records?: ReadonlySet<Sha256Digest>,
 ): readonly ReadableSearchSegmentRows[] {
+  const admitted = segments.filter((segment) => admittedSegment(segment, reader));
   if (project_id === undefined && records === undefined) return admitted;
   if (project_id !== undefined && !readerProjectIds(reader).includes(project_id))
     throw new Error("readable-search project scope is not currently granted");
@@ -1489,22 +1514,13 @@ function scopedSegments(
     );
     const atomIds = new Set(facts.map((fact) => fact.atom_id));
     const postings = segment.postings.filter((posting) => atomIds.has(posting.atom_id));
-    const document_frequency = new Map<string, number>();
-    const length_by_atom = new Map<Sha256Digest, number>();
-    let total_term_count = 0;
-    for (const posting of postings) {
-      document_frequency.set(posting.term, (document_frequency.get(posting.term) ?? 0) + 1);
-      length_by_atom.set(posting.atom_id, (length_by_atom.get(posting.atom_id) ?? 0) + posting.term_frequency);
-      total_term_count += posting.term_frequency;
-    }
     return {
       ...segment,
       facts,
       facts_by_atom: new Map(facts.map((fact) => [fact.atom_id, fact])),
       postings,
       related_atom_pairs: segment.related_atom_pairs.filter((pair) => atomIds.has(pair.left_atom_id) && atomIds.has(pair.right_atom_id)),
-      statistics: { document_count: facts.length, total_term_count, document_frequency },
-      length_by_atom,
+      ...segmentStatistics(postings, facts.length),
     };
   });
 }
@@ -1552,6 +1568,25 @@ function scoreAdmittedCandidates(
   return candidates;
 }
 
+type ReadableSearchCandidate = ReturnType<typeof scoreAdmittedCandidates>[number];
+
+function compareScoredRows(left: ReadableSearchCandidate, right: ReadableSearchCandidate): number {
+  return compareReadableSearchCandidates(
+    {
+      score: left.score,
+      log_position: left.fact.log_position,
+      atom_order: left.fact.atom_order,
+      atom_id: left.fact.atom_id,
+    },
+    {
+      score: right.score,
+      log_position: right.fact.log_position,
+      atom_order: right.fact.atom_order,
+      atom_id: right.fact.atom_id,
+    },
+  );
+}
+
 interface ValidatedActiveGenerationHandleV1 {
   readonly key: string;
   readonly manifest: ReadableSearchGenerationManifestV1;
@@ -1570,6 +1605,15 @@ function activeGenerationKey(
     retrieval_contract_sha256: active.retrieval_contract_sha256,
     exact_head: active.exact_head,
   });
+}
+
+function activeGenerationHandle(
+  active: ReadableSearchActiveGenerationV1,
+): ValidatedActiveGenerationHandleV1 {
+  const handle = validatedActiveGenerationHandleV1;
+  if (handle === null || handle.key !== activeGenerationKey(active))
+    throw new Error("readable-search engine active-generation handle is unavailable");
+  return handle;
 }
 
 /** Drops the sole process-local handle, primarily for shutdown and tests. */
@@ -1757,14 +1801,6 @@ function assertSegmentManifest(
         canonicalProjectIds(manifest.audience_project_ids, "segment audience_project_ids", true).length === 0))
   )
     throw new Error("readable-search engine segment policy and tuple disagree");
-}
-
-function rootForRead(
-  kind: string,
-  segment_id: Sha256Digest,
-  values: readonly object[],
-): Sha256Digest {
-  return canonicalSha256({ schema_version: 1, kind, segment_id, rows: values });
 }
 
 function readableSearchContentBindingFromRows(
@@ -1968,19 +2004,14 @@ function readAndValidateReadableSearchSegment(
     policy.policy_contract_sha256 !== segment.policy_contract_sha256
   )
     throw new Error("readable-search engine segment policy is not generation-bound");
-  const expectedSegmentId = canonicalSha256({
-    schema_version: 1,
-    kind: "clean-readable-search-segment-identity-v1",
-    authority_id: generation.authority_id,
-    organization_id: generation.organization_id,
-    state_lineage_id: generation.state_lineage_id,
-    segment_kind: segment.segment_kind,
-    policy_id: segment.policy_id,
-    policy_contract_sha256: segment.policy_contract_sha256,
-    reviewer_principal_id: segment.reviewer_principal_id,
-    reviewer_membership_id: segment.reviewer_membership_id,
-    audience_project_ids: segment.audience_project_ids ?? [],
-  });
+  const expectedSegmentId = segmentIdentity(
+    generation,
+    segment.policy_id,
+    segment.policy_contract_sha256,
+    segment.reviewer_principal_id,
+    segment.reviewer_membership_id,
+    segment.audience_project_ids ?? [],
+  ).segment_id;
   if (expectedSegmentId !== segment.segment_id)
     throw new Error("readable-search engine segment identity is invalid");
   const databases = new Map<Plane, Database.Database>();
@@ -2019,12 +2050,12 @@ function readAndValidateReadableSearchSegment(
       content.length !== segment.content_count ||
       documents.length !== segment.document_count ||
       postings.length !== segment.posting_count ||
-      rootForRead(
+      root(
         "clean-readable-search-facts-root-v2",
         segment.segment_id,
         [{ facts, related_atom_pairs: relatedAtomPairs }],
       ) !== segment.facts_root ||
-      rootForRead(
+      root(
         "clean-readable-search-content-root-v1",
         segment.segment_id,
         content,
@@ -2092,20 +2123,6 @@ function readAndValidateReadableSearchSegment(
       )
         throw new Error("readable-search engine related atom pair is invalid");
     }
-    const document_frequency = new Map<string, number>();
-    const lengthByAtom = new Map<Sha256Digest, number>();
-    let total_term_count = 0;
-    for (const posting of postings) {
-      document_frequency.set(
-        posting.term,
-        (document_frequency.get(posting.term) ?? 0) + 1,
-      );
-      lengthByAtom.set(
-        posting.atom_id,
-        (lengthByAtom.get(posting.atom_id) ?? 0) + posting.term_frequency,
-      );
-      total_term_count += posting.term_frequency;
-    }
     return {
       manifest: segment,
       facts,
@@ -2113,12 +2130,7 @@ function readAndValidateReadableSearchSegment(
       content_by_atom: contentByAtom,
       postings,
       related_atom_pairs: relatedAtomPairs,
-      statistics: {
-        document_count: facts.length,
-        total_term_count,
-        document_frequency,
-      },
-      length_by_atom: lengthByAtom,
+      ...segmentStatistics(postings, facts.length),
     };
   } finally {
     for (const database of databases.values()) database.close();
@@ -2206,23 +2218,7 @@ function validateAndWarmReadableSearchGenerationV1(
     names.some((name, index) => name !== declared[index])
   )
     throw new Error("active readable-search generation has mixed segments");
-  const expectedRoots = {
-    facts_root: canonicalSha256({
-      schema_version: 1,
-      kind: "clean-readable-search-generation-facts-root-v2",
-      segments: manifest.segments,
-    }),
-    content_root: canonicalSha256({
-      schema_version: 1,
-      kind: "clean-readable-search-generation-content-root-v1",
-      segments: manifest.segments,
-    }),
-    lexical_root: canonicalSha256({
-      schema_version: 1,
-      kind: "clean-readable-search-generation-lexical-root-v1",
-      segments: manifest.segments,
-    }),
-  };
+  const expectedRoots = generationRoots(manifest.segments);
   if (
     expectedRoots.facts_root !== manifest.roots.facts_root ||
     expectedRoots.content_root !== manifest.roots.content_root ||
@@ -2252,19 +2248,13 @@ function validateAndWarmReadableSearchGenerationV1(
       admitted.push(segment);
   }
   const memberContract = manifest.policies[0].policy_contract_sha256;
-  const memberSegmentId = canonicalSha256({
-    schema_version: 1,
-    kind: "clean-readable-search-segment-identity-v1",
-    authority_id: manifest.authority_id,
-    organization_id: manifest.organization_id,
-    state_lineage_id: manifest.state_lineage_id,
-    segment_kind: "organization-member",
-    policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
-    policy_contract_sha256: memberContract,
-    reviewer_principal_id: null,
-    reviewer_membership_id: null,
-    audience_project_ids: [],
-  });
+  const memberSegmentId = segmentIdentity(
+    manifest,
+    ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+    memberContract,
+    null,
+    null,
+  ).segment_id;
   if (!seenSegments.has(memberSegmentId))
     throw new Error("readable-search generation omits its member segment");
   const budget = READABLE_SEARCH_ADMISSION_BUDGET_V1;
@@ -2299,22 +2289,7 @@ function validateAndWarmReadableSearchGenerationV1(
     segments: Object.freeze(validatedSegments),
   });
   const candidates = scoreAdmittedCandidates(admitted, terms);
-  candidates.sort((left, right) =>
-    compareReadableSearchCandidates(
-      {
-        score: left.score,
-        log_position: left.fact.log_position,
-        atom_order: left.fact.atom_order,
-        atom_id: left.fact.atom_id,
-      },
-      {
-        score: right.score,
-        log_position: right.fact.log_position,
-        atom_order: right.fact.atom_order,
-        atom_id: right.fact.atom_id,
-      },
-    ),
-  );
+  candidates.sort(compareScoredRows);
   return Object.freeze({
     generation_id: manifest.generation_id,
     exact_head: manifest.exact_head,
@@ -2365,14 +2340,9 @@ export function expandReadableSearchRelatedAtomsV1(
   const limit = input.limit ?? 16;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16)
     throw new Error("related atom expansion limit must be a safe integer from one through sixteen");
-  const handle = validatedActiveGenerationHandleV1;
-  if (
-    handle === null ||
-    handle.key !== activeGenerationKey(input.active_generation)
-  )
-    throw new Error("readable-search engine active-generation handle is unavailable");
+  const handle = activeGenerationHandle(input.active_generation);
   const admitted = scopedSegments(
-    handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
+    handle.segments,
     input.reader,
     input.project_id,
     records,
@@ -2472,15 +2442,10 @@ export function searchReadableSearchGenerationV1(
     throw new Error(
       "readable-search engine limit must be a safe integer from one through ten",
     );
-  const handle = validatedActiveGenerationHandleV1;
-  if (
-    handle === null ||
-    handle.key !== activeGenerationKey(input.active_generation)
-  )
-    throw new Error("readable-search engine active-generation handle is unavailable");
+  const handle = activeGenerationHandle(input.active_generation);
   const terms = analyzeReadableSearchQuery(input.query);
   const admitted = scopedSegments(
-    handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
+    handle.segments,
     input.reader,
     input.project_id,
     records,
@@ -2488,22 +2453,7 @@ export function searchReadableSearchGenerationV1(
   const candidates = scoreAdmittedCandidates(admitted, terms).filter((candidate) =>
     input.kinds === undefined || input.kinds.includes(candidate.content.item_kind),
   );
-  candidates.sort((left, right) =>
-    compareReadableSearchCandidates(
-      {
-        score: left.score,
-        log_position: left.fact.log_position,
-        atom_order: left.fact.atom_order,
-        atom_id: left.fact.atom_id,
-      },
-      {
-        score: right.score,
-        log_position: right.fact.log_position,
-        atom_order: right.fact.atom_order,
-        atom_id: right.fact.atom_id,
-      },
-    ),
-  );
+  candidates.sort(compareScoredRows);
   return Object.freeze({
     generation_id: handle.manifest.generation_id,
     exact_head: handle.manifest.exact_head,
@@ -2530,14 +2480,9 @@ export function listReadableSearchGenerationV1(
   const limit = input.limit ?? 50;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)
     throw new Error("readable-search inventory limit must be a safe integer from one through fifty");
-  const handle = validatedActiveGenerationHandleV1;
-  if (
-    handle === null ||
-    handle.key !== activeGenerationKey(input.active_generation)
-  )
-    throw new Error("readable-search engine active-generation handle is unavailable");
+  const handle = activeGenerationHandle(input.active_generation);
   const admitted = scopedSegments(
-    handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
+    handle.segments,
     input.reader,
     input.project_id,
     records,
@@ -2574,14 +2519,9 @@ export function listReadableSearchGenerationRecordsV1(
   text(input.reader.membership_id, "reader membership_id");
   readerProjectIds(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
-  const handle = validatedActiveGenerationHandleV1;
-  if (
-    handle === null ||
-    handle.key !== activeGenerationKey(input.active_generation)
-  )
-    throw new Error("readable-search engine active-generation handle is unavailable");
+  const handle = activeGenerationHandle(input.active_generation);
   const admitted = scopedSegments(
-    handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
+    handle.segments,
     input.reader,
     input.project_id,
     records,
@@ -2631,9 +2571,8 @@ export function readReadableSearchGenerationAtomsV1(
   const records = readerRecordNarrowing(input.record_sha256s);
   if (!Array.isArray(input.atom_ids) || input.atom_ids.length < 1 || input.atom_ids.length > 10 || new Set(input.atom_ids).size !== input.atom_ids.length) throw new Error("readable-search atom read requires one through ten unique atoms");
   for (const atomId of input.atom_ids) validDigest(atomId, "readable-search atom id");
-  const handle = validatedActiveGenerationHandleV1;
-  if (handle === null || handle.key !== activeGenerationKey(input.active_generation)) throw new Error("readable-search engine active-generation handle is unavailable");
-  const admitted = scopedSegments(handle.segments.filter((segment) => admittedSegment(segment, input.reader)), input.reader, input.project_id, records);
+  const handle = activeGenerationHandle(input.active_generation);
+  const admitted = scopedSegments(handle.segments, input.reader, input.project_id, records);
   const byAtom = new Map<Sha256Digest, ReadableSearchResultItemV1>();
   for (const segment of admitted) for (const atomId of input.atom_ids) {
     const fact = segment.facts_by_atom.get(atomId);

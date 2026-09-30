@@ -139,7 +139,6 @@ export async function loadSyntheticDemoMeetingCorpusV1(
       assertCanonicalMeetingDocument(parsed, syntheticDemoMeetingSourceIdentityV1);
       const expected = SYNTHETIC_DEMO_MEETING_IDENTITIES_V1[index]!;
       if (
-        !isSyntheticDemoFixtureMeetingV1(parsed) ||
         parsed.id !== expected.id ||
         parsed.provenance.canonical_revision !== expected.canonical_revision
       ) {

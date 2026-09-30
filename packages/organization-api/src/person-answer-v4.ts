@@ -5,12 +5,12 @@ import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validatePersonAnswerScopeV3, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
 import { validatePersonOpenRefV1, type PersonOpenRefV1 } from './person-list-v1.js';
 import {
-  asRecord,
+  asEnumerableRecord as object,
   assertDigest,
   assertExactKeys,
-  assertOnlyEnumerableDataProperties,
   fail,
   MAX_ORGANIZATION_API_BODY_BYTES,
+  utf8ByteLength,
 } from './validation.js';
 
 /** The Agentic Ask endpoint: the only Ask since ADR-0022 retired V1 and V2. */
@@ -148,23 +148,11 @@ export interface PersonCapabilitiesV1 {
   readonly agentic_ask_v1: boolean;
 }
 
-function object(value: unknown, label: string): Record<string, unknown> {
-  assertOnlyEnumerableDataProperties(value, label);
-  return asRecord(value, label);
-}
-
-function utf8Bytes(value: string): number {
-  return [...value].reduce((total, character) => {
-    const point = character.codePointAt(0)!;
-    return total + (point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4);
-  }, 0);
-}
-
 function text(value: unknown, label: string, maximumBytes: number, multiline = false): asserts value is string {
   const controls = multiline ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u : /[\p{Cc}\p{Zl}\p{Zp}]/u;
   if (
     typeof value !== 'string' || value.length === 0 || value.trim() !== value ||
-    value !== value.normalize('NFC') || controls.test(value) || utf8Bytes(value) > maximumBytes
+    value !== value.normalize('NFC') || controls.test(value) || utf8ByteLength(value) > maximumBytes
   ) fail(`${label} is invalid`);
 }
 
@@ -172,7 +160,7 @@ function text(value: unknown, label: string, maximumBytes: number, multiline = f
 function evidenceText(value: unknown, label: string, maximumBytes: number): asserts value is string {
   if (
     typeof value !== 'string' || value.length === 0 || value !== value.normalize('NFC') ||
-    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || utf8Bytes(value) > maximumBytes
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || utf8ByteLength(value) > maximumBytes
   ) fail(`${label} is invalid`);
 }
 

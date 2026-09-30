@@ -423,6 +423,46 @@ async function body(request: IncomingMessage): Promise<unknown> {
   }
 }
 
+/** Person JSON reads share transport mechanics while application ports own authorization and audit. */
+async function personBody<Request>(request: IncomingMessage, validate: (value: unknown) => Request): Promise<Request> {
+  try { return validate(await body(request)); }
+  catch { throw new AuthorityOperationError("invalid_request", "request is invalid"); }
+}
+
+type PersonPostHandler = (request: IncomingMessage, response: ServerResponse) => Promise<void>;
+
+/** Original-source reads validate the body before checking the bearer, then release synchronously. */
+function personSourcePost<Application, Request>(
+  application: Application | undefined,
+  validate: (value: unknown) => Request,
+  read: (application: Application, input: { readonly access_token: string; readonly request: Request }) => unknown,
+): PersonPostHandler {
+  return async (request, response) => {
+    if (application === undefined) { fail(response, 503, "unavailable"); return; }
+    const requestBody = await personBody(request, validate);
+    json(response, 200, read(application, {
+      access_token: accessToken(request.headers.authorization), request: requestBody,
+    }));
+  };
+}
+
+/** Desk/list reads check the bearer and install cancellation before reading any body bytes. */
+function personCancellablePost<Application, Request>(
+  application: Application | undefined,
+  validate: (value: unknown) => Request,
+  read: (application: Application, input: { readonly access_token: string; readonly request: Request; readonly signal: AbortSignal }) => Promise<unknown>,
+): PersonPostHandler {
+  return async (request, response) => {
+    if (application === undefined) { fail(response, 503, "unavailable"); return; }
+    const access_token = accessToken(request.headers.authorization);
+    const disconnect = disconnectSignal(request, response);
+    try {
+      const requestBody = await personBody(request, validate);
+      json(response, 200, await read(application, { access_token, request: requestBody, signal: disconnect.signal }));
+    } finally { disconnect.dispose(); }
+  };
+}
+
 /** A disconnected client must stop the bounded Ask loop without releasing a response. */
 function disconnectSignal(request: IncomingMessage, response: ServerResponse): { readonly signal: AbortSignal; dispose(): void } {
   const controller = new AbortController();
@@ -680,6 +720,14 @@ export function createOrganizationAuthorityHttpServer(
   const documents = options.person_documents === undefined ? undefined : createPersonDocumentsHttpHandlerV1(
     options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
   );
+  const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
+    [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
+    [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
+    [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
+    [PERSON_MEETING_TRANSCRIPT_PATH_V1, personSourcePost(options.person_meeting_transcript, validatePersonMeetingTranscriptReadRequestV1, (application, input) => application.readTranscript(input))],
+    [PERSON_LIST_PATH_V1, personCancellablePost(options.person_list, validatePersonListRequestV1, (application, input) => application.list(input))],
+    [PERSON_OPEN_PATH_V1, personCancellablePost(options.person_list, validatePersonOpenRequestV1, (application, input) => application.open(input))],
+  ]);
   const handoffs = new Map<string, PendingLoopbackHandoff>();
   const oidcBeginWindows = new Map<string, OidcBeginClientWindow>();
   let activeHttp = 0;
@@ -1012,12 +1060,7 @@ export function createOrganizationAuthorityHttpServer(
           fail(response, 503, "unavailable");
           return;
         }
-        let requestBody;
-        try {
-          requestBody = validatePersonAnswerRequestV3(await body(request));
-        } catch {
-          throw new AuthorityOperationError("invalid_request", "request is invalid");
-        }
+        const requestBody = await personBody(request, validatePersonAnswerRequestV3);
         const disconnect = disconnectSignal(request, response);
         try {
           json(response, 200, await options.person_answer_v3.ask({
@@ -1030,115 +1073,9 @@ export function createOrganizationAuthorityHttpServer(
         }
         return;
       }
-      if (
-        method === "POST" &&
-        (url.pathname === PERSON_EVIDENCE_SEARCH_PATH_V1 || url.pathname === PERSON_EVIDENCE_OPEN_PATH_V1) &&
-        url.search === ""
-      ) {
-        if (options.person_answer_v3 === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        const access_token = accessToken(request.headers.authorization);
-        const disconnect = disconnectSignal(request, response);
-        try {
-          if (url.pathname === PERSON_EVIDENCE_SEARCH_PATH_V1) {
-            let requestBody;
-            try {
-              requestBody = validatePersonEvidenceSearchRequestV1(await body(request));
-            } catch {
-              throw new AuthorityOperationError("invalid_request", "request is invalid");
-            }
-            json(response, 200, await options.person_answer_v3.searchEvidence({ access_token, request: requestBody, signal: disconnect.signal }));
-          } else {
-            let requestBody;
-            try {
-              requestBody = validatePersonEvidenceOpenRequestV1(await body(request));
-            } catch {
-              throw new AuthorityOperationError("invalid_request", "request is invalid");
-            }
-            json(response, 200, await options.person_answer_v3.openEvidence({ access_token, request: requestBody, signal: disconnect.signal }));
-          }
-        } finally {
-          disconnect.dispose();
-        }
-        return;
-      }
-      if (
-        method === "POST" &&
-        url.pathname === PERSON_SOURCE_EVIDENCE_PATH_V1 &&
-        url.search === ""
-      ) {
-        if (options.person_source_evidence === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        let requestBody;
-        try {
-          requestBody = validatePersonSourceEvidenceReadRequestV1(await body(request));
-        } catch {
-          throw new AuthorityOperationError("invalid_request", "request is invalid");
-        }
-        json(response, 200, options.person_source_evidence.readSource({
-          access_token: accessToken(request.headers.authorization),
-          request: requestBody,
-        }));
-        return;
-      }
-      if (
-        method === "POST" &&
-        url.pathname === PERSON_MEETING_TRANSCRIPT_PATH_V1 &&
-        url.search === ""
-      ) {
-        if (options.person_meeting_transcript === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        let requestBody;
-        try {
-          requestBody = validatePersonMeetingTranscriptReadRequestV1(await body(request));
-        } catch {
-          throw new AuthorityOperationError("invalid_request", "request is invalid");
-        }
-        json(response, 200, options.person_meeting_transcript.readTranscript({
-          access_token: accessToken(request.headers.authorization),
-          request: requestBody,
-        }));
-        return;
-      }
-      if (
-        method === "POST" &&
-        (url.pathname === PERSON_LIST_PATH_V1 || url.pathname === PERSON_OPEN_PATH_V1) &&
-        url.search === ""
-      ) {
-        if (options.person_list === undefined) {
-          fail(response, 503, "unavailable");
-          return;
-        }
-        const access_token = accessToken(request.headers.authorization);
-        const disconnect = disconnectSignal(request, response);
-        try {
-          if (url.pathname === PERSON_LIST_PATH_V1) {
-            let requestBody;
-            try {
-              requestBody = validatePersonListRequestV1(await body(request));
-            } catch {
-              throw new AuthorityOperationError("invalid_request", "request is invalid");
-            }
-            json(response, 200, await options.person_list.list({ access_token, request: requestBody, signal: disconnect.signal }));
-          } else {
-            let requestBody;
-            try {
-              requestBody = validatePersonOpenRequestV1(await body(request));
-            } catch {
-              throw new AuthorityOperationError("invalid_request", "request is invalid");
-            }
-            json(response, 200, await options.person_list.open({ access_token, request: requestBody, signal: disconnect.signal }));
-          }
-        } finally {
-          disconnect.dispose();
-        }
-        return;
+      if (method === "POST" && url.search === "") {
+        const personRead = personReadPosts.get(url.pathname);
+        if (personRead !== undefined) { await personRead(request, response); return; }
       }
       fail(response, 404, "not_found");
     } catch (error) {

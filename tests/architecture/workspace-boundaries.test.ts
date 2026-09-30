@@ -131,6 +131,35 @@ function runBoundary(fixture: string): {
 }
 
 describe("workspace source boundaries", () => {
+  it.each([
+    "entry_points",
+    "allowed_internal_paths",
+    "forbidden_internal_roots",
+    "allowed_external_runtime_packages",
+    "runtime_assets",
+    "layer_rules",
+  ])("refuses reactivation through retired machine %s", (field) => {
+    const fixture = fixtureRepository();
+    const path = "product/source-boundary.v1.json";
+    const boundary = readFixtureJson<Record<string, unknown>>(fixture, path);
+    boundary[field] = [field === "layer_rules" ? {} : "src/retired-machine.ts"];
+    writeFixtureJson(fixture, path, boundary);
+    const result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(`retired machine boundary ${field} must remain empty`);
+  });
+
+  it("refuses a process owner in the retired machine boundary", () => {
+    const fixture = fixtureRepository();
+    const path = "product/source-boundary.v1.json";
+    const boundary = readFixtureJson<Record<string, unknown>>(fixture, path);
+    boundary.child_process_owner = "src/retired-machine.ts";
+    writeFixtureJson(fixture, path, boundary);
+    const result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("retired machine boundary child_process_owner must remain null");
+  });
+
   it("accepts the declared workspace component indexes", () => {
     const fixture = fixtureRepository();
 

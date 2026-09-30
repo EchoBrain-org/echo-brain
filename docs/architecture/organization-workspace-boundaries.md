@@ -82,6 +82,10 @@ HTTP contract remains provider-owned for installed clients; v3 admits up to
 
 `product/source-boundary.v1.json` declares bootstrap modules, provider folders,
 source assemblies and retired roots. The legacy machine runtime remains absent.
+Its former product graph fields must remain empty: active products are checked
+through their registered workspace boundaries. The gate retains source
+tombstones and provider ownership without maintaining a second graph walker
+for the retired runtime.
 
 ## Authority layers
 

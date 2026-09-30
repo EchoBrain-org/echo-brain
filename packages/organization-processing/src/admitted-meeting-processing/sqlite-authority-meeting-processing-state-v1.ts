@@ -673,32 +673,7 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   readCandidateByApprovalId(
     approvalId: string,
   ): ApprovalWorkflowOutboxV1 | undefined {
-    return this.database
-      .prepare(
-          `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
-                candidate.review_lineage_id, candidate.review_input_sha256,
-                candidate.review_semantic_sha256,
-                candidate.review_policy_id,
-                candidate.review_policy_contract_sha256,
-                candidate.review_policy_consequence_text,
-                candidate.review_policy_consequence_sha256,
-                candidate.disposition,
-                outbox.approval_id, outbox.stage_command_id, outbox.state,
-                outbox.provider_message_ts AS presentation_external_id,
-                outbox.frozen_card_sha256,
-                outbox.approved_snapshot_json, outbox.approved_snapshot_sha256,
-                outbox.post_started_at,
-                CASE WHEN outbox.state = 'staged' THEN outbox.updated_at
-                     ELSE NULL END AS durable_staged_at,
-                outbox.control_approval_sha256,
-                outbox.superseded_by_candidate_id, outbox.superseded_at,
-                outbox.tombstoned_at
-           FROM authority_live_source_candidates_v2 AS candidate
-           JOIN authority_live_approval_outbox_v2 AS outbox
-             ON outbox.candidate_id = candidate.candidate_id
-          WHERE outbox.approval_id = ?`,
-      )
-      .get(approvalId) as ApprovalWorkflowOutboxV1 | undefined;
+    return this.findOutbox("approval_id", approvalId);
   }
 
   /**
@@ -1284,7 +1259,18 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
   }
 
   private outbox(candidateId: string): ApprovalWorkflowOutboxV1 {
-    const outbox = this.database
+    const outbox = this.findOutbox("candidate_id", candidateId);
+    if (outbox === undefined)
+      throw new Error("approval workflow outbox is absent");
+    return outbox;
+  }
+
+  private findOutbox(
+    key: "approval_id" | "candidate_id",
+    value: string,
+  ): ApprovalWorkflowOutboxV1 | undefined {
+    const column = key === "approval_id" ? "outbox.approval_id" : "candidate.candidate_id";
+    return this.database
       .prepare(
           `SELECT candidate.candidate_id, candidate.candidate_semantic_sha256,
                 candidate.review_lineage_id, candidate.review_input_sha256,
@@ -1307,12 +1293,9 @@ export class SqliteAuthorityMeetingProcessingStateV1 implements AuthorityMeeting
            FROM authority_live_source_candidates_v2 AS candidate
            JOIN authority_live_approval_outbox_v2 AS outbox
              ON outbox.candidate_id = candidate.candidate_id
-          WHERE candidate.candidate_id = ?`,
+          WHERE ${column} = ?`,
       )
-      .get(candidateId) as ApprovalWorkflowOutboxV1 | undefined;
-    if (outbox === undefined)
-      throw new Error("approval workflow outbox is absent");
-    return outbox;
+      .get(value) as ApprovalWorkflowOutboxV1 | undefined;
   }
 }
 

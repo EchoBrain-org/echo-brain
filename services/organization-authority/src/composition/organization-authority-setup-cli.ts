@@ -313,8 +313,22 @@ function absolutePath(value: string, label: string): string {
   return value;
 }
 
+/** The setup commands accept closed, nonempty flag/value pairs and reject duplicate flags. */
+function parseSetupFlags(arguments_: readonly string[], accepted: readonly string[]): ReadonlyMap<string, string> {
+  const values = new Map<string, string>();
+  for (let index = 0; index < arguments_.length; index += 2) {
+    const key = arguments_[index];
+    const value = arguments_[index + 1];
+    if (key === undefined || value === undefined || value.length === 0 || !accepted.includes(key) || values.has(key)) {
+      throw new Error(USAGE);
+    }
+    values.set(key, value);
+  }
+  return values;
+}
+
 function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
-  const accepted = new Set([
+  const values = parseSetupFlags(arguments_, [
     "--state-dir",
     "--organization-name",
     "--owner-display-name",
@@ -324,21 +338,6 @@ function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
     "--slack-approval-channel-id",
     "--artifact-revision",
   ]);
-  const values = new Map<string, string>();
-  for (let index = 0; index < arguments_.length; index += 2) {
-    const key = arguments_[index];
-    const value = arguments_[index + 1];
-    if (
-      key === undefined ||
-      value === undefined ||
-      value.length === 0 ||
-      !accepted.has(key) ||
-      values.has(key)
-    ) {
-      throw new Error(USAGE);
-    }
-    values.set(key, value);
-  }
   const required = (key: string): string => {
     const value = values.get(key);
     if (value === undefined) throw new Error(USAGE);
@@ -366,23 +365,10 @@ function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
 }
 
 function parseFinalize(arguments_: readonly string[]): FinalizeInput {
-  const accepted = new Set([
+  const values = parseSetupFlags(arguments_, [
     "--state-dir",
     "--staging-synthetic-meetings-dir",
   ]);
-  const values = new Map<string, string>();
-  for (let index = 0; index < arguments_.length; index += 2) {
-    const key = arguments_[index];
-    const value = arguments_[index + 1];
-    if (
-      key === undefined ||
-      value === undefined ||
-      value.length === 0 ||
-      !accepted.has(key) ||
-      values.has(key)
-    ) throw new Error(USAGE);
-    values.set(key, value);
-  }
   const stateDirectory = values.get("--state-dir");
   if (stateDirectory === undefined) throw new Error(USAGE);
   return Object.freeze({
@@ -410,27 +396,12 @@ function parseStateDirectory(arguments_: readonly string[]): FinalizeInput {
 function parseCredentialInstall(
   arguments_: readonly string[],
 ): CredentialInstallInput {
-  const accepted = new Set([
+  const values = parseSetupFlags(arguments_, [
     "--state-dir",
     "--granola-credential-file",
     "--granola-owner-email-file",
     "--llm-credential-file",
   ]);
-  const values = new Map<string, string>();
-  for (let index = 0; index < arguments_.length; index += 2) {
-    const key = arguments_[index];
-    const value = arguments_[index + 1];
-    if (
-      key === undefined ||
-      value === undefined ||
-      value.length === 0 ||
-      !accepted.has(key) ||
-      values.has(key)
-    ) {
-      throw new Error(USAGE);
-    }
-    values.set(key, value);
-  }
   const source = (key: string, label: string): string => {
     const value = values.get(key);
     if (value === undefined) throw new Error(USAGE);

@@ -13,6 +13,30 @@ import type {
 import { ADMITTED_AT, ADVANCED_AT, assertActionable, database, databases, decisions, FIXTURE_PROCESSOR_VERSION, fixtureCursorPolicy, meeting, NEXT_CUTOFF, nextCursor, REVIEW_POLICY, SHA, sourceCursor } from './fixtures/sqlite-meeting-state.js';
 afterEach(() => { for (const value of databases.splice(0)) value.close(); });
 
+function stateFixture() {
+  const value = database();
+  const state = new SqliteAuthorityMeetingProcessingStateV1(
+    value,
+    fixtureCursorPolicy,
+    "llm",
+    () => ADVANCED_AT,
+  );
+  return { value, state };
+}
+
+async function actionableFixture() {
+  const { value, state } = stateFixture();
+  const current = await state.readAdmission();
+  const candidate = await state.stageCandidate({
+    admission: current,
+    meeting,
+    decisions,
+    review_policy: REVIEW_POLICY,
+  });
+  assertActionable(candidate);
+  return { value, state, current, candidate };
+}
+
 describe("SQLite admitted meeting-processing state", () => {
   it("fences source custody with current identity and owner membership inside the retaining transaction", async () => {
     const value = database();
@@ -54,13 +78,7 @@ describe("SQLite admitted meeting-processing state", () => {
   });
 
   it("rejects foreign admission identity and malformed canonical payloads before persistence", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
+    const { value, state } = stateFixture();
     const current = await state.readAdmission();
 
     await expect(
@@ -100,21 +118,7 @@ describe("SQLite admitted meeting-processing state", () => {
 it.each(["approved", "rejected"] as const)(
     "keeps a completed %s private approval terminal when a later revision arrives",
     async (outcome) => {
-      const value = database();
-      const state = new SqliteAuthorityMeetingProcessingStateV1(
-        value,
-        fixtureCursorPolicy,
-        "llm",
-        () => ADVANCED_AT,
-      );
-      const current = await state.readAdmission();
-      const first = await state.stageCandidate({
-        admission: current,
-        meeting,
-        decisions,
-        review_policy: REVIEW_POLICY,
-      });
-      assertActionable(first);
+      const { value, state, current, candidate: first } = await actionableFixture();
 
       // This source-state boundary does not need a full private-assignment
       // fixture; constrain the FK exception to the terminal receipt insert.
@@ -185,21 +189,7 @@ it.each(["approved", "rejected"] as const)(
   );
 
   it("freezes exactly one durable post intent", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const candidate = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(candidate);
+    const { state, candidate } = await actionableFixture();
     const prepared = state.prepareApprovalPost({
       candidate_id: candidate.candidate_id,
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
@@ -249,21 +239,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("durably fences an unrepresentable approval package without retrying delivery", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const candidate = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(candidate);
+    const { state, current, candidate } = await actionableFixture();
 
     const expected = {
       candidate_id: candidate.candidate_id,
@@ -514,13 +490,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("materializes one progress row from the immutable admission and advances it by CAS", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
+    const { value, state } = stateFixture();
 
     await expect(state.readAdmission()).resolves.toMatchObject({
       source: { cursor: sourceCursor, cutoff_at: ADMITTED_AT },
@@ -570,13 +540,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("will not initialize or advance a source after its owner is revoked", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
+    const { value, state } = stateFixture();
     await state.readAdmission();
     value
       .prepare(
@@ -598,13 +562,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("keeps the progress row narrowly mutable", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
+    const { value, state } = stateFixture();
     await state.readAdmission();
     expect(() =>
       value
@@ -622,21 +580,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("freezes one candidate before the post-once Slack/D2 handoff", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const candidate = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(candidate);
+    const { value, state, current, candidate } = await actionableFixture();
     expect(candidate).toMatchObject({
       candidate_id: expect.stringMatching(/^cnd_/),
       approval_id: expect.stringMatching(/^apr_/),
@@ -708,13 +652,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("rejects a candidate policy that differs from the provider-neutral default", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
+    const { state } = stateFixture();
     const current = await state.readAdmission();
 
     await expect(
@@ -733,13 +671,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("deduplicates retries by admitted configuration and source revision while preserving the first audit snapshot", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
+    const { value, state } = stateFixture();
     const initialAdmission = await state.readAdmission();
     const original = await state.stageCandidate({
       admission: initialAdmission,
@@ -866,21 +798,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("records a folder-only provider revision without creating another review round", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
+    const { state, current, candidate: first } = await actionableFixture();
     const folderOnly: MeetingDocument = {
       ...meeting,
       provenance: {
@@ -925,21 +843,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("coalesces a meeting-time-only revision into the existing review round", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
+    const { value, state, current, candidate: first } = await actionableFixture();
     const timeOnly: MeetingDocument = {
       ...meeting,
       provenance: {
@@ -974,21 +878,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("opens a new immutable review round for a semantic change", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
+    const { state, current, candidate: first } = await actionableFixture();
     const edited: MeetingDocument = {
       ...meeting,
       provenance: {
@@ -1051,21 +941,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("records no-signals revisions, supersedes unresolved work, and revalidates the exact revision", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
+    const { state, current, candidate: first } = await actionableFixture();
     const noSignalsMeeting: MeetingDocument = {
       ...meeting,
       provenance: {
@@ -1105,21 +981,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("retains a Slack post that returns after its queued candidate was superseded", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
+    const { state, current, candidate: first } = await actionableFixture();
     state.prepareApprovalPost({
       candidate_id: first.candidate_id,
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
@@ -1190,20 +1052,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("releases a superseded post attempt after a definitive provider rejection", async () => {
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      database(),
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
+    const { state, current, candidate: first } = await actionableFixture();
     state.prepareApprovalPost({
       candidate_id: first.candidate_id,
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
@@ -1260,20 +1109,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("releases only the exact unresolved delivery attempt", async () => {
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      database(),
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const candidate = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(candidate);
+    const { state, candidate } = await actionableFixture();
     state.prepareApprovalPost({
       candidate_id: candidate.candidate_id,
       frozen_card_sha256: `sha256:${"c".repeat(64)}`,
@@ -1365,21 +1201,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("retains every stale posted card through an A-to-B-to-C no-signals lineage", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
+    const { state, current, candidate: first } = await actionableFixture();
     state.prepareApprovalPost({
       candidate_id: first.candidate_id,
       frozen_card_sha256: `sha256:${"a".repeat(64)}`,
@@ -1477,21 +1299,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("rejects impossible supersession evidence transitions", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
+    const { value, state, current, candidate: first } = await actionableFixture();
     const otherMeeting: MeetingDocument = {
       ...meeting,
       id: "meeting-other",
@@ -1573,21 +1381,7 @@ it.each(["approved", "rejected"] as const)(
   });
 
   it("keeps separate source meetings on independent review lineages", async () => {
-    const value = database();
-    const state = new SqliteAuthorityMeetingProcessingStateV1(
-      value,
-      fixtureCursorPolicy,
-      "llm",
-      () => ADVANCED_AT,
-    );
-    const current = await state.readAdmission();
-    const first = await state.stageCandidate({
-      admission: current,
-      meeting,
-      decisions,
-      review_policy: REVIEW_POLICY,
-    });
-    assertActionable(first);
+    const { state, current, candidate: first } = await actionableFixture();
     const otherMeeting: MeetingDocument = {
       ...meeting,
       id: "meeting-2",

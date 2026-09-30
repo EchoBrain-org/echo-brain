@@ -259,14 +259,7 @@ export function exactObject(
     organizationProtocolValidationFailure(`${label} must be a plain object`);
   }
   const record = snapshot as Record<string, unknown>;
-  const actual = Object.keys(record).sort();
-  const expected = [...keys].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((key, index) => key !== expected[index])
-  ) {
-    organizationProtocolValidationFailure(`${label} has an unexpected shape`);
-  }
+  assertExactKeys(record, keys, label);
   return record;
 }
 

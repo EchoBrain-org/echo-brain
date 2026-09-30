@@ -675,6 +675,12 @@ export class PersonAuthorityClient {
       input.timeout_ms,
       input.signal,
     );
+    const value = await this.jsonValue(response,
+      input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.expected_status);
+    return validateSuccess(value, response.status, input.validate_response);
+  }
+
+  private async jsonValue(response: Response, maximumBytes: number, expectedStatus?: number): Promise<unknown> {
     const contentType = response.headers.get("content-type");
     if (
       contentType === null ||
@@ -686,11 +692,7 @@ export class PersonAuthorityClient {
         "Person Authority returned a non-JSON response",
       );
     }
-    const text = await readBoundedBody(
-      response,
-      input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES,
-    );
-    const value = parsedJson(text, response.status);
+    const value = parsedJson(await readBoundedBody(response, maximumBytes), response.status);
     if (!response.ok) {
       let code = "request_failed";
       try {
@@ -708,10 +710,10 @@ export class PersonAuthorityClient {
         "Person Authority rejected the request",
       );
     }
-    if (input.expected_status !== undefined && response.status !== input.expected_status) {
+    if (expectedStatus !== undefined && response.status !== expectedStatus) {
       throw new PersonAuthorityClientError('invalid_response', response.status, 'Person Authority returned an unexpected status');
     }
-    return validateSuccess(value, response.status, input.validate_response);
+    return value;
   }
 
   private async getJson<T>(input: {
@@ -730,38 +732,7 @@ export class PersonAuthorityClient {
         authorization: `Bearer ${input.access_token}`,
       },
     }, undefined, input.signal);
-    const contentType = response.headers.get("content-type");
-    if (
-      contentType === null ||
-      !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)
-    ) {
-      throw new PersonAuthorityClientError(
-        "invalid_response",
-        response.status,
-        "Person Authority returned a non-JSON response",
-      );
-    }
-    const value = parsedJson(
-      await readBoundedBody(response, input.maximum_response_bytes),
-      response.status,
-    );
-    if (!response.ok) {
-      try {
-        const error = validateOrganizationApiError(value);
-        throw new PersonAuthorityClientError(
-          error.error.code,
-          response.status,
-          "Person Authority rejected the request",
-        );
-      } catch (error) {
-        if (error instanceof PersonAuthorityClientError) throw error;
-        throw new PersonAuthorityClientError(
-          "invalid_response",
-          response.status,
-          "Person Authority returned a malformed error",
-        );
-      }
-    }
+    const value = await this.jsonValue(response, input.maximum_response_bytes);
     try {
       return input.validate_response(value);
     } catch {
