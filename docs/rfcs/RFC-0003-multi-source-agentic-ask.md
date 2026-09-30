@@ -262,9 +262,13 @@ the question.
 - Every step and the answer call see `asked_by`, the asker's name from their
   own directory entry, and `today`. The route looks up only the authenticated
   membership, and uses the name only when that entry names the same principal.
-- The prompts read "I", "me" and "my" as that person: research searches for the
-  name and lists meeting actions with it as `owner`. Without a name, they do not
-  guess.
+- The prompts read "I", "me" and "my" as that person without widening the
+  question's topic or named sources. Research searches for the name or lists
+  meeting actions with it as `owner` when the question asks about assigned work.
+  A review's pending decisions come from its unresolved choices and requests for
+  approval, even when there is no assigned meeting action. They remain pending;
+  the answer preserves the stated person or role without assuming the asker
+  holds that role. Without a name, the prompts do not guess who "I" means.
 - The name goes to the model only. Audits keep hashes, never the name.
 
 **Scratchpad.**

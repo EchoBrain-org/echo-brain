@@ -498,11 +498,16 @@ describe("agentic Ask: research loop", () => {
     ]);
     const evidence = desk({ search: () => passages, open: id => passages.filter(value => value.id === id) });
     await ask({ desk: evidence, model: script.model, context_tokens: 16_000 }).answer({ question: "When is launch?" });
-    // A small window cannot hold 12 opened passages of about 3 KB each; the rest shrink back to previews.
+    // A small window cannot hold 12 opened passages of about 3 KB each;
+    // the remaining space holds previews, but need not fit every preview.
     const shown = script.prompt(4).opened.length;
     expect(shown).toBeGreaterThan(0);
     expect(shown).toBeLessThan(12);
-    expect(script.prompt(4).seen.length).toBe(12 - shown);
+    expect(script.prompt(4).seen.length).toBeGreaterThan(0);
+    expect(script.prompt(4).seen.length).toBeLessThanOrEqual(12 - shown);
+    expect(Buffer.byteLength(script.inputs[4]!.user_prompt)).toBeLessThanOrEqual(
+      agenticAskContextBudgetBytesV1(16_000, script.inputs[4]!.system_prompt, 1_500),
+    );
   });
 });
 

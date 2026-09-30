@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "kind": "echo-agentic-ask-semantic-development-execution-v1",
+  "purpose": "Distinguish a named review's pending choices from the asker's assigned work and from decisions already approved.",
+  "synthetic": true,
+  "actor": {
+    "display_name": "Jules",
+    "role_note": "The fixture establishes no PM role for Jules."
+  },
+  "scope": {
+    "kind": "global"
+  },
+  "sources": [
+    {
+      "id": "lark-software-review",
+      "kind": "document_passage",
+      "label": "LARK Software Review",
+      "text": "LARK Software Review. Status: proposal awaiting PM review, not an approved design. Software's main concern is losing operator edits when the sensor console reconnects after an outage. Hardware and Software need a shared message-sequence and replay interface. PM decisions still needed: choose automatic conflict merging versus an operator review queue; choose a retry window of ten minutes versus one hour. These are unresolved choices, not approved decisions or assigned work."
+    },
+    {
+      "id": "lark-hardware-review",
+      "kind": "document_passage",
+      "label": "LARK Hardware Review",
+      "text": "LARK Hardware Review. Status: proposal awaiting PM review, not an approved design. Hardware's main concern is condensation around the outdoor console connector. Hardware and Software need the same message-sequence and replay interface. PM decisions still needed: choose a sealed connector versus a weather cover; choose a bench-only trial versus an outdoor trial. These choices remain pending. No PM decision has been recorded in this review."
+    },
+    {
+      "id": "orbit-assigned-action",
+      "kind": "action",
+      "label": "ORBIT Operations",
+      "attributes": {
+        "owner": "Jules",
+        "status": "open"
+      },
+      "text": "ORBIT: Jules owns preparing the reseller training agenda. This is an approved open action for the ORBIT project."
+    },
+    {
+      "id": "lark-approved-decision",
+      "kind": "decision",
+      "label": "LARK Steering Review",
+      "text": "Approved LARK decision: use a wired USB connection for the first console prototype. This decision does not resolve the later review choices about edit conflicts, retry windows, connector protection or trial location."
+    }
+  ],
+  "questions": [
+    {
+      "id": "named-reviews-pending-decisions",
+      "question": "Compare the LARK Software Review and LARK Hardware Review. What are their main concerns, shared dependencies, and decisions needed from me?"
+    },
+    {
+      "id": "personal-assigned-work",
+      "question": "What am I working on?"
+    },
+    {
+      "id": "already-approved-decisions",
+      "question": "Which LARK decisions are already approved?"
+    }
+  ]
+}

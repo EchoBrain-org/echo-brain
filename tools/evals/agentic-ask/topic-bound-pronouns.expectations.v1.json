@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "kind": "echo-agentic-ask-semantic-development-expectations-v1",
+  "questions": [
+    {
+      "id": "named-reviews-pending-decisions",
+      "expected_outcome": "answered",
+      "parts": [
+        {
+          "id": "software-concern",
+          "requirement": "Identify the risk of losing operator edits after an outage.",
+          "evidence": [
+            "lark-software-review"
+          ]
+        },
+        {
+          "id": "hardware-concern",
+          "requirement": "Identify condensation around the outdoor connector.",
+          "evidence": [
+            "lark-hardware-review"
+          ]
+        },
+        {
+          "id": "shared-dependency",
+          "requirement": "Identify the shared message-sequence and replay interface.",
+          "evidence": [
+            "lark-software-review",
+            "lark-hardware-review"
+          ]
+        },
+        {
+          "id": "pending-software-choices",
+          "requirement": "Report automatic merge versus operator review and ten-minute versus one-hour retry as pending PM choices.",
+          "evidence": [
+            "lark-software-review"
+          ]
+        },
+        {
+          "id": "pending-hardware-choices",
+          "requirement": "Report sealed connector versus weather cover and bench-only versus outdoor trial as pending PM choices.",
+          "evidence": [
+            "lark-hardware-review"
+          ]
+        }
+      ],
+      "material_failure_conditions": [
+        "Includes the unrelated ORBIT training action or substitutes it for the review decisions.",
+        "Claims that no decision is needed because no assigned meeting action or approved decision names Jules.",
+        "Presents any pending review choice as approved, or asserts Jules is the PM without evidence."
+      ],
+      "abstention_rule": "All requested review content is readable; a missing PM-to-Jules role binding permits role-qualified wording, not omission of the pending choices."
+    },
+    {
+      "id": "personal-assigned-work",
+      "expected_outcome": "answered",
+      "parts": [
+        {
+          "id": "assigned-action",
+          "requirement": "Identify Jules's approved open ORBIT action to prepare the reseller training agenda.",
+          "evidence": [
+            "orbit-assigned-action"
+          ]
+        }
+      ],
+      "material_failure_conditions": [
+        "Assigns the LARK PM choices to Jules without a recorded owner or role binding.",
+        "Omits the action explicitly assigned to Jules."
+      ],
+      "abstention_rule": "The fixture contains one readable action explicitly assigned to Jules; it supports a direct answer."
+    },
+    {
+      "id": "already-approved-decisions",
+      "expected_outcome": "answered",
+      "parts": [
+        {
+          "id": "approved-decision",
+          "requirement": "Identify the wired USB connection for the first console prototype as the approved decision.",
+          "evidence": [
+            "lark-approved-decision"
+          ]
+        }
+      ],
+      "material_failure_conditions": [
+        "Presents a choice from either proposal review as an approved decision.",
+        "Includes the unrelated ORBIT action as a LARK decision."
+      ],
+      "abstention_rule": "The approved LARK decision is readable; pending choices may be distinguished as unresolved, but never promoted to approved status."
+    }
+  ]
+}
