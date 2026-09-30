@@ -36,7 +36,6 @@ const definitions = [
   ['slack-link', ['slack-user'], 'Link Slack through a private-DM code exchange.'],
   ['slack-connect-begin', [], 'Open Slack browser connection.'],
   ['slack-connect-status', ['attempt-id'], 'Read Slack browser connection status.'],
-  ['slack-connect-cancel', ['attempt-id'], 'Cancel a pending Slack browser connection.'],
   ['slack-disconnect', [], 'Remove your personal Slack link.'],
 ] as const;
 
@@ -82,8 +81,8 @@ export function createSlackPersonCommandsV1(): readonly PersonToolCommandV1[] {
           client,
           open_browser,
         );
-        // The attempt ID is an opaque cancellation/polling handle. The
-        // authorization URL remains solely in the process that opened it.
+        // The attempt ID is an opaque polling handle. The authorization URL
+        // remains solely in the process that opened it.
         print( {
           ok: true,
           phase: "waiting-for-slack",
@@ -94,13 +93,6 @@ export function createSlackPersonCommandsV1(): readonly PersonToolCommandV1[] {
       }
       case "slack-connect-status": {
         const status = await client.slackBrowserLinkStatus(
-          requiredText(values, "attempt-id"),
-        );
-        print( { ok: true, ...status });
-        break;
-      }
-      case "slack-connect-cancel": {
-        const status = await client.cancelSlackBrowserLink(
           requiredText(values, "attempt-id"),
         );
         print( { ok: true, ...status });

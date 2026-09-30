@@ -1214,41 +1214,6 @@ describe("Person client", () => {
     });
   });
 
-  it("cancels a pending Slack browser attempt without exposing its authorization URL", async () => {
-    await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const attempt = fixtureId("sbl", 10);
-      await new PersonClient({
-        home_directory: home,
-        now: () => NOW,
-        fetch: async () => json({ authority_descriptor: authority }),
-      }).installSession("https://authority.example", ROTATED_SESSION);
-      const { code: status, stdout } = await runCli(
-        ["slack-connect-cancel", "--attempt-id", attempt],
-        {
-          home_directory: home,
-          now: () => NOW,
-          fetch: async (input, init) => {
-            expect(new URL(String(input)).pathname).toBe(
-              "/v2/person/external-identities/slack/browser/cancel",
-            );
-            expect(JSON.parse(String(init?.body))).toEqual({ attempt_id: attempt });
-            return json({
-              schema_version: 1,
-              kind: "echo-person-slack-browser-link-status-v1",
-              attempt_id: attempt,
-              status: "cancelled",
-              failure_reason: null,
-            });
-          },
-        },
-      );
-      expect(status).toBe(0);
-      expect(JSON.parse(stdout)).toMatchObject({ ok: true, attempt_id: attempt, status: "cancelled" });
-      expect(stdout).not.toContain("authorization_url");
-    });
-  });
-
   it("disconnects the current person's Slack link without accepting an identity argument", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
