@@ -12,7 +12,7 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import { boundedTextV1 } from "./person-item-text-v1.js";
 
 /**
- * Pure meeting presentation for the person list and open (ADR-0023). Every
+ * Pure meeting presentation for the person list and open (ADR-0024). Every
  * value here is projected from an approved record the caller was already
  * admitted to; nothing here reads a database or decides access.
  */
@@ -219,7 +219,7 @@ export function approverDisplayNameV1(
   return name;
 }
 
-/** Immutable per-record facts read at query time (ADR-0023, D11). */
+/** Immutable per-record facts read at query time (ADR-0024, D11). */
 export interface RecordMetadataV1 {
   readonly envelope_sha256: Sha256Digest;
   /** The signed receipt's issue time, canonical. */

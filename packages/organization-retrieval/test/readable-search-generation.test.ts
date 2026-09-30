@@ -828,7 +828,7 @@ describe("immutable readable-search generation v1", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
-  describe("record inventory and record narrowing (ADR-0023)", () => {
+  describe("record inventory and record narrowing (ADR-0024)", () => {
     const projectPolicy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
     const inRecord = (record: string, position: number, order: number, text: string, overrides: Partial<ReadableSearchAtomV1> = {}): ReadableSearchAtomV1 =>
       atomWith(`${record}-${order}`, { record_position: position, record_sha256: digest(`record-${record}`), envelope_sha256: digest(`envelope-${record}`), approval_id: `approval-${record}`, atom_order: order, text, ...overrides });

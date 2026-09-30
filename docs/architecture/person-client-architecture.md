@@ -45,7 +45,7 @@ produced by `tools/pack-person-client.mjs`.
 
 The sidebar's **Mine** row, under New project, opens a page that reads
 `person list --mine`
-([ADR-0023](../decisions/ADR-0023-person-list-open-and-mine-scope.md)): the
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)): the
 notes the person saved, the files they uploaded and the meetings they approved,
 newest first, each with the names of their projects it is filed in, and More
 for the next page. A project page reads `person list --project`, and the reader

@@ -22,7 +22,7 @@ unrelated organization or other-project material remain excluded.
 Choosing **Mine** narrows Ask to what the person added: the notes they saved
 and the documents they uploaded under their current membership, and the
 meetings they approved as final approver, while each is still readable to them
-([ADR-0023](../decisions/ADR-0023-person-list-open-and-mine-scope.md)). Mine
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). Mine
 reads no Slack and, in this version, no shared transcripts. It is a narrowing
 of global scope, never another view: a teammate's item is excluded even when
 the person can read it. "My" in a question is only a search hint; it does not

@@ -55,7 +55,7 @@ export interface PersonAnswerRequestV3 {
   readonly question: string;
   /** Exclusive with `mine`. */
   readonly project_id?: ProjectIdV1;
-  /** Only what the asker added: their notes and uploads, and meetings they approved (ADR-0023). */
+  /** Only what the asker added: their notes and uploads, and meetings they approved (ADR-0024). */
   readonly mine?: true;
 }
 
@@ -81,7 +81,7 @@ export interface PersonAnswerCitationV4 {
   readonly kind: PersonEvidenceKindV1;
   readonly label: string;
   readonly visibility: PersonEvidenceVisibilityV1;
-  /** Opens the cited item with person open (ADR-0023). Never on a Slack message. */
+  /** Opens the cited item with person open (ADR-0024). Never on a Slack message. */
   readonly ref?: PersonOpenRefV1;
 }
 

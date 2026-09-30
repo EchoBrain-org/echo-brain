@@ -10,7 +10,7 @@ type JoinedRow = PersonListJoinedProjectV1 & { readonly project_membership_id: s
 
 /**
  * The person list's own reads of the caller's projects and name, and its page
- * audit (ADR-0023). Kept apart from the project context repository: nothing
+ * audit (ADR-0024). Kept apart from the project context repository: nothing
  * here writes a project row or decides item access.
  */
 export class SqlitePersonListDirectoryV1 implements PersonListDirectoryPortV1 {

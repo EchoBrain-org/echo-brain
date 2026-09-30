@@ -465,7 +465,7 @@ describe("agentic Ask: research loop", () => {
     expect(script.prompt(0).scope).toContain("Slack is not");
   });
 
-  it("tells the model a mine scope reads only what the asker added, never Slack or shared transcripts (ADR-0023)", async () => {
+  it("tells the model a mine scope reads only what the asker added, never Slack or shared transcripts (ADR-0024)", async () => {
     const script = scripted([finish([missing()]), finish([missing()])]);
     const result = await ask({ desk: desk({ scope: { kind: "mine" } }), model: script.model }).answer({ question: "What did I decide?" });
     expect(script.prompt(0).scope).toBe("only what the asker added: their own notes and uploaded documents, and meetings they approved; Slack and shared transcripts are not read");
@@ -475,7 +475,7 @@ describe("agentic Ask: research loop", () => {
     expect(global.prompt(0).scope).toBe("everything the asker can read");
   });
 
-  it("carries each desk item's ref onto its citation, and never shows a ref to the model (ADR-0023)", async () => {
+  it("carries each desk item's ref onto its citation, and never shows a ref to the model (ADR-0024)", async () => {
     const record = item("launch", "Launch is approved for Tuesday.");
     const meeting = Object.freeze({ ...record, ref: `meeting:${(record.citation as { readonly record_sha256: `sha256:${string}` }).record_sha256}` as const });
     const document_id = `doc_${"1".repeat(64)}` as const;

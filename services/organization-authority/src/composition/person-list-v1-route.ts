@@ -201,7 +201,7 @@ function receipts(...releases: readonly (PersonStoreReleaseV1 | undefined)[]): S
 }
 
 /**
- * The person list and open by ref (ADR-0023). Each call is a fresh
+ * The person list and open by ref (ADR-0024). Each call is a fresh
  * authenticated read: stores collect unaudited, the route merges and shapes,
  * each store audits only what left, and the session, grants and project names
  * are revalidated before the page audit and the response. No model is called.

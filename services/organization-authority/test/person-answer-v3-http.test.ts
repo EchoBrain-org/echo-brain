@@ -179,7 +179,7 @@ async function post(url: string, path: string, body: unknown): Promise<{ readonl
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
-describe("Ask with mine, and citation refs (ADR-0023)", () => {
+describe("Ask with mine, and citation refs (ADR-0024)", () => {
   it("builds a mine desk for every store, never reads Slack, echoes mine, and cites with a ref", async () => {
     const f = mineFixture();
     const value = await server({ application: f.route });

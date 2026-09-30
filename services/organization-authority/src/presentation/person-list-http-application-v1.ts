@@ -1,7 +1,7 @@
 import type { PersonListRequestV1, PersonListResponseV1, PersonOpenRequestV1, PersonOpenResponseV1 } from "@echo-brain/organization-api";
 
 /**
- * The person list and open by ref (ADR-0023). Neither needs an answer model;
+ * The person list and open by ref (ADR-0024). Neither needs an answer model;
  * the bearer and the disconnect signal stay in the HTTP boundary.
  */
 export interface PersonListHttpApplicationV1 {

@@ -152,7 +152,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
   /** Explicit transcript release uses the same originals gate but no Ask model. */
   readonly person_meeting_transcript?: PersonMeetingTranscriptHttpApplicationV1;
-  /** The person list and open by ref (ADR-0023); it needs no answer model. */
+  /** The person list and open by ref (ADR-0024); it needs no answer model. */
   readonly person_list?: PersonListHttpApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
   readonly project_context?: ProjectContextApplicationV1;

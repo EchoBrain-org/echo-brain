@@ -114,7 +114,7 @@ function count(value: number, maximum: number): boolean {
 
 /**
  * Notes (every version) and documents (every extraction state) for the person
- * list and open (ADR-0023), read from custody under Ask's exact ACL. Custody
+ * list and open (ADR-0024), read from custody under Ask's exact ACL. Custody
  * rows are listed before Ask can find them; nothing here reads a source
  * revision or a meeting.
  */

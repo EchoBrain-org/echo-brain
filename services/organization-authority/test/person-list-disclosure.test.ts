@@ -41,7 +41,7 @@ import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, 
 import { addMembership, authorization } from "./fixtures/project-context-sqlite.js";
 
 /**
- * The person list and open (ADR-0023) on real SQLite stores and signed
+ * The person list and open (ADR-0024) on real SQLite stores and signed
  * approvals, composed as the Authority runtime composes them and served by the
  * real HTTP server. Owner and employee readers; every negative disclosure case
  * of the spec, Ask's included (N-16).
@@ -285,7 +285,7 @@ async function scopes(f: World, token: Token): Promise<Readonly<Record<string, u
   return [{}, { mine: true }, ...first.projects!.map((project) => ({ project_id: project.project_id }))];
 }
 
-describe("person list and open negative disclosure (ADR-0023)", () => {
+describe("person list and open negative disclosure (ADR-0024)", () => {
   it("N-1, N-8, N-9: another member's only-me items, rejected and pending meetings stay hidden, and every miss is one 404", async () => {
     const f = await disclosureWorld();
     const hidden: Readonly<Record<Token, readonly string[]>> = {

@@ -1,5 +1,5 @@
 /**
- * One display line for the person list and open (ADR-0023): NFC, control,
+ * One display line for the person list and open (ADR-0024): NFC, control,
  * format and line-separator characters become spaces, and a line over
  * `maxBytes` is cut at a code point and ends in "…". Undefined when nothing
  * printable remains, so the caller chooses the fallback.

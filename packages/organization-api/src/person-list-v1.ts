@@ -13,7 +13,7 @@ import type { ProjectStatusV2 } from './project-context-v2.js';
 import { asRecord, assertExactKeys, assertOnlyEnumerableDataProperties, assertTimestamp, fail } from './validation.js';
 
 /**
- * Model-free list and open (ADR-0023). A list page names what the caller can
+ * Model-free list and open (ADR-0024). A list page names what the caller can
  * read now, newest first, with no text and no counts; open releases one item
  * by ref. Refs never carry a source, revision or content hash.
  */

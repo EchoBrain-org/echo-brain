@@ -112,7 +112,7 @@ function pages(route: PersonRecordSearchRouteV1, token: ReaderToken, record_sha2
 
 const NOT_FOUND = { code: "not_found", message: "item is not available" };
 
-describe("Person meetings open: one record by its digest (ADR-0023)", () => {
+describe("Person meetings open: one record by its digest (ADR-0024)", () => {
   it("releases the row, a names-only meeting, the approver's name and every atom in brief order", async () => {
     const w = await world();
     const route = w.route();

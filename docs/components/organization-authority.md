@@ -32,6 +32,7 @@ decision_ids:
   - ADR-0021
   - ADR-0022
   - ADR-0023
+  - ADR-0024
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -151,7 +152,7 @@ handle or provider-specific implementation. Architecture tests traverse its
 entire import closure to enforce that separation.
 
 Person list and open by ref are proposed in
-[ADR-0023](../decisions/ADR-0023-person-list-open-and-mine-scope.md).
+[ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md).
 `POST /v1/person/list` returns the newest notes, documents and approved
 meetings the caller can read, 25 per page under an opaque cursor, in global,
 joined-project or mine scope; `POST /v1/person/open` reads one of them, or a

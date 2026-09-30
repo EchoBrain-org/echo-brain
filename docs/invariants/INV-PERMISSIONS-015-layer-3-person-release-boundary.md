@@ -17,10 +17,10 @@ decision_ids:
   - ADR-0015
   - ADR-0017
   - ADR-0019
-  - ADR-0023
+  - ADR-0024
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0023 Person list and open-by-reference paths with the mine scope, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths with the mine scope, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -51,7 +51,7 @@ possession from being mistaken for human permission. It covers clean V1 Layer 1
 listing, Layer 2 search, and the composed Layer 4 `ask` path. ADR-0015 extends
 that bounded path to authorized Person originals and optional project scope;
 it does not grant generic raw-meeting access or permit a privileged model read.
-ADR-0023 adds model-free Person list and open-by-reference paths over the same
+ADR-0024 adds model-free Person list and open-by-reference paths over the same
 readable set; their project and mine scopes only narrow it.
 
 ADR-0010 adds one non-serving exception to the otherwise model-free lower
@@ -102,7 +102,7 @@ when requested, project association are checked before content access and again
 at release; a missing, disabled or mismatched grant releases no content. This
 does not admit generic meeting snapshots into original-context search or Ask.
 
-ADR-0023's list and open paths call no model and are served outside the
+ADR-0024's list and open paths call no model and are served outside the
 answer-model gate. The server binds principal and membership from the session;
 a request chooses only a joined project or mine, and a project it has not
 joined gets the same denial as project Ask before any store runs. Notes and

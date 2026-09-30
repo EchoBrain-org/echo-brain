@@ -24,6 +24,7 @@ decision_ids:
   - ADR-0021
   - ADR-0022
   - ADR-0023
+  - ADR-0024
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-RUNTIME-001
@@ -91,7 +92,7 @@ desk are capability-gated; implementation and live qualification are separate.
 
 `person list [--project <project-id> | --mine] [--cursor <next_cursor>]` and
 `person open --ref <ref> [--cursor <next_cursor>]` read the Authority's
-[ADR-0023](../decisions/ADR-0023-person-list-open-and-mine-scope.md) routes and
+[ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md) routes and
 print one JSON line. List rows carry a ref, title, time, who can read it and
 the caller's projects it is filed in, never text; open pages a note, document,
 approved meeting or shared transcript by that ref. `person ask --mine` narrows

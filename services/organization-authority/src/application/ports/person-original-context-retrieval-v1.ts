@@ -138,7 +138,7 @@ export interface PersonOriginalContextRetrievalPortV1 {
     readonly approval_id: string;
     readonly record_sha256: Sha256Digest;
   }): boolean;
-  /** The approved transcript page of one record, read with global access (ADR-0023). */
+  /** The approved transcript page of one record, read with global access (ADR-0024). */
   readApprovedMeetingTranscriptByRecordV1(input: {
     readonly access_token: string;
     readonly record_sha256: Sha256Digest;
@@ -159,7 +159,7 @@ export interface OriginalContextDeskItemV1 {
   readonly label: string;
   readonly received_at: string;
   readonly version: string;
-  /** The note, document or shared transcript this passage opens as (ADR-0023). */
+  /** The note, document or shared transcript this passage opens as (ADR-0024). */
   readonly ref?: PersonOpenRefV1;
 }
 

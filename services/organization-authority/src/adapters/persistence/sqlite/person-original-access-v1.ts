@@ -5,7 +5,7 @@ import type { PersonAskScopeV2 } from "../../../application/ports/person-origina
 
 /**
  * Ask's originals ACL, shared by Ask retrieval and the person list/open store
- * (ADR-0023) so the two can never disagree about who may read a note or a
+ * (ADR-0024) so the two can never disagree about who may read a note or a
  * document. `u` is a note custody row, `d` a document custody row.
  */
 export type PersonOriginalPrefixV1 = "u" | "d";

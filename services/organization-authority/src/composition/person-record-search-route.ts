@@ -126,7 +126,7 @@ export interface PersonRecordSearchBatchInputV1 {
   readonly queries: readonly string[];
   /** Authority-checked project scope; association never replaces audience. */
   readonly project_id?: string;
-  /** Records whose final approver is the caller (ADR-0023); exclusive with project_id. */
+  /** Records whose final approver is the caller (ADR-0024); exclusive with project_id. */
   readonly mine?: true;
   /**
    * A canonical release named by the answer question. Layer 3 applies it only
@@ -480,7 +480,7 @@ function deskLabel(title: string | undefined, time: { readonly scheduled_start_a
   return `${prefix}...`;
 }
 
-/** Store-raw: only the list route collapses these tokens (ADR-0023). */
+/** Store-raw: only the list route collapses these tokens (ADR-0024). */
 function recordVisibility(policy_id: ReadableSearchResultItemV1["policy_id"], audience_project_count: number): Exclude<PersonStoreVisibilityV1, "only_me"> {
   if (policy_id === "project-members-readable-person-v1" && audience_project_count < 1) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
   return policy_id === "restricted-reviewer-person-v2" ? "approver_only" : policy_id === "project-members-readable-person-v1" ? (audience_project_count === 1 ? "project" : "projects") : "team";

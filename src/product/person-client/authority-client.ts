@@ -1419,7 +1419,7 @@ export class PersonAuthorityClient {
     return response;
   }
 
-  /** Model-free list (ADR-0023). Only the caller knows which page is first, so the header is checked here. */
+  /** Model-free list (ADR-0024). Only the caller knows which page is first, so the header is checked here. */
   async list(accessToken: string, value: PersonListRequestV1, signal?: AbortSignal): Promise<PersonListV1> {
     const request = validatePersonListRequestV1(value);
     const response = await this.json({ path: PERSON_LIST_PATH_V1, body: request,

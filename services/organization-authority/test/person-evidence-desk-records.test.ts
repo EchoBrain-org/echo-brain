@@ -452,7 +452,7 @@ describe('Person evidence desk over a Slack-approved record with a confirmed own
   });
 });
 
-describe('Person evidence desk: mine (ADR-0023)', () => {
+describe('Person evidence desk: mine (ADR-0024)', () => {
   it('passes mine, never a project, to every record call, and returns only the caller\'s own approvals', async () => {
     const w = await meetingWorld();
     try {
@@ -487,7 +487,7 @@ describe('Person evidence desk: mine (ADR-0023)', () => {
   });
 });
 
-describe('Person evidence desk: refs (ADR-0023)', () => {
+describe('Person evidence desk: refs (ADR-0024)', () => {
   it('gives record items their meeting ref, keeps each original item\'s store ref, and gives Slack items none', async () => {
     const value = await fixture();
     try {

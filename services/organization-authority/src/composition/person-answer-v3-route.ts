@@ -92,7 +92,7 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
     schema_version: 1,
     kind: "echo-person-evidence-desk-v1",
     scope: desk.scope,
-    // The desk contract carries no ref; only Ask citations do (ADR-0023).
+    // The desk contract carries no ref; only Ask citations do (ADR-0024).
     items: result.items.map(({ ref: _ref, ...item }) => item),
     truncated: result.truncated,
     ...(result.notice === undefined ? {} : { notice: result.notice }),
@@ -129,7 +129,7 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
       }
       journey?.succeed("ask_authorization", authorizationStartedAt);
       const researchStartedAt = journey?.startTimer() ?? 0;
-      // mine reads only what the asker added to Echo, so never Slack (ADR-0023).
+      // mine reads only what the asker added to Echo, so never Slack (ADR-0024).
       const slack = input.request.mine === true ? undefined : options.slack_for?.({ principal_id: authorization.principal_id, membership_id: authorization.membership_id });
       const desk = deskFor(options, input.access_token, input.request, slack);
       const asker = askerOf(options, authorization);

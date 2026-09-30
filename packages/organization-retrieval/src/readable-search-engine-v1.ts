@@ -1252,7 +1252,7 @@ export interface ListReadableSearchGenerationV1Input {
 }
 
 /**
- * One row per admitted record, for a record inventory (ADR-0023). It carries
+ * One row per admitted record, for a record inventory (ADR-0024). It carries
  * no text: the caller reads presentation from the record it already verifies.
  */
 export interface ListReadableSearchGenerationRecordsV1Input {

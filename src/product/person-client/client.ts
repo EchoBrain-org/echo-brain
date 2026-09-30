@@ -801,7 +801,7 @@ export class PersonClient {
     return result;
   }
 
-  /** One model-free list page under a fresh authenticated read (ADR-0023). */
+  /** One model-free list page under a fresh authenticated read (ADR-0024). */
   async list(value: PersonListRequestV1, signal?: AbortSignal): Promise<PersonListV1> {
     const request = validatePersonListRequestV1(value);
     const stored = await this.accessSession();

@@ -105,7 +105,7 @@ function unavailable(): never {
   throw new AuthorityOperationError("unavailable", "person source retrieval is unavailable");
 }
 
-/** A record opened by ref is read with global access (ADR-0023). */
+/** A record opened by ref is read with global access (ADR-0024). */
 const GLOBAL_SCOPE: PersonAskScopeV2 = Object.freeze({ kind: "global" });
 
 function transcriptCitation(grant: ApprovedMeetingTranscriptGrantV1): PersonMeetingTranscriptCitationV1 {
@@ -744,7 +744,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private readableTranscriptGrant(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, grant: ApprovedMeetingTranscriptGrantV1): boolean {
     switch (scope.kind) {
-      // A shared transcript is not something the caller added (ADR-0023, v1).
+      // A shared transcript is not something the caller added (ADR-0024, v1).
       case "mine":
         return false;
       case "project":

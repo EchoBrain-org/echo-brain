@@ -13,7 +13,7 @@ import type { PersonAskScopeV2 } from "./person-original-context-retrieval-v1.js
 
 /** Last emitted row of ONE source. Store order inside a source: added_at DESC, id ASC (binary). */
 export interface PersonItemPositionV1 { readonly added_at: string; readonly id: string }
-/** Store-raw visibility; only the list route collapses it (ADR-0023). */
+/** Store-raw visibility; only the list route collapses it (ADR-0024). */
 export type PersonStoreVisibilityV1 = "only_me" | "team" | "project" | "projects" | "approver_only";
 interface PersonStoreRowBaseV1 {
   readonly id: string;
@@ -142,7 +142,7 @@ export interface PersonListJoinedProjectV1 {
 }
 
 /**
- * The caller's own projects, name and audit for the person list (ADR-0023).
+ * The caller's own projects, name and audit for the person list (ADR-0024).
  * Projects are the caller's active grants, active projects first, then newest.
  */
 export interface PersonListDirectoryPortV1 {

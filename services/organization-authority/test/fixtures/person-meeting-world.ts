@@ -32,7 +32,7 @@ import {
 
 /**
  * A small organization with real signed Slack approvals, for the meeting
- * list and open (ADR-0023). OWNER and EMP_A hold SHARED; EMP_A has left
+ * list and open (ADR-0024). OWNER and EMP_A hold SHARED; EMP_A has left
  * PROJ_X; nobody who reads holds UNJOINED; EMP_B and EMP_C hold nothing.
  */
 const person = (name: string, membership_type: "owner" | "employee"): AuthorityPersonMembershipBinding => ({

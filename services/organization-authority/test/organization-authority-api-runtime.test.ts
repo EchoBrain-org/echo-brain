@@ -1330,7 +1330,7 @@ describe("Organization Authority API runtime", () => {
       expect(await post("/v2/person/updates", { ...upload, audience: { kind: "team" } }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
       expect(await get(`/v2/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text, audience: upload.audience });
 
-      // The person list and open serve without an answer model or a published generation (ADR-0023).
+      // The person list and open serve without an answer model or a published generation (ADR-0024).
       expect(await post("/v1/person/list", { schema_version: 1 })).toEqual({
         schema_version: 1, kind: "echo-person-list-v1", scope: { kind: "global" },
         me: { display_name: "Founder", membership_type: "owner" }, connected: [],

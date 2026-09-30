@@ -1855,7 +1855,7 @@ describe("Person Layer 2 route", () => {
   );
 });
 
-describe("Person Layer 2 route: mine narrows to the caller's own approvals (ADR-0023)", () => {
+describe("Person Layer 2 route: mine narrows to the caller's own approvals (ADR-0024)", () => {
   it("searches, lists and opens only records whose final approver is the caller", async () => {
     const w = await meetingWorld();
     try {

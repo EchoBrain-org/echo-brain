@@ -52,7 +52,7 @@ function walk(route: PersonRecordSearchRouteV1, token: ReaderToken, scope: Perso
 
 const ids = (rows: readonly PersonStoreMeetingRowV1[]) => rows.map((row) => row.id);
 
-describe("Person meetings list: collect and commit (ADR-0023)", () => {
+describe("Person meetings list: collect and commit (ADR-0024)", () => {
   it("lists each reader's readable approved meetings newest first, as content-free rows", async () => {
     const w = await world();
     const route = w.route();

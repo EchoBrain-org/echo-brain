@@ -168,7 +168,7 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(() => validatePersonAnswerResponseV4(answer({ kind: 'everyone' }))).toThrow('Ask response scope is invalid');
   });
 
-  it('asks with mine, but never mine with a project or mine other than true (ADR-0023)', () => {
+  it('asks with mine, but never mine with a project or mine other than true (ADR-0024)', () => {
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine: true }))
       .toEqual({ schema_version: 3, question: 'What did I decide?', mine: true });
     expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine: true, project_id })).toThrow('Ask request scope is invalid');
@@ -177,7 +177,7 @@ describe('Agentic Ask V1 public contracts', () => {
     }
   });
 
-  it('carries a citation ref only when it names the cited item (ADR-0023)', () => {
+  it('carries a citation ref only when it names the cited item (ADR-0024)', () => {
     const answer = (value: Record<string, unknown>) => ({
       schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'mine' }, outcome: 'answered',
       citations: [{ kind: 'decision', label: 'Launch decision', visibility: 'team', ...value }],

@@ -4,7 +4,7 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import { frameCursorV1, unframeCursorV1 } from "../adapters/persistence/sqlite/project-context-cursor-v1.js";
 
 /**
- * Person list and open cursors (ADR-0023). Untrusted keysets, not MACs: a
+ * Person list and open cursors (ADR-0024). Untrusted keysets, not MACs: a
  * forged position only filters rows the caller may read, and a cursor holds
  * nothing but positions the caller already received in this walk. The binding
  * digest refuses replay under another scope, person, membership, organization,

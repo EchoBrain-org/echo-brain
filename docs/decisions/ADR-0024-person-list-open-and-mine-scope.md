@@ -1,6 +1,6 @@
 ---
 schema_version: 1
-id: ADR-0023
+id: ADR-0024
 kind: decision
 title: Person list, open by ref, and the mine scope
 component_ids:
@@ -23,7 +23,7 @@ updates:
   - ADR-0022
 ---
 
-# ADR-0023: Person list, open by ref, and the mine scope
+# ADR-0024: Person list, open by ref, and the mine scope
 
 ## Disposition
 
@@ -331,6 +331,13 @@ Specifying the approved choices against the code refined them as follows:
 - [ADR-0022](ADR-0022-agentic-ask-only.md): `/v3/person/ask` stays the only
   Ask. Its request gains `mine` and its citations gain an optional `ref`; the
   answer kind is unchanged.
+- [ADR-0023](ADR-0023-reader-scoped-upload-releases.md): document metadata
+  releases `request_id` only to the uploading tenure, which is the
+  prerequisite that keeps refs non-attributing (see Consequences). ADR-0023
+  names only the reader's current projects in a released upload audience;
+  list and open go further, collapsing it to `only_me`, `team` or `project`
+  and naming no audience project. Both leave the Ask evidence desk's
+  `projects` label as it is.
 
 ## Consequences
 
@@ -344,12 +351,17 @@ Specifying the approved choices against the code refined them as follows:
   the server goes first.
 - **Refs are non-attributing only while `request_id` stays secret and
   high-entropy.** Note and document ids are digests of organization,
-  membership and `request_id`. The change that stops releasing `request_id` to
-  readers other than the uploader must land before this ships.
+  membership and `request_id`.
+  [ADR-0023](ADR-0023-reader-scoped-upload-releases.md) stopped releasing a
+  document's `request_id` to readers other than its uploader, and note reads
+  never released it, so this prerequisite is met. Any later path that releases
+  `request_id` to another reader would make refs attributing and needs its own
+  decision.
 - Ask citations and evidence-desk items still carry the uncollapsed
   visibility tokens, so a project reader can learn from Ask that a cited
   item's audience names other projects. `person records` already exposes the
-  full audience. Collapsing them is a follow-up alongside ADR-0020.
+  full audience. ADR-0023 deferred the same desk label. Collapsing them is a
+  follow-up alongside ADR-0020.
 - **Measured cost.** Page 1 over 1,024 single-atom approved records, on one
   development Mac: global 20.9 ms cold and 1.4 ms warm; mine 213.2 ms cold and
   1.5 ms warm. All four are inside the revisit thresholds (50 ms warm, 3 s cold
@@ -367,8 +379,10 @@ Rollback reverts server, CLI and desktop together.
 Merge checklist, in the change that merges the implementation:
 
 - `status` here and this ADR's row in the decision index change to `accepted`.
-- The change that stops releasing `request_id` to readers other than the
-  uploader is merged, or ships in the same release.
+- Done: the change that stops releasing `request_id` to readers other than the
+  uploader merged as [ADR-0023](ADR-0023-reader-scoped-upload-releases.md).
+  This ADR's server, Person client and desktop app ship in a release that
+  includes it.
 - The pull request states the coordinated server-first release plan.
 
 Evidence:

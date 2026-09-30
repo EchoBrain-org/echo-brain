@@ -87,7 +87,7 @@ The CLI exposes `person updates submit-v3|status-v3|read-v3|search-v3` and
 Project content uses `person projects feed-v2|search-v2|read-context-v2`. The
 desktop app's project page instead reads `person list --project <project-id>`
 and opens each row with `person open --ref`
-([ADR-0023](../decisions/ADR-0023-person-list-open-and-mine-scope.md)). New
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). New
 admission commands accept `--association-project-ids-json`; a projects
 audience also uses `--audience-project-ids-json`. Document retry selects the
 retained snapshot's version automatically. In the desktop app, only **Save**
