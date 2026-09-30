@@ -238,13 +238,6 @@ function loadMeetings(meetingsDirectory) {
     .map((name) => ({ path: resolve(meetingsDirectory, name), document: readJson(resolve(meetingsDirectory, name)) }));
 }
 
-function expectedInputPaths(meetingsDirectory) {
-  return readdirSync(meetingsDirectory)
-    .filter((name) => name.endsWith(".json"))
-    .sort()
-    .map((name) => resolve(meetingsDirectory, name));
-}
-
 export function evaluateRehearsal(result, expectations, meetingDocuments, options = {}) {
   const checks = [];
   const check = (id, name, verify) => {
@@ -583,8 +576,9 @@ function main(argv) {
   if (!resultPath) throw new Error("--result is required");
   const expectationsPath = valueFor("--expectations", DEFAULT_EXPECTATIONS);
   const meetingsDirectory = valueFor("--meetings-dir", DEFAULT_MEETINGS);
-  const report = evaluateRehearsal(readJson(resultPath), readJson(expectationsPath), loadMeetings(meetingsDirectory), {
-    expectedInputPaths: expectedInputPaths(meetingsDirectory)
+  const meetings = loadMeetings(meetingsDirectory);
+  const report = evaluateRehearsal(readJson(resultPath), readJson(expectationsPath), meetings, {
+    expectedInputPaths: meetings.map((meeting) => meeting.path)
   });
   for (const item of report.checks) {
     console.log(`${item.passed ? "PASS" : "FAIL"} ${item.id} ${item.name}`);

@@ -434,6 +434,15 @@ export class PersonClient {
     return result;
   }
 
+  private async withReadSession<T>(
+    operation: (authority: PersonAuthorityClient, accessToken: string) => Promise<T>,
+  ): Promise<T> {
+    const stored = await this.accessSession();
+    const result = await operation(this.authority(stored.authority_origin), stored.session.access_token);
+    this.assertCurrentSession(stored);
+    return result;
+  }
+
   private documentBinding(stored: StoredPersonClientSessionV1): string {
     return JSON.stringify([stored.authority_origin, stored.authority_id, stored.session.organization_id, stored.session.membership_id]);
   }
@@ -648,66 +657,39 @@ export class PersonClient {
     // Preserve the public query error type before transport schema validation.
     validatePersonQueryText(question);
     if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
-    const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).askV3(stored.session.access_token, question, scope, signal);
-    this.assertCurrentSession(stored);
-    return result;
+    return this.withReadSession((authority, token) => authority.askV3(token, question, scope, signal));
   }
 
   /** Each evidence invocation creates a new authenticated, scope-bound desk request. */
   async evidenceSearch(value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).evidenceSearch(stored.session.access_token, value, signal);
-    this.assertCurrentSession(stored);
-    return result;
+    return this.withReadSession((authority, token) => authority.evidenceSearch(token, value, signal));
   }
 
   /** Opens only the supplied server-owned citation under a fresh authorized request. */
   async evidenceOpen(value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
-    const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).evidenceOpen(stored.session.access_token, value, signal);
-    this.assertCurrentSession(stored);
-    return result;
+    return this.withReadSession((authority, token) => authority.evidenceOpen(token, value, signal));
   }
 
   /** One model-free list page under a fresh authenticated read (ADR-0024). */
   async list(value: PersonListRequestV1, signal?: AbortSignal): Promise<PersonListV1> {
     const request = validatePersonListRequestV1(value);
-    const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).list(stored.session.access_token, request, signal);
-    this.assertCurrentSession(stored);
-    return result;
+    return this.withReadSession((authority, token) => authority.list(token, request, signal));
   }
 
   /** Opens one ref from a list row or an Ask citation under the caller's current access. */
   async open(value: PersonOpenRequestV1, signal?: AbortSignal): Promise<PersonOpenV1> {
     const request = validatePersonOpenRequestV1(value);
-    const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).open(stored.session.access_token, request, signal);
-    this.assertCurrentSession(stored);
-    return result;
+    return this.withReadSession((authority, token) => authority.open(token, request, signal));
   }
 
   async askSourceEvidence(value: PersonSourceEvidenceReadRequestV1): Promise<PersonAskSourceEvidenceV1> {
     const request = validatePersonSourceEvidenceReadRequestV1(value);
-    const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).askSourceEvidence(
-      stored.session.access_token,
-      request,
-    );
-    this.assertCurrentSession(stored);
-    return result;
+    return this.withReadSession((authority, token) => authority.askSourceEvidence(token, request));
   }
 
   async readMeetingTranscript(value: PersonMeetingTranscriptReadRequestV1): Promise<PersonMeetingTranscriptReadV1> {
     const request = validatePersonMeetingTranscriptReadRequestV1(value);
-    const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).readMeetingTranscript(
-      stored.session.access_token,
-      request,
-    );
-    this.assertCurrentSession(stored);
-    return result;
+    return this.withReadSession((authority, token) => authority.readMeetingTranscript(token, request));
   }
 
   async withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>): Promise<T> {

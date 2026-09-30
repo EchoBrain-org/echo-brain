@@ -381,9 +381,10 @@ describe('document CLI custody and bounded transport', () => {
     expect(readdirSync(f.home).some(name => name.startsWith('.echo-document-'))).toBe(false);
   });
 
-  it('withholds a download when the signed-in identity changes before file publication', async () => {
+  it('withholds a V2 download when the signed-in identity changes before file publication', async () => {
     const f = setup(); const out = join(f.home, 'download.md');
     const outcome = await run(f.home, ['documents', 'download-v2', '--document-id', documentId, '--out', out], async url => {
+      expect(new URL(String(url)).pathname).toMatch(/^\/v2\/person\/documents\//);
       if (!String(url).endsWith('/original')) return json(f.metadata);
       const stored = f.store.read();
       f.store.install(stored.authority_origin, stored.authority_id, { ...stored.session, membership_id: 'mem_00000000-0000-4000-8000-000000000002' });

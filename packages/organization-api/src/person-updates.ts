@@ -1,6 +1,6 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { validatePersonQueryText } from './person-query.js';
-import { asRecord, assertExactKeys, assertOnlyEnumerableDataProperties, fail, MAX_ORGANIZATION_API_BODY_BYTES } from './validation.js';
+import { asEnumerableRecord, assertExactKeys, fail, MAX_ORGANIZATION_API_BODY_BYTES, utf8ByteLength } from './validation.js';
 
 /** Retired route. The Authority keeps it reserved against provider adapters. */
 export const PERSON_UPDATES_PATH_V1 = '/v1/person/updates';
@@ -34,13 +34,12 @@ export function validatePersonUploadVisibilityV1(value: unknown): PersonUploadVi
 }
 function text(value: unknown, maximum: number, multiline: boolean): asserts value is string {
   if (typeof value !== 'string' || value.trim().length === 0 ||
-      Array.from(value).reduce((bytes, point) => { const n = point.codePointAt(0)!; return bytes + (n < 0x80 ? 1 : n < 0x800 ? 2 : n < 0x10000 ? 3 : 4); }, 0) > maximum ||
+      utf8ByteLength(value) > maximum ||
       /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) ||
       (!multiline && /[\t\r\n]/u.test(value)) || /[\uD800-\uDFFF]/u.test(value)) fail('Person update text is invalid');
 }
 function object(value: unknown): Record<string, unknown> {
-  assertOnlyEnumerableDataProperties(value, 'Person upload');
-  return asRecord(value, 'Person upload');
+  return asEnumerableRecord(value, 'Person upload');
 }
 export function validatePersonUpdateSubmitV1(value: unknown): PersonUpdateSubmitV1 {
   const r = object(value);

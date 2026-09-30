@@ -2,12 +2,12 @@ import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { type PersonSourceReadScopeV1 } from './person-answer-v3.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import {
-  asRecord,
+  asEnumerableRecord as object,
   assertDigest,
   assertExactKeys,
-  assertOnlyEnumerableDataProperties,
   fail,
   MAX_ORGANIZATION_API_BODY_BYTES,
+  utf8ByteLength,
 } from './validation.js';
 
 /** An explicit, approval-gated read. It is intentionally outside Ask retrieval. */
@@ -40,23 +40,11 @@ export interface PersonMeetingTranscriptV1 {
   readonly next_offset: number | null;
 }
 
-function object(value: unknown, label: string): Record<string, unknown> {
-  assertOnlyEnumerableDataProperties(value, label);
-  return asRecord(value, label);
-}
-
 function text(value: unknown, label: string, maximum: number): asserts value is string {
   if (typeof value !== 'string' || value.length === 0 || value !== value.normalize('NFC') ||
-      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || utf8Bytes(value) > maximum) {
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) || utf8ByteLength(value) > maximum) {
     fail(`${label} is invalid`);
   }
-}
-
-function utf8Bytes(value: string): number {
-  return [...value].reduce((total, character) => {
-    const point = character.codePointAt(0)!;
-    return total + (point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4);
-  }, 0);
 }
 
 function scope(value: unknown): PersonSourceReadScopeV1 {

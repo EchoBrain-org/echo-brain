@@ -665,7 +665,7 @@ function validateComponentBacklinks(recordsById, errors) {
   }
 }
 
-function validateCatalog(recordsById, errors) {
+function validateCatalog(recordsById, errors, sources, files) {
   const catalog = recordsById.get("CMP-CATALOG");
   if (!catalog) {
     errors.push("docs/components/README.md: missing CMP-CATALOG");
@@ -686,17 +686,16 @@ function validateCatalog(recordsById, errors) {
       "utf8",
     ),
   );
-  const catalogText = readFileSync(
-    join(DOCS, "components", "README.md"),
-    "utf8",
-  );
+  const catalogText = sources.get(join(DOCS, "components", "README.md"));
   for (const retiredRoot of registry.retired_workspace_roots ?? [])
     if (catalogText.includes(retiredRoot))
       errors.push(
         `component catalog mentions retired workspace ${retiredRoot}`,
       );
-  const componentText = markdownFiles(join(DOCS, "components"))
-    .map((path) => readFileSync(path, "utf8"))
+  const componentRoot = `${join(DOCS, "components")}/`;
+  const componentText = files
+    .filter((path) => path.startsWith(componentRoot))
+    .map((path) => sources.get(path))
     .join("\n");
   for (const manifest of registry.manifests) {
     const workspace = dirname(manifest);
@@ -729,12 +728,10 @@ function markdownProse(source) {
     .join("\n");
 }
 
-function validateLinks(files, errors) {
+function validateLinks(sources, errors) {
   const pattern = /!?\[[^\]]*\]\(([^)]+)\)/g;
-  for (const path of files)
-    for (const match of markdownProse(readFileSync(path, "utf8")).matchAll(
-      pattern,
-    )) {
+  for (const [path, source] of sources)
+    for (const match of markdownProse(source).matchAll(pattern)) {
       let target = match[1].trim();
       target =
         target.startsWith("<") && target.endsWith(">")
@@ -765,7 +762,7 @@ function validateLinks(files, errors) {
     }
 }
 
-function validateSensitiveMaterial(files, errors) {
+function validateSensitiveMaterial(sources, errors) {
   const forbidden = [
     [
       "/Users path",
@@ -793,8 +790,7 @@ function validateSensitiveMaterial(files, errors) {
     ],
     ["private receipt filename", /\bstep9-[a-z0-9-]+\.v1\.json\b/i],
   ];
-  for (const path of files) {
-    const source = readFileSync(path, "utf8");
+  for (const [path, source] of sources) {
     for (const [label, pattern] of forbidden)
       if (pattern.test(source))
         errors.push(`${relative(REPO, path)}: contains forbidden ${label}`);
@@ -812,10 +808,13 @@ export function checkDocumentation() {
   const files = markdownFiles(DOCS);
   const trackedMarkdown = trackedMarkdownFiles();
   const checkedMarkdown = [...new Set([...files, ...trackedMarkdown])].sort();
+  const sources = new Map(
+    checkedMarkdown.map((path) => [path, readFileSync(path, "utf8")]),
+  );
   const records = [];
   for (const absolutePath of files) {
     if (absolutePath.startsWith(`${TEMPLATE_ROOT}/`)) continue;
-    const source = readFileSync(absolutePath, "utf8");
+    const source = sources.get(absolutePath);
     const metadata = parseFrontMatter(absolutePath, source, errors);
     if (!metadata) {
       if (managed(absolutePath))
@@ -862,9 +861,9 @@ export function checkDocumentation() {
       validateQualification(record, recordsById, evidenceIds, matrices, errors, git);
   }
   validateComponentBacklinks(recordsById, errors);
-  validateCatalog(recordsById, errors);
-  validateLinks(checkedMarkdown, errors);
-  validateSensitiveMaterial(checkedMarkdown, errors);
+  validateCatalog(recordsById, errors, sources, files);
+  validateLinks(sources, errors);
+  validateSensitiveMaterial(sources, errors);
   return errors;
 }
 

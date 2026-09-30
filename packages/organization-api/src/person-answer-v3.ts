@@ -2,12 +2,12 @@ import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { validatePersonDocumentIdV1 } from './person-documents-v1.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import {
-  asRecord,
+  asEnumerableRecord as object,
   assertDigest,
   assertExactKeys,
-  assertOnlyEnumerableDataProperties,
   fail,
   MAX_ORGANIZATION_API_BODY_BYTES,
+  utf8ByteLength,
 } from './validation.js';
 
 /**
@@ -77,11 +77,6 @@ export interface PersonSourceEvidenceV1 {
   readonly text: string;
 }
 
-function object(value: unknown, label: string): Record<string, unknown> {
-  assertOnlyEnumerableDataProperties(value, label);
-  return asRecord(value, label);
-}
-
 function boundedText(value: unknown, label: string, maximumCodePoints: number): asserts value is string {
   if (
     typeof value !== 'string' ||
@@ -111,17 +106,10 @@ function evidenceText(value: unknown): asserts value is string {
     value.length === 0 ||
     value !== value.normalize('NFC') ||
     /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value) ||
-    utf8Bytes(value) > PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1
+    utf8ByteLength(value) > PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1
   ) {
     fail('Ask source evidence text is invalid');
   }
-}
-
-function utf8Bytes(value: string): number {
-  return [...value].reduce((total, character) => {
-    const point = character.codePointAt(0)!;
-    return total + (point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4);
-  }, 0);
 }
 
 function scope(value: unknown): PersonSourceReadScopeV1 {

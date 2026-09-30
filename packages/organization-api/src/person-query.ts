@@ -1,3 +1,5 @@
+import { utf8ByteLength } from './validation.js';
+
 /** Shared public Ask/search input rules. No normalization or input echoing. */
 export class PersonQueryInputError extends Error {
   constructor(readonly code: string, message: string) {
@@ -26,10 +28,7 @@ export function validatePersonQueryText(value: unknown): string {
   if (terms.size < 1 || terms.size > 32) {
     throw new PersonQueryInputError('query_term_count', 'Use 1 to 32 distinct normalized letter/number terms in the question or search query.');
   }
-  if ([...terms].some(term => [...term].reduce((bytes, character) => {
-    const point = character.codePointAt(0)!;
-    return bytes + (point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4);
-  }, 0) > 64)) {
+  if ([...terms].some(term => utf8ByteLength(term) > 64)) {
     throw new PersonQueryInputError('query_term_too_long', 'Shorten each normalized term to at most 64 UTF-8 bytes; non-ASCII letters can use multiple bytes.');
   }
   return value;

@@ -39,18 +39,14 @@ describe('product source independence', () => {
   it('no production source module references a sibling repository', () => {
     // This check covers literal sibling references in production source.
     // Import/path escapes are separately enforced by the product boundary check.
-    const paths = git('ls-tree', '-r', '--name-only', 'HEAD')
-      .trim()
-      .split('\n')
-      .filter((p) => p.startsWith('src/') && /\.(ts|mts)$/.test(p));
-    for (const p of paths) {
-      const content = git('show', `HEAD:${p}`);
-      for (const marker of SIBLING_MARKERS) {
-        expect(content.includes(marker), `${p} references ${marker}`).toBe(
-          false,
-        );
-      }
-    }
+    const result = spawnSync('git', [
+      '-C', REPO, 'grep', '--full-name', '--fixed-strings', '--line-number',
+      ...SIBLING_MARKERS.flatMap((marker) => ['-e', marker]),
+      'HEAD', '--', ':(glob)src/**/*.ts', ':(glob)src/**/*.mts',
+    ], { encoding: 'utf8', maxBuffer: 1 << 28 });
+    expect(result.stderr).toBe('');
+    expect(result.status, result.stdout || result.error?.message).toBe(1);
+    expect(result.stdout).toBe('');
   });
 
 });
