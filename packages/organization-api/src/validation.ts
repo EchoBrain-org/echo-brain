@@ -36,6 +36,24 @@ export function fail(message: string, cause?: unknown): never {
   throw new OrganizationApiValidationError(message, { cause });
 }
 
+/** Counts scalar widths; each wire validator retains its Unicode rules. */
+export function utf8ByteLength(value: string): number {
+  let bytes = 0;
+  for (const character of value) {
+    const point = character.codePointAt(0)!;
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+  }
+  return bytes;
+}
+
+export function asEnumerableRecord(
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
+  assertOnlyEnumerableDataProperties(value, label);
+  return asRecord(value, label);
+}
+
 export function asRecord(
   value: unknown,
   label: string,

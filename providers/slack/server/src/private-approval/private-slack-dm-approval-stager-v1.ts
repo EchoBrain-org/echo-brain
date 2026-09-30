@@ -247,30 +247,36 @@ export function projectPrivateSlackApprovalCardV1(
     input.meeting,
     input.decisions,
   );
+  return projectCompiledCardV1(input.approval_id, input.meeting.title, brief);
+}
+
+function projectCompiledCardV1(
+  approvalId: string,
+  meetingTitle: unknown,
+  brief: CompiledDecisionBrief,
+): ReturnType<typeof buildPrivateSlackApprovalBlockKitCardV1> | undefined {
   const review = frozenReview(brief);
   if (review === undefined) return undefined;
   try {
     return buildPrivateSlackApprovalBlockKitCardV1({
       schema_version: 1,
-      approval_id: input.approval_id,
-      meeting_title: legacyMeetingTitle(input.meeting.title),
+      approval_id: approvalId,
+      meeting_title: legacyMeetingTitle(meetingTitle),
       ...review,
     });
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.startsWith("private approval Block Kit card ")
-    ) {
+    if (isCardLimitError(error)) {
       return undefined;
     }
     throw error;
   }
 }
 
-function buildCardAndSnapshot(
+/** Shared approved bytes; each card version adds its own presentation commitment. */
+function buildApprovalSnapshot(
   input: ApprovalWorkflowStageInputV1,
   sha256: (value: unknown) => Digest,
-): PrivateCardAndSnapshotV1 | undefined {
+) {
   const brief = compileDecisionBrief(
     `brf_${input.candidate.candidate_semantic_sha256.slice("sha256:".length)}`,
     input.meeting,
@@ -299,14 +305,18 @@ function buildCardAndSnapshot(
     payload_contract_id: "organization-record-approval-payload-v1" as const,
     approved_payload: payload,
   });
+  return { brief, approved_snapshot };
+}
+
+function buildCardAndSnapshot(
+  input: ApprovalWorkflowStageInputV1,
+  sha256: (value: unknown) => Digest,
+): PrivateCardAndSnapshotV1 | undefined {
+  const { brief, approved_snapshot } = buildApprovalSnapshot(input, sha256);
   // The active controls must follow a complete projection of the exact brief
   // they authorize. An unrepresentable candidate is durably quarantined before
   // any post attempt instead of truncating an informed-consent view.
-  const card = projectPrivateSlackApprovalCardV1({
-    approval_id: input.candidate.approval_id,
-    meeting: input.meeting,
-    decisions: input.decisions,
-  });
+  const card = projectCompiledCardV1(input.candidate.approval_id, input.meeting.title, brief);
   if (card === undefined) return undefined;
   const approved_snapshot_sha256 = sha256(approved_snapshot);
   const frozen_card_sha256 = sha256({
@@ -335,32 +345,7 @@ function buildCardAndSnapshotV2(
   eligibility: readonly PrivateSlackApprovalEligibleProjectV2[],
   transcriptSource: PrivateApprovalTranscriptSourceV1,
 ): PrivateCardAndSnapshotV2 | undefined {
-  const brief = compileDecisionBrief(
-    `brf_${input.candidate.candidate_semantic_sha256.slice("sha256:".length)}`,
-    input.meeting,
-    input.decisions,
-  );
-  const payload = Object.freeze({
-    brief: withoutProposedOwners(brief),
-    source: Object.freeze({
-      adapter_id: input.meeting.provenance.source.adapter_id,
-      instance_id: input.meeting.provenance.source.instance_id,
-      external_id: input.meeting.provenance.external_id,
-    }),
-    alternatives: Object.freeze([]),
-    links: null,
-    reviewed_at: input.decisions.generated_at,
-    surface: "slack-private-owner-dm" as const,
-  });
-  const approved_snapshot = Object.freeze({
-    schema_version: 2 as const,
-    kind: "echo-approved-decision-snapshot-v2" as const,
-    approval_id: input.candidate.approval_id,
-    staged_content_sha256: sha256({ meeting: input.meeting, decisions: input.decisions }),
-    final_content_sha256: sha256(payload),
-    payload_contract_id: "organization-record-approval-payload-v1" as const,
-    approved_payload: payload,
-  });
+  const { brief, approved_snapshot } = buildApprovalSnapshot(input, sha256);
   const review = frozenReview(brief);
   if (review === undefined) return undefined;
   const base = {
@@ -609,18 +594,6 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       if (target === undefined) return { kind: "delivery_pending" };
       if (existingV2 !== undefined) {
         pendingV2 = existingV2;
-        const rebuilt = buildCardAndSnapshotV2(
-          input,
-          this.sha256,
-          pendingV2.eligible_projects,
-          pendingV2.transcript_source,
-        );
-        if (
-          rebuilt === undefined ||
-          rebuilt.frozen_card_sha256 !== pendingV2.frozen_card_sha256 ||
-          rebuilt.approved_snapshot_sha256 !== pendingV2.approved_snapshot_sha256
-        ) return { kind: "state_drift" };
-        frozen = rebuilt;
       } else {
         const transcriptSource = retainedTranscriptSourceV2(
           this.options.authority_database,
@@ -669,19 +642,20 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
             transcript_source: initial.transcript_source,
           }),
         });
-        const rebuilt = buildCardAndSnapshotV2(
-          input,
-          this.sha256,
-          pendingV2.eligible_projects,
-          pendingV2.transcript_source,
-        );
-        if (
-          rebuilt === undefined ||
-          rebuilt.frozen_card_sha256 !== pendingV2.frozen_card_sha256 ||
-          rebuilt.approved_snapshot_sha256 !== pendingV2.approved_snapshot_sha256
-        ) return { kind: "state_drift" };
-        frozen = rebuilt;
       }
+      // Reprove both fresh and resumed cards against the persisted contract.
+      const rebuilt = buildCardAndSnapshotV2(
+        input,
+        this.sha256,
+        pendingV2.eligible_projects,
+        pendingV2.transcript_source,
+      );
+      if (
+        rebuilt === undefined ||
+        rebuilt.frozen_card_sha256 !== pendingV2.frozen_card_sha256 ||
+        rebuilt.approved_snapshot_sha256 !== pendingV2.approved_snapshot_sha256
+      ) return { kind: "state_drift" };
+      frozen = rebuilt;
     } else {
       // Retain exact V1 delivery behavior for every pre-V2 pending outbox.
       const legacy = buildCardAndSnapshot(input, this.sha256);

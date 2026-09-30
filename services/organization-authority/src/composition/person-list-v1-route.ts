@@ -20,6 +20,7 @@ import {
 } from "@echo-brain/organization-api";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
+import { samePersonReleaseAuthorizationV1 } from "../application/person-release-authorization-v1.js";
 import type {
   PersonItemPositionV1,
   PersonListDirectoryPortV1,
@@ -101,15 +102,6 @@ function scopeOf(request: PersonListRequestV1): PersonAnswerScopeV3 {
   if (request.project_id !== undefined && request.mine !== undefined) invalidRequest();
   if (request.project_id !== undefined) return Object.freeze({ kind: "project", project_id: request.project_id });
   return request.mine === true ? Object.freeze({ kind: "mine" }) : Object.freeze({ kind: "global" });
-}
-
-/** The session fields a fence compares; checked_at alone may move. */
-function sameAuthorization(left: PersonAccessAuthorization, right: PersonAccessAuthorization): boolean {
-  return left.organization_id === right.organization_id && left.principal_id === right.principal_id &&
-    left.membership_id === right.membership_id && left.membership_type === right.membership_type &&
-    left.identity_binding_id === right.identity_binding_id && left.session_family_id === right.session_family_id &&
-    left.access_credential_sha256 === right.access_credential_sha256 && left.person_state_sha256 === right.person_state_sha256 &&
-    left.session_state_sha256 === right.session_state_sha256;
 }
 
 /** One vs several audience projects, and approver vs uploader, are never released. */
@@ -292,7 +284,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
     if (originalsRelease !== undefined) options.originals.revalidate({ access_token, release: originalsRelease });
     if (meetingsRelease !== undefined) options.meetings.revalidateMeetingRelease({ access_token, release: meetingsRelease });
     const current = authenticate(access_token);
-    if (!sameAuthorization(actor, current)) denied();
+    if (!samePersonReleaseAuthorizationV1(actor, current)) denied();
     const now = options.directory.joinedProjects(current);
     if (now.grants_sha256 !== joined.grants_sha256) denied();
     // Only a name, role or status moved: retryable, and not lost access.
@@ -407,7 +399,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
         if (opened.kind === "note" || opened.kind === "document") options.originals.revalidate({ access_token, release: opened.release });
         if (opened.kind === "meeting") options.meetings.revalidateMeetingRelease({ access_token, release: opened.release });
         current = authenticate(access_token);
-        if (!sameAuthorization(actor, current) || options.directory.joinedProjects(current).grants_sha256 !== joined.grants_sha256) notFound();
+        if (!samePersonReleaseAuthorizationV1(actor, current) || options.directory.joinedProjects(current).grants_sha256 !== joined.grants_sha256) notFound();
       } catch (error) {
         if (error instanceof AuthorityOperationError) notFound();
         throw error;

@@ -1376,31 +1376,47 @@ export function setPeopleQuery(query: string): void {
   peopleTimer = setTimeout(() => void findPeople(), SEARCH_PAUSE_MS);
 }
 
-/** The directory's people for the name typed (all, with none), or the next page of them (More people). */
+/**
+ * The current people picker's directory, searched by name or paged with More.
+ * New project uses the organization's directory; a project's People sheet
+ * (including New project's fallback) uses its directory and requires a lead.
+ * Replies for a search or sheet that has moved on are discarded.
+ */
 export async function findPeople(more = false): Promise<void> {
   clearTimeout(peopleTimer);
   const account = expect();
-  const sheet = peopleSheet();
-  if (!account || !sheet || sheet.project.role !== 'lead') return;
+  const sheet = newProjectSheet() ?? peopleSheet();
+  if (!account || !sheet) return;
+  const wholeOrganization = sheet.kind === 'new-project' && !sheet.peopleLater;
+  if (!wholeOrganization && sheet.project?.role !== 'lead') return;
+  const patch = (value: Partial<Finding>) => {
+    if (wholeOrganization) setNewProject(value, sheet.seq);
+    else setPeople(value, sheet.seq);
+  };
   const cursor = more ? sheet.directory?.next : undefined;
   if (more && !cursor) return;
   const query = askText(sheet.query);
   const mine = ++seq;
   const shown = more ? sheet.directory?.items ?? [] : [];
-  // A new search ends the last add's Undo.
-  setPeople({ directory: { seq: mine, items: shown, next: sheet.directory?.next ?? null, loading: true }, ...(more ? {} : { added: null }) });
-  const result = await rpc('projects.directory', {
-    expect: account, project_id: sheet.project.project_id, ...(query ? { query } : {}), ...(cursor ? { cursor } : {}),
-  });
-  const current = peopleSheet(sheet.seq);
+  // A new project-directory search ends the last add's Undo.
+  patch({ directory: { seq: mine, items: shown, next: sheet.directory?.next ?? null, loading: true },
+    ...(!wholeOrganization && !more ? { added: null } : {}) });
+  const params = { expect: account, ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) };
+  const result = wholeOrganization ? await rpc('people.directory', params)
+    : await rpc('projects.directory', { ...params, project_id: sheet.project!.project_id });
+  const current = wholeOrganization ? newProjectSheet(sheet.seq) : peopleSheet(sheet.seq);
   if (!current || current.directory?.seq !== mine) return;
   if (!result.ok) {
-    setPeople({ directory: { seq: mine, items: shown, next: null, loading: false, failure: result.failure } });
+    if (wholeOrganization && NO_DIRECTORY.includes(result.failure.code)) {
+      setNewProject({ peopleLater: true, query: '', directory: null }, sheet.seq);
+      return;
+    }
+    patch({ directory: { seq: mine, items: shown, next: null, loading: false, failure: result.failure } });
     accountLost(result.failure);
     return;
   }
   const seen = new Set(shown.map(person => person.membership_id));
-  setPeople({ directory: {
+  patch({ directory: {
     seq: mine, items: [...shown, ...result.value.items.filter(person => !seen.has(person.membership_id))], next: result.value.next_cursor, loading: false,
   } });
 }
@@ -1518,7 +1534,7 @@ export function openNewProject(): void {
       query: '', directory: null, menu: null, confirm: null, added: null,
     },
   });
-  void searchPeople();
+  void findPeople();
 }
 
 /** Typing the name. A different name is a different request; while a create is on its way or unknown it cannot change. */
@@ -1669,38 +1685,7 @@ export function setPickQuery(query: string): void {
   if (!sheet || sheet.peopleLater) return;
   setNewProject({ query });
   clearTimeout(peopleTimer);
-  peopleTimer = setTimeout(() => void searchPeople(), SEARCH_PAUSE_MS);
-}
-
-/**
- * The organization's people for the name typed (the first ones, with none),
- * or the next page of them (More people). An Authority without the directory
- * turns people to after Create, once, and never as an empty list.
- */
-export async function searchPeople(more = false): Promise<void> {
-  clearTimeout(peopleTimer);
-  const account = expect();
-  const sheet = newProjectSheet();
-  if (!account || !sheet || sheet.peopleLater) return;
-  const cursor = more ? sheet.directory?.next : undefined;
-  if (more && !cursor) return;
-  const query = askText(sheet.query);
-  const mine = ++seq;
-  const shown = more ? sheet.directory?.items ?? [] : [];
-  setNewProject({ directory: { seq: mine, items: shown, next: sheet.directory?.next ?? null, loading: true } }, sheet.seq);
-  const result = await rpc('people.directory', { expect: account, ...(query ? { query } : {}), ...(cursor ? { cursor } : {}) });
-  const current = newProjectSheet(sheet.seq);
-  if (!current || current.directory?.seq !== mine) return;
-  if (!result.ok) {
-    if (NO_DIRECTORY.includes(result.failure.code)) { setNewProject({ peopleLater: true, query: '', directory: null }, sheet.seq); return; }
-    setNewProject({ directory: { seq: mine, items: shown, next: null, loading: false, failure: result.failure } }, sheet.seq);
-    accountLost(result.failure);
-    return;
-  }
-  const seen = new Set(shown.map(person => person.membership_id));
-  setNewProject({ directory: {
-    seq: mine, items: [...shown, ...result.value.items.filter(person => !seen.has(person.membership_id))], next: result.value.next_cursor, loading: false,
-  } }, sheet.seq);
+  peopleTimer = setTimeout(() => void findPeople(), SEARCH_PAUSE_MS);
 }
 
 /** The people found who can be picked: not you, who lead it, and not picked already. */

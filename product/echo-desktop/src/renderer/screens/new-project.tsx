@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { message } from '../messages.js';
 import {
   askSkip, canDropFiles, cancelSkip, checkFile, chooseFiles, closeSheet, confirmSkip, createProject, dropFiles, EXTRACTION, keepNewProject,
-  MAX_PROJECT_FILES, newProjectBusy, newProjectUnsettled, pickable, pickPerson, projectName, removeRow, retryFile, retryPick, searchPeople,
+  MAX_PROJECT_FILES, newProjectBusy, newProjectUnsettled, pickable, pickPerson, projectName, removeRow, retryFile, retryPick, findPeople,
   setNewProjectName, setPickQuery, unsent, type FindingSheet, type NewProjectSheet, type ProjectFile, type ProjectPick, type State,
 } from '../store.js';
 import { trapTab } from './compose.js';
@@ -103,7 +103,7 @@ function Picker({ state, sheet, field, queued, halted, busy }: {
         ref={field} class="field small" data-testid="people-find" type="text" autocomplete="off" maxLength={240}
         placeholder="Add someone by name" aria-label="Add someone by name" value={sheet.query}
         onInput={event => setPickQuery((event.target as HTMLInputElement).value)}
-        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void searchPeople(); } }}
+        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void findPeople(); } }}
       />
       <div class="people-list" aria-busy={directory?.loading ?? false}>
         {me && (
@@ -128,7 +128,7 @@ function Picker({ state, sheet, field, queued, halted, busy }: {
         )}
         {directory?.next && (
           <button type="button" class="pill center" data-testid="people-more" disabled={directory.loading}
-            onClick={() => void searchPeople(true)}>More people</button>
+            onClick={() => void findPeople(true)}>More people</button>
         )}
       </div>
     </>

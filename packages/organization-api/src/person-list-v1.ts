@@ -10,7 +10,7 @@ import { PERSON_MEETING_TRANSCRIPT_MAX_TEXT_BYTES_V1 } from './person-meeting-tr
 import { PERSON_UPDATE_TEXT_MAX_BYTES } from './person-updates.js';
 import { PROJECT_NAME_MAX_BYTES, validateProjectIdV1, type ProjectIdV1, type ProjectRoleV1 } from './project-context-v1.js';
 import type { ProjectStatusV2 } from './project-context-v2.js';
-import { asRecord, assertExactKeys, assertOnlyEnumerableDataProperties, assertTimestamp, fail } from './validation.js';
+import { asEnumerableRecord as object, assertExactKeys, assertTimestamp, fail, utf8ByteLength } from './validation.js';
 
 /**
  * Model-free list and open (ADR-0024). A list page names what the caller can
@@ -195,27 +195,15 @@ const ATOM_KINDS: readonly string[] = ['decision', 'action', 'rationale'];
 const DECISION_STATUSES: readonly string[] = ['proposed', 'decided', 'unresolved'];
 const GLOBAL_HEADER = ['me', 'connected', 'projects', 'projects_more'] as const;
 
-function object(value: unknown, label: string): Record<string, unknown> {
-  assertOnlyEnumerableDataProperties(value, label);
-  return asRecord(value, label);
-}
-
 function optionalKeys(input: Record<string, unknown>, keys: readonly string[]): string[] {
   return keys.filter((key) => Object.hasOwn(input, key));
-}
-
-function utf8Bytes(value: string): number {
-  return [...value].reduce((total, character) => {
-    const point = character.codePointAt(0)!;
-    return total + (point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4);
-  }, 0);
 }
 
 /** One trimmed NFC display line. */
 function line(value: unknown, label: string, maximumBytes: number, controls = LINE_CONTROLS): asserts value is string {
   if (
     typeof value !== 'string' || value.length === 0 || value.trim() !== value || value !== value.normalize('NFC') ||
-    controls.test(value) || LONE_SURROGATE.test(value) || utf8Bytes(value) > maximumBytes
+    controls.test(value) || LONE_SURROGATE.test(value) || utf8ByteLength(value) > maximumBytes
   ) fail(`${label} is invalid`);
 }
 
@@ -223,7 +211,7 @@ function line(value: unknown, label: string, maximumBytes: number, controls = LI
 function body(value: unknown, label: string, maximumBytes: number): asserts value is string {
   if (
     typeof value !== 'string' || value.length === 0 || BODY_CONTROLS.test(value) || LONE_SURROGATE.test(value) ||
-    utf8Bytes(value) > maximumBytes
+    utf8ByteLength(value) > maximumBytes
   ) fail(`${label} is invalid`);
 }
 
@@ -424,7 +412,7 @@ function openItem(value: unknown, ref: PersonItemRefV1): PersonListRowV1 {
 function filename(value: unknown): asserts value is string {
   if (
     typeof value !== 'string' || value.length === 0 || value !== value.normalize('NFC') || C0_C1_CONTROLS.test(value) ||
-    LONE_SURROGATE.test(value) || utf8Bytes(value) > 255 || /[\\/]/.test(value) || value === '.' || value === '..'
+    LONE_SURROGATE.test(value) || utf8ByteLength(value) > 255 || /[\\/]/.test(value) || value === '.' || value === '..'
   ) fail('Person open document filename is invalid');
 }
 
@@ -443,7 +431,7 @@ function chunk(value: unknown): PersonOpenDocumentChunkV1 {
   }
   if (
     typeof input.text !== 'string' || input.text.length === 0 || LONE_SURROGATE.test(input.text) ||
-    utf8Bytes(input.text) > PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES
+    utf8ByteLength(input.text) > PERSON_DOCUMENT_TEXT_CHUNK_MAX_BYTES
   ) fail('Person open document chunk text is invalid');
   return Object.freeze({ anchor: Object.freeze({ kind: anchor.kind, start: anchor.start as number }), text: input.text });
 }

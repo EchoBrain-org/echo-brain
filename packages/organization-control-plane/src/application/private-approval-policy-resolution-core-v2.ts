@@ -168,21 +168,15 @@ export function privateApprovalPolicyBindingV2(input: {
   if (typeof input.share_transcript !== "boolean") privateApprovalInvalid("V2 policy share_transcript must be boolean");
   privateApprovalDigest(input.policy_consequence_sha256, "V2 policy consequence digest");
   const source = privateApprovalTranscriptSourceV1(input.transcript_source, "V2 policy transcript_source");
-  if (input.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID) return Object.freeze({
-    policy_id: input.policy_id, policy_contract_sha256: PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-    policy_consequence_sha256: input.policy_consequence_sha256, restricted_reader: null,
-    audience_project_ids: audience, association_project_ids: association,
-    share_transcript: input.share_transcript, transcript_source: source,
-  });
-  if (input.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID) return Object.freeze({
-    policy_id: input.policy_id, policy_contract_sha256: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-    policy_consequence_sha256: input.policy_consequence_sha256, restricted_reader: null,
-    audience_project_ids: audience, association_project_ids: association,
-    share_transcript: input.share_transcript, transcript_source: source,
-  });
+  const contract = input.policy_id === PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID
+    ? PROJECT_MEMBERS_READABLE_PERSON_POLICY_CONTRACT_SHA256
+    : input.policy_id === ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID
+      ? ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256
+      : RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256;
   return Object.freeze({
-    policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID, policy_contract_sha256: RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
-    policy_consequence_sha256: input.policy_consequence_sha256, restricted_reader: approver,
+    policy_id: input.policy_id, policy_contract_sha256: contract,
+    policy_consequence_sha256: input.policy_consequence_sha256,
+    restricted_reader: input.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID ? approver : null,
     audience_project_ids: audience, association_project_ids: association,
     share_transcript: input.share_transcript, transcript_source: source,
   });

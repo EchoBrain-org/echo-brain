@@ -247,13 +247,15 @@ describe("private Slack DM approval stager V1", () => {
       '"due_at":"2026-09-01T00:00:00.000Z"',
     );
     expect(JSON.stringify(publishedCard.blocks.slice(actionsIndex))).toContain("Approve");
+    // Replay compiles a brf_replay brief; staging uses the candidate brief ID.
+    // Neither identifier changes the complete frozen presentation bytes.
     expect(
-      projectPrivateSlackApprovalCardV1({
+      JSON.stringify(projectPrivateSlackApprovalCardV1({
         approval_id: "apr_1",
         meeting: reviewedInput.meeting,
         decisions: reviewedInput.decisions,
-      }),
-    ).toEqual(publishedCard);
+      })),
+    ).toBe(JSON.stringify(publishedCard));
   });
 
   it("durably quarantines an approval package that cannot fit before provider I/O", async () => {

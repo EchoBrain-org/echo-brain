@@ -10,6 +10,7 @@ import type {
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
+import { samePersonReleaseAuthorizationV1 } from "../application/person-release-authorization-v1.js";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { captureRecordProjectsV1, type CaptureRecordProjectsV1 } from "./person-record-project-scope-v1.js";
 import { approverDisplayNameV1, type ApproverMembershipsV1 } from "./person-meeting-items-v1.js";
@@ -52,23 +53,6 @@ function sourceMetadata(
   return name === undefined
     ? Object.freeze({})
     : Object.freeze({ record_approved_by: Object.freeze({ display_name: name }) });
-}
-
-function sameReleaseAuthorization(
-  initial: PersonAccessAuthorization,
-  current: PersonAccessAuthorization,
-): boolean {
-  return (
-    initial.organization_id === current.organization_id &&
-    initial.principal_id === current.principal_id &&
-    initial.membership_id === current.membership_id &&
-    initial.membership_type === current.membership_type &&
-    initial.identity_binding_id === current.identity_binding_id &&
-    initial.session_family_id === current.session_family_id &&
-    initial.access_credential_sha256 === current.access_credential_sha256 &&
-    initial.person_state_sha256 === current.person_state_sha256 &&
-    initial.session_state_sha256 === current.session_state_sha256
-  );
 }
 
 function assertExpectedOrganization(
@@ -141,7 +125,7 @@ export function createPersonRecordReadRouteV1(
         access_token: input.access_token,
       });
       if (
-        !sameReleaseAuthorization(admitted, released) ||
+        !samePersonReleaseAuthorizationV1(admitted, released) ||
         captureRecordProjectsV1(options.capture_projects, released).grants_sha256 !== projects.grants_sha256 ||
         released.organization_id !== options.organization_id
       ) {

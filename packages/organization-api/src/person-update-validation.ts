@@ -2,20 +2,16 @@ import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { PROJECT_CONTEXT_RESPONSE_MAX_BYTES } from './project-context-v1.js';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
-  asRecord,
-  assertOnlyEnumerableDataProperties,
   fail,
+  utf8ByteLength,
 } from './validation.js';
 
 // Shared wire rules for V2/V3; version-specific shapes stay in their validators.
-export function object(value: unknown, label: string): Record<string, unknown> {
-  assertOnlyEnumerableDataProperties(value, label);
-  return asRecord(value, label);
-}
+export { asEnumerableRecord as object } from './validation.js';
 
 export function text(value: unknown, label: string, maximum: number, multiline: boolean): asserts value is string {
   if (typeof value !== 'string' || value.trim().length === 0 ||
-      Array.from(value).reduce((bytes, point) => { const n = point.codePointAt(0)!; return bytes + (n < 0x80 ? 1 : n < 0x800 ? 2 : n < 0x10000 ? 3 : 4); }, 0) > maximum ||
+      utf8ByteLength(value) > maximum ||
       /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value) ||
       (!multiline && /[\t\r\n]/u.test(value))) fail(`${label} is invalid`);
 }

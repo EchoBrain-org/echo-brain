@@ -29,6 +29,19 @@ import type {
 
 export type PersonHumanActActionV2 = 'approve' | 'reject';
 
+interface PersonPolicyLineage {
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly state_lineage_id: string;
+}
+
+interface PersonPolicyApproval extends PersonPolicyLineage {
+  readonly approval_id: string;
+  readonly action: PersonHumanActActionV2;
+  readonly policy_id: PersonPolicyIdV2;
+  readonly policy_contract_sha256: Sha256Digest;
+}
+
 export interface PersonPolicySignalV2View {
   readonly id: string;
   readonly kind: PersonPolicyFactItemKindV2;
@@ -56,14 +69,7 @@ export type PersonPolicyEventV4View =
   | ApprovedPersonPolicyEventV4View
   | RejectedPersonPolicyEventV4View;
 
-export interface PersonHumanActResolutionRefV1View {
-  readonly authority_id: string;
-  readonly organization_id: string;
-  readonly state_lineage_id: string;
-  readonly approval_id: string;
-  readonly action: PersonHumanActActionV2;
-  readonly policy_id: PersonPolicyIdV2;
-  readonly policy_contract_sha256: Sha256Digest;
+export interface PersonHumanActResolutionRefV1View extends PersonPolicyApproval {
   readonly audit_event_id: string;
   readonly audit_sequence: number;
   readonly audit_entry_sha256: Sha256Digest;
@@ -75,10 +81,7 @@ export interface PersonHumanActResolutionRefV1View {
 
 export interface StructurallyVerifiedPersonPolicyRecordV4View {
   readonly record_sha256: Sha256Digest;
-  readonly body: {
-    readonly authority_id: string;
-    readonly organization_id: string;
-    readonly state_lineage_id: string;
+  readonly body: PersonPolicyLineage & {
     readonly human_act_resolution_ref: PersonHumanActResolutionRefV1View;
     readonly event: PersonPolicyEventV4View;
   };
@@ -88,14 +91,7 @@ export interface StructurallyVerifiedPersonPolicyRecordV4View {
  * Minimum fields read from the independently revalidated D2 allow body.
  * `authorization_proof_sha256` below is its recomputed canonical digest.
  */
-export interface RevalidatedPersonPolicyAuthorizationAllowV2View {
-  readonly authority_id: string;
-  readonly organization_id: string;
-  readonly state_lineage_id: string;
-  readonly approval_id: string;
-  readonly action: PersonHumanActActionV2;
-  readonly policy_id: PersonPolicyIdV2;
-  readonly policy_contract_sha256: Sha256Digest;
+export interface RevalidatedPersonPolicyAuthorizationAllowV2View extends PersonPolicyApproval {
   readonly principal_id: string;
   readonly membership_id: string;
   readonly provider_action_sha256: Sha256Digest;
@@ -106,10 +102,7 @@ export interface RevalidatedPersonPolicyAuthorizationAllowV2View {
  * Minimum identity and chain coordinates read from the independently
  * revalidated immutable D2 integration-audit entry.
  */
-export interface RevalidatedPersonPolicyAuditEntryV2View {
-  readonly authority_id: string;
-  readonly organization_id: string;
-  readonly state_lineage_id: string;
+export interface RevalidatedPersonPolicyAuditEntryV2View extends PersonPolicyLineage {
   readonly audit_event_id: string;
   readonly audit_sequence: number;
   readonly actor_class: 'provider_human';
@@ -337,21 +330,24 @@ function literal<T extends string | number>(
   return expected;
 }
 
-interface ValidatedResolutionRef {
-  readonly authority_id: string;
-  readonly organization_id: string;
-  readonly state_lineage_id: string;
-  readonly approval_id: string;
-  readonly action: PersonHumanActActionV2;
-  readonly policy_id: PersonPolicyIdV2;
-  readonly policy_contract_sha256: Sha256Digest;
-  readonly audit_event_id: string;
-  readonly audit_sequence: number;
-  readonly audit_entry_sha256: Sha256Digest;
-  readonly provider_action_kind: 'echo-provider-human-action-v2';
-  readonly provider_action_schema_version: 2;
-  readonly provider_action_sha256: Sha256Digest;
-  readonly authorization_proof_sha256: Sha256Digest;
+type ValidatedResolutionRef = PersonHumanActResolutionRefV1View;
+
+function lineage(record: Record<string, unknown>, label: string): PersonPolicyLineage {
+  return {
+    authority_id: text(record.authority_id, `${label} authority_id`),
+    organization_id: text(record.organization_id, `${label} organization_id`),
+    state_lineage_id: text(record.state_lineage_id, `${label} state_lineage_id`),
+  };
+}
+
+function approval(record: Record<string, unknown>, label: string): PersonPolicyApproval {
+  return {
+    ...lineage(record, label),
+    approval_id: text(record.approval_id, `${label} approval_id`),
+    action: action(record.action, `${label} action`),
+    policy_id: policyId(record.policy_id, `${label} policy_id`),
+    policy_contract_sha256: digest(record.policy_contract_sha256, `${label} policy_contract_sha256`),
+  };
 }
 
 function resolutionRef(value: unknown): ValidatedResolutionRef {
@@ -361,19 +357,7 @@ function resolutionRef(value: unknown): ValidatedResolutionRef {
     'Person policy resolution reference view',
   );
   return Object.freeze({
-    authority_id: text(record.authority_id, 'resolution authority_id'),
-    organization_id: text(record.organization_id, 'resolution organization_id'),
-    state_lineage_id: text(
-      record.state_lineage_id,
-      'resolution state_lineage_id',
-    ),
-    approval_id: text(record.approval_id, 'resolution approval_id'),
-    action: action(record.action, 'resolution action'),
-    policy_id: policyId(record.policy_id, 'resolution policy_id'),
-    policy_contract_sha256: digest(
-      record.policy_contract_sha256,
-      'resolution policy_contract_sha256',
-    ),
+    ...approval(record, 'resolution'),
     audit_event_id: text(record.audit_event_id, 'resolution audit_event_id'),
     audit_sequence: positiveSafeInteger(
       record.audit_sequence,
@@ -404,18 +388,7 @@ function resolutionRef(value: unknown): ValidatedResolutionRef {
   });
 }
 
-interface ValidatedAuthorizationAllow {
-  readonly authority_id: string;
-  readonly organization_id: string;
-  readonly state_lineage_id: string;
-  readonly approval_id: string;
-  readonly action: PersonHumanActActionV2;
-  readonly policy_id: PersonPolicyIdV2;
-  readonly policy_contract_sha256: Sha256Digest;
-  readonly principal_id: string;
-  readonly membership_id: string;
-  readonly provider_action_sha256: Sha256Digest;
-}
+type ValidatedAuthorizationAllow = Omit<RevalidatedPersonPolicyAuthorizationAllowV2View, 'decision'>;
 
 function authorizationAllow(value: unknown): ValidatedAuthorizationAllow {
   const record = exactRecord(
@@ -425,19 +398,7 @@ function authorizationAllow(value: unknown): ValidatedAuthorizationAllow {
   );
   literal(record.decision, 'allow', 'D2 authorization decision');
   return Object.freeze({
-    authority_id: text(record.authority_id, 'D2 allow authority_id'),
-    organization_id: text(record.organization_id, 'D2 allow organization_id'),
-    state_lineage_id: text(
-      record.state_lineage_id,
-      'D2 allow state_lineage_id',
-    ),
-    approval_id: text(record.approval_id, 'D2 allow approval_id'),
-    action: action(record.action, 'D2 allow action'),
-    policy_id: policyId(record.policy_id, 'D2 allow policy_id'),
-    policy_contract_sha256: digest(
-      record.policy_contract_sha256,
-      'D2 allow policy_contract_sha256',
-    ),
+    ...approval(record, 'D2 allow'),
     principal_id: text(record.principal_id, 'D2 allow principal_id'),
     membership_id: text(record.membership_id, 'D2 allow membership_id'),
     provider_action_sha256: digest(
@@ -447,19 +408,7 @@ function authorizationAllow(value: unknown): ValidatedAuthorizationAllow {
   });
 }
 
-interface ValidatedAuditEntry {
-  readonly authority_id: string;
-  readonly organization_id: string;
-  readonly state_lineage_id: string;
-  readonly audit_event_id: string;
-  readonly audit_sequence: number;
-  readonly principal_id: string;
-  readonly membership_id: string;
-  readonly action: PersonHumanActActionV2;
-  readonly subject_id: string;
-  readonly detail_digest: Sha256Digest;
-  readonly provider_action_sha256: Sha256Digest;
-}
+type ValidatedAuditEntry = Omit<RevalidatedPersonPolicyAuditEntryV2View, 'actor_class' | 'subject_kind'>;
 
 function auditEntry(value: unknown): ValidatedAuditEntry {
   const record = exactRecord(
@@ -470,12 +419,7 @@ function auditEntry(value: unknown): ValidatedAuditEntry {
   literal(record.actor_class, 'provider_human', 'D2 audit actor_class');
   literal(record.subject_kind, 'approval', 'D2 audit subject_kind');
   return Object.freeze({
-    authority_id: text(record.authority_id, 'D2 audit authority_id'),
-    organization_id: text(record.organization_id, 'D2 audit organization_id'),
-    state_lineage_id: text(
-      record.state_lineage_id,
-      'D2 audit state_lineage_id',
-    ),
+    ...lineage(record, 'D2 audit'),
     audit_event_id: text(record.audit_event_id, 'D2 audit audit_event_id'),
     audit_sequence: positiveSafeInteger(
       record.audit_sequence,
@@ -537,11 +481,7 @@ function same(actual: unknown, expected: unknown, label: string): void {
 }
 
 function joinResolutionToAuthorizationWitness(
-  body: {
-    readonly authority_id: string;
-    readonly organization_id: string;
-    readonly state_lineage_id: string;
-  },
+  body: PersonPolicyLineage,
   ref: ValidatedResolutionRef,
   witness: ValidatedAuthorizationWitness,
 ): void {
@@ -679,11 +619,7 @@ function rejectedEvent(eventValue: unknown): void {
 }
 
 function commonFact(
-  body: {
-    readonly authority_id: string;
-    readonly organization_id: string;
-    readonly state_lineage_id: string;
-  },
+  body: PersonPolicyLineage,
   ref: ValidatedResolutionRef & { readonly action: 'approve' },
   recordPosition: number,
   recordSha256: Sha256Digest,
@@ -750,17 +686,7 @@ export function projectPersonPolicyFactsV2(
     BODY_KEYS,
     'Person policy record v4 body view',
   );
-  const body = Object.freeze({
-    authority_id: text(bodyRecord.authority_id, 'record body authority_id'),
-    organization_id: text(
-      bodyRecord.organization_id,
-      'record body organization_id',
-    ),
-    state_lineage_id: text(
-      bodyRecord.state_lineage_id,
-      'record body state_lineage_id',
-    ),
-  });
+  const body = Object.freeze(lineage(bodyRecord, 'record body'));
   const ref = resolutionRef(bodyRecord.human_act_resolution_ref);
   const witness = authorizationWitness(source.witness);
   joinResolutionToAuthorizationWitness(body, ref, witness);

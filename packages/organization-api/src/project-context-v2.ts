@@ -1,5 +1,5 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { MAX_ORGANIZATION_API_CURSOR_CHARACTERS, asRecord, assertExactKeys, assertOnlyEnumerableDataProperties, assertTimestamp, fail } from './validation.js';
+import { MAX_ORGANIZATION_API_CURSOR_CHARACTERS, asEnumerableRecord as object, assertExactKeys, assertTimestamp, fail } from './validation.js';
 import { validatePersonUploadContextId } from './person-updates.js';
 import { PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PROJECT_NAME_MAX_BYTES, PROJECT_PAGE_MAX_ITEMS, type ProjectIdV1, type ProjectRoleV1, validateProjectIdV1 } from './project-context-v1.js';
 import { validatePersonUploadAudienceV3, type PersonUploadAudienceV3 } from './person-upload-audience-v3.js';
@@ -57,10 +57,6 @@ export interface ProjectContextReadV2 {
   readonly audience: PersonUploadAudienceV3;
 }
 
-function object(value: unknown, label: string): Record<string, unknown> {
-  assertOnlyEnumerableDataProperties(value, label);
-  return asRecord(value, label);
-}
 function scalarText(value: unknown, label: string, maximum: number, multiline = false): asserts value is string {
   const bytes = typeof value === 'string' ? Array.from(value).reduce((total, point) => {
     const code = point.codePointAt(0)!;

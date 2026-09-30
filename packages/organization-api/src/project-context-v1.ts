@@ -3,12 +3,12 @@ import { validatePersonQueryText } from './person-query.js';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
-  asRecord,
+  asEnumerableRecord as object,
   assertExactKeys,
   assertId,
-  assertOnlyEnumerableDataProperties,
   assertTimestamp,
   fail,
+  utf8ByteLength,
 } from './validation.js';
 import { validatePersonUpdateRequestId, validatePersonUploadContextId } from './person-updates.js';
 
@@ -189,10 +189,6 @@ export interface ProjectContextReadV1 {
   readonly audience: ProjectContextAudienceV1;
 }
 
-function object(value: unknown, label: string): Record<string, unknown> {
-  assertOnlyEnumerableDataProperties(value, label);
-  return asRecord(value, label);
-}
 function snapshot(value: unknown, label: string): Record<string, unknown> {
   const record = object(value, label);
   let bytes: Uint8Array;
@@ -205,7 +201,7 @@ function responseBound(value: unknown, label: string): void {
 }
 function text(value: unknown, label: string, maximum: number, multiline = false): asserts value is string {
   if (typeof value !== 'string' || value.trim().length === 0 ||
-      Array.from(value).reduce((bytes, point) => { const n = point.codePointAt(0)!; return bytes + (n < 0x80 ? 1 : n < 0x800 ? 2 : n < 0x10000 ? 3 : 4); }, 0) > maximum ||
+      utf8ByteLength(value) > maximum ||
       /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\uD800-\uDFFF]/u.test(value) ||
       (!multiline && /[\t\r\n]/u.test(value))) fail(`${label} is invalid`);
 }

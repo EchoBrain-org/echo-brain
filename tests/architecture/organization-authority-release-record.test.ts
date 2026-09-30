@@ -904,54 +904,35 @@ fi
     expect(readFileSync(dockerLog, "utf8")).toBe(callsBeforeDirtyAttempt);
   });
 
-  it("refuses an Authority image whose OCI revision label differs before startup", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-image-source-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
-    const up = join(root, "up-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
-    const profile = writeRuntimeProfile();
-    const runtimeConfig = prepareRuntimeConfig(root, profile);
-    const candidate = writeRecord(releaseWithRuntimeProfile(profile, {
-      release_id: "clean-v1-20260822-002",
-      authority_image: { reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}` },
-    }));
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
-if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"f".repeat(40)}'; exit 0; fi
-if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
-`,
-    );
-    chmodSync(docker, 0o755);
-    writeFileSync(envFile, "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\n");
-    chmodSync(envFile, 0o600);
-
-    const result = run("bash", [
-      UPDATE,
-      "stage",
-      "--release",
-      candidate,
-      "--runtime-profile",
-      profile,
-    ], {
-      PATH: `${bin}:${process.env.PATH}`,
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-    });
-    expect(result.status).toBe(1);
-    expect(existsSync(up)).toBe(false);
-    expect(existsSync(join(state, "failed", "clean-v1-20260822-002.json"))).toBe(true);
-    expect(readFileSync(envFile, "utf8")).toContain("d".repeat(64));
-  });
-
-  it("refuses startup when the Authority host cannot be validated", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-invalid-host-"));
+  it.each([
+    {
+      name: "refuses an Authority image whose OCI revision label differs before startup",
+      imageSource: "f".repeat(40),
+      host: undefined,
+      telemetry: false,
+      assertFailedRecord: true,
+      assertImageWritten: true,
+    },
+    {
+      name: "refuses startup when the Authority host cannot be validated",
+      imageSource: "a".repeat(40),
+      host: "INVALID HOST",
+      telemetry: false,
+      assertFailedRecord: false,
+      assertImageWritten: false,
+    },
+    {
+      name: "refuses telemetry-enabled image identity without its capability label",
+      imageSource: "a".repeat(40),
+      host: "authority-staging.echobrain.org",
+      telemetry: true,
+      assertFailedRecord: true,
+      assertImageWritten: false,
+    },
+  ].map((scenario) => [scenario.name, scenario] as const))(
+    "%s",
+    (_name, { imageSource, host, telemetry, assertFailedRecord, assertImageWritten }) => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-startup-refusal-"));
     roots.push(root);
     const envFile = join(root, ".env.clean-v1");
     const state = join(root, "release-state");
@@ -968,84 +949,32 @@ if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
         },
       }),
     );
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
-if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
-if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
-`,
-    );
-    chmodSync(docker, 0o755);
-    writeFileSync(
-      envFile,
-      "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=INVALID HOST\n",
-      { mode: 0o600 },
-    );
-
-    const result = run(
-      "bash",
-      [
-        UPDATE,
-        "stage",
-        "--release",
-        candidate,
-        "--runtime-profile",
-        profile,
-      ],
-      {
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_CLEAN_ENV_FILE: envFile,
-        ECHO_CLEAN_RELEASE_STATE_DIR: state,
-        ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(existsSync(up)).toBe(false);
-  });
-
-  it("refuses telemetry-enabled image identity without its capability label", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-telemetry-identity-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
-    const up = join(root, "up-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
-    const profile = writeRuntimeProfile();
-    const runtimeConfig = prepareRuntimeConfig(root, profile);
-    const candidate = writeRecord(
-      releaseWithRuntimeProfile(profile, {
-        release_id: "clean-v1-20260822-002",
-        authority_image: {
-          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-        },
-      }),
-    );
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
-if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${"a".repeat(40)}'; exit 0; fi
+    const telemetryInspection = telemetry ? `
 if [[ "$1" == image && "$*" == *'org.echobrain.authority.telemetry.staging-journey-v1'* ]]; then printf '<no value>\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'org.echobrain.authority.build-number'* ]]; then printf '42\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'ECHO_STAGING_JOURNEY_TELEMETRY_V1=true'* ]]; then printf 'enabled\\n'; exit 0; fi
 if [[ "$1" == image && "$*" == *'{{json .Config.Env}}'* ]]; then printf '%s\\n' '${JSON.stringify([
-        "NODE_ENV=production",
-        "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true",
-        `ECHO_SOURCE_SHA=${"a".repeat(40)}`,
-        "ECHO_BUILD_NUMBER=42",
-      ])}'; exit 0; fi
+      "NODE_ENV=production",
+      "ECHO_STAGING_JOURNEY_TELEMETRY_V1=true",
+      `ECHO_SOURCE_SHA=${"a".repeat(40)}`,
+      "ECHO_BUILD_NUMBER=42",
+    ])}'; exit 0; fi
+` : "";
+    mkdirSync(bin);
+    writeFileSync(
+      docker,
+      `#!/usr/bin/env bash
+if [[ "$1" == compose && "$*" == *" ps -q authority"* ]]; then exit 0; fi
+if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then printf '%s\\n' '${imageSource}'; exit 0; fi
+${telemetryInspection}
 if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
 `,
     );
     chmodSync(docker, 0o755);
     writeFileSync(
       envFile,
-      "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\nECHO_CLEAN_AUTHORITY_HOST=authority-staging.echobrain.org\n",
+      "ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local\n" +
+        (host === undefined ? "" : `ECHO_CLEAN_AUTHORITY_HOST=${host}\n`),
       { mode: 0o600 },
     );
 
@@ -1069,9 +998,10 @@ if [[ "$1" == compose && "$*" == *" up "* ]]; then touch "${up}"; fi
 
     expect(result.status).toBe(1);
     expect(existsSync(up)).toBe(false);
-    expect(existsSync(join(state, "failed", "clean-v1-20260822-002.json"))).toBe(
-      true,
-    );
+    if (assertFailedRecord) {
+      expect(existsSync(join(state, "failed", "clean-v1-20260822-002.json"))).toBe(true);
+    }
+    if (assertImageWritten) expect(readFileSync(envFile, "utf8")).toContain("d".repeat(64));
   });
 
   it("rejects a running container that overrides telemetry image identity", () => {
@@ -1603,42 +1533,80 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(readFileSync(envFile, "utf8")).toContain(record().authority_image.reference);
   });
 
-  it("runs the candidate lineage verifier before mutating a malformed version-matching state", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-lineage-"));
+  it.each([
+    {
+      name: "runs the candidate lineage verifier before mutating a malformed version-matching state",
+      prepareState: (stateDirectory: string) => {
+        bootstrapOrganizationAuthorityState({
+          state_directory: stateDirectory,
+          organization_display_name: "Release fixture",
+          owner_display_name: "Owner",
+          created_at: "2026-09-12T00:00:00.000Z",
+          creating_artifact_revision: "release-fixture",
+        });
+        // Matching database versions do not make an incomplete root valid.
+        writeFileSync(join(stateDirectory, "state-lineage-root.v2.json"),
+          JSON.stringify({ schema_version: 2, kind: "echo-state-lineage-root-manifest-v2" }));
+      },
+      candidateOverrides: {
+        release_id: "clean-v1-20260822-002",
+        authority_image: {
+          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
+        },
+      },
+      verifyProcessor: false,
+      inspectVerifier: true,
+      diagnostics: ["candidate Authority image rejected persisted state lineage"],
+    },
+    {
+      name: "rejects an unsupported root lineage before staging the current candidate and explains the pre-live rehearsal replacement path",
+      prepareState: writeUnsupportedRootState,
+      candidateOverrides: {},
+      verifyProcessor: false,
+      inspectVerifier: false,
+      diagnostics: [
+        "candidate Authority image rejected persisted state lineage",
+        "unsupported root manifest version",
+        "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
+        "state is never migrated",
+      ],
+    },
+    {
+      name: "rejects a legacy processor admission before staging or activating the candidate",
+      prepareState: writeStateWithLegacyProcessorAdmission,
+      candidateOverrides: {},
+      verifyProcessor: true,
+      inspectVerifier: false,
+      diagnostics: [
+        "Candidate OpenRouter processor differs from the immutable admitted processor commitment",
+        "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
+        "live state requires an explicit processor-admission migration",
+      ],
+    },
+  ].map((scenario) => [scenario.name, scenario] as const))(
+    "%s",
+    (_name, { prepareState, candidateOverrides, verifyProcessor, inspectVerifier, diagnostics }) => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-state-refusal-"));
     roots.push(root);
     const envFile = join(root, ".env.clean-v1");
     const releaseState = join(root, "release-state");
     const stateDirectory = join(root, "state");
-    const verifier = join(root, "lineage-verifier-called");
+    const verifier = join(root, "state-verifier-called");
     const activation = join(root, "compose-activation-called");
     const dockerLog = join(root, "docker.log");
     const bin = join(root, "bin");
     const docker = join(bin, "docker");
     const profile = writeRuntimeProfile();
-    const candidate = writeRecord(
-      releaseWithRuntimeProfile(profile, {
-        release_id: "clean-v1-20260822-002",
-        authority_image: {
-          reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"d".repeat(64)}`,
-        },
-      }),
-    );
-    bootstrapOrganizationAuthorityState({
-      state_directory: stateDirectory,
-      organization_display_name: "Release fixture",
-      owner_display_name: "Owner",
-      created_at: "2026-09-12T00:00:00.000Z",
-      creating_artifact_revision: "release-fixture",
-    });
-    // Database versions match, but the root is incomplete. Only the candidate's
-    // complete lineage validation can reject this before activation.
-    writeFileSync(join(stateDirectory, "state-lineage-root.v2.json"),
-      JSON.stringify({ schema_version: 2, kind: "echo-state-lineage-root-manifest-v2" }));
+    const candidate = writeRecord(releaseWithRuntimeProfile(profile, candidateOverrides));
+    prepareState(stateDirectory);
+    const processorVerification = verifyProcessor
+      ? `import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "${OPENROUTER_ADMISSION_VERIFIER}"; verifyPersistedOpenRouterDecisionProcessorAdmissionV1(process.argv[1]);`
+      : "";
     mkdirSync(bin);
     writeFileSync(
       docker,
       `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "${dockerLog}"
+${inspectVerifier ? `printf '%s\\n' "$*" >> "${dockerLog}"` : ""}
 if [[ "$1" == pull ]]; then exit 0; fi
 if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
   printf '%s\\n' '${"a".repeat(40)}'
@@ -1646,93 +1614,7 @@ if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
 fi
 if [[ "$1" == run ]]; then
   touch "${verifier}"
-  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]);' "${stateDirectory}"
-  exit $?
-fi
-if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
-  touch "${activation}"
-fi
-`,
-    );
-    chmodSync(docker, 0o755);
-    const initialEnvironment = [
-      `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}`,
-      "ECHO_CLEAN_AUTHORITY_HOST=authority.example.test",
-      "ECHO_CLEAN_AUTHORITY_UID=1000",
-      "ECHO_CLEAN_AUTHORITY_GID=1000",
-      "",
-    ].join("\n");
-    writeFileSync(
-      envFile,
-      initialEnvironment,
-      { mode: 0o600 },
-    );
-
-    const malformed = run(
-      "bash",
-      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
-      {
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_CLEAN_ENV_FILE: envFile,
-        ECHO_CLEAN_RELEASE_STATE_DIR: releaseState,
-        ECHO_CLEAN_STATE_DIR: stateDirectory,
-      },
-    );
-    expect(malformed.status).toBe(1);
-    expect(malformed.stderr).toContain("candidate Authority image rejected persisted state lineage");
-    expect(existsSync(verifier)).toBe(true);
-    expect(existsSync(activation)).toBe(false);
-    expect(existsSync(join(releaseState, "candidate.clean-v1.json"))).toBe(false);
-    expect(readdirSync(join(releaseState, "runtime-profiles"))).toEqual([]);
-    expect(readdirSync(join(releaseState, "runtime-environments"))).toEqual([]);
-    expect(readFileSync(envFile, "utf8")).toBe(initialEnvironment);
-    expect(readFileSync(candidate, "utf8")).toContain('"release_id":"clean-v1-20260822-002"');
-    const dockerCalls = readFileSync(dockerLog, "utf8");
-    expect(dockerCalls).toContain(
-      "run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --workdir /app --entrypoint node",
-    );
-    expect(dockerCalls).toContain(
-      `--mount type=bind,src=${stateDirectory},dst=/echo-clean/state,readonly`,
-    );
-    expect(dockerCalls).toContain("--input-type=module -e");
-    expect(dockerCalls).toContain("verify-authority-state-lineage.js");
-    expect(dockerCalls).toContain('verifyAuthorityStateLineage("/echo-clean/state")');
-    expect(dockerCalls).toContain(
-      "verify-openrouter-decision-processor-admission-v1.js",
-    );
-    expect(dockerCalls).toContain(
-      'verifyPersistedOpenRouterDecisionProcessorAdmissionV1("/echo-clean/state")',
-    );
-    expect(dockerCalls.indexOf("pull ")).toBeLessThan(
-      dockerCalls.indexOf("run "),
-    );
-  });
-
-  it("rejects an unsupported root lineage before staging the current candidate and explains the pre-live rehearsal replacement path", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-v3-lineage-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const releaseState = join(root, "release-state");
-    const stateDirectory = join(root, "state");
-    const verifier = join(root, "lineage-verifier-called");
-    const activation = join(root, "compose-activation-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
-    const profile = writeRuntimeProfile();
-    const candidate = writeRecord(releaseWithRuntimeProfile(profile));
-    writeUnsupportedRootState(stateDirectory);
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-if [[ "$1" == pull ]]; then exit 0; fi
-if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
-  printf '%s\\n' '${"a".repeat(40)}'
-  exit 0
-fi
-if [[ "$1" == run ]]; then
-  touch "${verifier}"
-  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]);' "${stateDirectory}"
+  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]); ${processorVerification}' "${stateDirectory}"
   exit $?
 fi
 if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
@@ -1760,87 +1642,30 @@ fi
         ECHO_CLEAN_STATE_DIR: stateDirectory,
       },
     );
-
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "candidate Authority image rejected persisted state lineage",
-    );
-    expect(result.stderr).toContain("unsupported root manifest version");
-    expect(result.stderr).toContain(
-      "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
-    );
-    expect(result.stderr).toContain("state is never migrated");
+    for (const diagnostic of diagnostics) expect(result.stderr).toContain(diagnostic);
     expect(existsSync(verifier)).toBe(true);
     expect(existsSync(activation)).toBe(false);
     expect(existsSync(join(releaseState, "candidate.clean-v1.json"))).toBe(false);
     expect(readFileSync(envFile, "utf8")).toBe(initialEnvironment);
-  });
-
-  it("rejects a legacy processor admission before staging or activating the candidate", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-legacy-processor-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const releaseState = join(root, "release-state");
-    const stateDirectory = join(root, "state");
-    const verifier = join(root, "processor-verifier-called");
-    const activation = join(root, "compose-activation-called");
-    const bin = join(root, "bin");
-    const docker = join(bin, "docker");
-    const profile = writeRuntimeProfile();
-    const candidate = writeRecord(releaseWithRuntimeProfile(profile));
-    writeStateWithLegacyProcessorAdmission(stateDirectory);
-    mkdirSync(bin);
-    writeFileSync(
-      docker,
-      `#!/usr/bin/env bash
-if [[ "$1" == pull ]]; then exit 0; fi
-if [[ "$1" == image && "$*" == *'org.opencontainers.image.revision'* ]]; then
-  printf '%s\\n' '${"a".repeat(40)}'
-  exit 0
-fi
-if [[ "$1" == run ]]; then
-  touch "${verifier}"
-  node --input-type=module -e 'import { verifyAuthorityStateLineage } from "${CURRENT_LINEAGE_VERIFIER}"; import { verifyPersistedOpenRouterDecisionProcessorAdmissionV1 } from "${OPENROUTER_ADMISSION_VERIFIER}"; verifyAuthorityStateLineage(process.argv[1]); verifyPersistedOpenRouterDecisionProcessorAdmissionV1(process.argv[1]);' "${stateDirectory}"
-  exit $?
-fi
-if [[ "$1" == compose && ( "$*" == *" up "* || "$*" == *" restart "* ) ]]; then
-  touch "${activation}"
-fi
-`,
-    );
-    chmodSync(docker, 0o755);
-    const initialEnvironment = [
-      `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}`,
-      "ECHO_CLEAN_AUTHORITY_HOST=authority.example.test",
-      "ECHO_CLEAN_AUTHORITY_UID=1000",
-      "ECHO_CLEAN_AUTHORITY_GID=1000",
-      "",
-    ].join("\n");
-    writeFileSync(envFile, initialEnvironment, { mode: 0o600 });
-
-    const result = run(
-      "bash",
-      [UPDATE, "stage", "--release", candidate, "--runtime-profile", profile],
-      {
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_CLEAN_ENV_FILE: envFile,
-        ECHO_CLEAN_RELEASE_STATE_DIR: releaseState,
-        ECHO_CLEAN_STATE_DIR: stateDirectory,
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "Candidate OpenRouter processor differs from the immutable admitted processor commitment",
-    );
-    expect(result.stderr).toContain(
-      "onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users",
-    );
-    expect(result.stderr).toContain("live state requires an explicit processor-admission migration");
-    expect(existsSync(verifier)).toBe(true);
-    expect(existsSync(activation)).toBe(false);
-    expect(existsSync(join(releaseState, "candidate.clean-v1.json"))).toBe(false);
-    expect(readFileSync(envFile, "utf8")).toBe(initialEnvironment);
+    if (inspectVerifier) {
+      expect(readdirSync(join(releaseState, "runtime-profiles"))).toEqual([]);
+      expect(readdirSync(join(releaseState, "runtime-environments"))).toEqual([]);
+      expect(readFileSync(candidate, "utf8")).toContain('"release_id":"clean-v1-20260822-002"');
+      const dockerCalls = readFileSync(dockerLog, "utf8");
+      expect(dockerCalls).toContain(
+        "run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --user 1000:1000 --workdir /app --entrypoint node",
+      );
+      expect(dockerCalls).toContain(
+        `--mount type=bind,src=${stateDirectory},dst=/echo-clean/state,readonly`,
+      );
+      expect(dockerCalls).toContain("--input-type=module -e");
+      expect(dockerCalls).toContain("verify-authority-state-lineage.js");
+      expect(dockerCalls).toContain('verifyAuthorityStateLineage("/echo-clean/state")');
+      expect(dockerCalls).toContain("verify-openrouter-decision-processor-admission-v1.js");
+      expect(dockerCalls).toContain('verifyPersistedOpenRouterDecisionProcessorAdmissionV1("/echo-clean/state")');
+      expect(dockerCalls.indexOf("pull ")).toBeLessThan(dockerCalls.indexOf("run "));
+    }
   });
 
   it("rejects a runtime-profile digest mismatch before Docker can mutate the deployment", () => {
@@ -2359,7 +2184,20 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     expect(existsSync(marker)).toBe(false);
   });
 
-  it("does not claim an accepted release while a staged candidate has a corrupt current record", () => {
+  it.each([
+    {
+      name: "does not claim an accepted release while a staged candidate has a corrupt current record",
+      symlink: false,
+      diagnostic: "clean-v1 release record",
+    },
+    {
+      name: "does not claim an accepted release through a current-record symlink",
+      symlink: true,
+      diagnostic: "regular file",
+    },
+  ].map((scenario) => [scenario.name, scenario] as const))(
+    "%s",
+    (_name, { symlink, diagnostic }) => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-status-current-"));
     roots.push(root);
     const envFile = join(root, ".env.clean-v1");
@@ -2373,7 +2211,9 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     const runtimeConfig = prepareRuntimeConfig(root, profile);
     installActiveTuple(state, envFile, candidateRecord, profile);
     copyFileSync(candidate, join(state, "candidate.clean-v1.json"));
-    writeFileSync(join(state, "current.clean-v1.json"), "not a release record\n");
+    const current = join(state, "current.clean-v1.json");
+    if (symlink) symlinkSync(candidate, current);
+    else writeFileSync(current, "not a release record\n");
 
     const result = run("bash", [UPDATE, "status"], {
       ECHO_CLEAN_ENV_FILE: envFile,
@@ -2382,33 +2222,7 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${accepted.runtime_profile.profile_version}
     });
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("clean-v1 release record");
-  });
-
-  it("does not claim an accepted release through a current-record symlink", () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-status-symlink-"));
-    roots.push(root);
-    const envFile = join(root, ".env.clean-v1");
-    const state = join(root, "release-state");
-    const profile = writeRuntimeProfile();
-    const candidateRecord = releaseWithRuntimeProfile(profile, {
-      release_id: "clean-v1-20260822-002",
-    });
-    const candidate = writeRecord(candidateRecord);
-    mkdirSync(state, { recursive: true });
-    const runtimeConfig = prepareRuntimeConfig(root, profile);
-    installActiveTuple(state, envFile, candidateRecord, profile);
-    copyFileSync(candidate, join(state, "candidate.clean-v1.json"));
-    symlinkSync(candidate, join(state, "current.clean-v1.json"));
-
-    const result = run("bash", [UPDATE, "status"], {
-      ECHO_CLEAN_ENV_FILE: envFile,
-      ECHO_CLEAN_RELEASE_STATE_DIR: state,
-      ECHO_CLEAN_RUNTIME_CONFIG_DIR: runtimeConfig,
-    });
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("regular file");
+    expect(result.stderr).toContain(diagnostic);
   });
 
   it("carries onboarding's unterminated telemetry line into the candidate and preserves its rollback bytes", () => {
