@@ -63,7 +63,7 @@ const OPEN_ATOMS_BYTES = 32 * 1024;
 const ATOM_PART_BYTES = 3 * 1024;
 
 /** The modes where Ari has added notes, uploads and approved meetings of their own; `mine-empty` has none yet. */
-const MINE_MODES = new Set(['mine', 'owner-mine', 'mine-empty', 'mine-fails-once']);
+const MINE_MODES = new Set(['mine', 'owner-mine', 'mine-empty', 'mine-fails-once', 'mine-meetings-held', 'mine-unauthorized']);
 const PRICING_REVIEW = `sha256:${'7'.repeat(64)}`;
 const BEACON_KICKOFF = `sha256:${'8'.repeat(64)}`;
 const PRICING_MEMO = `doc_${'9'.repeat(64)}`;
@@ -528,6 +528,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const project = projectId === undefined ? undefined : joined().find(entry => entry.project_id === projectId);
       // A project you are not in is refused as ask --project refuses it.
       if (projectId !== undefined && (!project || mode === 'feed-unauthorized')) return failure('unauthorized', 401);
+      // The same account, whose access changed: Mine is refused.
+      if (request.mine && mode === 'mine-unauthorized') return failure('unauthorized', 401);
       if (request.mine) mineLists += 1;
       // Opened, then More: the read after a save, or the More, never comes back; Mine's first read fails once.
       if ((mode === 'long-feed-refresh-fails' && lists === 3) || (mode === 'long-feed-more-fails' && lists === 2) ||
@@ -535,7 +537,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const key = request.mine ? 'mine' : `project/${projectId}`;
       const from = pageFrom(key, request.cursor);
       if (from === null) return failure('invalid_request', 400);
-      const all = rows(request.mine ? { mine: true } : { project_id: projectId! });
+      // Mine's second read comes while meetings wait to be indexed: they are held, with the notice.
+      const held = mode === 'mine-meetings-held' && request.mine === true && mineLists === 2;
+      const all = rows(request.mine ? { mine: true } : { project_id: projectId! }).filter(row => !held || row.kind !== 'meeting');
       return json(api.validatePersonListResponseV1({
         schema_version: 1, kind: 'echo-person-list-v1', scope: request.mine ? { kind: 'mine' } : { kind: 'project', project_id: projectId },
         ...(project && request.cursor === undefined ? { project: {
@@ -543,6 +547,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           status: projectStatus.get(project.project_id) ?? 'active',
         } } : {}),
         items: all.slice(from, from + LIST_PAGE), next_cursor: from + LIST_PAGE < all.length ? pageCursor(key, from + LIST_PAGE) : null,
+        ...(held ? { notice: 'meetings_unavailable' } : {}),
       }));
     }
     // One item by its ref, under your access: anything you cannot read is one not_found.

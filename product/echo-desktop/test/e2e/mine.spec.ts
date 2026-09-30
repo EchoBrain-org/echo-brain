@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { drop, emit, launch, type Launched } from './launch.js';
+import { chooseFromAccountMenu, drop, emit, launch, type Launched } from './launch.js';
 
 let run: Launched;
 const folders: string[] = [];
@@ -38,6 +38,9 @@ test('Mine lists only what you added, newest first, with what each is, where it 
   await expect(rows.nth(2)).toHaveAttribute('data-kind', 'document');
   await expect(rows.nth(2).getByTestId('document-detail')).toHaveText('PDF · 22 bytes');
   await expect(rows.nth(2).getByTestId('item-projects')).toHaveText('Apollo');
+  // Read by its project's members: no mark. Every row says when it was added, as a message list does.
+  await expect(rows.nth(2).getByLabel(/Only me|Organization/)).toHaveCount(0);
+  for (const at of [0, 1, 2, 3]) await expect(rows.nth(at).locator('.meta')).toHaveText(/^(now|\d+[mh]|Yesterday|[A-Z][a-z]{2}|[A-Z][a-z]{2} \d{1,2})$/);
   await expect(rows.nth(3)).toContainText('Launch checklist');
   await expect(rows.nth(3).getByTestId('item-projects')).toHaveText('Apollo, Beacon');
   await expect(rows.nth(3).getByLabel('Organization')).toBeVisible();
@@ -76,6 +79,90 @@ test('a project renamed from Mine takes its new name in every row, and the rows 
   await expect(rows.nth(3).getByTestId('item-projects')).toHaveText('Apollo 2, Beacon');
   await expect(page.getByTestId('item-projects').filter({ hasText: /Apollo(?! 2)/ })).toHaveCount(0);
   await expect(rows).toHaveCount(12);
+});
+
+test('a note or document opened from Mine is read by its ref, Back returns to Mine, and it can be filed but not removed', async () => {
+  run = await launch('mine');
+  const { page } = run;
+  await page.getByTestId('sidebar-mine').click();
+  const rows = page.getByTestId('mine-row');
+  await expect(rows).toHaveCount(10);
+  await rows.nth(0).click();
+  await expect(page.getByTestId('reader').locator('h1')).toHaveText('Pricing decision from Tuesday sync');
+  await expect(page.getByTestId('reader-meta')).toHaveText(/^Only me · \S/);
+  await expect(page.getByTestId('reader-text')).not.toBeEmpty();
+  await expect(page.getByTestId('back')).toHaveText('Mine');
+  await page.getByTestId('reader-actions').click();
+  await expect(page.getByTestId('reader-add')).toBeVisible();
+  await expect(page.getByTestId('reader-remove')).toHaveCount(0);
+  // Back closes the menu first, then the reader.
+  await page.getByTestId('back').click();
+  await expect(page.getByTestId('reader-menu')).toHaveCount(0);
+  await page.getByTestId('back').click();
+  await expect(rows).toHaveCount(10);
+
+  await rows.nth(2).click();
+  await expect(page.getByTestId('reader').locator('h1')).toHaveText('Pricing memo');
+  await expect(page.getByTestId('reader-chunk')).toHaveText(['Annual plans lead the price sheet.']);
+  await expect(page.getByTestId('back')).toHaveText('Mine');
+  await page.getByTestId('reader-actions').click();
+  await expect(page.getByTestId('reader-save')).toBeVisible();
+  await expect(page.getByTestId('reader-add')).toBeVisible();
+  await expect(page.getByTestId('reader-remove')).toHaveCount(0);
+  expect(opens().map(call => call.body)).toEqual([
+    { schema_version: 1, ref: `note:ctx_${'d'.repeat(64)}` }, { schema_version: 1, ref: `document:doc_${'9'.repeat(64)}` },
+  ]);
+});
+
+test('signing out on Mine leaves it and clears what it read, and signing in again lands on Home', async () => {
+  run = await launch('mine');
+  const { page, app, home } = run;
+  await page.getByTestId('sidebar-mine').click();
+  await page.getByTestId('mine-row').nth(0).click();
+  await expect(page.getByTestId('reader-text')).not.toBeEmpty();
+  // Signed out elsewhere, as the terminal's `person logout` does.
+  rmSync(join(home, '.local', 'share', 'echo-brain', 'person', 'session.v1.json'));
+  await emit(app, 'echo-test:shown');
+  await expect(page.getByTestId('signed-out')).toBeVisible();
+  await expect(page.getByTestId('reader')).toHaveCount(0);
+  await expect(page.getByTestId('mine-row')).toHaveCount(0);
+  await chooseFromAccountMenu(run, page.getByTestId('signin-open'), 'Sign in with Google…');
+  await page.getByTestId('signin-url').fill('https://authority.example');
+  await page.getByTestId('signin-button').click();
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await expect(page.getByTestId('title')).toHaveText('ECHO');
+  await expect(page.getByTestId('sidebar-mine')).not.toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('reader')).toHaveCount(0);
+  await expect(page.getByTestId('mine-row')).toHaveCount(0);
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
+});
+
+test('while meetings wait to be indexed, a save on Mine keeps the meetings shown, and the next read applies', async () => {
+  run = await launch('mine-meetings-held');
+  const { page } = run;
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await page.getByTestId('sidebar-mine').click();
+  const rows = page.getByTestId('mine-row');
+  await expect(rows.filter({ hasText: 'Pricing review' })).toHaveCount(1);
+  const save = async (text: string) => {
+    await page.getByTestId('sidebar-capture').click();
+    await page.getByTestId('readers-team').click();
+    await page.getByTestId('compose-body').fill(text);
+    await page.getByTestId('compose-send').click();
+    await expect(page.getByTestId('toast')).toHaveText('Shared with your organization');
+  };
+  // The read after this save holds meetings: it is not applied, so nothing shown goes.
+  await save('Held notes');
+  await expect.poll(() => lists().length).toBe(2);
+  await page.waitForTimeout(300);
+  await expect(rows.filter({ hasText: 'Pricing review' })).toHaveCount(1);
+  await expect(rows.filter({ hasText: 'Held notes' })).toHaveCount(0);
+  // The next read, with meetings again, is applied.
+  await save('Indexed notes');
+  await expect.poll(() => lists().length).toBe(3);
+  await expect(rows.filter({ hasText: 'Indexed notes' })).toHaveCount(1);
+  await expect(rows.filter({ hasText: 'Held notes' })).toHaveCount(1);
+  await expect(rows.filter({ hasText: 'Pricing review' })).toHaveCount(1);
 });
 
 test('a meeting opened from Mine is its approved record: More reads the rest, and a long action\'s parts join into one', async () => {
@@ -166,6 +253,8 @@ test('a save only Mine shows opens it from its toast, and a save made on Mine jo
   await page.getByTestId('compose-body').fill('All hands notes');
   await page.getByTestId('compose-send').click();
   await expect(toast).toHaveText('Shared with your organization');
+  // No project page shows it either: its toast opens Mine too.
+  await expect(toast).toHaveJSProperty('tagName', 'BUTTON');
   await expect.poll(() => lists().length).toBe(before + 1);
   await expect(page.getByTestId('mine-row').filter({ hasText: 'All hands notes' })).toHaveCount(1);
   await expect(page.getByTestId('mine-row').filter({ hasText: 'Call notes with Dana' })).toHaveCount(1);
@@ -223,6 +312,19 @@ test('Mine that could not be read says why and reads again; a project you were t
   // Your account and projects are read again, once.
   const after = () => log().split('list.page unauthorized')[1] ?? '';
   await expect.poll(() => after().match(/projects\.list ok/g)?.length ?? 0).toBe(1);
+  await page.waitForTimeout(300);
+  expect(after().match(/app\.status/g)).toHaveLength(1);
+  await expect(page.getByTestId('account-row')).toContainText('Ari');
+});
+
+test('Mine refused for the same account says your access changed, and reads status again once', async () => {
+  run = await launch('mine-unauthorized');
+  const { page } = run;
+  await expect(page.getByTestId('project-row')).toHaveCount(2);
+  await page.getByTestId('sidebar-mine').click();
+  await expect(page.getByTestId('mine-error')).toContainText('Your access changed. Sign in again.');
+  const after = () => log().split('list.page unauthorized')[1] ?? '';
+  await expect.poll(() => after().match(/app\.status/g)?.length ?? 0).toBe(1);
   await page.waitForTimeout(300);
   expect(after().match(/app\.status/g)).toHaveLength(1);
   await expect(page.getByTestId('account-row')).toContainText('Ari');
