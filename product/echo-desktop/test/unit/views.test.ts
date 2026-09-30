@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-  abandonView, answerView, changeView, contextView, createdView, directoryView, documentPageView, documentTextView, employeesView, failureView, feedView,
-  invitationView, membersView, noteMatchesView, noteTitle, noteView, revokedView,
-  NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView, savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
+  abandonView, answerView, changeView, createdView, directoryView, employeesView, failureView, invitationView, listView, membersView, noteMatchesView,
+  noteTitle, openView, revokedView, NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView,
+  savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
+import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
+
+// The store reads the preload's bridge when it loads; its record join needs none.
+(globalThis as { window?: unknown }).window = { echo: {} };
+const { joinRecord } = await import('../../src/renderer/store.js');
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 
@@ -37,13 +42,8 @@ describe('view models copy only what the renderer may see', () => {
 
   it('rejects a reply of the wrong kind', () => {
     expect(() => projectPageView({ kind: 'something-else', items: [] })).toThrow(ViewError);
-    expect(() => feedView({ kind: 'echo-project-context-feed-v1', items: [] })).toThrow(ViewError);
-  });
-
-  it('marks feed rows by who can read them', () => {
-    const row = (kind: string) => ({ context_id: 'ctx', title: 't', excerpt: 'e', received_at: '2026-09-21T22:01:00.000Z', audience: { kind } });
-    const page = feedView({ kind: 'echo-project-context-feed-v2', project_id: 'prj', items: [row('only_me'), row('team'), row('projects')], next_cursor: null });
-    expect(page.items.map(item => item.audience)).toEqual(['only-me', 'team', 'project']);
+    expect(() => listView({ ok: true, result: { schema_version: 1, kind: 'echo-project-context-feed-v2', scope: { kind: 'mine' }, items: [], next_cursor: null } },
+      { kind: 'mine' })).toThrow(ViewError);
   });
 
   it('keeps each cited approved record by digest and policy, and each original by its coordinates, in citation order', () => {
@@ -153,37 +153,181 @@ describe('view models copy only what the renderer may see', () => {
 describe('live matches', () => {
   const item = { context_id: 'ctx_1', received_at: '2026-09-21T22:01:00.000Z', title: 'Apollo update', excerpt: 'We agreed to ship.' };
 
-  it('a project search counts only for the project searched, and says how to read each match', () => {
+  it('a project search counts only for the project searched', () => {
     const reply = { kind: 'echo-project-context-search-result-v2', project_id: 'prj_1', items: [{ ...item, audience: { kind: 'projects' } }] };
-    expect(projectMatchesView(reply, 'prj_1')).toEqual({ items: [{ ...item, source: 'project' }] });
+    expect(projectMatchesView(reply, 'prj_1')).toEqual({ items: [item] });
     expect(() => projectMatchesView(reply, 'prj_2')).toThrow(ViewError);
     expect(() => projectMatchesView({ ...reply, kind: 'echo-project-context-feed-v2' }, 'prj_1')).toThrow(ViewError);
   });
 
-  it('saved notes keep their version, so each is read the way it was saved', () => {
-    expect(noteMatchesView({ kind: 'echo-person-upload-search-v3', results: [item] }, 3)).toEqual([{ ...item, source: 'v3' }]);
-    expect(noteMatchesView({ kind: 'echo-person-upload-search-v2', results: [item] }, 2)).toEqual([{ ...item, source: 'v2' }]);
+  it('saved notes of either version are the same matches, each opened by its ref', () => {
+    expect(noteMatchesView({ kind: 'echo-person-upload-search-v3', results: [item] }, 3)).toEqual([item]);
+    expect(noteMatchesView({ kind: 'echo-person-upload-search-v2', results: [item] }, 2)).toEqual([item]);
     expect(() => noteMatchesView({ kind: 'echo-person-upload-search-v2', results: [item] }, 3)).toThrow(ViewError);
-  });
-
-  it('a note is read only as the one asked for', () => {
-    const reply = { kind: 'echo-person-upload-content-v3', context_id: 'ctx_1', received_at: item.received_at, title: 'T', text: 'Body',
-      audience: { kind: 'only_me' } };
-    expect(noteView(reply, 3, 'ctx_1')).toEqual({ context_id: 'ctx_1', title: 'T', text: 'Body', received_at: item.received_at, audience: 'only-me' });
-    expect(() => noteView(reply, 3, 'ctx_2')).toThrow(ViewError);
-    expect(() => noteView(reply, 2, 'ctx_1')).toThrow(ViewError);
   });
 });
 
-describe('an original read in full', () => {
-  it('says who can read it, as a feed row marks it', () => {
-    const reply = (audience: unknown) => ({
-      kind: 'echo-project-context-read-v2', context_id: 'ctx_1', received_at: '2026-09-21T22:01:00.000Z', title: 'T', text: 'Body', audience,
-    });
-    expect(contextView(reply({ kind: 'only_me' })).audience).toBe('only-me');
-    expect(contextView(reply({ kind: 'team' })).audience).toBe('team');
-    expect(contextView(reply({ kind: 'projects', project_ids: ['prj_1'] })).audience).toBe('project');
-    expect(() => contextView(reply(undefined))).toThrow(ViewError);
+const NOTE = `ctx_${'a'.repeat(64)}`;
+const DOC = `doc_${'e'.repeat(64)}`;
+const RECORD = sha('7');
+const APOLLO = 'prj_11111111-1111-4111-8111-111111111111';
+const HIDDEN = 'prj_99999999-9999-4999-8999-999999999999';
+const row = (ref: string, extra: Record<string, unknown> = {}) => ({
+  ref, kind: ref.slice(0, ref.indexOf(':')), title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', visibility: 'only_me',
+  projects: [{ project_id: APOLLO, name: 'Apollo' }], ...extra,
+});
+const documentRow = (extra: Record<string, unknown> = {}) => row(`document:${DOC}`, {
+  media_type: 'application/pdf', extraction_state: 'ready', size_bytes: 1_245_184, ...extra,
+});
+
+describe('a list shows rows, and nothing else crosses', () => {
+  const page = (fields: Record<string, unknown>) => ({ ok: true, result: {
+    schema_version: 1, kind: 'echo-person-list-v1', scope: { kind: 'mine' }, items: [], next_cursor: null, ...fields,
+  } });
+
+  it('copies each row, names your projects without their ids, and marks who can read it', () => {
+    const view = listView(page({ items: [
+      row(`meeting:${RECORD}`, { meeting_date: '2026-09-21' }), documentRow({ visibility: 'project', added_at: '2026-09-21T18:00:00.000Z' }),
+      row(`note:${NOTE}`, { visibility: 'team', added_at: '2026-09-20T12:00:00.000Z', projects: [] }),
+    ], next_cursor: 'AnR3' }), { kind: 'mine' });
+    expect(view).toEqual({ next_cursor: 'AnR3', meetings_held: false, items: [
+      { ref: { kind: 'meeting', id: RECORD }, title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', visibility: 'only-me', projects: ['Apollo'],
+        meeting_date: '2026-09-21' },
+      { ref: { kind: 'document', id: DOC }, title: 'Pricing review', added_at: '2026-09-21T18:00:00.000Z', visibility: 'project', projects: ['Apollo'],
+        document: { type: 'pdf', size: 1_245_184, extraction: 'ready' } },
+      { ref: { kind: 'note', id: NOTE }, title: 'Pricing review', added_at: '2026-09-20T12:00:00.000Z', visibility: 'team', projects: [] },
+    ] });
+    // No project id, and nothing of a header, reaches the renderer.
+    const header = listView({ ok: true, result: {
+      schema_version: 1, kind: 'echo-person-list-v1', scope: { kind: 'project', project_id: APOLLO },
+      project: { project_id: APOLLO, name: 'Apollo', role: 'lead', status: 'active' }, items: [row(`note:${NOTE}`)], next_cursor: null,
+    } }, { kind: 'project', project_id: APOLLO });
+    expect(JSON.stringify([view, header])).not.toContain('prj_');
+    expect(header).toEqual({ items: [expect.objectContaining({ projects: ['Apollo'] })], next_cursor: null, meetings_held: false });
+  });
+
+  it('is only for the scope asked for, a project header only for that project, and at most a page of rows', () => {
+    expect(() => listView(page({ scope: { kind: 'project', project_id: APOLLO } }), { kind: 'mine' })).toThrow(ViewError);
+    expect(() => listView(page({ scope: { kind: 'global' } }), { kind: 'mine' })).toThrow(ViewError);
+    expect(() => listView(page({ scope: { kind: 'project', project_id: HIDDEN } }), { kind: 'project', project_id: APOLLO })).toThrow(ViewError);
+    expect(() => listView(page({ scope: { kind: 'project', project_id: APOLLO }, project: { project_id: HIDDEN, name: 'x', role: 'lead', status: 'active' } }),
+      { kind: 'project', project_id: APOLLO })).toThrow(ViewError);
+    const many = Array.from({ length: 26 }, (_, index) => row(`note:ctx_${index.toString(16).padStart(64, '0')}`));
+    expect(() => listView(page({ items: many }), { kind: 'mine' })).toThrow(ViewError);
+    expect(() => listView(page({ items: [row(`note:${NOTE}`, { kind: 'document' })] }), { kind: 'mine' })).toThrow(ViewError);
+    expect(() => listView(page({ items: [row(`note:ctx_short`)] }), { kind: 'mine' })).toThrow(ViewError);
+    expect(() => listView(page({ items: [row(`note:${NOTE}`, { visibility: 'projects' })] }), { kind: 'mine' })).toThrow(ViewError);
+    expect(() => listView(page({}).result, { kind: 'mine' })).toThrow(ViewError);
+  });
+
+  it('holds meetings only on the closed notice, never on prose', () => {
+    expect(listView(page({ notice: 'meetings_unavailable' }), { kind: 'mine' }).meetings_held).toBe(true);
+    expect(listView(page({ notice: 'Meetings are still being indexed.' }), { kind: 'mine' }).meetings_held).toBe(false);
+  });
+});
+
+describe('an item opened by its ref', () => {
+  const opened = (ref: string, fields: Record<string, unknown>) => ({ ok: true, result: {
+    schema_version: 1, kind: 'echo-person-open-v1', ref, next_cursor: null, ...fields,
+  } });
+
+  it('a note is the one asked for, with where it is filed, as a row marks it', () => {
+    const reply = opened(`note:${NOTE}`, { item: row(`note:${NOTE}`), text: 'Body' });
+    expect(openView(reply, { kind: 'note', id: NOTE }, true)).toEqual({ kind: 'note', content: {
+      context_id: NOTE, title: 'Pricing review', text: 'Body', received_at: '2026-09-21T20:30:00.000Z', audience: 'only-me', project_ids: [APOLLO],
+    } });
+    expect(() => openView(reply, { kind: 'note', id: `ctx_${'b'.repeat(64)}` }, true)).toThrow(ViewError);
+    expect(() => openView(reply.result, { kind: 'note', id: NOTE }, true)).toThrow(ViewError);
+    expect(() => openView(opened(`note:${NOTE}`, { item: row(`note:${NOTE}`), text: 'Body', next_cursor: 'AQ' }), { kind: 'note', id: NOTE }, true))
+      .toThrow(ViewError);
+    expect(() => openView(opened(`note:${NOTE}`, { item: row(`note:ctx_${'b'.repeat(64)}`), text: 'Body' }), { kind: 'note', id: NOTE }, true))
+      .toThrow(ViewError);
+  });
+
+  it('a document is a page of its text, and its file', () => {
+    const reply = opened(`document:${DOC}`, { item: documentRow(), filename: 'Pricing memo.pdf', next_cursor: 'AQ',
+      chunks: [{ anchor: { kind: 'page', start: 3 }, text: 'Hello' }] });
+    expect(openView(reply, { kind: 'document', id: DOC }, true)).toEqual({ kind: 'document', document: {
+      document: { document_id: DOC, title: 'Pricing review', filename: 'Pricing memo.pdf', received_at: '2026-09-21T20:30:00.000Z', type: 'pdf',
+        size: 1_245_184, audience: 'only-me', extraction: 'ready', project_ids: [APOLLO] },
+      chunks: [{ anchor: 'page', start: 3, text: 'Hello' }], next_cursor: 'AQ',
+    } });
+    expect(() => openView(opened(`document:${DOC}`, { item: documentRow(), filename: 'x', chunks: [{ anchor: { kind: 'line', start: 1 }, text: 'x' }] }),
+      { kind: 'document', id: DOC }, true)).toThrow(ViewError);
+  });
+
+  const meeting = { started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, participants: ['Ari', 'Maya Chen'],
+    participants_more: false, approved_by: 'Ari' };
+  const meetingPage = (atoms: unknown[], fields: Record<string, unknown> = {}) => opened(`meeting:${RECORD}`, {
+    item: row(`meeting:${RECORD}`), meeting, atoms, transcript_ref: `transcript:${RECORD}`, ...fields,
+  });
+  const ref = { kind: 'meeting', id: RECORD } as const;
+
+  it('a meeting\'s first page describes it; its transcript\'s ref and every id stay behind', () => {
+    const view = openView(meetingPage([
+      { kind: 'decision', text: 'Annual plans first.', status: 'decided' }, { kind: 'decision', text: 'Keep the pilot.', status: 'proposed' },
+      { kind: 'action', text: 'Send the sheet.', owner: 'Maya Chen', due_at: 'Friday' }, { kind: 'rationale', text: 'It funds the launch.' },
+    ]), ref, true);
+    expect(view).toEqual({ kind: 'meeting', next_cursor: null, record: {
+      title: 'Pricing review', started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Ari',
+      participants: ['Ari', 'Maya Chen'], participants_more: false, visibility: 'approver',
+      decisions: { more: false, items: [{ text: 'Annual plans first.', excerpts: [] }, { text: 'Keep the pilot.', status: 'proposed', excerpts: [] }] },
+      actions: { more: false, items: [{ text: 'Send the sheet.', owner: 'Maya Chen', excerpts: [] }] },
+      rationales: { more: false, items: [{ text: 'It funds the launch.', excerpts: [] }] },
+    } });
+    expect(JSON.stringify(view)).not.toMatch(/transcript|sha256|prj_/);
+    const team = openView(meetingPage([], { item: row(`meeting:${RECORD}`, { visibility: 'team' }) }), ref, true);
+    expect(team.kind === 'meeting' && team.record.visibility).toBe('organization');
+    const project = openView(meetingPage([], { item: row(`meeting:${RECORD}`, { visibility: 'project' }) }), ref, true);
+    expect(project.kind === 'meeting' && project.record.visibility).toBe('project');
+  });
+
+  it('only the first page describes the meeting, and a page holds at most 25 parts', () => {
+    const atom = { kind: 'decision', text: 'One.' };
+    expect(() => openView(meetingPage([atom]), ref, false)).toThrow(ViewError);
+    expect(() => openView(meetingPage([atom], { meeting: undefined }), ref, true)).toThrow(ViewError);
+    expect(openView(meetingPage([atom], { meeting: undefined, transcript_ref: undefined }), ref, false).kind).toBe('meeting');
+    expect(() => openView(meetingPage(Array.from({ length: 26 }, () => atom)), ref, true)).toThrow(ViewError);
+    expect(() => openView(meetingPage([{ kind: 'excerpt', text: 'A quote.' }]), ref, true)).toThrow(ViewError);
+    expect(() => openView(meetingPage([atom], { meeting: { ...meeting, participants: ['Ari', 'Ari'] } }), ref, true)).toThrow(ViewError);
+    expect(() => openView(meetingPage([atom], { meeting: { ...meeting, participants: [{ display_name: 'Ari' }] } }), ref, true)).toThrow(ViewError);
+  });
+
+  it('three parts of one action, across two pages, join into one action item', () => {
+    const [one, two, three] = ['First part, ', 'second part, ', 'and the third.'];
+    const first = openView(meetingPage([
+      { kind: 'decision', text: 'Annual plans first.' },
+      { kind: 'action', text: one, owner: 'Maya Chen', part: { index: 1, count: 3 } },
+      { kind: 'action', text: two, part: { index: 2, count: 3 } },
+    ], { next_cursor: 'AQ' }), ref, true);
+    const next = openView(meetingPage([
+      { kind: 'action', text: three, part: { index: 3, count: 3 } }, { kind: 'rationale', text: 'It funds the launch.' },
+    ], { meeting: undefined, transcript_ref: undefined }), ref, false);
+    if (first.kind !== 'meeting' || next.kind !== 'meeting') throw new Error('not a meeting');
+    expect(first.record.actions.items).toEqual([{ text: `${one}${two}`, owner: 'Maya Chen', excerpts: [], parts: { from: 1, to: 2, count: 3 } }]);
+    expect(first.next_cursor).toBe('AQ');
+    const joined = joinRecord(first.record, next.record) as ApprovedRecord;
+    expect(joined.actions.items).toEqual([{ text: 'First part, second part, and the third.', owner: 'Maya Chen', excerpts: [] }]);
+    expect(joined.decisions.items).toHaveLength(1);
+    expect(joined.rationales.items).toEqual([{ text: 'It funds the launch.', excerpts: [] }]);
+    expect(joined.approved_by).toBe('Ari');
+    // Parts that do not follow on are never joined.
+    const skipped = openView(meetingPage([{ kind: 'action', text: 'late', part: { index: 3, count: 4 } }], { meeting: undefined, transcript_ref: undefined }),
+      ref, false);
+    if (skipped.kind !== 'meeting') throw new Error('not a meeting');
+    expect(joinRecord(first.record, skipped.record)).toBeNull();
+    expect(joinRecord(first.record, first.record)).toBeNull();
+  });
+
+  it('a part goes on the part before it: never first on a first page, never after another item', () => {
+    const later = { kind: 'action', text: 'rest', part: { index: 2, count: 2 } };
+    expect(() => openView(meetingPage([later]), ref, true)).toThrow(ViewError);
+    expect(() => openView(meetingPage([{ kind: 'decision', text: 'One.' }, later], { meeting: undefined, transcript_ref: undefined }), ref, false))
+      .toThrow(ViewError);
+    expect(() => openView(meetingPage([
+      { kind: 'action', text: 'start', part: { index: 1, count: 2 } }, { kind: 'decision', text: 'Between.' },
+    ]), ref, true)).toThrow(ViewError);
+    expect(() => openView(meetingPage([{ kind: 'action', text: 'start', part: { index: 3, count: 2 } }]), ref, true)).toThrow(ViewError);
   });
 });
 
@@ -320,6 +464,10 @@ describe('an approved record shows only what the source pane needs', () => {
     }), { ...asked, policy_id: 'restricted-reviewer-person-v2' });
     expect(restricted.visibility).toBe('approver');
     expect(restricted.approved_by).toBeUndefined();
+    const project = recordView(reply({}, record => {
+      ((record.envelope as { body: { event: Record<string, unknown> } }).body.event).policy_id = 'project-members-readable-person-v1';
+    }), { ...asked, policy_id: 'project-members-readable-person-v1' });
+    expect(project.visibility).toBe('project');
   });
 
   it('takes an empty list as a record the person can no longer read, not as a bad reply', () => {
@@ -332,35 +480,6 @@ describe('an approved record shows only what the source pane needs', () => {
 describe('documents, members and project changes', () => {
   const PROJECT = 'prj_11111111-1111-4111-8111-111111111111';
   const DOCUMENT = `doc_${'e'.repeat(64)}`;
-  const metadata = {
-    schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: '00000000-0000-4000-8000-000000000001', filename: 'Plan.pdf',
-    title: 'Plan', content_length: 2_100_000, sha256: sha('1'), audience: { kind: 'team' }, association_project_ids: [PROJECT],
-    document_id: DOCUMENT, detected_media_type: 'application/pdf', received_at: '2026-09-20T09:00:00.000Z', state: 'saved',
-    extraction_state: 'ready', extraction_detail: 'SECRET detail', extractor: 'x', extracted_text_bytes: 10,
-  };
-
-  it('a document row keeps its name, kind, size and where it is filed, and nothing that identifies the original', () => {
-    const page = documentPageView({ ok: true, result: {
-      schema_version: 2, kind: 'echo-person-document-search-result-v2', next_cursor: 'cGFnZTI',
-      documents: [{ ...metadata, excerpt: 'SECRET excerpt', anchor: null }],
-    } });
-    expect(page).toEqual({ next_cursor: 'cGFnZTI', items: [{
-      document_id: DOCUMENT, title: 'Plan', filename: 'Plan.pdf', received_at: '2026-09-20T09:00:00.000Z', type: 'pdf', size: 2_100_000,
-      audience: 'team', extraction: 'ready', project_ids: [PROJECT],
-    }] });
-    expect(JSON.stringify(page)).not.toContain('SECRET');
-    expect(JSON.stringify(page)).not.toContain(sha('1'));
-  });
-
-  it('a text page must be of the document asked for, and of the same original', () => {
-    const reply = (text: Record<string, unknown>) => ({ ok: true, result: { metadata, text: {
-      schema_version: 1, kind: 'echo-person-document-text-v1', document_id: DOCUMENT, original_sha256: sha('1'), extractor: 'x',
-      extraction_state: 'ready', next_cursor: null, chunks: [{ ordinal: 0, anchor_kind: 'page', anchor_start: 3, text: 'Hello' }], ...text,
-    } } });
-    expect(documentTextView(reply({}), DOCUMENT).chunks).toEqual([{ anchor: 'page', start: 3, text: 'Hello' }]);
-    expect(() => documentTextView(reply({}), `doc_${'f'.repeat(64)}`)).toThrow(ViewError);
-    expect(() => documentTextView(reply({ original_sha256: sha('2') }), DOCUMENT)).toThrow(ViewError);
-  });
 
   it('a saved original leaves its path behind', () => {
     expect(savedOriginalView({ ok: true, result: { document_id: DOCUMENT, output_path: '/Users/someone/Plan.pdf', content_length: 1, sha256: sha('1') } },

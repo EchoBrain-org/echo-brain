@@ -4,7 +4,7 @@ import { askText, queryTerms } from '../../shared/query.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  answerSources, ask, askEverywhere, cancelAsk, chipProject, chooseSource, copyAnswer, earlierTurns, foundNothingInProject, matchesShown, openCompose, openMatch,
+  answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, copyAnswer, earlierTurns, foundNothingInProject, matchesShown, openCompose, openMatch,
   openSlackSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, toggleSources, widenScope, type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Plus, Up } from './icons.js';
@@ -28,23 +28,28 @@ function MatchRow({ match, terms }: { match: Match; terms: readonly string[] }) 
   );
 }
 
-/** Live matches above the bar, within its scope, and the Ask that Return makes. */
+/** Live matches above the bar, within its scope, and the Ask that Return makes. Mine is only asked, never searched. */
 function Matches({ state, scopeName }: { state: State; scopeName: string | null }) {
   const matches = state.matches!;
   const terms = queryTerms(matches.query);
+  const searched = matches.scope.kind !== 'mine';
   return (
     <div class="matches" data-testid="matches" role="group" aria-label="Matches">
-      <div class="matches-head" data-testid="matches-head">Matches in {scopeName ?? 'all context'}</div>
-      {matches.items.map(match => <MatchRow key={`${match.source}-${match.context_id}`} match={match} terms={terms} />)}
-      {matches.loading && matches.items.length === 0 && <div class="matches-note">Searching</div>}
-      {!matches.loading && !matches.failure && matches.items.length === 0 && <div class="matches-note" data-testid="matches-empty">No matches</div>}
-      {matches.failure && (
-        <div class="matches-note" data-testid="matches-error">
-          <span class="error">{message(matches.failure)}</span>
-          <button type="button" class="link-button" onClick={searchAgain}>Try again</button>
-        </div>
+      {searched && (
+        <>
+          <div class="matches-head" data-testid="matches-head">Matches in {scopeName ?? 'all context'}</div>
+          {matches.items.map(match => <MatchRow key={match.context_id} match={match} terms={terms} />)}
+          {matches.loading && matches.items.length === 0 && <div class="matches-note">Searching</div>}
+          {!matches.loading && !matches.failure && matches.items.length === 0 && <div class="matches-note" data-testid="matches-empty">No matches</div>}
+          {matches.failure && (
+            <div class="matches-note" data-testid="matches-error">
+              <span class="error">{message(matches.failure)}</span>
+              <button type="button" class="link-button" onClick={searchAgain}>Try again</button>
+            </div>
+          )}
+          <div class="matches-rule" />
+        </>
       )}
-      <div class="matches-rule" />
       <button type="button" class="match-row ask-row" data-testid="match-ask" onClick={submitBar}>
         <Up />
         <span class="label">Ask {scopeName ?? 'ECHO'} about “{askText(state.barText)}”</span>
@@ -56,25 +61,28 @@ function Matches({ state, scopeName }: { state: State; scopeName: string | null 
 
 /**
  * The one bar on every page. ⊕ captures and Return asks, both in the bar's
- * scope; typing shows live matches in it. The chip names a project scope, and
- * its × widens to all context without moving the page.
+ * scope; typing shows live matches in it. The chip names a project scope, or
+ * Mine, which is only asked; its × widens to all context without moving the
+ * page. Mine is not a place to capture: it has no ⊕.
  */
 export function Bar({ state }: { state: State }) {
   // While another app is in front nothing says which project is open, or what
   // was typed over a covered page: the text is kept, and shows again on return.
-  const chip = chipProject(state);
+  const chip = chipName(state);
   const covered = pageCovered(state);
   const text = covered ? '' : state.barText;
-  const verb = state.ask ? 'Ask' : 'Search or ask';
-  const name = `${verb} ${chip?.name ?? 'ECHO'}`;
+  const verb = state.ask || (chip !== null && state.barScope.kind === 'mine') ? 'Ask' : 'Search or ask';
+  const name = `${verb} ${chip ?? 'ECHO'}`;
   return (
     <div class="bar-wrap">
-      {matchesShown(state) && <Matches state={state} scopeName={chip?.name ?? null} />}
+      {matchesShown(state) && <Matches state={state} scopeName={chip} />}
       <form class="bar" onSubmit={event => { event.preventDefault(); submitBar(); }}>
-        <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
+        {state.route.page !== 'mine' && (
+          <button type="button" class="circle" aria-label="Capture" data-testid="write-button" onClick={() => openCompose()}><Plus /></button>
+        )}
         {chip && (
           <span class="chip" data-testid="scope-chip">
-            <span>{chip.name}</span>
+            <span>{chip}</span>
             <button type="button" aria-label="Widen to all context" data-testid="scope-clear"
               onClick={() => { widenScope(); document.getElementById('ask-field')?.focus(); }}><Close /></button>
           </span>
@@ -290,8 +298,15 @@ function Item({ item }: { item: RecordItem }) {
 
 const SECTIONS = [['decisions', 'Decisions', 'decision'], ['actions', 'Actions', 'action'], ['rationales', 'Rationale', 'rationale']] as const;
 
-/** MEETING · APPROVED RECORD: who approved it, who was there, who can read it, and what was approved. */
-function RecordDetail({ record }: { record: ApprovedRecord }) {
+const VISIBILITY: Record<ApprovedRecord['visibility'], string> = {
+  organization: 'Visible to active organization members', project: 'Visible to project members', approver: 'Only the approver',
+};
+
+/**
+ * MEETING · APPROVED RECORD: who approved it, who was there, who can read it,
+ * and what was approved. In the source pane, and in the reader.
+ */
+export function RecordDetail({ record }: { record: ApprovedRecord }) {
   const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];
   return (
     <div class="source-detail selectable" data-testid="record">
@@ -301,7 +316,7 @@ function RecordDetail({ record }: { record: ApprovedRecord }) {
         {record.approved_by && <><dt>Record approved by</dt><dd>{record.approved_by}</dd></>}
         {participants.length > 0 && <><dt>Participants</dt><dd>{participants.join(', ')}</dd></>}
         <dt>Visibility</dt>
-        <dd>{record.visibility === 'organization' ? 'Visible to active organization members' : 'Only the approver'}</dd>
+        <dd data-testid="record-visibility">{VISIBILITY[record.visibility]}</dd>
       </dl>
       {SECTIONS.map(([key, heading, kind]) => {
         const section = record[key];

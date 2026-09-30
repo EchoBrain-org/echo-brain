@@ -8,7 +8,7 @@ test('a refused read for the same account shows why instead of loading forever',
   run = await launch('feed-unauthorized');
   const { page } = run;
   await page.getByTestId('project-row').nth(0).click();
-  await expect(page.getByText('Your access changed. Sign in again.')).toBeVisible();
+  await expect(page.getByText('This is no longer available to you.')).toBeVisible();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
 });
 

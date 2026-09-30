@@ -4,7 +4,7 @@ import { emit, launch, type Launched } from './launch.js';
 let run: Launched;
 test.afterEach(async () => { await run?.close(); });
 
-const feeds = () => run.calls().filter(call => call.path === '/v2/person/projects/context/feed').length;
+const feeds = () => run.calls().filter(call => call.path === '/v1/person/list').length;
 
 test('the sidebar lists your projects, and one click switches project from any page', async () => {
   run = await launch();

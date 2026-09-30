@@ -50,7 +50,7 @@ test('in a project the bar shows its matches as you type, a match reads in place
   expect(searches('/v2/person/updates/search').map(call => call.body)).toEqual([{ query: 'ship', limit: 10 }]);
   await page.getByTestId('match-row').click();
   await expect(page.getByTestId('reader-text')).toHaveText('We agreed to ship.');
-  expect(run.calls().some(call => call.path.startsWith('/v2/person/updates/content/'))).toBe(true);
+  expect(run.calls().some(call => call.path === '/v1/person/open' && call.body?.ref === `note:ctx_${'a'.repeat(64)}`)).toBe(true);
   await page.keyboard.press('Escape');
 
   // Return still asks, in the same scope, and the bar empties.

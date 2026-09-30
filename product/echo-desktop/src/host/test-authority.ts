@@ -41,10 +41,41 @@ const SECOND_PAGE = 'cGFnZTI';
 const PAGE = 10;
 const EXTRACTOR = 'fixture-extractor-v1';
 
-/** The organization directory's request and response, checked by the contract's own validators. */
-interface DirectoryContract {
+/** The requests and responses the fixture checks with the contract's own validators. */
+interface Contract {
   validateOrganizationDirectorySearchV1(value: unknown): { query?: string; limit?: number; cursor?: string };
   validateOrganizationDirectoryV1(value: unknown): unknown;
+  validatePersonListRequestV1(value: unknown): { project_id?: string; mine?: true; cursor?: string };
+  validatePersonListResponseV1(value: unknown): unknown;
+  validatePersonOpenRequestV1(value: unknown): { ref: string; cursor?: string };
+  validatePersonOpenResponseV1(value: unknown): unknown;
+  validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string; mine?: true };
+}
+
+/**
+ * A fake-only list page: ten rows, so the desktop's More is exercised
+ * without seeding 25 (the Authority's own page).
+ */
+const LIST_PAGE = 10;
+/** An opened meeting's page: at most 25 parts, whose atoms stay within 32 KiB; a longer atom comes in parts of 3 KiB. */
+const OPEN_ATOMS = 25;
+const OPEN_ATOMS_BYTES = 32 * 1024;
+const ATOM_PART_BYTES = 3 * 1024;
+
+/** The modes where Ari has added notes, uploads and approved meetings of their own; `mine-empty` has none yet. */
+const MINE_MODES = new Set(['mine', 'owner-mine', 'mine-empty', 'mine-fails-once']);
+const PRICING_REVIEW = `sha256:${'7'.repeat(64)}`;
+const BEACON_KICKOFF = `sha256:${'8'.repeat(64)}`;
+const PRICING_MEMO = `doc_${'9'.repeat(64)}`;
+const LAUNCH_CHECKLIST = `ctx_${'b'.repeat(64)}`;
+/** One action long enough to come in three parts, across the first page's end. */
+const LONG_ACTION = `Draft the renewal terms.${' Clause.'.repeat(872)}`;
+
+/** An approved meeting, as list and open release it. */
+interface Meeting {
+  record_sha256: string; title: string; added_at: string; meeting_date: string; visibility: 'only_me' | 'team' | 'project';
+  project_ids: string[]; approver: string; started_at: string; timezone: string; participants: string[]; approved_by: string;
+  atoms: { kind: 'decision' | 'action' | 'rationale'; text: string; status?: string; owner?: string }[];
 }
 
 interface Store {
@@ -87,7 +118,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     operations: Operation[];
   }).operations;
   const desktop = JSON.parse(readFileSync(join(fixturesDirectory, 'desktop-v1.json'), 'utf8')) as DesktopFixtures;
-  const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<DirectoryContract>;
+  const contract = () => import(pathToFileURL(join(repository, 'packages/organization-api/dist/index.js')).href) as Promise<Contract>;
   const mode = process.env.ECHO_DESKTOP_TEST_MODE ?? '';
   // Thirteen people: the organization's directory comes in two pages.
   if (mode === 'many-people') {
@@ -155,6 +186,57 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }));
     filed.set(beacon, ids);
   }
+  // What Ari added: notes they saved, documents they uploaded, and meetings they approved.
+  const mineNotes = new Set<string>();
+  const mineDocuments = new Set<string>();
+  const meetings: Meeting[] = [];
+  const [apollo, beacon] = desktop.projects.map(project => project.project_id) as [string, string];
+  if (MINE_MODES.has(mode)) {
+    // Beacon's kickoff: approved by Maya, so it is in Beacon but not in Mine.
+    meetings.push({
+      record_sha256: BEACON_KICKOFF, title: 'Beacon kickoff', added_at: '2026-09-19T16:00:00.000Z', meeting_date: '2026-09-19', visibility: 'project',
+      project_ids: [beacon], approver: 'mem_33333333-3333-4333-8333-333333333333', started_at: '2026-09-19T15:00:00.000Z', timezone: 'Europe/London',
+      participants: ['Maya Chen', 'Ari'], approved_by: 'Maya Chen',
+      atoms: [{ kind: 'decision', text: 'Kick off Beacon in October.' }, { kind: 'action', text: 'Invite the design team.', owner: 'Maya Chen' }],
+    });
+  }
+  if (MINE_MODES.has(mode) && mode !== 'mine-empty') {
+    meetings.push({
+      record_sha256: PRICING_REVIEW, title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', meeting_date: '2026-09-21', visibility: 'only_me',
+      project_ids: [], approver: session.membership_id, started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles',
+      participants: ['Ari', 'Maya Chen'], approved_by: 'Ari',
+      atoms: [
+        ...Array.from({ length: 20 }, (_, index) => ({ kind: 'decision' as const, text: `Decision ${index + 1}: keep plan ${index + 1} as priced.`,
+          ...(index === 0 ? { status: 'proposed' } : {}) })),
+        { kind: 'action', text: 'Send the annual price sheet.', owner: 'Maya Chen' },
+        { kind: 'action', text: 'Update the pricing page.' },
+        { kind: 'action', text: 'Brief the sales team.' },
+        { kind: 'action', text: LONG_ACTION },
+        { kind: 'action', text: 'Book the follow-up review.' },
+        { kind: 'rationale', text: 'Annual plans fund the launch.' },
+        { kind: 'rationale', text: 'Teams asked for one price sheet.' },
+      ],
+    });
+    documents.push({
+      document_id: PRICING_MEMO, request_id: '00000000-0000-4000-8000-0000000000d9', filename: 'Pricing memo.pdf', title: 'Pricing memo',
+      original: '%PDF-1.4 Pricing memo\n', detected_media_type: 'application/pdf', audience: { kind: 'project', project_id: apollo },
+      association_project_ids: [apollo], received_at: '2026-09-21T18:00:00.000Z', extraction_state: 'ready',
+      pages: [[{ ordinal: 0, anchor_kind: 'page', anchor_start: 1, text: 'Annual plans lead the price sheet.' }]],
+    });
+    mineDocuments.add(PRICING_MEMO);
+    catalog.set(LAUNCH_CHECKLIST, {
+      received_at: '2026-09-20T12:00:00.000Z', title: 'Launch checklist', text: 'Book the venue.\nSend the invites.\n', audience: { kind: 'team' },
+    });
+    filed.set(apollo, [...filed.get(apollo)!, LAUNCH_CHECKLIST]);
+    filed.set(beacon, [...filed.get(beacon)!, LAUNCH_CHECKLIST]);
+    // Eight quick notes of Ari's own, a day earlier: Mine runs past one page.
+    const standups = Array.from({ length: 8 }, (_, index) => `ctx_${'f'.repeat(62)}${(index + 1).toString(16).padStart(2, '0')}`);
+    standups.forEach((id, index) => catalog.set(id, {
+      received_at: new Date(Date.parse('2026-09-19T12:00:00.000Z') - (index + 1) * 3_600_000).toISOString(), title: `Standup ${index + 1}`,
+      text: `Standup ${index + 1} notes.`, audience: { kind: 'only_me' },
+    }));
+    for (const id of [...desktop.notes.map(saved => saved.context_id), LAUNCH_CHECKLIST, ...standups]) mineNotes.add(id);
+  }
   /** Changes applied, by request id: a resend of the same one gets the same receipt, anything else under it conflicts. */
   const applied = new Map<string, { command: string; receipt: Record<string, unknown>; status: number }>();
   /** The organization's employees, as their owner lists them. */
@@ -172,8 +254,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   let evidenceReads = 0;
   let asks = 0;
   let projectLists = 0;
-  let feedReads = 0;
-  let documentLists = 0;
+  let lists = 0;
+  let mineLists = 0;
   // Sign-in: the descriptor a new session is checked against, and the client's
   // loopback receiver for each sign-in begun, by its OIDC state.
   const signingKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey.export({ type: 'spki', format: 'der' });
@@ -282,6 +364,57 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const leadsAfter = (projectId: string, membershipId: string, role: 'lead' | 'member' | null) =>
     (members[projectId] ?? []).filter(entry => (entry.membership_id === membershipId ? role : entry.role) === 'lead').length;
 
+  // Person list and open: your notes, documents and approved meetings, as rows, and each one opened by its ref.
+  /** A project that is yours: listed, and one you have not left. The numbered modes' projects have no member list. */
+  const joined = () => listed().filter(project => members[project.project_id] === undefined || roleOf(project.project_id, session.membership_id));
+  const visibility = (audience: Record<string, unknown>) => audience.kind === 'only_me' ? 'only_me' : audience.kind === 'team' ? 'team' : 'project';
+  /** A row's projects: yours only, in your projects' order. */
+  const rowProjects = (ids: readonly string[]) => joined().filter(project => ids.includes(project.project_id))
+    .map(project => ({ project_id: project.project_id, name: project.name }));
+  type Row = Record<string, unknown> & { ref: string; added_at: string };
+  const noteRow = (id: string): Row => {
+    const note = catalog.get(id)!;
+    return { ref: `note:${id}`, kind: 'note', title: note.title, added_at: new Date(note.received_at).toISOString(), visibility: visibility(note.audience),
+      projects: rowProjects([...filed].filter(([, ids]) => ids.includes(id)).map(([projectId]) => projectId)) };
+  };
+  const documentRow = (document: StoredDocument): Row => ({
+    ref: `document:${document.document_id}`, kind: 'document', title: document.title, added_at: new Date(document.received_at).toISOString(),
+    visibility: visibility(document.audience), projects: rowProjects(document.association_project_ids), media_type: document.detected_media_type,
+    extraction_state: document.extraction_state, size_bytes: Buffer.byteLength(document.original),
+  });
+  const meetingRow = (meeting: Meeting): Row => ({
+    ref: `meeting:${meeting.record_sha256}`, kind: 'meeting', title: meeting.title, added_at: meeting.added_at, visibility: meeting.visibility,
+    projects: rowProjects(meeting.project_ids), meeting_date: meeting.meeting_date,
+  });
+  /** Everything in a scope, newest first, then by ref. */
+  const rows = (scope: { mine: true } | { project_id: string }): Row[] => {
+    const notes = 'mine' in scope ? [...mineNotes] : filed.get(scope.project_id) ?? [];
+    const all = [
+      ...notes.filter(id => catalog.has(id)).map(noteRow),
+      ...documents.filter(document => 'mine' in scope ? mineDocuments.has(document.document_id) : document.association_project_ids.includes(scope.project_id))
+        .map(documentRow),
+      ...meetings.filter(meeting => 'mine' in scope ? meeting.approver === session.membership_id : meeting.project_ids.includes(scope.project_id))
+        .map(meetingRow),
+    ];
+    return all.sort((a, b) => a.added_at === b.added_at ? (a.ref < b.ref ? -1 : 1) : a.added_at > b.added_at ? -1 : 1);
+  };
+  const pageCursor = (key: string, from: number) => Buffer.from(`${key}|${from}`).toString('base64url');
+  /** Where a cursor this fixture gave goes on from, or null for any other. */
+  const pageFrom = (key: string, cursor: string | undefined): number | null => {
+    if (cursor === undefined) return 0;
+    const [given, from] = Buffer.from(cursor, 'base64url').toString('utf8').split('|');
+    return given === key && /^[1-9][0-9]*$/.test(from ?? '') ? Number(from) : null;
+  };
+  /** A meeting's atoms as open pages them: each atom's text in parts of at most 3 KiB, its attributes on the first. */
+  const atomParts = (meeting: Meeting) => meeting.atoms.flatMap(atom => {
+    const count = Math.ceil(Buffer.byteLength(atom.text) / ATOM_PART_BYTES);
+    const { text: whole, ...attributes } = atom;
+    if (count === 1) return [atom];
+    return Array.from({ length: count }, (_, index) => ({
+      kind: atom.kind, text: whole.slice(index * ATOM_PART_BYTES, (index + 1) * ATOM_PART_BYTES), ...(index === 0 ? attributes : {}), part: { index: index + 1, count },
+    }));
+  });
+
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     const method = init?.method ?? 'GET';
@@ -377,21 +510,81 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return json({ schema_version: 2, kind: 'echo-project-summary-v2', project_id: known.project_id, name: known.name, created_at: NOW,
         role: currentRole, status: projectStatus.get(known.project_id) ?? 'active' });
     }
-    if (method === 'POST' && path === '/v2/person/projects/context/feed' && mode === 'feed-unauthorized') {
-      return failure('unauthorized', 401);
+    // Mine, or one project's page: the desktop never lists all you may read.
+    if (method === 'POST' && path === '/v1/person/list') {
+      const api = await contract();
+      let request: ReturnType<Contract['validatePersonListRequestV1']>;
+      try {
+        request = api.validatePersonListRequestV1(body);
+      } catch {
+        return failure('invalid_request', 400);
+      }
+      lists += 1;
+      if (request.mine === undefined && request.project_id === undefined) return failure('invalid_request', 400);
+      const projectId = request.project_id;
+      const project = projectId === undefined ? undefined : joined().find(entry => entry.project_id === projectId);
+      // A project you are not in is refused as ask --project refuses it.
+      if (projectId !== undefined && (!project || mode === 'feed-unauthorized')) return failure('unauthorized', 401);
+      if (request.mine) mineLists += 1;
+      // Opened, then More: the read after a save, or the More, never comes back; Mine's first read fails once.
+      if ((mode === 'long-feed-refresh-fails' && lists === 3) || (mode === 'long-feed-more-fails' && lists === 2) ||
+          (mode === 'mine-fails-once' && request.mine && mineLists === 1)) return failure('unavailable', 503);
+      const key = request.mine ? 'mine' : `project/${projectId}`;
+      const from = pageFrom(key, request.cursor);
+      if (from === null) return failure('invalid_request', 400);
+      const all = rows(request.mine ? { mine: true } : { project_id: projectId! });
+      return json(api.validatePersonListResponseV1({
+        schema_version: 1, kind: 'echo-person-list-v1', scope: request.mine ? { kind: 'mine' } : { kind: 'project', project_id: projectId },
+        ...(project && request.cursor === undefined ? { project: {
+          project_id: project.project_id, name: project.name, role: roleOf(project.project_id, session.membership_id) ?? project.role,
+          status: projectStatus.get(project.project_id) ?? 'active',
+        } } : {}),
+        items: all.slice(from, from + LIST_PAGE), next_cursor: from + LIST_PAGE < all.length ? pageCursor(key, from + LIST_PAGE) : null,
+      }));
     }
-    if (method === 'POST' && path === '/v2/person/projects/context/feed') {
-      feedReads += 1;
-      // Opened, then More: the read after a save never comes back.
-      if (mode === 'long-feed-refresh-fails' && feedReads === 3) return failure('unavailable', 503);
-      const projectId = String(body?.project_id);
-      const notes = (filed.get(projectId) ?? []).map(id => ({ id, note: catalog.get(id)! }))
-        .sort((a, b) => Date.parse(b.note.received_at) - Date.parse(a.note.received_at))
-        .map(({ id, note }) => ({
-          context_id: id, received_at: note.received_at, title: note.title, excerpt: excerpt(note.text),
-          audience: note.audience.kind === 'projects' ? { kind: 'projects', project_ids: [projectId] } : note.audience,
-        }));
-      return json({ schema_version: 2, kind: 'echo-project-context-feed-v2', project_id: projectId, ...paged(notes, body?.cursor) });
+    // One item by its ref, under your access: anything you cannot read is one not_found.
+    if (method === 'POST' && path === '/v1/person/open') {
+      const api = await contract();
+      let request: ReturnType<Contract['validatePersonOpenRequestV1']>;
+      try {
+        request = api.validatePersonOpenRequestV1(body);
+      } catch {
+        return failure('invalid_request', 400);
+      }
+      const at = request.ref.indexOf(':');
+      const [kind, id] = [request.ref.slice(0, at), request.ref.slice(at + 1)];
+      const open = (fields: Record<string, unknown>) => json(api.validatePersonOpenResponseV1({ schema_version: 1, kind: 'echo-person-open-v1', ref: request.ref, ...fields }));
+      if (kind === 'note' && catalog.has(id)) {
+        return open({ item: noteRow(id), text: catalog.get(id)!.text, next_cursor: null });
+      }
+      const document = kind === 'document' ? documents.find(entry => entry.document_id === id) : undefined;
+      if (document) {
+        const from = pageFrom(request.ref, request.cursor);
+        if (from === null || from >= Math.max(document.pages.length, 1)) return failure('not_found', 404);
+        return open({
+          item: documentRow(document), filename: document.filename,
+          chunks: (document.pages[from] ?? []).map(chunk => ({ anchor: { kind: chunk.anchor_kind, start: chunk.anchor_start }, text: chunk.text })),
+          next_cursor: from + 1 < document.pages.length ? pageCursor(request.ref, from + 1) : null,
+        });
+      }
+      const meeting = kind === 'meeting' ? meetings.find(entry => entry.record_sha256 === id) : undefined;
+      if (meeting) {
+        const parts = atomParts(meeting);
+        const from = pageFrom(request.ref, request.cursor);
+        if (from === null || (from > 0 && from >= parts.length)) return failure('not_found', 404);
+        // At most 25 parts, and at least one, within the atoms' byte budget.
+        let to = from;
+        while (to < parts.length && to - from < OPEN_ATOMS && (to === from || Buffer.byteLength(JSON.stringify(parts.slice(from, to + 1))) <= OPEN_ATOMS_BYTES)) to += 1;
+        return open({
+          item: meetingRow(meeting),
+          ...(request.cursor === undefined ? { meeting: {
+            started_at: meeting.started_at, timezone: meeting.timezone, all_day: false, participants: meeting.participants, participants_more: false,
+            approved_by: meeting.approved_by,
+          } } : {}),
+          atoms: parts.slice(from, to), next_cursor: to < parts.length ? pageCursor(request.ref, to) : null,
+        });
+      }
+      return failure('not_found', 404);
     }
     if (method === 'POST' && path === '/v2/person/projects/context/search') {
       if (mode === 'search-fails') return failure('unauthorized', 401);
@@ -413,27 +606,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       }
       const results = desktop.notes.filter(note => found(body?.query, note)).map(({ text, ...note }) => ({ ...note, excerpt: excerpt(text) }));
       return json({ schema_version: 3, kind: 'echo-person-upload-search-v3', results });
-    }
-    const note = /^\/v3\/person\/updates\/content\/(ctx_[0-9a-f]{64})$/.exec(path);
-    if (method === 'GET' && note) {
-      const saved = desktop.notes.find(entry => entry.context_id === note[1]);
-      if (!saved) return failure('not_found', 404);
-      return json({ schema_version: 3, kind: 'echo-person-upload-content-v3', ...saved });
-    }
-    const olderNote = /^\/v2\/person\/updates\/content\/(ctx_[0-9a-f]{64})$/.exec(path);
-    if (method === 'GET' && olderNote) {
-      const saved = fixture('updates-read-v2');
-      return saved.context_id === olderNote[1] ? json(saved) : failure('not_found', 404);
-    }
-    const context = /^\/v2\/person\/projects\/(prj_[0-9a-f-]+)\/context\/(ctx_[0-9a-f]+)$/.exec(path);
-    if (method === 'GET' && context) {
-      const note = catalog.get(context[2]!);
-      if (!note || !filed.get(context[1]!)?.includes(context[2]!)) return failure('not_found', 404);
-      return json({
-        schema_version: 2, kind: 'echo-project-context-read-v2', project_id: context[1], context_id: context[2],
-        received_at: note.received_at, title: note.title, text: note.text,
-        audience: note.audience.kind === 'projects' ? { kind: 'projects', project_ids: [context[1]] } : note.audience,
-      });
     }
 
     // A project: your role in it, its members, and the people a lead can add.
@@ -546,7 +718,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     // Authority from before it has no such route: not_found, as any unknown path.
     if (method === 'POST' && path === '/v1/person/directory' && mode !== 'no-person-directory') {
       const api = await contract();
-      let request: ReturnType<DirectoryContract['validateOrganizationDirectorySearchV1']>;
+      let request: ReturnType<Contract['validateOrganizationDirectorySearchV1']>;
       try {
         request = api.validateOrganizationDirectorySearchV1(body);
       } catch {
@@ -598,20 +770,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       });
     }
 
-    // Documents: a project's, one read a page at a time, its original, and where it is filed.
-    if (method === 'POST' && path === '/v2/person/documents/search') {
-      documentLists += 1;
-      if (mode === 'documents-fail-once' && documentLists === 1) return failure('unavailable', 503);
-      const projectId = typeof body?.project_id === 'string' ? body.project_id : null;
-      const all = documents
-        .filter(document => (projectId === null || document.association_project_ids.includes(projectId)) &&
-          (body?.query === '' || found(body?.query, { title: document.title, text: document.pages.flat().map(chunk => chunk.text).join(' ') })))
-        .sort((a, b) => Date.parse(b.received_at) - Date.parse(a.received_at))
-        .map(document => ({ ...documentMetadata(document), excerpt: null, anchor: null }));
-      const { items, next_cursor } = paged(all, body?.cursor);
-      return json({ schema_version: 2, kind: 'echo-person-document-search-result-v2', documents: items, next_cursor });
-    }
-    const document = /^\/v2\/person\/documents\/(doc_[0-9a-f]{64})(\/text|\/original)?$/.exec(path);
+    // Documents: a saved one's original, and where it is filed.
+    const document = /^\/v2\/person\/documents\/(doc_[0-9a-f]{64})(\/original)?$/.exec(path);
     if (method === 'GET' && document) {
       const stored = findDocument(document[1]!, url.searchParams.get('project_id'));
       if (!stored) return failure('not_found', 404);
@@ -619,14 +779,6 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         return new Response(stored.original, { status: 200, headers: {
           'content-type': stored.detected_media_type, 'x-echo-document-sha256': sha(stored.original),
         } });
-      }
-      if (document[2] === '/text') {
-        const at = url.searchParams.get('cursor') === SECOND_PAGE ? 1 : 0;
-        return json({
-          schema_version: 1, kind: 'echo-person-document-text-v1', document_id: stored.document_id, original_sha256: sha(stored.original),
-          extractor: EXTRACTOR, extraction_state: stored.extraction_state, chunks: stored.pages[at] ?? [],
-          next_cursor: at + 1 < stored.pages.length ? SECOND_PAGE : null,
-        });
       }
       return json(documentMetadata(stored));
     }
@@ -650,12 +802,21 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'write-unavailable-then-refused') return failure('invalid_request', 400);
       const refused = refusedProjects(body);
       if (refused) return refused;
+      // In the mine modes each save is its own note, of Ari's own, filed where the save said.
+      const mine = MINE_MODES.has(mode);
       const receipt = {
         schema_version: 3, kind: 'echo-person-update-receipt-v3', request_id: body?.request_id,
-        context_id: 'ctx_' + 'c'.repeat(64), received_at: NOW, audience: body?.audience,
-        association_project_ids: body?.association_project_ids, state: 'received',
+        context_id: mine ? `ctx_${createHash('sha256').update(String(body?.request_id)).digest('hex')}` : 'ctx_' + 'c'.repeat(64), received_at: NOW,
+        audience: body?.audience, association_project_ids: body?.association_project_ids, state: 'received',
       };
       writeFileSync(join(home, `saved-${String(body?.request_id)}.json`), JSON.stringify(receipt));
+      if (mine) {
+        catalog.set(receipt.context_id, { received_at: NOW, title: String(body?.title), text: String(body?.text), audience: body?.audience as Record<string, unknown> });
+        for (const projectId of (body?.association_project_ids ?? []) as string[]) {
+          filed.set(projectId, [...(filed.get(projectId) ?? []).filter(id => id !== receipt.context_id), receipt.context_id]);
+        }
+        mineNotes.add(receipt.context_id);
+      }
       // A long feed files what is saved into it, newest, readable by whom the save said.
       if (mode.startsWith('long-feed')) {
         for (const projectId of (body?.association_project_ids ?? []) as string[]) {
@@ -707,11 +868,18 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       });
     }
     if (method === 'POST' && path === '/v3/person/ask') {
+      let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
+      try {
+        request = (await contract()).validatePersonAnswerRequestV3(body);
+      } catch {
+        return failure('invalid_request', 400);
+      }
       asks += 1;
       if (mode === 'ask-unavailable') return failure('unavailable', 503);
       if (mode === 'ask-hangs') return new Promise<Response>(() => undefined);
-      const scope = typeof body?.project_id === 'string' ? { kind: 'project', project_id: body.project_id } : { kind: 'global' };
-      const question = typeof body?.question === 'string' ? body.question : 'Question';
+      // One project, only what you added, or all you may read.
+      const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : request.mine ? { kind: 'mine' } : { kind: 'global' };
+      const question = request.question;
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const answered = (text?: string) => {
         const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];

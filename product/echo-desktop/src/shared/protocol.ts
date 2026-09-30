@@ -37,18 +37,38 @@ export interface ProjectSettingsReceipt {
   readonly operation: 'rename' | 'archive' | 'leave';
 }
 
-export interface FeedItem {
-  readonly context_id: string;
-  readonly title: string;
-  readonly received_at: string;
-  /** Who can read it; project rows carry no mark. */
-  readonly audience: 'only-me' | 'project' | 'team';
+/** Who can read an item: only you, everyone in the organization, or one or more projects' members. */
+export type Visibility = 'only-me' | 'team' | 'project';
+
+/** What a list shows: what you added, or one project's items. The desktop never lists all you can read. */
+export type ListScope = { readonly kind: 'mine' } | { readonly kind: 'project'; readonly project_id: string };
+
+/** One item, by kind and id: a note's context id, a document's id, or an approved meeting's record digest. */
+export interface ItemRef {
+  readonly kind: 'note' | 'document' | 'meeting';
+  readonly id: string;
 }
 
-export interface FeedPage {
-  readonly project_id: string;
-  readonly items: readonly FeedItem[];
+/** One row of a list: never an item's text, and never a project's id. */
+export interface ListItem {
+  readonly ref: ItemRef;
+  readonly title: string;
+  /** When it entered ECHO (ISO 8601). */
+  readonly added_at: string;
+  readonly visibility: Visibility;
+  /** The names of your projects it is filed in. */
+  readonly projects: readonly string[];
+  /** A document's kind and size, from the bytes the Authority checked, and where its text stands. */
+  readonly document?: { readonly type: DocumentSummary['type']; readonly size: number; readonly extraction: Extraction };
+  /** A meeting's own date (YYYY-MM-DD), when it has one. */
+  readonly meeting_date?: string;
+}
+
+/** Newest first. Meetings still being indexed are held for a later read. */
+export interface ListPage {
+  readonly items: readonly ListItem[];
   readonly next_cursor: string | null;
+  readonly meetings_held: boolean;
 }
 
 /** A saved document: an original file, and the text extracted from it. */
@@ -61,15 +81,10 @@ export interface DocumentSummary {
   readonly type: 'pdf' | 'word' | 'markdown' | 'text';
   /** Bytes. */
   readonly size: number;
-  readonly audience: 'only-me' | 'project' | 'team';
+  readonly audience: Visibility;
   readonly extraction: Extraction;
-  /** The projects it is filed in. */
+  /** The projects it is filed in that are yours. */
   readonly project_ids: readonly string[];
-}
-
-export interface DocumentPage {
-  readonly items: readonly DocumentSummary[];
-  readonly next_cursor: string | null;
 }
 
 /** One piece of a document's extracted text, from a page or a paragraph. */
@@ -143,29 +158,30 @@ export interface ContextContent {
   readonly title: string;
   readonly text: string;
   readonly received_at: string;
-  /** Who can read it, as a feed row marks it. */
-  readonly audience: FeedItem['audience'];
+  /** Who can read it, as its row marks it. */
+  readonly audience: Visibility;
+  /** The projects it is filed in that are yours. */
+  readonly project_ids: readonly string[];
 }
 
 /**
  * A live match for the bar's text: an item in the project in scope, or, in
  * all context, one of the saved notes you can read (of either note version).
+ * Each opens by its ref, as a note.
  */
 export interface Match {
   readonly context_id: string;
   readonly title: string;
   readonly excerpt: string;
   readonly received_at: string;
-  /** Which read opens it: the project's, or the saved-note read of its version. */
-  readonly source: 'project' | 'v2' | 'v3';
 }
 
 export interface Matches {
   readonly items: readonly Match[];
 }
 
-/** Ask is always explicitly scoped; there is no default. */
-export type AskScope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string };
+/** Ask is always explicitly scoped; there is no default. Mine is only what you added. */
+export type AskScope = { readonly kind: 'global' } | { readonly kind: 'project'; readonly project_id: string } | { readonly kind: 'mine' };
 
 /** Immutable coordinates of one answer source; opaque to the renderer. */
 export interface SourceRef {
@@ -234,6 +250,11 @@ export interface RecordItem {
   /** An action's owner, only as the approver confirmed it at approval. */
   readonly owner?: string;
   readonly excerpts: readonly { readonly quote: string; readonly at?: string }[];
+  /**
+   * A long item read in parts, while some are still unread: its text holds
+   * parts `from` to `to` of `count`, and the next page's first part goes on.
+   */
+  readonly parts?: { readonly from: number; readonly to: number; readonly count: number };
 }
 
 /** At most 32 items; `more` says some were left out. */
@@ -253,11 +274,17 @@ export interface ApprovedRecord {
   /** At most 32 names; `participants_more` says others were left out. */
   readonly participants: readonly string[];
   readonly participants_more: boolean;
-  readonly visibility: 'organization' | 'approver';
+  readonly visibility: 'organization' | 'project' | 'approver';
   readonly decisions: RecordSection;
   readonly actions: RecordSection;
   readonly rationales: RecordSection;
 }
+
+/** One item opened by its ref: a note's text, a page of a document's text, or a page of a meeting's approved record. */
+export type Opened =
+  | { readonly kind: 'note'; readonly content: ContextContent }
+  | { readonly kind: 'document'; readonly document: DocumentText }
+  | { readonly kind: 'meeting'; readonly record: ApprovedRecord; readonly next_cursor: string | null };
 
 /** One audience per item: only you, one project's members, several projects' members, or everyone. */
 export type Audience =
@@ -330,13 +357,12 @@ export interface HostMethods {
   /** The renderer names the invitation only by a handle main issued; main swaps in the path. */
   'signin.invitation': { params: { invitation_handle: string }; result: AppStatus };
   'projects.list': { params: { expect: Expect; status?: 'active' | 'archived'; cursor?: string }; result: ProjectPage };
-  'projects.feed': { params: { expect: Expect; project_id: string; cursor?: string }; result: FeedPage };
-  /** A project's documents, newest first. */
-  'documents.list': { params: { expect: Expect; project_id: string; cursor?: string }; result: DocumentPage };
-  /** A document and one page of its text; read in a project when it was opened from one. */
-  'documents.read': { params: { expect: Expect; document_id: string; project_id?: string; cursor?: string }; result: DocumentText };
+  /** One page of what you added, or of one project's notes, documents and meetings, newest first. */
+  'list.page': { params: { expect: Expect; scope: ListScope; cursor?: string }; result: ListPage };
+  /** One item by its ref, under your current access: a document's text or a meeting's record a page at a time. */
+  'open.ref': { params: { expect: Expect; ref: ItemRef; cursor?: string }; result: Opened };
   /** Save original…: the renderer names the file only by a handle main issued; main swaps in the path. */
-  'documents.save': { params: { expect: Expect; document_id: string; project_id?: string; save_handle: string }; result: null };
+  'documents.save': { params: { expect: Expect; document_id: string; save_handle: string }; result: null };
   /** The project as it is now, with your role in it. */
   'projects.read': { params: { expect: Expect; project_id: string }; result: ProjectSummary };
   'projects.members': { params: { expect: Expect; project_id: string; cursor?: string }; result: MemberPage };
@@ -365,7 +391,6 @@ export interface HostMethods {
   'employees.reissue': { params: { expect: Expect; email: string; invitation_handle: string }; result: InvitationSaved };
   /** Revoke access: ends the employee's membership at once. */
   'employees.revoke': { params: { expect: Expect; email: string }; result: null };
-  'projects.readContext': { params: { expect: Expect; project_id: string; context_id: string }; result: ContextContent };
   /** `project_ids`: the projects it is filed in, at most MAX_CAPTURE_PROJECTS, in any order. */
   'notes.submit': { params: { expect: Expect; request_id: string; text: string; audience: Audience; project_ids: readonly string[] }; result: Receipt };
   /** The renderer names a file only by a handle main issued; main swaps in the path. */
@@ -378,8 +403,6 @@ export interface HostMethods {
   'ask.cancel': { params: { cancel_id: string }; result: null };
   /** The bar's live search, within its scope: a project, or all context. */
   'search.run': { params: { expect: Expect; query: string; scope: AskScope }; result: Matches };
-  /** Reads a saved note found in all context. A project's match is read with projects.readContext. */
-  'search.read': { params: { expect: Expect; context_id: string; source: 'v2' | 'v3' }; result: ContextContent };
   'ask.source': { params: { expect: Expect; scope: AskScope; ref: SourceRef }; result: SourceEvidence };
   /** Reads one approved record an answer cites. */
   'ask.record': { params: { expect: Expect; record: RecordRef }; result: ApprovedRecord };
@@ -426,9 +449,9 @@ export type MethodName = keyof Methods;
 export type HostMethodName = keyof HostMethods;
 
 export const HOST_METHODS: readonly HostMethodName[] = [
-  'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'projects.feed', 'projects.readContext',
+  'app.status', 'signin.begin', 'signin.invitation', 'projects.list', 'list.page', 'open.ref',
   'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
-  'account.signOut', 'account.tools', 'search.run', 'search.read', 'documents.list', 'documents.read', 'documents.save', 'projects.read',
+  'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
   'employees.reissue', 'employees.revoke',
 ];

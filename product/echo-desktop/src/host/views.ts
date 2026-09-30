@@ -2,10 +2,10 @@
 // models of ../shared/protocol.ts. Every field is copied explicitly, so nothing
 // the client prints beyond these fields can reach the renderer.
 import type {
-  Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, ContextContent, CreatedProject, DocumentPage,
-  DocumentSummary, DocumentText, Employee, Employees, Extraction, Failure, FeedItem, FeedPage, InvitationSaved, Match, Matches, Member, MemberPage,
+  Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, CreatedProject, DocumentSummary,
+  Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
   ProjectChange, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
-  WriteStatus,
+  Visibility, WriteStatus,
 } from '../shared/protocol.js';
 import { slackPermalink } from '../shared/protocol.js';
 
@@ -90,26 +90,11 @@ export function projectSettingsView(raw: unknown, requestId: string, projectId: 
   return { request_id: requestId, project_id: projectId, operation };
 }
 
-/** Who can read an item: only you, everyone, or one or more projects' members. */
-function audienceMark(raw: unknown): FeedItem['audience'] {
-  const kind = object(raw).kind;
-  return kind === 'only_me' ? 'only-me' : kind === 'team' ? 'team' : 'project';
-}
-
-/** A project's notes, one page, only for the project asked for. */
-export function feedView(raw: unknown, projectId?: string): FeedPage {
-  const value = object(raw);
-  if (value.kind !== 'echo-project-context-feed-v2' || (projectId !== undefined && value.project_id !== projectId)) throw new ViewError();
-  return {
-    project_id: text(value.project_id),
-    items: list(value.items).map(entry => {
-      const item = object(entry);
-      return {
-        context_id: text(item.context_id), title: text(item.title), received_at: text(item.received_at), audience: audienceMark(item.audience),
-      };
-    }),
-    next_cursor: optionalText(value.next_cursor) ?? null,
-  };
+/** Who can read an item, in the list's three words: a project row says nothing more about its projects. */
+function visibility(value: unknown): Visibility {
+  if (value === 'only_me') return 'only-me';
+  if (value === 'team' || value === 'project') return value;
+  throw new ViewError();
 }
 
 const MEDIA: Record<string, DocumentSummary['type']> = {
@@ -117,50 +102,112 @@ const MEDIA: Record<string, DocumentSummary['type']> = {
   'text/markdown': 'markdown', 'text/plain': 'text',
 };
 
-/** A saved document's metadata (V2): its file, who can read it, and where its text stands. */
-function documentSummary(raw: unknown): DocumentSummary {
-  const value = object(raw);
-  if (value.schema_version !== 2 || value.kind !== 'echo-person-document-metadata-v2') throw new ViewError();
-  const type = MEDIA[text(value.detected_media_type)];
-  const size = value.content_length;
-  const state = text(value.extraction_state);
-  if (type === undefined || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 1 || !EXTRACTION.has(state)) throw new ViewError();
-  return {
-    document_id: text(value.document_id), title: text(value.title), filename: text(value.filename), received_at: text(value.received_at),
-    type, size, audience: audienceMark(value.audience), extraction: state as Extraction,
-    project_ids: list(value.association_project_ids).map(text),
+/** The id after each kind of ref, as the API writes it: `note:ctx_…`, `document:doc_…`, `meeting:sha256:…`. */
+const ITEM_REF: Readonly<Record<ItemRef['kind'], RegExp>> = {
+  note: /^ctx_[0-9a-f]{64}$/, document: /^doc_[0-9a-f]{64}$/, meeting: /^sha256:[0-9a-f]{64}$/,
+};
+
+function itemRef(raw: unknown): ItemRef {
+  const value = text(raw);
+  const at = value.indexOf(':');
+  const kind = value.slice(0, at);
+  const id = value.slice(at + 1);
+  if (at < 0 || !Object.hasOwn(ITEM_REF, kind) || !ITEM_REF[kind as ItemRef['kind']].test(id)) throw new ViewError();
+  return { kind: kind as ItemRef['kind'], id };
+}
+
+/** A row: its ref, title, when it was added, who can read it, and the names of your projects it is filed in. */
+function listItem(raw: unknown): ListItem {
+  const item = object(raw);
+  const ref = itemRef(item.ref);
+  const added = text(item.added_at);
+  if (item.kind !== ref.kind || Number.isNaN(Date.parse(added))) throw new ViewError();
+  const base = {
+    ref, title: text(item.title), added_at: added, visibility: visibility(item.visibility),
+    projects: list(item.projects).map(project => text(object(project).name)),
   };
+  if (ref.kind === 'document') {
+    const type = MEDIA[text(item.media_type)];
+    const size = item.size_bytes;
+    const state = text(item.extraction_state);
+    if (type === undefined || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 1 || !EXTRACTION.has(state)) throw new ViewError();
+    return { ...base, document: { type, size, extraction: state as Extraction } };
+  }
+  if (ref.kind === 'meeting' && item.meeting_date !== undefined) {
+    const date = text(item.meeting_date);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ViewError();
+    return { ...base, meeting_date: date };
+  }
+  return base;
 }
 
-/** One page of a project's documents, as `documents search-v2` lists them. */
-export function documentPageView(raw: unknown): DocumentPage {
-  const value = object(unwrap(raw));
-  if (value.schema_version !== 2 || value.kind !== 'echo-person-document-search-result-v2') throw new ViewError();
-  // A search hit carries where it matched; a list does not need it.
-  const items = list(value.documents).map(entry => {
-    const { excerpt: _excerpt, anchor: _anchor, ...metadata } = object(entry);
-    return documentSummary(metadata);
-  });
-  return { items, next_cursor: optionalText(value.next_cursor) ?? null };
+/** Rows a list page holds. */
+const MAX_LIST_ITEMS = 25;
+
+function nextCursor(value: unknown): string | null {
+  if (value !== null && typeof value !== 'string') throw new ViewError();
+  return value;
 }
 
-/** The document asked for, and one page of its text, which must be of that same original. */
-export function documentTextView(raw: unknown, documentId: string): DocumentText {
+/**
+ * One page of a list, only for the scope asked for. Nothing of its header
+ * (who you are, your tools, your projects) crosses, and a row names your
+ * projects it is filed in, never their ids.
+ */
+export function listView(raw: unknown, scope: ListScope): ListPage {
   const value = object(unwrap(raw));
-  const metadata = object(value.metadata);
-  const page = object(value.text);
-  const document = documentSummary(metadata);
-  if (document.document_id !== documentId || page.kind !== 'echo-person-document-text-v1' || page.document_id !== documentId ||
-      page.original_sha256 !== metadata.sha256) throw new ViewError();
-  const chunks: TextChunk[] = list(page.chunks).map(entry => {
-    const chunk = object(entry);
-    const start = chunk.anchor_start;
-    if ((chunk.anchor_kind !== 'page' && chunk.anchor_kind !== 'paragraph') || typeof start !== 'number' || !Number.isSafeInteger(start)) {
-      throw new ViewError();
+  if (value.schema_version !== 1 || value.kind !== 'echo-person-list-v1') throw new ViewError();
+  const project = scope.kind === 'project' ? scope.project_id : undefined;
+  const echoed = object(value.scope);
+  if (echoed.kind !== scope.kind || echoed.project_id !== project) throw new ViewError();
+  if (value.project !== undefined && object(value.project).project_id !== project) throw new ViewError();
+  const items = list(value.items);
+  if (items.length > MAX_LIST_ITEMS) throw new ViewError();
+  return { items: items.map(listItem), next_cursor: nextCursor(value.next_cursor), meetings_held: value.notice === 'meetings_unavailable' };
+}
+
+/**
+ * The item asked for, opened by its ref: a note's text, one page of a
+ * document's text, or one page of a meeting's approved record. `first` says
+ * the page was read without a cursor.
+ */
+export function openView(raw: unknown, ref: ItemRef, first: boolean): Opened {
+  const value = object(unwrap(raw));
+  if (value.schema_version !== 1 || value.kind !== 'echo-person-open-v1' || value.ref !== `${ref.kind}:${ref.id}`) throw new ViewError();
+  const item = listItem(value.item);
+  if (item.ref.kind !== ref.kind || item.ref.id !== ref.id) throw new ViewError();
+  // Where an original is filed crosses here only, so the reader can add it to another project.
+  const project_ids = list(object(value.item).projects).map(project => text(object(project).project_id));
+  const next = nextCursor(value.next_cursor);
+  switch (ref.kind) {
+    case 'note':
+      if (next !== null) throw new ViewError();
+      return { kind: 'note', content: {
+        context_id: ref.id, title: item.title, text: text(value.text), received_at: item.added_at, audience: item.visibility, project_ids,
+      } };
+    case 'document': {
+      if (!item.document) throw new ViewError();
+      const chunks: TextChunk[] = list(value.chunks).map(entry => {
+        const chunk = object(entry);
+        const anchor = object(chunk.anchor);
+        const start = anchor.start;
+        if ((anchor.kind !== 'page' && anchor.kind !== 'paragraph') || typeof start !== 'number' || !Number.isSafeInteger(start) || start < 1) {
+          throw new ViewError();
+        }
+        return { anchor: anchor.kind, start, text: text(chunk.text) };
+      });
+      const { type, size, extraction } = item.document;
+      return { kind: 'document', document: {
+        document: {
+          document_id: ref.id, title: item.title, filename: text(value.filename), received_at: item.added_at, type, size, audience: item.visibility,
+          extraction, project_ids,
+        },
+        chunks, next_cursor: next,
+      } };
     }
-    return { anchor: chunk.anchor_kind, start, text: text(chunk.text) };
-  });
-  return { document, chunks, next_cursor: optionalText(page.next_cursor) ?? null };
+    case 'meeting':
+      return { kind: 'meeting', record: meetingRecord(value, item, first), next_cursor: next };
+  }
 }
 
 /** The original was written where the person chose, checked against its digest. The path stays behind. */
@@ -267,43 +314,23 @@ export function revokedView(raw: unknown): null {
   return null;
 }
 
-export function contextView(raw: unknown): ContextContent {
-  const value = object(raw);
-  if (value.kind !== 'echo-project-context-read-v2') throw new ViewError();
-  return {
-    context_id: text(value.context_id), title: text(value.title), text: text(value.text), received_at: text(value.received_at),
-    audience: audienceMark(value.audience),
-  };
-}
-
-function match(raw: unknown, source: Match['source']): Match {
+function match(raw: unknown): Match {
   const item = object(raw);
-  return {
-    context_id: text(item.context_id), title: text(item.title), excerpt: text(item.excerpt), received_at: text(item.received_at), source,
-  };
+  return { context_id: text(item.context_id), title: text(item.title), excerpt: text(item.excerpt), received_at: text(item.received_at) };
 }
 
 /** A project's search results, only for the project that was searched. */
 export function projectMatchesView(raw: unknown, projectId: string): Matches {
   const value = object(raw);
   if (value.kind !== 'echo-project-context-search-result-v2' || value.project_id !== projectId) throw new ViewError();
-  return { items: list(value.items).map(item => match(item, 'project')) };
+  return { items: list(value.items).map(match) };
 }
 
-/** Saved notes of one version found by a search. */
+/** Saved notes of one version found by a search. Either version opens by its ref. */
 export function noteMatchesView(raw: unknown, version: 2 | 3): Match[] {
   const value = object(raw);
   if (value.kind !== `echo-person-upload-search-v${version}`) throw new ViewError();
-  return list(value.results).map(item => match(item, version === 3 ? 'v3' : 'v2'));
-}
-
-/** A saved note read in full, only the one asked for. */
-export function noteView(raw: unknown, version: 2 | 3, contextId: string): ContextContent {
-  const value = object(raw);
-  if (value.kind !== `echo-person-upload-content-v${version}` || value.context_id !== contextId) throw new ViewError();
-  return {
-    context_id: contextId, title: text(value.title), text: text(value.text), received_at: text(value.received_at), audience: audienceMark(value.audience),
-  };
+  return list(value.results).map(match);
 }
 
 function sourceRef(citation: Json): SourceRef {
@@ -396,19 +423,22 @@ function v4Part(raw: unknown, sourceCount: number): AnswerPart {
 
 /** Longest text the source pane shows, in characters; longer is cut and marked. */
 const MAX_SOURCE_TEXT = 2_000;
+/** Longest part of an approved item the reader shows, in characters: more than one part holds (3 KiB). */
+const MAX_READER_TEXT = 4_000;
 /** Items shown per section, and participants shown. */
 const MAX_RECORD_ITEMS = 32;
 
 /**
- * Text as the source pane may show it: control and format characters made
- * spaces, trimmed, and at most 2,000 characters. Nothing left is none.
+ * Text as the source pane or the reader may show it: control and format
+ * characters made spaces, trimmed, and at most `maximum` characters. Nothing
+ * left is none.
  */
-function sourceText(value: unknown): string | undefined {
+function sourceText(value: unknown, maximum = MAX_SOURCE_TEXT): string | undefined {
   if (typeof value !== 'string') return undefined;
   const cleaned = value.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim();
   if (cleaned === '') return undefined;
   const characters = [...cleaned];
-  return characters.length > MAX_SOURCE_TEXT ? `${characters.slice(0, MAX_SOURCE_TEXT - 1).join('')}… (truncated)` : cleaned;
+  return characters.length > maximum ? `${characters.slice(0, maximum - 1).join('')}… (truncated)` : cleaned;
 }
 
 /** An ISO 8601 time the renderer can format, or none. */
@@ -512,8 +542,117 @@ export function recordView(raw: unknown, asked: RecordRef): ApprovedRecord {
     all_day: time.all_day === true,
     ...(approver === undefined ? {} : { approved_by: approver }),
     participants, participants_more: participantsMore,
-    visibility: asked.policy_id === 'restricted-reviewer-person-v2' ? 'approver' : 'organization',
+    visibility: asked.policy_id === 'restricted-reviewer-person-v2' ? 'approver'
+      : asked.policy_id === 'project-members-readable-person-v1' ? 'project' : 'organization',
     decisions, actions, rationales,
+  };
+}
+
+/** Parts a meeting's page holds. */
+const MAX_OPEN_ATOMS = 25;
+const SECTIONS: Readonly<Record<string, 'decisions' | 'actions' | 'rationales'>> = { decision: 'decisions', action: 'actions', rationale: 'rationales' };
+
+/**
+ * One part of a long approved item: controls made spaces, but not trimmed,
+ * since the parts join exactly as they were cut.
+ */
+function partText(value: unknown): string {
+  const part = text(value).replace(/[\p{Cc}\p{Cf}]/gu, ' ');
+  if (part === '' || [...part].length > MAX_READER_TEXT) throw new ViewError();
+  return part;
+}
+
+/** A long item whose parts are all read: its whole text, trimmed, and no parts left to join. */
+function whole(item: RecordItem): RecordItem {
+  const { parts: _parts, ...rest } = item;
+  const joined = item.text.trim();
+  if (joined === '') throw new ViewError();
+  return { ...rest, text: joined };
+}
+
+/**
+ * One page of a meeting's approved record, as the reader shows it. Only the
+ * first page describes the meeting (when, who was there, who approved it).
+ * A long item comes in parts: each part goes on the item before it, and only
+ * a page read with a cursor may begin with a part that goes on the page
+ * before. Who can read it follows the row: everyone, a project's members, or
+ * the approver. Its transcript's ref and every id stay behind.
+ */
+function meetingRecord(value: Json, item: ListItem, first: boolean): ApprovedRecord {
+  if ((value.meeting !== undefined) !== first) throw new ViewError();
+  const atoms = list(value.atoms);
+  if (atoms.length > MAX_OPEN_ATOMS) throw new ViewError();
+  const sections: Record<'decisions' | 'actions' | 'rationales', RecordItem[]> = { decisions: [], actions: [], rationales: [] };
+  // The section of a long item whose parts are not all read yet: the next part must go on it.
+  let open: 'decisions' | 'actions' | 'rationales' | null = null;
+  atoms.forEach((entry, position) => {
+    const atom = object(entry);
+    const kind = text(atom.kind);
+    const section = Object.hasOwn(SECTIONS, kind) ? SECTIONS[kind]! : null;
+    if (!section) throw new ViewError();
+    const items = sections[section];
+    let part: { index: number; count: number } | null = null;
+    if (atom.part !== undefined) {
+      const { index, count } = object(atom.part);
+      if (typeof index !== 'number' || typeof count !== 'number' || !Number.isSafeInteger(index) || !Number.isSafeInteger(count) ||
+          count < 2 || index < 1 || index > count) throw new ViewError();
+      part = { index, count };
+    }
+    if (part && part.index > 1) {
+      const { index, count } = part;
+      const last = items.at(-1);
+      let joined: RecordItem;
+      if (open === section && last?.parts && last.parts.to === index - 1 && last.parts.count === count) {
+        joined = { ...last, text: last.text + partText(atom.text), parts: { ...last.parts, to: index } };
+        items[items.length - 1] = joined;
+      } else if (position === 0 && !first) {
+        joined = { text: partText(atom.text), excerpts: [], parts: { from: index, to: index, count } };
+        items.push(joined);
+      } else {
+        throw new ViewError();
+      }
+      open = index === count ? null : section;
+      // Every part read here: the item is whole. One begun on the page before stays in parts, to be joined.
+      if (index === count && joined.parts!.from === 1) items[items.length - 1] = whole(joined);
+      return;
+    }
+    // A long item's parts all come before the next item.
+    if (open !== null) throw new ViewError();
+    const status: RecordItem['status'] = kind === 'decision' && (atom.status === 'proposed' || atom.status === 'unresolved') ? atom.status : undefined;
+    const owner = kind === 'action' ? sourceText(atom.owner) : undefined;
+    const attributes = { ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }) };
+    if (part) {
+      items.push({ text: partText(atom.text), ...attributes, excerpts: [], parts: { from: 1, to: 1, count: part.count } });
+      open = section;
+      return;
+    }
+    const itemText = sourceText(atom.text, MAX_READER_TEXT);
+    if (itemText === undefined) throw new ViewError();
+    items.push({ text: itemText, ...attributes, excerpts: [] });
+  });
+
+  const detail = first ? object(value.meeting) : {};
+  const participants = first ? list(detail.participants).map(name => {
+    const shown = sourceText(name);
+    if (shown === undefined) throw new ViewError();
+    return shown;
+  }) : [];
+  if (participants.length > MAX_RECORD_ITEMS || new Set(participants).size !== participants.length) throw new ViewError();
+  if (first && typeof detail.participants_more !== 'boolean') throw new ViewError();
+  const startedAt = isoTime(detail.started_at);
+  const timezone = typeof detail.timezone === 'string' && /^[A-Za-z0-9_+\-/]{1,64}$/.test(detail.timezone) ? detail.timezone : undefined;
+  const approver = sourceText(detail.approved_by);
+  return {
+    title: item.title,
+    ...(startedAt === undefined ? {} : { started_at: startedAt }),
+    ...(timezone === undefined ? {} : { timezone }),
+    all_day: detail.all_day === true,
+    ...(approver === undefined ? {} : { approved_by: approver }),
+    participants, participants_more: detail.participants_more === true,
+    visibility: item.visibility === 'team' ? 'organization' : item.visibility === 'project' ? 'project' : 'approver',
+    decisions: { items: sections.decisions, more: false },
+    actions: { items: sections.actions, more: false },
+    rationales: { items: sections.rationales, more: false },
   };
 }
 

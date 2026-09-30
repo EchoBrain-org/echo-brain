@@ -47,7 +47,7 @@ export function changeShownInPlace(state: State): boolean {
   if (!change || state.concealed) return false;
   if (change.origin === 'people') return findingSheet(state)?.project.project_id === change.project.project_id;
   const target = 'context_id' in change.change ? change.change.context_id : 'document_id' in change.change ? change.change.document_id : null;
-  return state.reader?.id === target && !state.ask;
+  return state.reader?.ref.id === target && !state.ask;
 }
 
 /** Whether a click started inside what the selector names. The path is the one it had then: a menu may have changed since. */

@@ -1,14 +1,16 @@
+import type { Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
 import { message } from '../messages.js';
 import {
-  addToProject, changeBlocked, closeReader, EXTRACTION, loadProjects, nextTextPage, projectChoices, refreshDocument, removableFrom, removeFromProject,
-  saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState, type State,
+  addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreRecord, nextTextPage, projectChoices, refreshDocument,
+  removableFrom, removeFromProject, saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState, type State,
 } from '../store.js';
+import { RecordDetail } from './ask.js';
 import { ChangeLine, changeShownInPlace, within } from './change.js';
 import { Chevron, Ellipsis } from './icons.js';
 
 /** Who can read it, when that is not a project's members: the words Capture uses. */
-function readersWord(audience: 'only-me' | 'project' | 'team' | undefined): string | null {
+function readersWord(audience: Visibility | undefined): string | null {
   return audience === 'only-me' ? 'Only me' : audience === 'team' ? 'Organization' : null;
 }
 
@@ -22,11 +24,12 @@ function saveLine(reader: ReaderState): { text: string; error: boolean } | null 
   return { text: 'Could not confirm the download. Check the selected file before trying again.', error: true };
 }
 
-/** The ⋯ menu: for a document its original and text pages, and for either where it is filed. */
+/** The ⋯ menu: for a document its original and text pages, and for a note or document where it is filed. */
 function Actions({ state, reader }: { state: State; reader: ReaderState }) {
   const blocked = changeBlocked(state);
   const document = reader.document;
   const removable = removableFrom(state);
+  const filing = canFile(reader);
   if (reader.menu === 'projects') {
     const choices = projectChoices(state);
     return (
@@ -44,7 +47,7 @@ function Actions({ state, reader }: { state: State; reader: ReaderState }) {
   }
   return (
     <div class="menu" role="menu" data-testid="reader-menu">
-      {reader.from.kind === 'document' && (
+      {reader.ref.kind === 'document' && (
         <>
           <button type="button" role="menuitem" class="menu-item" data-testid="reader-save" disabled={!document || reader.save?.status === 'saving'}
             onClick={() => void saveOriginal()}>Save original…</button>
@@ -59,19 +62,21 @@ function Actions({ state, reader }: { state: State; reader: ReaderState }) {
         <button type="button" role="menuitem" class="menu-item" data-testid="reader-remove" disabled={blocked || reader.loading}
           onClick={removeFromProject}>Remove from this project</button>
       )}
-      <button type="button" role="menuitem" class="menu-item" data-testid="reader-add" disabled={blocked || reader.loading}
+      <button type="button" role="menuitem" class="menu-item" data-testid="reader-add" disabled={blocked || reader.loading || !filing}
         onClick={showProjectChoices}>Add to project <Chevron /></button>
     </div>
   );
 }
 
 /**
- * An original, read in place of the page's list: a note's text as it was
- * saved, or a document's text a page at a time. Back returns to the list.
+ * An item, read in place of the page's list: a note's text as it was saved,
+ * a document's text a page at a time, or a meeting's approved record, read on
+ * with More. Back returns to the list.
  */
 export function Reader({ state, reader, backTo }: { state: State; reader: ReaderState; backTo: string }) {
   const content = reader.content;
   const document = reader.document;
+  const record = reader.record;
   const title = content?.title ?? document?.document.title;
   const received = content?.received_at ?? document?.document.received_at;
   const meta = [readersWord(content?.audience ?? document?.document.audience), received ? when(received) : null,
@@ -89,9 +94,11 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
             <h1>{title}</h1>
             <div class="notice" data-testid="reader-meta">{meta}</div>
           </div>
-          <button type="button" class="circle small" aria-label="More actions" aria-haspopup="menu" aria-expanded={reader.menu !== 'closed'}
-            data-testid="reader-actions" onClick={toggleReaderMenu}><Ellipsis /></button>
-          {reader.menu !== 'closed' && <Actions state={state} reader={reader} />}
+          {hasReaderMenu(reader) && (
+            <button type="button" class="circle small" aria-label="More actions" aria-haspopup="menu" aria-expanded={reader.menu !== 'closed'}
+              data-testid="reader-actions" onClick={toggleReaderMenu}><Ellipsis /></button>
+          )}
+          {hasReaderMenu(reader) && reader.menu !== 'closed' && <Actions state={state} reader={reader} />}
         </div>
       )}
       {state.change?.origin === 'reader' && changeShownInPlace(state) && <ChangeLine change={state.change} />}
@@ -110,6 +117,10 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
           ))}
         </div>
       ))}
+      {record && <RecordDetail record={record} />}
+      {record && reader.recordNext && (
+        <button type="button" class="link-button more" data-testid="reader-more" disabled={reader.loading} onClick={moreRecord}>More</button>
+      )}
       <div class="actions"><button type="button" class="link-button" onClick={closeReader}>Back to {backTo}</button></div>
     </article>
   );
