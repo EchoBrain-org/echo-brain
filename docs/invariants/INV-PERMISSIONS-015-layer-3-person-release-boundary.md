@@ -17,9 +17,10 @@ decision_ids:
   - ADR-0015
   - ADR-0017
   - ADR-0019
+  - ADR-0023
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0023 Person list and open-by-reference paths with the mine scope, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -50,6 +51,8 @@ possession from being mistaken for human permission. It covers clean V1 Layer 1
 listing, Layer 2 search, and the composed Layer 4 `ask` path. ADR-0015 extends
 that bounded path to authorized Person originals and optional project scope;
 it does not grant generic raw-meeting access or permit a privileged model read.
+ADR-0023 adds model-free Person list and open-by-reference paths over the same
+readable set; their project and mine scopes only narrow it.
 
 ADR-0010 adds one non-serving exception to the otherwise model-free lower
 layers: during construction of a fresh Layer 2 generation, an Authority-owned
@@ -99,6 +102,22 @@ when requested, project association are checked before content access and again
 at release; a missing, disabled or mismatched grant releases no content. This
 does not admit generic meeting snapshots into original-context search or Ask.
 
+ADR-0023's list and open paths call no model and are served outside the
+answer-model gate. The server binds principal and membership from the session;
+a request chooses only a joined project or mine, and a project it has not
+joined gets the same denial as project Ask before any store runs. Notes and
+documents are read from custody under the evidence desk's access rule, meetings
+from the pinned search generation (list) or the Layer 1 exact read (open), and
+a transcript only after that exact read and through the ADR-0017 grant. Each
+store audits exactly the rows it released after its own fence; the route then
+revalidates every store release, the session and the grant set before one page
+audit and the response. Rows and open responses carry only allowlisted fields:
+never the envelope, a log position, a count, an uploader or approver identity,
+or an unjoined project. A cursor holds only positions the caller already
+received and is bound to the operation, scope, organization and membership.
+An open of anything the caller cannot read is one fixed `not_found`, and list
+holds meetings only when a record the reader can read is waiting to be indexed.
+
 ## Verification and change procedure
 
 Focused Authority, retrieval, Person-client, architecture, and clean-runtime
@@ -106,7 +125,8 @@ integration tests verify the two policy branches, exact-caller scope, final
 fence, audit digest, metadata, rejection non-disclosure, model-free Layer 1
 and query-serving Layer 3 closures, exact-segment rebuild-time projection,
 bounded Layer 3 adjacency, bounded Layer 4 calls, one request snapshot,
-request-local citation subsets, and answer-audit rows. The source boundary
+request-local citation subsets, list and open allowlists, mine and project
+subsets of global, cursor binding, and answer-audit rows. The source boundary
 keeps the Layer 4 root narrow and rejects direct lower-layer imports.
 Enforcement remains partial until an exact deployed artifact completes the
 two-Person live rehearsal. Any new release path requires an accepted ADR,

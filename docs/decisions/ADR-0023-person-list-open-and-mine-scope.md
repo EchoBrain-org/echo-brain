@@ -194,8 +194,9 @@ never loops on the same cursor.
 ### Open by ref
 
 Open always uses global access; a cited item from a mine or project answer
-opens under global, which is safe because both scopes are subsets of it. Every
-refusal after authentication other than `unavailable` returns one `not_found`
+opens under global, which is safe because both scopes are subsets of it. A
+malformed ref, or a cursor bound to another ref, person or operation, is a 400.
+After that, every refusal other than `unavailable` returns one `not_found`
 (HTTP 404, fixed body): unknown, unreadable, left project, pending or rejected
 meeting, unshared or unreadable transcript, out-of-range cursor, and fence
 failures.
@@ -349,6 +350,10 @@ Specifying the approved choices against the code refined them as follows:
   visibility tokens, so a project reader can learn from Ask that a cited
   item's audience names other projects. `person records` already exposes the
   full audience. Collapsing them is a follow-up alongside ADR-0020.
+- **Measured cost.** Page 1 over 1,024 single-atom approved records, on one
+  development Mac: global 20.9 ms cold and 1.4 ms warm; mine 213.2 ms cold and
+  1.5 ms warm. All four are inside the revisit thresholds (50 ms warm, 3 s cold
+  mine), so approval time and approver stay query-time reads.
 - Each of these needs its own decision: placeholders for items lost with a
   left project, counts, a since filter, Slack in mine, pending meetings,
   unjoined projects, persisted approver facts, and listing meetings past the
@@ -359,11 +364,19 @@ Specifying the approved choices against the code refined them as follows:
 There is no database migration and no SQL, baseline or lineage change.
 Rollback reverts server, CLI and desktop together.
 
+Merge checklist, in the change that merges the implementation:
+
+- `status` here and this ADR's row in the decision index change to `accepted`.
+- The change that stops releasing `request_id` to readers other than the
+  uploader is merged, or ships in the same release.
+- The pull request states the coordinated server-first release plan.
+
 Evidence:
 
 - `services/organization-authority/test/person-list-disclosure.test.ts`
-  covers the negative disclosure cases on the real runtime and SQLite, for
-  owner and employee readers, including Ask with mine.
+  covers the negative disclosure cases for owner and employee readers,
+  including Ask with mine. It composes the runtime's own stores and routes over
+  SQLite and signed approvals, served by the real HTTP server.
 - `services/organization-authority/test/person-list-route.test.ts` and
   `services/organization-authority/test/person-list-cursor-v1.test.ts` cover
   the merge, cursor binding, full walks and fences.
@@ -377,6 +390,12 @@ Evidence:
 - `services/organization-authority/test/person-meeting-open-route.test.ts`
   covers meeting open, split parts, transcripts and the absence of evidence
   quotes.
+- `services/organization-authority/test/person-answer-v3-http.test.ts`,
+  `services/organization-authority/test/person-evidence-desk-records.test.ts`
+  and `packages/organization-authority-kernel/test/answer-composition/agentic-ask-v1.test.ts`
+  cover Ask with mine and citation refs.
+- `services/organization-authority/test/organization-authority-api-runtime.test.ts`
+  covers list and open served by a fresh runtime with no answer model.
 - `packages/organization-api/test/person-list-v1.test.ts` and
   `packages/organization-api/test/person-answer-v4.test.ts` cover the
   contracts and their never-released keys.

@@ -76,10 +76,14 @@ audiences retain their meaning. Legacy request versions remain supported.
 
 The CLI exposes `person updates submit-v3|status-v3|read-v3|search-v3` and
 `person documents upload-v2|status-v2|read-v2|search-v2|download-v2`.
-Project content uses `person projects feed-v2|search-v2|read-context-v2`. New admission commands accept
-`--association-project-ids-json`; a projects audience also uses
-`--audience-project-ids-json`. Document retry selects the retained snapshot's
-version automatically. In the desktop app, only **Save** submits the request.
+Project content uses `person projects feed-v2|search-v2|read-context-v2`. The
+desktop app's project page instead reads `person list --project <project-id>`
+and opens each row with `person open --ref`
+([ADR-0023](../decisions/ADR-0023-person-list-open-and-mine-scope.md)). New
+admission commands accept `--association-project-ids-json`; a projects
+audience also uses `--audience-project-ids-json`. Document retry selects the
+retained snapshot's version automatically. In the desktop app, only **Save**
+submits the request.
 
 Existing capacity limits remain **100 retained originals per membership** and
 **1,000 per organization**, shared by notes and files. Linking one original to

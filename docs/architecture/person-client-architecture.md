@@ -43,6 +43,20 @@ and after the command and refuses the result if the account changed, reporting
 a write's outcome as unknown. A packaged app carries the Person client package
 produced by `tools/pack-person-client.mjs`.
 
+The sidebar's **Mine** row, under New project, opens a page that reads
+`person list --mine`
+([ADR-0023](../decisions/ADR-0023-person-list-open-and-mine-scope.md)): the
+notes the person saved, the files they uploaded and the meetings they approved,
+newest first, each with the names of their projects it is filed in, and More
+for the next page. A project page reads `person list --project`, and the reader
+opens every row and citation with `person open --ref`, joining a meeting's
+split parts across pages. On Mine the bar asks with the Mine chip, shows no
+live matches and has no ⊕, and a dropped file is not taken. A save toast that
+no project page shows opens Mine. A 401 on a project's list means the person
+is no longer a member: the page says "This is no longer available to you." and
+status and projects are read again once per visit, without signing out.
+Signing out leaves Mine and clears it.
+
 ## Local state authority
 
 The machine's authorization state is the signed-in Person session below
@@ -111,6 +125,11 @@ unapproved evidence. The source-card behavior below describes approved
 records; original evidence uses its exact source/revision/representation
 coordinates and a fresh authorized read.
 
+With the Mine chip, the desktop sends `person ask --mine`: Ask reads only the
+person's own notes and uploads and the meetings they approved, and no Slack or
+shared transcript. A cited original from that answer is read under global scope,
+which contains mine.
+
 The desktop app's **Account** menu uses the same Person client and session
 store. An existing member can sign in through Google without another
 invitation; a new member chooses the private invitation file. Sign-out and
@@ -134,9 +153,11 @@ converted to null or retried automatically.
 Ask retains validated citations, groups them by record digest, and loads source
 cards through `person records --record-sha256 <digest>` while the app is shown.
 Each readable card appears as its read completes; a failed or missing read does
-not discard other readable cards. The **Based on** chips acquire meeting titles
-after their reads complete. Selecting a chip opens its approved record alongside
-the answer.
+not discard other readable cards. Citations also carry a `ref` for
+`person open`, but the source cards still read `person records` until a
+follow-up moves them to open by ref. The **Based on** chips acquire meeting
+titles after their reads complete. Selecting a chip opens its approved record
+alongside the answer.
 
 Cards show decisions, actions, rationale, and approved evidence excerpts beside
 the statement each excerpt supports. Meeting dates, excerpt timestamps,
@@ -175,6 +196,32 @@ records. Ask and Sources continue to use the Person session. The server resolves
 the caller rather than accepting a target membership, revokes the current link,
 and invalidates pending linking attempts so they cannot restore it later.
 Connecting again requires a new browser sign-in.
+
+## Agents
+
+Claude Code, Codex and other agents use the Person CLI with the session of the
+person who runs them; an agent has no membership of its own
+([INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)).
+`person --help` starts with the same order:
+
+- `person status` says who is signed in, from local state only.
+- `person list` is the map: the newest notes, documents and approved meetings
+  the person can read now, 25 per page, with no text and no counts. Its first
+  page names the person, their connected tools and their projects.
+  `--project <project-id>` narrows it to one joined project and `--mine` to
+  what the person added or approved.
+- Pass `next_cursor` back as `--cursor` with the same scope; `null` is the end.
+- `notice: "meetings_unavailable"` means meetings are still being indexed and
+  come on a later page. A first page with no items and that notice is not the
+  end: follow its cursor later. A later page that could only wait answers 503
+  `unavailable`; retry the same cursor later.
+- `person open --ref <ref>` reads one row or one Ask citation's `ref`.
+  Documents, meetings and transcripts page with `--cursor` and the same ref. A
+  meeting's first page carries `transcript_ref` when its transcript was shared
+  with the reader. Anything the person cannot read is `not_found`.
+- `person ask --question <text>` answers with citations in the same scopes.
+- With a valid session, a 401 on `--project` means the person is not a member
+  or the project does not exist.
 
 ## Artifact boundary
 
@@ -232,6 +279,12 @@ stored audience and, for project scope, project association
 Generic source admission alone grants no access to raw meeting snapshots or
 pending approvals. See the
 [historical upload scope](../product/2026-09-21-person-update-inbox-v1.md).
+
+`person list --mine` lists these uploads from custody as soon as they are
+saved, in every extraction state, so they appear in Mine before Ask can find
+them. Mine is bound to the uploading membership: after a person is provisioned
+again, earlier uploads stay readable wherever their audience allows but no
+longer appear in Mine.
 
 In the desktop app, **Capture** wraps these commands through the Person
 client. Owners and employees write a note or choose a file, choose who can read

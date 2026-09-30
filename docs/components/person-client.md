@@ -88,3 +88,14 @@ optional metadata do not settle the final context shape. See the
 Agentic Ask V1 is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md)
 and [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md). Its V3 route and shared evidence
 desk are capability-gated; implementation and live qualification are separate.
+
+`person list [--project <project-id> | --mine] [--cursor <next_cursor>]` and
+`person open --ref <ref> [--cursor <next_cursor>]` read the Authority's
+[ADR-0023](../decisions/ADR-0023-person-list-open-and-mine-scope.md) routes and
+print one JSON line. List rows carry a ref, title, time, who can read it and
+the caller's projects it is filed in, never text; open pages a note, document,
+approved meeting or shared transcript by that ref. `person ask --mine` narrows
+Ask to what the caller added or approved, and every citation that carries a
+`ref` opens with `person open`. `--project` and `--mine` are exclusive, and
+the request is validated before any session or network use
+([`person-list-cli.test.ts`](../../tests/person-client/person-list-cli.test.ts)).

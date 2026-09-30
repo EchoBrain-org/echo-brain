@@ -19,6 +19,16 @@ associated with that project. This is the initial definition of related personal
 context. Other people's private material, unassociated personal context, and
 unrelated organization or other-project material remain excluded.
 
+Choosing **Mine** narrows Ask to what the person added: the notes they saved
+and the documents they uploaded under their current membership, and the
+meetings they approved as final approver, while each is still readable to them
+([ADR-0023](../decisions/ADR-0023-person-list-open-and-mine-scope.md)). Mine
+reads no Slack and, in this version, no shared transcripts. It is a narrowing
+of global scope, never another view: a teammate's item is excluded even when
+the person can read it. "My" in a question is only a search hint; it does not
+select Mine. Its citations carry a `ref`, which `person open` reads under
+global scope.
+
 The separate Find saved context entry is removed. File browsing is not a
 prerequisite for asking. Owner administration is **People & invites**, under
 Organization in the desktop app's sidebar and its menu bar icon's menu, and
@@ -37,12 +47,12 @@ a running request. This is one question and answer at a time; it does not add
 persistent chat history or conversational memory.
 
 In the desktop app, Escape steps back one level: a sheet, then Capture, then
-the answer with the source beside it, then the reader, then the project or
-People & invites, then Home. The reader names where its Back goes. Back from
-an original or an answer returns to the place the project feed was scrolled
-to. Escape or Close puts an unsent note or attached file away until Capture
-opens again, and a save in flight cannot be dismissed. See the desktop app's
-[known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
+the answer with the source beside it, then the reader, then the project, Mine
+or People & invites, then Home. The reader names where its Back goes. Back from
+an item or an answer returns to the place the project page or Mine was
+scrolled to. Escape or Close puts an unsent note or attached file away until
+Capture opens again, and a save in flight cannot be dismissed. See the desktop
+app's [known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
 
 Capture, and a file dropped on the window, a project row or the Capture sheet,
 use one sheet: a note or one file, the projects it is filed in, and **Who can
@@ -135,8 +145,10 @@ This version shipped as `POST /v2/person/ask` (request schema 2, response
 schema 3), beside the approved-record-only `/v1/person/ask`. Both were retired
 by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): Ask is now
 `POST /v3/person/ask` with V4 answers, and the scope rules here still apply to
-it. The CLI accepts `person ask --question <text> [--project <project-id>]`. The
-client does not silently downgrade a project request to global Ask.
+it. The CLI accepts
+`person ask --question <text> [--project <project-id> | --mine]`; the two
+flags are exclusive. The client does not silently downgrade a project or mine
+request to global Ask.
 
 Cited original evidence is read through `POST /v2/person/ask/source` or
 `person ask-source`, using the answer's scope and exact source, revision,
