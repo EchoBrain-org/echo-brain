@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
 import { PERSON_DOCUMENT_MAX_ORIGINAL_BYTES } from '@echo-brain/organization-api';
+import { canonicalJson } from '@echo-brain/federation-protocol';
 
 const NOW = '2026-09-23T01:00:00.000Z';
 const requestId = '10000000-0000-4000-8000-000000000001';
@@ -24,11 +25,11 @@ function setup(bytes = Buffer.from('# SCOUT PRD\n' + 'robot requirements\n'.repe
     refresh_expires_at: '2026-09-30T01:00:00.000Z', hard_reauthentication_at: '2026-09-30T01:00:00.000Z',
   });
   const file = join(home, 'SCOUT.md'); writeFileSync(file, bytes);
-  const upload = { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: requestId, filename: 'SCOUT.md',
-    title: 'SCOUT PRD', content_length: bytes.length, sha256: digest(bytes), audience: { kind: 'only_me' }, project_id: null };
-  const receipt = { ...upload, kind: 'echo-person-document-receipt-v1', document_id: documentId, detected_media_type: 'text/markdown',
+  const upload = { schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: requestId, filename: 'SCOUT.md',
+    title: 'SCOUT PRD', content_length: bytes.length, sha256: digest(bytes), association_project_ids: [] as string[], audience: { kind: 'only_me' } };
+  const receipt = { ...upload, kind: 'echo-person-document-receipt-v2', document_id: documentId, detected_media_type: 'text/markdown',
     received_at: NOW, state: 'saved', extraction_state: 'extracting' };
-  const metadata = { ...receipt, kind: 'echo-person-document-metadata-v1', extraction_detail: null, extractor: null, extracted_text_bytes: 0 };
+  const metadata = { ...receipt, kind: 'echo-person-document-metadata-v2', extraction_detail: null, extractor: null, extracted_text_bytes: 0 };
   return { home, file, bytes, upload, receipt, metadata, store };
 }
 function json(value: unknown, status = 200): Response { return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } }); }
@@ -38,7 +39,7 @@ async function run(home: string, args: string[], fetch: typeof globalThis.fetch)
     stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } });
   return { code, stdout, stderr, result: stdout ? JSON.parse(stdout) as Record<string, unknown> : null, failure: stderr ? JSON.parse(stderr) as Record<string, unknown> : null };
 }
-const uploadArgs = (file: string) => ['documents', 'upload', '--file', file, '--audience', 'only-me', '--title', 'SCOUT PRD', '--request-id', requestId];
+const uploadArgs = (file: string) => ['documents', 'upload-v2', '--file', file, '--audience', 'only-me', '--title', 'SCOUT PRD', '--request-id', requestId];
 async function consume(init?: RequestInit): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of init?.body as unknown as AsyncIterable<Uint8Array>) { expect(chunk.byteLength).toBeLessThanOrEqual(64 * 1024); chunks.push(Buffer.from(chunk)); }
@@ -63,7 +64,7 @@ describe('document CLI custody and bounded transport', () => {
     const f = setup();
     expect(f.bytes.length).toBeGreaterThan(8192);
     const fetch = vi.fn<typeof globalThis.fetch>(async (url, init) => {
-      expect(String(url)).toBe(`https://authority.example/v1/person/documents/${requestId}`);
+      expect(String(url)).toBe(`https://authority.example/v2/person/documents/${requestId}`);
       expect(init?.method).toBe('PUT'); expect(init?.redirect).toBe('error');
       expect((init as RequestInit & { duplex: string }).duplex).toBe('half');
       expect(init?.signal).toBeInstanceOf(AbortSignal);
@@ -122,7 +123,7 @@ describe('document CLI custody and bounded transport', () => {
     const root = join(f.home, '.local/share/echo-brain/person/document-snapshots');
     const pending = join(root, readdirSync(root)[0]!, requestId);
     expect(existsSync(pending)).toBe(true);
-    const status = await run(f.home, ['documents', 'status', '--request-id', requestId], async () => json(f.metadata));
+    const status = await run(f.home, ['documents', 'status-v2', '--request-id', requestId], async () => json(f.metadata));
     expect(status.code, status.stderr).toBe(0); expect(existsSync(pending)).toBe(false);
   });
 
@@ -173,6 +174,24 @@ describe('document CLI custody and bounded transport', () => {
     expect((await run(f.home, ['documents', 'pending'], offline)).result).toMatchObject({ ok: true, result: { snapshots: [] } });
   });
 
+  it('retries a snapshot an older client retained from a V1 upload, on the V1 route', async () => {
+    const f = setup();
+    await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });
+    // Only older clients wrote V1 snapshots, so rewrite this retained request's manifest as one.
+    const root = join(f.home, '.local/share/echo-brain/person/document-snapshots');
+    const legacy = { schema_version: 1, kind: 'echo-person-document-upload-v1', request_id: requestId, filename: 'SCOUT.md', title: 'SCOUT PRD',
+      content_length: f.bytes.length, sha256: f.upload.sha256, audience: { kind: 'only_me' }, project_id: projectId };
+    writeFileSync(join(root, readdirSync(root)[0]!, requestId, 'metadata.json'), canonicalJson({ metadata: legacy }), { mode: 0o600 });
+    const receipt = { ...legacy, kind: 'echo-person-document-receipt-v1', document_id: documentId, detected_media_type: 'text/markdown', received_at: NOW, state: 'saved', extraction_state: 'extracting' };
+    const retry = await run(f.home, ['documents', 'retry', '--request-id', requestId], async (url, init) => {
+      expect(String(url)).toBe(`https://authority.example/v1/person/documents/${requestId}`);
+      expect(JSON.parse(Buffer.from(new Headers(init?.headers).get('x-echo-document-metadata')!, 'base64url').toString())).toEqual(legacy);
+      expect(await consume(init)).toEqual(f.bytes); return json(receipt, 201);
+    });
+    expect(retry.code, retry.stderr).toBe(0); expect(retry.result).toEqual({ ok: true, result: receipt });
+    expect((await run(f.home, ['documents', 'pending'], vi.fn())).result).toMatchObject({ ok: true, result: { snapshots: [] } });
+  });
+
   it('explicitly abandons a retained local snapshot without claiming the Authority upload was cancelled', async () => {
     const f = setup();
     await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });
@@ -205,7 +224,7 @@ describe('document CLI custody and bounded transport', () => {
 
   it('treats interrupted original downloads as failures without publishing partial bytes', async () => {
     const f = setup(); const out = join(f.home, 'download.md');
-    const outcome = await run(f.home, ['documents', 'download', '--document-id', documentId, '--out', out], async url => {
+    const outcome = await run(f.home, ['documents', 'download-v2', '--document-id', documentId, '--out', out], async url => {
       if (!String(url).endsWith('/original')) return json(f.metadata);
       let part = 0;
       return new Response(new ReadableStream({ pull(controller) { if (part++ === 0) controller.enqueue(f.bytes.subarray(0, 10)); else controller.error(new Error('private transport diagnostic')); } }),
@@ -237,7 +256,7 @@ describe('document CLI custody and bounded transport', () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
       const meta = JSON.parse(Buffer.from(new Headers(init?.headers).get('x-echo-document-metadata')!, 'base64url').toString());
       for await (const chunk of init?.body as unknown as AsyncIterable<Uint8Array>) { sent += chunk.byteLength; expect(chunk.byteLength).toBeLessThanOrEqual(64 * 1024); }
-      return json({ ...f.receipt, ...meta, kind: 'echo-person-document-receipt-v1' }, 201);
+      return json({ ...f.receipt, ...meta, kind: 'echo-person-document-receipt-v2' }, 201);
     });
     expect((await run(f.home, uploadArgs(f.file), fetch)).code).toBe(0); expect(sent).toBe(PERSON_DOCUMENT_MAX_ORIGINAL_BYTES);
     truncateSync(f.file, PERSON_DOCUMENT_MAX_ORIGINAL_BYTES + 1);
@@ -255,26 +274,23 @@ describe('document CLI custody and bounded transport', () => {
   });
 
   it('keeps association and audience independent and carries Unicode metadata in ASCII-safe headers', async () => {
-    const f = setup(); const args = uploadArgs(f.file); args[args.indexOf('--title') + 1] = '机器人 PRD'; args.push('--project-id', projectId);
+    const f = setup(); const args = uploadArgs(f.file); args[args.indexOf('--title') + 1] = '机器人 PRD'; args.push('--association-project-ids-json', JSON.stringify([projectId]));
     const outcome = await run(f.home, args, async (_url, init) => {
       const encoded = new Headers(init?.headers).get('x-echo-document-metadata')!; expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
-      const meta = JSON.parse(Buffer.from(encoded, 'base64url').toString()); expect(meta.title).toBe('机器人 PRD'); expect(meta.audience).toEqual({ kind: 'only_me' }); expect(meta.project_id).toBe(projectId);
-      await consume(init); return json({ ...f.receipt, ...meta, kind: 'echo-person-document-receipt-v1' }, 201);
+      const meta = JSON.parse(Buffer.from(encoded, 'base64url').toString()); expect(meta.title).toBe('机器人 PRD'); expect(meta.audience).toEqual({ kind: 'only_me' }); expect(meta.association_project_ids).toEqual([projectId]);
+      await consume(init); return json({ ...f.receipt, ...meta, kind: 'echo-person-document-receipt-v2' }, 201);
     }); expect(outcome.code, outcome.stderr).toBe(0);
   });
 
-  it('lists documents with empty query and reads metadata plus provenance-bound text pages', async () => {
+  it('lists V2 documents in a project with an empty query', async () => {
     const f = setup();
-    const list = await run(f.home, ['documents', 'search', '--project-id', projectId], async (_url, init) => {
-      expect(JSON.parse(String(init?.body))).toMatchObject({ project_id: projectId, query: '', limit: 10, cursor: null });
-      return json({ schema_version: 1, kind: 'echo-person-document-search-result-v1', documents: [], next_cursor: null });
-    }); expect(list.code).toBe(0);
-    const page = { schema_version: 1, kind: 'echo-person-document-text-v1', document_id: documentId, original_sha256: f.upload.sha256,
-      extractor: 'fixture-v1', extraction_state: 'ready', chunks: [{ ordinal: 0, anchor_kind: 'paragraph', anchor_start: 1, text: 'Robot requirements' }], next_cursor: 'bmV4dA' };
-    const read = await run(f.home, ['documents', 'read', '--document-id', documentId, '--project-id', projectId], async url => {
-      expect(new URL(String(url)).searchParams.get('project_id')).toBe(projectId);
-      return json(new URL(String(url)).pathname.endsWith('/text') ? page : { ...f.metadata, extractor: 'fixture-v1', extraction_state: 'ready', extracted_text_bytes: 18 });
-    }); expect(read.code, read.stderr).toBe(0); expect(read.result).toEqual({ ok: true, result: { metadata: { ...f.metadata, extractor: 'fixture-v1', extraction_state: 'ready', extracted_text_bytes: 18 }, text: page } });
+    const page = { schema_version: 2, kind: 'echo-person-document-search-result-v2', documents: [], next_cursor: null };
+    const list = await run(f.home, ['documents', 'search-v2', '--project-id', projectId], async (url, init) => {
+      expect(String(url)).toBe('https://authority.example/v2/person/documents/search');
+      expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 2, kind: 'echo-person-document-search-v2', project_id: projectId, query: '', limit: 10, cursor: null });
+      return json(page);
+    });
+    expect(list.code, list.stderr).toBe(0); expect(list.result).toEqual({ ok: true, result: page });
   });
 
   it('searches V2 documents through the V2 endpoint and preserves projects audience', async () => {
@@ -300,26 +316,11 @@ describe('document CLI custody and bounded transport', () => {
     expect(outcome.result).toMatchObject({ ok: true, result: { documents: [{ document_id: documentId, request_id: null }] } });
   });
 
-  it('reconciles extraction completion between metadata and text reads without losing provenance', async () => {
-    const f = setup(); let reads = 0;
-    const ready = { ...f.metadata, extractor: 'fixture-v1', extraction_state: 'ready', extracted_text_bytes: 18 };
-    const text = { schema_version: 1, kind: 'echo-person-document-text-v1', document_id: documentId, original_sha256: f.upload.sha256,
-      extractor: 'fixture-v1', extraction_state: 'ready', chunks: [{ ordinal: 0, anchor_kind: 'paragraph', anchor_start: 1, text: 'Robot requirements' }], next_cursor: null };
-    const result = await run(f.home, ['documents', 'read', '--document-id', documentId], async url => {
-      if (String(url).endsWith('/text')) return json(text);
-      return json(reads++ === 0 ? f.metadata : ready);
-    });
-    expect(result.code, result.stderr).toBe(0); expect(reads).toBe(2);
-    expect(result.result).toEqual({ ok: true, result: { metadata: ready, text } });
-    const bad = await run(f.home, ['documents', 'read', '--document-id', documentId], async url => json(String(url).endsWith('/text') ? { ...text, original_sha256: `sha256:${'b'.repeat(64)}` } : f.metadata));
-    expect(bad.failure).toMatchObject({ code: 'invalid_response' }); expect(bad.stdout).toBe('');
-  });
-
   it('settles a retained request from a minimal saved receipt after project access loss', async () => {
     const f = setup();
     await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });
-    const saved = { schema_version: 1, kind: 'echo-person-document-saved-v1', request_id: requestId, document_id: documentId, received_at: NOW, state: 'saved' };
-    const result = await run(f.home, ['documents', 'status', '--request-id', requestId], async () => json(saved));
+    const saved = { schema_version: 2, kind: 'echo-person-document-saved-v2', request_id: requestId, document_id: documentId, received_at: NOW, state: 'saved' };
+    const result = await run(f.home, ['documents', 'status-v2', '--request-id', requestId], async () => json(saved));
     expect(result.code, result.stderr).toBe(0); expect(result.result).toEqual({ ok: true, result: saved });
     expect((await run(f.home, ['documents', 'pending'], vi.fn())).result).toMatchObject({ ok: true, result: { snapshots: [] } });
   });
@@ -357,7 +358,7 @@ describe('document CLI custody and bounded transport', () => {
 
   it('downloads exact bytes to a new atomic file and prints only byte/hash proof', async () => {
     const f = setup(); const out = join(f.home, 'download.md');
-    const outcome = await run(f.home, ['documents', 'download', '--document-id', documentId, '--out', out, '--project-id', projectId], async url => {
+    const outcome = await run(f.home, ['documents', 'download-v2', '--document-id', documentId, '--out', out, '--project-id', projectId], async url => {
       expect(new URL(String(url)).searchParams.get('project_id')).toBe(projectId);
       return String(url).includes('/original?') ? original(f.bytes) : json(f.metadata);
     });
@@ -369,7 +370,7 @@ describe('document CLI custody and bounded transport', () => {
   it.each(['hash', 'length', 'truncated', 'wrong-proof', 'existing'])('never publishes a %s download or overwrites an existing file', async kind => {
     const f = setup(); const out = join(f.home, 'download.md');
     if (kind === 'existing') writeFileSync(out, 'keep');
-    const outcome = await run(f.home, ['documents', 'download', '--document-id', documentId, '--out', out], async url => {
+    const outcome = await run(f.home, ['documents', 'download-v2', '--document-id', documentId, '--out', out], async url => {
       if (!String(url).endsWith('/original')) return json(f.metadata);
       if (kind === 'wrong-proof') return original(f.bytes, `sha256:${'b'.repeat(64)}`);
       const bytes = kind === 'hash' ? Buffer.alloc(f.bytes.length, 65) : kind === 'length' ? Buffer.concat([f.bytes, Buffer.from('!')]) : kind === 'truncated' ? f.bytes.subarray(1) : f.bytes;
@@ -382,7 +383,7 @@ describe('document CLI custody and bounded transport', () => {
 
   it('withholds a download when the signed-in identity changes before file publication', async () => {
     const f = setup(); const out = join(f.home, 'download.md');
-    const outcome = await run(f.home, ['documents', 'download', '--document-id', documentId, '--out', out], async url => {
+    const outcome = await run(f.home, ['documents', 'download-v2', '--document-id', documentId, '--out', out], async url => {
       if (!String(url).endsWith('/original')) return json(f.metadata);
       const stored = f.store.read();
       f.store.install(stored.authority_origin, stored.authority_id, { ...stored.session, membership_id: 'mem_00000000-0000-4000-8000-000000000002' });
@@ -393,7 +394,7 @@ describe('document CLI custody and bounded transport', () => {
   it('rejects duplicate, unknown, and contradictory document options before sending', async () => {
     const f = setup();
     for (const args of [[...uploadArgs(f.file), '--audience', 'team'], [...uploadArgs(f.file), '--audience-project-id', projectId],
-      ['documents', 'read', '--document-id', '../../secret'], ['documents', 'search', '--limit', '21'], ['documents', 'search', '--query', '界'.repeat(67)]]) {
+      ['documents', 'download-v2', '--document-id', '../../secret', '--out', join(f.home, 'secret.md')], ['documents', 'search-v2', '--limit', '21'], ['documents', 'search-v2', '--query', '界'.repeat(67)]]) {
       const fetch = vi.fn(); const outcome = await run(f.home, args, fetch); expect(outcome.code).not.toBe(0); expect(fetch).not.toHaveBeenCalled();
     }
   });

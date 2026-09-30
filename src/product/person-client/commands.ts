@@ -1,6 +1,6 @@
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { DocumentFileError } from './document-file.js';
-import { validateProjectContextAudienceV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchV2, parseCanonicalAssociationProjectIdsJsonV1, validatePersonUploadAudienceV3 } from '@echo-brain/organization-api';
+import { validatePersonDocumentSearchV2, parseCanonicalAssociationProjectIdsJsonV1, validatePersonUploadAudienceV3 } from '@echo-brain/organization-api';
 import { readUpdateFile } from './update-file.js';
 import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validatePersonUploadAudienceV2, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1, validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
@@ -90,20 +90,14 @@ type Option = string;
 const RULES: Readonly<
   Record<string, { accepts?: readonly Option[]; requires?: readonly Option[] }>
 > = {
-  "documents-upload": { accepts: ["file", "audience", "audience-project-id", "project-id", "title", "request-id", "expected-membership-id", "expected-authority"], requires: ["file", "audience", "title", "request-id"] },
   "documents-upload-v2": { accepts: ["file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json", "title", "request-id", "expected-membership-id", "expected-authority"], requires: ["file", "title", "request-id"] },
   "documents-associate": { accepts: ["request-id", "document-id", "project-id", "expected-membership-id", "expected-authority"], requires: ["request-id", "document-id", "project-id"] },
   "documents-dissociate": { accepts: ["request-id", "document-id", "project-id", "expected-membership-id", "expected-authority"], requires: ["request-id", "document-id", "project-id"] },
   "documents-pending": { accepts: [], requires: [] },
   "documents-retry": { accepts: ["request-id", "expected-membership-id", "expected-authority"], requires: ["request-id"] },
   "documents-abandon": { accepts: ["request-id", "expected-membership-id", "expected-authority"], requires: ["request-id"] },
-  "documents-status": { accepts: ["request-id"], requires: ["request-id"] },
   "documents-status-v2": { accepts: ["request-id"], requires: ["request-id"] },
-  "documents-read": { accepts: ["document-id", "cursor", "project-id"], requires: ["document-id"] },
-  "documents-read-v2": { accepts: ["document-id", "cursor", "project-id"], requires: ["document-id"] },
-  "documents-search": { accepts: ["project-id", "query", "limit", "cursor"] },
   "documents-search-v2": { accepts: ["project-id", "query", "limit", "cursor"] },
-  "documents-download": { accepts: ["document-id", "out", "project-id"], requires: ["document-id", "out"] },
   "documents-download-v2": { accepts: ["document-id", "out", "project-id"], requires: ["document-id", "out"] },
   "projects-list": { accepts: ["limit", "cursor"] },
   "projects-list-v2": { accepts: ["limit", "cursor", "status"] },
@@ -203,7 +197,7 @@ Commands:
   directory   Find people in your organization by name.
   projects    Create projects, manage members, and browse permitted context.
   updates     Upload, search, and read original context with your chosen visibility.
-  documents   Upload documents, read extracted text, and download exact originals.
+  documents   Upload, search, and download exact document originals.
   employee    List, invite, reissue, or revoke an employee.
   tools       Read organization tools and your current link status.
 
@@ -267,13 +261,9 @@ Lists active people in your organization by name, or narrows the list with a nam
 
 Search --limit is 1–10; list --limit is 1–100. Queries use the same text bounds as Ask. Lists recent records, searches the current index, or retrieves one exact readable cited record. --limit can refine --query; --record-sha256 cannot be combined with either.
 `,
-  documents: `usage: echo-brain person documents <upload|upload-v2|status|status-v2|pending|retry|abandon|read|read-v2|search|search-v2|download|download-v2|associate|dissociate> [options]
+  documents: `usage: echo-brain person documents <upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate> [options]
 
-Supports UTF-8 text/Markdown, PDF and Word .docx originals up to 25 MiB. Saving and text extraction are separate states. Project association does not change audience. Extracted originals can contribute typed evidence to authorized Ask results.
-`,
-  "documents-upload": `usage: echo-brain person documents upload --file <path> --audience <only-me|team|project> [--audience-project-id <id>] [--project-id <id>] --title <title> --request-id <uuid>
-
-Saves exact original bytes; prints a bounded receipt. PDF and DOCX extraction may finish later or fail while the original stays saved. Legacy .doc is unsupported. If the outcome is unknown, the private exact snapshot is retained for documents retry --request-id with no source pathname required; source file changes are ignored for that retained request. At most ten unresolved snapshots are retained per membership. Use pending to list retained requests and status to reconcile before starting another upload. Explicit abandon removes only local retry bytes; it never cancels or deletes a saved Authority document. Optional paired --expected-membership-id and --expected-authority bind automation to its captured signed-in account.
+Supports UTF-8 text/Markdown, PDF and Word .docx originals up to 25 MiB. Saving and text extraction are separate states. Project association does not change audience. Read a document's extracted text with person open --ref document:<document-id>. Extracted originals can contribute typed evidence to authorized Ask results.
 `,
   "documents-upload-v2": `usage: echo-brain person documents upload-v2 --file <path> --title <title> --request-id <uuid> [--association-project-ids-json <canonical-project-id-array>] [--audience <only-me|team|project|projects>] [--audience-project-id <id>] [--audience-project-ids-json <canonical-project-id-array>]
 
@@ -293,39 +283,19 @@ Lists this account's retained upload requests without reading source files or co
 `,
   "documents-retry": `usage: echo-brain person documents retry --request-id <uuid>
 
-Resends the exact retained original and metadata, even after restart or source-file deletion. Check status first. Optional paired --expected-membership-id and --expected-authority bind the operation to its captured account.
+Resends the exact retained original and metadata, even after restart or source-file deletion. Check status-v2 first. Optional paired --expected-membership-id and --expected-authority bind the operation to its captured account.
 `,
   "documents-abandon": `usage: echo-brain person documents abandon --request-id <uuid>
 
-Explicitly removes only this account's local retry snapshot. This does not cancel or delete an Authority upload. Keep the request ID and check status or search before starting a new upload to avoid a duplicate. Optional paired --expected-membership-id and --expected-authority bind local cleanup to its captured account.
-`,
-  "documents-status": `usage: echo-brain person documents status --request-id <uuid>
-
-Reads the saved document metadata and current extraction state.
+Explicitly removes only this account's local retry snapshot. This does not cancel or delete an Authority upload. Keep the request ID and check status-v2 or search-v2 before starting a new upload to avoid a duplicate. Optional paired --expected-membership-id and --expected-authority bind local cleanup to its captured account.
 `,
   "documents-status-v2": `usage: echo-brain person documents status-v2 --request-id <uuid>
 
-Reads V2 metadata and its immutable initial association set. Current associations are available from V2 read and search results.
-`,
-  "documents-read": `usage: echo-brain person documents read --document-id <id> [--cursor <opaque>] [--project-id <id>]
-
-Returns metadata and one bounded page of extracted text with original hash and page/paragraph anchors. Follow text.next_cursor for more.
-`,
-  "documents-read-v2": `usage: echo-brain person documents read-v2 --document-id <id> [--cursor <opaque>] [--project-id <id>]
-
-Returns V2 metadata and one bounded page of extracted text. It preserves the selected audience union and current authorized project associations.
-`,
-  "documents-search": `usage: echo-brain person documents search [--project-id <id>] [--query <text>] [--limit <1-20>] [--cursor <opaque>]
-
-Omit --query to list currently accessible documents. Search queries are at most 200 UTF-8 bytes. Project scope requires association as well as current access.
+Reads V2 metadata and its immutable initial association set. Current associations are available from search-v2 results.
 `,
   "documents-search-v2": `usage: echo-brain person documents search-v2 [--project-id <id>] [--query <text>] [--limit <1-20>] [--cursor <opaque>]
 
 Lists or searches accessible V2 documents. Results preserve multi-project audience and current association coordinates.
-`,
-  "documents-download": `usage: echo-brain person documents download --document-id <id> --out <new-file> [--project-id <id>]
-
-Streams the exact saved original to a new file, verifies its length and SHA-256, and publishes it atomically. Prints only the file path and byte/hash proof.
 `,
   "documents-download-v2": `usage: echo-brain person documents download-v2 --document-id <id> --out <new-file> [--project-id <id>]
 
@@ -542,7 +512,7 @@ function isContextAction(action: string): boolean {
 }
 
 function contextCliFailure(action: string, error: unknown, values: Record<Option, string | boolean | undefined>) {
-  const mutation = ['projects-create', 'projects-rename', 'projects-archive', 'projects-unarchive', 'projects-leave', 'projects-member-add', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit', 'updates-submit-v3', 'documents-upload', 'documents-upload-v2', 'documents-retry', 'documents-associate', 'documents-dissociate'].includes(action);
+  const mutation = ['projects-create', 'projects-rename', 'projects-archive', 'projects-unarchive', 'projects-leave', 'projects-member-add', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit', 'updates-submit-v3', 'documents-upload-v2', 'documents-retry', 'documents-associate', 'documents-dissociate'].includes(action);
   let requestId: string | undefined;
   try { requestId = validatePersonUpdateRequestId(values['request-id']); } catch { /* Never echo invalid caller input. */ }
   return {
@@ -965,18 +935,6 @@ export async function runPersonClientCli(
       return 0;
     }
     switch (action) {
-      case 'documents-upload': {
-        const requestId = validatePersonUpdateRequestId(requiredText(values, 'request-id'));
-        const audienceKind = requiredText(values, 'audience');
-        if (!['only-me', 'team', 'project'].includes(audienceKind)) throw new Error('Invalid document audience');
-        const audience = validateProjectContextAudienceV1({ kind: audienceKind === 'only-me' ? 'only_me' : audienceKind,
-          ...(values['audience-project-id'] === undefined ? {} : { project_id: requiredText(values, 'audience-project-id') }) });
-        printDocument(stdout, await client.uploadDocument({ file: requiredText(values, 'file'), request_id: requestId,
-          title: requiredText(values, 'title'), audience, project_id: values['project-id'] === undefined ? null : validateProjectIdV1(values['project-id']),
-          ...(values['expected-membership-id'] === undefined ? {} : { expected_membership_id: requiredText(values, 'expected-membership-id') }),
-          ...(values['expected-authority'] === undefined ? {} : { expected_authority: requiredText(values, 'expected-authority') }) }));
-        break;
-      }
       case 'documents-upload-v2': {
         const requestId = validatePersonUpdateRequestId(requiredText(values, 'request-id'));
         printDocument(stdout, await client.uploadDocumentV2({ file: requiredText(values, 'file'), request_id: requestId,
@@ -1010,30 +968,13 @@ export async function runPersonClientCli(
         printDocument(stdout, action === 'documents-retry' ? await client.retryDocument(requestId, expected) : client.abandonDocument(requestId, expected));
         break;
       }
-      case 'documents-status':
-        printDocument(stdout, await client.documentStatus(requiredText(values, 'request-id')));
-        break;
       case 'documents-status-v2':
         printDocument(stdout, await client.documentStatusV2(requiredText(values, 'request-id')));
-        break;
-      case 'documents-read':
-        printDocument(stdout, await client.readDocument(requiredText(values, 'document-id'), values.cursor === undefined ? undefined : requiredText(values, 'cursor'), values['project-id'] === undefined ? undefined : requiredText(values, 'project-id')));
-        break;
-      case 'documents-read-v2':
-        printDocument(stdout, await client.readDocumentV2(requiredText(values, 'document-id'), values.cursor === undefined ? undefined : requiredText(values, 'cursor'), values['project-id'] === undefined ? undefined : requiredText(values, 'project-id')));
-        break;
-      case 'documents-search':
-        printDocument(stdout, await client.searchDocuments(validatePersonDocumentSearchV1({ schema_version: 1, kind: 'echo-person-document-search-v1',
-          project_id: values['project-id'] === undefined ? null : validateProjectIdV1(values['project-id']), query: values.query === undefined ? '' : requiredText(values, 'query'),
-          limit: optionalRecordLimit(values, 20) ?? 10, cursor: values.cursor === undefined ? null : requiredText(values, 'cursor') })));
         break;
       case 'documents-search-v2':
         printDocument(stdout, await client.searchDocumentsV2(validatePersonDocumentSearchV2({ schema_version: 2, kind: 'echo-person-document-search-v2',
           project_id: values['project-id'] === undefined ? null : validateProjectIdV1(values['project-id']), query: values.query === undefined ? '' : requiredText(values, 'query'),
           limit: optionalRecordLimit(values, 20) ?? 10, cursor: values.cursor === undefined ? null : requiredText(values, 'cursor') })));
-        break;
-      case 'documents-download':
-        printDocument(stdout, await client.downloadDocument(requiredText(values, 'document-id'), requiredText(values, 'out'), values['project-id'] === undefined ? undefined : requiredText(values, 'project-id')));
         break;
       case 'documents-download-v2':
         printDocument(stdout, await client.downloadDocumentV2(requiredText(values, 'document-id'), requiredText(values, 'out'), values['project-id'] === undefined ? undefined : requiredText(values, 'project-id')));

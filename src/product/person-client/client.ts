@@ -1,6 +1,6 @@
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
-import { validatePersonDocumentIdV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchV2, type PersonDocumentSearchV1, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
-import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUpload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
+import { validatePersonDocumentIdV1, validatePersonDocumentSearchV2, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
+import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
 import { validatePersonUploadContextId } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { validatePersonQueryText } from '@echo-brain/organization-api';
@@ -461,15 +461,11 @@ export class PersonClient {
     }
   }
 
-  async uploadDocument(input: DocumentFileUpload | DocumentFileUploadV2) {
+  async uploadDocumentV2(input: DocumentFileUploadV2) {
     validatePersonUpdateRequestId(input.request_id);
     const stored = await this.accessSession();
     this.assertDocumentAccount(stored, input.request_id, input);
     return this.submitDocumentSnapshot(stored, prepareDocumentSnapshot(this.options.home_directory, this.documentBinding(stored), input));
-  }
-
-  async uploadDocumentV2(input: DocumentFileUploadV2) {
-    return this.uploadDocument(input);
   }
 
   async retryDocument(requestId: string, expected: { expected_authority?: string; expected_membership_id?: string } = {}) {
@@ -507,16 +503,6 @@ export class PersonClient {
     return result;
   }
 
-  async documentStatus(requestId: string) {
-    validatePersonUpdateRequestId(requestId);
-    const stored = await this.accessSession();
-    const receipt = await this.authority(stored.authority_origin).documentStatus(stored.session.access_token, requestId);
-    this.assertCurrentSession(stored);
-    try { reconcileDocumentSnapshot(this.options.home_directory, JSON.stringify([stored.authority_origin, stored.authority_id, stored.session.organization_id, stored.session.membership_id]), receipt); }
-    catch { /* Status remains useful even if local snapshot cleanup is unavailable. */ }
-    return receipt;
-  }
-
   async documentStatusV2(requestId: string) {
     validatePersonUpdateRequestId(requestId);
     const stored = await this.accessSession();
@@ -527,66 +513,9 @@ export class PersonClient {
     return receipt;
   }
 
-  async readDocument(documentId: string, cursor?: string, projectId?: string) {
-    validatePersonDocumentIdV1(documentId);
-    if (cursor !== undefined && (!/^[A-Za-z0-9_-]+$/.test(cursor) || cursor.length > 1024)) throw new Error('Document cursor is invalid');
-    return this.withContextSession(async (authority, token) => {
-      let metadata = await authority.documentMetadata(token, documentId, projectId);
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const text = await authority.documentText(token, documentId, cursor, projectId);
-        if (metadata.document_id !== text.document_id || metadata.sha256 !== text.original_sha256) throw new PersonAuthorityClientError('invalid_response', 200, 'Document text provenance did not match its original.');
-        if (metadata.extractor === text.extractor && metadata.extraction_state === text.extraction_state) return { metadata, text };
-        // Extraction can finish between the two reads. Refresh the metadata under the
-        // same current session instead of returning a mismatched pair.
-        const refreshed = await authority.documentMetadata(token, documentId, projectId);
-        if (refreshed.document_id !== metadata.document_id || refreshed.sha256 !== metadata.sha256 ||
-            refreshed.request_id !== metadata.request_id || refreshed.content_length !== metadata.content_length) {
-          throw new PersonAuthorityClientError('invalid_response', 200, 'Document original changed while loading its text.');
-        }
-        metadata = refreshed;
-        if (metadata.extractor === text.extractor && metadata.extraction_state === text.extraction_state) return { metadata, text };
-      }
-      throw new PersonAuthorityClientError('unavailable', null, 'Document extraction changed while loading. Retry the read.');
-    });
-  }
-
-  async readDocumentV2(documentId: string, cursor?: string, projectId?: string) {
-    validatePersonDocumentIdV1(documentId);
-    if (cursor !== undefined && (!/^[A-Za-z0-9_-]+$/.test(cursor) || cursor.length > 1024)) throw new Error('Document cursor is invalid');
-    return this.withContextSession(async (authority, token) => {
-      let metadata = await authority.documentMetadataV2(token, documentId, projectId);
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const text = await authority.documentTextV2(token, documentId, cursor, projectId);
-        if (metadata.document_id !== text.document_id || metadata.sha256 !== text.original_sha256) throw new PersonAuthorityClientError('invalid_response', 200, 'Document text provenance did not match its original.');
-        if (metadata.extractor === text.extractor && metadata.extraction_state === text.extraction_state) return { metadata, text };
-        const refreshed = await authority.documentMetadataV2(token, documentId, projectId);
-        if (refreshed.document_id !== metadata.document_id || refreshed.sha256 !== metadata.sha256 || refreshed.request_id !== metadata.request_id || refreshed.content_length !== metadata.content_length) throw new PersonAuthorityClientError('invalid_response', 200, 'Document original changed while loading its text.');
-        metadata = refreshed;
-        if (metadata.extractor === text.extractor && metadata.extraction_state === text.extraction_state) return { metadata, text };
-      }
-      throw new PersonAuthorityClientError('unavailable', null, 'Document extraction changed while loading. Retry the read.');
-    });
-  }
-
-  async searchDocuments(input: PersonDocumentSearchV1) {
-    const request = validatePersonDocumentSearchV1(input);
-    return this.withContextSession((authority, token) => authority.searchDocuments(token, request));
-  }
-
   async searchDocumentsV2(input: PersonDocumentSearchV2) {
     const request = validatePersonDocumentSearchV2(input);
     return this.withContextSession((authority, token) => authority.searchDocumentsV2(token, request));
-  }
-
-  async downloadDocument(documentId: string, outputPath: string, projectId?: string) {
-    validatePersonDocumentIdV1(documentId);
-    const stored = await this.accessSession();
-    const authority = this.authority(stored.authority_origin);
-    const metadata = await authority.documentMetadata(stored.session.access_token, documentId, projectId);
-    this.assertCurrentSession(stored);
-    const response = await authority.documentOriginal(stored.session.access_token, documentId, projectId);
-    const output = await saveDocumentDownload(response, outputPath, metadata, () => this.assertCurrentSession(stored));
-    return { document_id: documentId, output_path: output, content_length: metadata.content_length, sha256: metadata.sha256 };
   }
 
   async downloadDocumentV2(documentId: string, outputPath: string, projectId?: string) {

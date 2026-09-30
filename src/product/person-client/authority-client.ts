@@ -51,7 +51,7 @@ import {
 } from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
-import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV1, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV1, validatePersonDocumentMetadataV2, validatePersonDocumentTextV1, validatePersonDocumentSearchV1, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV1, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV1, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
+import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
 import {
   PERSON_DIRECTORY_PATH_V1, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, type OrganizationDirectorySearchV1,
@@ -212,7 +212,7 @@ export function unknownContextMutation(requestId: string, upload: boolean, statu
 
 export function unknownDocumentMutation(requestId: string, status: number | null): PersonContextMutationError {
   return new PersonContextMutationError('outcome_unknown', status,
-    'Document submission outcome is unknown. Its exact file snapshot is retained. Check documents status with the same request ID, or retry the exact command.', requestId, 'unknown');
+    'Document submission outcome is unknown. Its exact file snapshot is retained. Check documents status-v2 with the same request ID, or retry the exact command.', requestId, 'unknown');
 }
 
 export interface PersonAuthorityClientOptions {
@@ -901,10 +901,6 @@ export class PersonAuthorityClient {
     return result;
   }
 
-  async documentStatus(accessToken: string, requestId: string) {
-    return this.documentStatusFor(accessToken, requestId, PERSON_DOCUMENTS_PATH_V1, validatePersonDocumentStatusV1);
-  }
-
   async documentStatusV2(accessToken: string, requestId: string) {
     return this.documentStatusFor(accessToken, requestId, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentStatusV2);
   }
@@ -918,34 +914,8 @@ export class PersonAuthorityClient {
     return result;
   }
 
-  async documentMetadata(accessToken: string, documentId: string, projectId?: string) {
-    return this.documentMetadataFor(accessToken, documentId, projectId, PERSON_DOCUMENTS_PATH_V1, validatePersonDocumentMetadataV1);
-  }
-
   async documentMetadataV2(accessToken: string, documentId: string, projectId?: string) {
     return this.documentMetadataFor(accessToken, documentId, projectId, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentMetadataV2);
-  }
-
-  private async documentTextFor<T extends { document_id: string }>(accessToken: string, documentId: string, cursor: string | undefined, projectId: string | undefined, base: string, validate: (value: unknown) => T): Promise<T> {
-    validatePersonDocumentIdV1(documentId);
-    if (cursor !== undefined && (!/^[A-Za-z0-9_-]+$/.test(cursor) || cursor.length > 1024)) throw new Error('Document cursor is invalid');
-    const params = new URLSearchParams();
-    if (cursor !== undefined) params.set('cursor', cursor);
-    if (projectId !== undefined) params.set('project_id', validateProjectIdV1(projectId));
-    const query = params.size === 0 ? '' : `?${params}`;
-    const result = await this.documentResponse(await this.send(`${base}/${documentId}/text${query}`, {
-      method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
-    }), validate);
-    if (result.document_id !== documentId) throw new PersonAuthorityClientError('invalid_response', 200, 'Document text coordinates changed.');
-    return result;
-  }
-
-  async documentText(accessToken: string, documentId: string, cursor?: string, projectId?: string) {
-    return this.documentTextFor(accessToken, documentId, cursor, projectId, PERSON_DOCUMENTS_PATH_V1, validatePersonDocumentTextV1);
-  }
-
-  async documentTextV2(accessToken: string, documentId: string, cursor?: string, projectId?: string) {
-    return this.documentTextFor(accessToken, documentId, cursor, projectId, PERSON_DOCUMENTS_PATH_V2, validatePersonDocumentTextV1);
   }
 
   private async searchDocumentsFor<T extends { limit: number }, R extends { documents: readonly { document_id: string }[] }>(accessToken: string, input: T, base: string, validateRequest: (value: unknown) => T, validateResponse: (value: unknown) => R): Promise<R> {
@@ -957,10 +927,6 @@ export class PersonAuthorityClient {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Document search page was invalid.');
     }
     return result;
-  }
-
-  async searchDocuments(accessToken: string, input: PersonDocumentSearchV1) {
-    return this.searchDocumentsFor(accessToken, input, PERSON_DOCUMENTS_PATH_V1, validatePersonDocumentSearchV1, validatePersonDocumentSearchResultV1);
   }
 
   async searchDocumentsV2(accessToken: string, input: PersonDocumentSearchV2) {
@@ -975,10 +941,6 @@ export class PersonAuthorityClient {
     if (!response.ok) await this.documentResponse(response, () => { throw new Error('Unexpected document response'); });
     if (response.status !== 200) { await response.body?.cancel(); throw new PersonAuthorityClientError('invalid_response', response.status, 'Document response status was unexpected.'); }
     return response;
-  }
-
-  async documentOriginal(accessToken: string, documentId: string, projectId?: string): Promise<Response> {
-    return this.documentOriginalFor(accessToken, documentId, projectId, PERSON_DOCUMENTS_PATH_V1);
   }
 
   async documentOriginalV2(accessToken: string, documentId: string, projectId?: string): Promise<Response> {

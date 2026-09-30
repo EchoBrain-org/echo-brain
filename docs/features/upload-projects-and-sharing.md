@@ -83,7 +83,8 @@ array of one to 20 IDs. Existing only-me, organization and single-project
 audiences retain their meaning. Legacy request versions remain supported.
 
 The CLI exposes `person updates submit-v3|status-v3|read-v3|search-v3` and
-`person documents upload-v2|status-v2|read-v2|search-v2|download-v2`.
+`person documents upload-v2|status-v2|search-v2|download-v2`, and
+`person open --ref` reads a note's text or a document's extracted text.
 Project content uses `person projects feed-v2|search-v2|read-context-v2`. The
 desktop app's project page instead reads `person list --project <project-id>`
 and opens each row with `person open --ref`
