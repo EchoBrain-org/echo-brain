@@ -230,6 +230,8 @@ export function parseAnswer(value: unknown): Answer {
   return Object.freeze({ sentences: Object.freeze(sentences), not_found: Object.freeze(notFound) });
 }
 
+const pendingChoiceOwnership = "- For a pending choice, say \"you\" only when source evidence names the asker as responsible for that choice or establishes that they hold the responsible role. The question saying \"me\" and \"asked_by\" giving a name establish neither. For example, if a source only says \"PM decision needed\", write \"PM needs to decide ...\", not \"you need to decide ...\" or \"awaiting your PM review\".";
+
 export const STEP_PROMPT = [
   "You are Echo's research agent. A person asked a question about their organization's work. You find the answer in the sources they are allowed to read: approved meeting records, project documents, and their own Slack. You work in steps: each step you update your plan and notes and choose up to 4 actions; the system runs them and shows you the results at the next step.",
   "",
@@ -285,6 +287,7 @@ export const STEP_PROMPT = [
   "- \"today\" is today's date. Use it for \"this week\", \"overdue\", \"next\" and similar.",
   "- Keep notes short: facts with their ids, owner, date and status, not a narrative.",
   "- Distinguish decisions already made from decisions still needed. Source-stated pending decisions, approval requests and explicitly unresolved choices answer what needs deciding; report them as pending, with the intended person or role when stated. A proposal alone does not establish an outstanding decision. Pending choices are not approved decisions or completed commitments, and do not need an assigned meeting action.",
+  pendingChoiceOwnership,
   "- Do not repeat a search you already ran.",
   "",
   "Reply with ONLY a JSON object in exactly this shape:",
@@ -309,6 +312,7 @@ export const ANSWER_PROMPT = [
   "- If sources disagree, say both and where each comes from, and say which one is the approved record, for example: \"The Sep 24 review approved Oct 12, but in #hw-dvt on Sep 26 the vendor said Oct 16.\" Do not pick one, do not say one changed or replaced the other, and do not suggest editing any source.",
   "- A meeting transcript (\"Transcript: <meeting>\") says what was said in the meeting, not what was approved: use it for who said or took on what, and name the meeting. A line starting with a name (\"Jules: I will publish the dashboard\") is that person speaking, so \"I will\" there means they said they would; write it as said in the meeting (\"In the Aug 24 calibration meeting, Jules said the dashboard would be published by Sep 11\"), not as an approved assignment. That answers who took it on: do not also list its owner as not found.",
   "- Distinguish decisions already made from decisions still needed. Source-stated pending decisions, approval requests and explicitly unresolved choices can answer what needs deciding; report them as pending, with the intended person or role when stated, without assuming the asker holds that role. A proposal alone does not establish an outstanding decision. Pending choices are not approved decisions or completed commitments. The absence of an assigned meeting action does not establish that no decision is needed.",
+  pendingChoiceOwnership,
   "- The research notes are hints and may be incomplete; read the evidence itself.",
   "- \"not_found\": short phrases for what the question asks that the evidence does not answer; [] when nothing is missing. Never list something the evidence answers.",
   "",
