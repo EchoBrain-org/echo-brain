@@ -1,5 +1,12 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonDocumentExtractionStateV1, PersonDocumentMediaTypeV1, ProjectIdV1 } from "@echo-brain/organization-api";
+import type {
+  PersonDocumentExtractionStateV1,
+  PersonDocumentMediaTypeV1,
+  PersonOpenMeetingAtomV1,
+  PersonOpenMeetingDetailV1,
+  ProjectIdV1,
+} from "@echo-brain/organization-api";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import type { PersonAskScopeV2 } from "./person-original-context-retrieval-v1.js";
 
 /** Last emitted row of ONE source. Store order inside a source: added_at DESC, id ASC (binary). */
@@ -65,3 +72,62 @@ export interface PersonOriginalItemsPortV1 {
   /** Throws unauthorized (tuple change) or stale_access_state (grants or row change). */
   revalidate(input: { readonly access_token: string; readonly release: PersonStoreReleaseV1 }): void;
 }
+
+export type PersonMeetingCollectionV1 =
+  /** A verified index lag with a record this reader can read after it: nothing collected, nothing audited. */
+  | Readonly<{ status: "held" }>
+  | Readonly<{ status: "ok"; rows: readonly PersonStoreMeetingRowV1[]; handle: PersonStoreHandleV1 }>;
+/** Inclusive: the first part the next page returns. */
+export interface PersonMeetingPartPositionV1 { readonly atom_order: number; readonly part: number }
+
+/**
+ * Approved meetings, listed from the exact-head readable-search generation and
+ * opened through the Layer 1 exact read. The approver stays server-only.
+ */
+export interface PersonMeetingItemsPortV1 {
+  /** Unaudited. rows.length < limit ⇒ meetings are exhausted. */
+  collectMeetings(input: {
+    readonly access_token: string;
+    readonly scope: PersonAskScopeV2;
+    readonly after: PersonItemPositionV1 | null;
+    /** 1..26 */
+    readonly limit: number;
+  }): PersonMeetingCollectionV1;
+  /** Fences the session and grants, then audits exactly the first `count` rows it returned. */
+  commitMeetings(input: { readonly access_token: string; readonly handle: PersonStoreHandleV1; readonly count: number }): PersonStoreReleaseV1;
+  /** Global access. Every item failure: AuthorityOperationError('not_found'). Audited. */
+  openMeeting(input: {
+    readonly access_token: string;
+    readonly record_sha256: `sha256:${string}`;
+    readonly from?: PersonMeetingPartPositionV1;
+  }): {
+    readonly row: PersonStoreMeetingRowV1;
+    /** Present iff `from` is undefined. */
+    readonly meeting?: PersonOpenMeetingDetailV1;
+    /** Present iff `from` is undefined. */
+    readonly transcript_shared?: boolean;
+    readonly atoms: readonly PersonOpenMeetingAtomV1[];
+    readonly next: PersonMeetingPartPositionV1 | null;
+    readonly release: PersonStoreReleaseV1;
+  };
+  /** Layer 1 exact read with current grants; not_found on a miss; no audit (an internal lookup, like openDeskCitation). */
+  admitMeeting(input: { readonly access_token: string; readonly record_sha256: `sha256:${string}` }): void;
+  /** Throws unauthorized when the session tuple or the caller's grants changed. */
+  revalidateMeetingRelease(input: { readonly access_token: string; readonly release: PersonStoreReleaseV1 }): void;
+}
+
+/** A shared transcript opened by its approved record, after the caller admitted that record. */
+export interface PersonTranscriptByRecordPortV1 {
+  readApprovedMeetingTranscriptByRecordV1(input: {
+    readonly access_token: string;
+    readonly record_sha256: `sha256:${string}`;
+    readonly offset?: number;
+  }): { readonly text: string; readonly next_offset: number | null };
+}
+
+/** The content-free probe the meetings store asks before it offers a transcript ref. */
+export type PersonTranscriptProbeV1 = (input: {
+  readonly actor: PersonAccessAuthorization;
+  readonly approval_id: string;
+  readonly record_sha256: `sha256:${string}`;
+}) => boolean;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
@@ -13,10 +13,8 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { SqliteSourceAdmissionStoreV1 } from "../src/adapters/persistence/sqlite/source-admission-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
-import type { OriginalContextDeskItemV1, PersonAskScopeV2, PersonOriginalContextEvidenceDeskPortV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
+import type { OriginalContextDeskItemV1, PersonAskScopeV2 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
-import { createPersonEvidenceDeskV1 } from "../src/composition/person-evidence-desk-v1.js";
-import type { PersonEvidenceDeskRecordsV1 } from "../src/composition/person-record-search-route.js";
 import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, projectContextDatabase } from "./fixtures/project-context-sqlite.js";
 
 const GLOBAL: PersonAskScopeV2 = { kind: "global" };
@@ -183,22 +181,5 @@ describe("originals under the mine scope", () => {
     expect(desk.items.map((item) => item.ref).sort()).toEqual([`document:${documentId}`, `note:${contextId}`, `transcript:${RECORD_SHA256}`].sort());
     const audit = JSON.parse((f.database.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1 WHERE row_sha256=?").get(desk.receipt) as { body_json: string }).body_json) as { released_metadata_sha256: string };
     expect(audit.released_metadata_sha256).toBe(canonicalSha256(desk.items.map(({ citation, kind, visibility, label, received_at, version, text, ref }) => ({ citation, kind, visibility, label, received_at, version, ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ref }))));
-  });
-
-  it("fails the evidence desk closed for mine before any record read, never widening to global", async () => {
-    const records = new Proxy({}, { get: (_target, key) => vi.fn(() => { throw new Error(`records.${String(key)} must not run under mine`); }) }) as unknown as PersonEvidenceDeskRecordsV1;
-    const originals = {
-      deskAuthorize: () => ({ checked_at: PROJECT_CONTEXT_NOW }),
-      deskSearch: vi.fn(), deskOpen: vi.fn(), revalidateDeskRelease: vi.fn(),
-    } as unknown as PersonOriginalContextEvidenceDeskPortV1;
-    const desk = createPersonEvidenceDeskV1({ access_token: "owner", scope: MINE, originals, records });
-    expect(desk.scope).toEqual({ kind: "mine" });
-    for (const call of [
-      () => desk.search({ query: "sharedterm" }),
-      () => desk.search({}),
-      () => desk.list({ source: "meeting" }),
-      () => desk.revalidate({}),
-    ]) await expect(call()).rejects.toMatchObject({ code: "unavailable" });
-    expect(originals.deskSearch).not.toHaveBeenCalled();
   });
 });

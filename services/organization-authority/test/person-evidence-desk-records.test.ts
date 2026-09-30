@@ -26,7 +26,8 @@ import type { PersonSlackMessageV1, PersonSlackReaderV1, PersonSlackReleaseV1 } 
 import { SqlitePersonRecordReadAuditV1 } from '../src/adapters/persistence/sqlite/person-record-read-audit-v1.js';
 import type { PersonOriginalContextEvidenceDeskPortV1 } from '../src/application/ports/person-original-context-retrieval-v1.js';
 import { createPersonEvidenceDeskV1 } from '../src/composition/person-evidence-desk-v1.js';
-import { createPersonRecordSearchRouteV1 } from '../src/composition/person-record-search-route.js';
+import { createPersonRecordSearchRouteV1, type PersonEvidenceDeskRecordsV1 } from '../src/composition/person-record-search-route.js';
+import { meetingWorld } from './fixtures/person-meeting-world.js';
 import { COORDINATES, appendInput, database as recordDatabase, protocolAuthority } from '../../../packages/organization-record/test/fixtures/record-append-fixture.js';
 
 import { createRecordInputCodecRegistryV4, HUMAN_ACT_RECORD_INPUT_CODEC_V1, type HumanActEventV1 } from '@echo-brain/organization-protocol';
@@ -448,5 +449,40 @@ describe('Person evidence desk over a Slack-approved record with a confirmed own
     try {
       await expect(value.desk.search({ query: 'Jules', limit: 10 })).rejects.toMatchObject({ code: 'unavailable' });
     } finally { value.close(); }
+  });
+});
+
+describe('Person evidence desk: mine (ADR-0023)', () => {
+  it('passes mine, never a project, to every record call, and returns only the caller\'s own approvals', async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      const calls: { readonly method: string; readonly input: object }[] = [];
+      const records: PersonEvidenceDeskRecordsV1 = {
+        ...route,
+        initializeDesk(input) { calls.push({ method: 'initializeDesk', input }); return route.initializeDesk.call(this, input); },
+        searchBatch(input) { calls.push({ method: 'searchBatch', input }); return route.searchBatch(input); },
+        listDeskBatch(input) { calls.push({ method: 'listDeskBatch', input }); return route.listDeskBatch(input); },
+        openDeskCitation(input) { calls.push({ method: 'openDeskCitation', input }); return route.openDeskCitation(input); },
+      };
+      const desk = createPersonEvidenceDeskV1({ access_token: 'emp_a', scope: { kind: 'mine' }, originals: emptyOriginals(), records });
+      expect(desk.scope).toEqual({ kind: 'mine' });
+      const recordsOf = (items: readonly { readonly citation: { readonly kind: string; readonly record_sha256?: string } }[]) =>
+        [...new Set(items.flatMap((item) => item.citation.kind === 'approved_record' ? [item.citation.record_sha256] : []))];
+      const searched = await desk.search({ query: 'Decision' });
+      expect(recordsOf(searched.items)).toEqual([w.digest('r4')]);
+      expect(recordsOf((await desk.search({})).items)).toEqual([w.digest('r4')]);
+      expect(recordsOf((await desk.list({ source: 'meeting' })).items)).toEqual([w.digest('r4')]);
+      const own = searched.items.find((item) => item.citation.kind === 'approved_record')!.citation as PersonAnswerCitationV3;
+      expect(recordsOf((await desk.openCitation({ citation: own })).items)).toEqual([w.digest('r4')]);
+      const other = route.searchBatch({ access_token: 'emp_a', queries: ['Decision'], desk: true }).desk_items!.find((item) => item.record_sha256 === w.digest('r1'))!;
+      await expect(desk.openCitation({ citation: { kind: 'approved_record', atom_id: other.atom_id, record_sha256: other.record_sha256, policy_id: other.policy_id } as PersonAnswerCitationV3 })).rejects.toMatchObject({ code: 'not_found' });
+      await desk.revalidate({});
+      expect(new Set(calls.map((call) => call.method))).toEqual(new Set(['initializeDesk', 'searchBatch', 'listDeskBatch', 'openDeskCitation']));
+      for (const call of calls) {
+        expect(call.input).toMatchObject({ mine: true });
+        expect(call.input).not.toHaveProperty('project_id');
+      }
+    } finally { w.close(); }
   });
 });

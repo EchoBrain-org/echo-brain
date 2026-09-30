@@ -105,6 +105,16 @@ function unavailable(): never {
   throw new AuthorityOperationError("unavailable", "person source retrieval is unavailable");
 }
 
+/** A record opened by ref is read with global access (ADR-0023). */
+const GLOBAL_SCOPE: PersonAskScopeV2 = Object.freeze({ kind: "global" });
+
+function transcriptCitation(grant: ApprovedMeetingTranscriptGrantV1): PersonMeetingTranscriptCitationV1 {
+  return Object.freeze({
+    kind: "approved_meeting_transcript", approval_id: grant.approval_id, source_id: grant.source_id as `source:${string}`,
+    revision_id: grant.revision_id, source_sha256: grant.source_sha256,
+  });
+}
+
 // Closed English function words only. No domain synonyms, stemming, or semantic
 // expansion: project IDs, negation, numbers and subject words remain intact.
 const QUERY_FUNCTION_WORDS = new Set([
@@ -627,6 +637,43 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const response = Object.freeze({ scope: Object.freeze({ ...input.scope }), citation: Object.freeze({ ...input.citation }), text: page.text, next_offset: page.next_offset });
     this.auditTranscriptRead(currentActor, response);
     return response;
+  }
+
+  probeApprovedMeetingTranscriptV1(input: {
+    readonly actor: PersonAccessAuthorization;
+    readonly approval_id: string;
+    readonly record_sha256: Sha256Digest;
+  }): boolean {
+    const options = this.transcriptOptions;
+    if (options === undefined) return false;
+    this.assertOrganization(input.actor);
+    const grant = options.grants.find({ authority_id: options.authority_id, organization_id: this.organizationId, state_lineage_id: options.state_lineage_id, approval_id: input.approval_id });
+    return grant !== null && grant.record_sha256 === input.record_sha256 &&
+      options.is_expected_policy_contract(grant) &&
+      this.readableTranscriptGrant(input.actor, GLOBAL_SCOPE, grant) &&
+      this.meetingSource(transcriptCitation(grant)) !== undefined;
+  }
+
+  /**
+   * The same double-fenced, audited read as a citation, keyed by the record.
+   * Callers admit the record through Layer 1 first; every miss here is the
+   * same denial.
+   */
+  readApprovedMeetingTranscriptByRecordV1(input: {
+    readonly access_token: string;
+    readonly record_sha256: Sha256Digest;
+    readonly offset?: number;
+  }): { readonly text: string; readonly next_offset: number | null } {
+    const options = this.transcriptOptions;
+    if (options?.grants.findByRecord === undefined) unavailable();
+    this.assertOrganization(this.sessions.authenticateAccess({ access_token: input.access_token }));
+    const grant = options.grants.findByRecord({ authority_id: options.authority_id, organization_id: this.organizationId, state_lineage_id: options.state_lineage_id, record_sha256: input.record_sha256 });
+    if (grant === null) denied();
+    const page = this.readApprovedMeetingTranscript({
+      access_token: input.access_token, scope: GLOBAL_SCOPE, citation: transcriptCitation(grant),
+      ...(input.offset === undefined ? {} : { offset: input.offset }),
+    });
+    return Object.freeze({ text: page.text, next_offset: page.next_offset });
   }
 
   private assertOrganization(actor: PersonAccessAuthorization): void {

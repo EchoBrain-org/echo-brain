@@ -42,6 +42,7 @@ import { createRecordProjectAuthorizationV1 } from "../src/composition/person-re
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { addMembership } from "./fixtures/project-context-sqlite.js";
+import { SHARED, meetingWorld } from "./fixtures/person-meeting-world.js";
 
 import { independentRecordCoverageFixture, rolloutCoverageFixture } from "./retrieval-coverage-fixture.js";
 
@@ -1852,4 +1853,50 @@ describe("Person Layer 2 route", () => {
       }
     },
   );
+});
+
+describe("Person Layer 2 route: mine narrows to the caller's own approvals (ADR-0023)", () => {
+  it("searches, lists and opens only records whose final approver is the caller", async () => {
+    const w = await meetingWorld();
+    try {
+      const route = w.route();
+      const records = (result: { readonly response: { readonly items: readonly { readonly record_sha256: Sha256Digest }[] } }) =>
+        [...new Set(result.response.items.map((item) => item.record_sha256))].sort();
+      const global = route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true });
+      expect(records(global)).toEqual([w.digest("r1"), w.digest("r3"), w.digest("r4"), w.digest("r7a"), w.digest("r7b")].sort());
+      const mine = route.searchBatch({ access_token: "emp_a", queries: ["Decision"], desk: true, mine: true });
+      expect(records(mine)).toEqual([w.digest("r4")]);
+      expect(mine.release.mine).toBe(true);
+      expect(global.release).not.toHaveProperty("mine");
+      expect(records(route.searchBatch({ access_token: "owner", queries: ["Decision"], mine: true }))).toEqual([w.digest("r2"), w.digest("r3")].sort());
+      expect(route.searchBatch({ access_token: "emp_c", queries: ["Decision"], mine: true }).response.items).toEqual([]);
+      const listed = route.listDeskBatch({ access_token: "emp_a", mine: true });
+      expect(records(listed)).toEqual([w.digest("r4")]);
+      expect(listed.release.mine).toBe(true);
+      expect(route.initializeDesk({ access_token: "emp_a", mine: true }).release.mine).toBe(true);
+      route.revalidateBatchRelease({ access_token: "emp_a", release: mine.release });
+
+      // A citation to someone else's approval does not open under mine; the caller's own does.
+      const other = global.desk_items!.find((item) => item.record_sha256 === w.digest("r1"))!;
+      const own = mine.desk_items![0]!;
+      const cite = (item: typeof own) => ({ access_token: "emp_a", atom_id: item.atom_id, record_sha256: item.record_sha256, policy_id: item.policy_id });
+      expect(() => route.openDeskCitation({ ...cite(other), mine: true })).toThrow(expect.objectContaining({ code: "not_found" }));
+      expect(records(route.openDeskCitation(cite(other)))).toEqual([w.digest("r1")]);
+      const opened = route.openDeskCitation({ ...cite(own), mine: true });
+      expect(records(opened)).toEqual([w.digest("r4")]);
+      expect(opened.release.mine).toBe(true);
+      // A mine release cannot open, or expand into, a record outside mine.
+      expect(() => route.openDeskBatch({ access_token: "emp_a", release: mine.release, anchor: other })).toThrow(expect.objectContaining({ code: "unavailable" }));
+      expect(records(route.openDeskBatch({ access_token: "emp_a", release: mine.release, anchor: own }))).toEqual([w.digest("r4")]);
+
+      const invalid = expect.objectContaining({ code: "invalid_request" });
+      expect(() => route.searchBatch({ access_token: "emp_a", queries: ["Decision"], mine: true, project_id: SHARED })).toThrow(invalid);
+      expect(() => route.searchBatch({ access_token: "emp_a", queries: ["Decision"], mine: false as unknown as true })).toThrow(invalid);
+      expect(() => route.listDeskBatch({ access_token: "emp_a", mine: true, project_id: SHARED })).toThrow(invalid);
+      expect(() => route.initializeDesk({ access_token: "emp_a", mine: true, project_id: SHARED })).toThrow(invalid);
+      expect(() => route.openDeskCitation({ ...cite(own), mine: true, project_id: SHARED })).toThrow(invalid);
+      // Without the approver projectors mine is unavailable, never global.
+      expect(() => w.route({ record_approver: undefined }).searchBatch({ access_token: "emp_a", queries: ["Decision"], mine: true })).toThrow(expect.objectContaining({ code: "unavailable" }));
+    } finally { w.close(); }
+  });
 });

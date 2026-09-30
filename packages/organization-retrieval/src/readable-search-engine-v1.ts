@@ -1229,6 +1229,8 @@ export interface SearchReadableSearchGenerationV1Input {
   readonly limit?: number;
   /** Desk-only kind narrowing, applied before relevance slicing. */
   readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
+  /** Authority-derived record narrowing (mine); sorted, unique; never client input; narrows admitted facts only. */
+  readonly record_sha256s?: readonly Sha256Digest[];
 }
 
 /**
@@ -1245,6 +1247,39 @@ export interface ListReadableSearchGenerationV1Input {
   readonly limit?: number;
   /** Desk-only kind narrowing, applied before inventory slicing. */
   readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
+  /** Authority-derived record narrowing (mine); sorted, unique; never client input; narrows admitted facts only. */
+  readonly record_sha256s?: readonly Sha256Digest[];
+}
+
+/**
+ * One row per admitted record, for a record inventory (ADR-0023). It carries
+ * no text: the caller reads presentation from the record it already verifies.
+ */
+export interface ListReadableSearchGenerationRecordsV1Input {
+  readonly state_directory: string;
+  readonly active_generation: ReadableSearchActiveGenerationV1;
+  readonly reader: ReadableSearchReaderV1;
+  readonly project_id?: string;
+  /** Authority-derived record narrowing (mine); sorted, unique; never client input; narrows admitted facts only. */
+  readonly record_sha256s?: readonly Sha256Digest[];
+}
+
+export interface ReadableSearchGenerationRecordV1 {
+  readonly record_position: number;
+  readonly record_sha256: Sha256Digest;
+  readonly envelope_sha256: Sha256Digest;
+  readonly approval_id: string;
+  readonly policy_id: ReadableSearchPolicyIdV1;
+  /** Immutable audience fact, never inferred from the current reader. */
+  readonly audience_project_count: number;
+  readonly atom_count: number;
+}
+
+export interface ReadableSearchGenerationRecordsV1 {
+  readonly generation_id: Sha256Digest;
+  readonly exact_head: ReadableSearchExactHeadV1;
+  /** Newest record first. */
+  readonly records: readonly ReadableSearchGenerationRecordV1[];
 }
 
 /** Opens named immutable atoms after Authority has accepted their coordinates. */
@@ -1254,6 +1289,8 @@ export interface ReadReadableSearchGenerationAtomsV1Input {
   readonly reader: ReadableSearchReaderV1;
   readonly project_id?: string;
   readonly atom_ids: readonly Sha256Digest[];
+  /** Authority-derived record narrowing (mine); sorted, unique; never client input; narrows admitted facts only. */
+  readonly record_sha256s?: readonly Sha256Digest[];
 }
 
 /** Expands direct, already-authorized related facts from at most three anchors. */
@@ -1268,6 +1305,8 @@ export interface ExpandReadableSearchRelatedAtomsV1Input {
   readonly include_anchor_records?: true;
   /** Defaults to 16 and bounds the entire expansion, not each anchor. */
   readonly limit?: number;
+  /** Authority-derived record narrowing (mine); sorted, unique; never client input; narrows admitted facts only. */
+  readonly record_sha256s?: readonly Sha256Digest[];
 }
 
 interface ReadableSearchFactRow {
@@ -1398,6 +1437,20 @@ function readerProjectIds(reader: ReadableSearchReaderV1): readonly string[] {
     throw new Error("reader project_ids must be sorted and unique");
   return Object.freeze(ids);
 }
+/** A record digest set derived by Authority (mine); it can only narrow what the reader was admitted to. */
+function readerRecordNarrowing(
+  value: readonly Sha256Digest[] | undefined,
+): ReadonlySet<Sha256Digest> | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms)
+    throw new Error("record narrowing must be a bounded record-digest array");
+  value.forEach((record, index) => {
+    validDigest(record, "record narrowing entry");
+    if (index > 0 && value[index - 1]! >= record)
+      throw new Error("record narrowing must be sorted and unique");
+  });
+  return new Set(value);
+}
 function factProjectIds(
   fact: ReadableSearchFactRow,
   field: "audience_project_ids_json" | "association_project_ids_json",
@@ -1424,13 +1477,15 @@ function scopedSegments(
   admitted: readonly ReadableSearchSegmentRows[],
   reader: ReadableSearchReaderV1,
   project_id: string | undefined,
+  records?: ReadonlySet<Sha256Digest>,
 ): readonly ReadableSearchSegmentRows[] {
-  if (project_id === undefined) return admitted;
-  if (!readerProjectIds(reader).includes(project_id))
+  if (project_id === undefined && records === undefined) return admitted;
+  if (project_id !== undefined && !readerProjectIds(reader).includes(project_id))
     throw new Error("readable-search project scope is not currently granted");
   return admitted.map((segment) => {
     const facts = segment.facts.filter((fact) =>
-      factProjectIds(fact, "association_project_ids_json").includes(project_id),
+      (project_id === undefined || factProjectIds(fact, "association_project_ids_json").includes(project_id)) &&
+      (records === undefined || records.has(fact.record_hash)),
     );
     const atomIds = new Set(facts.map((fact) => fact.atom_id));
     const postings = segment.postings.filter((posting) => atomIds.has(posting.atom_id));
@@ -2293,6 +2348,7 @@ export function expandReadableSearchRelatedAtomsV1(
   text(input.reader.principal_id, "reader principal_id");
   text(input.reader.membership_id, "reader membership_id");
   readerProjectIds(input.reader);
+  const records = readerRecordNarrowing(input.record_sha256s);
   if (
     !Array.isArray(input.anchor_atom_ids) ||
     input.anchor_atom_ids.length < 1 ||
@@ -2319,6 +2375,7 @@ export function expandReadableSearchRelatedAtomsV1(
     handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
     input.reader,
     input.project_id,
+    records,
   );
   const segmentsByAnchor = new Map<Sha256Digest, ReadableSearchSegmentRows>();
   for (const segment of admitted)
@@ -2409,6 +2466,7 @@ export function searchReadableSearchGenerationV1(
   text(input.reader.principal_id, "reader principal_id");
   text(input.reader.membership_id, "reader membership_id");
   readerProjectIds(input.reader);
+  const records = readerRecordNarrowing(input.record_sha256s);
   const limit = input.limit ?? 10;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
     throw new Error(
@@ -2425,6 +2483,7 @@ export function searchReadableSearchGenerationV1(
     handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
     input.reader,
     input.project_id,
+    records,
   );
   const candidates = scoreAdmittedCandidates(admitted, terms).filter((candidate) =>
     input.kinds === undefined || input.kinds.includes(candidate.content.item_kind),
@@ -2467,6 +2526,7 @@ export function listReadableSearchGenerationV1(
   text(input.reader.principal_id, "reader principal_id");
   text(input.reader.membership_id, "reader membership_id");
   readerProjectIds(input.reader);
+  const records = readerRecordNarrowing(input.record_sha256s);
   const limit = input.limit ?? 50;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)
     throw new Error("readable-search inventory limit must be a safe integer from one through fifty");
@@ -2480,6 +2540,7 @@ export function listReadableSearchGenerationV1(
     handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
     input.reader,
     input.project_id,
+    records,
   );
   const candidates: { readonly fact: ReadableSearchFactRow; readonly content: ReadableSearchContentRow }[] = [];
   for (const segment of admitted) {
@@ -2501,17 +2562,78 @@ export function listReadableSearchGenerationV1(
   });
 }
 
+/**
+ * Groups the reader's admitted facts by record. Every fact of one record must
+ * agree on its record-level coordinates and audience, or the generation is
+ * refused rather than presented.
+ */
+export function listReadableSearchGenerationRecordsV1(
+  input: ListReadableSearchGenerationRecordsV1Input,
+): ReadableSearchGenerationRecordsV1 {
+  text(input.reader.principal_id, "reader principal_id");
+  text(input.reader.membership_id, "reader membership_id");
+  readerProjectIds(input.reader);
+  const records = readerRecordNarrowing(input.record_sha256s);
+  const handle = validatedActiveGenerationHandleV1;
+  if (
+    handle === null ||
+    handle.key !== activeGenerationKey(input.active_generation)
+  )
+    throw new Error("readable-search engine active-generation handle is unavailable");
+  const admitted = scopedSegments(
+    handle.segments.filter((segment) => admittedSegment(segment, input.reader)),
+    input.reader,
+    input.project_id,
+    records,
+  );
+  const grouped = new Map<Sha256Digest, { readonly fact: ReadableSearchFactRow; atom_count: number }>();
+  for (const segment of admitted) {
+    for (const fact of segment.facts) {
+      const existing = grouped.get(fact.record_hash);
+      if (existing === undefined) {
+        grouped.set(fact.record_hash, { fact, atom_count: 1 });
+        continue;
+      }
+      if (
+        existing.fact.log_position !== fact.log_position ||
+        existing.fact.envelope_sha256 !== fact.envelope_sha256 ||
+        existing.fact.approval_id !== fact.approval_id ||
+        existing.fact.policy_id !== fact.policy_id ||
+        existing.fact.audience_project_ids_json !== fact.audience_project_ids_json
+      )
+        throw new Error("readable-search record facts are inconsistent");
+      existing.atom_count += 1;
+    }
+  }
+  const rows = [...grouped.values()].map(({ fact, atom_count }) => Object.freeze({
+    record_position: fact.log_position,
+    record_sha256: fact.record_hash,
+    envelope_sha256: fact.envelope_sha256,
+    approval_id: fact.approval_id,
+    policy_id: fact.policy_id,
+    audience_project_count: factProjectIds(fact, "audience_project_ids_json").length,
+    atom_count,
+  }));
+  rows.sort((left, right) => right.record_position - left.record_position);
+  return Object.freeze({
+    generation_id: handle.manifest.generation_id,
+    exact_head: handle.manifest.exact_head,
+    records: Object.freeze(rows),
+  });
+}
+
 export function readReadableSearchGenerationAtomsV1(
   input: ReadReadableSearchGenerationAtomsV1Input,
 ): ReadableSearchResultV1 {
   text(input.reader.principal_id, "reader principal_id");
   text(input.reader.membership_id, "reader membership_id");
   readerProjectIds(input.reader);
+  const records = readerRecordNarrowing(input.record_sha256s);
   if (!Array.isArray(input.atom_ids) || input.atom_ids.length < 1 || input.atom_ids.length > 10 || new Set(input.atom_ids).size !== input.atom_ids.length) throw new Error("readable-search atom read requires one through ten unique atoms");
   for (const atomId of input.atom_ids) validDigest(atomId, "readable-search atom id");
   const handle = validatedActiveGenerationHandleV1;
   if (handle === null || handle.key !== activeGenerationKey(input.active_generation)) throw new Error("readable-search engine active-generation handle is unavailable");
-  const admitted = scopedSegments(handle.segments.filter((segment) => admittedSegment(segment, input.reader)), input.reader, input.project_id);
+  const admitted = scopedSegments(handle.segments.filter((segment) => admittedSegment(segment, input.reader)), input.reader, input.project_id, records);
   const byAtom = new Map<Sha256Digest, ReadableSearchResultItemV1>();
   for (const segment of admitted) for (const atomId of input.atom_ids) {
     const fact = segment.facts_by_atom.get(atomId);

@@ -93,12 +93,12 @@ function publicScope(scope: PersonAskScopeV2): EvidenceDeskScopeV1 {
 }
 
 /** The records half of a scope. Every records call spreads this, so no scope can fall through to global. */
-function recordScope(scope: PersonAskScopeV2): Readonly<{ project_id?: never }> | Readonly<{ project_id: string }> {
+function recordScope(scope: PersonAskScopeV2): Readonly<{ project_id?: never }> | Readonly<{ project_id: string }> | Readonly<{ mine: true }> {
   switch (scope.kind) {
     case "global": return {};
     case "project": return { project_id: scope.project_id };
-    // Records cannot narrow to the caller's own approvals yet: fail closed, never global.
-    case "mine": throw new AuthorityOperationError("unavailable", "record evidence is unavailable");
+    // The records route narrows to meetings the caller finally approved.
+    case "mine": return { mine: true as const };
     default: return unknownScope(scope);
   }
 }
