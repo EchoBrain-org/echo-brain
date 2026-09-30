@@ -656,6 +656,22 @@ describe("Person client", () => {
       });
     });
   });
+  it("maps a mine scope to an Ask request that reads only what the asker added", async () => {
+    await withHome(async home => {
+      const client = new PersonClient({ home_directory: home, now: () => NOW, fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/v1/authority-descriptor") return json({ authority_descriptor: authorityDescriptor() });
+        expect(path).toBe("/v3/person/ask");
+        expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: "What did I decide?", mine: true });
+        return json(v4Answer({ scope: { kind: "mine" }, citations: [{ ...RECORD_CITATION, ref: `meeting:${RECORD_CITATION.citation.record_sha256}` }] }));
+      } });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+      await expect(client.ask("What did I decide?", { mine: true })).resolves.toMatchObject({
+        scope: { kind: "mine" },
+        citations: [{ ref: `meeting:sha256:${"b".repeat(64)}` }],
+      });
+    });
+  });
   it("never falls back to a retired Ask path when agentic Ask returns a canonical 404", async () => {
     await withHome(async home => {
       let legacyCalled = false;

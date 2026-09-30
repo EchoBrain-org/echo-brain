@@ -5,6 +5,7 @@ import { readUpdateFile } from './update-file.js';
 import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validatePersonUploadAudienceV2, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1, validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
+import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolCommandV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -83,6 +84,8 @@ const OPTIONS = {
   kind: { type: "string" },
   item: { type: "string" },
   neighbours: { type: "string" },
+  mine: { type: "boolean" },
+  ref: { type: "string" },
 } as const;
 
 type Option = string;
@@ -143,9 +146,11 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project"],
+    accepts: ["question", "project", "mine"],
     requires: ["question"],
   },
+  list: { accepts: ["project", "mine", "cursor"] },
+  open: { accepts: ["ref", "cursor"], requires: ["ref"] },
   "evidence-search": { accepts: ["query", "project", "kind", "limit"], requires: [] },
   "evidence-open": { accepts: ["item", "project", "neighbours"], requires: ["item"] },
   "ask-source": {
@@ -192,11 +197,21 @@ function usage(): string {
 const HELP: Readonly<Record<string, string>> = {
   person: `${usage()}
 
+Start here:
+  status                                      Who you are on this machine (no network).
+  list                                        The newest notes, documents and approved meetings you can read, 25 at a time.
+  list --project <project-id> | --mine        Only one of your projects, or only what you added.
+  open --ref <ref>                            Read one item from list or from an ask citation.
+  ask --question <text> [--project <project-id> | --mine]   Answer with citations.
+list shows only what you can read now; next_cursor means more.
+
 Commands:
   login       Sign in with an invitation or existing Authority identity.
   status      Show client build identity and sign-in state.
   logout      Remove the local session.
-  ask         Ask a question over records you may read.
+  list        List the newest notes, documents and approved meetings you can read.
+  open        Read one item by its ref from list or an ask citation.
+  ask         Ask a question over context you may read.
   evidence    Search or open released Ask evidence.
   transcript  Read an explicitly approved meeting transcript page.
   records     List records or search the current generation.
@@ -223,9 +238,21 @@ Client provenance does not identify the Authority build serving requests. Status
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id>]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id> | --mine]
 
-Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, it retrieves only context proven associated with that current project. Answers include typed citations.
+Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved; Slack and shared transcripts are not read. Answers include typed citations; each opens with person open --ref when it carries a ref.
+`,
+  list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
+
+Lists the newest things you can read now, 25 per page: notes, documents and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
+Without a scope flag the list covers what ask can read; the first page also shows who you are, your connected tools and your projects.
+--project lists one project you belong to. --mine lists only what you added: notes you saved, documents you uploaded and meetings you approved in Slack (approved means you were the approver, not an attendee or action owner).
+Pass next_cursor as --cursor with the same scope for the next page; null means the end.
+notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A page with no items and that notice is not the end: retry later.
+`,
+  open: `usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]
+
+Reads one item under your current access: a note's full text, a document's extracted text, or a meeting's decisions, actions and rationales. Documents and meetings are paged. A meeting's first page shows transcript_ref when its approver shared the transcript and you may read it; open that ref to page the transcript. Refs come from person list and from ask citations. Anything you cannot read returns not_found. Pass next_cursor as --cursor with the same --ref for the next page.
 `,
   evidence: `usage: echo-brain person evidence <search|open> [options]
 
@@ -834,6 +861,8 @@ export async function runPersonClientCli(
   }
 
   let values: Record<Option, string | boolean | undefined> = {};
+  let listRequest: PersonListRequestV1 | undefined;
+  let openRequest: PersonOpenRequestV1 | undefined;
   try {
     const args = [...argv.slice(employeeAction === undefined && updateAction === undefined && projectAction === undefined && documentAction === undefined && evidenceAction === undefined ? 1 : 2)];
     // Accept a negative integer as a limit value so the existing bounds explain
@@ -900,6 +929,25 @@ export async function runPersonClientCli(
       ) {
         throw new Error("--record-sha256 must be sha256 followed by 64 lowercase hex characters");
       }
+    }
+    if ((action === "ask" || action === "list") && values.project !== undefined && values.mine === true) {
+      throw new Error(`--project and --mine cannot be combined with \`echo-brain person ${action}\``);
+    }
+    // List and open requests are complete and validated before any network or session use.
+    if (action === "list") {
+      listRequest = validatePersonListRequestV1({
+        schema_version: 1,
+        ...(values.project === undefined ? {} : { project_id: values.project }),
+        ...(values.mine === true ? { mine: true } : {}),
+        ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
+      });
+    }
+    if (action === "open") {
+      openRequest = validatePersonOpenRequestV1({
+        schema_version: 1,
+        ref: values.ref,
+        ...(values.cursor === undefined ? {} : { cursor: values.cursor }),
+      });
     }
   } catch (error) {
     if (isContextAction(action)) {
@@ -1207,10 +1255,18 @@ export async function runPersonClientCli(
           ok: true,
           result: await client.ask(
             requiredText(values, "question"),
-            values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project")),
+            values.project !== undefined
+              ? validateProjectIdV1(requiredText(values, "project"))
+              : values.mine === true ? { mine: true } : undefined,
             dependencies.abort_signal,
           ),
         });
+        break;
+      case "list":
+        print(stdout, { ok: true, result: await client.list(listRequest!, dependencies.abort_signal) });
+        break;
+      case "open":
+        print(stdout, { ok: true, result: await client.open(openRequest!, dependencies.abort_signal) });
         break;
       case 'evidence-search': {
         const project_id = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, 'project'));
@@ -1371,7 +1427,7 @@ export async function runPersonClientCli(
         error.code === "invalid_output" && error.status === 502
         ? "Answer generation returned an invalid response."
         : error instanceof PersonAuthorityClientError || error instanceof PersonQueryInputError ||
-        error instanceof PersonClientSessionUnavailableError || (action !== "ask" && action !== "records")
+        error instanceof PersonClientSessionUnavailableError || !["ask", "records", "list", "open"].includes(action)
         ? (error as Error).message : "Person request could not be completed",
       ...(error instanceof PersonAuthorityClientError ? { code: error.code, status: error.status } : {}),
       ...(error instanceof PersonQueryInputError ? { code: error.code } : {}),

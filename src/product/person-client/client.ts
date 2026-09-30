@@ -5,6 +5,7 @@ import { validatePersonUploadContextId } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { validatePersonQueryText } from '@echo-brain/organization-api';
 import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1, type PersonSourceEvidenceReadRequestV1, type PersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
+import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
 import type { PersonToolSessionV1 } from '@echo-brain/organization-api';
 import {
   validateProjectPageRequestV1, validateProjectPageRequestV2, validateProjectCreateV1, validateProjectIdV1,
@@ -33,7 +34,9 @@ import {
   type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
   type PersonAskSourceEvidenceV1,
+  type PersonListV1,
   type PersonMeetingTranscriptReadV1,
+  type PersonOpenV1,
   type PersonRecordListV1,
   type PersonRecordSearchV2,
 } from "./authority-client.js";
@@ -776,12 +779,12 @@ export class PersonClient {
   }
 
   /** Agentic Ask (RFC-0003), the only Ask since the one-shot routes were retired (ADR-0022). */
-  async ask(question: string, projectId?: ProjectIdV1, signal?: AbortSignal): Promise<PersonAnswer> {
+  async ask(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswer> {
     // Preserve the public query error type before transport schema validation.
     validatePersonQueryText(question);
-    if (projectId !== undefined) validateProjectIdV1(projectId, 'Ask project_id');
+    if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
     const stored = await this.accessSession();
-    const result = await this.authority(stored.authority_origin).askV3(stored.session.access_token, question, projectId, signal);
+    const result = await this.authority(stored.authority_origin).askV3(stored.session.access_token, question, scope, signal);
     this.assertCurrentSession(stored);
     return result;
   }
@@ -798,6 +801,24 @@ export class PersonClient {
   async evidenceOpen(value: PersonEvidenceOpenV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
     const stored = await this.accessSession();
     const result = await this.authority(stored.authority_origin).evidenceOpen(stored.session.access_token, value, signal);
+    this.assertCurrentSession(stored);
+    return result;
+  }
+
+  /** One model-free list page under a fresh authenticated read (ADR-0023). */
+  async list(value: PersonListRequestV1, signal?: AbortSignal): Promise<PersonListV1> {
+    const request = validatePersonListRequestV1(value);
+    const stored = await this.accessSession();
+    const result = await this.authority(stored.authority_origin).list(stored.session.access_token, request, signal);
+    this.assertCurrentSession(stored);
+    return result;
+  }
+
+  /** Opens one ref from a list row or an Ask citation under the caller's current access. */
+  async open(value: PersonOpenRequestV1, signal?: AbortSignal): Promise<PersonOpenV1> {
+    const request = validatePersonOpenRequestV1(value);
+    const stored = await this.accessSession();
+    const result = await this.authority(stored.authority_origin).open(stored.session.access_token, request, signal);
     this.assertCurrentSession(stored);
     return result;
   }
