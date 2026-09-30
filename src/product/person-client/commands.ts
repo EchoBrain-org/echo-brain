@@ -230,10 +230,10 @@ Ask one question using at most 240 Unicode code points, 1–32 distinct normaliz
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
 Lists the newest things you can read now, 25 per page: notes, documents and approved meetings. Each row has a ref for person open, a title, when it was added (added_at), who can see it (only_me, team or project) and the projects you belong to that it is filed under. Rows never carry text.
-Without a scope flag the list covers what ask can read; the first page also shows who you are, your connected tools and your projects.
+Without a scope flag the list covers the notes, documents and approved meetings ask can read (not Slack messages or shared transcripts); the first page also shows who you are, your connected tools and your projects.
 --project lists one project you belong to. --mine lists only what you added: notes you saved, documents you uploaded and meetings you approved in Slack (approved means you were the approver, not an attendee or action owner).
 Pass next_cursor as --cursor with the same scope for the next page; null means the end.
-notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A page with no items and that notice is not the end: retry later.
+notice "meetings_unavailable" means meetings are still being indexed and come on a later page. A first page with no items and that notice is not the end: follow its next_cursor later. A later page that could only wait for meetings fails with unavailable (503): retry the same --cursor later.
 `,
   open: `usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]
 

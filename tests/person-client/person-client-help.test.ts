@@ -58,6 +58,10 @@ describe("Person client help", () => {
     await expect(help(["ask", "--help"])).resolves.toContain(
       "echo-brain person ask --question <text> [--project <project-id> | --mine]",
     );
+    // An agent reads this help: it must not overstate what list covers, and must say how a waiting page fails.
+    const listHelp = await help(["list", "--help"]);
+    expect(listHelp).toContain("not Slack messages or shared transcripts");
+    expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
     await expect(help(["list", "--help"])).resolves.toContain(
       "usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]",
     );
