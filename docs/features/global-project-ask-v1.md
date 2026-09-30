@@ -151,7 +151,8 @@ flags are exclusive. The client does not silently downgrade a project or mine
 request to global Ask.
 
 Cited original evidence is read through `POST /v2/person/ask/source` or
-`person ask-source`, using the answer's scope and exact source, revision,
+`person ask-source`, using the answer's project scope (global for a global or
+Mine answer, since global contains mine) and exact source, revision,
 representation, and anchor coordinates. The response is a bounded evidence
 excerpt, not a new browsing interface.
 

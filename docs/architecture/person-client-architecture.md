@@ -49,8 +49,9 @@ The sidebar's **Mine** row, under New project, opens a page that reads
 notes the person saved, the files they uploaded and the meetings they approved,
 newest first, each with the names of their projects it is filed in, and More
 for the next page. A project page reads `person list --project`, and the reader
-opens every row and citation with `person open --ref`, joining a meeting's
-split parts across pages. On Mine the bar asks with the Mine chip, shows no
+opens every list row and live match with `person open --ref`, joining a
+meeting's split parts across pages; Ask's sources still read as described
+under Ask below. On Mine the bar asks with the Mine chip, shows no
 live matches and has no ⊕, and a dropped file is not taken. A save toast that
 no project page shows opens Mine. A 401 on a project's list means the person
 is no longer a member: the page says "This is no longer available to you." and
@@ -155,9 +156,9 @@ cards through `person records --record-sha256 <digest>` while the app is shown.
 Each readable card appears as its read completes; a failed or missing read does
 not discard other readable cards. Citations also carry a `ref` for
 `person open`, but the source cards still read `person records` until a
-follow-up moves them to open by ref. The **Based on** chips acquire meeting
-titles after their reads complete. Selecting a chip opens its approved record
-alongside the answer.
+follow-up moves them to open by ref. The answer's numbered sources acquire
+meeting titles after their reads complete. Selecting a source's number or row
+opens its approved record alongside the answer.
 
 Cards show decisions, actions, rationale, and approved evidence excerpts beside
 the statement each excerpt supports. Meeting dates, excerpt timestamps,
@@ -179,7 +180,7 @@ and newer clients accept older servers that omit the optional metadata.
 Current membership and record visibility are checked again before releasing
 the enriched response, whose digest is included in the existing read audit.
 Missing and inaccessible records both produce an empty result. Source details,
-including names in chips, are cleared when the app loses focus or the conversation
+including meeting titles in the sources, are cleared when the app loses focus or the conversation
 changes and reloaded on return. Runtime processing and telemetry are unchanged.
 
 ## Connected tools
