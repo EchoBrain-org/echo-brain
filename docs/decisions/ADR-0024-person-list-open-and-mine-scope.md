@@ -10,7 +10,7 @@ component_ids:
 created_at: 2026-09-29
 reviewed_at: 2026-09-29
 reviewed_ref: f6effed96764fcb742f65f191cb04288031a7dbc
-status: proposed
+status: accepted
 supersedes: []
 superseded_by: []
 updates:
@@ -27,12 +27,11 @@ updates:
 
 ## Disposition
 
-Proposed. The founder approved the design choices on 2026-09-29.
+Accepted. The founder approved the design choices on 2026-09-29 and accepted
+this record on 2026-09-30, in the change that merges the implementation, as
 [INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)
-requires an accepted ADR before any new release path ships, so `status`, this
-section and the index row change to `accepted` in the change that merges the
-implementation. `reviewed_ref` is the source the design was checked against;
-it is not an implementation claim.
+requires before any new release path ships. `reviewed_ref` is the source the
+design was checked against; it is not an implementation claim.
 
 ## Context and options
 
@@ -406,8 +405,8 @@ server without them fails their project pages and Mine.
 
 Merge checklist, in the change that merges the implementation:
 
-- `status`, the Disposition section and this ADR's row in the decision index
-  change to `accepted`, and "proposed" goes from the Person list sentence in
+- Done: `status`, the Disposition section and this ADR's row in the decision
+  index are `accepted`, and "proposed" is gone from the Person list sentence in
   [organization-authority.md](../components/organization-authority.md) and
   from the ADR-0024 served-path rows in
   [permissions.md](../components/permissions.md).
@@ -415,7 +414,8 @@ Merge checklist, in the change that merges the implementation:
   uploader merged as [ADR-0023](ADR-0023-reader-scoped-upload-releases.md).
   This ADR's server, Person client and desktop app ship in a release that
   includes it.
-- The pull request states the coordinated server-first release plan.
+- Done: the merging pull request states the coordinated server-first release
+  plan.
 
 Evidence:
 

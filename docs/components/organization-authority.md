@@ -151,7 +151,7 @@ the route binds the Person, desk, model and request audit. It receives no storag
 handle or provider-specific implementation. Architecture tests traverse its
 entire import closure to enforce that separation.
 
-Person list and open by ref are proposed in
+Person list and open by ref are specified in
 [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md).
 `POST /v1/person/list` returns the newest notes, documents and approved
 meetings the caller can read, 25 per page under an opaque cursor, in global,
