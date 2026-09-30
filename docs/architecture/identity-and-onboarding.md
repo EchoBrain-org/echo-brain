@@ -49,8 +49,8 @@ its claim and is signed out. Only a refresh that never left the machine (no
 connection was made, for example before the network is up) keeps the stored
 session, since its credential is certainly unused. Logout removes
 local authority even if the remote revocation outcome is unknown. Every Person
-read, exclusion, and integration-link request rechecks the current session,
-membership, and revocation state on the Authority.
+read and integration-link request rechecks the current session, membership, and
+revocation state on the Authority.
 
 Organization-tool onboarding remains an Authority administrator operation. An
 owner supplies the organization Slack bot credential and a public channel
@@ -61,9 +61,9 @@ legacy field name `slack_approval_channel_id` is transitional naming debt: that
 channel is never an approval destination or readiness gate.
 
 After that organization tool is active, a signed-in Person can run the
-`echo-brain person slack-link-begin` and `slack-link-complete` challenge. The
-Authority posts the challenge, observes the exact Slack human replying in the
-exact thread, and creates or reuses that membership's external identity link.
+`echo-brain person slack-link` challenge. The Authority posts the challenge,
+observes the exact Slack human replying in the exact thread, and creates or
+reuses that membership's external identity link.
 The Person flow creates no shared-channel/reaction adapter binding or
 approve/reject grant. Private meeting-owner approvals are instead delivered as
 signed Block Kit DMs. The visibility selector defaults to **Only me**

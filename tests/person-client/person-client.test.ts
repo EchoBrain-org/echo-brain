@@ -2750,64 +2750,6 @@ describe("Person client", () => {
     });
   });
 
-  it("lists only the signed-in Person's exclusions for one exact source", async () => {
-    await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const fetchImpl: typeof fetch = async (input, init) => {
-        const path = new URL(String(input)).pathname;
-        if (path === "/v1/authority-descriptor") {
-          return json({ authority_descriptor: authority });
-        }
-        expect(path).toBe("/v2/member-exclusions/list");
-        expect(new Headers(init?.headers).get("authorization")).toBe(
-          `Bearer ${ROTATED_SESSION.access_token}`,
-        );
-        const request = JSON.parse(String(init?.body)) as Record<
-          string,
-          unknown
-        >;
-        expect(request).toMatchObject({
-          subject_principal_id: SESSION.principal_id,
-          source_adapter_id: "granola",
-          source_instance_id: "test-meeting-source",
-        });
-        expect(request).not.toHaveProperty("target_principal_id");
-        expect(request).not.toHaveProperty("target_membership_id");
-        return json({
-          schema_version: 2,
-          kind: "echo-organization-member-exclusion-list-response",
-          authority_id: authority.authority_id,
-          organization_id: SESSION.organization_id,
-          subject_principal_id: SESSION.principal_id,
-          membership_id: SESSION.membership_id,
-          source_adapter_id: "granola",
-          source_instance_id: "test-meeting-source",
-          exclusions: [
-            {
-              scope: "source",
-              source_adapter_id: "granola",
-              source_instance_id: "test-meeting-source",
-            },
-          ],
-        });
-      };
-      const client = new PersonClient({
-        home_directory: home,
-        fetch: fetchImpl,
-        now: () => NOW,
-        random_uuid: () => "00000000-0000-4000-8000-000000000112",
-      });
-
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(
-        client.meetingIngestionExclusions("granola", "test-meeting-source"),
-      ).resolves.toMatchObject({
-        subject_principal_id: SESSION.principal_id,
-        exclusions: [{ scope: "source" }],
-      });
-    });
-  });
-
   function refreshingClient(home: string, reply: () => Response) {
     const authority = authorityDescriptor();
     const calls = { refresh: 0 };

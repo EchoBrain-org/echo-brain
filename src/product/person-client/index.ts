@@ -29,11 +29,6 @@ export {
   type PersonClientCliDependencies,
 } from "./commands.js";
 export {
-  createPersonMeetingIngestionExclusionChangeRequest,
-  createPersonMeetingIngestionExclusionListRequest,
-  type PersonApiRequestIdentity,
-} from "./person-api-request-builders.js";
-export {
   readPersonOnboardingInvitation,
   writePersonOnboardingInvitation,
   type PersonOnboardingInvitation,

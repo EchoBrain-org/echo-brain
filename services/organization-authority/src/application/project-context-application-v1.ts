@@ -24,7 +24,7 @@ import {
   type PersonUpdateReceiptV2,
   type PersonUpdateReceiptV3,
   type PersonUpdateStatusV2,
-  type PersonUpdateStatusV3,
+  type PersonUpdateStatusResultV3,
   type PersonUploadContentV2,
   type PersonUploadContentV3,
   type PersonUploadSearchResultV2,
@@ -169,7 +169,7 @@ export class ProjectContextApplication implements ProjectContextApplicationV1 {
     const actor = this.authenticate(accessToken); const requestId = this.input(() => validatePersonUpdateRequestId(value));
     return this.read(accessToken, actor, { operation: 'upload_status', request_id: requestId }, (transaction, snapshot) => transaction.uploadStatus(snapshot, requestId));
   }
-  uploadStatusV3(accessToken: string, value: unknown): PersonUpdateStatusV3 {
+  uploadStatusV3(accessToken: string, value: unknown): PersonUpdateStatusResultV3 {
     const actor = this.authenticate(accessToken); const requestId = this.input(() => validatePersonUpdateRequestId(value));
     return this.read(accessToken, actor, { operation: 'upload_status_v3', request_id: requestId }, (transaction, snapshot) => transaction.uploadStatusV3(snapshot, requestId));
   }

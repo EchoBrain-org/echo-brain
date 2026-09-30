@@ -239,6 +239,76 @@ describe("agentic Ask: research loop", () => {
     expect(result.outcome).toBe("answered");
   });
 
+  it("lets the writer read released search passages when global research never opens them", async () => {
+    const software = item("software", `Software needs an explicit transition table before architecture drafting. ${"Software review context. ".repeat(20)}`, { kind: "document_passage", label: "SCOUT Software Review" });
+    const hardware = item("hardware", `Hardware needs payload stability and battery endurance measurements. ${"Hardware review context. ".repeat(20)}`, { kind: "document_passage", label: "SCOUT Hardware Review" });
+    const unrelated = item("release", "The staging release is approved.");
+    const evidence = desk({ scope: { kind: "global" }, search: () => [software, hardware, unrelated] });
+    const question = "Compare the Software and Hardware Reviews.";
+    const script = scripted([
+      step([{ question }], [search("SCOUT Software Review"), search("SCOUT Hardware Review")]),
+      finish([{ question, needs: [{ status: "not_found" }] }]),
+      answer([
+        { text: "Software needs a transition table.", evidence: ["E1"] },
+        { text: "Hardware needs stability and endurance measurements.", evidence: ["E2"] },
+      ]),
+    ]);
+    const result = await ask({ desk: evidence, model: script.model }).answer({ question });
+    expect(evidence.open).not.toHaveBeenCalled();
+    expect(script.prompt(1).last_results[0].results.slice(0, 2).map((value: { full: boolean }) => value.full)).toEqual([false, false]);
+    expect(script.prompt(2).evidence).toEqual([
+      expect.objectContaining({ id: "E3", text: unrelated.text }),
+      expect.objectContaining({ id: "E2", text: hardware.text }),
+      expect.objectContaining({ id: "E1", text: software.text }),
+    ]);
+    expect(result.outcome).toBe("answered");
+    expect(result.citations.map(value => value.label)).toEqual([software.label, hardware.label]);
+  });
+
+  it("still permits not_found when released search passages do not answer the question", async () => {
+    const unrelated = item("unrelated", "This is unrelated background about another project. ".repeat(20), { kind: "document_passage" });
+    const script = scripted([
+      step([{}], [search("launch"), search("launch date")]),
+      finish([missing()]),
+      answer([], ["launch date"]),
+    ]);
+    const result = await ask({ desk: desk({ search: () => [unrelated] }), model: script.model }).answer({ question: "When is launch?" });
+    expect(script.prompt(2).evidence).toEqual([expect.objectContaining({ text: unrelated.text })]);
+    expect(result).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", gap: "Not found: launch date." }] });
+    expect(result.parts[0]).not.toHaveProperty("records");
+  });
+
+  it("does not admit metadata-only listings to the writer", async () => {
+    const evidence = desk({ list: () => [listedItem("unread", { kind: "document_passage" })] });
+    const script = scripted([
+      step([{}], [{ tool: "list", args: { source: "documents" } }]),
+      finish([missing()]),
+    ]);
+    const result = await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
+    expect(script.inputs).toHaveLength(2);
+    expect(result).toMatchObject({ outcome: "not_found", citations: [] });
+  });
+
+  it("fits unopened search passages after cited and read evidence within the writer budget", async () => {
+    const read = item("read", "Released background.");
+    const cited = item("cited", "Launch is Tuesday.");
+    const unopened = Array.from({ length: 8 }, (_, index) => item(`unopened-${index}`, `Passage ${index}. ${"Detailed background. ".repeat(150)}`, { kind: "document_passage" }));
+    const script = scripted([
+      step([{}], [search("launch")]),
+      finish([found(["E2"])]),
+      answer([{ text: "Launch is Tuesday.", evidence: ["E2"] }, { text: "Excluded passage.", evidence: ["E3"] }]),
+    ]);
+    const result = await ask({ desk: desk({ search: () => [read, cited, ...unopened] }), model: script.model, context_tokens: 4_096 }).answer({ question: "When is launch?" });
+    const supplied = script.prompt(2).evidence as { id: string; text: string }[];
+    expect(supplied.slice(0, 2).map(value => value.id)).toEqual(["E2", "E1"]);
+    expect(supplied.length).toBeGreaterThan(2);
+    expect(supplied.length).toBeLessThan(unopened.length + 2);
+    expect(new Set(supplied.map(value => value.id)).size).toBe(supplied.length);
+    expect(supplied.reduce((total, value) => total + Buffer.byteLength(value.text) + 200, 0)).toBeLessThanOrEqual(16 * 1_024);
+    expect(supplied.some(value => value.id === "E3")).toBe(false);
+    expect(result.parts[0]!.statements.map(value => value.text)).toEqual(["Launch is Tuesday."]);
+  });
+
   it("previews a long search hit where the query matched, not only its head", async () => {
     const transcript = item("transcript", `Transcript: Calibration\n${"Anika: We reviewed the pilot numbers. ".repeat(12)}Jules: I will publish the dashboard by September 11.\n\nZhen: Thanks.`, { kind: "note", label: "Transcript: Calibration" });
     const unmatched = item("unmatched", `${"Nothing relevant here at all. ".repeat(12)}The end.`);
@@ -246,6 +316,7 @@ describe("agentic Ask: research loop", () => {
       step([{ needs: [{ need: "what Jules took on" }] }], [search("Jules dashboard")]),
       finish([missing()]),
       finish([missing()]),
+      answer([{ text: "Jules said they would publish the dashboard by September 11.", evidence: ["E1"] }]),
     ]);
     await ask({ desk: desk({ search: () => [transcript, unmatched] }), model: script.model }).answer({ question: "What is Jules working on?" });
     const [hit, other] = script.prompt(1).last_results[0].results;
@@ -475,6 +546,19 @@ describe("agentic Ask: research loop", () => {
 describe("agentic Ask: failures never lose found evidence", () => {
   const unavailable = () => Object.assign(new Error("OpenRouter request failed"), { diagnostic: { failure_class: "adapter_timeout" } });
 
+  it("does not dump unopened search passages when the writer fails or call that completed absence", async () => {
+    const passage = item("unread", "Potentially relevant launch background. ".repeat(20), { kind: "document_passage" });
+    const script = scripted([
+      step([{}], [search("launch"), search("launch date")]),
+      finish([missing()]),
+      { wrong: true }, { still: "wrong" },
+    ]);
+    const result = await ask({ desk: desk({ search: () => [passage] }), model: script.model }).answer({ question: "When is launch?" });
+    expect(script.inputs).toHaveLength(4);
+    expect(result).toMatchObject({ outcome: "not_found", citations: [], parts: [{ status: "not_found", gap: expect.stringContaining("couldn't complete the search") }] });
+    expect(result.parts[0]).not.toHaveProperty("records");
+  });
+
   it("shows cited records when the answer call fails twice", async () => {
     const script = scripted([
       step([{}], [search("launch")]),
@@ -582,9 +666,12 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(script.inputs).toHaveLength(1);
   });
 
-  it("reports an incomplete search when it reaches the step limit with only unread previews", async () => {
+  it("reports an incomplete search when research reaches the step limit and the writer cannot use its search passages", async () => {
     let queries = 0;
-    const model: StructuredGenerationPort = { generate: vi.fn(async () => step([{}], [search(`launch ${++queries}`)])) };
+    const model: StructuredGenerationPort = { generate: vi.fn(async input =>
+      (input.schema.properties as Readonly<Record<string, unknown>>)?.sentences !== undefined
+        ? { wrong: true }
+        : step([{}], [search(`launch ${++queries}`)])) };
     const evidence = desk({ search: query => [item(query, "Unread background. ".repeat(100))] });
     const result = await ask({ desk: evidence, model }).answer({ question: "When is launch?" });
     expect(result.parts[0]!.gap).toContain("couldn't complete the search");

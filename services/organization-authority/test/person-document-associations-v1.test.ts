@@ -71,7 +71,9 @@ describe('document project associations', () => {
     const removal = dissociate(associate(saved.document_id));
     expect(app.dissociate('owner', removal).state).toBe('applied');
     expect(db.prepare('SELECT project_id FROM authority_person_document_associations_v1 WHERE document_id=?').all(saved.document_id)).toEqual([{ project_id: PROJECT_BETA }]);
-    expect(app.readV2('member', saved.document_id).audience).toEqual(input.audience);
+    // The member holds only Alpha, so the released audience names only Alpha (ADR-0023).
+    expect(app.readV2('member', saved.document_id).audience).toEqual({ kind: 'project', project_id: PROJECT_ALPHA });
+    expect(app.readV2('owner', saved.document_id).audience).toEqual(input.audience);
     expect(app.readV2('member', saved.document_id).association_project_ids).toEqual([]);
     expect(() => app.readV2('member', saved.document_id, { project_id: PROJECT_ALPHA })).toThrow(expect.objectContaining({ code: 'not_found' }));
     const addition = associate(saved.document_id);

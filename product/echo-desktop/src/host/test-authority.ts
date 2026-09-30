@@ -171,7 +171,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const readable = fixture('projects-read-context');
   const catalog = new Map<string, { received_at: string; title: string; text: string; audience: Record<string, unknown> }>([
     [String(feedItem[0]!.context_id), { received_at: String(feedItem[0]!.received_at), title: String(feedItem[0]!.title),
-      // Readable by the members of whichever project it is read in.
+      // Shared with several projects; a reader sees only the one it is read in (ADR-0023).
       text: String(readable.text), audience: { kind: 'projects' } }],
     ...desktop.notes.map(note => [note.context_id, note] as const),
   ]);
@@ -290,8 +290,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     return { items: all.slice(from, from + PAGE), next_cursor: from + PAGE < all.length ? SECOND_PAGE : null };
   };
   const sha = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
+  // The fixture's documents were saved by someone else, so their request IDs stay private (ADR-0023);
+  // only one Ari uploaded (Mine's) carries its own.
   const documentMetadata = (document: StoredDocument) => ({
-    schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: document.request_id, filename: document.filename,
+    schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: mineDocuments.has(document.document_id) ? document.request_id : null,
+    filename: document.filename,
     title: document.title, content_length: Buffer.byteLength(document.original), sha256: sha(document.original), audience: document.audience,
     association_project_ids: document.association_project_ids, document_id: document.document_id,
     detected_media_type: document.detected_media_type, received_at: document.received_at, state: 'saved',
@@ -593,7 +596,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       response.project_id = body?.project_id;
       response.items = (response.items as { title: string; excerpt: string }[])
         .filter(item => found(body?.query, item))
-        .map(item => ({ ...item, audience: { kind: 'projects', project_ids: [body?.project_id] } }));
+        .map(item => ({ ...item, audience: { kind: 'project', project_id: body?.project_id } }));
       return json(response);
     }
     // All context: saved notes, each version searched and read on its own.
@@ -900,6 +903,18 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             { text: 'Maya confirmed the launch in Slack.', citation_indexes: [2], private: true }] }],
         });
       }
+      // One file cited through two passages: one source, with both passages in its pane.
+      if (mode === 'ask-passages') {
+        const [record, passage] = desktop.answer.citations as { label: string; citation: Record<string, unknown> }[];
+        const label = 'Apollo-launch-plan-v2.md';
+        const first = { ...passage!, label, citation: { ...passage!.citation, label } };
+        const second = { ...first, citation: { ...first.citation, anchor_sha256: sha('second passage') } };
+        return json({ ...desktop.answer, scope, citations: [record, first, second],
+          parts: [{ question, status: 'answered', statements: [
+            { text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0, 1], private: false },
+            { text: 'Monthly plans follow the launch.', citation_indexes: [2], private: false },
+          ] }] });
+      }
       // Follow-ups: the second answer comes late, and the third question fails.
       if (mode === 'ask-follow-ups' && asks === 2) {
         // The test releases the reply after cancellation. A fixed delay races
@@ -924,10 +939,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (method === 'POST' && path === '/v2/person/ask/source') {
       evidenceReads += 1;
       if (mode === 'evidence-fails-once' && evidenceReads === 1) return failure('unavailable', 503);
+      const citation = body?.citation as Record<string, unknown>;
+      // The second passage of ask-passages is markdown that starts with its file name, as real evidence can.
+      const text = mode === 'long-evidence' ? 'x'.repeat(3_000)
+        : citation?.anchor_sha256 === sha('second passage') ? 'Apollo-launch-plan-v2.md ## Pricing\n\n- **Monthly** plans follow the launch.'
+          : desktop.evidence_text;
       return json({
         schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: body?.scope,
-        citation: { ...(body?.citation as Record<string, unknown>), label: desktop.evidence_label },
-        text: mode === 'long-evidence' ? 'x'.repeat(3_000) : desktop.evidence_text,
+        citation: { ...citation, label: desktop.evidence_label }, text,
       });
     }
     // One approved record, by the digest an answer cited. A record the person

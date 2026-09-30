@@ -198,7 +198,7 @@ function askerName(value: { readonly display_name: string } | undefined): string
 type Entry = {
   readonly short: string;
   item: EvidenceDeskItemV1;
-  /** The model has seen this item's complete released text. */
+  /** The research model has seen this item's complete released text. */
   full: boolean;
   /** Opened explicitly (or preloaded); full text stays in the prompt while budget allows. */
   opened: boolean;
@@ -845,6 +845,10 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         };
         for (const entry of cited) admit(entry);
         for (const entry of [...entries.values()].filter(value => value.full).sort((left, right) => right.touched - left.touched)) admit(entry);
+        // Search already released these passage bodies through the desk. The writer
+        // can read them even when research stopped at their previews; `full` still
+        // records what research read, not what the writer is allowed to read now.
+        for (const entry of [...entries.values()].filter(value => !value.full && value.item.text !== undefined).sort((left, right) => right.touched - left.touched)) admit(entry);
         const allowed = new Set(evidence.map(entry => entry.short));
         report({ stage: "context", event: "succeeded", elapsed_ms: 0, retrieval: { context_atom_count: evidence.length } });
 
@@ -889,12 +893,13 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         if (statements.length > 0) {
           draft = gapText === undefined ? { status: "answered", statements } : { status: "partial", statements, gap: gapText };
         } else {
-          // No verified sentence: show what research found rather than "not found".
-          const fallback = (answer === null ? evidence : cited.filter(entry => allowed.has(entry.short))).slice(0, 3);
+          // Raw fallback remains limited to research-read evidence; merely sending
+          // a search passage to a failed writer does not make it a useful answer.
+          const fallback = (answer === null ? evidence.filter(entry => entry.full) : cited.filter(entry => allowed.has(entry.short))).slice(0, 3);
           const records = fallback.map(entry => ({ text: entry.item.text!, citation_indexes: use([entry.short]), private: privateItem(entry.item) }));
           draft = records.length > 0
             ? { status: "records_only", statements: [], records, gap: RECORDS_GAP }
-            : { status: "not_found", statements: [], gap: gapText ?? (researchIncomplete ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
+            : { status: "not_found", statements: [], gap: gapText ?? (researchIncomplete || (answer === null && evidence.length > 0) ? INCOMPLETE_SEARCH_GAP : NOT_FOUND_GAP) };
         }
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
         const outcome = !anyEvidence ? "not_found" as const : draft.status === "answered" ? "answered" as const : "partial" as const;

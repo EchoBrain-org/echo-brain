@@ -17,6 +17,7 @@ decision_ids:
   - ADR-0005
   - ADR-0006
   - ADR-0013
+  - ADR-0023
 invariant_ids:
   - INV-IDENTITY-002
 failure_pattern_ids:

@@ -21,7 +21,7 @@ import {
 import { validatePersonUpdateSubmitV3, validatePersonUploadSearchV3, type PersonUpdateSubmitV3, type PersonUploadSearchV3 } from '@echo-brain/organization-api';
 import { validateOrganizationDirectorySearchV1, type OrganizationDirectorySearchV1 } from '@echo-brain/organization-api';
 import { randomBytes, randomUUID } from "node:crypto";
-import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonMeetingIngestionExclusionSelectorV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
+import { isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 import {
   PersonAuthorityClient,
   PersonAuthorityClientError,
@@ -40,10 +40,6 @@ import {
   type PersonRecordListV1,
   type PersonRecordSearchV2,
 } from "./authority-client.js";
-import {
-  createPersonMeetingIngestionExclusionChangeRequest,
-  createPersonMeetingIngestionExclusionListRequest,
-} from "./person-api-request-builders.js";
 import {
   PersonClientSessionUnavailableError,
   PersonSessionStore,
@@ -843,40 +839,6 @@ export class PersonClient {
     );
     this.assertCurrentSession(stored);
     return result;
-  }
-
-  async changeMeetingIngestionExclusion(
-    excluded: boolean,
-    selector: OrganizationPersonMeetingIngestionExclusionSelectorV2,
-  ): Promise<void> {
-    const stored = await this.accessSession();
-    await this.authority(stored.authority_origin).changeMeetingIngestionExclusion(
-      createPersonMeetingIngestionExclusionChangeRequest(
-        stored,
-        this.requestId("mex"),
-        excluded,
-        selector,
-      ),
-      stored.session.access_token,
-    );
-  }
-
-  async meetingIngestionExclusions(
-    sourceAdapterId: string,
-    sourceInstanceId: string,
-  ) {
-    const stored = await this.accessSession();
-    return await this.authority(
-      stored.authority_origin,
-    ).meetingIngestionExclusions(
-      createPersonMeetingIngestionExclusionListRequest(
-        stored,
-        this.requestId("mex"),
-        sourceAdapterId,
-        sourceInstanceId,
-      ),
-      stored.session.access_token,
-    );
   }
 
   async withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>): Promise<T> {

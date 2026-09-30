@@ -72,9 +72,6 @@ const OPTIONS = {
   invitation: { type: "string" },
   question: { type: "string" },
   query: { type: "string" },
-  "source-adapter-id": { type: "string" },
-  "source-instance-id": { type: "string" },
-  "meeting-external-id": { type: "string" },
   name: { type: "string" },
   email: { type: "string" },
   out: { type: "string" },
@@ -162,18 +159,6 @@ const RULES: Readonly<
     requires: ["approval-id", "source-id", "revision-id", "source-sha256"],
   },
   records: { accepts: ["limit", "query", "record-sha256"] },
-  exclusions: {
-    accepts: ["source-adapter-id", "source-instance-id"],
-    requires: ["source-adapter-id", "source-instance-id"],
-  },
-  exclude: {
-    accepts: ["source-adapter-id", "source-instance-id", "meeting-external-id"],
-    requires: ["source-adapter-id", "source-instance-id"],
-  },
-  include: {
-    accepts: ["source-adapter-id", "source-instance-id", "meeting-external-id"],
-    requires: ["source-adapter-id", "source-instance-id"],
-  },
   "tools": {},
   "employee-invite": {
     accepts: ["name", "email", "out"],
@@ -586,20 +571,6 @@ function contextPaging(values: Record<Option, string | boolean | undefined>) {
   };
 }
 
-async function readBoundedStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  for await (const chunk of process.stdin) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    bytes += buffer.byteLength;
-    if (bytes > MAXIMUM_INPUT_BYTES) {
-      throw new Error("Person client input exceeds 64 KiB");
-    }
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks, bytes).toString("utf8");
-}
-
 async function readBoundedStdinLine(): Promise<string> {
   const prompt = createInterface({
     input: process.stdin,
@@ -984,13 +955,12 @@ export async function runPersonClientCli(
       ? {}
       : { random_uuid: dependencies.random_uuid }),
   });
-  const readInput = dependencies.read_input ?? readBoundedStdin;
   const readInteractiveLine = dependencies.read_input ?? readBoundedStdinLine;
 
   try {
     if (toolCommand !== undefined) {
       await toolCommand.run({ host: client, values, print: (value) => print(stdout, value),
-        read_input: async () => await readInput(), read_interactive_line: async () => await readInteractiveLine(),
+        read_interactive_line: async () => await readInteractiveLine(),
         open_browser: dependencies.open_authorization_url ?? openAuthorizationUrl });
       return 0;
     }
@@ -1350,38 +1320,6 @@ export async function runPersonClientCli(
             typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
           ),
         });
-        break;
-      }
-      case "exclusions":
-        print(stdout, {
-          ok: true,
-          result: await client.meetingIngestionExclusions(
-            requiredText(values, "source-adapter-id"),
-            requiredText(values, "source-instance-id"),
-          ),
-        });
-        break;
-      case "exclude":
-      case "include": {
-        const sourceAdapterId = requiredText(values, "source-adapter-id");
-        const sourceInstanceId = requiredText(values, "source-instance-id");
-        const externalId = values["meeting-external-id"];
-        await client.changeMeetingIngestionExclusion(
-          action === "exclude",
-          typeof externalId === "string"
-            ? {
-                scope: "meeting",
-                source_adapter_id: sourceAdapterId,
-                source_instance_id: sourceInstanceId,
-                external_id: externalId,
-              }
-            : {
-                scope: "source",
-                source_adapter_id: sourceAdapterId,
-                source_instance_id: sourceInstanceId,
-              },
-        );
-        print(stdout, { ok: true, excluded: action === "exclude" });
         break;
       }
       case "tools":

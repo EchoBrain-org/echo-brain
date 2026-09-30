@@ -8,6 +8,7 @@ import type {
 } from '../shared/protocol.js';
 import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
+import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
 import { reread } from './feed.js';
 import { message } from './messages.js';
@@ -61,14 +62,14 @@ export type Read<T> =
 export interface SourcesState {
   /** Which start this is: a read for an earlier one is dropped. */
   gen: number;
-  /** The source the pane shows, by its place in the answer; null while the pane is closed. */
+  /** The source the pane shows, by its number in the answer less one; null while the pane is closed. */
   open: number | null;
-  /** The last one chosen: Sources (n) opens the pane on it again. */
-  selected: number;
+  /** The sentence whose number opened the pane: "direct", or its part and place ("0.2", "0.r1" for a passage found); null when a row did. */
+  focus: string | null;
   /** Approved records read for this answer, by digest. */
   records: Readonly<Record<string, Read<ApprovedRecord>>>;
-  /** The original the pane shows, read each time it is chosen. */
-  evidence: { seq: number; index: number; read: Read<SourceEvidence> } | null;
+  /** The cited passages of the original the pane shows, by citation; read each time it is chosen. */
+  evidence: { seq: number; group: number; reads: Readonly<Record<number, Read<SourceEvidence>>> } | null;
 }
 
 /** Who can read a capture: only you, the members of the projects ticked under Projects, or everyone in the organization. */
@@ -2251,9 +2252,14 @@ export function closeAsk(): void {
 /** What the pane may show: at most 32 sources. */
 export const MAX_SOURCES = 32;
 
-/** The sources of the answer on screen. */
+/** The citations of the answer on screen. */
 export function answerSources(current: State = state): readonly AnswerSource[] {
   return current.ask?.shown?.answer.sources.slice(0, MAX_SOURCES) ?? [];
+}
+
+/** The answer's sources, numbered from one: each document, meeting record or Slack message it cites. */
+export function answerGroups(current: State = state): SourceGroup[] {
+  return sourceGroups(answerSources(current));
 }
 
 /** Access-level failures: a background read reports only these. */
@@ -2266,7 +2272,7 @@ const ACCOUNT_GONE = ['signed_out', 'account_changed', 'unauthorized', 'stale_ac
  */
 function startSources(): void {
   const gen = ++seq;
-  set({ sources: { gen, open: null, selected: state.sources?.selected ?? 0, records: {}, evidence: null } });
+  set({ sources: { gen, open: null, focus: null, records: {}, evidence: null } });
   void readRecords(gen);
 }
 
@@ -2297,13 +2303,17 @@ async function readRecord(gen: number, record: RecordRef, background: boolean): 
   if (!result.ok && sourcesAt(gen) && (!background || ACCOUNT_GONE.includes(result.failure.code))) accountLost(result.failure);
 }
 
-/** A chip: the pane opens beside the answer on that source, read unless it already was. */
-export function chooseSource(index: number): void {
+/**
+ * A source's number or row: the pane opens beside the answer on that source,
+ * read unless it already was. A sentence's number also names the sentence.
+ */
+export function chooseSource(group: number, focus: string | null = null): void {
   const sources = state.sources;
-  const source = answerSources()[index];
+  const chosen = answerGroups()[group];
+  const source = chosen ? answerSources()[chosen.indexes[0]!] : undefined;
   if (!sources || !source) return;
-  set({ sources: { ...sources, open: index, selected: index, evidence: null } });
-  if (source.kind === 'original') { void readEvidence(sources.gen, index); return; }
+  set({ sources: { ...sources, open: group, focus, evidence: null } });
+  if (source.kind === 'original') { void readEvidence(sources.gen, group); return; }
   if (source.kind === 'slack') return;
   const read = sources.records[source.record.record_sha256];
   if (!read || (!read.loading && 'failure' in read)) void readRecord(sources.gen, source.record, false);
@@ -2315,33 +2325,44 @@ export async function openSlackSource(index: number): Promise<boolean> {
   return !state.concealed && source?.kind === 'slack' && (await rpc('source.openSlack', { permalink: source.permalink })).ok;
 }
 
-/** Sources (n): opens the pane on the last source chosen, or closes it. */
-export function toggleSources(): void {
+/** × on the pane: it closes, and forgets the passages it read. */
+export function closeSources(): void {
   const sources = state.sources;
-  if (!sources) return;
-  if (sources.open === null) chooseSource(sources.selected);
-  else set({ sources: { ...sources, open: null, evidence: null } });
+  if (sources) set({ sources: { ...sources, open: null, focus: null, evidence: null } });
 }
 
-/** The original's verified evidence packet, read each time it is chosen. */
-async function readEvidence(gen: number, index: number): Promise<void> {
+/** Passages read at once: each is its own client call. */
+const EVIDENCE_READS_AT_ONCE = 3;
+
+/** An original's cited passages, each a verified evidence packet, read in order each time it is chosen. */
+async function readEvidence(gen: number, group: number): Promise<void> {
   const account = expect();
   const answer = state.ask?.shown?.answer;
-  const source = answerSources()[index];
+  const indexes = answerGroups()[group]?.indexes ?? [];
   const sources = sourcesAt(gen);
-  if (!account || !answer || source?.kind !== 'original' || !sources) return;
+  if (!account || !answer || !sources || indexes.length === 0) return;
   const mine = ++seq;
-  set({ sources: { ...sources, evidence: { seq: mine, index, read: { loading: true } } } });
-  const result = await rpc('ask.source', { expect: account, scope: answer.scope, ref: source.ref });
-  // Replies for another source or answer, or that land while another app is in front, are dropped.
-  const now = sourcesAt(gen);
-  if (now?.evidence?.seq !== mine) return;
-  set({ sources: { ...now, evidence: { seq: mine, index,
-    read: result.ok ? { loading: false, value: result.value } : { loading: false, failure: result.failure } } } });
-  if (!result.ok) accountLost(result.failure);
+  set({ sources: { ...sources, evidence: { seq: mine, group, reads: Object.fromEntries(indexes.map(index => [index, { loading: true }])) } } });
+  let next = 0;
+  const reader = async () => {
+    // A pane that moved on, or another app in front, stops the rest.
+    while (next < indexes.length && sourcesAt(gen)?.evidence?.seq === mine) {
+      const index = indexes[next++]!;
+      const source = answerSources()[index];
+      if (source?.kind !== 'original') continue;
+      const result = await rpc('ask.source', { expect: account, scope: answer.scope, ref: source.ref });
+      // Replies for another source or answer, or that land while another app is in front, are dropped.
+      const now = sourcesAt(gen);
+      if (now?.evidence?.seq !== mine) return;
+      set({ sources: { ...now, evidence: { ...now.evidence, reads: { ...now.evidence.reads,
+        [index]: result.ok ? { loading: false, value: result.value } : { loading: false, failure: result.failure } } } } });
+      if (!result.ok) accountLost(result.failure);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(EVIDENCE_READS_AT_ONCE, indexes.length) }, reader));
 }
 
-/** Try again, on the original the pane shows. */
+/** Try again, on the original the pane shows: all its passages, read again. */
 export function retryEvidence(): void {
   const sources = state.sources;
   if (sources?.open != null) void readEvidence(sources.gen, sources.open);
@@ -2350,7 +2371,8 @@ export function retryEvidence(): void {
 /** Try again, on an approved record that could not be read. */
 export function retryRecord(): void {
   const sources = state.sources;
-  const source = sources?.open != null ? answerSources()[sources.open] : undefined;
+  const chosen = sources?.open != null ? answerGroups()[sources.open] : undefined;
+  const source = chosen ? answerSources()[chosen.indexes[0]!] : undefined;
   if (sources && source?.kind === 'record') void readRecord(sources.gen, source.record, false);
 }
 
@@ -2848,7 +2870,7 @@ export function conceal(): void {
   // New project stays: files are dropped on it from other apps.
   // People & invites closes what is open in it, and an invitation just saved is no longer offered back (its Undo ends).
   set({
-    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, records: {}, evidence: null } } : {}),
+    concealed: true, ...(reading ? { sources: { ...state.sources!, gen: ++seq, open: null, focus: null, records: {}, evidence: null } } : {}),
     ...(people ? { sheet: null } : {}), ...(state.reader ? { reader: { ...state.reader, menu: 'closed' as const } } : {}),
     ...(state.organization ? { organization: { ...state.organization, menu: null, confirm: null, saved: null } } : {}),
   });
