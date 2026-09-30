@@ -137,6 +137,27 @@ describe("Person meetings list: collect and commit (ADR-0024)", () => {
     expect(ids(walk(route, "owner", MINE))).toEqual([w.digest("r8"), w.digest("r3"), w.digest("r2")]);
   });
 
+  it("keeps listing the published generation through a lag after the process handle is dropped", async () => {
+    const w = await world();
+    const route = w.route();
+    const before = ids(walk(route, "emp_a", GLOBAL));
+    const mine = ids(walk(route, "emp_a", MINE));
+    await w.approve({ name: "r8", approval_id: "apr_r8", projects: [], final_approver: OWNER, issued_at: T(8) });
+    // A search during the lag is unavailable, but no longer drops the handle the list reads.
+    expect(failure(() => route.searchBatch({ access_token: "emp_a", queries: ["Decision"] })).code).toBe("unavailable");
+    expect(ids(walk(route, "emp_a", GLOBAL))).toEqual(before);
+    // A superseded rebuild or a restart drops it: the list warms the published generation again.
+    clearReadableSearchActiveGenerationV1();
+    expect(ids(walk(route, "emp_a", GLOBAL))).toEqual(before);
+    clearReadableSearchActiveGenerationV1();
+    expect(ids(walk(route, "emp_a", MINE))).toEqual(mine);
+    clearReadableSearchActiveGenerationV1();
+    expect(ids(walk(route, "emp_a", inProject(SHARED)))).toEqual([w.digest("r4"), w.digest("r3")]);
+    // A reader who can read the new record is still held, cold handle or not.
+    clearReadableSearchActiveGenerationV1();
+    expect(route.collectMeetings({ access_token: "owner", scope: GLOBAL, after: null, limit: 26 })).toEqual({ status: "held" });
+  });
+
   it("completes a walk that was held mid-way once the generation is rebuilt", async () => {
     const w = await world();
     const route = w.route();

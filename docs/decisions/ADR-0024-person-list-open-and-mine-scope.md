@@ -180,11 +180,17 @@ generation's 1,024-atom admission ceiling bounds at 1,024 records.
 
 Meetings are held, never skipped, while the search generation lags the record
 log. They are held only when the lag is verified **and** a record the reader
-can read in this scope was appended after the generation's head. A held page
-carries `notice: "meetings_unavailable"` and keeps the meeting position. A lag
-with no readable new record lists from the generation with no notice, which
-closes the timing channel on approvals the reader cannot see. Any other state
-(organization or contract mismatch, cold handle) fails the whole page with 503.
+can read in this scope was appended after the generation's head; that probe
+reads only the log after the head. A held page carries
+`notice: "meetings_unavailable"` and keeps the meeting position. A lag with no
+readable new record lists from the generation with no notice. If a search, a
+superseded rebuild or a restart dropped the process handle during the lag, the
+list validates and warms the published generation again instead of failing.
+So the list never names an approval the reader cannot see, and its rows do not
+change when one lands. It does not hide that the index lags: during a lag,
+Layer 2 search answers 503 and Ask carries its lag notice for every reader.
+Any other state (organization or contract mismatch, a cold handle with no lag,
+a generation that fails validation) fails the whole page with 503.
 
 Page 1 while meetings are held still returns its header, the rows it has (or
 `items: []`), the notice and a cursor. A cursor page that would carry zero
@@ -285,8 +291,9 @@ Specifying the approved choices against the code refined them as follows:
 - Open pages are byte-bounded as well as capped at 25.
 - `notice` is a closed token, not prose.
 - Meetings are held only on a verified lag with a readable new record. A lag
-  with no readable new record lists without a notice, and any other
-  generation state is a whole-page 503.
+  with no readable new record lists without a notice, warming the published
+  generation again if its handle was dropped, and any other generation state
+  is a whole-page 503.
 - A cursor page that would carry zero items while meetings are held is a 503;
   page 1 never is.
 - Ask with mine reads no Slack and no shared transcripts.

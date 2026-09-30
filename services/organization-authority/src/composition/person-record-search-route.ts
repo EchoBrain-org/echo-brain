@@ -22,6 +22,7 @@ import {
   listReadableSearchGenerationV1,
   readReadableSearchGenerationAtomsV1,
   searchReadableSearchGenerationV1,
+  warmReadableSearchActiveGenerationV1,
   type ReadableSearchActiveGenerationV1,
   type ReadableSearchGenerationRecordV1,
   type ReadableSearchReaderV1,
@@ -700,11 +701,27 @@ export function createPersonRecordSearchRouteV1(
     return approver !== null && approver.principal_id === authorization.principal_id && approver.membership_id === authorization.membership_id;
   }
 
-  function generationRecords(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, projectId?: string): readonly ReadableSearchGenerationRecordV1[] {
+  /**
+   * The reader's records in the published generation. `rewarm` is set only
+   * during a verified index lag: a search, a superseded rebuild or a restart
+   * may have dropped the process handle while the pointer still names the
+   * same immutable generation, so it is validated and warmed again rather
+   * than failing the page.
+   */
+  function generationRecords(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, pointer: ActiveGenerationRow, projectId?: string, rewarm = false): readonly ReadableSearchGenerationRecordV1[] {
+    const active_generation = activeGenerationAt(pointer);
+    const list = () => listReadableSearchGenerationRecordsV1({ state_directory: options.state_directory, active_generation, reader: readerOf(authorization, projects), ...(projectId === undefined ? {} : { project_id: projectId }) });
     let listed: ReturnType<typeof listReadableSearchGenerationRecordsV1>;
     try {
-      listed = listReadableSearchGenerationRecordsV1({ state_directory: options.state_directory, active_generation: activeGenerationAt(pointer), reader: readerOf(authorization, projects), ...(projectId === undefined ? {} : { project_id: projectId }) });
-    } catch (error) { if (isUnavailableGenerationError(error)) unavailable(); throw error; }
+      listed = list();
+    } catch (error) {
+      if (!isUnavailableGenerationError(error)) throw error;
+      if (!rewarm) unavailable();
+      try {
+        warmReadableSearchActiveGenerationV1({ state_directory: options.state_directory, active_generation });
+        listed = list();
+      } catch { unavailable(); }
+    }
     if (!hasExpectedGenerationIdentity({ result: listed, pointer, authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id })) unavailable();
     return listed.records;
   }
@@ -781,6 +798,21 @@ export function createPersonRecordSearchRouteV1(
     return rows[0]!;
   }
 
+  /**
+   * Whether a record this reader can read in this scope was appended after the
+   * published head. An approval the reader cannot see never changes what the
+   * reader sees. The probe reads only the log after the published head.
+   */
+  function meetingWaiting(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: { readonly mine: boolean; readonly project_id?: string }, publishedHead: number): boolean {
+    return new PersonRecordReaderV1(options.record).list({
+      authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
+      principal_id: authorization.principal_id, membership_id: authorization.membership_id,
+      ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
+      ...(scope.project_id === undefined ? {} : { project_id: scope.project_id }),
+      after_position: publishedHead, limit: 1,
+    }).length > 0;
+  }
+
   function meetingCollection(authorization: PersonAccessAuthorization, projects: RecordProjectAuthorizationV1, scope: PersonAskScopeV2, rows: readonly PersonStoreMeetingRowV1[]): PersonMeetingCollectionV1 {
     const handle: PersonStoreHandleV1 = Object.freeze({});
     meetingCollections.set(handle, { authorization: releaseAuthorization(authorization), grants_sha256: projects.grants_sha256, scope: Object.freeze({ ...scope }), rows: Object.freeze([...rows]), consumed: false });
@@ -829,7 +861,12 @@ export function createPersonRecordSearchRouteV1(
       !sameHead(pointer, head)
     ) {
       annotateCoreRuntimeV1({ result: "unavailable", counts: { current_head: head.position, published_head: pointer?.record_head_position ?? null }, ...(pointer === null ? {} : { generation: pointer.generation_id }) });
-      clearReadableSearchActiveGenerationV1();
+      // A lagging pointer keeps its handle: the handle is keyed to that
+      // immutable generation, so it can never serve a newer head, and the
+      // Person list still reads it until the rebuild publishes (ADR-0024).
+      if (pointer === null || pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256) {
+        clearReadableSearchActiveGenerationV1();
+      }
       unavailable();
     }
     if (input.expected_pointer !== undefined && !matchesReleasePointer(pointer, input.expected_pointer)) {
@@ -1309,20 +1346,13 @@ export function createPersonRecordSearchRouteV1(
       const head = recordHead(options.record);
       const pointer = activeGeneration(options.authority);
       if (pointer !== null && (pointer.organization_id !== options.organization_id || pointer.retrieval_contract_sha256 !== options.retrieval_contract_sha256)) unavailable();
-      if (pointer === null || !sameHead(pointer, head)) {
+      const lagging = pointer === null || !sameHead(pointer, head);
+      if (lagging) {
         if (!isVerifiedIndexLag(options.record, pointer, head, options)) unavailable();
-        // Hold only for a record this reader can read after the published head.
-        // An approval the reader cannot see never changes what the reader sees.
-        const newest = new PersonRecordReaderV1(options.record).list({
-          authority_id: options.authority_id, organization_id: options.organization_id, state_lineage_id: options.state_lineage_id,
-          principal_id: authorization.principal_id, membership_id: authorization.membership_id,
-          ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
-          ...(scope.project_id === undefined ? {} : { project_id: scope.project_id }), limit: 1,
-        })[0];
-        if (newest !== undefined && newest.position > (pointer?.record_head_position ?? 0)) return Object.freeze({ status: "held" as const });
+        if (meetingWaiting(authorization, projects, scope, pointer?.record_head_position ?? 0)) return Object.freeze({ status: "held" as const });
         if (pointer === null) return meetingCollection(authorization, projects, input.scope, []);
       }
-      const listed = generationRecords(authorization, projects, pointer, scope.project_id);
+      const listed = generationRecords(authorization, projects, pointer, scope.project_id, lagging);
       const candidates = scope.mine ? listed.filter((record) => approvedByCaller(record, authorization)) : listed;
       const added = addedAtOf(candidates);
       const taken = candidates
