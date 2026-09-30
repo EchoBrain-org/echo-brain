@@ -732,6 +732,18 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             { text: 'Maya confirmed the launch in Slack.', citation_indexes: [2], private: true }] }],
         });
       }
+      // One file cited through two passages: one source, with both passages in its pane.
+      if (mode === 'ask-passages') {
+        const [record, passage] = desktop.answer.citations as { label: string; citation: Record<string, unknown> }[];
+        const label = 'Apollo-launch-plan-v2.md';
+        const first = { ...passage!, label, citation: { ...passage!.citation, label } };
+        const second = { ...first, citation: { ...first.citation, anchor_sha256: sha('second passage') } };
+        return json({ ...desktop.answer, scope, citations: [record, first, second],
+          parts: [{ question, status: 'answered', statements: [
+            { text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0, 1], private: false },
+            { text: 'Monthly plans follow the launch.', citation_indexes: [2], private: false },
+          ] }] });
+      }
       // Follow-ups: the second answer comes late, and the third question fails.
       if (mode === 'ask-follow-ups' && asks === 2) {
         // The test releases the reply after cancellation. A fixed delay races
@@ -756,10 +768,14 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     if (method === 'POST' && path === '/v2/person/ask/source') {
       evidenceReads += 1;
       if (mode === 'evidence-fails-once' && evidenceReads === 1) return failure('unavailable', 503);
+      const citation = body?.citation as Record<string, unknown>;
+      // The second passage of ask-passages is markdown that starts with its file name, as real evidence can.
+      const text = mode === 'long-evidence' ? 'x'.repeat(3_000)
+        : citation?.anchor_sha256 === sha('second passage') ? 'Apollo-launch-plan-v2.md ## Pricing\n\n- **Monthly** plans follow the launch.'
+          : desktop.evidence_text;
       return json({
         schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: body?.scope,
-        citation: { ...(body?.citation as Record<string, unknown>), label: desktop.evidence_label },
-        text: mode === 'long-evidence' ? 'x'.repeat(3_000) : desktop.evidence_text,
+        citation: { ...citation, label: desktop.evidence_label }, text,
       });
     }
     // One approved record, by the digest an answer cited. A record the person

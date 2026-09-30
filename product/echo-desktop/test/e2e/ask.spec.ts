@@ -41,8 +41,8 @@ test('follow-ups stack in a thread, newest at the bottom: earlier answers collap
   await expect(earlier.locator('.q')).toHaveText(['Question 2', 'Question 3', 'Question 4', 'Question 5', 'Question 6']);
   await expect(page.getByTestId('question')).toHaveText('Question 7');
   await expect(page.getByTestId('answer')).toBeInViewport();
-  // Only the current answer has chips.
-  await expect(page.getByTestId('source-chip')).toHaveCount(2);
+  // Only the current answer lists its sources.
+  await expect(page.getByTestId('source-row')).toHaveCount(2);
   // Collapsed until clicked.
   await expect(earlier.nth(4)).toHaveAttribute('aria-expanded', 'false');
   await earlier.nth(4).click();
@@ -82,7 +82,7 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   const field = page.getByTestId('ask-field');
   const earlier = page.getByTestId('earlier-turn');
   await askFromHome(page, 'First?');
-  await expect(page.getByTestId('source-chip')).toHaveCount(2);
+  await expect(page.getByTestId('source-row')).toHaveCount(2);
 
   await field.fill('Second?');
   await field.press('Enter');
@@ -102,14 +102,14 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
   await expect(page.getByTestId('asking')).toHaveCount(0);
   await expect(page.getByTestId('question')).toHaveText('First?');
   await expect(earlier).toHaveCount(0);
-  await expect(page.getByTestId('source-chip')).toHaveCount(2);
+  await expect(page.getByTestId('source-row')).toHaveCount(2);
 
   // The third question fails: the first answer stays current, and Try again asks the third again.
   await field.press('Enter');
   await expect(page.getByTestId('ask-error')).toHaveText('ECHO is unavailable right now. Try again.');
   await expect(page.getByTestId('ask-failed')).toContainText('Third?');
   await expect(page.getByTestId('question')).toHaveText('First?');
-  await expect(page.getByTestId('source-chip')).toHaveCount(2);
+  await expect(page.getByTestId('source-row')).toHaveCount(2);
   await expect(earlier).toHaveCount(0);
   await page.getByTestId('ask-retry').click();
   await expect(page.getByTestId('question')).toHaveText('Third?');
@@ -138,7 +138,7 @@ test('a project question that finds nothing says so and offers, never makes, one
   await expect(page.getByTestId('answer-gap')).toHaveText("I couldn't find this in the sources you can access.");
   await expect(page.getByTestId('statement-text')).toHaveCount(0);
   await expect(page.getByTestId('project-empty')).toContainText('Nothing in Apollo matched.');
-  await expect(page.getByTestId('source-chip')).toHaveCount(0);
+  await expect(page.getByTestId('source-row')).toHaveCount(0);
   // Nothing widened on its own: one question, to the project.
   expect(asks()).toEqual([{ question: 'What did we agree on pricing?', project: 'prj_11111111-1111-4111-8111-111111111111' }]);
   await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
@@ -147,7 +147,7 @@ test('a project question that finds nothing says so and offers, never makes, one
   await expect(page.getByTestId('question')).toHaveText('What did we agree on pricing?');
   await expect(page.getByTestId('statement-text')).toHaveText('We agreed to ship Apollo with annual plans first.');
   await expect(page.getByTestId('project-empty')).toHaveCount(0);
-  await expect(page.getByTestId('source-chip')).toHaveCount(2);
+  await expect(page.getByTestId('source-row')).toHaveCount(2);
   // The project answer stays in the thread; the bar widened with the question.
   await expect(page.getByTestId('earlier-turn').locator('.q')).toHaveText(['What did we agree on pricing?']);
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
@@ -174,7 +174,7 @@ test('an approved record opens beside the answer: who approved it, who was there
   await askFromHome(page, 'What did we agree?');
   await expect(page.getByTestId('answer')).toBeVisible();
   // The record is read once, so its chip names the meeting.
-  const chips = page.getByTestId('source-chip');
+  const chips = page.getByTestId('source-row');
   await expect(chips).toHaveText([/^1\s*Tuesday sync$/, /^2\s*Apollo update$/]);
   expect(recordReads().map(call => call.query)).toEqual([`?record_sha256=${RECORD}`]);
   await expect(page.getByTestId('source-pane')).toHaveCount(0);
@@ -199,13 +199,16 @@ test('an approved record opens beside the answer: who approved it, who was there
   await expect(pane.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
   await expect(chips.nth(1)).toHaveAttribute('aria-pressed', 'true');
 
-  // Sources (2) closes the pane, and opens it again on the same source.
-  const toggle = page.getByTestId('sources-toggle');
-  await expect(toggle).toHaveText('Sources (2)');
-  await toggle.click();
+  // × closes the pane; a sentence's number opens it again on that source, and lights the sentence.
+  await pane.getByTestId('source-close').click();
   await expect(pane).toHaveCount(0);
-  await toggle.click();
+  const markers = page.getByTestId('citation');
+  await expect(markers).toHaveText(['1', '2']);
+  await expect(page.getByTestId('statement')).not.toHaveClass(/\bon\b/);
+  await markers.nth(1).click();
   await expect(pane.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
+  await expect(markers.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('statement')).toHaveClass(/\bon\b/);
 
   // Another app in front: the pane closes and forgets what it read; back in ECHO the record is read again.
   await emit(app, 'echo-test:conceal');
@@ -228,7 +231,7 @@ test('a cited record the person can no longer read says so, with no Try again th
   const { page } = run;
   await askFromHome(page, 'What did we agree?');
   // The Authority answers with an empty list; the chip keeps its own name.
-  const chips = page.getByTestId('source-chip');
+  const chips = page.getByTestId('source-row');
   await expect.poll(() => recordReads().length).toBe(1);
   await expect(chips.nth(0)).toHaveText(/^1\s*Approved record 1$/);
   await chips.nth(0).click();
@@ -252,10 +255,12 @@ test('a Slack citation survives the client and IPC, keeps its label, and opens o
   await expect(page.getByTestId('statement-text')).toHaveText([
     'We agreed to ship Apollo with annual plans first.', 'Maya confirmed the launch in Slack.',
   ]);
-  const chips = page.getByTestId('source-chip');
+  const chips = page.getByTestId('source-row');
   await expect(chips).toHaveText([/^1\s*Tuesday sync$/, /^2\s*Apollo update$/, /^3\s*#launch · Maya$/]);
   await expect(page.getByTestId('private-mark')).toHaveCount(1);
-  await page.getByTestId('statement-citation').nth(2).click();
+  // The Slack sentence's own number is the third source's.
+  await expect(page.getByTestId('citation')).toHaveText(['1', '2', '3']);
+  await page.getByTestId('citation').nth(2).click();
   const pane = page.getByTestId('source-pane');
   await expect(pane).toContainText('Slack message');
   await expect(pane.locator('h2')).toHaveText('#launch · Maya');
@@ -280,11 +285,51 @@ test('a Slack citation survives the client and IPC, keeps its label, and opens o
   await expect(pane.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
 });
 
+test('passages of one file are one source: one number, one row, and a pane that shows each cited passage as the document reads', async () => {
+  run = await launch('ask-passages');
+  const { page } = run;
+  await askFromHome(page, 'What did we agree?');
+  await expect(page.getByTestId('statement-text')).toHaveText([
+    'We agreed to ship Apollo with annual plans first.', 'Monthly plans follow the launch.',
+  ]);
+  // Three citations, two sources: the file is named once, as a person says it, its version apart.
+  const rows = page.getByTestId('source-row');
+  await expect(rows).toHaveText([/^1\s*Tuesday sync$/, /^2\s*Apollo launch plan\s*v2 · 2 passages$/]);
+  const markers = page.getByTestId('citation');
+  await expect(markers).toHaveText(['1', '2', '2']);
+  expect(evidenceReads()).toHaveLength(0);
+
+  // The second sentence's number: both passages, the one it cites lit, and the sentence lit.
+  await markers.nth(2).click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane.locator('h2')).toHaveText('Apollo launch plan');
+  await expect(pane.getByTestId('source-meta')).toHaveText('v2 · 2 passages cited');
+  const passages = pane.getByTestId('evidence-text');
+  await expect(passages).toHaveCount(2);
+  await expect(passages.nth(0)).toHaveText('We agreed to ship.');
+  // Markdown reads as the document does, without the file name the evidence starts with.
+  await expect(passages.nth(1).locator('h3')).toHaveText('Pricing');
+  await expect(passages.nth(1).locator('li')).toHaveText('Monthly plans follow the launch.');
+  await expect(passages.nth(1).locator('strong')).toHaveText('Monthly');
+  await expect(pane).not.toContainText('Apollo-launch-plan-v2.md');
+  await expect(pane.locator('.passage.on')).toHaveCount(1);
+  await expect(passages.nth(1)).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId('statement').nth(1)).toHaveClass(/\bon\b/);
+  await expect(page.getByTestId('statement').nth(0)).not.toHaveClass(/\bon\b/);
+  expect(evidenceReads()).toHaveLength(2);
+
+  // Its row opens the same source with no sentence in particular.
+  await rows.nth(1).click();
+  await expect(passages).toHaveCount(2);
+  await expect(pane.locator('.passage.on')).toHaveCount(0);
+  await expect(page.locator('[data-testid="statement"].on')).toHaveCount(0);
+});
+
 test('evidence that could not be read says so, and Try again reads it again', async () => {
   run = await launch('evidence-fails-once');
   const { page } = run;
   await askFromHome(page, 'What did we agree?');
-  await page.getByTestId('source-chip').nth(1).click();
+  await page.getByTestId('source-row').nth(1).click();
   const pane = page.getByTestId('source-pane');
   await expect(pane.getByTestId('source-error')).toHaveText('ECHO is unavailable right now. Try again.');
   await expect(pane.getByTestId('evidence-text')).toHaveCount(0);
