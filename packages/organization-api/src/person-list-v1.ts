@@ -183,8 +183,13 @@ const LINE_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const C0_C1_CONTROLS = /[\u0000-\u001f\u007f-\u009f]/;
 const BODY_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
 const VISIBILITIES: readonly string[] = ['only_me', 'team', 'project'];
-const MEDIA_TYPES: readonly string[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-const EXTRACTION_STATES: readonly string[] = ['extracting', 'ready', 'partial', 'no_text', 'encrypted', 'malformed', 'limit_exceeded', 'timed_out', 'unsupported', 'unavailable'];
+// Keyed by the documents contract's unions: a new media type or extraction state fails to compile here until it is listed.
+const MEDIA_TYPES: readonly string[] = Object.keys({
+  'text/plain': true, 'text/markdown': true, 'application/pdf': true, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': true,
+} satisfies Record<PersonDocumentMediaTypeV1, true>);
+const EXTRACTION_STATES: readonly string[] = Object.keys({
+  extracting: true, ready: true, partial: true, no_text: true, encrypted: true, malformed: true, limit_exceeded: true, timed_out: true, unsupported: true, unavailable: true,
+} satisfies Record<PersonDocumentExtractionStateV1, true>);
 const TOOL_STATUSES: readonly string[] = ['unlinked', 'linked', 'revoked', 'unavailable'];
 const ATOM_KINDS: readonly string[] = ['decision', 'action', 'rationale'];
 const DECISION_STATUSES: readonly string[] = ['proposed', 'decided', 'unresolved'];

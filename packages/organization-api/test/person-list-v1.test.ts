@@ -185,6 +185,13 @@ describe('Person list and open public contracts', () => {
     expect(() => validatePersonListResponseV1(withRow(1, { size_bytes: 0 }))).toThrow('size_bytes');
     expect(() => validatePersonListResponseV1(withRow(1, { media_type: 'application/msword' }))).toThrow('media_type');
     expect(() => validatePersonListResponseV1(withRow(1, { extraction_state: 'queued' }))).toThrow('extraction_state');
+    // Every media type and extraction state the documents contract names is a valid row.
+    for (const media_type of ['text/plain', 'text/markdown', 'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']) {
+      expect(validatePersonListResponseV1(withRow(1, { media_type })).items[1]).toMatchObject({ media_type });
+    }
+    for (const extraction_state of ['extracting', 'ready', 'partial', 'no_text', 'encrypted', 'malformed', 'limit_exceeded', 'timed_out', 'unsupported', 'unavailable']) {
+      expect(validatePersonListResponseV1(withRow(1, { extraction_state })).items[1]).toMatchObject({ extraction_state });
+    }
     expect(validatePersonListResponseV1(page({ items: [without(meetingRow, 'meeting_date')] })).items[0]).not.toHaveProperty('meeting_date');
     for (const meeting_date of ['2026-02-30', '2026-13-01', '2026-9-21', '2026-09-21T00:00:00.000Z']) {
       expect(() => validatePersonListResponseV1(withRow(2, { meeting_date }))).toThrow('meeting_date');
