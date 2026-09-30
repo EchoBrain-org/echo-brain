@@ -1,11 +1,15 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonMeetingTranscriptCitationV1 } from "@echo-brain/organization-api";
+import type { PersonMeetingTranscriptCitationV1, PersonOpenRefV1 } from "@echo-brain/organization-api";
 import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-authority-kernel/shared/released-source-context-v1";
 
-/** The caller-selected boundary; global is still limited to the actor's ACL. */
+/**
+ * The caller-selected boundary; global is still limited to the actor's ACL.
+ * mine = added by the caller (membership_id AND principal_id); always ⊆ global.
+ */
 export type PersonAskScopeV2 =
   | Readonly<{ readonly kind: "global" }>
-  | Readonly<{ readonly kind: "project"; readonly project_id: string }>;
+  | Readonly<{ readonly kind: "project"; readonly project_id: string }>
+  | Readonly<{ readonly kind: "mine" }>;
 
 export interface OriginalContextAuthorizationV1 {
   readonly principal_id: string;
@@ -131,6 +135,8 @@ export interface OriginalContextDeskItemV1 {
   readonly label: string;
   readonly received_at: string;
   readonly version: string;
+  /** The note, document or shared transcript this passage opens as (ADR-0023). */
+  readonly ref?: PersonOpenRefV1;
 }
 
 export interface OriginalContextDeskReleaseV1 {

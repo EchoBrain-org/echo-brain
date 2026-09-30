@@ -36,6 +36,9 @@ describe('retrieval and answer-composition boundaries', () => {
       'services/organization-authority/src/application/ports/person-original-context-retrieval-v1.ts',
       'services/organization-authority/src/adapters/persistence/sqlite/person-original-context-retrieval-v1.ts',
       'services/organization-authority/src/composition/person-evidence-desk-v1.ts',
+      'services/organization-authority/src/application/ports/person-list-v1.ts',
+      'services/organization-authority/src/adapters/persistence/sqlite/person-original-items-v1.ts',
+      'services/organization-authority/src/adapters/persistence/sqlite/person-original-access-v1.ts',
     ];
     const visited = new Set<string>();
     while (pending.length) {
