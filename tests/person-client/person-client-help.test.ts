@@ -101,7 +101,6 @@ describe("Person client help", () => {
     const modern = [
       ["updates", "submit-v3", "--help", "--association-project-ids-json"],
       ["updates", "status-v3", "--help", "--request-id <uuid>"],
-      ["updates", "read-v3", "--help", "--context-id <id>"],
       ["updates", "search-v3", "--help", "--query <text>"],
       ["documents", "upload-v2", "--help", "--audience-project-ids-json"],
       ["documents", "status-v2", "--help", "--request-id <uuid>"],
@@ -112,7 +111,7 @@ describe("Person client help", () => {
     for (const [parent, action, flag, required] of modern) {
       await expect(help([parent, action, flag])).resolves.toContain(required);
     }
-    await expect(help(["updates", "--help"])).resolves.toContain("submit-v3|status|status-v3|search|search-v3|read|read-v3");
+    await expect(help(["updates", "--help"])).resolves.toContain("<submit-v3|status-v3|search|search-v3>");
     await expect(help(["documents", "--help"])).resolves.toContain("<upload-v2|status-v2|pending|retry|abandon|search-v2|download-v2|associate|dissociate>");
     await expect(help(["projects", "--help"])).resolves.toContain("<list-v2|create|read-v2|rename|archive|unarchive|leave|members|directory|member-add|member-set|member-remove|associate|dissociate|search-v2>");
   });

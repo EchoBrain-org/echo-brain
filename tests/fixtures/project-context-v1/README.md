@@ -48,14 +48,16 @@ encoding implementation.
 | `projects feed` (retired) | `POST /v1/person/projects/context/feed` | project browse | `200` project feed |
 | `projects search` (retired) | `POST /v1/person/projects/context/search` | project search | `200` project search page |
 | `projects read-context` (retired) | `GET /v1/person/projects/{project_id}/context/{context_id}` | none | `200` project context read |
-| `updates submit` | `POST /v2/person/updates` | V2 submit | `202` V2 receipt |
-| `updates status` | `GET /v2/person/updates/{request_id}` | none | `200` V2 status |
+| `updates submit` (retired) | `POST /v2/person/updates` | V2 submit | `202` V2 receipt |
+| `updates status` (retired) | `GET /v2/person/updates/{request_id}` | none | `200` V2 status |
 | `updates search` | `POST /v2/person/updates/search` | V2 search | `200` V2 search result |
-| `updates read` | `GET /v2/person/updates/content/{context_id}` | none | `200` V2 original read |
+| `updates read` (retired) | `GET /v2/person/updates/content/{context_id}` | none | `200` V2 original read |
 
 The CLI retired the commands marked retired on 2026-09-30. `projects list-v2`,
-`read-v2` and `search-v2` replace the project reads, `person list --project`
-browses a project and `person open --ref` reads one item.
+`read-v2` and `search-v2` replace the project reads, `updates submit-v3` and
+`status-v3` replace the V2 note write and status, `person list --project`
+browses a project and `person open --ref` reads one item. The CLI test covers
+the kept commands with its own rows.
 
 `projects directory` requires a lead grant on that project. `directory` (fixture
 `person-directory`) lists the same active-member names for any active member of
@@ -101,17 +103,18 @@ echo-brain person projects member-remove --request-id <uuid> --project-id <proje
 echo-brain person projects associate --request-id <uuid> --project-id <project-id> --context-id <context-id>
 echo-brain person projects dissociate --request-id <uuid> --project-id <project-id> --context-id <context-id>
 echo-brain person projects search-v2 --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
-echo-brain person updates submit --request-id <uuid> --title <title> --file <utf8-text-file> [--visibility <only-me|team|project>] [--audience-project-id <project-id>] [--project-id <project-id>]
+echo-brain person updates submit-v3 --request-id <uuid> --title <title> --file <utf8-text-file> [--association-project-ids-json <canonical-project-id-array>] [--audience <only-me|team|project|projects>] [--audience-project-id <project-id>] [--audience-project-ids-json <canonical-project-id-array>]
 ```
 
-V2 submit defaults to `--visibility only-me`, serializing
-`audience: { kind: "only_me" }` and required `project_id: null`. `--visibility
-project` requires exactly one `--audience-project-id`; `only-me` and `team`
-forbid it. `--project-id` is optional and is the one association coordinate,
-independent of the selected audience. It may equal a project audience but is
-not inferred from it. The CLI rejects every unsupported or ambiguous flag
-combination before HTTP, including an audience-project ID without project
-visibility or a second association.
+`updates submit-v3` defaults to the only-me audience and no association,
+serializing `audience: { kind: "only_me" }` and `association_project_ids: []`.
+`--audience project` requires exactly one `--audience-project-id`, and
+`--audience projects` requires `--audience-project-ids-json`; `only-me` and
+`team` forbid both. `--association-project-ids-json` is the independent
+association set: it may name a project audience but is never inferred from it.
+Both project ID arrays are canonical JSON. The CLI rejects every unsupported or
+ambiguous flag combination before HTTP, including an audience-project ID
+without a project audience or a repeated option.
 
 An exact 4xx response means the current attempt was rejected before a new
 mutation result. It does not prove that an earlier attempt using the same

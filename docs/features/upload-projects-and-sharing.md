@@ -82,7 +82,7 @@ New editor uploads use `/v3/person/updates`; new file uploads use
 array of one to 20 IDs. Existing only-me, organization and single-project
 audiences retain their meaning. Legacy request versions remain supported.
 
-The CLI exposes `person updates submit-v3|status-v3|read-v3|search-v3` and
+The CLI exposes `person updates submit-v3|status-v3|search-v3` and
 `person documents upload-v2|status-v2|search-v2|download-v2`, and
 `person open --ref` reads a note's text or a document's extracted text.
 `person list --project <project-id>` browses a project's content,

@@ -1838,15 +1838,15 @@ it('runs submit/status from the exact packed Person CLI against a disposable Aut
     const path = join(home, 'update.txt'); writeFileSync(path, 'We agreed to ship the release.\n');
     const requestId = randomUUID(); let output = ''; let errors = '';
     const dependencies = { home_directory: home, allow_insecure_loopback: true, stdout: { write: (value: string) => { output += value; } }, stderr: { write: (value: string) => { errors += value; } } };
-    expect(await cli.runPersonClientCli(['updates', 'submit', '--request-id', requestId, '--title', 'Release', '--file', path], dependencies), errors).toBe(0);
-    expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-receipt-v2', state: 'received', request_id: requestId }); output = '';
-    expect(await cli.runPersonClientCli(['updates', 'status', '--request-id', requestId], dependencies), errors).toBe(0);
-    expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-status-v2', status: 'stored', request_id: requestId });
+    expect(await cli.runPersonClientCli(['updates', 'submit-v3', '--request-id', requestId, '--title', 'Release', '--file', path], dependencies), errors).toBe(0);
+    expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-receipt-v3', state: 'received', request_id: requestId }); output = '';
+    expect(await cli.runPersonClientCli(['updates', 'status-v3', '--request-id', requestId], dependencies), errors).toBe(0);
+    expect(JSON.parse(output)).toMatchObject({ kind: 'echo-person-update-status-v3', status: 'stored', request_id: requestId });
     expect(output).not.toContain('We agreed'); output = '';
-    expect(await cli.runPersonClientCli(['updates', 'search', '--query', 'release'], dependencies), errors).toBe(0);
+    expect(await cli.runPersonClientCli(['updates', 'search-v3', '--query', 'release'], dependencies), errors).toBe(0);
     const found = JSON.parse(output).results[0]; expect(found.title).toBe('Release'); output = '';
-    expect(await cli.runPersonClientCli(['updates', 'read', '--context-id', found.context_id], dependencies), errors).toBe(0);
-    expect(JSON.parse(output).text).toBe('We agreed to ship the release.\n'); expect(errors).toBe('');
+    expect(await cli.runPersonClientCli(['open', '--ref', `note:${found.context_id}`], dependencies), errors).toBe(0);
+    expect(JSON.parse(output).result.text).toBe('We agreed to ship the release.\n'); expect(errors).toBe('');
   } finally { await runtime.close(); }
 });
 

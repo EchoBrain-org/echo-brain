@@ -258,17 +258,20 @@ decodes that retained response there.
 
 ## Deliberate context uploads
 
-`person updates submit` saves one explicitly selected UTF-8 file unchanged,
-with `--visibility only-me|team|project` (default Only me; `project` requires
-`--audience-project-id`) and an optional `--project-id` association that does
-not change the audience. `updates submit-v3`, which the desktop app uses, takes
-`--audience only-me|team|project|projects` and independent project ID sets.
-`status` returns the durable receipt and optional enrichment progress. `search`
-and `read` retrieve original uploads under current membership and stored
-audience, without Slack approval or a model dependency. Content/search releases
-revalidate the session and audit before returning. Unknown submissions require
-the same request ID and exact file, title, audience, and project coordinates on
-retry; no local queue or automatic upload exists.
+`person updates submit-v3`, which the desktop app also uses, saves one
+explicitly selected UTF-8 file unchanged, with
+`--audience only-me|team|project|projects` (default Only me; `project` requires
+`--audience-project-id`, `projects` requires `--audience-project-ids-json`) and
+an independent `--association-project-ids-json` set that does not change the
+audience. `status-v3` returns the durable receipt and optional enrichment
+progress. `search-v3` and `search` find original uploads, and
+`person open --ref note:<context-id>` reads one, under current membership and
+stored audience, without Slack approval or a model dependency. Content/search
+releases revalidate the session and audit before returning. Unknown submissions
+require the same request ID and exact file, title, audience, and project
+coordinates on retry; no local queue or automatic upload exists. The V2
+`submit`, `status` and `read` commands and `read-v3` left the CLI on
+2026-09-30.
 
 The current bounded text carrier does not decide the context taxonomy. Optional
 LLM search hints remain derived metadata. Uploads never become approved

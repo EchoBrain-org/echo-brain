@@ -75,7 +75,7 @@ import {
 import {
   PERSON_UPDATES_PATH_V3,
   validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
-  validatePersonUploadContentV3, validatePersonUploadSearchV3, validatePersonUploadSearchResultV3,
+  validatePersonUploadSearchV3, validatePersonUploadSearchResultV3,
   type PersonUpdateSubmitV3, type PersonUploadSearchV3,
 } from '@echo-brain/organization-api';
 import { canonicalJson } from "@echo-brain/federation-protocol";
@@ -205,7 +205,7 @@ export class PersonContextMutationError extends PersonAuthorityClientError {
 export function unknownContextMutation(requestId: string, upload: boolean, status: number | null): PersonContextMutationError {
   return new PersonContextMutationError('outcome_unknown', status,
     upload
-      ? 'Submission outcome is unknown. Check updates status with the same request ID, or retry the exact file and title with the same request ID.'
+      ? 'Submission outcome is unknown. Check updates status-v3 with the same request ID, or retry the exact file and title with the same request ID.'
       : 'Mutation outcome is unknown. Retain the same request ID and exact request for reconciliation or replay.',
     requestId, 'unknown');
 }
@@ -822,7 +822,7 @@ export class PersonAuthorityClient {
       return result;
     } catch (error) {
       if (error instanceof PersonContextMutationError) throw error;
-      if (input.request_id !== undefined) throw unknownContextMutation(input.request_id, input.path === PERSON_UPDATES_PATH_V2, status);
+      if (input.request_id !== undefined) throw unknownContextMutation(input.request_id, input.path === PERSON_UPDATES_PATH_V3, status);
       if (error instanceof PersonAuthorityClientError) throw error;
       throw new PersonAuthorityClientError('invalid_response', status, 'Person Authority returned a malformed response');
     }
@@ -1125,12 +1125,6 @@ export class PersonAuthorityClient {
     validatePersonUpdateRequestId(requestId);
     return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V3}/${requestId}`, validate: validatePersonUpdateStatusResultV3,
       matches: result => result.request_id === requestId });
-  }
-
-  async readUploadV3(accessToken: string, contextId: string) {
-    validatePersonUploadContextId(contextId);
-    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V3}/content/${contextId}`, validate: validatePersonUploadContentV3,
-      matches: result => result.context_id === contextId });
   }
 
   async searchUploadsV3(accessToken: string, value: PersonUploadSearchV3) {

@@ -122,8 +122,8 @@ it('uses default API composition and real Person session checks through CLI, inc
     const project = JSON.parse(created.stdout).project_id as string;
     const file = join(root, 'original.txt'); writeFileSync(file, 'PC06 original meridian.\n', { mode: 0o600 });
     const requestId = randomUUID();
-    const submitted = await cli(['updates', 'submit', '--request-id', requestId, '--title', 'Synthetic original', '--file', file,
-      '--visibility', 'project', '--audience-project-id', project, '--project-id', project]);
+    const submitted = await cli(['updates', 'submit-v3', '--request-id', requestId, '--title', 'Synthetic original', '--file', file,
+      '--audience', 'project', '--audience-project-id', project, '--association-project-ids-json', JSON.stringify([project])]);
     expect(submitted.stderr).toBe(''); expect(submitted.code).toBe(0);
     const receipt = JSON.parse(submitted.stdout);
     await runtime.close();
@@ -132,7 +132,7 @@ it('uses default API composition and real Person session checks through CLI, inc
     expect(read.stderr).toBe(''); expect(read.code).toBe(0);
     expect(JSON.parse(read.stdout)).toMatchObject({ ok: true, result: { text: 'PC06 original meridian.\n',
       item: { visibility: 'project', projects: [{ project_id: project, name: 'Synthetic Alpha' }] } } });
-    const status = await cli(['updates', 'status', '--request-id', requestId]);
+    const status = await cli(['updates', 'status-v3', '--request-id', requestId]);
     expect(status.code).toBe(0); expect(JSON.parse(status.stdout)).toMatchObject({ context_id: receipt.context_id, metadata: 'pending' });
     const logout = await cli(['logout']); expect(logout.code).toBe(0);
     const denied = await fetch(`http://127.0.0.1:${runtime.address.port}/v1/person/projects/${project}`, { headers: { authorization: `Bearer ${session.access_token}` } });

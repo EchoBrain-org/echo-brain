@@ -2,7 +2,7 @@ import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1 }
 import { DocumentFileError } from './document-file.js';
 import { validatePersonDocumentSearchV2, parseCanonicalAssociationProjectIdsJsonV1, validatePersonUploadAudienceV3 } from '@echo-brain/organization-api';
 import { readUpdateFile } from './update-file.js';
-import { validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validatePersonUploadAudienceV2, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1, validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1 } from '@echo-brain/organization-api';
+import { validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validateProjectIdV1, validateProjectCreateV1, validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1, validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1 } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
@@ -115,14 +115,10 @@ const RULES: Readonly<
   "projects-associate": { accepts: ["request-id", "project-id", "context-id"], requires: ["request-id", "project-id", "context-id"] },
   "projects-dissociate": { accepts: ["request-id", "project-id", "context-id"], requires: ["request-id", "project-id", "context-id"] },
   "projects-search-v2": { accepts: ["project-id", "query", "limit", "cursor"], requires: ["project-id", "query"] },
-  "updates-submit": { accepts: ["request-id", "title", "file", "visibility", "audience-project-id", "project-id"], requires: ["request-id", "title", "file"] },
   "updates-submit-v3": { accepts: ["request-id", "title", "file", "audience", "audience-project-id", "association-project-ids-json", "audience-project-ids-json"], requires: ["request-id", "title", "file"] },
   "updates-status-v3": { accepts: ["request-id"], requires: ["request-id"] },
   "updates-search-v3": { accepts: ["query", "limit"], requires: ["query"] },
-  "updates-read-v3": { accepts: ["context-id"], requires: ["context-id"] },
-  "updates-status": { accepts: ["request-id"], requires: ["request-id"] },
   "updates-search": { accepts: ["query", "limit"], requires: ["query"] },
-  "updates-read": { accepts: ["context-id"], requires: ["context-id"] },
   login: {
     accepts: ["invitation", "authority-url", "open-browser"],
   },
@@ -189,7 +185,7 @@ Commands:
   records     List records or search the current generation.
   directory   Find people in your organization by name.
   projects    Create projects, manage members, and browse permitted context.
-  updates     Upload, search, and read original context with your chosen visibility.
+  updates     Save and search original notes with your chosen visibility.
   documents   Upload, search, and download exact document originals.
   employee    List, invite, reissue, or revoke an employee.
   tools       Read organization tools and your current link status.
@@ -358,21 +354,13 @@ Remove the association without changing the original or its audience. Refresh pe
 
 Search project originals including V3 multi-project uploads. An empty query is invalid; use person list --project to browse.
 `,
-  updates: `usage: echo-brain person updates <submit|submit-v3|status|status-v3|search|search-v3|read|read-v3> [options]
+  updates: `usage: echo-brain person updates <submit-v3|status-v3|search|search-v3> [options]
 
-Uploads preserve the original text. Only me is the default; Team explicitly shares it with current organization members. No Slack approval or decision extraction is required.
-`,
-  "updates-submit": `usage: echo-brain person updates submit --request-id <uuid> --title <title> --file <utf8-text-file> [--visibility <only-me|team|project>] [--audience-project-id <project-id>] [--project-id <project-id>]
-
-Saves this UTF-8 file (at most 8 KiB) unchanged in your organization. Only me is the default; Team makes it readable to current organization members immediately. It is searchable without waiting for optional metadata. Project sharing requires --audience-project-id; Only me and Team forbid it. The independent --project-id associates the original with a project without changing its audience. Keep the request ID and immutable file, title, audience, and both project coordinates: after an unknown outcome, check V2 status with the same ID before an exact replay. No V1 fallback is performed.
+Uploads preserve the original text. Only me is the default; Team explicitly shares it with current organization members. No Slack approval or decision extraction is required. Read a note with person open --ref note:<context-id>.
 `,
   "updates-submit-v3": `usage: echo-brain person updates submit-v3 --request-id <uuid> --title <title> --file <utf8-text-file> [--association-project-ids-json <canonical-project-id-array>] [--audience <only-me|team|project|projects>] [--audience-project-id <project-id>] [--audience-project-ids-json <canonical-project-id-array>]
 
 Saves one UTF-8 text original (at most 8 KiB) with independent initial association and audience sets. Only me and no association are the defaults. Project requires --audience-project-id; projects requires --audience-project-ids-json. Both project ID arrays are canonical JSON: sorted, unique project IDs, at most 20. An association never widens the audience. Keep the same request ID and immutable fields for exact V3 status/replay after an unknown outcome.
-`,
-  "updates-status": `usage: echo-brain person updates status --request-id <uuid>
-
-Shows your saved V2 receipt, selected audience, initial association, and optional search-metadata progress. The initial association does not report later association changes. Metadata failure does not prevent reading or searching the original.
 `,
   "updates-status-v3": `usage: echo-brain person updates status-v3 --request-id <uuid>
 
@@ -385,14 +373,6 @@ Find original uploads you may read. Optional search hints help matching; excerpt
   "updates-search-v3": `usage: echo-brain person updates search-v3 --query <text> [--limit <1-10>]
 
 Find V3 original uploads you may read. Results preserve the exact selected audience union and current access checks.
-`,
-  "updates-read": `usage: echo-brain person updates read --context-id <id>
-
-Open the original uploaded text under its current access checks.
-`,
-  "updates-read-v3": `usage: echo-brain person updates read-v3 --context-id <id>
-
-Open one V3 original under its current audience access checks.
 `,
   employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 
@@ -477,7 +457,7 @@ function isContextAction(action: string): boolean {
 }
 
 function contextCliFailure(action: string, error: unknown, values: Record<Option, string | boolean | undefined>) {
-  const mutation = ['projects-create', 'projects-rename', 'projects-archive', 'projects-unarchive', 'projects-leave', 'projects-member-add', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit', 'updates-submit-v3', 'documents-upload-v2', 'documents-retry', 'documents-associate', 'documents-dissociate'].includes(action);
+  const mutation = ['projects-create', 'projects-rename', 'projects-archive', 'projects-unarchive', 'projects-leave', 'projects-member-add', 'projects-member-set', 'projects-member-remove', 'projects-associate', 'projects-dissociate', 'updates-submit-v3', 'documents-upload-v2', 'documents-retry', 'documents-associate', 'documents-dissociate'].includes(action);
   let requestId: string | undefined;
   try { requestId = validatePersonUpdateRequestId(values['request-id']); } catch { /* Never echo invalid caller input. */ }
   return {
@@ -756,7 +736,7 @@ export async function runPersonClientCli(
       : undefined;
   const documentAction = argv[0] === 'documents' ? `documents-${argv[1] ?? ''}` : undefined;
   const evidenceAction = argv[0] === 'evidence' ? `evidence-${argv[1] ?? ''}` : undefined;
-  const updateAction = argv[0] === 'updates' && ['submit', 'status', 'search', 'read', 'submit-v3', 'status-v3', 'search-v3', 'read-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
+  const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
   const action = documentAction ?? evidenceAction ?? projectAction ?? updateAction ?? employeeAction ?? (argv[0] ?? "");
   const toolCommand = registered.get(action);
@@ -997,18 +977,6 @@ export async function runPersonClientCli(
       case 'projects-search-v2':
         print(stdout, await client.searchProjectContextV2({ project_id: validateProjectIdV1(values['project-id']), query: requiredText(values, 'query'), ...contextPaging(values) }));
         break;
-      case 'updates-submit': {
-        const requestId = validatePersonUpdateRequestId(requiredText(values, 'request-id'));
-        const visibility = values.visibility ?? 'only-me';
-        if (!['only-me', 'team', 'project'].includes(String(visibility))) throw new Error('Invalid visibility');
-        const audience = validatePersonUploadAudienceV2({ kind: visibility === 'only-me' ? 'only_me' : visibility,
-          ...(values['audience-project-id'] === undefined ? {} : { project_id: values['audience-project-id'] }) });
-        const project_id = values['project-id'] === undefined ? null : validateProjectIdV1(values['project-id']);
-        const request = validatePersonUpdateSubmitV2({ schema_version: 2, kind: 'echo-person-update-submit-v2', request_id: requestId,
-          title: requiredText(values, 'title'), text: readUpdateFile(requiredText(values, 'file')), project_id, audience });
-        print(stdout, await client.submitUpdateV2(request));
-        break;
-      }
       case 'updates-submit-v3': {
         const request = validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: validatePersonUpdateRequestId(requiredText(values, 'request-id')),
           title: requiredText(values, 'title'), text: readUpdateFile(requiredText(values, 'file')),
@@ -1022,17 +990,8 @@ export async function runPersonClientCli(
       case 'updates-search-v3':
         print(stdout, await client.searchUploadsV3({ query: requiredText(values, 'query'), ...contextPaging(values) }));
         break;
-      case 'updates-read-v3':
-        print(stdout, await client.readUploadV3(requiredText(values, 'context-id')));
-        break;
       case 'updates-search':
         print(stdout, await client.searchUploadsV2({ query: requiredText(values, 'query'), ...contextPaging(values) }));
-        break;
-      case 'updates-read':
-        print(stdout, await client.readUploadV2(requiredText(values, 'context-id')));
-        break;
-      case 'updates-status':
-        print(stdout, await client.updateStatusV2(requiredText(values, 'request-id')));
         break;
       case "login": {
         requireSignedOut(client);

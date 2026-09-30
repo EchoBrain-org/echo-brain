@@ -1,7 +1,6 @@
 import { validatePersonDocumentAssociateV1, validatePersonDocumentDissociateV1, type PersonDocumentAssociateV1, type PersonDocumentDissociateV1 } from '@echo-brain/organization-api';
 import { validatePersonDocumentIdV1, validatePersonDocumentSearchV2, type PersonDocumentSearchV2 } from '@echo-brain/organization-api';
 import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots, abandonDocumentSnapshot, reconcileDocumentSnapshot, saveDocumentDownload, type DocumentFileUploadV2, type DocumentSnapshot } from './document-file.js';
-import { validatePersonUploadContextId } from '@echo-brain/organization-api';
 import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { validatePersonQueryText } from '@echo-brain/organization-api';
 import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1, type PersonSourceEvidenceReadRequestV1, type PersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
@@ -12,11 +11,11 @@ import {
   validateProjectContextBrowseV1, validateProjectDirectorySearchV1,
   validateProjectMemberAddV1, validateProjectMemberSetV1, validateProjectMemberRemoveV1, validateProjectContextAssociateV1, validateProjectContextDissociateV1,
   validateProjectRenameV1, validateProjectArchiveV1, validateProjectLeaveV1,
-  validateProjectContextSearchV1, validatePersonUpdateSubmitV2, validatePersonUploadSearchV2,
+  validateProjectContextSearchV1, validatePersonUploadSearchV2,
   type ProjectPageRequestV2, type ProjectCreateV1, type ProjectContextBrowseV1, type ProjectDirectorySearchV1,
   type ProjectMemberAddV1, type ProjectMemberSetV1, type ProjectMemberRemoveV1, type ProjectContextAssociateV1, type ProjectContextDissociateV1,
   type ProjectRenameV1, type ProjectArchiveV1, type ProjectLeaveV1,
-  type ProjectContextSearchV1, type PersonUpdateSubmitV2, type PersonUploadSearchV2, type ProjectIdV1,
+  type ProjectContextSearchV1, type PersonUploadSearchV2, type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import { validatePersonUpdateSubmitV3, validatePersonUploadSearchV3, type PersonUpdateSubmitV3, type PersonUploadSearchV3 } from '@echo-brain/organization-api';
 import { validateOrganizationDirectorySearchV1, type OrganizationDirectorySearchV1 } from '@echo-brain/organization-api';
@@ -604,25 +603,6 @@ export class PersonClient {
     return this.withContextSession((authority, token) => authority.searchProjectContextV2(token, request));
   }
 
-  async submitUpdateV2(value: PersonUpdateSubmitV2) {
-    // Copy and freeze before session refresh can yield. No reread, retry, or
-    // request-ID generation may change this attempt's original or coordinates.
-    const request = validatePersonUpdateSubmitV2(value);
-    Object.freeze(request.audience);
-    Object.freeze(request);
-    return this.withContextSession((authority, token) => authority.submitUpdateV2(token, request), { request_id: request.request_id, upload: true });
-  }
-
-  async updateStatusV2(requestId: string) {
-    validatePersonUpdateRequestId(requestId);
-    return this.withContextSession((authority, token) => authority.updateStatusV2(token, requestId));
-  }
-
-  async readUploadV2(contextId: string) {
-    validatePersonUploadContextId(contextId);
-    return this.withContextSession((authority, token) => authority.readUploadV2(token, contextId));
-  }
-
   async searchUploadsV2(value: PersonUploadSearchV2) {
     const request = validatePersonUploadSearchV2(value);
     return this.withContextSession((authority, token) => authority.searchUploadsV2(token, request));
@@ -636,11 +616,6 @@ export class PersonClient {
   async updateStatusV3(requestId: string) {
     validatePersonUpdateRequestId(requestId);
     return this.withContextSession((authority, token) => authority.updateStatusV3(token, requestId));
-  }
-
-  async readUploadV3(contextId: string) {
-    validatePersonUploadContextId(contextId);
-    return this.withContextSession((authority, token) => authority.readUploadV3(token, contextId));
   }
 
   async searchUploadsV3(value: PersonUploadSearchV3) {
