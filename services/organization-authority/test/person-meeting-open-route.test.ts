@@ -1,6 +1,5 @@
 import { sha256Digest, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
-import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
 import {
   organizationMemberReadablePersonPolicyContractSha256,
   projectMembersReadablePersonPolicyContractSha256,
@@ -8,14 +7,12 @@ import {
   type OrganizationRecordDecisionBriefV1,
 } from "@echo-brain/organization-protocol";
 import { ApprovedMeetingTranscriptGrantReaderV1 } from "@echo-brain/organization-record/organization-record-api-v1";
-import type Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
-import { SqliteSourceAdmissionStoreV1 } from "../src/adapters/persistence/sqlite/source-admission-v1.js";
 import type { PersonMeetingPartPositionV1, PersonStoreMeetingRowV1 } from "../src/application/ports/person-list-v1.js";
 import type { PersonRecordSearchRouteV1 } from "../src/composition/person-record-search-route.js";
 import { COORDINATES } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
-import { EMP_A, EMP_B, OWNER, SHARED, T, UNJOINED, meetingWorld, type ReaderToken } from "./fixtures/person-meeting-world.js";
+import { EMP_A, EMP_B, OWNER, SHARED, T, UNJOINED, admittedTranscriptV1, meetingWorld, type ReaderToken } from "./fixtures/person-meeting-world.js";
 import { SIGNED_APPROVAL_SLACK_SUBJECT } from "./fixtures/signed-slack-approval-v2.js";
 
 type World = Awaited<ReturnType<typeof meetingWorld>>;
@@ -28,27 +25,6 @@ const QUOTE = "QUOTE-SECRET-EVIDENCE";
 /** 2 + 3,499 × 2 bytes: parts of 3,072, 3,072 and 856 bytes. */
 const LONG_ACTION = `ab${"é".repeat(3_499)}`;
 
-async function admitTranscript(authority: Database.Database): Promise<{ source_id: string; revision_id: string; source_sha256: Sha256Digest }> {
-  const meeting = {
-    schema_version: 1 as const, id: "meeting-shared-transcript",
-    provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-shared-transcript", canonical_revision: "revision-1", observed_at: T(4), normalizer_version: "1" },
-    capture: { state: "complete" as const, components: [{ kind: "transcript" as const, state: "available" as const }] },
-    participants: [], artifacts: [], title: "Pricing review",
-    content: [{ id: "transcript-1", kind: "transcript" as const, text: TRANSCRIPT }],
-  };
-  await pullAndAdmitSourceBatchV1({
-    source: new MeetingSourceBridgeV1({
-      identity: meeting.provenance.source,
-      validateConfig: () => ({ ok: true, errors: [] }),
-      healthCheck: async () => ({ status: "healthy" as const, checked_at: T(4) }),
-      pull: async () => ({ meetings: [meeting], next_cursor: "meeting-next" }),
-    }),
-    request: { limit: 1 },
-    admission: { store: new SqliteSourceAdmissionStoreV1(authority), scope: { organization_id: COORDINATES.organization_id, custody_ref: `organization:${COORDINATES.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
-  });
-  return authority.prepare("SELECT source_id,revision_id,('sha256:' || revision_sha256) AS source_sha256 FROM authority_source_revisions_v1").get() as { source_id: string; revision_id: string; source_sha256: Sha256Digest };
-}
-
 const withMeeting = (change: (brief: OrganizationRecordDecisionBriefV1) => Partial<OrganizationRecordDecisionBriefV1>) =>
   (brief: OrganizationRecordDecisionBriefV1): OrganizationRecordDecisionBriefV1 => ({ ...brief, ...change(brief) });
 const quoted = <T extends { readonly evidence: readonly { readonly meeting_id: string; readonly block_id: string }[] }>(signal: T): T =>
@@ -56,7 +32,7 @@ const quoted = <T extends { readonly evidence: readonly { readonly meeting_id: s
 
 /** The standard world, plus the meetings open needs. `long` exceeds the generation's atom bound, so it is appended last and never listed. */
 async function world(options: { readonly long?: boolean } = {}) {
-  const w = await meetingWorld({ r4_transcript: admitTranscript });
+  const w = await meetingWorld({ r4_transcript: admittedTranscriptV1(TRANSCRIPT) });
   worlds.push(w);
   await w.approve({
     name: "detail", approval_id: "apr_detail", projects: "team", final_approver: OWNER, issued_at: T(11),

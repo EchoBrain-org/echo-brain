@@ -7,12 +7,14 @@ import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-ke
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
+import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from "@echo-brain/organization-processing/core";
 import type { OrganizationRecordDecisionBriefV1, OrganizationRecordMeetingTimeV1 } from "@echo-brain/organization-protocol";
 import { OrganizationRecordAppenderV4 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { expandReadableSearchRelatedAtomsV1, type ReadableSearchActiveGenerationV1 } from "@echo-brain/organization-retrieval/readable-search-engine-v1";
 import Database from "better-sqlite3";
 import { COORDINATES, database as recordDatabase, protocolAuthority, type ProtocolAuthority } from "../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { SqlitePersonRecordReadAuditV1 } from "../../src/adapters/persistence/sqlite/person-record-read-audit-v1.js";
+import { SqliteSourceAdmissionStoreV1 } from "../../src/adapters/persistence/sqlite/source-admission-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createRecordProjectAuthorizationV1 } from "../../src/composition/person-record-project-scope-v1.js";
 import type { ApproverMembershipsV1 } from "../../src/composition/person-meeting-items-v1.js";
@@ -69,6 +71,33 @@ export const STANDARD_RECORDS: readonly WorldApprovalV1[] = [
   { name: "r7a", approval_id: "apr_r7a", projects: "team", final_approver: APPROVER_X, issued_at: T(7) },
   { name: "r7b", approval_id: "apr_r7b", projects: "team", final_approver: APPROVER_X, issued_at: T(7) },
 ];
+
+/**
+ * Admits one meeting whose transcript is `text` into the Authority's source
+ * custody, for r4's shared transcript; returns its exact revision.
+ */
+export function admittedTranscriptV1(text: string) {
+  return async (authority: Database.Database): Promise<{ source_id: string; revision_id: string; source_sha256: Sha256Digest }> => {
+    const meeting = {
+      schema_version: 1 as const, id: "meeting-shared-transcript",
+      provenance: { source: { kind: "meeting-source" as const, adapter_id: "meeting", instance_id: "fixture", version: "1" }, external_id: "meeting-shared-transcript", canonical_revision: "revision-1", observed_at: T(4), normalizer_version: "1" },
+      capture: { state: "complete" as const, components: [{ kind: "transcript" as const, state: "available" as const }] },
+      participants: [], artifacts: [], title: "Pricing review",
+      content: [{ id: "transcript-1", kind: "transcript" as const, text }],
+    };
+    await pullAndAdmitSourceBatchV1({
+      source: new MeetingSourceBridgeV1({
+        identity: meeting.provenance.source,
+        validateConfig: () => ({ ok: true, errors: [] }),
+        healthCheck: async () => ({ status: "healthy" as const, checked_at: T(4) }),
+        pull: async () => ({ meetings: [meeting], next_cursor: "meeting-next" }),
+      }),
+      request: { limit: 1 },
+      admission: { store: new SqliteSourceAdmissionStoreV1(authority), scope: { organization_id: COORDINATES.organization_id, custody_ref: `organization:${COORDINATES.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
+    });
+    return authority.prepare("SELECT source_id,revision_id,('sha256:' || revision_sha256) AS source_sha256 FROM authority_source_revisions_v1").get() as { source_id: string; revision_id: string; source_sha256: Sha256Digest };
+  };
+}
 
 function grant(database: Database.Database, projectId: string, actor: AuthorityPersonMembershipBinding, role: "lead" | "member"): void {
   database.prepare(`INSERT INTO authority_project_memberships_v1

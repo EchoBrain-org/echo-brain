@@ -5,6 +5,8 @@ import type {
   PersonOpenMeetingAtomV1,
   PersonOpenMeetingDetailV1,
   ProjectIdV1,
+  ProjectRoleV1,
+  ProjectStatusV2,
 } from "@echo-brain/organization-api";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import type { PersonAskScopeV2 } from "./person-original-context-retrieval-v1.js";
@@ -131,3 +133,34 @@ export type PersonTranscriptProbeV1 = (input: {
   readonly approval_id: string;
   readonly record_sha256: `sha256:${string}`;
 }) => boolean;
+
+export interface PersonListJoinedProjectV1 {
+  readonly project_id: ProjectIdV1;
+  readonly name: string;
+  readonly role: ProjectRoleV1;
+  readonly status: ProjectStatusV2;
+}
+
+/**
+ * The caller's own projects, name and audit for the person list (ADR-0023).
+ * Projects are the caller's active grants, active projects first, then newest.
+ */
+export interface PersonListDirectoryPortV1 {
+  joinedProjects(actor: PersonAccessAuthorization): {
+    readonly projects: readonly PersonListJoinedProjectV1[];
+    /** The grant set: project ids and grant ids. A change is lost or gained access. */
+    readonly grants_sha256: Sha256Digest;
+    /** Names, roles and statuses only. A change is a concurrent rename, not an access change. */
+    readonly names_sha256: Sha256Digest;
+  };
+  me(actor: PersonAccessAuthorization): { readonly display_name: string } | undefined;
+  /** One content-free page audit, written only after every fence passed. */
+  audit(entry: {
+    readonly operation: "person_list" | "person_open";
+    readonly scope_kind: "global" | "project" | "mine" | "item";
+    readonly actor: PersonAccessAuthorization;
+    readonly response_sha256: Sha256Digest;
+    readonly released_count: number;
+    readonly store_receipts: readonly Sha256Digest[];
+  }): Sha256Digest;
+}

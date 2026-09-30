@@ -75,6 +75,13 @@ import {
 } from "@echo-brain/organization-api";
 import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
+import {
+  PERSON_LIST_PATH_V1,
+  PERSON_OPEN_PATH_V1,
+  validatePersonListRequestV1,
+  validatePersonOpenRequestV1,
+} from "@echo-brain/organization-api";
+import type { PersonListHttpApplicationV1 } from "./person-list-http-application-v1.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
@@ -106,6 +113,8 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
   `POST ${PERSON_SOURCE_EVIDENCE_PATH_V1}`,
   `POST ${PERSON_MEETING_TRANSCRIPT_PATH_V1}`,
+  `POST ${PERSON_LIST_PATH_V1}`,
+  `POST ${PERSON_OPEN_PATH_V1}`,
 ]);
 
 function routeKey(method: string, path: string): string {
@@ -143,6 +152,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
   /** Explicit transcript release uses the same originals gate but no Ask model. */
   readonly person_meeting_transcript?: PersonMeetingTranscriptHttpApplicationV1;
+  /** The person list and open by ref (ADR-0023); it needs no answer model. */
+  readonly person_list?: PersonListHttpApplicationV1;
   /** Mounted only when the project application and V2 worker binding are composed. */
   readonly project_context?: ProjectContextApplicationV1;
   readonly person_documents?: PersonDocumentApplicationV1;
@@ -1093,6 +1104,40 @@ export function createOrganizationAuthorityHttpServer(
           access_token: accessToken(request.headers.authorization),
           request: requestBody,
         }));
+        return;
+      }
+      if (
+        method === "POST" &&
+        (url.pathname === PERSON_LIST_PATH_V1 || url.pathname === PERSON_OPEN_PATH_V1) &&
+        url.search === ""
+      ) {
+        if (options.person_list === undefined) {
+          fail(response, 503, "unavailable");
+          return;
+        }
+        const access_token = accessToken(request.headers.authorization);
+        const disconnect = disconnectSignal(request, response);
+        try {
+          if (url.pathname === PERSON_LIST_PATH_V1) {
+            let requestBody;
+            try {
+              requestBody = validatePersonListRequestV1(await body(request));
+            } catch {
+              throw new AuthorityOperationError("invalid_request", "request is invalid");
+            }
+            json(response, 200, await options.person_list.list({ access_token, request: requestBody, signal: disconnect.signal }));
+          } else {
+            let requestBody;
+            try {
+              requestBody = validatePersonOpenRequestV1(await body(request));
+            } catch {
+              throw new AuthorityOperationError("invalid_request", "request is invalid");
+            }
+            json(response, 200, await options.person_list.open({ access_token, request: requestBody, signal: disconnect.signal }));
+          }
+        } finally {
+          disconnect.dispose();
+        }
         return;
       }
       fail(response, 404, "not_found");
