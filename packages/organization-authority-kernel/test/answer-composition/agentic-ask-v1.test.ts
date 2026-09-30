@@ -278,6 +278,38 @@ describe("agentic Ask: research loop", () => {
     expect(result.parts[0]).not.toHaveProperty("records");
   });
 
+  it.each<EvidenceDeskPortV1["scope"]>([
+    { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000002" },
+    { kind: "global" },
+    { kind: "mine" },
+  ])("keeps the writer's explicit no-match response uncited in $kind scope", async scope => {
+    const question = "What did we decide for synthetic staging release clean-v1-20260930-mine-03b922f?";
+    const passage = item("software-review", "The SCOUT release requires an explicit transition table before architecture drafting.", {
+      kind: "document_passage", label: "SCOUT Software Review",
+    });
+    const evidence = desk({ scope, search: () => [passage] });
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const script = scripted([
+      step([{ question, needs: [{ need: "release decision" }] }], [search("synthetic staging release")]),
+      // The writer can reject a research-selected citation after reading its text.
+      finish([{ question, needs: [{ need: "release decision", status: "found", evidence: ["E1"] }] }]),
+      answer([], ["a decision about the requested staging release within this scope"]),
+    ]);
+
+    const result = await ask({ desk: evidence, model: script.model, audit }).answer({ question });
+
+    expect(script.prompt(2).evidence).toEqual([expect.objectContaining({ id: "E1", text: passage.text })]);
+    expect(validatePersonAnswerResponseV4(result)).toEqual(result);
+    expect(result).toMatchObject({
+      scope, outcome: "not_found", citations: [],
+      parts: [{ status: "not_found", statements: [], gap: "Not found: a decision about the requested staging release within this scope." }],
+    });
+    expect(result.parts[0]).not.toHaveProperty("records");
+    expect(script.inputs).toHaveLength(3);
+    expect(evidence.revalidate).toHaveBeenCalledTimes(4);
+    expect(audit).toEqual([expect.objectContaining({ outcome: "not_found", model_calls: 3, citation_count: 0 })]);
+  });
+
   it("does not admit metadata-only listings to the writer", async () => {
     const evidence = desk({ list: () => [listedItem("unread", { kind: "document_passage" })] });
     const script = scripted([

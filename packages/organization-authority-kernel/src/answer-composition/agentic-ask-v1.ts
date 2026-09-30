@@ -893,9 +893,10 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
         if (statements.length > 0) {
           draft = gapText === undefined ? { status: "answered", statements } : { status: "partial", statements, gap: gapText };
         } else {
+          // Honor a completed writer's no-match result instead of substituting research-selected records.
           // Raw fallback remains limited to research-read evidence; merely sending
           // a search passage to a failed writer does not make it a useful answer.
-          const fallback = (answer === null ? evidence.filter(entry => entry.full) : cited.filter(entry => allowed.has(entry.short))).slice(0, 3);
+          const fallback = notFound.length > 0 ? [] : (answer === null ? evidence.filter(entry => entry.full) : cited.filter(entry => allowed.has(entry.short))).slice(0, 3);
           const records = fallback.map(entry => ({ text: entry.item.text!, citation_indexes: use([entry.short]), private: privateItem(entry.item) }));
           draft = records.length > 0
             ? { status: "records_only", statements: [], records, gap: RECORDS_GAP }
