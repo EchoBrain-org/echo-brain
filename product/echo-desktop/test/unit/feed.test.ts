@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ListItem } from '../../src/shared/protocol.js';
-import { reread } from '../../src/renderer/feed.js';
+import { renamedProject, reread } from '../../src/renderer/feed.js';
 
 const row = (title: string, hour: number, kind: ListItem['ref']['kind'] = 'note'): ListItem => ({
   ref: { kind, id: `${kind}-${title}` }, title, added_at: `2026-09-20T${String(hour).padStart(2, '0')}:00:00.000Z`, visibility: 'project', projects: [],
@@ -33,5 +33,16 @@ describe('a first page read again', () => {
     const shown = { items: [row('a', 12, 'meeting'), row('a', 11, 'note'), row('a', 11, 'document')], next: null };
     const first = { items: [row('b', 13), row('a', 12, 'meeting')], next: 'page2' };
     expect(reread(shown, first, key).items.map(key)).toEqual(['note:note-b', 'meeting:meeting-a', 'note:note-a', 'document:document-a']);
+  });
+});
+
+describe('a project renamed while its rows show', () => {
+  it('renames it in every row that names it, older rows included, and leaves the rest', () => {
+    const filed = (title: string, hour: number, projects: string[]): ListItem => ({ ...row(title, hour), projects });
+    const shown = [filed('first', 20, ['Apollo', 'Beacon']), filed('mine', 19, []), filed('older', 3, ['Apollo']), filed('other', 2, ['Beacon'])];
+    const renamed = renamedProject(shown, 'Apollo', 'Apollo 2');
+    expect(renamed.map(item => item.projects)).toEqual([['Apollo 2', 'Beacon'], [], ['Apollo 2'], ['Beacon']]);
+    expect(renamed[1]).toBe(shown[1]);
+    expect(shown[0]!.projects).toEqual(['Apollo', 'Beacon']);
   });
 });

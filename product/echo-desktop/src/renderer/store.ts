@@ -10,7 +10,7 @@ import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
-import { reread } from './feed.js';
+import { renamedProject, reread } from './feed.js';
 import { message } from './messages.js';
 
 /** Mine: only what you added, to see and to ask about. */
@@ -1258,8 +1258,15 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
     const fresh = { ...project, name: detail.name! };
     replaceProject(fresh);
     set({ toast: `Renamed to ${fresh.name}` });
-    // Mine's rows name the projects they are filed in.
-    if (state.route.page === 'mine') refreshList({ kind: 'mine' });
+    // Mine's rows name the projects they are filed in: every row shown takes the new name, then the first page is read again.
+    // Rows hold names only, so when another of your projects had the old name, Mine is read again from its first page.
+    const list = state.list;
+    if (state.route.page === 'mine' && list?.scope.kind === 'mine') {
+      const shared = [...state.projects.items, ...state.archivedProjects.items].some(item => item.project_id !== project.project_id && item.name === project.name);
+      if (shared) { void loadList('first'); return; }
+      set({ list: { ...list, items: renamedProject(list.items, project.name, fresh.name) } });
+      refreshList({ kind: 'mine' });
+    }
     return;
   }
   if (operation === 'archive') {

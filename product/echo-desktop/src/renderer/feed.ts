@@ -11,6 +11,15 @@ function time(iso: string): number {
  * and older rows loaded with More stay, with the cursor that reaches past
  * them. A shown row the page should hold but does not has left the list.
  */
+/**
+ * A project renamed: every row shown that names it, older rows More loaded
+ * included, names it by its new name. Rows carry names only, so the caller
+ * applies this only while no other project of yours had the old name.
+ */
+export function renamedProject<T extends { projects: readonly string[] }>(items: readonly T[], from: string, to: string): T[] {
+  return items.map(item => item.projects.includes(from) ? { ...item, projects: item.projects.map(name => name === from ? to : name) } : item);
+}
+
 export function reread<T extends { added_at: string }>(
   shown: { items: readonly T[]; next: string | null }, first: { items: readonly T[]; next: string | null }, key: (item: T) => string,
 ): { items: T[]; next: string | null } {

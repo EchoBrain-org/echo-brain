@@ -58,6 +58,26 @@ test('Mine lists only what you added, newest first, with what each is, where it 
   await expect(page.getByTestId('sidebar-mine')).not.toHaveAttribute('aria-current', 'page');
 });
 
+test('a project renamed from Mine takes its new name in every row, and the rows More loaded stay', async () => {
+  run = await launch('mine');
+  const { page } = run;
+  await page.getByTestId('sidebar-mine').click();
+  const rows = page.getByTestId('mine-row');
+  await expect(rows).toHaveCount(10);
+  await page.getByTestId('mine-more').click();
+  await expect(rows).toHaveCount(12);
+  await page.getByRole('button', { name: 'Actions for Apollo' }).click();
+  await page.getByTestId('project-rename').click();
+  await page.getByTestId('project-rename-input').fill('Apollo 2');
+  await page.getByTestId('project-rename-save').click();
+  await expect(page.getByTestId('toast')).toHaveText('Renamed to Apollo 2');
+  await expect(page.getByTestId('title')).toHaveText('Mine');
+  await expect(rows.nth(2).getByTestId('item-projects')).toHaveText('Apollo 2');
+  await expect(rows.nth(3).getByTestId('item-projects')).toHaveText('Apollo 2, Beacon');
+  await expect(page.getByTestId('item-projects').filter({ hasText: /Apollo(?! 2)/ })).toHaveCount(0);
+  await expect(rows).toHaveCount(12);
+});
+
 test('a meeting opened from Mine is its approved record: More reads the rest, and a long action\'s parts join into one', async () => {
   run = await launch('mine');
   const { page } = run;
