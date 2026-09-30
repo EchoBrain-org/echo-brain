@@ -36,9 +36,11 @@ import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-r
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import { decodePersonListCursorV1, encodePersonListCursorV1, type PersonListPositionsV1 } from "../src/composition/person-list-cursor-v1.js";
 import { createPersonListRouteV1 } from "../src/composition/person-list-v1-route.js";
+import { personMeetingReleaseOptionsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, STANDARD_RECORDS, T, UNJOINED, admittedTranscriptV1, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
 import { addMembership, authorization } from "./fixtures/project-context-sqlite.js";
+import { SIGNED_APPROVAL_APPROVER } from "./fixtures/signed-slack-approval-v2.js";
 
 /**
  * The person list and open (ADR-0024) on real SQLite stores and signed
@@ -185,7 +187,8 @@ async function disclosureWorld() {
   const storeCalls: string[] = [];
   const hooks: { afterCollect?: () => void } = {};
   const items: PersonOriginalItemsPortV1 = counted(new SqlitePersonOriginalItemsV1(w.authority, sessions, org), storeCalls);
-  const records = w.route({ sessions, transcript_probe: (input) => originals.probeApprovedMeetingTranscriptV1(input) });
+  // The runtime's own meeting options: approver, directory and transcript probe.
+  const records = w.route({ sessions, record_approver: undefined, memberships: undefined, ...personMeetingReleaseOptionsV1({ record_approver: SIGNED_APPROVAL_APPROVER, memberships: w.memberships, originals }) });
   const meetings: PersonMeetingItemsPortV1 = counted({
     collectMeetings: (input) => { const collected = records.collectMeetings(input); hooks.afterCollect?.(); return collected; },
     commitMeetings: (input) => records.commitMeetings(input),
@@ -433,6 +436,8 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
     const f = await disclosureWorld();
     const r4 = (await f.openAll("emp_a", f.meeting("r4")))[0] as PersonOpenMeetingV1;
     expect(r4.transcript_ref).toBe(`transcript:${f.w.digest("r4")}`);
+    // The final approver's current directory name, the only approver attribution.
+    expect(r4.meeting?.approved_by).toBe("Ari Employee");
     const pages = await f.openAll("emp_a", r4.transcript_ref!) as PersonOpenTranscriptV1[];
     expect(pages.length).toBeGreaterThan(1);
     expect(pages.map((page) => page.text).join("")).toBe(TRANSCRIPT);

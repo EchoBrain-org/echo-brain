@@ -37,7 +37,7 @@ import { createOrganizationAuthorityHttpServer } from "../presentation/organizat
 import type { PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
 import { LazyPersonSessionOidcProvider } from "./lazy-person-session-oidc-provider.js";
 import { createPersonRecordReadRouteV1 } from "./person-record-read-route.js";
-import { createPersonRecordSearchRouteV1 } from "./person-record-search-route.js";
+import { createPersonRecordSearchRouteV1, personMeetingReleaseOptionsV1 } from "./person-record-search-route.js";
 import { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
 import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
@@ -243,11 +243,13 @@ export async function startOrganizationAuthorityApiRuntime(
       capture_projects: captureProjects,
       expand_related_atoms: expandReadableSearchRelatedAtomsV1,
       // Mine needs the approver; the person list names it and offers a shared transcript.
-      record_approver: dependencies.record_approver,
-      memberships: {
-        membership: (id) => repository.read((transaction) => transaction.membership(id)),
-      },
-      transcript_probe: (input) => originals.probeApprovedMeetingTranscriptV1(input),
+      ...personMeetingReleaseOptionsV1({
+        record_approver: dependencies.record_approver,
+        memberships: {
+          membership: (id) => repository.read((transaction) => transaction.membership(id)),
+        },
+        originals,
+      }),
     });
     const documents = new SqlitePersonDocumentRepositoryV1(database);
     const originalItems = new SqlitePersonOriginalItemsV1(database, sessions, metadata.organization_id);

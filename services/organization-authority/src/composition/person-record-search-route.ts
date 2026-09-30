@@ -286,6 +286,24 @@ export interface CreatePersonRecordSearchRouteV1Options {
   readonly transcript_probe?: PersonTranscriptProbeV1;
 }
 
+/**
+ * What the person list and open need beyond the records: the approver (mine
+ * and `approved_by`), the directory that names it, and the shared-transcript
+ * probe (`transcript_ref`). The runtime and the disclosure test compose them
+ * through this one function, so a dropped option fails that test.
+ */
+export function personMeetingReleaseOptionsV1(input: {
+  readonly record_approver: RecordApproverProjectorV1 | undefined;
+  readonly memberships: ApproverMembershipsV1;
+  readonly originals: { probeApprovedMeetingTranscriptV1: PersonTranscriptProbeV1 };
+}): Pick<CreatePersonRecordSearchRouteV1Options, "record_approver" | "memberships" | "transcript_probe"> {
+  return {
+    ...(input.record_approver === undefined ? {} : { record_approver: input.record_approver }),
+    memberships: input.memberships,
+    transcript_probe: (probe) => input.originals.probeApprovedMeetingTranscriptV1(probe),
+  };
+}
+
 function activeGeneration(
   authority: Database.Database,
 ): ActiveGenerationRow | null {
