@@ -37,7 +37,7 @@ import { createOrganizationAuthorityHttpServer } from "../presentation/organizat
 import type { PersonSessionOidcAuthorizationProvider } from "./lazy-person-session-oidc-provider.js";
 import { LazyPersonSessionOidcProvider } from "./lazy-person-session-oidc-provider.js";
 import { createPersonRecordReadRouteV1 } from "./person-record-read-route.js";
-import { createPersonRecordSearchRouteV1 } from "./person-record-search-route.js";
+import { createPersonRecordSearchRouteV1, personMeetingReleaseOptionsV1 } from "./person-record-search-route.js";
 import { PersonEmployeeLifecycleApplication } from "../application/person-employee-lifecycle.js";
 import { createPersonEmployeeHttpApplication } from "../presentation/person-employee-http-application.js";
 import { readableSearchGenerationContractV1 } from "./readable-search-generation-composition.js";
@@ -46,6 +46,9 @@ import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRou
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
+import { SqlitePersonOriginalItemsV1 } from "../adapters/persistence/sqlite/person-original-items-v1.js";
+import { SqlitePersonListDirectoryV1 } from "../adapters/persistence/sqlite/person-list-directory-v1.js";
+import { createPersonListRouteV1 } from "./person-list-v1-route.js";
 import type { AnswerCompositionGenerationBindingV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
 import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
 import type {
@@ -209,23 +212,6 @@ export async function startOrganizationAuthorityApiRuntime(
     const transcriptGrants = new ApprovedMeetingTranscriptGrantReaderV1(recordDatabase);
     const projectRepository = new SqliteProjectContextRepositoryV1(database);
     const captureProjects = createRecordProjectAuthorizationV1(projectRepository);
-    const recordSearch = createPersonRecordSearchRouteV1({
-      ...(dependencies.record_input_codecs === undefined ? {} : { record_input_codecs: dependencies.record_input_codecs }),
-      state_directory: config.state_directory,
-      authority_id: metadata.authority_id,
-      organization_id: metadata.organization_id,
-      state_lineage_id: lineage.root.state_lineage_id,
-      retrieval_contract_sha256:
-        dependencies.readable_search_retrieval_contract_sha256 ??
-        readableSearchGenerationContractV1().retrieval_contract_sha256,
-      sessions,
-      authority: database,
-      record: recordDatabase,
-      audit: readAudit,
-      capture_projects: captureProjects,
-      expand_related_atoms: expandReadableSearchRelatedAtomsV1,
-    });
-    const documents = new SqlitePersonDocumentRepositoryV1(database);
     const originals = new SqlitePersonOriginalContextRetrievalV1(
       database,
       sessions,
@@ -241,6 +227,33 @@ export async function startOrganizationAuthorityApiRuntime(
         ),
       },
     );
+    const recordSearch = createPersonRecordSearchRouteV1({
+      ...(dependencies.record_input_codecs === undefined ? {} : { record_input_codecs: dependencies.record_input_codecs }),
+      state_directory: config.state_directory,
+      authority_id: metadata.authority_id,
+      organization_id: metadata.organization_id,
+      state_lineage_id: lineage.root.state_lineage_id,
+      retrieval_contract_sha256:
+        dependencies.readable_search_retrieval_contract_sha256 ??
+        readableSearchGenerationContractV1().retrieval_contract_sha256,
+      sessions,
+      authority: database,
+      record: recordDatabase,
+      audit: readAudit,
+      capture_projects: captureProjects,
+      expand_related_atoms: expandReadableSearchRelatedAtomsV1,
+      // Mine needs the approver; the person list names it and offers a shared transcript.
+      ...personMeetingReleaseOptionsV1({
+        record_approver: dependencies.record_approver,
+        memberships: {
+          membership: (id) => repository.read((transaction) => transaction.membership(id)),
+        },
+        originals,
+      }),
+    });
+    const documents = new SqlitePersonDocumentRepositoryV1(database);
+    const originalItems = new SqlitePersonOriginalItemsV1(database, sessions, metadata.organization_id);
+    const personTools = (token: string) => externalIdentity?.tools(token) ?? Promise.resolve([]);
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
       on_failure: dependencies.person_source_failure ?? (event => console.error(JSON.stringify(event))),
     });
@@ -268,6 +281,16 @@ export async function startOrganizationAuthorityApiRuntime(
       person_record_search: recordSearch,
       person_meeting_transcript: createPersonMeetingTranscriptReadRouteV1({ originals }),
       person_source_evidence: createPersonSourceEvidenceRouteV1({ originals }),
+      // Outside the answer-model gate: listing and opening never call a model.
+      person_list: createPersonListRouteV1({
+        organization_id: metadata.organization_id,
+        sessions,
+        tools: personTools,
+        directory: new SqlitePersonListDirectoryV1(database),
+        originals: originalItems,
+        meetings: recordSearch,
+        transcripts: originals,
+      }),
       // Agentic Ask is the only Ask (ADR-0022); it needs the bound answer model.
       ...(dependencies.answer_composition_generation === undefined
         ? {}
@@ -310,7 +333,7 @@ export async function startOrganizationAuthorityApiRuntime(
       ),
       person_tools: createPersonToolsHttpApplicationV3({
         authenticate: (access_token) => sessions.authenticateAccess({ access_token }),
-        tools: (token) => externalIdentity?.tools(token) ?? Promise.resolve([]),
+        tools: personTools,
       }),
       ...(externalIdentity === undefined
         ? {}

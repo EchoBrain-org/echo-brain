@@ -1,11 +1,16 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
-import type { PersonMeetingTranscriptCitationV1 } from "@echo-brain/organization-api";
+import type { PersonMeetingTranscriptCitationV1, PersonOpenRefV1 } from "@echo-brain/organization-api";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-authority-kernel/shared/released-source-context-v1";
 
-/** The caller-selected boundary; global is still limited to the actor's ACL. */
+/**
+ * The caller-selected boundary; global is still limited to the actor's ACL.
+ * mine = added by the caller (membership_id AND principal_id); always ⊆ global.
+ */
 export type PersonAskScopeV2 =
   | Readonly<{ readonly kind: "global" }>
-  | Readonly<{ readonly kind: "project"; readonly project_id: string }>;
+  | Readonly<{ readonly kind: "project"; readonly project_id: string }>
+  | Readonly<{ readonly kind: "mine" }>;
 
 export interface OriginalContextAuthorizationV1 {
   readonly principal_id: string;
@@ -75,6 +80,13 @@ export interface ApprovedMeetingTranscriptGrantReaderV1 {
     readonly revision_id?: string;
     readonly source_sha256?: Sha256Digest;
   }): readonly ApprovedMeetingTranscriptGrantV1[];
+  /** The grant of one exact approved record; without it, a transcript cannot be opened by its record. */
+  findByRecord?(input: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly record_sha256: Sha256Digest;
+  }): ApprovedMeetingTranscriptGrantV1 | null;
 }
 
 export interface ApprovedMeetingTranscriptReadV1 {
@@ -116,6 +128,22 @@ export interface PersonOriginalContextRetrievalPortV1 {
     readonly citation: PersonMeetingTranscriptCitationV1;
     readonly offset?: number;
   }): ApprovedMeetingTranscriptReadV1;
+  /**
+   * Whether an approved record's shared transcript is readable now with
+   * global access. Content-free: it releases and audits nothing, so a caller
+   * that has already admitted the record may offer a transcript ref.
+   */
+  probeApprovedMeetingTranscriptV1(input: {
+    readonly actor: PersonAccessAuthorization;
+    readonly approval_id: string;
+    readonly record_sha256: Sha256Digest;
+  }): boolean;
+  /** The approved transcript page of one record, read with global access (ADR-0024). */
+  readApprovedMeetingTranscriptByRecordV1(input: {
+    readonly access_token: string;
+    readonly record_sha256: Sha256Digest;
+    readonly offset?: number;
+  }): { readonly text: string; readonly next_offset: number | null };
 }
 
 /** Desk-only, request-bound original evidence release.  Callers of the
@@ -131,6 +159,8 @@ export interface OriginalContextDeskItemV1 {
   readonly label: string;
   readonly received_at: string;
   readonly version: string;
+  /** The note, document or shared transcript this passage opens as (ADR-0024). */
+  readonly ref?: PersonOpenRefV1;
 }
 
 export interface OriginalContextDeskReleaseV1 {

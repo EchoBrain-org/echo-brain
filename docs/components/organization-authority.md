@@ -32,6 +32,7 @@ decision_ids:
   - ADR-0021
   - ADR-0022
   - ADR-0023
+  - ADR-0024
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -149,3 +150,16 @@ protocol and response helpers handle parsing and canonical V4 validation, while
 the route binds the Person, desk, model and request audit. It receives no storage
 handle or provider-specific implementation. Architecture tests traverse its
 entire import closure to enforce that separation.
+
+Person list and open by ref are specified in
+[ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md).
+`POST /v1/person/list` returns the newest notes, documents and approved
+meetings the caller can read, 25 per page under an opaque cursor, in global,
+joined-project or mine scope; `POST /v1/person/open` reads one of them, or a
+shared transcript, by its ref. Both are model-free and served outside the
+answer-model gate. The originals store lists custody rows under the evidence
+desk's access rule, and the records route lists meetings from the pinned search
+generation and opens them through the Layer 1 exact read; neither returns the
+envelope. Mine is the caller's own notes and uploads plus meetings they
+finally approved, and Ask accepts the same `mine` scope. Each store audits its
+released rows before the route revalidates and writes one page audit.

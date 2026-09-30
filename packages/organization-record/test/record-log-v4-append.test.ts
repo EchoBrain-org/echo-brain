@@ -152,6 +152,11 @@ describe("V4 organization-record append", () => {
       expect(reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1", revision_id: "revision-1", source_sha256 })).toEqual(listed);
       expect(reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1", revision_id: "revision-2", source_sha256 })).toEqual([]);
       expect(() => reader.list({ authority_id: COORDINATES.authority_id, organization_id: COORDINATES.organization_id, state_lineage_id: COORDINATES.state_lineage_id, source_id: "source-1" })).toThrow("exact source tuple");
+      // By record: the same checked grant, and nothing for any other digest or lineage.
+      expect(reader.findByRecord({ ...COORDINATES, record_sha256: envelope.record_sha256 })).toEqual(listed[0]);
+      expect(reader.findByRecord({ ...COORDINATES, record_sha256: sha256Digest("unknown-record") })).toBeNull();
+      expect(reader.findByRecord({ ...COORDINATES, state_lineage_id: "state-lineage-2", record_sha256: envelope.record_sha256 })).toBeNull();
+      expect(() => reader.findByRecord({ ...COORDINATES, record_sha256: "record" as Sha256Digest })).toThrow("record_sha256");
     } finally { db.close(); }
   });
 
@@ -307,6 +312,8 @@ describe("V4 organization-record append", () => {
       ).toEqual(
         Array.from({ length: 11 }, (_, atom_order) => ({ atom_order })),
       );
+      // An approval that did not share its transcript has no grant to find.
+      expect(new ApprovedMeetingTranscriptGrantReaderV1(db).findByRecord({ ...COORDINATES, record_sha256: row.record_sha256 })).toBeNull();
     } finally {
       db.close();
     }

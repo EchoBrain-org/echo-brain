@@ -261,7 +261,7 @@ test('saving to the project on screen adds to its feed and leaves the rest of th
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved to Apollo');
   await expect(page.getByTestId('compose')).toHaveCount(0);
-  await expect.poll(() => run.calls().filter(call => call.path === '/v2/person/projects/context/feed').length).toBe(2);
+  await expect.poll(() => run.calls().filter(call => call.path === '/v1/person/list').length).toBe(2);
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await expect(page.getByTestId('feed-row')).toHaveCount(1);

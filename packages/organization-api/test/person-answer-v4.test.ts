@@ -154,6 +154,77 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(validatePersonEvidenceSearchRequestV1({ schema_version: 1, query: 'fixtures', kinds: ['decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'] }).kinds).toHaveLength(6);
   });
 
+  it('echoes a mine scope on answers and desk responses, but never a mine scope with a project', () => {
+    const answer = (scope: unknown) => ({
+      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope, outcome: 'answered',
+      citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
+      parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
+    });
+    const desk = (scope: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope, truncated: false, items: [] });
+    expect(validatePersonAnswerResponseV4(answer({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
+    expect(validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
+    expect(() => validatePersonAnswerResponseV4(answer({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
+    expect(() => validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
+    expect(() => validatePersonAnswerResponseV4(answer({ kind: 'everyone' }))).toThrow('Ask response scope is invalid');
+  });
+
+  it('asks with mine, but never mine with a project or mine other than true (ADR-0024)', () => {
+    expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine: true }))
+      .toEqual({ schema_version: 3, question: 'What did I decide?', mine: true });
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine: true, project_id })).toThrow('Ask request scope is invalid');
+    for (const mine of [false, 'true', 1, null]) {
+      expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine })).toThrow('Ask request scope is invalid');
+    }
+  });
+
+  it('carries a citation ref only when it names the cited item (ADR-0024)', () => {
+    const answer = (value: Record<string, unknown>) => ({
+      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'mine' }, outcome: 'answered',
+      citations: [{ kind: 'decision', label: 'Launch decision', visibility: 'team', ...value }],
+      parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
+    });
+    const document_id = `doc_${'1'.repeat(64)}`;
+    const source = {
+      kind: 'source_revision' as const, source_id: `source:${'d'.repeat(64)}`, revision_id: 'revision-1',
+      source_sha256: `sha256:${'e'.repeat(64)}`, representation_sha256: `sha256:${'f'.repeat(64)}`, anchor_sha256: `sha256:${'0'.repeat(64)}`,
+    };
+    const note = `note:ctx_${'2'.repeat(64)}`;
+    const transcript = `transcript:${citation.record_sha256}`;
+    const slack = {
+      kind: 'slack_message' as const, team_id: 'T01ABCDEF', channel_id: 'C02ABCDEF', message_ts: '1758873600.000100',
+      permalink: 'https://acme.slack.com/archives/C02ABCDEF/p1758873600000100', text_sha256: `sha256:${'d'.repeat(64)}`,
+    };
+    const accepted = [
+      { citation, ref: `meeting:${citation.record_sha256}` },
+      { citation: { ...source, document_id }, kind: 'document_passage', ref: `document:${document_id}` },
+      { citation: source, kind: 'note', ref: note },
+      { citation: source, kind: 'note', ref: transcript },
+    ];
+    for (const value of accepted) expect(validatePersonAnswerResponseV4(answer(value)).citations[0]!.ref).toBe(value.ref);
+    // A citation without a ref (an older server, or Slack) still validates.
+    expect(validatePersonAnswerResponseV4(answer({ citation }))).not.toHaveProperty('citations.0.ref');
+    const rejected = [
+      { citation: slack, kind: 'slack_message', visibility: 'only_me', ref: `meeting:${citation.record_sha256}` },
+      { citation, ref: `meeting:sha256:${'9'.repeat(64)}` },
+      { citation, ref: transcript },
+      { citation: { ...source, document_id }, kind: 'document_passage', ref: note },
+      { citation: { ...source, document_id }, kind: 'document_passage', ref: `document:doc_${'3'.repeat(64)}` },
+      { citation: source, kind: 'note', ref: `document:${document_id}` },
+      { citation: source, kind: 'note', ref: `meeting:${citation.record_sha256}` },
+    ];
+    for (const value of rejected) expect(() => validatePersonAnswerResponseV4(answer(value))).toThrow('Ask response citation ref is inconsistent');
+    for (const ref of [`record:${citation.record_sha256}`, `meeting:${citation.record_sha256} `, `meeting:sha256:${'A'.repeat(64)}`, 42]) {
+      expect(() => validatePersonAnswerResponseV4(answer({ citation, ref }))).toThrow('Ask response citation ref is invalid');
+    }
+  });
+
+  it('keeps the evidence desk contract exact-key: a desk item never carries a ref', () => {
+    const item = { id: 'desk-item-1', citation, kind: 'decision', label: 'Launch decision', visibility: 'team', receipt_sha256 };
+    const desk = (value: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: { kind: 'mine' }, truncated: false, items: [value] });
+    expect(validatePersonEvidenceDeskResponseV1(desk(item)).items[0]).toEqual(item);
+    expect(() => validatePersonEvidenceDeskResponseV1(desk({ ...item, ref: `meeting:${citation.record_sha256}` }))).toThrow('Evidence desk item has an unexpected shape');
+  });
+
   it('allows up to ten statements in a part (RFC-0003) and rejects more', () => {
     const response = (count: number) => ({
       schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',

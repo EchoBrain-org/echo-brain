@@ -7,6 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildReadableSearchGenerationV1,
   expandReadableSearchRelatedAtomsV1,
+  listReadableSearchGenerationRecordsV1,
+  listReadableSearchGenerationV1,
+  readReadableSearchGenerationAtomsV1,
   READABLE_SEARCH_ADMISSION_BUDGET_V1,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
@@ -824,5 +827,106 @@ describe("immutable readable-search generation v1", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+  describe("record inventory and record narrowing (ADR-0024)", () => {
+    const projectPolicy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
+    const inRecord = (record: string, position: number, order: number, text: string, overrides: Partial<ReadableSearchAtomV1> = {}): ReadableSearchAtomV1 =>
+      atomWith(`${record}-${order}`, { record_position: position, record_sha256: digest(`record-${record}`), envelope_sha256: digest(`envelope-${record}`), approval_id: `approval-${record}`, atom_order: order, text, ...overrides });
+    const A0 = inRecord("a", 1, 0, "alpha launch");
+    const A1 = inRecord("a", 1, 1, "alpha owner");
+    const R0 = { ...atom("restricted", RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2), record_position: 2, record_sha256: digest("record-r"), envelope_sha256: digest("envelope-r"), approval_id: "approval-r", text: "reviewer launch", text_sha256: digest("reviewer launch") };
+    const P0 = inRecord("p", 3, 0, "project launch", { policy_id: projectPolicy, policy_contract_sha256: digest(`policy-${projectPolicy}`), audience_project_ids: ["prj_alpha", "prj_beta"], association_project_ids: ["prj_alpha"] });
+    const B0 = inRecord("b", 4, 0, "beta launch");
+    const MEMBER = { principal_id: "prn_member", membership_id: "mem_member" };
+    const REVIEWER = { principal_id: "prn_reviewer", membership_id: "mem_reviewer" };
+    const ALPHA = { principal_id: "prn_alpha", membership_id: "mem_alpha", project_ids: ["prj_alpha"] };
+
+    function warmed(directory: string, atoms: readonly ReadableSearchAtomV1[], related: readonly ReadableSearchRelatedAtomPairV1[] = []) {
+      const head = atoms.reduce((top, value) => value.record_position > top.record_position ? value : top);
+      const built = buildReadableSearchGenerationV1({
+        ...input(directory, atoms),
+        exact_head: { ...input(directory).exact_head, position: head.record_position, record_sha256: head.record_sha256 },
+        project_members_policy_contract_sha256: digest(`policy-${projectPolicy}`),
+        related_atom_pairs: related,
+      });
+      const active_generation = { generation_id: built.manifest.generation_id, manifest_sha256: built.manifest_sha256, retrieval_contract_sha256: built.manifest.retrieval_contract_sha256, exact_head: built.manifest.exact_head };
+      warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation });
+      return { state_directory: directory, active_generation };
+    }
+
+    it("lists one row per admitted record, newest first, under the same admission as search", () => {
+      const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+      try {
+        const active = warmed(directory, [A0, A1, R0, P0, B0]);
+        const records = (reader: typeof MEMBER & { project_ids?: readonly string[] }, extra: { project_id?: string; record_sha256s?: readonly `sha256:${string}`[] } = {}) =>
+          listReadableSearchGenerationRecordsV1({ ...active, reader, ...extra }).records;
+        expect(records(MEMBER)).toEqual([
+          { record_position: 4, record_sha256: B0.record_sha256, envelope_sha256: B0.envelope_sha256, approval_id: B0.approval_id, policy_id: B0.policy_id, audience_project_count: 0, atom_count: 1 },
+          { record_position: 1, record_sha256: A0.record_sha256, envelope_sha256: A0.envelope_sha256, approval_id: A0.approval_id, policy_id: A0.policy_id, audience_project_count: 0, atom_count: 2 },
+        ]);
+        expect(records(REVIEWER).map((row) => row.record_sha256)).toEqual([B0.record_sha256, R0.record_sha256, A0.record_sha256]);
+        expect(records(ALPHA).map((row) => [row.record_sha256, row.audience_project_count])).toEqual([[B0.record_sha256, 0], [P0.record_sha256, 2], [A0.record_sha256, 0]]);
+        expect(records(ALPHA, { project_id: "prj_alpha" }).map((row) => row.record_sha256)).toEqual([P0.record_sha256]);
+        expect(() => records(MEMBER, { project_id: "prj_alpha" })).toThrow("project scope");
+        expect(records(REVIEWER, { record_sha256s: [A0.record_sha256, R0.record_sha256].sort() }).map((row) => row.record_sha256)).toEqual([R0.record_sha256, A0.record_sha256]);
+        // Narrowing never admits: the member still cannot see the reviewer's record.
+        expect(records(MEMBER, { record_sha256s: [R0.record_sha256] })).toEqual([]);
+        expect(records(MEMBER, { record_sha256s: [] })).toEqual([]);
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    });
+
+    it("narrows search, list, read and expansion to the given records", () => {
+      const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+      try {
+        const active = warmed(directory, [A0, A1, R0, P0, B0], [relatedPair(A0, B0)]);
+        const onlyA = { record_sha256s: [A0.record_sha256] };
+        const texts = (items: readonly { readonly text: string }[]) => items.map((item) => item.text);
+        expect(texts(searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch" }).items)).toEqual(["beta launch", "alpha launch"]);
+        expect(texts(searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch", ...onlyA }).items)).toEqual(["alpha launch"]);
+        expect(texts(listReadableSearchGenerationV1({ ...active, reader: MEMBER, ...onlyA }).items)).toEqual(["alpha launch", "alpha owner"]);
+        expect(texts(readReadableSearchGenerationAtomsV1({ ...active, reader: MEMBER, atom_ids: [A0.atom_id, B0.atom_id], ...onlyA }).items)).toEqual(["alpha launch"]);
+        expect(texts(expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id] }).items)).toEqual(["beta launch"]);
+        expect(expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id], ...onlyA }).items).toEqual([]);
+        expect(texts(expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id], include_anchor_records: true, ...onlyA }).items)).toEqual(["alpha owner"]);
+        expect(expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id], record_sha256s: [B0.record_sha256] }).items).toEqual([]);
+        for (const empty of [{ record_sha256s: [] }, { record_sha256s: [R0.record_sha256] }]) {
+          expect(searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch", ...empty }).items).toEqual([]);
+          expect(listReadableSearchGenerationV1({ ...active, reader: MEMBER, ...empty }).items).toEqual([]);
+        }
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    });
+
+    it("recomputes BM25 statistics over the narrowed records, as a project scope does", () => {
+      const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+      try {
+        // Across the generation "alpha" is common and "beta" rare, so beta ranks first.
+        // Within record A both terms are equally rare, and the atom order breaks the tie.
+        const x = inRecord("a", 1, 0, "alpha");
+        const y = inRecord("a", 1, 1, "beta");
+        const others = [0, 1, 2].map((order) => inRecord("b", 2, order, `alpha other${order}`));
+        const active = warmed(directory, [x, y, ...others]);
+        const top = (extra: { record_sha256s?: readonly `sha256:${string}`[] }) =>
+          searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "alpha beta", ...extra }).items.slice(0, 2).map((item) => item.text);
+        expect(top({})).toEqual(["beta", "alpha"]);
+        expect(top({ record_sha256s: [x.record_sha256] })).toEqual(["alpha", "beta"]);
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    });
+
+    it("refuses unsorted, duplicate, malformed and oversized record narrowing", () => {
+      const directory = mkdtempSync(join(tmpdir(), "echo-readable-search-generation-"));
+      try {
+        const active = warmed(directory, [A0, A1, B0]);
+        const sorted = [A0.record_sha256, B0.record_sha256].sort();
+        const oversized = Array.from({ length: READABLE_SEARCH_ADMISSION_BUDGET_V1.maximum_atoms + 1 }, (_, index) => digest(`narrow-${index}`)).sort();
+        for (const record_sha256s of [[...sorted].reverse(), [sorted[0]!, sorted[0]!], ["record-a"], oversized]) {
+          const narrowing = { record_sha256s: record_sha256s as `sha256:${string}`[] };
+          expect(() => listReadableSearchGenerationRecordsV1({ ...active, reader: MEMBER, ...narrowing })).toThrow("record narrowing");
+          expect(() => searchReadableSearchGenerationV1({ ...active, reader: MEMBER, query: "launch", ...narrowing })).toThrow("record narrowing");
+          expect(() => listReadableSearchGenerationV1({ ...active, reader: MEMBER, ...narrowing })).toThrow("record narrowing");
+          expect(() => readReadableSearchGenerationAtomsV1({ ...active, reader: MEMBER, atom_ids: [A0.atom_id], ...narrowing })).toThrow("record narrowing");
+          expect(() => expandReadableSearchRelatedAtomsV1({ ...active, reader: MEMBER, anchor_atom_ids: [A0.atom_id], ...narrowing })).toThrow("record narrowing");
+        }
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    });
   });
 });

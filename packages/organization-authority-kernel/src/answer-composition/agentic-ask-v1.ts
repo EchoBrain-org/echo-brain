@@ -278,6 +278,18 @@ function toolRefusal(error: unknown): string | null {
   return null;
 }
 function abort(): never { throw new DOMException("Ask cancelled", "AbortError"); }
+/** What the model is told the desk reads. Adding a scope kind is a compile error here. */
+function scopeText(scope: EvidenceDeskPortV1["scope"]): string {
+  switch (scope.kind) {
+    case "project": return "one project: meetings and documents are limited to it; Slack is not";
+    case "mine": return "only what the asker added: their own notes and uploaded documents, and meetings they approved; Slack and shared transcripts are not read";
+    case "global": return "everything the asker can read";
+    default: return unknownScope(scope);
+  }
+}
+function unknownScope(scope: never): never {
+  throw new Error(`Ask scope ${String((scope as { readonly kind?: unknown }).kind)} is invalid`);
+}
 function bytes(value: string | undefined): number { return value === undefined ? 0 : Buffer.byteLength(value, "utf8"); }
 function preview(text: string): string { return cleanLine(text, AGENTIC_ASK_PREVIEW_CHARS_V1); }
 /**
@@ -469,9 +481,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
       let listsRun = 0;
       const lists = new Map<string, ListState>();
       let touch = 0;
-      const scope = options.desk.scope.kind === "project"
-        ? "one project: meetings and documents are limited to it; Slack is not"
-        : "everything the asker can read";
+      const scope = scopeText(options.desk.scope);
 
       const remaining = () => deadline - now();
       const assertLive = () => {
@@ -901,7 +911,7 @@ export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
             ...(draft.gap === undefined ? {} : { gap: draft.gap }),
             ...(draft.records === undefined ? {} : { records: Object.freeze(draft.records.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))) }),
           })]),
-          citations: Object.freeze(anyEvidence ? used.map(entry => Object.freeze({ citation: entry.item.citation, kind: entry.item.kind, label: entry.item.label, visibility: entry.item.visibility })) : []),
+          citations: Object.freeze(anyEvidence ? used.map(entry => Object.freeze({ citation: entry.item.citation, kind: entry.item.kind, label: entry.item.label, visibility: entry.item.visibility, ...(entry.item.ref === undefined ? {} : { ref: entry.item.ref }) })) : []),
           ...(notice.size === 0 ? {} : { notice: [...notice].join(" ") }),
         });
         const validated = compactAndValidateAgenticAskResponseV1(result);

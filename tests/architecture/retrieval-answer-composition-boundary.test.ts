@@ -32,10 +32,16 @@ describe('retrieval and answer-composition boundaries', () => {
     const pending = [
       ...files('packages/organization-record/src/retrieve'), ...files('packages/organization-retrieval/src'),
       'packages/organization-authority-kernel/src/application/readable-search-authorization-fence.ts',
-      ...['person-record-read-route', 'person-record-search-route'].map(name => `services/organization-authority/src/composition/${name}.ts`),
+      ...['person-record-read-route', 'person-record-search-route', 'person-meeting-items-v1', 'person-item-text-v1'].map(name => `services/organization-authority/src/composition/${name}.ts`),
       'services/organization-authority/src/application/ports/person-original-context-retrieval-v1.ts',
       'services/organization-authority/src/adapters/persistence/sqlite/person-original-context-retrieval-v1.ts',
       'services/organization-authority/src/composition/person-evidence-desk-v1.ts',
+      'services/organization-authority/src/application/ports/person-list-v1.ts',
+      'services/organization-authority/src/adapters/persistence/sqlite/person-original-items-v1.ts',
+      'services/organization-authority/src/adapters/persistence/sqlite/person-original-access-v1.ts',
+      'services/organization-authority/src/composition/person-list-v1-route.ts',
+      'services/organization-authority/src/composition/person-list-cursor-v1.ts',
+      'services/organization-authority/src/adapters/persistence/sqlite/person-list-directory-v1.ts',
     ];
     const visited = new Set<string>();
     while (pending.length) {

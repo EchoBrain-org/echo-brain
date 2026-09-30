@@ -54,6 +54,18 @@ export const Caret = () => (
 export const Warning = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 2.8 19.5h18.4z" stroke="#e8a39a" stroke-width="1.8" stroke-linejoin="round" fill="none" /><path d="M12 10v4.5M12 17.2v.3" stroke="#e8a39a" stroke-width="1.8" stroke-linecap="round" /></svg>
 );
+/** Mine: one person, in outline. */
+export const OnePerson = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.5" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" fill="none" /><path d="M5 19.5c.9-3.4 3.6-5.2 7-5.2s6.1 1.8 7 5.2" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" fill="none" /></svg>
+);
+/** An approved meeting's row. */
+export const Calendar = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="3" stroke="rgba(240,236,230,0.8)" stroke-width="2.2" fill="none" /><path d="M3.5 10.5h17M8.5 2.8v4.2M15.5 2.8v4.2" stroke="rgba(240,236,230,0.8)" stroke-width="2.2" stroke-linecap="round" fill="none" /></svg>
+);
+/** A document's row. */
+export const Page = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l4 4v14H7zM14 3v4h4" stroke="rgba(240,236,230,0.8)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
+);
 export const FolderPlus = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v9.3a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5z" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linejoin="round" fill="none" /><path d="M12 10.5v5M9.5 13h5" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" /></svg>
 );

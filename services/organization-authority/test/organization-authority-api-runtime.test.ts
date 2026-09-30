@@ -1330,6 +1330,19 @@ describe("Organization Authority API runtime", () => {
       expect(await post("/v2/person/updates", { ...upload, audience: { kind: "team" } }, 409)).toEqual({ error: { code: "conflict", message: "request failed" } });
       expect(await get(`/v2/person/updates/content/${context_id}`)).toMatchObject({ text: upload.text, audience: upload.audience });
 
+      // The person list and open serve without an answer model or a published generation (ADR-0024).
+      expect(await post("/v1/person/list", { schema_version: 1 })).toEqual({
+        schema_version: 1, kind: "echo-person-list-v1", scope: { kind: "global" },
+        me: { display_name: "Founder", membership_type: "owner" }, connected: [],
+        projects: [{ project_id, name: create.name, role: "lead", status: "active" }], projects_more: false,
+        items: [{ ref: `note:${context_id}`, kind: "note", title: upload.title, added_at: expect.any(String), visibility: "project", projects: [{ project_id, name: create.name }] }],
+        next_cursor: null,
+      });
+      // This runtime composes no record approver projectors, so mine is unavailable, never global.
+      expect(await post("/v1/person/list", { schema_version: 1, mine: true }, 503)).toEqual({ error: { code: "unavailable", message: "request failed" } });
+      expect(await post("/v1/person/open", { schema_version: 1, ref: `note:${context_id}` })).toMatchObject({ kind: "echo-person-open-v1", text: upload.text, next_cursor: null });
+      expect(await post("/v1/person/open", { schema_version: 1, ref: `meeting:sha256:${"0".repeat(64)}` }, 404)).toEqual({ error: { code: "not_found", message: "request failed" } });
+
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,
         {

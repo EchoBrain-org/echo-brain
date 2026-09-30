@@ -1,8 +1,8 @@
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { colorFor, initial } from '../format.js';
-import { loadProjects, openCompose, openNewProject, openOrganization, openProject, showAccountMenu, type State } from '../store.js';
+import { loadProjects, openCompose, openMine, openNewProject, openOrganization, openProject, showAccountMenu, type State } from '../store.js';
 import { useDropTarget } from './drop.js';
-import { Capture, FolderPlus, People, Person } from './icons.js';
+import { Capture, FolderPlus, OnePerson, People, Person } from './icons.js';
 import { ProjectSettingsButton } from './project-settings.js';
 
 const CAPTURE_HINT = navigator.userAgent.includes('Mac') ? '⌘⇧E' : 'Ctrl+Shift+E';
@@ -25,15 +25,18 @@ function SidebarProject({ project, current, state }: { project: ProjectSummary; 
 }
 
 /**
- * Always beside the page: Capture, New project, your projects (one click
- * switches), People & invites for owners, and who is signed in. It shares the
- * list Home loads. While another app is in front the page is covered, but the
- * project rows stay, so a dropped file lands.
+ * Always beside the page: Capture, New project, Mine, your projects (one
+ * click switches), People & invites for owners, and who is signed in. It
+ * shares the list Home loads. While another app is in front the page is
+ * covered, but the project rows stay, so a dropped file lands. Mine never
+ * takes a drop.
  */
 export function Sidebar({ state }: { state: State }) {
   const account = state.status?.account ?? null;
   const { items, next, loading } = state.projects;
   const current = !state.concealed && state.route.page === 'project' ? state.route.project.project_id : null;
+  const mine = !state.concealed && state.route.page === 'mine';
+  const noDrop = (event: DragEvent) => event.stopPropagation();
   return (
     <aside class="sidebar" data-testid="sidebar">
       <div class="sidebar-drag" />
@@ -44,6 +47,10 @@ export function Sidebar({ state }: { state: State }) {
           </button>
           <button type="button" class="side-row" data-testid="sidebar-new-project" onClick={openNewProject}>
             <FolderPlus /><span class="label">New project</span>
+          </button>
+          <button type="button" class={`side-row${mine ? ' current' : ''}`} data-testid="sidebar-mine" aria-current={mine ? 'page' : undefined}
+            onClick={() => void openMine()} onDragOver={noDrop} onDrop={noDrop}>
+            <OnePerson /><span class="label">Mine</span>
           </button>
         </div>
       )}

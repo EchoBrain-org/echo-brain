@@ -2,18 +2,19 @@
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentSummary,
-  DocumentText, Employee, Expect, Extraction, Failure, FeedItem, FileHandle, Match, Member, ProjectChange, ProjectSummary, Receipt, RecordRef,
-  Result, SourceEvidence,
+  AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
+  Extraction, Failure, FileHandle, ItemRef, ListItem, ListScope, Match, Member, ProjectChange, ProjectSummary, Receipt, RecordItem, RecordRef,
+  RecordSection, Result, SourceEvidence,
 } from '../shared/protocol.js';
 import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { sourceGroups, type SourceGroup } from './answer.js';
 import { dropFile, rpc } from './api.js';
-import { moreSources, reread, type FeedSource } from './feed.js';
+import { renamedProject, reread } from './feed.js';
 import { message } from './messages.js';
 
-type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' };
+/** Mine: only what you added, to see and to ask about. */
+type Route = { page: 'home' } | { page: 'project'; project: ProjectSummary } | { page: 'organization' } | { page: 'mine' };
 
 /** A question, in the scope it was asked in. */
 export interface AskQuestion {
@@ -245,20 +246,22 @@ export interface OrganizationState {
   saved: { handle: string; action: 'invite' | 'reissue'; name: string; email: string; expires_at: string } | null;
 }
 
-/** Where an original was opened: a project's item, a saved note found in all context, or a document. */
-export type ReaderFrom =
-  | { kind: 'project'; project_id: string }
-  | { kind: 'note'; source: 'v2' | 'v3' }
-  | { kind: 'document'; project_id: string | null };
+/** Where an item was opened: a project's page (a row or a match in it), Mine, or a saved note found in all context. */
+export type ReaderFrom = { kind: 'project'; project_id: string } | { kind: 'mine' } | { kind: 'search' };
 
-/** An original open in the reader: a note's text, or a document's text a page at a time. */
+/**
+ * An item open in the reader, by its ref: a note's text, a document's text a
+ * page at a time, or a meeting's approved record, read on with More.
+ */
 export interface ReaderState {
-  /** The note's context id, or the document's id. */
-  id: string;
+  ref: ItemRef;
   from: ReaderFrom;
   loading: boolean;
   content?: ContextContent;
   document?: DocumentText;
+  record?: ApprovedRecord;
+  /** The record's next page, until all of it is read. */
+  recordNext?: string | null;
   failure?: Failure;
   /** The ⋯ menu, and its list of projects to add to. */
   menu: 'closed' | 'open' | 'projects';
@@ -266,17 +269,13 @@ export interface ReaderState {
   save?: { status: 'saving' | 'saved' | 'failed'; failure?: Failure };
 }
 
-/** A project's notes and documents, each read ten at a time. */
-export interface FeedState {
-  projectId: string;
-  /** This visit to the project: where its feed was scrolled is kept while it lasts. */
+/** A page's list: what you added, or a project's notes, documents and meetings, newest first, a page at a time. */
+export interface ListState {
+  scope: ListScope;
+  /** This visit to the page: where its list was scrolled is kept while it lasts. */
   opened: number;
-  notes: FeedItem[];
-  notesNext: string | null;
-  documents: DocumentSummary[];
-  documentsNext: string | null;
-  /** The lists whose first page could not be read: Try again reads them. */
-  unread: FeedSource[];
+  items: ListItem[];
+  next: string | null;
   loading: boolean;
   failure?: Failure;
 }
@@ -348,14 +347,14 @@ export interface State {
   route: Route;
   projects: { items: ProjectSummary[]; next: string | null; loading: boolean; failure?: Failure };
   archivedProjects: { items: ProjectSummary[]; next: string | null; loading: boolean; failure?: Failure };
-  feed: FeedState | null;
+  list: ListState | null;
   roster: RosterState | null;
   reader: ReaderState | null;
   change: ChangeState | null;
   projectSettings: ProjectSettingsState | null;
   /**
-   * What the bar asks about, and searches: a project (the chip) or all
-   * context. The page never moves with it.
+   * What the bar asks about, and searches: a project or Mine (the chip), or
+   * all context. The page never moves with it.
    */
   barScope: AskScope;
   /** The bar's text. Only asking, Escape, or a real change of access empties it. */
@@ -393,7 +392,7 @@ function rememberedSidebar(): boolean {
 
 let state: State = {
   status: null, booting: true, route: { page: 'home' }, projects: { items: [], next: null, loading: false },
-  archivedProjects: { items: [], next: null, loading: false }, feed: null, roster: null, reader: null, change: null, projectSettings: null,
+  archivedProjects: { items: [], next: null, loading: false }, list: null, roster: null, reader: null, change: null, projectSettings: null,
   barScope: { kind: 'global' }, barText: '', matches: null, ask: null, sources: null, compose: null, toast: null, concealed: false,
   signin: { phase: 'idle', form: false }, sheet: null, startFailed: false, sidebarOpen: rememberedSidebar(), organization: null, employeeWrite: null,
 };
@@ -465,8 +464,17 @@ function applyStatus(status: AppStatus): void {
   const before = state.status?.account ?? null;
   const next = status.account;
   set({ status, booting: false, startFailed: false });
-  // Signed out: the sign-in page covers everything until someone signs in.
-  if (!next) { emptyBar(); set({ sheet: null }); unresolvedChanged(); return; }
+  // Signed out: the sign-in page covers everything until someone signs in. Mine, and what was read in it, goes.
+  if (!next) {
+    emptyBar();
+    set({ sheet: null });
+    if (state.route.page === 'mine') {
+      readSeq += 1;
+      set({ route: { page: 'home' }, list: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' } });
+    }
+    unresolvedChanged();
+    return;
+  }
   const same = lastAccount?.authority === next.authority && lastAccount.membership_id === next.membership_id;
   // Someone else: nothing of the last account's survives, not even a draft.
   if (!same) forgetAccount();
@@ -483,7 +491,7 @@ function applyStatus(status: AppStatus): void {
 function forgetAccount(): void {
   lastAccount = null;
   emptyBar();
-  set({ route: { page: 'home' }, feed: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
+  set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, toast: null,
     barScope: { kind: 'global' }, projects: { items: [], next: null, loading: false }, archivedProjects: { items: [], next: null, loading: false },
     projectSettings: null, organization: null, employeeWrite: null });
   setCompose(null);
@@ -675,7 +683,7 @@ function rolesChanged(fresh: readonly ProjectSummary[]): boolean {
 /** Back to Home as it was left: the same pages, the same scroll. The bar searches all context. */
 export function goHome(): void {
   readSeq += 1;
-  set({ route: { page: 'home' }, feed: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
+  set({ route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, barScope: { kind: 'global' }, toast: null,
     organization: null });
   syncSearch();
 }
@@ -706,92 +714,97 @@ export async function openProject(project: ProjectSummary): Promise<void> {
   set({
     route: { page: 'project', project }, reader: null, ask: null, sources: null, toast: null, organization: null,
     barScope: { kind: 'project', project_id: project.project_id },
-    feed: { projectId: project.project_id, opened: ++seq, notes: [], notesNext: null, documents: [], documentsNext: null, unread: [], loading: true },
+    list: { scope: { kind: 'project', project_id: project.project_id }, opened: ++seq, items: [], next: null, loading: true },
   });
   syncSearch();
   void loadRoster(project.project_id);
-  await loadFeed(project.project_id);
+  await loadList('first');
 }
 
 /**
- * A project's first page of notes and of documents, read side by side. A
- * list read leads with its first page and keeps the older rows More loaded;
- * a list that could not be read keeps what it showed. Opening the project,
- * or Try again, says why a list could not be read, and the other still
- * shows. A read the person did not ask for (quiet) fails quietly, unless
- * the account is gone.
+ * Mine, from the sidebar or a toast: only what you added, newest first. The
+ * bar asks about it (its chip is Mine); nothing is captured or dropped here.
  */
-async function loadFeed(projectId: string, sources: readonly FeedSource[] = ['notes', 'documents'], quiet = false): Promise<void> {
-  const account = expect();
-  if (!account) return;
-  const [notes, documents] = await Promise.all([
-    sources.includes('notes') ? rpc('projects.feed', { expect: account, project_id: projectId }) : null,
-    sources.includes('documents') ? rpc('documents.list', { expect: account, project_id: projectId }) : null,
-  ]);
-  const current = state.feed;
-  if (current?.projectId !== projectId) return; // moved on
-  const failure = notes && !notes.ok ? notes.failure : documents && !documents.ok ? documents.failure : undefined;
-  // A list stays unread until a read of it succeeds; a quiet read never makes one unread.
-  const unread = (['notes', 'documents'] as const).filter(source => {
-    const read = source === 'notes' ? notes : documents;
-    return read === null || (!read.ok && quiet) ? current.unread.includes(source) : !read.ok;
+export async function openMine(): Promise<void> {
+  if (!expect()) return;
+  readSeq += 1;
+  set({
+    route: { page: 'mine' }, reader: null, ask: null, sources: null, toast: null, organization: null, roster: null, barScope: { kind: 'mine' },
+    list: { scope: { kind: 'mine' }, opened: ++seq, items: [], next: null, loading: true },
   });
-  const noteRows = notes?.ok
-    ? reread({ items: current.notes, next: current.notesNext }, { items: notes.value.items, next: notes.value.next_cursor }, item => item.context_id) : null;
-  const documentRows = documents?.ok
-    ? reread({ items: current.documents, next: current.documentsNext }, { items: documents.value.items, next: documents.value.next_cursor },
-      item => item.document_id) : null;
-  set({ feed: {
-    ...current, unread, loading: quiet ? current.loading : false,
-    failure: !quiet ? failure : !failure && unread.length === 0 ? undefined : current.failure,
-    ...(noteRows ? { notes: noteRows.items, notesNext: noteRows.next } : {}),
-    ...(documentRows ? { documents: documentRows.items, documentsNext: documentRows.next } : {}),
-  } });
-  if (failure && (!quiet || ACCOUNT_GONE.includes(failure.code))) accountLost(failure);
+  syncSearch();
+  await loadList('first');
 }
 
-/** Try again: the lists whose first page could not be read. */
-export async function retryFeed(): Promise<void> {
-  const feed = state.feed;
-  if (!feed || feed.loading || feed.unread.length === 0) return;
-  set({ feed: { ...feed, loading: true } });
-  await loadFeed(feed.projectId, feed.unread);
-}
+/** The visit whose refused project list has already had your access read again. */
+let accessCheckedVisit = 0;
 
-/** More: the next page of whichever list stops the feed from going further back. */
-export async function moreFeed(): Promise<void> {
+/**
+ * The list's first page (opening the page, or Try again with nothing shown),
+ * its next page (More), or its first page again, quietly, after something
+ * landed in it or left it. A quiet read leads with the first page and keeps
+ * the older rows More loaded; it fails quietly, unless the account is gone.
+ * While meetings wait to be indexed, a quiet read that would drop the
+ * meetings shown is not applied. A project that refuses its list is one you
+ * are no longer in: it says so, and your account and projects are read again
+ * once per visit, but you are not signed out.
+ */
+async function loadList(how: 'first' | 'more' | 'quiet'): Promise<void> {
   const account = expect();
-  const feed = state.feed;
-  if (!account || !feed || feed.loading) return;
-  const sources = moreSources(feed);
-  if (sources.length === 0) return;
-  // A list that could not be read still says why.
-  set({ feed: { ...feed, loading: true, failure: feed.unread.length > 0 ? feed.failure : undefined } });
-  const [notes, documents] = await Promise.all([
-    sources.includes('notes') && feed.notesNext ? rpc('projects.feed', { expect: account, project_id: feed.projectId, cursor: feed.notesNext }) : null,
-    sources.includes('documents') && feed.documentsNext
-      ? rpc('documents.list', { expect: account, project_id: feed.projectId, cursor: feed.documentsNext }) : null,
-  ]);
-  const current = state.feed;
-  if (current?.projectId !== feed.projectId) return;
-  const failure = notes && !notes.ok ? notes.failure : documents && !documents.ok ? documents.failure : undefined;
-  const seenNotes = new Set(current.notes.map(item => item.context_id));
-  const seenDocuments = new Set(current.documents.map(item => item.document_id));
-  set({ feed: {
-    ...current, loading: false, ...(failure ? { failure } : {}),
-    ...(notes?.ok ? { notes: [...current.notes, ...notes.value.items.filter(item => !seenNotes.has(item.context_id))], notesNext: notes.value.next_cursor } : {}),
-    ...(documents?.ok ? {
-      documents: [...current.documents, ...documents.value.items.filter(item => !seenDocuments.has(item.document_id))],
-      documentsNext: documents.value.next_cursor,
-    } : {}),
-  } });
-  if (failure) accountLost(failure);
+  const list = state.list;
+  if (!account || !list || (how === 'more' && (!list.next || list.loading))) return;
+  const { scope, opened } = list;
+  const cursor = how === 'more' ? list.next! : undefined;
+  if (how !== 'quiet') set({ list: { ...list, loading: true, failure: undefined } });
+  const result = await rpc('list.page', { expect: account, scope, ...(cursor ? { cursor } : {}) });
+  const current = state.list;
+  if (current?.opened !== opened) return; // moved on
+  const refused = !result.ok && result.failure.code === 'unauthorized' && scope.kind === 'project';
+  if (how === 'quiet') {
+    if (!result.ok) {
+      if (!refused && ACCOUNT_GONE.includes(result.failure.code)) accountLost(result.failure);
+      return;
+    }
+    if (result.value.meetings_held && current.items.some(item => item.ref.kind === 'meeting')) return;
+    const rows = reread({ items: current.items, next: current.next }, { items: result.value.items, next: result.value.next_cursor }, refKey);
+    set({ list: { ...current, items: rows.items, next: rows.next } });
+    return;
+  }
+  if (!result.ok) {
+    set({ list: { ...current, loading: false, failure: refused ? { ...result.failure, code: 'not_found' } : result.failure } });
+    if (!refused) accountLost(result.failure);
+    else if (accessCheckedVisit !== opened) {
+      accessCheckedVisit = opened;
+      void refreshStatus();
+      void loadProjects();
+    }
+    return;
+  }
+  const page = result.value;
+  if (how === 'first') { set({ list: { ...current, loading: false, items: [...page.items], next: page.next_cursor } }); return; }
+  const seen = new Set(current.items.map(refKey));
+  set({ list: { ...current, loading: false, items: [...current.items, ...page.items.filter(item => !seen.has(refKey(item)))], next: page.next_cursor } });
 }
 
-/** Something landed in or left the project on screen: its first pages again, and what shows stays. */
-async function refreshFeed(projectId: string): Promise<void> {
-  if (state.feed?.projectId !== projectId) return;
-  await loadFeed(projectId, ['notes', 'documents'], true);
+function refKey(item: ListItem): string { return `${item.ref.kind}:${item.ref.id}`; }
+
+/** More: the list's next page. */
+export function moreList(): Promise<void> { return loadList('more'); }
+
+/** Try again: the first page when nothing shows, or else the page More could not read. */
+export function retryList(): Promise<void> {
+  const list = state.list;
+  return list ? loadList(list.items.length === 0 && !list.next ? 'first' : 'more') : Promise.resolve();
+}
+
+/** Something landed in or left the list on screen: its first page again, and what shows stays. */
+function refreshList(scope: ListScope): void {
+  const list = state.list;
+  if (list && sameList(list.scope, scope)) void loadList('quiet');
+}
+
+function sameList(a: ListScope, b: ListScope): boolean {
+  return a.kind === b.kind && (a.kind === 'mine' || (b.kind === 'project' && a.project_id === b.project_id));
 }
 
 /** A project's members, the first page or the next one (More, in People). */
@@ -818,82 +831,104 @@ export function moreMembers(): void {
   if (state.roster) void loadRoster(state.roster.projectId, true);
 }
 
-export function openItem(item: FeedItem): Promise<void> {
+/** A row of the page's list, read in place: the list stays, and Back returns to it. */
+export function openListItem(item: ListItem): Promise<void> {
   const route = state.route;
+  if (route.page === 'mine') return openReader(item.ref, { kind: 'mine' });
   if (route.page !== 'project') return Promise.resolve();
-  return read(item.context_id, { kind: 'project', project_id: route.project.project_id });
-}
-
-/** A document in a project's feed: read with that project, a page of its text at a time. */
-export function openDocument(item: DocumentSummary): Promise<void> {
-  const route = state.route;
-  return readDocument(item.document_id, route.page === 'project' ? route.project.project_id : null);
+  return openReader(item.ref, { kind: 'project', project_id: route.project.project_id });
 }
 
 /** A live match, read in place: the page stays, and Back returns to the matches. */
 export function openMatch(match: Match): Promise<void> {
   const scope = state.matches?.scope;
-  if (match.source !== 'project') return read(match.context_id, { kind: 'note', source: match.source });
-  if (scope?.kind !== 'project') return Promise.resolve();
-  return read(match.context_id, { kind: 'project', project_id: scope.project_id });
+  return openReader({ kind: 'note', id: match.context_id }, scope?.kind === 'project' ? { kind: 'project', project_id: scope.project_id } : { kind: 'search' });
 }
 
 /** The read on screen; a reply for one since closed or replaced is dropped. */
 let readSeq = 0;
 
-async function read(contextId: string, from: ReaderState['from']): Promise<void> {
-  const account = expect();
-  if (!account || from.kind === 'document') return;
-  const mine = ++readSeq;
-  set({ reader: { id: contextId, from, loading: true, menu: 'closed' }, toast: null });
-  const result = from.kind === 'project'
-    ? await rpc('projects.readContext', { expect: account, project_id: from.project_id, context_id: contextId })
-    : await rpc('search.read', { expect: account, context_id: contextId, source: from.source });
-  if (state.reader?.id !== contextId || readSeq !== mine) return;
-  if (!result.ok) {
-    set({ reader: { id: contextId, from, loading: false, menu: 'closed', failure: result.failure } });
-    accountLost(result.failure);
-    return;
-  }
-  set({ reader: { id: contextId, from, loading: false, menu: 'closed', content: result.value } });
+function sameRef(a: ItemRef | undefined, b: ItemRef): boolean {
+  return a?.kind === b.kind && a.id === b.id;
 }
 
 /**
- * A document and one page of its text: the first, or the page a cursor
- * names (Next text page). While the next page loads, the one shown stays.
+ * An item opened by its ref, under your current access: a note, a page of a
+ * document's text (the first, or the one a cursor names), or a page of a
+ * meeting's record, joined to what shows. While a page loads, what the
+ * reader shows of that item stays.
  */
-async function readDocument(documentId: string, projectId: string | null, cursor?: string): Promise<void> {
+async function openReader(ref: ItemRef, from: ReaderFrom, cursor?: string): Promise<void> {
   const account = expect();
   if (!account) return;
   const mine = ++readSeq;
-  const from: ReaderFrom = { kind: 'document', project_id: projectId };
-  const shown = state.reader?.id === documentId ? state.reader.document : undefined;
-  set({ reader: { id: documentId, from, loading: true, menu: 'closed', ...(shown ? { document: shown } : {}) }, toast: null });
-  const result = await rpc('documents.read', {
-    expect: account, document_id: documentId, ...(projectId ? { project_id: projectId } : {}), ...(cursor ? { cursor } : {}),
-  });
-  if (state.reader?.id !== documentId || readSeq !== mine) return;
+  const shown = sameRef(state.reader?.ref, ref) ? state.reader : null;
+  const kept = {
+    ...(shown?.document ? { document: shown.document } : {}),
+    ...(shown?.record ? { record: shown.record, recordNext: shown.recordNext } : {}),
+  };
+  set({ reader: { ref, from, loading: true, menu: 'closed', ...kept }, toast: null });
+  const result = await rpc('open.ref', { expect: account, ref, ...(cursor ? { cursor } : {}) });
+  if (!sameRef(state.reader?.ref, ref) || readSeq !== mine) return;
   if (!result.ok) {
-    set({ reader: { id: documentId, from, loading: false, menu: 'closed', failure: result.failure, ...(shown ? { document: shown } : {}) } });
+    set({ reader: { ref, from, loading: false, menu: 'closed', failure: result.failure, ...kept } });
     accountLost(result.failure);
     return;
   }
-  set({ reader: { id: documentId, from, loading: false, menu: 'closed', document: result.value } });
+  const opened = result.value;
+  if (opened.kind === 'note') { set({ reader: { ref, from, loading: false, menu: 'closed', content: opened.content } }); return; }
+  if (opened.kind === 'document') { set({ reader: { ref, from, loading: false, menu: 'closed', document: opened.document } }); return; }
+  const record = cursor === undefined ? opened.record : kept.record ? joinRecord(kept.record, opened.record) : null;
+  // A page that does not go on from what shows is never joined to it.
+  if (!record) { set({ reader: { ref, from, loading: false, menu: 'closed', failure: { code: 'invalid_output', retryable: true }, ...kept } }); return; }
+  set({ reader: { ref, from, loading: false, menu: 'closed', record, recordNext: opened.next_cursor } });
+}
+
+/**
+ * A meeting's next page, joined to the record shown: its three sections go
+ * on. A long item left in parts goes on with the next page's first part,
+ * which must be its very next part; anything else is refused (null).
+ */
+export function joinRecord(shown: ApprovedRecord, next: ApprovedRecord): ApprovedRecord | null {
+  const join = (before: RecordSection, after: RecordSection): RecordSection | null => {
+    const last = before.items.at(-1);
+    const [first, ...rest] = after.items;
+    const unfinished = last?.parts !== undefined && last.parts.to < last.parts.count;
+    const continues = first?.parts !== undefined && first.parts.from > 1;
+    if (!continues) return unfinished ? null : { items: [...before.items, ...after.items], more: false };
+    const [was, goes] = [last?.parts, first!.parts!];
+    if (!last || !was || was.to !== goes.from - 1 || was.count !== goes.count) return null;
+    const text = last.text + first!.text;
+    const { parts: _parts, ...item } = last;
+    const joined: RecordItem = goes.to === goes.count && was.from === 1 ? { ...item, text: text.trim() } : { ...item, text, parts: { ...was, to: goes.to } };
+    return { items: [...before.items.slice(0, -1), joined, ...rest], more: false };
+  };
+  const decisions = join(shown.decisions, next.decisions);
+  const actions = join(shown.actions, next.actions);
+  const rationales = join(shown.rationales, next.rationales);
+  return decisions && actions && rationales ? { ...shown, decisions, actions, rationales } : null;
+}
+
+/** More, under a meeting's record: its next page. */
+export function moreRecord(): void {
+  const reader = state.reader;
+  if (reader?.ref.kind !== 'meeting' || !reader.recordNext || reader.loading) return;
+  void openReader(reader.ref, reader.from, reader.recordNext);
 }
 
 /** Next text page, from the ⋯ menu. */
 export function nextTextPage(): void {
   const reader = state.reader;
   const next = reader?.document?.next_cursor;
-  if (reader?.from.kind !== 'document' || !next || reader.loading) return;
-  void readDocument(reader.id, reader.from.project_id, next);
+  if (reader?.ref.kind !== 'document' || !next || reader.loading) return;
+  void openReader(reader.ref, reader.from, next);
 }
 
 /** Refresh document: its metadata and first text page again, as text extraction may have moved on. */
 export function refreshDocument(): void {
   const reader = state.reader;
-  if (reader?.from.kind !== 'document' || reader.loading) return;
-  void readDocument(reader.id, reader.from.project_id);
+  if (reader?.ref.kind !== 'document' || reader.loading) return;
+  void openReader(reader.ref, reader.from);
 }
 
 /**
@@ -904,18 +939,15 @@ export async function saveOriginal(): Promise<void> {
   const account = expect();
   const reader = state.reader;
   const document = reader?.document?.document;
-  if (!account || reader?.from.kind !== 'document' || !document || reader.save?.status === 'saving') return;
-  const projectId = reader.from.project_id;
+  if (!account || reader?.ref.kind !== 'document' || !document || reader.save?.status === 'saving') return;
   set({ reader: { ...reader, menu: 'closed', save: undefined } });
   const chosen = await rpc('dialog.saveDocument', { name: document.filename });
-  const stillHere = () => state.reader?.id === document.document_id ? state.reader : null;
+  const stillHere = () => state.reader?.ref.id === document.document_id ? state.reader : null;
   if (!stillHere()) return;
   if (!chosen.ok) { set({ reader: { ...stillHere()!, save: { status: 'failed', failure: chosen.failure } } }); return; }
   if (!chosen.value) return; // cancelled
   set({ reader: { ...stillHere()!, save: { status: 'saving' } } });
-  const result = await rpc('documents.save', {
-    expect: account, document_id: document.document_id, ...(projectId ? { project_id: projectId } : {}), save_handle: chosen.value.handle,
-  });
+  const result = await rpc('documents.save', { expect: account, document_id: document.document_id, save_handle: chosen.value.handle });
   const current = stillHere();
   if (!current) return;
   set({ reader: { ...current, save: result.ok ? { status: 'saved' } : { status: 'failed', failure: result.failure } } });
@@ -936,43 +968,54 @@ export function showProjectChoices(): void {
   if (reader) set({ reader: { ...reader, menu: 'projects' } });
 }
 
+/**
+ * A note or a document, once read, can be filed in projects. An approved
+ * meeting cannot: its projects were set when it was approved.
+ */
+export function canFile(reader: ReaderState): boolean {
+  return reader.ref.kind === 'document' ? reader.document !== undefined : reader.ref.kind === 'note' && reader.content !== undefined;
+}
+
+/** The reader's ⋯: a document's original and text pages, and where a note or document is filed. A meeting has none. */
+export function hasReaderMenu(reader: ReaderState): boolean {
+  return reader.ref.kind !== 'meeting';
+}
+
 /** The projects an original can be added to: yours, less the ones it is already filed in that the page knows of. */
 export function projectChoices(current: State = state): ProjectSummary[] {
   const reader = current.reader;
-  if (!reader) return [];
-  const filed = new Set(reader.document?.document.project_ids ?? []);
+  if (!reader || !canFile(reader)) return [];
+  const filed = new Set(reader.content?.project_ids ?? reader.document?.document.project_ids ?? []);
   if (reader.from.kind === 'project') filed.add(reader.from.project_id);
-  if (reader.from.kind === 'document' && reader.from.project_id) filed.add(reader.from.project_id);
   return current.projects.items.filter(project => project.status === 'active' && !filed.has(project.project_id));
 }
 
 /** What the reader shows can leave the project it was opened in. */
 export function removableFrom(current: State = state): ProjectSummary | null {
   const { reader, route } = current;
-  if (!reader || route.page !== 'project') return null;
-  const projectId = reader.from.kind === 'project' || reader.from.kind === 'document' ? reader.from.project_id : null;
-  return projectId === route.project.project_id ? route.project : null;
+  if (!reader || !canFile(reader) || route.page !== 'project') return null;
+  return reader.from.kind === 'project' && reader.from.project_id === route.project.project_id ? route.project : null;
 }
 
 /** Remove from this project: the original stays, and so does who can read it. */
 export function removeFromProject(): void {
   const reader = state.reader;
   const project = removableFrom();
-  if (!reader || !project || (reader.from.kind === 'document' && !reader.document)) return;
+  if (!reader || !project) return;
   set({ reader: { ...reader, menu: 'closed' } });
-  void sendChange(reader.from.kind === 'document'
-    ? { kind: 'document-dissociate', project_id: project.project_id, document_id: reader.id }
-    : { kind: 'dissociate', project_id: project.project_id, context_id: reader.id }, { project, origin: 'reader' });
+  void sendChange(reader.ref.kind === 'document'
+    ? { kind: 'document-dissociate', project_id: project.project_id, document_id: reader.ref.id }
+    : { kind: 'dissociate', project_id: project.project_id, context_id: reader.ref.id }, { project, origin: 'reader' });
 }
 
 /** Add to project: filed there too; who can read it does not change. */
 export function addToProject(project: ProjectSummary): void {
   const reader = state.reader;
-  if (!reader || project.status !== 'active' || (reader.from.kind === 'document' && !reader.document) || (reader.from.kind !== 'document' && !reader.content)) return;
+  if (!reader || project.status !== 'active' || !canFile(reader)) return;
   set({ reader: { ...reader, menu: 'closed' } });
-  void sendChange(reader.from.kind === 'document'
-    ? { kind: 'document-associate', project_id: project.project_id, document_id: reader.id }
-    : { kind: 'associate', project_id: project.project_id, context_id: reader.id }, { project, origin: 'reader' });
+  void sendChange(reader.ref.kind === 'document'
+    ? { kind: 'document-associate', project_id: project.project_id, document_id: reader.ref.id }
+    : { kind: 'associate', project_id: project.project_id, context_id: reader.ref.id }, { project, origin: 'reader' });
 }
 
 // ---- project changes -----------------------------------------------------------
@@ -1060,22 +1103,22 @@ function changed(done: ChangeState): void {
     case 'dissociate':
     case 'document-dissociate': {
       const id = 'context_id' in change ? change.context_id : change.document_id;
-      if (reader?.id === id) closeReader();
+      if (reader?.ref.id === id) closeReader();
       // It left the project: it goes from the rows shown, older ones More loaded included.
-      const feed = state.feed;
-      if (feed?.projectId === project.project_id) {
-        set({ feed: { ...feed, notes: feed.notes.filter(item => item.context_id !== id), documents: feed.documents.filter(item => item.document_id !== id) } });
+      const list = state.list;
+      if (list?.scope.kind === 'project' && list.scope.project_id === project.project_id) {
+        set({ list: { ...list, items: list.items.filter(item => item.ref.id !== id) } });
       }
       set({ toast: `Removed from ${project.name}` });
-      void refreshFeed(project.project_id);
+      refreshList({ kind: 'project', project_id: project.project_id });
       return;
     }
     case 'associate':
     case 'document-associate': {
       const id = 'context_id' in change ? change.context_id : change.document_id;
       // Still reading it: the project it went to opens, and shows it.
-      if (reader?.id === id) void openProject(project);
-      else void refreshFeed(project.project_id);
+      if (reader?.ref.id === id) void openProject(project);
+      else refreshList({ kind: 'project', project_id: project.project_id });
       set({ toast: `Added to ${project.name}` });
       return;
     }
@@ -1215,6 +1258,15 @@ function appliedProjectSetting(project: ProjectSummary, operation: 'rename' | 'a
     const fresh = { ...project, name: detail.name! };
     replaceProject(fresh);
     set({ toast: `Renamed to ${fresh.name}` });
+    // Mine's rows name the projects they are filed in: every row shown takes the new name, then the first page is read again.
+    // Rows hold names only, so when another of your projects had the old name, Mine is read again from its first page.
+    const list = state.list;
+    if (state.route.page === 'mine' && list?.scope.kind === 'mine') {
+      const shared = [...state.projects.items, ...state.archivedProjects.items].some(item => item.project_id !== project.project_id && item.name === project.name);
+      if (shared) { void loadList('first'); return; }
+      set({ list: { ...list, items: renamedProject(list.items, project.name, fresh.name) } });
+      refreshList({ kind: 'mine' });
+    }
     return;
   }
   if (operation === 'archive') {
@@ -1248,7 +1300,7 @@ function forgetLeftProject(projectId: string): void {
   readSeq += 1;
   emptyBar();
   set({ projects: { ...state.projects, items: projects }, archivedProjects: { ...state.archivedProjects, items: archivedProjects }, compose: nextCompose,
-    route: { page: 'home' }, feed: null, roster: null, reader: null, ask: null, sources: null, sheet: null, barScope: { kind: 'global' }, organization: null });
+    route: { page: 'home' }, list: null, roster: null, reader: null, ask: null, sources: null, sheet: null, barScope: { kind: 'global' }, organization: null });
 }
 
 // ---- people ----------------------------------------------------------------------
@@ -1599,7 +1651,7 @@ function finishNewProject(sheet: NewProjectSheet): void {
   set({ sheet: null, ...(toast ? { toast } : {}) });
   unresolvedChanged();
   if (!sheet.project) return;
-  void refreshFeed(sheet.project.project_id);
+  refreshList({ kind: 'project', project_id: sheet.project.project_id });
   // Someone added after the project opened shows in its title bar too.
   if (state.roster?.projectId === sheet.project.project_id) void loadRoster(sheet.project.project_id);
 }
@@ -1897,7 +1949,7 @@ export function openOrganization(fromTray = false): void {
   // A change sent on an earlier visit may still be on its way: this visit waits for it too.
   const sending = state.employeeWrite;
   set({
-    route: { page: 'organization' }, feed: null, roster: null, reader: null, ask: null, sources: null, toast: null, barScope: { kind: 'global' },
+    route: { page: 'organization' }, list: null, roster: null, reader: null, ask: null, sources: null, toast: null, barScope: { kind: 'global' },
     organization: {
       seq: ++seq, loading: false, items: null, name: '', email: '', menu: null, confirm: null,
       write: sending ? { action: sending.action, status: 'sending' } : null, notice: null, saved: null,
@@ -2109,6 +2161,7 @@ export function widenScope(): void {
 
 function scopeName(scope: AskScope): string {
   if (scope.kind === 'global') return 'All accessible context';
+  if (scope.kind === 'mine') return 'Mine';
   const route = state.route;
   if (route.page === 'project' && route.project.project_id === scope.project_id) return route.project.name;
   return state.projects.items.find(project => project.project_id === scope.project_id)?.name ?? 'Project';
@@ -2337,7 +2390,7 @@ const SEARCH_PAUSE_MS = 250;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 function sameScope(a: AskScope, b: AskScope): boolean {
-  return a.kind === b.kind && (a.kind === 'global' || (b.kind === 'project' && a.project_id === b.project_id));
+  return a.kind === b.kind && (a.kind !== 'project' || (b.kind === 'project' && a.project_id === b.project_id));
 }
 
 /** What the bar should search now: never on the Ask page, never while another app is in front. */
@@ -2362,6 +2415,8 @@ function syncSearch(fresh = false, typed = false): void {
   const sameList = current !== null && sameScope(current.scope, wanted.scope);
   if (!fresh && sameList && current.query === wanted.query && !current.failure) return;
   if (typed && state.reader) closeReader();
+  // Mine is not searched: the bar only asks it.
+  if (wanted.scope.kind === 'mine') { set({ matches: { seq: ++seq, query: wanted.query, scope: wanted.scope, loading: false, items: [] } }); return; }
   void runSearch(wanted.query, wanted.scope, sameList ? current.items : []);
 }
 
@@ -2417,20 +2472,21 @@ export function matchesShown(current: State = state): boolean {
 }
 
 /**
- * Another app is in front and the page is covered: a project, People &
+ * Another app is in front and the page is covered: a project, Mine, People &
  * invites, an answer or an original. The bar's text is covered with it.
  */
 export function pageCovered(current: State = state): boolean {
   const { route } = current;
-  return current.concealed && (current.ask !== null || route.page === 'project' || current.reader !== null ||
+  return current.concealed && (current.ask !== null || route.page === 'project' || route.page === 'mine' || current.reader !== null ||
     (route.page === 'organization' && current.organization !== null));
 }
 
-/** The project the chip names, while its page is on screen. */
-export function chipProject(current: State = state): ProjectSummary | null {
+/** What the chip names while its page is on screen: the project, or Mine. */
+export function chipName(current: State = state): string | null {
   const { route, barScope } = current;
-  return !current.concealed && route.page === 'project' && barScope.kind === 'project' && barScope.project_id === route.project.project_id
-    ? route.project : null;
+  if (current.concealed) return null;
+  if (route.page === 'mine' && barScope.kind === 'mine') return 'Mine';
+  return route.page === 'project' && barScope.kind === 'project' && barScope.project_id === route.project.project_id ? route.project.name : null;
 }
 
 // ---- capture -----------------------------------------------------------------
@@ -2639,19 +2695,33 @@ export const EXTRACTION: Record<Extraction, string> = {
   unavailable: 'Text unavailable',
 };
 
+/** Where an Only me save, or one for the whole organization, went: Mine, which its toast opens. */
+const SAVED_FOR_YOU = 'Saved for you';
+const SHARED = 'Shared with your organization';
+
 /** Where a confirmed save went, and for a file how its text is coming along. */
 function savedLabel(compose: ComposeState, extraction: Extraction | undefined): string {
-  const where = compose.readers === 'team' ? 'Shared with your organization'
-    : compose.readers === 'projects' && compose.projects.length > 0 ? `Saved to ${projectNames(compose.projects)}` : 'Saved for you';
+  const where = compose.readers === 'team' ? SHARED
+    : compose.readers === 'projects' && compose.projects.length > 0 ? `Saved to ${projectNames(compose.projects)}` : SAVED_FOR_YOU;
   return compose.file && extraction ? `${where} · ${EXTRACTION[extraction]}` : where;
 }
 
-/** The Authority confirmed it: the sheet closes itself, and the toast says where it went. */
+/** A save no project page shows says where it went, and a click opens Mine on it. */
+export function toastOpensMine(toast: string): boolean {
+  return [SAVED_FOR_YOU, SHARED].some(where => toast === where || toast.startsWith(`${where} · `));
+}
+
+/**
+ * The Authority confirmed it: the sheet closes itself, and the toast says
+ * where it went. The list on screen that holds it is read again: Mine holds
+ * every save, a project page what is filed in it.
+ */
 function saved(compose: ComposeState, extraction: Extraction | undefined): void {
   setCompose(null);
   set({ toast: savedLabel(compose, extraction) });
-  const shown = state.route.page === 'project' ? state.route.project.project_id : null;
-  if (shown !== null && filedIn(compose).includes(shown)) void refreshFeed(shown);
+  const route = state.route;
+  if (route.page === 'mine') refreshList({ kind: 'mine' });
+  if (route.page === 'project' && filedIn(compose).includes(route.project.project_id)) refreshList({ kind: 'project', project_id: route.project.project_id });
 }
 
 /** Save, or resend the exact same request after an unconfirmed outcome. */
@@ -2745,6 +2815,11 @@ export function canDrop(event: DragEvent): boolean {
   return state.status?.signed_in === true && !state.sheet && items?.length === 1 && items[0]!.kind === 'file';
 }
 
+/** The window takes a file dropped anywhere but a project row: not on Mine, which only shows and asks, unless Capture is up over it. */
+export function windowTakesDrop(current: State = state): boolean {
+  return current.route.page !== 'mine' || Boolean(current.compose && !current.compose.hidden);
+}
+
 /**
  * A dropped file. On the open sheet it is attached, and who can read it
  * stays; on a project row it is captured into that project; anywhere else
@@ -2753,7 +2828,7 @@ export function canDrop(event: DragEvent): boolean {
  * attached.
  */
 export async function acceptDrop(file: File, on: ProjectSummary | 'window' | 'sheet'): Promise<void> {
-  if (!expect() || state.sheet) return;
+  if (!expect() || state.sheet || (on === 'window' && !windowTakesDrop())) return;
   const target = on === 'window' || on === 'sheet' ? (on === 'window' ? state.route.page === 'project' ? state.route.project : null : null) : on;
   if (target?.status === 'archived') { set({ toast: 'Restore this project to add files or notes.' }); return; }
   const result = await dropFile(file);

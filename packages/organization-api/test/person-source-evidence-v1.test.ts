@@ -53,6 +53,19 @@ describe('cited original and transcript public contracts', () => {
     expect(() => validatePersonMeetingTranscriptV1({ schema_version: 1, kind: 'echo-person-meeting-transcript-v1', scope: { kind: 'global' }, citation, text: 'Page', next_offset: 0, extra: true })).toThrow();
   });
 
+  it('never reads a cited original or a transcript page under the mine scope', () => {
+    const sourceCitation = { kind: 'source_revision' as const, source_id, revision_id: 'r1', source_sha256, representation_sha256, anchor_sha256 };
+    const transcriptCitation = { kind: 'approved_meeting_transcript' as const, approval_id: 'apr_approval_fixture', source_id, revision_id: 'r1', source_sha256 };
+    expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'mine' }, citation: sourceCitation })).toThrow('Ask response scope is invalid');
+    expect(() => validatePersonSourceEvidenceV1({
+      schema_version: 1, kind: 'echo-person-source-evidence-v1', scope: { kind: 'mine' }, citation: { ...sourceCitation, label: 'MRD' }, text: 'MRD',
+    })).toThrow('Ask response scope is invalid');
+    expect(() => validatePersonMeetingTranscriptReadRequestV1({ schema_version: 1, scope: { kind: 'mine' }, citation: transcriptCitation })).toThrow('Meeting transcript scope is invalid');
+    expect(() => validatePersonMeetingTranscriptV1({
+      schema_version: 1, kind: 'echo-person-meeting-transcript-v1', scope: { kind: 'mine' }, citation: transcriptCitation, text: 'Page', next_offset: null,
+    })).toThrow('Meeting transcript scope is invalid');
+  });
+
   it('rejects a caller-controlled label or a malformed project in a source read', () => {
     const citation = { kind: 'source_revision' as const, source_id, revision_id: 'r1', source_sha256, representation_sha256, anchor_sha256 };
     expect(() => validatePersonSourceEvidenceReadRequestV1({ schema_version: 1, scope: { kind: 'global' }, citation: { ...citation, label: 'caller-controlled' } })).toThrow();

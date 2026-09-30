@@ -33,10 +33,8 @@ test('a project is one feed of notes and documents, and More reads older ones in
   await expect(rows.nth(11).getByTestId('document-detail')).toHaveText('PDF · 24 bytes');
   await expect(rows.nth(12)).toContainText('Note 12');
   await expect(page.getByTestId('feed-more')).toHaveCount(0);
-  const feeds = run.calls().filter(call => call.path === '/v2/person/projects/context/feed');
-  expect(feeds.map(call => call.body?.cursor ?? null)).toEqual([null, 'cGFnZTI']);
-  expect(run.calls().filter(call => call.path === '/v2/person/documents/search').map(call => call.body))
-    .toEqual([{ schema_version: 2, kind: 'echo-person-document-search-v2', project_id: BEACON, query: '', limit: 10, cursor: null }]);
+  const lists = run.calls().filter(call => call.path === '/v1/person/list');
+  expect(lists.map(call => call.body)).toEqual([{ schema_version: 1, project_id: BEACON }, { schema_version: 1, project_id: BEACON, cursor: expect.any(String) }]);
 });
 
 test('the feed keeps its place: Back from an original, or ECHO coming back, returns to where it was scrolled', async () => {
@@ -103,7 +101,7 @@ test('the reader says who can read an original when it is not the project\'s mem
 test('a save into the project on screen keeps the rows shown, even when reading them again fails', async () => {
   run = await launch('long-feed-refresh-fails');
   const { page } = run;
-  const feeds = () => run.calls().filter(call => call.path === '/v2/person/projects/context/feed').length;
+  const feeds = () => run.calls().filter(call => call.path === '/v1/person/list').length;
   const log = () => readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8');
   await page.getByTestId('project-row').nth(1).click();
   const rows = page.getByTestId('feed-row');
@@ -116,7 +114,7 @@ test('a save into the project on screen keeps the rows shown, even when reading 
   await page.getByTestId('compose-body').fill('Beacon standup');
   await page.getByTestId('compose-send').click();
   await expect(page.getByTestId('toast')).toHaveText('Saved to Beacon');
-  await expect.poll(log).toMatch(/projects\.feed unavailable/);
+  await expect.poll(log).toMatch(/list\.page unavailable/);
   await page.waitForTimeout(300);
   await expect(rows).toHaveCount(13);
   await expect(page.getByTestId('feed-failure')).toHaveCount(0);
@@ -133,20 +131,25 @@ test('a save into the project on screen keeps the rows shown, even when reading 
   expect(feeds()).toBe(4);
 });
 
-test('a list that could not be read says why beside the rest, and Try again reads only it', async () => {
-  run = await launch('documents-fail-once');
+test('a page More could not read says why below the rows, and Try again reads only it', async () => {
+  run = await launch('long-feed-more-fails');
   const { page } = run;
-  const lists = () => run.calls().filter(call => call.path === '/v2/person/documents/search').length;
+  const cursors = () => run.calls().filter(call => call.path === '/v1/person/list').map(call => call.body?.cursor ?? null);
   await page.getByTestId('project-row').nth(1).click();
-  await expect(page.getByTestId('feed-row')).toHaveCount(1);
+  const rows = page.getByTestId('feed-row');
+  await expect(rows).toHaveCount(10);
+  await page.getByTestId('feed-more').click();
   await expect(page.getByTestId('feed-failure')).toContainText('ECHO is unavailable right now.');
-  const feeds = run.calls().filter(call => call.path === '/v2/person/projects/context/feed').length;
+  await expect(rows).toHaveCount(10);
   await page.getByTestId('feed-retry').click();
-  await expect(page.getByTestId('feed-row')).toHaveCount(2);
+  await expect(rows).toHaveCount(13);
   await expect(page.locator('[data-kind="document"]')).toContainText('Q4 hiring plan.pdf');
   await expect(page.getByTestId('feed-failure')).toHaveCount(0);
-  expect(lists()).toBe(2);
-  expect(run.calls().filter(call => call.path === '/v2/person/projects/context/feed')).toHaveLength(feeds);
+  // The first page once, then the same next page twice.
+  const [first, more, again] = cursors();
+  expect(cursors()).toHaveLength(3);
+  expect(first).toBeNull();
+  expect(again).toBe(more);
 });
 
 test('a document reads a page of text at a time, and Save original writes the checked original where main was told', async () => {
@@ -161,9 +164,9 @@ test('a document reads a page of text at a time, and Save original writes the ch
   await expect(page.getByTestId('reader-chunk')).toHaveText(['Open a design role in November.']);
   await page.getByTestId('reader-actions').click();
   await expect(page.getByTestId('reader-next')).toBeDisabled();
-  // Read in the project it was opened from.
-  const texts = run.calls().filter(call => call.path === `/v2/person/documents/${DOCUMENT}/text`);
-  expect(texts.map(call => call.query)).toEqual([`?project_id=${BEACON}`, `?cursor=cGFnZTI&project_id=${BEACON}`]);
+  // Opened by its ref, a page of text at a time.
+  const opens = run.calls().filter(call => call.path === '/v1/person/open');
+  expect(opens.map(call => call.body)).toEqual([{ schema_version: 1, ref: `document:${DOCUMENT}` }, { schema_version: 1, ref: `document:${DOCUMENT}`, cursor: expect.any(String) }]);
 
   const folder = mkdtempSync(join(tmpdir(), 'echo-save-'));
   folders.push(folder);

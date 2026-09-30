@@ -12,6 +12,7 @@ import { AuthorityOperationError } from "@echo-brain/organization-authority-kern
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { SqlitePersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/person-record-read-audit-v1.js";
 import { captureRecordProjectsV1, type CaptureRecordProjectsV1 } from "./person-record-project-scope-v1.js";
+import { approverDisplayNameV1, type ApproverMembershipsV1 } from "./person-meeting-items-v1.js";
 import type {
   PersonRecordReadHttpApplicationV1,
   PersonRecordReadResponseV1,
@@ -40,44 +41,17 @@ export interface CreatePersonRecordReadRouteV1Options {
   readonly capture_projects?: CaptureRecordProjectsV1;
   readonly record_approver?: RecordApproverProjectorV1;
   /** Resolves only the actor named by a record already released to this reader. */
-  readonly memberships?: {
-    membership(id: string): {
-      readonly organization_id: string;
-      readonly principal_id: string;
-      readonly membership_id: string;
-      readonly display_name: string;
-    } | undefined;
-  };
+  readonly memberships?: ApproverMembershipsV1;
 }
 
 function sourceMetadata(
   record: PersonReadableRecordV1,
   options: CreatePersonRecordReadRouteV1Options,
 ): PersonRecordSourceMetadataV1 {
-  const actor = options.record_approver?.(record.envelope);
-  if (
-    actor === undefined ||
-    actor.authority_id !== options.authority_id ||
-    actor.organization_id !== options.organization_id ||
-    actor.state_lineage_id !== options.state_lineage_id ||
-    actor.approval_id !== record.approval_id ||
-    typeof actor.principal_id !== "string" ||
-    typeof actor.membership_id !== "string"
-  ) return Object.freeze({});
-  const membership = options.memberships?.membership(actor.membership_id);
-  if (
-    membership === undefined ||
-    membership.organization_id !== options.organization_id ||
-    membership.principal_id !== actor.principal_id ||
-    membership.membership_id !== actor.membership_id
-  ) return Object.freeze({});
-  // A revoked membership can still identify a historical approver. It never
-  // authorizes this read. Names are current directory labels, not job titles.
-  const name = membership.display_name.trim();
-  if (name.length === 0 || name.length > 200 || /[\p{Cc}\p{Cf}]/u.test(name)) {
-    return Object.freeze({});
-  }
-  return Object.freeze({ record_approved_by: Object.freeze({ display_name: name }) });
+  const name = approverDisplayNameV1(record.envelope, record.approval_id, options, options.record_approver, options.memberships);
+  return name === undefined
+    ? Object.freeze({})
+    : Object.freeze({ record_approved_by: Object.freeze({ display_name: name }) });
 }
 
 function sameReleaseAuthorization(

@@ -14,7 +14,7 @@ import {
   type EvidenceDeskOpenInputV1,
   type EvidenceDeskScopeV1,
 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
-import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 } from "@echo-brain/organization-api";
+import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, type PersonOpenRefV1 } from "@echo-brain/organization-api";
 import type { PersonSlackMessageV1, PersonSlackReaderV1, PersonSlackReleaseAuditV1, PersonSlackReleaseV1 } from "../application/ports/person-slack-reader-v1.js";
 import type { PersonAnswerCitationV3 } from "@echo-brain/organization-api";
 import type {
@@ -78,8 +78,29 @@ type Stored = Readonly<{
   record_anchor?: { readonly atom_id: Sha256Digest; readonly record_sha256: Sha256Digest; readonly record_position: number; readonly envelope_sha256: Sha256Digest; readonly atom_order: number; readonly audience_project_count: number; readonly item_kind: "decision" | "action" | "rationale"; readonly text: string; readonly policy_id: "restricted-reviewer-person-v2" | "organization-member-readable-person-v2" | "project-members-readable-person-v1" };
 }>;
 
+/** A compile error when a scope kind is added; a closed failure at run time. */
+function unknownScope(scope: never): never {
+  throw new AuthorityOperationError("invalid_request", `scope ${String((scope as { readonly kind?: unknown }).kind)} is invalid`);
+}
+
 function publicScope(scope: PersonAskScopeV2): EvidenceDeskScopeV1 {
-  return (scope.kind === "global" ? Object.freeze({ kind: "global" }) : Object.freeze({ kind: "project", project_id: scope.project_id })) as EvidenceDeskScopeV1;
+  switch (scope.kind) {
+    case "global": return Object.freeze({ kind: "global" });
+    case "project": return Object.freeze({ kind: "project", project_id: scope.project_id }) as EvidenceDeskScopeV1;
+    case "mine": return Object.freeze({ kind: "mine" });
+    default: return unknownScope(scope);
+  }
+}
+
+/** The records half of a scope. Every records call spreads this, so no scope can fall through to global. */
+function recordScope(scope: PersonAskScopeV2): Readonly<{ project_id?: never }> | Readonly<{ project_id: string }> | Readonly<{ mine: true }> {
+  switch (scope.kind) {
+    case "global": return {};
+    case "project": return { project_id: scope.project_id };
+    // The records route narrows to meetings the caller finally approved.
+    case "mine": return { mine: true as const };
+    default: return unknownScope(scope);
+  }
 }
 
 function sourceCitation(item: OriginalContextDeskReleaseV1["items"][number]): EvidenceDeskCitationV1 {
@@ -233,6 +254,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       id: itemId(sourceCitation(value)), citation: sourceCitation(value), kind: value.kind,
       ...(value.text === undefined ? {} : { text: value.text }), label: value.label,
       visibility: value.visibility, receipt_sha256: release.receipt,
+      ...(value.ref === undefined ? {} : { ref: value.ref }),
     }), { original: release }));
   };
   const records = (result: ReturnType<PersonEvidenceDeskRecordsV1["searchBatch"]>, includeText = true): readonly EvidenceDeskItemV1[] => {
@@ -243,7 +265,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (result.desk_items === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
     return result.desk_items.map((value) => {
       const citation = recordCitation(value);
-      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, visibility: value.visibility, ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
+      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, visibility: value.visibility, ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonOpenRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
     });
   };
   const searchRecords = (query: string, kinds?: readonly EvidenceDeskKindV1[]): readonly EvidenceDeskItemV1[] => {
@@ -251,7 +273,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     try {
       const recordKinds = kinds?.filter((kind): kind is "decision" | "action" | "rationale" => kind === "decision" || kind === "action" || kind === "rationale");
       if (recordKinds !== undefined && recordKinds.length === 0) return [];
-      return records(options.records.searchBatch({ access_token: options.access_token, queries: [query], limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }));
+      return records(options.records.searchBatch({ access_token: options.access_token, queries: [query], limit: 10, desk: true, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }));
     } catch (error) {
       if (pointer === undefined && unavailableAtStart(error)) { recordsUnavailableAtStart = true; return []; }
       throw error;
@@ -264,7 +286,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     // The empty model-facing desk still needs a fixed record-mode decision.
     // This server-owned probe never enters the pad or a provider prompt.
     try {
-      const probe = options.records.initializeDesk({ access_token: options.access_token, ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}) });
+      const probe = options.records.initializeDesk({ access_token: options.access_token, ...recordScope(options.scope) });
       pointer = probe.release.active_pointer;
       recordReleases.push(probe.release);
       initializationReceipts = [probe.release.record_read_audit_row_sha256];
@@ -300,7 +322,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       });
       const beforeRecords = recordReleases.length;
       const recordKinds = input.kinds?.filter((kind): kind is "decision" | "action" | "rationale" => kind === "decision" || kind === "action" || kind === "rationale");
-      const recordInventory = recordsUnavailableAtStart ? [] : records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
+      const recordInventory = recordsUnavailableAtStart ? [] : records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
       const items = balanced(originals(released), recordInventory).filter((item) => input.kinds === undefined || input.kinds.includes(item.kind));
       return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
     }
@@ -345,7 +367,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       if (recordKinds !== undefined && recordKinds.length === 0) return result([], false, []);
       latestRecordTruncated = false;
       const beforeRecords = recordReleases.length;
-      const items = records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
+      const items = records(options.records.listDeskBatch({ access_token: options.access_token, limit, ...(recordKinds === undefined ? {} : { kinds: recordKinds }), ...recordScope(options.scope), ...(pointer === undefined ? {} : { expected_pointer: pointer }) }), false);
       return result(items.slice(0, limit), latestRecordTruncated || items.length > limit, recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256));
     }
     const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" => kind === "note" || kind === "document_passage");
@@ -385,7 +407,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     initialize();
     if ((input.citation as { readonly kind: string }).kind === "slack_message") throw new AuthorityOperationError("not_found", "Slack messages open in Slack");
     if (input.citation.kind === "approved_record") {
-      const expanded = options.records.openDeskCitation({ access_token: options.access_token, atom_id: input.citation.atom_id, record_sha256: input.citation.record_sha256, policy_id: input.citation.policy_id, ...(options.scope.kind === "project" ? { project_id: options.scope.project_id } : {}) });
+      const expanded = options.records.openDeskCitation({ access_token: options.access_token, atom_id: input.citation.atom_id, record_sha256: input.citation.record_sha256, policy_id: input.citation.policy_id, ...recordScope(options.scope) });
       latestRecordTruncated = false;
       return result(records(expanded), expanded.truncated === true, [expanded.release.record_read_audit_row_sha256]);
     }

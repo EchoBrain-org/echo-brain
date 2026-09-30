@@ -52,3 +52,4 @@ export * from './person-document-associations-v1.js';
 export * from './person-answer-v3.js';
 export * from './person-answer-v4.js';
 export * from './person-meeting-transcript-v1.js';
+export * from './person-list-v1.js';

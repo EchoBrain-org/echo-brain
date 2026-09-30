@@ -9,6 +9,15 @@ import {
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1,
   PERSON_MEETING_TRANSCRIPT_PATH_V1,
+  PERSON_LIST_PATH_V1,
+  PERSON_OPEN_PATH_V1,
+  PERSON_LIST_RESPONSE_MAX_BYTES_V1,
+  PERSON_OPEN_RESPONSE_MAX_BYTES_V1,
+  personRefKindV1,
+  validatePersonListRequestV1,
+  validatePersonListResponseV1,
+  validatePersonOpenRequestV1,
+  validatePersonOpenResponseV1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV4,
   validatePersonCapabilitiesV1,
@@ -29,6 +38,10 @@ import {
   type PersonSourceEvidenceV1,
   type PersonMeetingTranscriptReadRequestV1,
   type PersonMeetingTranscriptV1,
+  type PersonListRequestV1,
+  type PersonListResponseV1,
+  type PersonOpenRequestV1,
+  type PersonOpenResponseV1,
   type ProjectIdV1,
 } from '@echo-brain/organization-api';
 import {
@@ -135,6 +148,8 @@ export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
 export type PersonEvidenceDeskV1 = PersonEvidenceDeskResponseV1;
 export type PersonAskSourceEvidenceV1 = PersonSourceEvidenceV1;
 export type PersonMeetingTranscriptReadV1 = PersonMeetingTranscriptV1;
+export type PersonListV1 = PersonListResponseV1;
+export type PersonOpenV1 = PersonOpenResponseV1;
 
 export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
@@ -1356,12 +1371,12 @@ export class PersonAuthorityClient {
     });
   }
 
-  /** Agentic Ask; global by default, and a supplied project ID is a strict project-only scope. */
-  async askV3(accessToken: string, question: string, projectId?: ProjectIdV1, signal?: AbortSignal): Promise<PersonAnswerV4> {
+  /** Agentic Ask; global by default, a supplied project ID is a strict project-only scope, and mine is only what the asker added. */
+  async askV3(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV4> {
     const request = validatePersonAnswerRequestV3({
       schema_version: 3,
       question,
-      ...(projectId === undefined ? {} : { project_id: projectId }),
+      ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}),
     });
     const response = await this.json({
       path: PERSON_ANSWER_PATH_V3,
@@ -1373,9 +1388,11 @@ export class PersonAuthorityClient {
       timeout_ms: ASK_TIMEOUT_MS,
       signal,
     });
-    const expectedScope = projectId === undefined
+    const expectedScope = scope === undefined
       ? { kind: 'global' as const }
-      : { kind: 'project' as const, project_id: projectId };
+      : typeof scope === 'string'
+        ? { kind: 'project' as const, project_id: scope }
+        : { kind: 'mine' as const };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
     }
@@ -1399,6 +1416,36 @@ export class PersonAuthorityClient {
       access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, signal });
     const expectedScope = request.project_id === undefined ? { kind: 'global' } : { kind: 'project', project_id: request.project_id };
     if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different evidence scope');
+    return response;
+  }
+
+  /** Model-free list (ADR-0024). Only the caller knows which page is first, so the header is checked here. */
+  async list(accessToken: string, value: PersonListRequestV1, signal?: AbortSignal): Promise<PersonListV1> {
+    const request = validatePersonListRequestV1(value);
+    const response = await this.json({ path: PERSON_LIST_PATH_V1, body: request,
+      validate_request: validatePersonListRequestV1, validate_response: validatePersonListResponseV1,
+      access_token: accessToken, maximum_response_bytes: PERSON_LIST_RESPONSE_MAX_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal });
+    const expectedScope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id }
+      : request.mine === true ? { kind: 'mine' } : { kind: 'global' };
+    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different list scope');
+    // Global page 1 carries me; project page 1 carries project; mine and cursor pages carry no header.
+    const hasHeader = response.me !== undefined || response.project !== undefined;
+    if (hasHeader !== (request.cursor === undefined && expectedScope.kind !== 'mine')) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned a list header on the wrong page');
+    }
+    return response;
+  }
+
+  /** Opens one ref under the caller's current access; a meeting's detail belongs to its first page only. */
+  async open(accessToken: string, value: PersonOpenRequestV1, signal?: AbortSignal): Promise<PersonOpenV1> {
+    const request = validatePersonOpenRequestV1(value);
+    const response = await this.json({ path: PERSON_OPEN_PATH_V1, body: request,
+      validate_request: validatePersonOpenRequestV1, validate_response: validatePersonOpenResponseV1,
+      access_token: accessToken, maximum_response_bytes: PERSON_OPEN_RESPONSE_MAX_BYTES_V1, timeout_ms: DEFAULT_TIMEOUT_MS, signal });
+    if (response.ref !== request.ref ||
+      (personRefKindV1(request.ref) === 'meeting' && ('meeting' in response) !== (request.cursor === undefined))) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different open coordinates');
+    }
     return response;
   }
 

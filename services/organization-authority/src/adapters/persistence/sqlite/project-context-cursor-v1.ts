@@ -61,21 +61,34 @@ function binding(scope: ProjectCursorScopeV1): Buffer {
 export function encodeProjectCursorV1(scope: ProjectCursorScopeV1, value: ProjectCursorPositionV1): string {
   const fields = value.map(String);
   position(fields, scope);
-  const encoded = Buffer.concat([Buffer.from([1]), binding(scope), Buffer.from(fields.join('\0'), 'utf8')]).toString('base64url');
-  if (encoded.length > 512) invalid();
-  return encoded;
+  return frameCursorV1(1, binding(scope), fields);
 }
 
 export function decodeProjectCursorV1(cursor: string | undefined, scope: ProjectCursorScopeV1): ProjectCursorPositionV1 | undefined {
   if (cursor === undefined) return undefined;
+  return position(unframeCursorV1(cursor, 1, binding(scope)), scope);
+}
+
+/**
+ * The shared framing: a version byte, a 32-byte binding digest and the
+ * NUL-joined UTF-8 fields, base64url, at most 512 characters. Each cursor
+ * family owns its version byte and validates its own fields.
+ */
+export function frameCursorV1(version: number, binding: Buffer, fields: readonly string[]): string {
+  const encoded = Buffer.concat([Buffer.from([version]), binding, Buffer.from(fields.join('\0'), 'utf8')]).toString('base64url');
+  if (encoded.length > 512) invalid();
+  return encoded;
+}
+
+export function unframeCursorV1(cursor: string, version: number, binding: Buffer): readonly string[] {
   if (!/^[A-Za-z0-9_-]+$/.test(cursor) || cursor.length > 512) invalid();
   const decoded = Buffer.from(cursor, 'base64url');
-  if (decoded.length < 34 || decoded[0] !== 1 || decoded.toString('base64url') !== cursor ||
-      !decoded.subarray(1, 33).equals(binding(scope))) invalid();
+  if (decoded.length < 34 || decoded[0] !== version || decoded.toString('base64url') !== cursor ||
+      !decoded.subarray(1, 33).equals(binding)) invalid();
   const encodedPosition = decoded.subarray(33);
   const text = encodedPosition.toString('utf8');
   if (!Buffer.from(text, 'utf8').equals(encodedPosition)) invalid();
-  return position(text.split('\0'), scope);
+  return text.split('\0');
 }
 
 export function normalizeProjectSearchQueryV1(query: string): string { return query.normalize('NFC').toLowerCase(); }

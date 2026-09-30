@@ -102,7 +102,7 @@ test('New project is one page: name, people and files before Create, then the pr
   const steps = () => run.calls().map(call => call.method === 'POST' && call.path === '/v1/person/projects' ? 'create'
     : call.path === '/v1/person/projects/members/add' ? `add ${call.body?.membership_id === RAJ ? 'Raj' : call.body?.membership_id === MAYA ? 'Maya' : '?'}`
     : call.method === 'PUT' && call.path.startsWith('/v2/person/documents/') ? 'save'
-    : call.path === '/v2/person/projects/context/feed' ? 'open' : null).filter(Boolean);
+    : call.path === '/v1/person/list' ? 'open' : null).filter(Boolean);
   await expect.poll(steps).toEqual(['create', 'add Raj', 'add Maya', 'save', 'open']);
   expect(creates().map(call => call.body)).toEqual([
     { schema_version: 1, kind: 'echo-project-create-v1', request_id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: 'Cedar' },

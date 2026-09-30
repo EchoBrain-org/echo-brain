@@ -7,6 +7,7 @@ import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
 import { ChangeLine, changeShownInPlace } from './screens/change.js';
 import { Back, Saved, SidebarIcon, Warning } from './screens/icons.js';
+import { Mine } from './screens/mine.js';
 import { NewProject } from './screens/new-project.js';
 import { Organization } from './screens/organization.js';
 import { People } from './screens/people.js';
@@ -17,9 +18,9 @@ import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeProjects, closeReader,
-  closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, pageCovered,
-  refreshStatus, resume, retryStart, signinPhase, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization,
-  useStore, WARNINGS, windowShown, type State,
+  closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, openMine, pageCovered,
+  refreshStatus, resume, retryStart, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization,
+  useStore, WARNINGS, windowShown, windowTakesDrop, type State,
 } from './store.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
@@ -118,11 +119,12 @@ function App() {
 
   const inProject = state.route.page === 'project' ? state.route.project : null;
   const organization = state.route.page === 'organization' ? state.organization : null;
-  // Another app is in front: cover what a project, People & invites, an answer
-  // or an original shows until ECHO is back. Project rows stay (Home's and the
-  // sidebar's), so a file dragged from Finder can still be dropped on one.
+  const mine = state.route.page === 'mine';
+  // Another app is in front: cover what a project, Mine, People & invites, an
+  // answer or an original shows until ECHO is back. Project rows stay (Home's
+  // and the sidebar's), so a file dragged from Finder can still be dropped on one.
   const covered = pageCovered(state);
-  const pageName = inProject ? inProject.name : organization ? 'People & invites' : null;
+  const pageName = inProject ? inProject.name : organization ? 'People & invites' : mine ? 'Mine' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
   // Back leaves Ask for the page it was asked from; asked over a reader, Back goes to the reader.
   const backLabel = covered ? null : state.ask && state.reader ? 'Back'
@@ -134,18 +136,22 @@ function App() {
   return (
     <Shell state={state} title={title} backLabel={backLabel} pane={pane}
       trailing={inProject && !covered && !state.ask ? <><MembersButton state={state} /><ProjectSettingsButton state={state} /></> : null}>
-      <main class="page">
+      {/* Mine's list runs from the top, the full height of the page. */}
+      <main class={`page${mine && !covered && !state.ask && !state.reader ? ' top' : ''}`}>
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
           : state.ask ? <AskView state={state} />
-          : state.reader ? <Reader state={state} reader={state.reader} backTo={inProject?.name ?? 'Home'} />
+          : state.reader ? <Reader state={state} reader={state.reader} backTo={pageName ?? 'Home'} />
           : inProject ? <Project state={state} project={inProject} />
-          : organization ? <Organization state={state} page={organization} /> : <Home state={state} />}
+          : organization ? <Organization state={state} page={organization} />
+          : mine ? <Mine state={state} /> : <Home state={state} />}
       </main>
-      {/* Always there, so a screen reader announces each toast as it appears. */}
+      {/* Always there, so a screen reader announces each toast as it appears. A save only Mine shows opens it. */}
       <div role="status">
-        {state.toast && !state.concealed && (
+        {state.toast && !state.concealed && (toastOpensMine(state.toast) ? (
+          <button type="button" class="toast" data-testid="toast" onClick={() => void openMine()}><Saved /><span>{state.toast}</span></button>
+        ) : (
           <div class="toast" data-testid="toast">{WARNINGS.has(state.toast) ? <Warning /> : <Saved />}<span>{state.toast}</span></div>
-        )}
+        ))}
       </div>
       {/* Under a toast, not hidden by it: Try again and Dismiss stay in reach. */}
       {banner && <div class={`banner${state.toast ? ' below' : ''}`} data-testid="change-banner"><ChangeLine change={banner} /></div>}
@@ -164,7 +170,7 @@ function App() {
 /**
  * One window: the sidebar (unless hidden), then the title bar and the page.
  * A file dropped anywhere but a project row goes to Capture: into the open
- * sheet, or a new capture for the project on screen.
+ * sheet, or a new capture for the project on screen. Mine takes none.
  */
 function Shell({ state, title, backLabel, pane = false, trailing = null, children }: {
   state: State; title: string; backLabel: string | null; pane?: boolean; trailing?: ComponentChildren; children: ComponentChildren;
@@ -179,7 +185,8 @@ function Shell({ state, title, backLabel, pane = false, trailing = null, childre
     if (files.length === 1) void acceptDrop(files[0]!, capturing ? 'sheet' : 'window');
   };
   return (
-    <div class={`app shell${open ? ' with-sidebar' : ''}`} onDragOver={event => { if (canDrop(event)) event.preventDefault(); }} onDrop={onDrop}>
+    <div class={`app shell${open ? ' with-sidebar' : ''}`} onDragOver={event => { if (canDrop(event) && windowTakesDrop(state)) event.preventDefault(); }}
+      onDrop={onDrop}>
       {open && <Sidebar state={state} />}
       <div class={`main${pane ? ' with-pane' : ''}`}>
         <header class="titlebar">

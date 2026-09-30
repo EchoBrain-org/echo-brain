@@ -21,7 +21,10 @@ export const PERSON_SOURCE_EVIDENCE_MAX_TEXT_BYTES_V1 = 3 * 1024;
 
 export type PersonAnswerScopeV3 =
   | { readonly kind: 'global' }
-  | { readonly kind: 'project'; readonly project_id: ProjectIdV1 };
+  | { readonly kind: 'project'; readonly project_id: ProjectIdV1 }
+  | { readonly kind: 'mine' };
+/** A cited original or a transcript page is read under global or project scope. mine ⊆ global, so a mine answer's citations open under global. */
+export type PersonSourceReadScopeV1 = Exclude<PersonAnswerScopeV3, { readonly kind: 'mine' }>;
 
 export type PersonAnswerCitationV3 =
   | {
@@ -60,14 +63,14 @@ export interface PersonSourceEvidenceCitationV1 {
 
 export interface PersonSourceEvidenceReadRequestV1 {
   readonly schema_version: 1;
-  readonly scope: PersonAnswerScopeV3;
+  readonly scope: PersonSourceReadScopeV1;
   readonly citation: PersonSourceEvidenceCitationV1;
 }
 
 export interface PersonSourceEvidenceV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-person-source-evidence-v1';
-  readonly scope: PersonAnswerScopeV3;
+  readonly scope: PersonSourceReadScopeV1;
   /** The server derives this label from the immutable retained source. */
   readonly citation: PersonSourceEvidenceCitationV1 & { readonly label: string };
   /** Bounded canonical evidence packet, not the original file or a mutable latest version. */
@@ -121,7 +124,7 @@ function utf8Bytes(value: string): number {
   }, 0);
 }
 
-function scope(value: unknown): PersonAnswerScopeV3 {
+function scope(value: unknown): PersonSourceReadScopeV1 {
   const input = object(value, 'Ask response scope');
   if (input.kind === 'global') {
     assertExactKeys(input, ['kind'], 'Ask response scope');
@@ -135,6 +138,26 @@ function scope(value: unknown): PersonAnswerScopeV3 {
     });
   }
   fail('Ask response scope is invalid');
+}
+
+/**
+ * An Ask, evidence-desk or list scope. Unlike a source read it may be mine:
+ * the caller's own items, always a subset of global.
+ */
+export function validatePersonAnswerScopeV3(value: unknown, label = 'Ask response scope'): PersonAnswerScopeV3 {
+  const input = object(value, label);
+  if (input.kind === 'global' || input.kind === 'mine') {
+    assertExactKeys(input, ['kind'], label);
+    return Object.freeze(input.kind === 'global' ? { kind: 'global' } : { kind: 'mine' });
+  }
+  if (input.kind === 'project') {
+    assertExactKeys(input, ['kind', 'project_id'], label);
+    return Object.freeze({
+      kind: 'project',
+      project_id: validateProjectIdV1(input.project_id, `${label} project_id`),
+    });
+  }
+  fail(`${label} is invalid`);
 }
 
 function sourceEvidenceCitation(value: unknown, labelRequired: boolean): PersonSourceEvidenceCitationV1 | (PersonSourceEvidenceCitationV1 & { readonly label: string }) {

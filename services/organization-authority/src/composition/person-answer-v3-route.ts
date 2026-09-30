@@ -70,13 +70,14 @@ function askerOf(
   return Object.freeze({ display_name: membership.display_name });
 }
 
-function scopeOf(request: { readonly project_id?: string }): PersonAskScopeV2 {
-  return request.project_id === undefined
-    ? Object.freeze({ kind: "global" as const })
-    : Object.freeze({ kind: "project" as const, project_id: request.project_id });
+/** Every request shape maps to exactly one scope; mine with a project is refused, never widened. */
+function scopeOf(request: { readonly project_id?: string; readonly mine?: true }): PersonAskScopeV2 {
+  if (request.mine !== undefined && (request.mine !== true || request.project_id !== undefined)) throw new AuthorityOperationError("invalid_request", "Ask scope is invalid");
+  if (request.project_id !== undefined) return Object.freeze({ kind: "project" as const, project_id: request.project_id });
+  return request.mine === true ? Object.freeze({ kind: "mine" as const }) : Object.freeze({ kind: "global" as const });
 }
 
-function deskFor(options: CreatePersonAnswerV3RouteOptions, access_token: string, request: { readonly project_id?: string }, slack?: CreatePersonEvidenceDeskV1Options["slack"]) {
+function deskFor(options: CreatePersonAnswerV3RouteOptions, access_token: string, request: { readonly project_id?: string; readonly mine?: true }, slack?: CreatePersonEvidenceDeskV1Options["slack"]) {
   return createPersonEvidenceDeskV1({
     access_token,
     scope: scopeOf(request),
@@ -91,7 +92,8 @@ function deskResponse(desk: ReturnType<typeof deskFor>, result: EvidenceDeskResu
     schema_version: 1,
     kind: "echo-person-evidence-desk-v1",
     scope: desk.scope,
-    items: result.items,
+    // The desk contract carries no ref; only Ask citations do (ADR-0024).
+    items: result.items.map(({ ref: _ref, ...item }) => item),
     truncated: result.truncated,
     ...(result.notice === undefined ? {} : { notice: result.notice }),
   });
@@ -127,7 +129,8 @@ export function createPersonAnswerV3Route(options: CreatePersonAnswerV3RouteOpti
       }
       journey?.succeed("ask_authorization", authorizationStartedAt);
       const researchStartedAt = journey?.startTimer() ?? 0;
-      const slack = options.slack_for?.({ principal_id: authorization.principal_id, membership_id: authorization.membership_id });
+      // mine reads only what the asker added to Echo, so never Slack (ADR-0024).
+      const slack = input.request.mine === true ? undefined : options.slack_for?.({ principal_id: authorization.principal_id, membership_id: authorization.membership_id });
       const desk = deskFor(options, input.access_token, input.request, slack);
       const asker = askerOf(options, authorization);
       try {

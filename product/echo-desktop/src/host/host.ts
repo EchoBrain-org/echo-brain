@@ -7,13 +7,13 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   externalUrl, MAX_CAPTURE_PROJECTS, WRITE_METHODS, type AppStatus, type AskScope, type Audience, type Expect, type Failure, type HostMethods,
-  type HostMethodName, type HostRequest, type ProjectChange, type Result,
+  type HostMethodName, type HostRequest, type ItemRef, type ListScope, type ProjectChange, type Result,
 } from '../shared/protocol.js';
 import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
-  abandonView, answerView, changeView, contextView, createdView, directoryView, documentPageView, documentTextView, employeesView, evidenceView, failureView,
-  feedView, invitationView, isRecordRef, membersView, noteMatchesView, noteTitle, noteView, projectMatchesView, projectPageView, projectSettingsView, projectView,
+  abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, invitationView, isRecordRef, listView,
+  membersView, noteMatchesView, noteTitle, openView, projectMatchesView, projectPageView, projectSettingsView, projectView,
   NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolsView, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
@@ -78,10 +78,10 @@ modules.catch(error => { console.error('person host failed to load the client:',
 /** Per-method limits; the client enforces its own shorter network timeouts. */
 const TIMEOUT_MS: Record<HostMethodName, number> = {
   'app.status': 5_000, 'signin.begin': 11 * 60_000, 'signin.invitation': 11 * 60_000, 'projects.list': 45_000,
-  'projects.feed': 45_000, 'projects.readContext': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
+  'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
   'ask.run': 145_000, 'ask.cancel': 5_000, 'ask.source': 15_000, 'ask.record': 15_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
-  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000, 'search.read': 45_000, 'documents.list': 45_000,
-  'documents.read': 45_000, 'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000, 'projects.directory': 45_000,
+  'account.signOut': 45_000, 'account.tools': 45_000, 'search.run': 45_000,
+  'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000, 'projects.directory': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
   'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
@@ -96,9 +96,13 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12
 const PROJECT_ID = new RegExp(`^prj_${UUID}$`);
 const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
 const DOCUMENT_ID = /^doc_[0-9a-f]{64}$/;
+/** An approved meeting's record digest: the id of a meeting's ref. */
+const RECORD_ID = /^sha256:[0-9a-f]{64}$/;
 const ASK_CANCEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** A page cursor, as the API writes one. */
 const CURSOR = /^[A-Za-z0-9_-]{1,1024}$/;
+/** A list's or an opened item's cursor, as person list and open write one. */
+const REF_CURSOR = /^[A-Za-z0-9_-]{1,512}$/;
 /** Writes this host has handed to the client and not yet heard back on. */
 const inFlight = new Set<string>();
 /** Active Ask aborts, keyed by a renderer-issued id that never reaches the Authority. */
@@ -305,8 +309,36 @@ function audienceArgs(audience: Audience | undefined, projectIds: unknown): stri
   }
 }
 
-function scopeArgs(scope: AskScope): string[] {
+/** Ask's scope: one project, only what you added, or all you may read. */
+function askScopeArgs(scope: AskScope): string[] {
+  return scope.kind === 'project' ? [option('project', scope.project_id)] : scope.kind === 'mine' ? ['--mine'] : [];
+}
+
+/**
+ * Where a cited original is read: in the project asked, or else under all you
+ * may read. What you added is a part of that, so a mine answer's sources read there.
+ */
+function sourceScopeArgs(scope: AskScope): string[] {
   return scope.kind === 'project' ? [option('project', scope.project_id)] : [];
+}
+
+/** A list's scope: what you added, or one project. Never all you may read: the app lists only these. Null for anything else. */
+function listScopeArgs(scope: ListScope | undefined): string[] | null {
+  if (scope === null || typeof scope !== 'object') return null;
+  if (scope.kind === 'mine') return ['--mine'];
+  return scope.kind === 'project' && typeof scope.project_id === 'string' && PROJECT_ID.test(scope.project_id) ? [option('project', scope.project_id)] : null;
+}
+
+/** An item's ref as the client takes it, built only from a known kind and an id of that kind's shape. Null for anything else. */
+function refArgument(ref: ItemRef | undefined): string | null {
+  if (ref === null || typeof ref !== 'object' || typeof ref.id !== 'string') return null;
+  const shape = ref.kind === 'note' ? CONTEXT_ID : ref.kind === 'document' ? DOCUMENT_ID : ref.kind === 'meeting' ? RECORD_ID : null;
+  return shape?.test(ref.id) ? option('ref', `${ref.kind}:${ref.id}`) : null;
+}
+
+/** No cursor, or one of a list's or an opened item's pages. */
+function cursorOk(cursor: unknown): cursor is string | undefined {
+  return cursor === undefined || (typeof cursor === 'string' && REF_CURSOR.test(cursor));
 }
 
 /** Ten at a time, from where the last page ended. */
@@ -368,39 +400,29 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       return forAccount(method, expect, ['projects', 'list-v2', '--limit=10', ...(status ? [option('status', status)] : []), ...(cursor ? [option('cursor', cursor)] : [])],
         stdout => projectPageView(lastJson(stdout)));
     }
-    case 'projects.feed': {
-      const { expect, project_id, cursor } = params as Params<'projects.feed'>;
-      if (!pageable(project_id, cursor)) return code('invalid_request');
-      return forAccount(method, expect, ['projects', 'feed-v2', option('project-id', project_id), ...page(cursor)],
-        stdout => feedView(lastJson(stdout), project_id));
+    case 'list.page': {
+      const { expect, scope, cursor } = params as Params<'list.page'>;
+      const where = listScopeArgs(scope);
+      if (where === null || !cursorOk(cursor)) return code('invalid_request');
+      const asked: ListScope = scope.kind === 'mine' ? { kind: 'mine' } : { kind: 'project', project_id: scope.project_id };
+      return forAccount(method, expect, ['list', ...where, ...(cursor ? [option('cursor', cursor)] : [])], stdout => listView(lastJson(stdout), asked));
     }
-    case 'documents.list': {
-      // No query: the project's documents, newest first.
-      const { expect, project_id, cursor } = params as Params<'documents.list'>;
-      if (!pageable(project_id, cursor)) return code('invalid_request');
-      return forAccount(method, expect, ['documents', 'search-v2', option('project-id', project_id), ...page(cursor)],
-        stdout => documentPageView(lastJson(stdout)));
-    }
-    case 'documents.read': {
-      const { expect, document_id, project_id, cursor } = params as Params<'documents.read'>;
-      if (typeof document_id !== 'string' || !DOCUMENT_ID.test(document_id)) return code('invalid_request');
-      if (project_id !== undefined && (typeof project_id !== 'string' || !PROJECT_ID.test(project_id))) return code('invalid_request');
-      if (cursor !== undefined && (typeof cursor !== 'string' || !CURSOR.test(cursor))) return code('invalid_request');
-      return forAccount(method, expect, [
-        'documents', 'read-v2', option('document-id', document_id), ...(project_id ? [option('project-id', project_id)] : []),
-        ...(cursor ? [option('cursor', cursor)] : []),
-      ], stdout => documentTextView(lastJson(stdout), document_id));
+    case 'open.ref': {
+      // Opened under your current access, wherever it was listed: a note has one page.
+      const { expect, ref, cursor } = params as Params<'open.ref'>;
+      const argument = refArgument(ref);
+      if (argument === null || !cursorOk(cursor) || (ref.kind === 'note' && cursor !== undefined)) return code('invalid_request');
+      const asked: ItemRef = { kind: ref.kind, id: ref.id };
+      return forAccount(method, expect, ['open', argument, ...(cursor ? [option('cursor', cursor)] : [])],
+        stdout => openView(lastJson(stdout), asked, cursor === undefined));
     }
     case 'documents.save': {
       // Main put the chosen file here in place of the page's handle.
-      const { expect, document_id, project_id } = params as Params<'documents.save'>;
+      const { expect, document_id } = params as Params<'documents.save'>;
       const out = (params as { out?: unknown }).out;
       if (typeof out !== 'string' || typeof document_id !== 'string' || !DOCUMENT_ID.test(document_id)) return code('invalid_request');
-      if (project_id !== undefined && (typeof project_id !== 'string' || !PROJECT_ID.test(project_id))) return code('invalid_request');
-      return forAccount(method, expect, [
-        'documents', 'download-v2', option('document-id', document_id), option('out', out),
-        ...(project_id ? [option('project-id', project_id)] : []),
-      ], stdout => savedOriginalView(lastJson(stdout), document_id));
+      return forAccount(method, expect, ['documents', 'download-v2', option('document-id', document_id), option('out', out)],
+        stdout => savedOriginalView(lastJson(stdout), document_id));
     }
     case 'projects.read': {
       const { expect, project_id } = params as Params<'projects.read'>;
@@ -494,11 +516,6 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       if (!employeeText(email, 254)) return code('invalid_request', true);
       return forAccount(method, expect, ['employee', 'revoke', option('email', email)], stdout => revokedView(lastJson(stdout)));
     }
-    case 'projects.readContext': {
-      const { expect, project_id, context_id } = params as Params<'projects.readContext'>;
-      return forAccount(method, expect, ['projects', 'read-context-v2', option('project-id', project_id), option('context-id', context_id)],
-        stdout => contextView(lastJson(stdout)));
-    }
     case 'notes.submit': {
       const { expect, request_id, text, audience, project_ids } = params as Params<'notes.submit'>;
       const title = noteTitle(text);
@@ -542,7 +559,7 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       const { expect, question, scope } = params as Params<'ask.run'>;
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      return forAccount(method, expect, ['ask', option('question', text), ...scopeArgs(scope)],
+      return forAccount(method, expect, ['ask', option('question', text), ...askScopeArgs(scope)],
         stdout => answerView(lastJson(stdout), scope), undefined, abortSignal);
     }
     case 'ask.cancel':
@@ -552,7 +569,7 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       return forAccount(method, expect, [
         'ask-source', option('source-id', ref.source_id), option('revision-id', ref.revision_id),
         option('source-sha256', ref.source_sha256), option('representation-sha256', ref.representation_sha256),
-        option('anchor-sha256', ref.anchor_sha256), ...(ref.document_id ? [option('document-id', ref.document_id)] : []), ...scopeArgs(scope),
+        option('anchor-sha256', ref.anchor_sha256), ...(ref.document_id ? [option('document-id', ref.document_id)] : []), ...sourceScopeArgs(scope),
       ], stdout => evidenceView(lastJson(stdout)));
     }
     case 'ask.record': {
@@ -580,13 +597,9 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       ]);
       if (!newer.ok) return newer;
       if (!older.ok) return older;
-      return ok({ items: [...newer.value, ...older.value].slice(0, 10) });
-    }
-    case 'search.read': {
-      const { expect, context_id, source } = params as Params<'search.read'>;
-      if (typeof context_id !== 'string' || !CONTEXT_ID.test(context_id) || (source !== 'v2' && source !== 'v3')) return code('invalid_request');
-      return forAccount(method, expect, ['updates', source === 'v3' ? 'read-v3' : 'read', option('context-id', context_id)],
-        stdout => noteView(lastJson(stdout), source === 'v3' ? 3 : 2, context_id));
+      // Either version opens by the same ref: a note found by both shows once.
+      const ids = new Set(newer.value.map(match => match.context_id));
+      return ok({ items: [...newer.value, ...older.value.filter(match => !ids.has(match.context_id))].slice(0, 10) });
     }
     case 'writes.status': {
       const { expect, request_id, kind } = params as Params<'writes.status'>;

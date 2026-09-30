@@ -159,6 +159,43 @@ export class ApprovedMeetingTranscriptGrantReaderV1 {
   }
 
   /**
+   * The grant of one exact approved record, or null when its approver did not
+   * share the transcript. It is read and checked exactly as `find` reads it.
+   */
+  findByRecord(input: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly record_sha256: Sha256Digest;
+  }): ApprovedMeetingTranscriptGrantV1 | null {
+    text(input.authority_id, "transcript grant authority_id");
+    text(input.organization_id, "transcript grant organization_id");
+    text(input.state_lineage_id, "transcript grant state_lineage_id");
+    digest(input.record_sha256, "transcript grant record_sha256");
+    const row = this.database.prepare(
+      `SELECT grant.approval_id
+         FROM organization_record_meeting_transcript_grant_v1 AS grant
+        WHERE grant.authority_id = ?
+          AND grant.organization_id = ?
+          AND grant.state_lineage_id = ?
+          AND grant.record_sha256 = ?`,
+    ).get(input.authority_id, input.organization_id, input.state_lineage_id, input.record_sha256) as
+      | { readonly approval_id: unknown }
+      | undefined;
+    if (row === undefined) return null;
+    const grant = this.find({
+      authority_id: input.authority_id,
+      organization_id: input.organization_id,
+      state_lineage_id: input.state_lineage_id,
+      approval_id: text(row.approval_id, "transcript grant approval_id"),
+    });
+    if (grant === null || grant.record_sha256 !== input.record_sha256) {
+      throw new Error("transcript grant does not bind its record");
+    }
+    return grant;
+  }
+
+  /**
    * Every grant in the lineage, oldest record first, or those for one exact
    * source revision. Each is read and checked exactly as `find` reads it.
    */

@@ -24,6 +24,15 @@ describe("Person client help", () => {
     await expect(help(["--help"])).resolves.toContain("directory   Find people in your organization by name.");
   });
 
+  it("starts the Person help with the model-free list, open and scoped ask", async () => {
+    const text = await help(["--help"]);
+    expect(text.indexOf("Start here:")).toBeGreaterThan(-1);
+    expect(text.indexOf("Start here:")).toBeLessThan(text.indexOf("Commands:"));
+    expect(text).toContain("\nlist shows only what you can read now; next_cursor means more.\n");
+    expect(text).toContain("  open --ref <ref>  ");
+    expect(text).toContain("  ask --question <text> [--project <project-id> | --mine]  ");
+  });
+
   it("documents the organization directory as a single command with no project", async () => {
     const text = await help(["directory", "--help"]);
     expect(text).toContain("usage: echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]");
@@ -47,7 +56,17 @@ describe("Person client help", () => {
       "echo-brain person logout",
     );
     await expect(help(["ask", "--help"])).resolves.toContain(
-      "echo-brain person ask --question <text> [--project <project-id>]",
+      "echo-brain person ask --question <text> [--project <project-id> | --mine]",
+    );
+    // An agent reads this help: it must not overstate what list covers, and must say how a waiting page fails.
+    const listHelp = await help(["list", "--help"]);
+    expect(listHelp).toContain("not Slack messages or shared transcripts");
+    expect(listHelp).toContain("fails with unavailable (503): retry the same --cursor later");
+    await expect(help(["list", "--help"])).resolves.toContain(
+      "usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]",
+    );
+    await expect(help(["open", "--help"])).resolves.toContain(
+      "usage: echo-brain person open --ref <ref> [--cursor <next_cursor>]",
     );
     await expect(help(["evidence", "search", "--help"])).resolves.toContain(
       "echo-brain person evidence search [--query <text>]",

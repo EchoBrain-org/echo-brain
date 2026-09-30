@@ -1,45 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import type { DocumentSummary, FeedItem } from '../../src/shared/protocol.js';
-import { mergedFeed, moreSources, reread } from '../../src/renderer/feed.js';
+import type { ListItem } from '../../src/shared/protocol.js';
+import { renamedProject, reread } from '../../src/renderer/feed.js';
 
-const note = (title: string, hour: number): FeedItem => ({
-  context_id: `ctx_${title}`, title, received_at: `2026-09-20T${String(hour).padStart(2, '0')}:00:00.000Z`, audience: 'project',
-});
-const document = (title: string, hour: number): DocumentSummary => ({
-  document_id: `doc_${title}`, title, filename: title, received_at: `2026-09-20T${String(hour).padStart(2, '0')}:00:00.000Z`,
-  type: 'pdf', size: 1, audience: 'project', extraction: 'ready', project_ids: [],
-});
-const titles = (entries: ReturnType<typeof mergedFeed>) => entries.map(entry => entry.item.title);
-
-describe('one feed of notes and documents', () => {
-  it('shows both lists newest first once both are read to the end', () => {
-    const lists = { notes: [note('n1', 20), note('n2', 10)], notesNext: null, documents: [document('d1', 15), document('d2', 5)], documentsNext: null };
-    expect(titles(mergedFeed(lists))).toEqual(['n1', 'd1', 'n2', 'd2']);
-    expect(moreSources(lists)).toEqual([]);
-  });
-
-  it('holds back what may belong below items not read yet, and More reads the list that stops it', () => {
-    // Notes have more after 12:00; a 09:00 document may have newer notes above it.
-    const lists = { notes: [note('n1', 20), note('n2', 12)], notesNext: 'next', documents: [document('d1', 15), document('d2', 9)], documentsNext: null };
-    expect(titles(mergedFeed(lists))).toEqual(['n1', 'd1', 'n2']);
-    expect(moreSources(lists)).toEqual(['notes']);
-  });
-
-  it('reads further the list that reaches back the least when both have more', () => {
-    const lists = { notes: [note('n1', 20), note('n2', 8)], notesNext: 'next', documents: [document('d1', 15), document('d2', 11)], documentsNext: 'next' };
-    expect(titles(mergedFeed(lists))).toEqual(['n1', 'd1', 'd2']);
-    expect(moreSources(lists)).toEqual(['documents']);
-  });
+const row = (title: string, hour: number, kind: ListItem['ref']['kind'] = 'note'): ListItem => ({
+  ref: { kind, id: `${kind}-${title}` }, title, added_at: `2026-09-20T${String(hour).padStart(2, '0')}:00:00.000Z`, visibility: 'project', projects: [],
 });
 
 describe('a first page read again', () => {
-  const key = (item: FeedItem) => item.context_id;
-  const hours = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, index) => note(`n${from - index}`, from - index));
+  const key = (item: ListItem) => `${item.ref.kind}:${item.ref.id}`;
+  const hours = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, index) => row(`n${from - index}`, from - index));
 
   it('leads with the page and keeps the older rows More loaded, with the cursor past them', () => {
-    // Shown: twelve notes, read to the end. A new one pushes the tenth off the first page.
+    // Shown: twelve rows, read to the end. A new one pushes the tenth off the first page.
     const shown = { items: hours(20, 9), next: null };
-    const first = { items: [note('new', 21), ...hours(20, 12)], next: 'page2' };
+    const first = { items: [row('new', 21), ...hours(20, 12)], next: 'page2' };
     const again = reread(shown, first, key);
     expect(again.items.map(item => item.title)).toEqual(['new', ...hours(20, 9).map(item => item.title)]);
     expect(again.next).toBeNull();
@@ -53,5 +27,22 @@ describe('a first page read again', () => {
     expect(again.items.map(item => item.title)).toEqual(['n20', 'n19', 'n18', 'n17', 'n16', 'n14', 'n13', 'n12', 'n11', 'n10']);
     expect(again.next).toBe('page2');
     expect(reread(shown, { items: hours(20, 16), next: null }, key)).toEqual({ items: hours(20, 16), next: null });
+  });
+
+  it('keeps notes, documents and meetings of the same time apart by their refs', () => {
+    const shown = { items: [row('a', 12, 'meeting'), row('a', 11, 'note'), row('a', 11, 'document')], next: null };
+    const first = { items: [row('b', 13), row('a', 12, 'meeting')], next: 'page2' };
+    expect(reread(shown, first, key).items.map(key)).toEqual(['note:note-b', 'meeting:meeting-a', 'note:note-a', 'document:document-a']);
+  });
+});
+
+describe('a project renamed while its rows show', () => {
+  it('renames it in every row that names it, older rows included, and leaves the rest', () => {
+    const filed = (title: string, hour: number, projects: string[]): ListItem => ({ ...row(title, hour), projects });
+    const shown = [filed('first', 20, ['Apollo', 'Beacon']), filed('mine', 19, []), filed('older', 3, ['Apollo']), filed('other', 2, ['Beacon'])];
+    const renamed = renamedProject(shown, 'Apollo', 'Apollo 2');
+    expect(renamed.map(item => item.projects)).toEqual([['Apollo 2', 'Beacon'], [], ['Apollo 2'], ['Beacon']]);
+    expect(renamed[1]).toBe(shown[1]);
+    expect(shown[0]!.projects).toEqual(['Apollo', 'Beacon']);
   });
 });

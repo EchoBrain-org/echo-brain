@@ -1,4 +1,4 @@
-import type { PersonAnswerEvidenceCitationV4, PersonAnswerScopeV3 } from '@echo-brain/organization-api';
+import type { PersonAnswerEvidenceCitationV4, PersonAnswerScopeV3, PersonOpenRefV1 } from '@echo-brain/organization-api';
 
 /** Read-only evidence desk contract bound to one authenticated Person request. */
 export type EvidenceDeskKindV1 = 'decision' | 'action' | 'rationale' | 'note' | 'document_passage' | 'slack_message';
@@ -34,6 +34,8 @@ export interface EvidenceDeskItemV1 {
   readonly occurred_at?: string;
   /** SHA-256 receipt for the release that admitted this item into the request. */
   readonly receipt_sha256: `sha256:${string}`;
+  /** Server-owned ref for person open. Never shown to a model. */
+  readonly ref?: PersonOpenRefV1;
 }
 
 export interface EvidenceDeskResultV1 {

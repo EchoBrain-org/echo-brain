@@ -24,6 +24,8 @@ export interface PersonRecordReaderV1Input {
   readonly project_id?: string;
   readonly limit?: number;
   readonly record_sha256?: Sha256Digest;
+  /** Only records appended after this log position, so a probe reads the tail and not the whole log. */
+  readonly after_position?: number;
 }
 
 export interface PersonReadableRecordV1 {
@@ -84,6 +86,12 @@ export class PersonRecordReaderV1 {
     ) {
       throw new Error("Person record_sha256 must be a SHA-256 digest");
     }
+    if (
+      input.after_position !== undefined &&
+      (!Number.isSafeInteger(input.after_position) || input.after_position < 0)
+    ) {
+      throw new Error("Person record after_position must be a non-negative integer");
+    }
 
     // Keep the exact lookup as a separate predicate so SQLite can use the
     // unique record digest index instead of evaluating an optional OR filter.
@@ -91,6 +99,10 @@ export class PersonRecordReaderV1 {
       input.record_sha256 === undefined
         ? ""
         : "\n            AND record.record_sha256 = ?";
+    const afterPositionWhere =
+      input.after_position === undefined
+        ? ""
+        : "\n            AND record.position > ?";
     const projectAudienceClause = projectIds.length === 0
       ? ""
       : `
@@ -121,6 +133,7 @@ export class PersonRecordReaderV1 {
            FROM organization_record_log AS record
           WHERE record.event_kind = 'approved'
             ${exactRecordWhere}
+            ${afterPositionWhere}
             AND (
               EXISTS (
                 SELECT 1
@@ -150,6 +163,7 @@ export class PersonRecordReaderV1 {
       )
       .all(
         ...(input.record_sha256 === undefined ? [] : [input.record_sha256]),
+        ...(input.after_position === undefined ? [] : [input.after_position]),
         input.authority_id,
         input.organization_id,
         input.state_lineage_id,

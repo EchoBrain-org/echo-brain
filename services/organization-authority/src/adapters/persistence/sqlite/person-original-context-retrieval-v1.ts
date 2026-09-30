@@ -7,7 +7,7 @@ import type { ReleasedSourceContextAtomV1 } from "@echo-brain/organization-autho
 import type Database from "better-sqlite3";
 import { canonicalSourceContentV1, sourceContentSha256V1 } from "@echo-brain/organization-processing/core";
 import { assertCanonicalMeetingDocument, type MeetingDocument } from "@echo-brain/organization-processing/core";
-import type { PersonMeetingTranscriptCitationV1 } from "@echo-brain/organization-api";
+import type { PersonMeetingTranscriptCitationV1, PersonOpenRefV1 } from "@echo-brain/organization-api";
 import type {
   ApprovedMeetingTranscriptGrantReaderV1,
   ApprovedMeetingTranscriptGrantV1,
@@ -19,6 +19,7 @@ import type {
   PersonAskScopeV2,
   PersonOriginalContextEvidenceDeskPortV1,
 } from "../../../application/ports/person-original-context-retrieval-v1.js";
+import { personOriginalAclV1, personOriginalGrantedProjectIdsV1, personOriginalScopeFilterV1, personUnknownScopeV1 } from "./person-original-access-v1.js";
 
 const MAXIMUM_PACKET_BYTES = 3_072;
 /** Leave room for five approved-record atoms in a 10-hit Ask query budget. */
@@ -102,6 +103,16 @@ function denied(): never {
 
 function unavailable(): never {
   throw new AuthorityOperationError("unavailable", "person source retrieval is unavailable");
+}
+
+/** A record opened by ref is read with global access (ADR-0024). */
+const GLOBAL_SCOPE: PersonAskScopeV2 = Object.freeze({ kind: "global" });
+
+function transcriptCitation(grant: ApprovedMeetingTranscriptGrantV1): PersonMeetingTranscriptCitationV1 {
+  return Object.freeze({
+    kind: "approved_meeting_transcript", approval_id: grant.approval_id, source_id: grant.source_id as `source:${string}`,
+    revision_id: grant.revision_id, source_sha256: grant.source_sha256,
+  });
 }
 
 // Closed English function words only. No domain synonyms, stemming, or semantic
@@ -262,7 +273,7 @@ function transcriptDeskItem(transcript: TranscriptCandidate, atom: ReleasedSourc
     : grant.policy_id === "project-members-readable-person-v1" ? (grant.audience_project_ids.length === 1 ? "project" : "projects")
     : "team";
   const citation: OriginalContextCitationV1 = Object.freeze({ kind: "source_revision", source_id: atom.source_id, revision_id: atom.revision_id, source_sha256: atom.source_sha256, representation_sha256: atom.representation_sha256, anchor_sha256: atom.anchor_sha256 });
-  return Object.freeze({ citation, kind: "note", ...(includeText ? { text: atom.text } : {}), visibility, label: atom.label ?? "Transcript", received_at: transcript.received_at, version: atom.revision_id });
+  return Object.freeze({ citation, kind: "note", ...(includeText ? { text: atom.text } : {}), visibility, label: atom.label ?? "Transcript", received_at: transcript.received_at, version: atom.revision_id, ref: `transcript:${grant.record_sha256}` as const });
 }
 
 /** Labels cross the public API boundary; evidence retains the full filename. */
@@ -628,6 +639,43 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return response;
   }
 
+  probeApprovedMeetingTranscriptV1(input: {
+    readonly actor: PersonAccessAuthorization;
+    readonly approval_id: string;
+    readonly record_sha256: Sha256Digest;
+  }): boolean {
+    const options = this.transcriptOptions;
+    if (options === undefined) return false;
+    this.assertOrganization(input.actor);
+    const grant = options.grants.find({ authority_id: options.authority_id, organization_id: this.organizationId, state_lineage_id: options.state_lineage_id, approval_id: input.approval_id });
+    return grant !== null && grant.record_sha256 === input.record_sha256 &&
+      options.is_expected_policy_contract(grant) &&
+      this.readableTranscriptGrant(input.actor, GLOBAL_SCOPE, grant) &&
+      this.meetingSource(transcriptCitation(grant)) !== undefined;
+  }
+
+  /**
+   * The same double-fenced, audited read as a citation, keyed by the record.
+   * Callers admit the record through Layer 1 first; every miss here is the
+   * same denial.
+   */
+  readApprovedMeetingTranscriptByRecordV1(input: {
+    readonly access_token: string;
+    readonly record_sha256: Sha256Digest;
+    readonly offset?: number;
+  }): { readonly text: string; readonly next_offset: number | null } {
+    const options = this.transcriptOptions;
+    if (options?.grants.findByRecord === undefined) unavailable();
+    this.assertOrganization(this.sessions.authenticateAccess({ access_token: input.access_token }));
+    const grant = options.grants.findByRecord({ authority_id: options.authority_id, organization_id: this.organizationId, state_lineage_id: options.state_lineage_id, record_sha256: input.record_sha256 });
+    if (grant === null) denied();
+    const page = this.readApprovedMeetingTranscript({
+      access_token: input.access_token, scope: GLOBAL_SCOPE, citation: transcriptCitation(grant),
+      ...(input.offset === undefined ? {} : { offset: input.offset }),
+    });
+    return Object.freeze({ text: page.text, next_offset: page.next_offset });
+  }
+
   private assertOrganization(actor: PersonAccessAuthorization): void {
     if (actor.organization_id !== this.organizationId ||
       !this.database.prepare("SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active'").get(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type)) denied();
@@ -644,7 +692,16 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private assertScope(actor: PersonAccessAuthorization, scope: PersonAskScopeV2): void {
-    if (scope.kind === "project" && !this.projectGrant(actor, scope.project_id)) denied();
+    switch (scope.kind) {
+      case "project":
+        if (!this.projectGrant(actor, scope.project_id)) denied();
+        return;
+      case "global":
+      case "mine":
+        return;
+      default:
+        personUnknownScopeV1(scope);
+    }
   }
 
   private matchesTranscriptGrant(grant: ApprovedMeetingTranscriptGrantV1, citation: PersonMeetingTranscriptCitationV1): boolean {
@@ -686,7 +743,18 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private readableTranscriptGrant(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, grant: ApprovedMeetingTranscriptGrantV1): boolean {
-    if (scope.kind === "project" && (!grant.association_project_ids.includes(scope.project_id) || !this.projectGrant(actor, scope.project_id))) return false;
+    switch (scope.kind) {
+      // A shared transcript is not something the caller added (ADR-0024, v1).
+      case "mine":
+        return false;
+      case "project":
+        if (!grant.association_project_ids.includes(scope.project_id) || !this.projectGrant(actor, scope.project_id)) return false;
+        break;
+      case "global":
+        break;
+      default:
+        personUnknownScopeV1(scope);
+    }
     if (grant.policy_id === "organization-member-readable-person-v2") return true;
     if (grant.policy_id === "restricted-reviewer-person-v2") {
       return actor.principal_id === grant.reviewer_principal_id && actor.membership_id === grant.reviewer_membership_id;
@@ -780,12 +848,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private acl(actor: PersonAccessAuthorization, prefix: "u" | "d"): { readonly sql: string; readonly args: readonly string[] } {
-    const projects = this.database.prepare("SELECT project_id FROM authority_project_memberships_v1 WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type=? AND status='active'").all(actor.organization_id, actor.principal_id, actor.membership_id, actor.membership_type) as readonly { readonly project_id: string }[];
-    const ids = projects.map((row) => row.project_id);
-    return Object.freeze({
-      sql: `(${prefix}.audience_kind='team' OR (${prefix}.audience_kind='only_me' AND ${prefix}.membership_id=?) OR (${prefix}.audience_kind='project' AND ${prefix}.audience_project_id IN (${ids.map(() => "?").join(",") || "NULL"})) OR (${prefix}.audience_kind='projects' AND EXISTS (SELECT 1 FROM ${prefix === 'u' ? 'authority_person_update_audience_projects_v1' : 'authority_person_document_audience_projects_v1'} audience_project WHERE audience_project.${prefix === 'u' ? 'context_id' : 'document_id'}=${prefix}.${prefix === 'u' ? 'context_id' : 'document_id'} AND audience_project.organization_id=${prefix}.organization_id AND audience_project.project_id IN (${ids.map(() => "?").join(",") || "NULL"}))))`,
-      args: [actor.membership_id, ...ids, ...ids],
-    });
+    return personOriginalAclV1(prefix, actor, personOriginalGrantedProjectIdsV1(this.database, actor));
   }
 
   private deskSearchRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], limit: number, kinds: readonly ("note" | "document_passage")[] | undefined): readonly (SourceRow | DocumentRow)[] {
@@ -832,21 +895,21 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private deskTextRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], inventory: boolean, rowLimit = 100): readonly SourceRow[] {
     const acl = this.acl(actor, "u");
-    const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)" : "";
+    const scoped = personOriginalScopeFilterV1("u", actor, scope);
     const updates = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
       UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
     const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,u.audience_kind AS visibility,echo_original_context_whole_score_v1(u.title,u.text,?) AS lexical_score
       FROM ${updates} u JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
-      WHERE u.organization_id=? AND ${acl.sql} ${scopeSql} ${inventory ? "" : "AND lexical_score > 0"}
+      WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} ${inventory ? "" : "AND lexical_score > 0"}
       ORDER BY lexical_score DESC,u.received_at DESC,s.source_id LIMIT ?`;
-    return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), rowLimit) as readonly SourceRow[];
+    return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...scoped.args, rowLimit) as readonly SourceRow[];
   }
 
   private deskDocumentRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], inventory: boolean, allDocumentPassages = false, rowLimit = 100): readonly DocumentRow[] {
     const acl = this.acl(actor, "d");
-    const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)" : "";
+    const scoped = personOriginalScopeFilterV1("d", actor, scope);
     const firstChunk = inventory && !allDocumentPassages ? "AND t.ordinal=(SELECT MIN(first_t.ordinal) FROM authority_person_document_text_v1 first_t WHERE first_t.document_id=d.document_id AND first_t.extractor=t.extractor)" : "";
     const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at,d.audience_kind AS visibility,echo_original_context_whole_score_v1(d.filename,t.text,?) AS lexical_score
       FROM authority_person_documents_v1 d JOIN authority_person_document_text_v1 t ON t.document_id=d.document_id
@@ -855,9 +918,9 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=d.original_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       JOIN authority_source_representations_v1 representation ON representation.organization_id=r.organization_id AND representation.source_id=r.source_id AND representation.revision_id=r.revision_id AND representation.processor_version=t.extractor
-      WHERE d.organization_id=? AND ${acl.sql} ${scopeSql} ${inventory ? "" : "AND lexical_score > 0"} ${firstChunk}
+      WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql} ${inventory ? "" : "AND lexical_score > 0"} ${firstChunk}
       ORDER BY lexical_score DESC,d.received_at DESC,s.source_id,t.ordinal LIMIT ?`;
-    return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), rowLimit) as readonly DocumentRow[];
+    return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...scoped.args, rowLimit) as readonly DocumentRow[];
   }
 
   private deskAtom(row: SourceRow | DocumentRow, terms: readonly string[]): ReleasedSourceContextAtomV1 {
@@ -880,7 +943,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const visibility = row.visibility;
     if (visibility !== "only_me" && visibility !== "team" && visibility !== "project" && visibility !== "projects") unavailable();
     const citation: OriginalContextCitationV1 = Object.freeze({ kind: "source_revision", source_id: atom.source_id, revision_id: atom.revision_id, source_sha256: atom.source_sha256, representation_sha256: atom.representation_sha256, anchor_sha256: atom.anchor_sha256, ...(atom.document_id === undefined ? {} : { document_id: atom.document_id }) });
-    return Object.freeze({ citation, kind: atom.document_id === undefined ? "note" : "document_passage", ...(includeText ? { text: atom.text } : {}), visibility, label: atom.label ?? "Saved context", received_at: row.received_at, version: atom.revision_id });
+    const ref = (atom.document_id === undefined ? `note:${(row as SourceRow).context_id}` : `document:${atom.document_id}`) as PersonOpenRefV1;
+    return Object.freeze({ citation, kind: atom.document_id === undefined ? "note" : "document_passage", ...(includeText ? { text: atom.text } : {}), visibility, label: atom.label ?? "Saved context", received_at: row.received_at, version: atom.revision_id, ref });
   }
 
   private currentDeskItem(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1, includeText: boolean): OriginalContextDeskItemV1 {
@@ -902,7 +966,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const release: OriginalContextReleaseV1 = Object.freeze({ authorization: Object.freeze({ principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, checked_at: actor.checked_at }), scope: Object.freeze({ ...scope }), authorization_revision: this.authorizationRevision(actor.organization_id), released_atoms: Object.freeze([...atoms]) });
     this.releases.add(release);
     this.revalidate({ access_token: accessToken, release });
-    const audit = { schema_version: 1, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, authorization_revision: release.authorization_revision, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text }) => ({ citation, kind, visibility, label, received_at, version, ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }) }))), released_count: items.length, checked_at: actor.checked_at };
+    const audit = { schema_version: 1, kind: "echo-person-original-context-desk-release-audit-v1", audit_id: randomUUID(), organization_id: actor.organization_id, principal_id: actor.principal_id, membership_id: actor.membership_id, session_family_id: actor.session_family_id, scope, authorization_revision: release.authorization_revision, released_atoms_sha256: canonicalSha256(atoms.map(({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }) => ({ source_id, revision_id, source_sha256, representation_sha256, anchor_sha256 }))), released_metadata_sha256: canonicalSha256(items.map(({ citation, kind, visibility, label, received_at, version, text, ref }) => ({ citation, kind, visibility, label, received_at, version, ...(text === undefined ? {} : { text_sha256: canonicalSha256(text) }), ...(ref === undefined ? {} : { ref }) }))), released_count: items.length, checked_at: actor.checked_at };
     const receipt = canonicalSha256(audit);
     this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(receipt, canonicalJson(audit), actor.checked_at);
     const result: OriginalContextDeskReleaseV1 = Object.freeze({ release, receipt, items: Object.freeze([...items]), truncated });
@@ -912,9 +976,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private textRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[]): readonly SourceRow[] {
     const acl = this.acl(actor, "u");
-    const scopeSql = scope.kind === "project"
-      ? "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)"
-      : "";
+    const scoped = personOriginalScopeFilterV1("u", actor, scope);
     const updates = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
       UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
     const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,echo_original_context_score_v1(u.title,u.text,?) AS lexical_score
@@ -922,18 +984,16 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
-      WHERE u.organization_id=? AND ${acl.sql} ${scopeSql}
+      WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql}
         AND lexical_score > 0
       ORDER BY lexical_score DESC,u.received_at DESC,s.source_id LIMIT ?`;
-    const args = [JSON.stringify(terms), actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), MAXIMUM_RESULTS_PER_QUERY];
+    const args = [JSON.stringify(terms), actor.organization_id, ...acl.args, ...scoped.args, MAXIMUM_RESULTS_PER_QUERY];
     return this.database.prepare(sql).all(...args) as readonly SourceRow[];
   }
 
   private documentRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[]): readonly DocumentRow[] {
     const acl = this.acl(actor, "d");
-    const scopeSql = scope.kind === "project"
-      ? "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)"
-      : "";
+    const scoped = personOriginalScopeFilterV1("d", actor, scope);
     // The admitted source binds filename, but not the document's display title.
     // Use the verified filename for both matching and the packet's title field.
     const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at,echo_original_context_score_v1(d.filename,t.text,?) AS lexical_score
@@ -944,10 +1004,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=d.original_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       JOIN authority_source_representations_v1 representation ON representation.organization_id=r.organization_id AND representation.source_id=r.source_id AND representation.revision_id=r.revision_id AND representation.processor_version=t.extractor
-      WHERE d.organization_id=? AND ${acl.sql} ${scopeSql}
+      WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql}
         AND lexical_score > 0
       ORDER BY lexical_score DESC,d.received_at DESC,s.source_id,t.ordinal LIMIT ?`;
-    const args = [JSON.stringify(terms), actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), MAXIMUM_RESULTS_PER_QUERY];
+    const args = [JSON.stringify(terms), actor.organization_id, ...acl.args, ...scoped.args, MAXIMUM_RESULTS_PER_QUERY];
     return this.database.prepare(sql).all(...args) as readonly DocumentRow[];
   }
 
@@ -1053,14 +1113,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private textBySource(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string): SourceRow | undefined {
     const acl = this.acl(actor, "u");
-    const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_project_context_associations_v1 association WHERE association.context_id=u.context_id AND association.organization_id=u.organization_id AND association.project_id=?)" : "";
+    const scoped = personOriginalScopeFilterV1("u", actor, scope);
     const updates = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
       UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
     return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,u.audience_kind AS visibility
       FROM ${updates} u JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
-      WHERE u.organization_id=? AND ${acl.sql} ${scopeSql} AND s.source_id=? AND r.revision_id=?`).get(actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), sourceId, revisionId) as SourceRow | undefined;
+      WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} AND s.source_id=? AND r.revision_id=?`).get(actor.organization_id, ...acl.args, ...scoped.args, sourceId, revisionId) as SourceRow | undefined;
   }
 
   private documentAnchorByCitation(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): ReleasedSourceContextAtomV1 | undefined {
@@ -1083,7 +1143,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
 
   private documentSourceMeta(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, sourceId: string, revisionId: string, documentId: string, representationSha256: Sha256Digest): Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text"> | undefined {
     const acl = this.acl(actor, "d");
-    const scopeSql = scope.kind === "project" ? "AND EXISTS (SELECT 1 FROM authority_person_document_associations_v1 association WHERE association.document_id=d.document_id AND association.organization_id=d.organization_id AND association.project_id=?)" : "";
+    const scoped = personOriginalScopeFilterV1("d", actor, scope);
     return this.database.prepare(`SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,work.extractor,representation.content_json AS representation_json,d.received_at,d.audience_kind AS visibility
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial')
@@ -1091,6 +1151,6 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=d.original_sha256
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       JOIN authority_source_representations_v1 representation ON representation.organization_id=r.organization_id AND representation.source_id=r.source_id AND representation.revision_id=r.revision_id AND representation.processor_version=work.extractor
-      WHERE d.organization_id=? AND ${acl.sql} ${scopeSql} AND s.source_id=? AND r.revision_id=? AND d.document_id=? AND ('sha256:' || representation.content_sha256)=?`).get(actor.organization_id, ...acl.args, ...(scope.kind === "project" ? [scope.project_id] : []), sourceId, revisionId, documentId, representationSha256) as Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text"> | undefined;
+      WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql} AND s.source_id=? AND r.revision_id=? AND d.document_id=? AND ('sha256:' || representation.content_sha256)=?`).get(actor.organization_id, ...acl.args, ...scoped.args, sourceId, revisionId, documentId, representationSha256) as Omit<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text"> | undefined;
   }
 }

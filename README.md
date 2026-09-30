@@ -22,7 +22,10 @@ It can:
 
 - begin Google OIDC login and install or refresh a Person session;
 - ask cited questions across approved records and authorized upload/document
-  evidence, globally or within one project;
+  evidence, globally, within one project, or over only what they added;
+- list the notes, documents and approved meetings they can read, newest
+  first (all of them, one project's, or only their own), and open any of them
+  by its ref;
 - list and search approved records and read explicitly shared meeting
   transcripts;
 - create projects and manage their members, settings and associated context;
