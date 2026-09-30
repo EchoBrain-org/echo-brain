@@ -46,7 +46,11 @@ or a new authorization format.
 Evaluate server-client compatibility before `stage`. Staging changes the current
 live host, so compatibility is a pre-stage condition, not a check deferred until
 `promote`. Stage and test the exact server candidate and both matching CLI kits,
-then review their evidence. After the existing private Slack-card approval and
+then review their evidence. A release that ships ADR-0024 has no compatible
+transition; follow its
+[release note](../../deploy/release/README.md#prepare-the-transition-before-staging)
+for the update window, the desktop reinstalls and the added list and open
+checks. After the existing private Slack-card approval and
 candidate-client checks, a human makes the final decision on the exact release.
 Only then may the operator promote the server and publish the signed feed using
 their existing, separate commands. A staged candidate never implies permission

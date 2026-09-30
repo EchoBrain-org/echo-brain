@@ -97,6 +97,28 @@ use `/v3/person/ask`. There is no implemented legacy bridge or dedicated
 "update required" response to rely on. A transition plan must reflect that
 contract. Do not treat this guide as implementing such a bridge.
 
+A release that ships [ADR-0024](../../docs/decisions/ADR-0024-person-list-open-and-mine-scope.md)
+(Person list, open by ref and the mine scope) has no compatible transition:
+
+- Every non-Slack Ask citation gains `ref`, while the answer stays
+  `echo-clean-person-answer-v4` schema 4. Clients built before ADR-0024
+  validate citations with exact keys, so from `stage` onward every cited Ask
+  answer fails closed on them. Stage it only inside an announced update window
+  with the affected seats named.
+- Updated desktops read project pages and Mine through `POST /v1/person/list`
+  and `POST /v1/person/open`, which an older server does not serve, so the
+  server goes first.
+- Publish the CLI feed right after promotion. Desktops embed their own Person
+  client and do not update themselves: reinstall each desktop seat through its
+  packaging lane.
+- Select the minimum client by committed source SHA, not by answer kind or
+  schema, which did not change.
+- Add a `person list` (global and `--mine`) and a `person open --ref` of a
+  listed row to the candidate-client checks, beside record search and cited
+  Ask.
+- There is no joint rollback after promotion or feed publication; recovery is
+  a reviewed forward fix or compatible recovery release (see ADR-0024).
+
 ### Qualify and review the exact release once
 
 Use the [automated current-host lane](#automated-current-host-staging-lane) to
@@ -859,7 +881,9 @@ audit or telemetry to identify that Authority independently.
 The candidate implements [ADR-0012](../../docs/decisions/ADR-0012-person-public-response-privacy.md).
 Current clients decode `echo-clean-person-record-search-v2` and, from
 `person ask`, `echo-clean-person-answer-v4` (schema 4); older exact-shape
-clients are incompatible.
+clients are incompatible. Decoding answer-v4 schema 4 does not by itself make
+a client current: a client built before ADR-0024 decodes that kind and schema
+but refuses the citation `ref` its Authority now sends.
 Select clients by committed source and tarball SHA-256, not a reused product version.
 The implementation contract is accepted; coordinated live qualification and
 the exact candidate's release decision remain required.
