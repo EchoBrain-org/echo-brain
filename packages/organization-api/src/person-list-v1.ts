@@ -418,7 +418,7 @@ function openItem(value: unknown, ref: PersonItemRefV1): PersonListRowV1 {
 }
 
 /**
- * The stored upload filename, released as documents read-v2 releases it: the
+ * The stored upload filename, released as V2 document metadata releases it: the
  * upload rules (person-documents-v1.ts) do not require it to be trimmed.
  */
 function filename(value: unknown): asserts value is string {

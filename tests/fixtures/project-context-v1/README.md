@@ -6,7 +6,10 @@ may claim success before the corresponding route exists.
 
 `operations.json` contains one accepted request/response pair for every
 project and V2 original-context operation. `invalid.json` contains inputs that
-the public codecs must reject before any mutation. Success is written by the
+the public codecs must reject before any mutation. An `operations.json` row
+whose command the CLI has retired stays, for the server HTTP test and the
+desktop test Authority, until its route is removed; the CLI test skips it. The
+`invalid.json` error rows and `visibility.json` cases name only kept commands. Success is written by the
 CLI as the exact response JSON on stdout followed by one newline; it has no
 extra `{ "ok": true }` envelope, matching the existing Person update commands.
 
@@ -33,9 +36,9 @@ encoding implementation.
 
 | CLI argv after `person` | Method and path | Request body | Success |
 | --- | --- | --- | --- |
-| `projects list` | `GET /v1/person/projects?limit={limit}&cursor={cursor}` | none | `200` project list |
+| `projects list` (retired) | `GET /v1/person/projects?limit={limit}&cursor={cursor}` | none | `200` project list |
 | `projects create` | `POST /v1/person/projects` | project create | `201` immutable create receipt |
-| `projects read` | `GET /v1/person/projects/{project_id}` | none | `200` project summary |
+| `projects read` (retired) | `GET /v1/person/projects/{project_id}` | none | `200` project summary |
 | `projects members` | `POST /v1/person/projects/members` | project browse | `200` members page |
 | `projects directory` | `POST /v1/person/projects/directory` | directory search | `200` directory page |
 | `directory` | `POST /v1/person/directory` | organization directory search | `200` organization directory page |
@@ -43,13 +46,19 @@ encoding implementation.
 | `projects member-remove` | `POST /v1/person/projects/members/remove` | member-remove | `200` immutable mutation receipt |
 | `projects associate` | `POST /v1/person/projects/context/associate` | association | `200` immutable mutation receipt |
 | `projects dissociate` | `POST /v1/person/projects/context/dissociate` | dissociation | `200` immutable mutation receipt |
-| `projects feed` | `POST /v1/person/projects/context/feed` | project browse | `200` project feed |
-| `projects search` | `POST /v1/person/projects/context/search` | project search | `200` project search page |
-| `projects read-context` | `GET /v1/person/projects/{project_id}/context/{context_id}` | none | `200` project context read |
-| `updates submit` | `POST /v2/person/updates` | V2 submit | `202` V2 receipt |
-| `updates status` | `GET /v2/person/updates/{request_id}` | none | `200` V2 status |
+| `projects feed` (retired) | `POST /v1/person/projects/context/feed` | project browse | `200` project feed |
+| `projects search` (retired) | `POST /v1/person/projects/context/search` | project search | `200` project search page |
+| `projects read-context` (retired) | `GET /v1/person/projects/{project_id}/context/{context_id}` | none | `200` project context read |
+| `updates submit` (retired) | `POST /v2/person/updates` | V2 submit | `202` V2 receipt |
+| `updates status` (retired) | `GET /v2/person/updates/{request_id}` | none | `200` V2 status |
 | `updates search` | `POST /v2/person/updates/search` | V2 search | `200` V2 search result |
-| `updates read` | `GET /v2/person/updates/content/{context_id}` | none | `200` V2 original read |
+| `updates read` (retired) | `GET /v2/person/updates/content/{context_id}` | none | `200` V2 original read |
+
+The CLI retired the commands marked retired on 2026-09-30. `projects list-v2`,
+`read-v2` and `search-v2` replace the project reads, `updates submit-v3` and
+`status-v3` replace the V2 note write and status, `person list --project`
+browses a project and `person open --ref` reads one item. The CLI test covers
+the kept commands with its own rows.
 
 `projects directory` requires a lead grant on that project. `directory` (fixture
 `person-directory`) lists the same active-member names for any active member of
@@ -57,14 +66,13 @@ the caller's own organization, with no project, per
 [ADR-0016](../../../docs/decisions/ADR-0016-organization-people-directory.md).
 Its body carries only the optional query, limit and cursor.
 
-Only `projects list` is the capability probe used by the UI. Its `not_found`
-response means **Not live yet** only at that capability-probe boundary. A
-`not_found` for an individual project or original is deliberately
+A `not_found` for an individual project or original is deliberately
 non-disclosing and must never be converted to a project list, global search,
 or an unavailable claim.
 
 `directory` is the one exception: a `not_found` there means only that this
-Authority lacks the organization directory, even when `projects list` is live.
+Authority lacks the organization directory, even when the project routes are
+live.
 The UI must show people search as unavailable, never as an empty list.
 
 ## Error and retry mapping
@@ -85,9 +93,9 @@ does not fall back to V1 when the Authority does not recognize the V2 path.
 ## Flag grammar
 
 ```text
-echo-brain person projects list [--limit <1-10>] [--cursor <opaque-base64url>]
+echo-brain person projects list-v2 [--status <active|archived>] [--limit <1-10>] [--cursor <opaque-base64url>]
 echo-brain person projects create --request-id <uuid> --name <name>
-echo-brain person projects read --project-id <project-id>
+echo-brain person projects read-v2 --project-id <project-id>
 echo-brain person projects members --project-id <project-id> [--limit <1-10>] [--cursor <opaque-base64url>]
 echo-brain person projects directory --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
 echo-brain person directory [--query <text>] [--limit <1-10>] [--cursor <opaque-base64url>]
@@ -95,20 +103,19 @@ echo-brain person projects member-set --request-id <uuid> --project-id <project-
 echo-brain person projects member-remove --request-id <uuid> --project-id <project-id> --membership-id <membership-id>
 echo-brain person projects associate --request-id <uuid> --project-id <project-id> --context-id <context-id>
 echo-brain person projects dissociate --request-id <uuid> --project-id <project-id> --context-id <context-id>
-echo-brain person projects feed --project-id <project-id> [--limit <1-10>] [--cursor <opaque-base64url>]
-echo-brain person projects search --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
-echo-brain person projects read-context --project-id <project-id> --context-id <context-id>
-echo-brain person updates submit --request-id <uuid> --title <title> --file <utf8-text-file> [--visibility <only-me|team|project>] [--audience-project-id <project-id>] [--project-id <project-id>]
+echo-brain person projects search-v2 --project-id <project-id> --query <text> [--limit <1-10>] [--cursor <opaque-base64url>]
+echo-brain person updates submit-v3 --request-id <uuid> --title <title> --file <utf8-text-file> [--association-project-ids-json <canonical-project-id-array>] [--audience <only-me|team|project|projects>] [--audience-project-id <project-id>] [--audience-project-ids-json <canonical-project-id-array>]
 ```
 
-V2 submit defaults to `--visibility only-me`, serializing
-`audience: { kind: "only_me" }` and required `project_id: null`. `--visibility
-project` requires exactly one `--audience-project-id`; `only-me` and `team`
-forbid it. `--project-id` is optional and is the one association coordinate,
-independent of the selected audience. It may equal a project audience but is
-not inferred from it. The CLI rejects every unsupported or ambiguous flag
-combination before HTTP, including an audience-project ID without project
-visibility or a second association.
+`updates submit-v3` defaults to the only-me audience and no association,
+serializing `audience: { kind: "only_me" }` and `association_project_ids: []`.
+`--audience project` requires exactly one `--audience-project-id`, and
+`--audience projects` requires `--audience-project-ids-json`; `only-me` and
+`team` forbid both. `--association-project-ids-json` is the independent
+association set: it may name a project audience but is never inferred from it.
+Both project ID arrays are canonical JSON. The CLI rejects every unsupported or
+ambiguous flag combination before HTTP, including an audience-project ID
+without a project audience or a repeated option.
 
 An exact 4xx response means the current attempt was rejected before a new
 mutation result. It does not prove that an earlier attempt using the same

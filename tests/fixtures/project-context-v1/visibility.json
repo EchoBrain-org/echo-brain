@@ -4,18 +4,23 @@
   "submits": [
     {
       "id": "only-me-default-without-association",
-      "cli": ["updates", "submit", "--request-id", "00000000-0000-4000-8000-000000000020", "--title", "Private note", "--file", "/private/snapshot.txt"],
-      "body": { "schema_version": 2, "kind": "echo-person-update-submit-v2", "request_id": "00000000-0000-4000-8000-000000000020", "title": "Private note", "text": "original", "project_id": null, "audience": { "kind": "only_me" } }
+      "cli": ["updates", "submit-v3", "--request-id", "00000000-0000-4000-8000-000000000020", "--title", "Private note", "--file", "/private/snapshot.txt"],
+      "body": { "schema_version": 3, "kind": "echo-person-update-submit-v3", "request_id": "00000000-0000-4000-8000-000000000020", "title": "Private note", "text": "original", "association_project_ids": [], "audience": { "kind": "only_me" } }
     },
     {
       "id": "team-with-independent-association",
-      "cli": ["updates", "submit", "--request-id", "00000000-0000-4000-8000-000000000021", "--title", "Team note", "--file", "/private/snapshot.txt", "--visibility", "team", "--project-id", "prj_11111111-1111-4111-8111-111111111111"],
-      "body": { "schema_version": 2, "kind": "echo-person-update-submit-v2", "request_id": "00000000-0000-4000-8000-000000000021", "title": "Team note", "text": "original", "project_id": "prj_11111111-1111-4111-8111-111111111111", "audience": { "kind": "team" } }
+      "cli": ["updates", "submit-v3", "--request-id", "00000000-0000-4000-8000-000000000021", "--title", "Team note", "--file", "/private/snapshot.txt", "--audience", "team", "--association-project-ids-json", "[\"prj_11111111-1111-4111-8111-111111111111\"]"],
+      "body": { "schema_version": 3, "kind": "echo-person-update-submit-v3", "request_id": "00000000-0000-4000-8000-000000000021", "title": "Team note", "text": "original", "association_project_ids": ["prj_11111111-1111-4111-8111-111111111111"], "audience": { "kind": "team" } }
     },
     {
       "id": "project-audience-with-different-single-association",
-      "cli": ["updates", "submit", "--request-id", "00000000-0000-4000-8000-000000000022", "--title", "Project note", "--file", "/private/snapshot.txt", "--visibility", "project", "--audience-project-id", "prj_11111111-1111-4111-8111-111111111111", "--project-id", "prj_44444444-4444-4444-8444-444444444444"],
-      "body": { "schema_version": 2, "kind": "echo-person-update-submit-v2", "request_id": "00000000-0000-4000-8000-000000000022", "title": "Project note", "text": "original", "project_id": "prj_44444444-4444-4444-8444-444444444444", "audience": { "kind": "project", "project_id": "prj_11111111-1111-4111-8111-111111111111" } }
+      "cli": ["updates", "submit-v3", "--request-id", "00000000-0000-4000-8000-000000000022", "--title", "Project note", "--file", "/private/snapshot.txt", "--audience", "project", "--audience-project-id", "prj_11111111-1111-4111-8111-111111111111", "--association-project-ids-json", "[\"prj_44444444-4444-4444-8444-444444444444\"]"],
+      "body": { "schema_version": 3, "kind": "echo-person-update-submit-v3", "request_id": "00000000-0000-4000-8000-000000000022", "title": "Project note", "text": "original", "association_project_ids": ["prj_44444444-4444-4444-8444-444444444444"], "audience": { "kind": "project", "project_id": "prj_11111111-1111-4111-8111-111111111111" } }
+    },
+    {
+      "id": "projects-audience-union-wider-than-its-association",
+      "cli": ["updates", "submit-v3", "--request-id", "00000000-0000-4000-8000-000000000023", "--title", "Two-project note", "--file", "/private/snapshot.txt", "--audience", "projects", "--audience-project-ids-json", "[\"prj_11111111-1111-4111-8111-111111111111\",\"prj_44444444-4444-4444-8444-444444444444\"]", "--association-project-ids-json", "[\"prj_11111111-1111-4111-8111-111111111111\"]"],
+      "body": { "schema_version": 3, "kind": "echo-person-update-submit-v3", "request_id": "00000000-0000-4000-8000-000000000023", "title": "Two-project note", "text": "original", "association_project_ids": ["prj_11111111-1111-4111-8111-111111111111"], "audience": { "kind": "projects", "project_ids": ["prj_11111111-1111-4111-8111-111111111111", "prj_44444444-4444-4444-8444-444444444444"] } }
     }
   ]
 }

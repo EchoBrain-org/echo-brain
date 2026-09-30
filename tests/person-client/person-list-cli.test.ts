@@ -187,6 +187,14 @@ describe('person open CLI', () => {
     }
   });
 
+  it('opens a full 8 KiB note, whose escaped text passes the old 16 KiB note bound', async () => {
+    const response = { schema_version: 1, kind: 'echo-person-open-v1', ref: NOTE, item: noteRow, text: '\t'.repeat(8191) + 'x', next_cursor: null };
+    expect(Buffer.byteLength(canonicalJson(response))).toBeGreaterThan(16384);
+    const result = await run(['open', '--ref', NOTE], network(() => json(response)).fetch);
+    expect(result.code, result.stderr).toBe(0);
+    expect(oneLine(result.stdout)).toEqual({ ok: true, result: response });
+  });
+
   it('refuses a missing or malformed ref or cursor before the network', async () => {
     const cases = [
       ['open'],

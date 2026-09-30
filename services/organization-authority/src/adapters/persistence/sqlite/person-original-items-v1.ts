@@ -187,7 +187,7 @@ export class SqlitePersonOriginalItemsV1 implements PersonOriginalItemsPortV1 {
     if (!Number.isSafeInteger(from) || from < 0 || from > MAXIMUM_ORDINAL) invalid();
     const found = this.documents(actor, GLOBAL, grants, { ids: [id] })[0];
     if (found === undefined) notFound();
-    // Mirrors documents read-v2 exactly: at most 8 chunks, 8 KiB raw and 20 KiB canonical per page.
+    // Mirrors the V2 document text route exactly: at most 8 chunks, 8 KiB raw and 20 KiB canonical per page.
     const candidates = this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text FROM authority_person_document_text_v1 WHERE document_id=? AND ordinal>=? ORDER BY ordinal LIMIT 9").all(id, from) as TextChunkRow[];
     const chunks: TextChunkRow[] = [];
     let total = 0;

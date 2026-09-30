@@ -8,8 +8,9 @@ import { PersonSessionStore } from '../../src/product/person-client/session-stor
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import {
-  validatePersonUpdateSubmitV1, validatePersonUpdateSubmitV2, validateProjectContextBrowseV1,
+  validatePersonUpdateSubmitV1, validatePersonUpdateSubmitV2, validatePersonUpdateSubmitV3, validateProjectContextBrowseV1,
   validateProjectContextFeedV1, validateProjectContextSearchV1, validateProjectCreateV1, validateProjectMemberSetV1,
+  type PersonUpdateSubmitV3, type ProjectIdV1,
 } from '@echo-brain/organization-api';
 
 interface Operation {
@@ -34,10 +35,38 @@ const invalidValidators: Readonly<Record<string, (value: unknown) => unknown>> =
 const visibility = JSON.parse(readFileSync(new URL('../fixtures/project-context-v1/visibility.json', import.meta.url), 'utf8')) as {
   submits: { id: string; cli: string[]; body: Record<string, unknown> }[];
 };
-const operation = (id: string) => fixtures.operations.find(item => item.id === id)!;
 const projectId = 'prj_11111111-1111-4111-8111-111111111111';
 const otherProject = 'prj_44444444-4444-4444-8444-444444444444';
-const upload = operation('updates-submit-v2');
+// operations.json keeps these rows for the server HTTP test and the desktop seeds; the CLI retired their commands.
+const RETIRED = new Set(['projects-list', 'projects-read', 'projects-feed', 'projects-search', 'projects-read-context', 'updates-submit-v2', 'updates-status-v2', 'updates-read-v2']);
+const summaryV2 = { schema_version: 2, kind: 'echo-project-summary-v2', project_id: projectId, name: 'Apollo', created_at: '2026-09-21T22:01:00.000Z', role: 'lead', status: 'active' };
+const contextItemV2 = { context_id: `ctx_${'a'.repeat(64)}`, received_at: '2026-09-21T22:01:00.000Z', title: 'Apollo update', excerpt: 'We agreed to ship.', audience: { kind: 'project', project_id: projectId } };
+const noteRequestId = '00000000-0000-4000-8000-000000000006';
+const noteV3 = { request_id: noteRequestId, context_id: `ctx_${'a'.repeat(64)}`, received_at: '2026-09-21T22:01:00.000Z',
+  association_project_ids: [projectId], audience: { kind: 'project', project_id: projectId } };
+/** The kept commands that replace the retired rows. */
+const current: Operation[] = [
+  { id: 'projects-list-v2', argv: ['projects', 'list-v2', '--limit', '10', '--cursor', 'eyJsYXN0Ijoicm93In0'],
+    http: { method: 'GET', path: '/v2/person/projects?limit=10&status=active&cursor=eyJsYXN0Ijoicm93In0', status: 200,
+      response: { schema_version: 2, kind: 'echo-project-list-v2', items: [summaryV2], next_cursor: null } } },
+  { id: 'projects-read-v2', argv: ['projects', 'read-v2', '--project-id', projectId],
+    http: { method: 'GET', path: `/v2/person/projects/${projectId}`, status: 200, response: summaryV2 } },
+  { id: 'projects-search-v2', argv: ['projects', 'search-v2', '--project-id', projectId, '--query', 'ship', '--limit', '10'],
+    http: { method: 'POST', path: '/v2/person/projects/context/search', status: 200, body: { project_id: projectId, query: 'ship', limit: 10 },
+      response: { schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id: projectId, items: [contextItemV2], next_cursor: null } } },
+  { id: 'updates-submit-v3', argv: ['updates', 'submit-v3', '--request-id', noteRequestId, '--title', 'Apollo update', '--file', '/private/snapshot.txt',
+    '--association-project-ids-json', JSON.stringify([projectId]), '--audience', 'project', '--audience-project-id', projectId],
+    http: { method: 'POST', path: '/v3/person/updates', status: 202,
+      body: { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id: noteRequestId, title: 'Apollo update', text: 'We agreed to ship.\n',
+        association_project_ids: [projectId], audience: { kind: 'project', project_id: projectId } },
+      response: { schema_version: 3, kind: 'echo-person-update-receipt-v3', ...noteV3, state: 'received' } } },
+  { id: 'updates-status-v3', argv: ['updates', 'status-v3', '--request-id', noteRequestId],
+    http: { method: 'GET', path: `/v3/person/updates/${noteRequestId}`, status: 200,
+      response: { schema_version: 3, kind: 'echo-person-update-status-v3', ...noteV3, status: 'stored', metadata: 'pending' } } },
+];
+const cliOperations = [...fixtures.operations.filter(item => !RETIRED.has(item.id)), ...current];
+const operation = (id: string) => cliOperations.find(item => item.id === id)!;
+const upload = operation('updates-submit-v3');
 const homes: string[] = [];
 const now = '2026-09-21T22:01:00.000Z';
 function setup() {
@@ -106,7 +135,7 @@ describe('frozen project context CLI contract', () => {
   it.each(visibility.submits)('$id keeps audience and association independent', async example => {
     const item: Operation = { id: example.id, argv: example.cli, http: { ...upload.http,
       body: { ...example.body, text: 'We agreed to ship.\n' }, response: { ...upload.http.response,
-        request_id: example.body.request_id, audience: example.body.audience, project_id: example.body.project_id } } };
+        request_id: example.body.request_id, audience: example.body.audience, association_project_ids: example.body.association_project_ids } } };
     const network = vi.fn<typeof fetch>(async (_url, init) => {
       expect(JSON.parse(String(init?.body))).toEqual(item.http.body);
       return json(item.http.response, 202);
@@ -116,7 +145,7 @@ describe('frozen project context CLI contract', () => {
     expect(JSON.parse(result.stdout)).toEqual(item.http.response);
   });
 
-  it.each(fixtures.operations)('$id rejects unknown success fields without releasing content', async item => {
+  it.each(cliOperations)('$id rejects unknown success fields without releasing content', async item => {
     const result = await run(item, async () => json({ ...item.http.response, private_extra: 'must not leak' }, item.http.status));
     expect(result.code).toBe(1); expect(result.stdout).toBe('');
     expect(result.stderr).not.toContain('must not leak');
@@ -124,7 +153,7 @@ describe('frozen project context CLI contract', () => {
       ...(isMutation(item) ? { mutation_outcome: 'unknown', request_id: item.http.body!.request_id } : {}) });
   });
 
-  it.each(fixtures.operations)('$id rejects an unexpected success status', async item => {
+  it.each(cliOperations)('$id rejects an unexpected success status', async item => {
     const result = await run(item, async () => json(item.http.response, item.http.status === 200 ? 201 : 200));
     expect(result.code).toBe(1); expect(result.stdout).toBe('');
     expect(JSON.parse(result.stderr).code).toBe(isMutation(item) ? 'outcome_unknown' : 'invalid_response');
@@ -132,19 +161,17 @@ describe('frozen project context CLI contract', () => {
 
   const mismatches: [string, Record<string, unknown>][] = [
     ['projects-create', { request_id: '00000000-0000-4000-8000-000000000009' }],
-    ['projects-read', { project_id: otherProject }],
+    ['projects-list-v2', { items: [{ ...summaryV2, status: 'archived' }] }], ['projects-read-v2', { project_id: otherProject }],
     ['projects-members', { project_id: otherProject }], ['projects-directory', { project_id: otherProject }],
     ['projects-member-add', { membership_id: 'mem_44444444-4444-4444-8444-444444444444' }],
     ['projects-member-set', { operation: 'member_remove' }],
     ['projects-member-set', { membership_id: 'mem_44444444-4444-4444-8444-444444444444' }],
     ['projects-member-remove', { project_id: otherProject }],
     ['projects-associate', { context_id: `ctx_${'b'.repeat(64)}` }], ['projects-dissociate', { operation: 'associate' }],
-    ['projects-feed', { project_id: otherProject }], ['projects-search', { project_id: otherProject }],
-    ['projects-read-context', { context_id: `ctx_${'b'.repeat(64)}` }],
-    ['updates-submit-v2', { audience: { kind: 'team' } }], ['updates-submit-v2', { project_id: otherProject }],
-    ['updates-submit-v2', { audience: { kind: 'project', project_id: otherProject } }],
-    ['updates-status-v2', { request_id: '00000000-0000-4000-8000-000000000009' }],
-    ['updates-read-v2', { context_id: `ctx_${'b'.repeat(64)}` }],
+    ['projects-search-v2', { project_id: otherProject }],
+    ['updates-submit-v3', { audience: { kind: 'team' } }], ['updates-submit-v3', { association_project_ids: [otherProject] }],
+    ['updates-submit-v3', { audience: { kind: 'project', project_id: otherProject } }],
+    ['updates-status-v3', { request_id: '00000000-0000-4000-8000-000000000009' }],
   ];
   it.each(mismatches)('%s binds decoded responses to the requested coordinates (%j)', async (id, change) => {
     const item = operation(id);
@@ -153,7 +180,7 @@ describe('frozen project context CLI contract', () => {
     expect(JSON.parse(result.stderr).code).toBe(isMutation(item) ? 'outcome_unknown' : 'invalid_response');
   });
 
-  it.each(fixtures.operations.filter(isMutation))('$id classifies closed 4xx and uncertain failures without retrying', async item => {
+  it.each(cliOperations.filter(isMutation))('$id classifies closed 4xx and uncertain failures without retrying', async item => {
     for (const [status, code] of [[400, 'invalid_request'], [400, 'stale_access_state'], [401, 'unauthorized'], [404, 'not_found'],
       [409, 'conflict'], [409, 'quota_exceeded'], [429, 'rate_limited'], [502, 'invalid_output'], [503, 'unavailable']] as const) {
       const network = vi.fn<typeof fetch>(async () => json({ error: { code, message: 'sensitive diagnostic' } }, status));
@@ -184,20 +211,23 @@ describe('frozen project context CLI contract', () => {
   });
 
   const invalidArgv = [
-    ['projects', 'feed'], ['projects', 'search', '--project-id', projectId, '--query', ''],
-    ['projects', 'list', '--limit', '0'], ['projects', 'list', '--limit', '11'], ['projects', 'list', '--limit', '1e0'],
-    ['projects', 'list', '--cursor', 'bad cursor'], ['projects', 'list', '--cursor', 'AB'],
-    ['projects', 'list', '--limit', '1', '--limit=2'],
-    ['projects', 'read', '--project-id', projectId, '--project-id', otherProject],
-    ['projects', 'feed', '--project-id', '../../updates'],
+    ['projects', 'search-v2', '--query', 'ship'], ['projects', 'search-v2', '--project-id', projectId, '--query', ''],
+    ['projects', 'list-v2', '--limit', '0'], ['projects', 'list-v2', '--limit', '11'], ['projects', 'list-v2', '--limit', '1e0'],
+    ['projects', 'list-v2', '--cursor', 'bad cursor'], ['projects', 'list-v2', '--cursor', 'AB'],
+    ['projects', 'list-v2', '--limit', '1', '--limit=2'], ['projects', 'list-v2', '--status', 'deleted'],
+    ['projects', 'read-v2', '--project-id', projectId, '--project-id', otherProject],
+    ['projects', 'read-v2', '--project-id', '../../updates'],
     ['projects', 'ask', '--question', 'ship'], ['ask', '--question', 'ship', '--project-id', projectId],
     ['updates', 'search', '--query', 'ship', '--project-id', projectId],
-    ['updates', 'read', '--context-id', `ctx_${'g'.repeat(64)}`],
-    [...upload.argv.filter((_, i) => i < upload.argv.indexOf('--visibility')), '--audience-project-id', projectId],
+    ['updates', 'status-v3', '--request-id', 'not-a-request-id'],
+    [...upload.argv.filter((_, i) => i < upload.argv.indexOf('--audience')), '--audience-project-id', projectId],
     [...upload.argv.slice(0, upload.argv.indexOf('--audience-project-id'))],
-    [...upload.argv, '--visibility', 'team'], [...upload.argv, '--project-id', otherProject],
+    [...upload.argv, '--audience', 'team'], [...upload.argv, '--project-id', otherProject],
+    [...upload.argv, '--association-project-ids-json', JSON.stringify([otherProject])],
     [...upload.argv, '--request-id', '00000000-0000-4000-8000-000000000008'],
-    [...upload.argv.slice(0, upload.argv.indexOf('--visibility')), '--visibility', 'only_me'],
+    [...upload.argv.slice(0, upload.argv.indexOf('--audience')), '--audience', 'everyone'],
+    [...upload.argv.slice(0, upload.argv.indexOf('--association-project-ids-json')), '--association-project-ids-json', JSON.stringify([otherProject, projectId])],
+    [...upload.argv.slice(0, upload.argv.indexOf('--audience')), '--audience', 'projects', '--audience-project-id', projectId],
     [...operation('projects-member-set').argv.slice(0, -1), 'owner'],
     [...operation('projects-create').argv, '--organization-id', 'private-input'],
     ['directory', '--project-id', projectId], ['directory', '--membership-id', 'mem_44444444-4444-4444-8444-444444444444'],
@@ -213,11 +243,11 @@ describe('frozen project context CLI contract', () => {
   });
 
   it('accepts ordinary JSON object order but rejects duplicate escaped keys, nested extras, and duplicate item IDs', async () => {
-    const item = operation('projects-feed');
+    const item = operation('projects-search-v2');
     expect((await run(item, async () => new Response(JSON.stringify(item.http.response, null, 2), { headers: { 'content-type': 'application/json' } }))).code).toBe(0);
     const rows = item.http.response.items as Record<string, unknown>[];
     const bad = [
-      JSON.stringify(item.http.response).replace('"schema_version":1', '"schema_version":2,"schema_\\u0076ersion":1'),
+      JSON.stringify(item.http.response).replace('"schema_version":2', '"schema_version":1,"schema_\\u0076ersion":2'),
       JSON.stringify({ ...item.http.response, items: [...rows, ...rows] }),
       JSON.stringify({ ...item.http.response, items: rows.map(row => ({ ...row, audience: { kind: 'team', project_id: projectId } })) }),
     ];
@@ -227,16 +257,16 @@ describe('frozen project context CLI contract', () => {
     }
   });
 
-  it('uses the V2 project feed for a projects-audience upload without downcasting its audience', async () => {
+  it('searches a projects-audience upload in a project without downcasting its audience', async () => {
     const { home } = setup(); let stdout = ''; let stderr = '';
     const contextId = `ctx_${'c'.repeat(64)}`;
-    const response = { schema_version: 2, kind: 'echo-project-context-feed-v2', project_id: projectId, items: [{
+    const response = { schema_version: 2, kind: 'echo-project-context-search-result-v2', project_id: projectId, items: [{
       context_id: contextId, received_at: now, title: 'SCOUT MRD', excerpt: 'Autonomous inspection requirements', audience: { kind: 'projects', project_ids: [projectId, otherProject] },
     }], next_cursor: null };
-    const code = await runPersonClientCli(['projects', 'feed-v2', '--project-id', projectId], { home_directory: home, now: () => now,
+    const code = await runPersonClientCli(['projects', 'search-v2', '--project-id', projectId, '--query', 'inspection'], { home_directory: home, now: () => now,
       fetch: async (url, init) => {
-        expect(String(url)).toBe('https://authority.example/v2/person/projects/context/feed');
-        expect(init?.method).toBe('POST'); expect(JSON.parse(String(init?.body))).toEqual({ project_id: projectId, limit: 10 });
+        expect(String(url)).toBe('https://authority.example/v2/person/projects/context/search');
+        expect(init?.method).toBe('POST'); expect(JSON.parse(String(init?.body))).toEqual({ project_id: projectId, query: 'inspection', limit: 10 });
         return json(response);
       }, stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } });
     expect(code, stderr).toBe(0); expect(JSON.parse(stdout)).toEqual(response);
@@ -252,30 +282,23 @@ describe('frozen project context CLI contract', () => {
     expect(code, stderr).toBe(0); expect(JSON.parse(stdout)).toEqual(saved);
   });
 
-  it('supports the full 8 KiB original under the 32 KiB wire bound', async () => {
-    const item = operation('updates-read-v2');
-    const response = { ...item.http.response, text: '\t'.repeat(8191) + 'x' };
-    expect(Buffer.byteLength(JSON.stringify(response))).toBeGreaterThan(16384);
-    const result = await run(item, async () => json(response));
-    expect(result.code, result.stderr).toBe(0); expect(JSON.parse(result.stdout)).toEqual(response);
-  });
-
   it('reports actual transport timeout as unknown without a replay', async () => {
     const network = vi.fn<typeof fetch>(async (_url, init) => new Promise((_resolve, reject) => {
       init!.signal!.addEventListener('abort', () => reject(new Error('timeout')), { once: true });
     }));
     const authority = new PersonAuthorityClient({ authority_origin: 'https://authority.example', fetch: network, timeout_ms: 5 });
-    await expect(authority.submitUpdateV2('fixture', validatePersonUpdateSubmitV2(upload.http.body))).rejects.toMatchObject({
+    await expect(authority.submitUpdateV3('fixture', validatePersonUpdateSubmitV3(upload.http.body))).rejects.toMatchObject({
       code: 'outcome_unknown', mutation_outcome: 'unknown', request_id: upload.http.body!.request_id, status: null,
     });
     expect(network).toHaveBeenCalledTimes(1);
   });
 
-  it('snapshots the original and independent project coordinates before yielding; unknown recovery only reads V2 status', async () => {
+  it('snapshots the original and independent project coordinates before yielding; unknown recovery only reads V3 status', async () => {
     const { home } = setup();
-    const request = { ...validatePersonUpdateSubmitV2(upload.http.body), project_id: otherProject as `prj_${string}` };
+    const request: { -readonly [K in keyof PersonUpdateSubmitV3]: PersonUpdateSubmitV3[K] } = { ...validatePersonUpdateSubmitV3(upload.http.body),
+      association_project_ids: [otherProject as ProjectIdV1], audience: { kind: 'project', project_id: projectId as ProjectIdV1 } };
     const original = structuredClone(request);
-    const status = { ...operation('updates-status-v2').http.response, project_id: otherProject };
+    const status = { ...operation('updates-status-v3').http.response, association_project_ids: [otherProject] };
     const paths: string[] = [];
     const client = new PersonClient({ home_directory: home, now: () => now, fetch: async (url, init) => {
       paths.push(new URL(String(url)).pathname);
@@ -285,12 +308,12 @@ describe('frozen project context CLI contract', () => {
       }
       return json(status);
     } });
-    const pending = client.submitUpdateV2(request);
-    request.text = 'changed draft'; request.project_id = projectId;
-    if (request.audience.kind === 'project') Object.assign(request.audience, { project_id: otherProject });
+    const pending = client.submitUpdateV3(request);
+    request.text = 'changed draft'; (request.association_project_ids as ProjectIdV1[]).push(projectId as ProjectIdV1);
+    Object.assign(request.audience, { project_id: otherProject });
     await expect(pending).rejects.toMatchObject({ mutation_outcome: 'unknown', request_id: original.request_id });
-    await expect(client.updateStatusV2(original.request_id)).resolves.toEqual(status);
-    expect(paths).toEqual(['/v2/person/updates', `/v2/person/updates/${original.request_id}`]);
+    await expect(client.updateStatusV3(original.request_id)).resolves.toEqual(status);
+    expect(paths).toEqual(['/v3/person/updates', `/v3/person/updates/${original.request_id}`]);
   });
 
   it('does not release a response after the local account changes', async () => {
@@ -299,9 +322,9 @@ describe('frozen project context CLI contract', () => {
       const stored = store.read();
       store.install(stored.authority_origin, stored.authority_id, { ...stored.session,
         membership_id: 'mem_44444444-4444-4444-8444-444444444444' });
-      return json(operation('projects-list').http.response);
+      return json(operation('projects-list-v2').http.response);
     } });
-    await expect(client.projects()).rejects.toMatchObject({ code: 'stale_access_state' });
+    await expect(client.projectsV2()).rejects.toMatchObject({ code: 'stale_access_state' });
   });
 
   it.each(failures.cases)('$id is rejected by its public codec', testCase => {
@@ -310,7 +333,7 @@ describe('frozen project context CLI contract', () => {
   });
 
   it.each(failures.errors)('$id preserves the exact sanitized failure contract', async failure => {
-    const operation = fixtures.operations.find(item => item.id === failure.cli.action || item.id === `${failure.cli.action}-v2`)!;
+    const operation = cliOperations.find(item => item.id === failure.cli.action || item.id === `${failure.cli.action}-v2`)!;
     const network = vi.fn<typeof fetch>(async () => json(failure.http, failure.http_status));
     const result = await run(operation, network);
     expect(result.code).toBe(1);
@@ -319,7 +342,7 @@ describe('frozen project context CLI contract', () => {
     expect(network).toHaveBeenCalledTimes(1);
   });
 
-  it.each(fixtures.operations)('$id has help without network or a session', async operation => {
+  it.each(cliOperations)('$id has help without network or a session', async operation => {
     const network = vi.fn(); let output = '';
     // `person directory` is one word; the project families are `<family> <action>`.
     const command = operation.argv.slice(0, operation.argv[0] === 'directory' ? 1 : 2);
@@ -329,7 +352,7 @@ describe('frozen project context CLI contract', () => {
     expect(network).not.toHaveBeenCalled();
   });
 
-  it.each(fixtures.operations)('$id maps exact argv to the frozen HTTP and success JSON', async operation => {
+  it.each(cliOperations)('$id maps exact argv to the frozen HTTP and success JSON', async operation => {
     const network = vi.fn<typeof fetch>(async (input, init) => {
       const url = new URL(String(input));
       expect(`${url.pathname}${url.search}`).toBe(operation.http.path);

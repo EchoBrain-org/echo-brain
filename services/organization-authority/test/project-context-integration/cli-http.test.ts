@@ -3,7 +3,7 @@ import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PersonUpdateReceiptV2, ProjectCreateReceiptV1 } from '@echo-brain/organization-api';
+import type { PersonUpdateReceiptV3, ProjectCreateReceiptV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { runPersonClientCli } from '../../../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../../../src/product/person-client/session-store.js';
@@ -101,33 +101,34 @@ function uploadArgv(project: string, audience: string, audienceProject?: string)
   const requestId = h.requestId();
   const file = join(realpathSync(h.root), `${requestId}.txt`);
   writeFileSync(file, 'PC06 original meridian.\n', { mode: 0o600 });
-  return ['updates', 'submit', '--request-id', requestId, '--title', 'Synthetic PC06', '--file', file, '--visibility', audience, '--project-id', project,
-    ...(audienceProject ? ['--audience-project-id', audienceProject] : [])];
+  return ['updates', 'submit-v3', '--request-id', requestId, '--title', 'Synthetic PC06', '--file', file, '--audience', audience,
+    '--association-project-ids-json', JSON.stringify([project]), ...(audienceProject ? ['--audience-project-id', audienceProject] : [])];
+}
+async function search(person: Person) {
+  return (await ok(person, ['updates', 'search-v3', '--query', 'meridian'])).results as { context_id: string; audience: unknown }[];
 }
 
 describe('PC-06 real CLI -> loopback HTTP -> application -> V10, fixture authentication/model', () => {
   it('preserves disjoint project visibility, private/team audience and cross-project coordinates', async () => {
     const alpha = await create('Synthetic Alpha'); const beta = await create('Synthetic Beta');
     await member(alpha, 'bob'); await member(beta, 'carol');
-    expect((await ok('bob', ['projects', 'list'])).items.map((item: { project_id: string }) => item.project_id)).toEqual([alpha]);
-    const privateNote = await ok<PersonUpdateReceiptV2>('alice', uploadArgv(alpha, 'only-me'));
-    const team = await ok<PersonUpdateReceiptV2>('alice', uploadArgv(alpha, 'team'));
-    const cross = await ok<PersonUpdateReceiptV2>('alice', uploadArgv(beta, 'project', alpha));
-    expect(cross).toMatchObject({ project_id: beta, audience: { kind: 'project', project_id: alpha } });
-    expect((await ok('bob', ['projects', 'feed', '--project-id', alpha])).items.map((item: { context_id: string }) => item.context_id)).toEqual([team.context_id]);
-    expect((await ok('carol', ['projects', 'search', '--project-id', beta, '--query', 'meridian'])).items).toEqual([]);
-    expect(await ok('bob', ['updates', 'read', '--context-id', cross.context_id])).toMatchObject({ text: 'PC06 original meridian.\n', audience: cross.audience });
-    expect(await ok('dana', ['updates', 'read', '--context-id', team.context_id])).not.toHaveProperty('project_id');
-    for (const [person, context] of [['bob', privateNote.context_id], ['carol', cross.context_id]] as const) {
-      const result = await cli(person, ['updates', 'read', '--context-id', context]);
-      expect(result.code).toBe(1); expect(result.stdout).toBe('');
-      expect(JSON.parse(result.stderr)).toMatchObject({ code: 'not_found', status: 404 });
-    }
-    const cursor = (await ok('alice', ['projects', 'feed', '--project-id', alpha, '--limit', '1'])).next_cursor;
-    const misuse = await cli('alice', ['projects', 'feed', '--project-id', beta, '--limit', '1', '--cursor', cursor]);
+    expect((await ok('bob', ['projects', 'list-v2'])).items.map((item: { project_id: string }) => item.project_id)).toEqual([alpha]);
+    const privateNote = await ok<PersonUpdateReceiptV3>('alice', uploadArgv(alpha, 'only-me'));
+    const team = await ok<PersonUpdateReceiptV3>('alice', uploadArgv(alpha, 'team'));
+    const cross = await ok<PersonUpdateReceiptV3>('alice', uploadArgv(beta, 'project', alpha));
+    expect(cross).toMatchObject({ association_project_ids: [beta], audience: { kind: 'project', project_id: alpha } });
+    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items.map((item: { context_id: string }) => item.context_id)).toEqual([team.context_id]);
+    expect((await ok('carol', ['projects', 'search-v2', '--project-id', beta, '--query', 'meridian'])).items).toEqual([]);
+    // Bob reads the cross-project note through its audience, never the private one; Carol and Dana see only Team.
+    const bobs = await search('bob');
+    expect(bobs.map(row => row.context_id).sort()).toEqual([team.context_id, cross.context_id].sort());
+    expect(bobs.find(row => row.context_id === cross.context_id)).toMatchObject({ audience: cross.audience });
+    expect(bobs.some(row => row.context_id === privateNote.context_id)).toBe(false);
+    for (const person of ['carol', 'dana'] as const) expect((await search(person)).map(row => row.context_id)).toEqual([team.context_id]);
+    const cursor = (await ok('alice', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian', '--limit', '1'])).next_cursor;
+    expect(cursor).toEqual(expect.any(String));
+    const misuse = await cli('alice', ['projects', 'search-v2', '--project-id', beta, '--query', 'meridian', '--limit', '1', '--cursor', cursor]);
     expect(JSON.parse(misuse.stderr)).toMatchObject({ code: 'invalid_request' });
-    const wrongProject = await cli('alice', ['projects', 'read-context', '--project-id', alpha, '--context-id', cross.context_id]);
-    expect(JSON.parse(wrongProject.stderr)).toMatchObject({ code: 'not_found' });
     const before = requests.length;
     const ask = await cli('alice', ['projects', 'ask', '--project-id', alpha, '--question', 'meridian']);
     expect(ask.code).not.toBe(0); expect(requests).toHaveLength(before);
@@ -148,25 +149,26 @@ describe('PC-06 real CLI -> loopback HTTP -> application -> V10, fixture authent
     const requestId = argv[argv.indexOf('--request-id') + 1]!;
     expect(JSON.parse(failed.stderr)).toMatchObject({ code: 'outcome_unknown', mutation_outcome: 'unknown', request_id: requestId });
     await stop(); h.restart(); await start();
-    const status = await ok('alice', ['updates', 'status', '--request-id', requestId]);
-    const replay = await ok<PersonUpdateReceiptV2>('alice', argv);
-    expect(replay).toMatchObject({ context_id: status.context_id, project_id: beta, audience: { kind: 'project', project_id: alpha } });
+    const status = await ok('alice', ['updates', 'status-v3', '--request-id', requestId]);
+    const replay = await ok<PersonUpdateReceiptV3>('alice', argv);
+    expect(replay).toMatchObject({ context_id: status.context_id, association_project_ids: [beta], audience: { kind: 'project', project_id: alpha } });
     const conflict = await cli('alice', argv.map(value => value === 'Synthetic PC06' ? 'Changed title' : value));
     expect(JSON.parse(conflict.stderr)).toMatchObject({ code: 'conflict', mutation_outcome: 'not_submitted', request_id: requestId });
     expect(h.database.prepare('SELECT count(*) AS n FROM authority_person_updates_v2').get()).toEqual({ n: 1 });
     expect(h.database.prepare('SELECT count(*) AS n FROM authority_person_update_work_v2').get()).toEqual({ n: 1 });
   });
 
-  it.each(['success', 'failure', 'revocation'] as const)('keeps original CLI read/search available across real worker %s', async outcome => {
+  it.each(['success', 'failure', 'revocation'] as const)('keeps original CLI search available across real worker %s', async outcome => {
     const alpha = await create('Synthetic Alpha'); await member(alpha, 'bob', 'lead');
-    const receipt = await ok<PersonUpdateReceiptV2>('alice', uploadArgv(alpha, 'project', alpha));
-    const original = await ok('bob', ['updates', 'read', '--context-id', receipt.context_id]);
-    expect((await ok('alice', ['updates', 'status', '--request-id', receipt.request_id])).metadata).toBe('pending');
+    const receipt = await ok<PersonUpdateReceiptV3>('alice', uploadArgv(alpha, 'project', alpha));
+    const original = await search('bob');
+    expect(original.map(row => row.context_id)).toEqual([receipt.context_id]);
+    expect((await ok('alice', ['updates', 'status-v3', '--request-id', receipt.request_id])).metadata).toBe('pending');
     let now = PROJECT_CONTEXT_NOW;
     let verifiedHandoffs = 0;
     const generate = vi.fn(async () => {
-      expect(await ok('bob', ['updates', 'read', '--context-id', receipt.context_id])).toEqual(original);
-      expect((await ok('bob', ['projects', 'search', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
+      expect(await search('bob')).toEqual(original);
+      expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
       verifiedHandoffs++;
       if (outcome === 'failure') throw new Error('synthetic provider failure');
       if (outcome === 'revocation') await ok('bob', ['projects', 'member-remove', '--request-id', h.requestId(), '--project-id', alpha, '--membership-id', PEOPLE.alice.membership_id]);
@@ -179,10 +181,15 @@ describe('PC-06 real CLI -> loopback HTTP -> application -> V10, fixture authent
       await worker.runOnce(new AbortController().signal);
       now = new Date(Date.parse(now) + 60_000).toISOString();
     }
-    expect((await ok('alice', ['updates', 'status', '--request-id', receipt.request_id])).metadata).toBe(outcome === 'success' ? 'ready' : 'unavailable');
-    expect(await ok('bob', ['updates', 'read', '--context-id', receipt.context_id])).toEqual(original);
-    expect((await ok('bob', ['projects', 'search', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
-    expect((await ok('bob', ['projects', 'search', '--project-id', alpha, '--query', 'zenith'])).items).toHaveLength(outcome === 'success' ? 1 : 0);
+    const status = await ok('alice', ['updates', 'status-v3', '--request-id', receipt.request_id]);
+    if (outcome === 'revocation') {
+      // Alice has left the note's project, so her status is the saved-only proof with no metadata (ADR-0023).
+      expect(status).toMatchObject({ kind: 'echo-person-update-saved-v3', context_id: receipt.context_id });
+      expect(h.database.prepare('SELECT state FROM authority_person_update_work_v2 WHERE context_id = ?').get(receipt.context_id)).toEqual({ state: 'unavailable' });
+    } else expect(status.metadata).toBe(outcome === 'success' ? 'ready' : 'unavailable');
+    expect(await search('bob')).toEqual(original);
+    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'meridian'])).items).toHaveLength(1);
+    expect((await ok('bob', ['projects', 'search-v2', '--project-id', alpha, '--query', 'zenith'])).items).toHaveLength(outcome === 'success' ? 1 : 0);
     expect(generate).toHaveBeenCalledTimes(outcome === 'failure' ? 5 : 1);
     expect(verifiedHandoffs).toBe(outcome === 'failure' ? 5 : 1);
   });
@@ -190,15 +197,15 @@ describe('PC-06 real CLI -> loopback HTTP -> application -> V10, fixture authent
   it('returns explicit unsupported-route failures without falling back to V1 or team sharing', async () => {
     const alpha = await create('Synthetic Alpha');
     await stop(); await start(false);
-    const list = await cli('alice', ['projects', 'list']);
-    expect(JSON.parse(list.stderr)).toMatchObject({ action: 'projects-list', code: 'not_found', status: 404 });
-    const read = await cli('alice', ['projects', 'read', '--project-id', alpha]);
-    expect(JSON.parse(read.stderr)).toMatchObject({ action: 'projects-read', code: 'not_found', status: 404 });
+    const list = await cli('alice', ['projects', 'list-v2']);
+    expect(JSON.parse(list.stderr)).toMatchObject({ action: 'projects-list-v2', code: 'not_found', status: 404 });
+    const read = await cli('alice', ['projects', 'read-v2', '--project-id', alpha]);
+    expect(JSON.parse(read.stderr)).toMatchObject({ action: 'projects-read-v2', code: 'not_found', status: 404 });
     requests.length = 0;
     const submit = await cli('alice', uploadArgv(alpha, 'project', alpha));
     expect(submit.stdout).toBe('');
     expect(JSON.parse(submit.stderr)).toMatchObject({ code: 'not_found', mutation_outcome: 'not_submitted' });
-    expect(requests).toEqual(['POST /v2/person/updates']);
+    expect(requests).toEqual(['POST /v3/person/updates']);
     expect(h.database.prepare('SELECT count(*) AS n FROM authority_person_updates_v2').get()).toEqual({ n: 0 });
   });
 });

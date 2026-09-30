@@ -14,7 +14,7 @@ Attach UTF-8 text/Markdown, PDF or Word `.docx` files up to **25 MiB (26,214,400
 
 An upload receipt means the original was saved with its filename, title, byte count and SHA-256. Text extraction is a separate state: extracting, ready, partial, no text, encrypted, malformed, limit exceeded, timed out, unsupported or unavailable. Failed extraction leaves the original downloadable. Scanned PDFs need OCR, which this version does not provide.
 
-Hardware, Software and QA participants can discover authorized documents in their project, search extracted text, read bounded pages with page/paragraph anchors, and download the original. A new extraction status refreshes the same document. The reader reconciles a bounded extraction-state change between metadata and text requests while preserving exact original identity and account fences.
+Hardware, Software and QA participants can discover authorized documents in their project, search extracted text, read bounded pages with page/paragraph anchors, and download the original. A new extraction status refreshes the same document. `person open` reads a document's metadata and text page in one server read, so they always agree.
 
 Audience and project association have separate controls. An uploader who can read the document and belongs to a target project may link it after upload. An uploader or current project lead who can read it may remove that link. A second project association conflicts: remove the existing link before linking another project. Association changes never edit the original or its audience, and an uncertain mutation retains its exact request for retry. Metadata reports the current association; the immutable full upload receipt retains the initial association. Recovery must not mistake a valid later link change for a changed original.
 
@@ -54,17 +54,25 @@ The CLI uses `echo-brain person documents`:
 
 | Command | Behavior |
 | --- | --- |
-| `upload --file …` | Captures and submits an immutable original with selected audience and association. |
-| `status --request-id …` | Returns current authorized metadata or the minimal saved proof. |
-| `read --document-id …`, `search` | Returns authorized bounded content; project context is selected with `--project-id`. |
-| `download --document-id … --out …` | Verifies bytes/hash and atomically installs a file without overwriting an existing destination. |
+| `upload-v2 --file …` | Captures and submits an immutable original with selected audience and association. |
+| `status-v2 --request-id …` | Returns current authorized metadata or the minimal saved proof. |
+| `search-v2` | Lists or searches authorized documents; project context is selected with `--project-id`. |
+| `download-v2 --document-id … --out …` | Verifies bytes/hash and atomically installs a file without overwriting an existing destination. |
 | `associate --document-id … --project-id … --request-id …` | Adds a project link without changing audience. |
 | `dissociate --document-id … --project-id … --request-id …` | Removes the specified link without deleting the original. |
 | `pending` | Lists this account's retained local upload requests without a network call or exposing original filesystem paths. |
 | `retry --request-id …` | Resends the exact retained bytes and metadata, including after restart or original file deletion. |
 | `abandon --request-id …` | Explicitly removes local retry material only; the Authority outcome is unchanged. |
 
-Unknown upload outcomes retain the bounded account-scoped immutable request snapshot. Matching full or minimal saved receipts reconcile it. Abandoning local recovery cannot cancel a server save; retain the request ID and check status or search before starting a new upload. A definitive first-attempt rejection fails that queue item and continues to the next; an earlier uncertain attempt remains recoverable. Known input/quota/snapshot rejections remain distinct from an unknown mutation outcome.
+`person open --ref document:<document-id>` reads a document's extracted text,
+paged, under current access
+([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). The V1
+`upload`, `status`, `read`, `search` and `download` commands and `read-v2` were
+retired from the CLI on 2026-09-30; their routes stay for older clients until a
+later server release. `retry` still resends a V1 snapshot that an older client
+retained.
+
+Unknown upload outcomes retain the bounded account-scoped immutable request snapshot. Matching full or minimal saved receipts reconcile it. A snapshot an older client kept from a V1 upload is settled by `retry`, `abandon` or a minimal saved receipt; a full `status-v2` receipt reports its document but does not settle it. Abandoning local recovery cannot cancel a server save; retain the request ID and check `status-v2` or `search-v2` before starting a new upload. A definitive first-attempt rejection fails that queue item and continues to the next; an earlier uncertain attempt remains recoverable. Known input/quota/snapshot rejections remain distinct from an unknown mutation outcome.
 
 While it runs, the desktop app offers **Check status**, **Try again** and **Start over** for an unconfirmed upload, where Start over abandons this computer's kept copy of the file, and **Try again** or **Dismiss** for an unconfirmed link change. It keeps that record in memory only, so after a quit or crash it does not offer them again; `pending` and `retry` above still reach the kept upload copies. See the desktop app's [known gaps](../product/2026-09-24-electron-desktop-known-gaps.md).
 
