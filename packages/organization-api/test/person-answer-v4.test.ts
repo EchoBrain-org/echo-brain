@@ -154,6 +154,22 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(validatePersonEvidenceSearchRequestV1({ schema_version: 1, query: 'fixtures', kinds: ['decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'] }).kinds).toHaveLength(6);
   });
 
+  it('echoes a mine scope on answers and desk responses, but never a mine scope with a project', () => {
+    const answer = (scope: unknown) => ({
+      schema_version: 4, kind: 'echo-clean-person-answer-v4', scope, outcome: 'answered',
+      citations: [{ citation, kind: 'decision', label: 'Launch decision', visibility: 'team' }],
+      parts: [{ question: 'What did I decide?', status: 'answered', statements: [{ text: 'The pilot is approved.', citation_indexes: [0], private: false }] }],
+    });
+    const desk = (scope: unknown) => ({ schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope, truncated: false, items: [] });
+    expect(validatePersonAnswerResponseV4(answer({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
+    expect(validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine' })).scope).toEqual({ kind: 'mine' });
+    expect(() => validatePersonAnswerResponseV4(answer({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
+    expect(() => validatePersonEvidenceDeskResponseV1(desk({ kind: 'mine', project_id }))).toThrow('Ask response scope has an unexpected shape');
+    expect(() => validatePersonAnswerResponseV4(answer({ kind: 'everyone' }))).toThrow('Ask response scope is invalid');
+    // The request gains mine only with the server that honours it (ADR-0023, step S6).
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'What did I decide?', mine: true })).toThrow();
+  });
+
   it('allows up to ten statements in a part (RFC-0003) and rejects more', () => {
     const response = (count: number) => ({
       schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: { kind: 'global' }, outcome: 'answered',

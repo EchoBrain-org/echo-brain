@@ -1,5 +1,5 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
-import { type PersonAnswerScopeV3 } from './person-answer-v3.js';
+import { type PersonSourceReadScopeV1 } from './person-answer-v3.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import {
   asRecord,
@@ -25,7 +25,7 @@ export interface PersonMeetingTranscriptCitationV1 {
 
 export interface PersonMeetingTranscriptReadRequestV1 {
   readonly schema_version: 1;
-  readonly scope: PersonAnswerScopeV3;
+  readonly scope: PersonSourceReadScopeV1;
   readonly citation: PersonMeetingTranscriptCitationV1;
   /** Unicode-code-point offset in the canonical transcript text; default zero. */
   readonly offset?: number;
@@ -34,7 +34,7 @@ export interface PersonMeetingTranscriptReadRequestV1 {
 export interface PersonMeetingTranscriptV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-person-meeting-transcript-v1';
-  readonly scope: PersonAnswerScopeV3;
+  readonly scope: PersonSourceReadScopeV1;
   readonly citation: PersonMeetingTranscriptCitationV1;
   readonly text: string;
   readonly next_offset: number | null;
@@ -59,7 +59,7 @@ function utf8Bytes(value: string): number {
   }, 0);
 }
 
-function scope(value: unknown): PersonAnswerScopeV3 {
+function scope(value: unknown): PersonSourceReadScopeV1 {
   const input = object(value, 'Meeting transcript scope');
   if (input.kind === 'global') {
     assertExactKeys(input, ['kind'], 'Meeting transcript scope');

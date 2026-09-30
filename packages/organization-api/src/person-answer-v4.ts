@@ -2,7 +2,7 @@ import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { validatePersonDocumentIdV1 } from './person-documents-v1.js';
 import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
-import type { PersonAnswerCitationV3, PersonAnswerScopeV3 } from './person-answer-v3.js';
+import { validatePersonAnswerScopeV3, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
 import {
   asRecord,
   assertDigest,
@@ -179,16 +179,7 @@ function coordinateText(value: unknown, label: string, maximumCodePoints: number
 }
 
 function scope(value: unknown): PersonAnswerScopeV3 {
-  const input = object(value, 'Ask response scope');
-  if (input.kind === 'global') {
-    assertExactKeys(input, ['kind'], 'Ask response scope');
-    return Object.freeze({ kind: 'global' });
-  }
-  if (input.kind === 'project') {
-    assertExactKeys(input, ['kind', 'project_id'], 'Ask response scope');
-    return Object.freeze({ kind: 'project', project_id: validateProjectIdV1(input.project_id, 'Ask response scope project_id') });
-  }
-  fail('Ask response scope is invalid');
+  return validatePersonAnswerScopeV3(value, 'Ask response scope');
 }
 
 const SLACK_TEAM_ID = /^[TE][A-Z0-9]{2,30}$/;

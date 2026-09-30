@@ -110,6 +110,7 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(answer.citations).toHaveLength(1);
     const citation = answer.citations[0]!.citation;
     if (citation.kind !== "source_revision") throw new Error("wrong citation kind");
+    if (answer.scope.kind === "mine") throw new Error("wrong scope");
     expect(f.originals.read({ access_token: "owner", scope: answer.scope, citation }).atom.text).toBe("Atlas plan.md\nThe launch window is October.");
     const opened = await f.route.openEvidence({ access_token: "owner", request: { schema_version: 1, citation, project_id: PROJECT_ALPHA } });
     expect(opened.items[0]!.text).toBe("Atlas plan.md\nThe launch window is October.");
