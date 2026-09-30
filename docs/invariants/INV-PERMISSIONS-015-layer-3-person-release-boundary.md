@@ -20,7 +20,7 @@ decision_ids:
   - ADR-0024
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths with the mine scope, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -112,12 +112,21 @@ a transcript only after that exact read and through the ADR-0017 grant. Each
 store audits exactly the rows it released after its own fence; the route then
 revalidates every store release, the session and the grant set before one page
 audit and the response. Rows and open responses carry only allowlisted fields:
-never the envelope, a log position, a count, an uploader or approver identity,
-or an unjoined project. A cursor holds only positions the caller already
+never the envelope, a log position, an uploader identity, an approver id, or
+an unjoined project. The only approver attribution is open meeting's first
+page naming the final approver by current directory display name
+(`approved_by`), as `person records` does, and the only count is a split
+atom's `part.count`. A cursor holds only positions the caller already
 received and is bound to the operation, scope, organization and membership.
 An open of anything the caller cannot read is one fixed `not_found`, and list
 holds meetings only when a record the reader can read in that scope (under
 mine, one the reader approved) is waiting to be indexed.
+
+ADR-0024's mine scope on `POST /v3/person/ask` is a caller-selected narrowing
+of the same global readable set: the evidence desk pushes it into every store
+query, mine with a project is a 400, and mine without the composed approver
+projectors is a 503 rather than global. Mine reads no Slack and no shared
+transcript. The answer audit and the per-store release audits are unchanged.
 
 ## Verification and change procedure
 
