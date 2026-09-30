@@ -2,13 +2,16 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { canonicalSha256, sha256Digest, type Sha256Digest } from "@echo-brain/federation-protocol";
 import {
+  PERSON_ANSWER_PATH_V3,
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
+  validatePersonAnswerResponseV4,
   type PersonListResponseV1,
   type PersonOpenMeetingV1,
   type PersonOpenResponseV1,
   type PersonOpenTranscriptV1,
 } from "@echo-brain/organization-api";
+import type { StructuredGenerationInput, StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AuthorityPersonMembershipBinding } from "@echo-brain/organization-authority-kernel/application/ports/authority-repository";
 import {
   organizationMemberReadablePersonPolicyContractSha256,
@@ -20,24 +23,28 @@ import { ApprovedMeetingTranscriptGrantReaderV1 } from "@echo-brain/organization
 import { afterEach, describe, expect, it } from "vitest";
 import { COORDINATES } from "../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
+import { SqlitePersonAgenticAskAuditV1 } from "../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonListDirectoryV1 } from "../src/adapters/persistence/sqlite/person-list-directory-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonOriginalItemsV1 } from "../src/adapters/persistence/sqlite/person-original-items-v1.js";
+import { SqlitePersonTextSourceInboxV1 } from "../src/adapters/persistence/sqlite/person-text-source-v1.js";
 import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import type { PersonMeetingItemsPortV1, PersonOriginalItemsPortV1 } from "../src/application/ports/person-list-v1.js";
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
+import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-route.js";
+import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import { decodePersonListCursorV1, encodePersonListCursorV1, type PersonListPositionsV1 } from "../src/composition/person-list-cursor-v1.js";
 import { createPersonListRouteV1 } from "../src/composition/person-list-v1-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
-import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, T, UNJOINED, admittedTranscriptV1, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
+import { APPROVER_X, EMP_A, EMP_B, EMP_C, OWNER, PROJECT_NAMES, PROJ_X, SHARED, STANDARD_RECORDS, T, UNJOINED, admittedTranscriptV1, meetingWorld, type MeetingWorldV1 } from "./fixtures/person-meeting-world.js";
 import { addMembership, authorization } from "./fixtures/project-context-sqlite.js";
 
 /**
  * The person list and open (ADR-0023) on real SQLite stores and signed
  * approvals, composed as the Authority runtime composes them and served by the
  * real HTTP server. Owner and employee readers; every negative disclosure case
- * of the spec except Ask's.
+ * of the spec, Ask's included (N-16).
  */
 
 type Actor = AuthorityPersonMembershipBinding;
@@ -144,6 +151,9 @@ async function disclosureWorld() {
   };
   // Enough team notes that every reader's global list takes more than one page.
   for (let index = 0; index < 20; index += 1) note("emp_c", { kind: "team" });
+  // Lists read custody; Ask reads notes only once the text inbox admitted them.
+  const inbox = new PersonDocumentProcessingV1(repository, undefined, new SqlitePersonTextSourceInboxV1(w.authority, now));
+  const admitNotes = async () => { while (await inbox.runOnce(new AbortController().signal) === "admitted") { /* next note */ } };
 
   // The runtime's composition, with the world's sessions plus the returned tenure.
   let returnedChecks = Date.parse("2026-09-25T00:00:00.000Z");
@@ -183,11 +193,31 @@ async function disclosureWorld() {
     admitMeeting: (input) => records.admitMeeting(input),
     revalidateMeetingRelease: (input) => records.revalidateMeetingRelease(input),
   } satisfies PersonMeetingItemsPortV1, storeCalls);
+  // N-16's Ask model takes every item the small-scope preload opened and cites all of them.
+  const everything: StructuredGenerationPort = {
+    async generate(input: StructuredGenerationInput) {
+      const prompt = JSON.parse(input.user_prompt) as { readonly question: string; readonly opened?: readonly { readonly id: string }[]; readonly evidence?: readonly { readonly id: string }[] };
+      if ((input.schema.properties as Readonly<Record<string, unknown>>).sentences !== undefined) {
+        const ids = prompt.evidence!.map((entry) => entry.id);
+        return { sentences: Array.from({ length: Math.ceil(ids.length / 12) }, (_, index) => ({ text: `Group ${index + 1} of what I added.`, evidence: ids.slice(index * 12, index * 12 + 12) })), not_found: [] };
+      }
+      const opened = (prompt.opened ?? []).map((entry) => entry.id);
+      return { parts: [{ question: prompt.question, needs: [{ need: "what I added", status: "found", evidence: opened.slice(0, 12) }], notes: "" }], actions: [{ tool: "finish", args: {} }] };
+    },
+  };
+  const slackAskers: { readonly principal_id: string; readonly membership_id: string }[] = [];
   const server = createOrganizationAuthorityHttpServer({
     descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: "https://issuer.example",
     person_list: createPersonListRouteV1({
       organization_id: org, sessions, tools: async () => [], directory: new SqlitePersonListDirectoryV1(w.authority),
       originals: items, meetings, transcripts: originals,
+    }),
+    person_answer_v3: createPersonAnswerV3Route({
+      authority_id: COORDINATES.authority_id, organization_id: org, state_lineage_id: COORDINATES.state_lineage_id,
+      sessions: sessions as never, originals, records, model: everything,
+      generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
+      audit: new SqlitePersonAgenticAskAuditV1(w.authority), small_scope_shortcut: true,
+      slack_for: (asker) => { slackAskers.push(asker); return undefined; },
     }),
   });
   server.listen(0, "127.0.0.1");
@@ -237,7 +267,8 @@ async function disclosureWorld() {
   const originalAudits = () => (w.authority.prepare("SELECT body_json FROM authority_person_upload_read_audit_v1").all() as { readonly body_json: string }[])
     .map((row) => JSON.parse(row.body_json) as Record<string, unknown>).filter((body) => body.kind === "echo-person-original-item-release-audit-v1");
   const meeting = (name: string) => `meeting:${w.digest(name)}`;
-  return { w, refs, requestIds, list, open, walk, listed, refsOf, openAll, bodies, pageAudits, originalAudits, meeting, storeCalls, hooks, grantReads };
+  const ask = async (token: Token, request: Readonly<Record<string, unknown>> = {}) => post(PERSON_ANSWER_PATH_V3, token, { schema_version: 3, question: "What did I add?", ...request });
+  return { w, refs, requestIds, list, open, walk, listed, refsOf, openAll, ask, admitNotes, slackAskers, bodies, pageAudits, originalAudits, meeting, storeCalls, hooks, grantReads };
 }
 
 type World = Awaited<ReturnType<typeof disclosureWorld>>;
@@ -448,5 +479,51 @@ describe("person list and open negative disclosure (ADR-0023)", () => {
     }
     expect((await f.list("owner", { project_id: SHARED })).status).toBe(200);
     expect(f.storeCalls).toEqual(expect.arrayContaining(["collect", "collectMeetings"]));
+  });
+
+  it("N-16, N-17: Ask with mine cites only what the reader added or approved, every citation opens, and no Slack or transcript is read", async () => {
+    const f = await disclosureWorld();
+    await f.admitNotes();
+    const approvers = new Map<string, { readonly principal_id: string; readonly membership_id: string }>([
+      ...STANDARD_RECORDS.map((input) => [f.meeting(input.name), input.final_approver] as const), [f.meeting("quoted"), EMP_B],
+    ]);
+    const added = (ref: string) => (ref.startsWith("note:")
+      ? f.w.authority.prepare("SELECT principal_id, membership_id FROM authority_person_updates_v2 WHERE context_id = ?").get(ref.slice("note:".length))
+      : f.w.authority.prepare("SELECT principal_id, membership_id FROM authority_person_documents_v1 WHERE document_id = ?").get(ref.slice("document:".length))) as { readonly principal_id: string; readonly membership_id: string } | undefined;
+    // Items each reader may read but did not add or approve: a teammate's team and project notes and meetings.
+    const readers = [
+      { token: "owner", actor: OWNER, teammates: [f.refs.empATeamNote, f.refs.empASharedNote, f.meeting("r1"), f.meeting("r4")] },
+      { token: "emp_a", actor: EMP_A, teammates: [f.refs.empBTeamNote, f.refs.unjoinedNote, f.meeting("r1"), f.meeting("r3")] },
+      { token: "emp_b", actor: EMP_B, teammates: [f.refs.empATeamNote, f.meeting("r7a")] },
+    ] as const;
+    for (const { token, actor, teammates } of readers) {
+      const global = await f.refsOf(token);
+      const mine = await f.refsOf(token, { mine: true });
+      for (const ref of teammates) expect({ token, ref, global: global.includes(ref), mine: mine.includes(ref) }).toEqual({ token, ref, global: true, mine: false });
+      const response = await f.ask(token, { mine: true });
+      expect(response.status).toBe(200);
+      const answer = validatePersonAnswerResponseV4(JSON.parse(response.text));
+      expect(answer.scope).toEqual({ kind: "mine" });
+      expect(answer.citations.length).toBeGreaterThan(0);
+      const refs: string[] = answer.citations.map((citation) => citation.ref ?? "");
+      // The model took every item the mine desk offered: exactly the reader's mine list, and nothing else.
+      expect(new Set(refs)).toEqual(new Set(mine));
+      for (const citation of answer.citations) {
+        const ref = citation.ref!;
+        expect(citation.citation.kind).not.toBe("slack_message");
+        expect(ref).toMatch(/^(note|document|meeting):/);
+        const owner = ref.startsWith("meeting:") ? approvers.get(ref) : added(ref);
+        expect({ ref, principal_id: owner?.principal_id, membership_id: owner?.membership_id }).toEqual({ ref, principal_id: actor.principal_id, membership_id: actor.membership_id });
+        expect({ ref, status: (await f.open(token, ref)).status }).toEqual({ ref, status: 200 });
+      }
+      for (const ref of teammates) expect({ token, ref, cited: refs.includes(ref) }).toEqual({ token, ref, cited: false });
+    }
+    // EMP_A may read r4's shared transcript globally; mine never reads it, nor any Slack.
+    expect((await f.openAll("emp_a", `transcript:${f.w.digest("r4")}`)).length).toBeGreaterThan(0);
+    expect(f.slackAskers).toEqual([]);
+    for (const token of ["owner", "emp_a"] as const) {
+      expect(await f.ask(token, { mine: true, project_id: SHARED })).toEqual({ status: 400, text: '{"error":{"code":"invalid_request","message":"request failed"}}' });
+    }
+    for (const body of f.bodies) expect(body).not.toContain(QUOTE);
   });
 });

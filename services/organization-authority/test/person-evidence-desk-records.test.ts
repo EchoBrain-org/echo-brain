@@ -486,3 +486,38 @@ describe('Person evidence desk: mine (ADR-0023)', () => {
     } finally { w.close(); }
   });
 });
+
+describe('Person evidence desk: refs (ADR-0023)', () => {
+  it('gives record items their meeting ref, keeps each original item\'s store ref, and gives Slack items none', async () => {
+    const value = await fixture();
+    try {
+      const originals = emptyOriginals();
+      const ref = `note:ctx_${'a'.repeat(64)}` as const;
+      const release = {
+        ...originals.deskSearch({ access_token: 'token', scope: { kind: 'global' } }),
+        items: [{
+          kind: 'note' as const, text: 'Decision from the original', visibility: 'team' as const, label: 'Original decision',
+          received_at: '2026-09-27T00:00:00.000Z', version: '1', ref,
+          citation: { kind: 'source_revision' as const, source_id: 'source-original', revision_id: 'revision-original',
+            source_sha256: digest('source'), representation_sha256: digest('representation'), anchor_sha256: digest('anchor') },
+        }],
+        truncated: false,
+      };
+      const slack = fakeSlack({ search: [slackMessage('1758873600.000100', 'Decision in Slack')] });
+      const desk = createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: { ...originals, deskSearch: () => release }, records: value.route, slack: slack.slack });
+      const meeting = `meeting:${value.recordAtom.record_sha256}`;
+      const searched = await desk.search({ query: 'Decision', limit: 10 });
+      expect(searched.items.map((item) => [item.citation.kind, item.ref])).toEqual([
+        ['source_revision', ref], ['approved_record', meeting], ['slack_message', undefined],
+      ]);
+      expect(searched.items.find((item) => item.kind === 'slack_message')).not.toHaveProperty('ref');
+      // Inventory items, opened items and fresh citation opens carry the same ref.
+      const inventoryDesk = value.makeDesk();
+      const listed = (await inventoryDesk.search({ limit: 10 })).items.find((item) => item.citation.kind === 'approved_record')!;
+      expect(listed.ref).toBe(meeting);
+      expect((await inventoryDesk.open({ item: listed.id })).items[0]!.ref).toBe(meeting);
+      const opened = await value.makeDesk().openCitation({ citation: listed.citation as PersonAnswerCitationV3 });
+      expect(opened.items.map((item) => item.ref)).toEqual([meeting]);
+    } finally { value.close(); }
+  });
+});

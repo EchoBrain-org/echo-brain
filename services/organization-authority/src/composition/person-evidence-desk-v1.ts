@@ -14,7 +14,7 @@ import {
   type EvidenceDeskOpenInputV1,
   type EvidenceDeskScopeV1,
 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
-import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 } from "@echo-brain/organization-api";
+import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, type PersonOpenRefV1 } from "@echo-brain/organization-api";
 import type { PersonSlackMessageV1, PersonSlackReaderV1, PersonSlackReleaseAuditV1, PersonSlackReleaseV1 } from "../application/ports/person-slack-reader-v1.js";
 import type { PersonAnswerCitationV3 } from "@echo-brain/organization-api";
 import type {
@@ -254,6 +254,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
       id: itemId(sourceCitation(value)), citation: sourceCitation(value), kind: value.kind,
       ...(value.text === undefined ? {} : { text: value.text }), label: value.label,
       visibility: value.visibility, receipt_sha256: release.receipt,
+      ...(value.ref === undefined ? {} : { ref: value.ref }),
     }), { original: release }));
   };
   const records = (result: ReturnType<PersonEvidenceDeskRecordsV1["searchBatch"]>, includeText = true): readonly EvidenceDeskItemV1[] => {
@@ -264,7 +265,7 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     if (result.desk_items === undefined) throw new AuthorityOperationError("unavailable", "record evidence metadata is unavailable");
     return result.desk_items.map((value) => {
       const citation = recordCitation(value);
-      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, visibility: value.visibility, ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
+      return save(Object.freeze({ id: itemId(citation), citation, kind: value.item_kind as EvidenceDeskKindV1, ...(includeText ? { text: value.text } : {}), label: value.label, visibility: value.visibility, ...(value.attributes === undefined ? {} : { attributes: value.attributes }), receipt_sha256: result.release.record_read_audit_row_sha256, ref: `meeting:${value.record_sha256}` as PersonOpenRefV1 }), { record: result.release, record_anchor: { atom_id: value.atom_id, record_sha256: value.record_sha256, record_position: value.record_position, envelope_sha256: value.envelope_sha256, atom_order: value.atom_order, audience_project_count: value.audience_project_count, item_kind: value.item_kind, text: value.text, policy_id: value.policy_id } });
     });
   };
   const searchRecords = (query: string, kinds?: readonly EvidenceDeskKindV1[]): readonly EvidenceDeskItemV1[] => {

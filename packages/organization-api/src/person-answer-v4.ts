@@ -3,6 +3,7 @@ import { validatePersonDocumentIdV1 } from './person-documents-v1.js';
 import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
 import { validatePersonAnswerScopeV3, type PersonAnswerCitationV3, type PersonAnswerScopeV3 } from './person-answer-v3.js';
+import { validatePersonOpenRefV1, type PersonOpenRefV1 } from './person-list-v1.js';
 import {
   asRecord,
   assertDigest,
@@ -52,7 +53,10 @@ export type PersonAnswerEvidenceCitationV4 = PersonAnswerCitationV3 | PersonSlac
 export interface PersonAnswerRequestV3 {
   readonly schema_version: 3;
   readonly question: string;
+  /** Exclusive with `mine`. */
   readonly project_id?: ProjectIdV1;
+  /** Only what the asker added: their notes and uploads, and meetings they approved (ADR-0023). */
+  readonly mine?: true;
 }
 
 export interface PersonAnswerStatementV4 {
@@ -77,6 +81,8 @@ export interface PersonAnswerCitationV4 {
   readonly kind: PersonEvidenceKindV1;
   readonly label: string;
   readonly visibility: PersonEvidenceVisibilityV1;
+  /** Opens the cited item with person open (ADR-0023). Never on a Slack message. */
+  readonly ref?: PersonOpenRefV1;
 }
 
 export interface PersonAnswerResponseV4 {
@@ -267,15 +273,28 @@ function statement(value: unknown, citations: readonly PersonAnswerCitationV4[],
   return Object.freeze({ text: input.text as string, citation_indexes: Object.freeze(indexes), private: input.private });
 }
 
+/** A citation's ref names the item it cites: its record, its document, or its note or shared transcript. */
+function citationRefConsistent(cited: PersonAnswerEvidenceCitationV4, ref: PersonOpenRefV1): boolean {
+  if (cited.kind === 'approved_record') return ref === `meeting:${cited.record_sha256}`;
+  if (cited.kind === 'source_revision') {
+    return cited.document_id === undefined
+      ? ref.startsWith('note:') || ref.startsWith('transcript:')
+      : ref === `document:${cited.document_id}`;
+  }
+  return false;
+}
+
 function answerCitation(value: unknown): PersonAnswerCitationV4 {
   const input = object(value, 'Ask response citation');
-  assertExactKeys(input, ['citation', 'kind', 'label', 'visibility'], 'Ask response citation');
+  assertExactKeys(input, ['citation', 'kind', 'label', 'visibility', ...(Object.hasOwn(input, 'ref') ? ['ref'] : [])], 'Ask response citation');
   evidenceKind(input.kind, 'Ask response citation kind');
   text(input.label, 'Ask response citation label', PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
   visibility(input.visibility, 'Ask response citation visibility');
   const cited = evidenceCitation(input.citation);
   if ((cited.kind === 'slack_message') !== (input.kind === 'slack_message')) fail('Ask response citation kind is inconsistent');
-  return Object.freeze({ citation: cited, kind: input.kind, label: input.label as string, visibility: input.visibility });
+  const ref = Object.hasOwn(input, 'ref') ? validatePersonOpenRefV1(input.ref, 'Ask response citation ref') : undefined;
+  if (ref !== undefined && !citationRefConsistent(cited, ref)) fail('Ask response citation ref is inconsistent');
+  return Object.freeze({ citation: cited, kind: input.kind, label: input.label as string, visibility: input.visibility, ...(ref === undefined ? {} : { ref }) });
 }
 
 function part(value: unknown, citations: readonly PersonAnswerCitationV4[]): PersonAnswerPartV4 {
@@ -326,9 +345,10 @@ function boundedRequest<T>(result: T, label: string): T {
 
 export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerRequestV3 {
   const input = object(value, 'Ask request');
-  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])], 'Ask request');
+  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'mine') ? ['mine'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
-  return boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}) }, 'Ask request');
+  if (Object.hasOwn(input, 'mine') && (input.mine !== true || Object.hasOwn(input, 'project_id'))) fail('Ask request scope is invalid');
+  return boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}) }, 'Ask request');
 }
 
 export function validatePersonAnswerResponseV4(value: unknown): PersonAnswerResponseV4 {

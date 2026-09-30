@@ -394,6 +394,43 @@ describe("agentic Ask: research loop", () => {
     expect(script.prompt(0).scope).toContain("Slack is not");
   });
 
+  it("tells the model a mine scope reads only what the asker added, never Slack or shared transcripts (ADR-0023)", async () => {
+    const script = scripted([finish([missing()]), finish([missing()])]);
+    const result = await ask({ desk: desk({ scope: { kind: "mine" } }), model: script.model }).answer({ question: "What did I decide?" });
+    expect(script.prompt(0).scope).toBe("only what the asker added: their own notes and uploaded documents, and meetings they approved; Slack and shared transcripts are not read");
+    expect(result.scope).toEqual({ kind: "mine" });
+    const global = scripted([finish([missing()]), finish([missing()])]);
+    await ask({ desk: desk({}), model: global.model }).answer({ question: "What did I decide?" });
+    expect(global.prompt(0).scope).toBe("everything the asker can read");
+  });
+
+  it("carries each desk item's ref onto its citation, and never shows a ref to the model (ADR-0023)", async () => {
+    const record = item("launch", "Launch is approved for Tuesday.");
+    const meeting = Object.freeze({ ...record, ref: `meeting:${(record.citation as { readonly record_sha256: `sha256:${string}` }).record_sha256}` as const });
+    const document_id = `doc_${"1".repeat(64)}` as const;
+    const passage = item("plan", "The plan names Tuesday.", {
+      kind: "document_passage", label: "Atlas plan.md", ref: `document:${document_id}`,
+      citation: { kind: "source_revision", source_id: `source:${"d".repeat(64)}`, revision_id: "revision-1", source_sha256: canonicalSha256({ source: 1 }), representation_sha256: canonicalSha256({ representation: 1 }), anchor_sha256: canonicalSha256({ anchor: 1 }), document_id },
+    });
+    const slack = slackItem("1758873600.000100", "Launch still Tuesday.");
+    const script = scripted([
+      step([{}], [search("launch")]),
+      finish([found(["E1", "E2", "E3"])]),
+      answer([{ text: "Launch is Tuesday.", evidence: ["E1", "E2", "E3"] }]),
+    ]);
+    const result = await ask({ desk: desk({ search: () => [meeting, passage, slack] }), model: script.model }).answer({ question: "When is launch?" });
+    expect(validatePersonAnswerResponseV4(result)).toEqual(result);
+    expect(result.citations.map(value => value.ref)).toEqual([meeting.ref, passage.ref, undefined]);
+    expect(result.citations[2]).not.toHaveProperty("ref");
+    expect(script.inputs).toHaveLength(3);
+    for (const input of script.inputs) {
+      for (const prompt of [input.user_prompt, input.system_prompt, JSON.stringify(input.schema)]) {
+        expect(prompt).not.toContain("\"ref\"");
+        for (const ref of [meeting.ref, passage.ref, document_id]) expect(prompt).not.toContain(ref);
+      }
+    }
+  });
+
   it("tells every call who is asking and today's date, and no audit keeps the name", async () => {
     const launch = item("launch", "Jules owns the vendor follow-up, due Oct 3.");
     const audit: AgenticAskAuditEntryV1[] = [];

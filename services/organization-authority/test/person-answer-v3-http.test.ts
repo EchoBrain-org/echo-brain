@@ -1,11 +1,23 @@
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { PERSON_ANSWER_PATH_V3, PERSON_CAPABILITIES_PATH_V1 } from "@echo-brain/organization-api";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
+import {
+  PERSON_ANSWER_PATH_V3,
+  PERSON_CAPABILITIES_PATH_V1,
+  PERSON_EVIDENCE_OPEN_PATH_V1,
+  PERSON_EVIDENCE_SEARCH_PATH_V1,
+  validatePersonAnswerResponseV4,
+  validatePersonEvidenceDeskResponseV1,
+} from "@echo-brain/organization-api";
+import type { StructuredGenerationInput } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 
 /** Retired Ask paths (ADR-0022): no route, so the canonical not-found reply. */
 const RETIRED_ASK_PATHS = ["/v1/person/ask", "/v2/person/ask"] as const;
+import type { OriginalContextDeskItemV1, PersonOriginalContextEvidenceDeskPortV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
+import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-route.js";
+import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV3HttpApplication } from "../src/presentation/person-answer-v3-http-application.js";
 
@@ -109,6 +121,125 @@ describe("Agentic Ask HTTP capability gate", () => {
       request.destroy();
       await abortedPromise;
       expect(application.ask).toHaveBeenCalledWith(expect.objectContaining({ access_token: "token", request: { schema_version: 3, question: "What changed?" } }));
+    } finally { await value.close(); }
+  });
+});
+
+/**
+ * The real V3 route and evidence desk behind the real HTTP server, over fake
+ * stores: one only-me note of the asker's, and records still indexing.
+ */
+function mineFixture() {
+  const checked_at = "2026-09-27T00:00:00.000Z";
+  const note: OriginalContextDeskItemV1 = Object.freeze({
+    kind: "note", text: "I decided to launch on Tuesday.", visibility: "only_me", label: "My launch note",
+    received_at: checked_at, version: "1", ref: `note:ctx_${"a".repeat(64)}`,
+    citation: {
+      kind: "source_revision" as const, source_id: `source:${"d".repeat(64)}`, revision_id: "revision-1",
+      source_sha256: canonicalSha256({ source: 1 }), representation_sha256: canonicalSha256({ representation: 1 }), anchor_sha256: canonicalSha256({ anchor: 1 }),
+    },
+  });
+  const scopes: unknown[] = [];
+  const release = (scope: unknown) => ({
+    release: { authorization: { principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker", checked_at }, scope, authorization_revision: 0, released_atoms: [] },
+    receipt: canonicalSha256({ release: scopes.length }), items: [note], truncated: false,
+  });
+  const originals = {
+    deskAuthorize: vi.fn((input: { readonly scope: unknown }) => { scopes.push(input.scope); return { checked_at }; }),
+    deskSearch: vi.fn((input: { readonly scope: unknown }) => { scopes.push(input.scope); return release(input.scope); }),
+    deskOpen: vi.fn((input: { readonly scope: unknown }) => { scopes.push(input.scope); return release(input.scope); }),
+    revalidateDeskRelease: vi.fn(() => ({ checked_at })),
+  };
+  const records = { initializeDesk: vi.fn((_input: object) => { throw new PersonRecordSearchIndexLagV1(); }) };
+  // Searches once, finishes on what it found, and cites it.
+  const generate = vi.fn(async (input: StructuredGenerationInput) => {
+    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
+    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) {
+      return { sentences: [{ text: "You decided to launch on Tuesday.", evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    }
+    const hit = prompt.last_results?.[0]?.results?.[0]?.id;
+    return hit === undefined
+      ? { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "launch" } }] }
+      : { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "found", evidence: [hit] }], notes: "" }], actions: [{ tool: "finish", args: {} }] };
+  });
+  const slack_for = vi.fn(() => undefined);
+  const route = createPersonAnswerV3Route({
+    authority_id: "authority_fixture", organization_id: "organization_fixture", state_lineage_id: "lineage_fixture",
+    sessions: { authenticateAccess: () => ({ principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker" }) } as never,
+    originals: originals as unknown as PersonOriginalContextEvidenceDeskPortV1, records: records as unknown as PersonEvidenceDeskRecordsV1,
+    model: { generate }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
+    audit: { forRequest: () => ({ append: vi.fn() }) } as never, slack_for,
+  });
+  // The desk cites an original with its display label.
+  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, slack_for, route };
+}
+
+async function post(url: string, path: string, body: unknown): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
+  const response = await fetch(`${url}${path}`, { method: "POST", headers: { authorization: "Bearer token", "content-type": "application/json" }, body: JSON.stringify(body) });
+  return { status: response.status, body: await response.json() as Record<string, unknown> };
+}
+
+describe("Ask with mine, and citation refs (ADR-0023)", () => {
+  it("builds a mine desk for every store, never reads Slack, echoes mine, and cites with a ref", async () => {
+    const f = mineFixture();
+    const value = await server({ application: f.route });
+    try {
+      const answer = await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: "What did I decide?", mine: true });
+      expect(answer.status).toBe(200);
+      const validated = validatePersonAnswerResponseV4(answer.body);
+      expect(validated.scope).toEqual({ kind: "mine" });
+      expect(validated.citations).toEqual([{ citation: f.cited, kind: "note", label: "My launch note", visibility: "only_me", ref: f.note.ref }]);
+      expect(f.slack_for).not.toHaveBeenCalled();
+      expect(f.scopes.length).toBeGreaterThan(1);
+      for (const scope of f.scopes) expect(scope).toEqual({ kind: "mine" });
+      expect(f.records.initializeDesk).toHaveBeenCalledTimes(1);
+      expect(f.records.initializeDesk.mock.calls[0]![0]).toMatchObject({ mine: true });
+      expect(f.records.initializeDesk.mock.calls[0]![0]).not.toHaveProperty("project_id");
+      // The research and answer prompts name the mine scope and never the ref.
+      for (const [input] of f.generate.mock.calls) {
+        expect(JSON.parse(input.user_prompt).scope).toContain("only what the asker added");
+        expect(input.user_prompt).not.toContain(f.note.ref!);
+      }
+      // Without mine, the same asker's Ask is global and binds live Slack to them.
+      f.scopes.length = 0;
+      expect((await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: "What did I decide?" })).body.scope).toEqual({ kind: "global" });
+      expect(f.slack_for).toHaveBeenCalledWith({ principal_id: "prn_asker", membership_id: "mem_asker" });
+      for (const scope of f.scopes) expect(scope).toEqual({ kind: "global" });
+    } finally { await value.close(); }
+  });
+
+  it("refuses mine with a project, or mine other than true, before the route runs", async () => {
+    const f = mineFixture();
+    const value = await server({ application: f.route });
+    try {
+      for (const body of [
+        { schema_version: 3, question: "What did I decide?", mine: true, project_id: "prj_00000000-0000-4000-8000-000000000001" },
+        { schema_version: 3, question: "What did I decide?", mine: false },
+      ]) {
+        expect(await post(value.url, PERSON_ANSWER_PATH_V3, body)).toEqual({ status: 400, body: { error: { code: "invalid_request", message: "request failed" } } });
+      }
+      expect(f.originals.deskAuthorize).not.toHaveBeenCalled();
+      expect(f.generate).not.toHaveBeenCalled();
+      // A caller that skips the HTTP validator is refused too, never widened to global or a project.
+      await expect(f.route.ask({ access_token: "token", request: { schema_version: 3, question: "What did I decide?", mine: true, project_id: "prj_00000000-0000-4000-8000-000000000001" } })).rejects.toMatchObject({ code: "invalid_request" });
+      expect(f.originals.deskAuthorize).not.toHaveBeenCalled();
+    } finally { await value.close(); }
+  });
+
+  it("strips ref from the evidence search and open doors, whose contract carries none", async () => {
+    const f = mineFixture();
+    const value = await server({ application: f.route });
+    try {
+      const searched = await post(value.url, PERSON_EVIDENCE_SEARCH_PATH_V1, { schema_version: 1, query: "launch" });
+      expect(searched.status).toBe(200);
+      const opened = await post(value.url, PERSON_EVIDENCE_OPEN_PATH_V1, { schema_version: 1, citation: f.note.citation });
+      expect(opened.status).toBe(200);
+      for (const response of [searched, opened]) {
+        const desk = validatePersonEvidenceDeskResponseV1(response.body);
+        expect(desk.items.map((item) => item.citation)).toEqual([f.cited]);
+        expect(desk.items[0]).not.toHaveProperty("ref");
+        expect(JSON.stringify(response.body)).not.toContain(f.note.ref!);
+      }
     } finally { await value.close(); }
   });
 });
