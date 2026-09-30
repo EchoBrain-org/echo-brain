@@ -3,7 +3,7 @@ import type {
   PersonUpdateReceiptV2,
   PersonUpdateReceiptV3,
   PersonUpdateStatusV2,
-  PersonUpdateStatusV3,
+  PersonUpdateStatusResultV3,
   PersonUpdateSubmitV2,
   PersonUpdateSubmitV3,
   PersonUploadContentV2,
@@ -87,7 +87,7 @@ export interface ProjectContextApplicationV1 {
   submitUpload(accessToken: string, request: unknown): PersonUpdateReceiptV2;
   submitUploadV3(accessToken: string, request: unknown): PersonUpdateReceiptV3;
   uploadStatus(accessToken: string, requestId: unknown): PersonUpdateStatusV2;
-  uploadStatusV3(accessToken: string, requestId: unknown): PersonUpdateStatusV3;
+  uploadStatusV3(accessToken: string, requestId: unknown): PersonUpdateStatusResultV3;
   readUpload(accessToken: string, contextId: unknown): PersonUploadContentV2;
   readUploadV3(accessToken: string, contextId: unknown): PersonUploadContentV3;
   searchUploads(accessToken: string, request: unknown): PersonUploadSearchResultV2;
@@ -160,7 +160,7 @@ export type ProjectReadResponseV1 =
   | ProjectContextFeedV1 | ProjectContextSearchResultV1 | ProjectContextReadV1
   | ProjectContextFeedV2 | ProjectContextSearchResultV2 | ProjectContextReadV2
   | PersonUpdateStatusV2 | PersonUploadContentV2 | PersonUploadSearchResultV2
-  | PersonUpdateStatusV3 | PersonUploadContentV3 | PersonUploadSearchResultV3;
+  | PersonUpdateStatusResultV3 | PersonUploadContentV3 | PersonUploadSearchResultV3;
 
 /**
  * PC-01 implements these operations over a single SQLite snapshot. All reads
@@ -187,7 +187,7 @@ export interface ProjectContextReadTransactionV1 {
   readContext(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1, contextId: string): ProjectContextReadV1;
   readContextV2(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1, contextId: string): ProjectContextReadV2;
   uploadStatus(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusV2;
-  uploadStatusV3(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusV3;
+  uploadStatusV3(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusResultV3;
   readUpload(snapshot: ProjectAuthorizationSnapshotV1, contextId: string): PersonUploadContentV2;
   readUploadV3(snapshot: ProjectAuthorizationSnapshotV1, contextId: string): PersonUploadContentV3;
   searchUploads(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV2;

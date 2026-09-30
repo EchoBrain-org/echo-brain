@@ -44,6 +44,7 @@ separately.
 | [ADR-0020](ADR-0020-minimized-person-layer-1-record-projection.md) | Minimized Person Layer 1 record projection | proposed |
 | [ADR-0021](ADR-0021-ask-reach-and-approval-owners.md) | Ask over shared transcripts, refused project choices, and confirmed action owners | accepted |
 | [ADR-0022](ADR-0022-agentic-ask-only.md) | Agentic Ask is the only Ask | accepted |
+| [ADR-0023](ADR-0023-reader-scoped-upload-releases.md) | Reader-scoped upload audiences and uploader-only request IDs | accepted |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

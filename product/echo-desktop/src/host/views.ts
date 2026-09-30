@@ -561,10 +561,12 @@ export function abandonView(raw: unknown, requestId: string): null {
   return null;
 }
 
+/** NOTE_STATUS holds both a note's full V3 status and the saved-only one sent once you leave a project it names. */
+const NOTE_STATUS: ReadonlySet<unknown> = new Set(['echo-person-update-status-v3', 'echo-person-update-saved-v3']);
 /** A note's V3 status, or a document's V2 status: stored means saved. */
 export function writeStatusView(raw: unknown, kind: 'note' | 'document'): WriteStatus {
   const value = object(kind === 'document' ? unwrap(raw) : raw);
-  if (kind === 'note') return { state: value.kind === 'echo-person-update-status-v3' && value.status === 'stored' ? 'saved' : 'unknown' };
+  if (kind === 'note') return { state: NOTE_STATUS.has(value.kind) && value.status === 'stored' ? 'saved' : 'unknown' };
   return value.state === 'saved' ? { state: 'saved', ...extraction(value) } : { state: 'unknown' };
 }
 

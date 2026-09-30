@@ -140,7 +140,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   const readable = fixture('projects-read-context');
   const catalog = new Map<string, { received_at: string; title: string; text: string; audience: Record<string, unknown> }>([
     [String(feedItem[0]!.context_id), { received_at: String(feedItem[0]!.received_at), title: String(feedItem[0]!.title),
-      // Readable by the members of whichever project it is read in.
+      // Shared with several projects; a reader sees only the one it is read in (ADR-0023).
       text: String(readable.text), audience: { kind: 'projects' } }],
     ...desktop.notes.map(note => [note.context_id, note] as const),
   ]);
@@ -208,8 +208,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     return { items: all.slice(from, from + PAGE), next_cursor: from + PAGE < all.length ? SECOND_PAGE : null };
   };
   const sha = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
+  // The fixture's documents were saved by someone else, so their request IDs stay private (ADR-0023).
   const documentMetadata = (document: StoredDocument) => ({
-    schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: document.request_id, filename: document.filename,
+    schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: null, filename: document.filename,
     title: document.title, content_length: Buffer.byteLength(document.original), sha256: sha(document.original), audience: document.audience,
     association_project_ids: document.association_project_ids, document_id: document.document_id,
     detected_media_type: document.detected_media_type, received_at: document.received_at, state: 'saved',
@@ -389,7 +390,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         .sort((a, b) => Date.parse(b.note.received_at) - Date.parse(a.note.received_at))
         .map(({ id, note }) => ({
           context_id: id, received_at: note.received_at, title: note.title, excerpt: excerpt(note.text),
-          audience: note.audience.kind === 'projects' ? { kind: 'projects', project_ids: [projectId] } : note.audience,
+          audience: note.audience.kind === 'projects' ? { kind: 'project', project_id: projectId } : note.audience,
         }));
       return json({ schema_version: 2, kind: 'echo-project-context-feed-v2', project_id: projectId, ...paged(notes, body?.cursor) });
     }
@@ -400,7 +401,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       response.project_id = body?.project_id;
       response.items = (response.items as { title: string; excerpt: string }[])
         .filter(item => found(body?.query, item))
-        .map(item => ({ ...item, audience: { kind: 'projects', project_ids: [body?.project_id] } }));
+        .map(item => ({ ...item, audience: { kind: 'project', project_id: body?.project_id } }));
       return json(response);
     }
     // All context: saved notes, each version searched and read on its own.
@@ -432,7 +433,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return json({
         schema_version: 2, kind: 'echo-project-context-read-v2', project_id: context[1], context_id: context[2],
         received_at: note.received_at, title: note.title, text: note.text,
-        audience: note.audience.kind === 'projects' ? { kind: 'projects', project_ids: [context[1]] } : note.audience,
+        audience: note.audience.kind === 'projects' ? { kind: 'project', project_id: context[1] } : note.audience,
       });
     }
 

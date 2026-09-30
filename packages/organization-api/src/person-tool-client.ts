@@ -35,7 +35,6 @@ export interface PersonToolCommandV1 {
     readonly host: PersonToolHostV1;
     readonly values: Readonly<Record<string, string | boolean | undefined>>;
     print(value: unknown): void;
-    read_input(): Promise<string>;
     read_interactive_line(): Promise<string>;
     open_browser(url: string): boolean | Promise<boolean>;
   }): Promise<void>;

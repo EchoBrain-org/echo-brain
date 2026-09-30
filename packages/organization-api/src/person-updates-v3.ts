@@ -13,6 +13,9 @@ export interface PersonUpdateReceiptV3 extends Omit<PersonUpdateSubmitV3, 'kind'
   readonly kind: 'echo-person-update-receipt-v3'; readonly context_id: string; readonly received_at: string; readonly state: 'received';
 }
 export type PersonUpdateStatusV3 = Omit<PersonUpdateReceiptV3, 'kind' | 'state'> & { readonly kind: 'echo-person-update-status-v3'; readonly status: 'stored'; readonly metadata: PersonUploadMetadataStateV1 };
+/** Own account-scoped proof once the uploader no longer holds every named project; it carries no project coordinates (ADR-0023). */
+export interface PersonUpdateSavedV3 { readonly schema_version: 3; readonly kind: 'echo-person-update-saved-v3'; readonly request_id: string; readonly context_id: string; readonly received_at: string; readonly status: 'stored'; }
+export type PersonUpdateStatusResultV3 = PersonUpdateStatusV3 | PersonUpdateSavedV3;
 export interface PersonUploadContentV3 { readonly schema_version: 3; readonly kind: 'echo-person-upload-content-v3'; readonly context_id: string; readonly received_at: string; readonly audience: UploadAudienceV3; readonly title: string; readonly text: string; }
 export type PersonUploadSearchV3 = PersonUploadSearchV1;
 export interface PersonUploadSearchResultV3 { readonly schema_version: 3; readonly kind: 'echo-person-upload-search-v3'; readonly results: readonly { readonly context_id: string; readonly received_at: string; readonly audience: UploadAudienceV3; readonly title: string; readonly excerpt: string }[]; }
@@ -35,6 +38,15 @@ export function validatePersonUpdateStatusV3(value: unknown): PersonUpdateStatus
   if (record.schema_version !== 3 || record.kind !== 'echo-person-update-status-v3' || record.status !== 'stored' || !['pending','processing','ready','unavailable'].includes(record.metadata as string)) fail('Person update status is invalid');
   validatePersonUpdateRequestId(record.request_id); validatePersonUploadContextId(record.context_id); timestamp(record.received_at);
   const response = Object.freeze({ schema_version: 3 as const, kind: 'echo-person-update-status-v3' as const, request_id: record.request_id as string, context_id: record.context_id as string, received_at: record.received_at as string, ...coordinates(record), status: 'stored' as const, metadata: record.metadata as PersonUploadMetadataStateV1 }); responseBound(response, 'Person update status'); return response;
+}
+export function validatePersonUpdateSavedV3(value: unknown): PersonUpdateSavedV3 {
+  const record = object(value, 'Person update status'); assertExactKeys(record, ['schema_version','kind','request_id','context_id','received_at','status'], 'Person update status');
+  if (record.schema_version !== 3 || record.kind !== 'echo-person-update-saved-v3' || record.status !== 'stored') fail('Person update status is invalid');
+  validatePersonUpdateRequestId(record.request_id); validatePersonUploadContextId(record.context_id); timestamp(record.received_at);
+  const response = Object.freeze({ schema_version: 3 as const, kind: 'echo-person-update-saved-v3' as const, request_id: record.request_id as string, context_id: record.context_id as string, received_at: record.received_at as string, status: 'stored' as const }); responseBound(response, 'Person update status'); return response;
+}
+export function validatePersonUpdateStatusResultV3(value: unknown): PersonUpdateStatusResultV3 {
+  return object(value, 'Person update status').kind === 'echo-person-update-saved-v3' ? validatePersonUpdateSavedV3(value) : validatePersonUpdateStatusV3(value);
 }
 export function validatePersonUploadContentV3(value: unknown): PersonUploadContentV3 {
   const record = object(value, 'Person upload content'); assertExactKeys(record, ['schema_version','kind','context_id','received_at','audience','title','text'], 'Person upload content'); if (record.schema_version !== 3 || record.kind !== 'echo-person-upload-content-v3') fail('Person upload content is invalid');

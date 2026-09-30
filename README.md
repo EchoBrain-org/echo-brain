@@ -29,7 +29,6 @@ It can:
 - upload text notes and documents with a chosen audience, then read or
   download them;
 - find people in the organization directory;
-- manage the signed-in member's meeting exclusions;
 - bind the signed-in identity to Slack and read organization tool link status;
 - let an owner list, invite, reissue or revoke employees; and
 - install signed CLI updates from a configured feed.

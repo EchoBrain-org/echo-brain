@@ -33,9 +33,7 @@ async function beginSlackBrowserConnect(
 
 
 const definitions = [
-  ['slack-link-begin', ['slack-user'], 'Start a private-DM Slack link.'],
-  ['slack-link', ['slack-user'], 'Legacy private-DM Slack linking command.'],
-  ['slack-link-complete', ['challenge-attempt', 'challenge-message-ts'], 'Complete a private-DM Slack link.'],
+  ['slack-link', ['slack-user'], 'Link Slack through a private-DM code exchange.'],
   ['slack-connect-begin', [], 'Open Slack browser connection.'],
   ['slack-connect-status', ['attempt-id'], 'Read Slack browser connection status.'],
   ['slack-connect-cancel', ['attempt-id'], 'Cancel a pending Slack browser connection.'],
@@ -47,12 +45,9 @@ export function createSlackPersonCommandsV1(): readonly PersonToolCommandV1[] {
     name, description,
     options: Object.freeze(Object.fromEntries(required.map(key => [key, { type: 'string' as const }]))),
     requires: required,
-    async run({ host, values, print, read_input: readInput, read_interactive_line: readInteractiveLine, open_browser }: Parameters<PersonToolCommandV1['run']>[0]) {
+    async run({ host, values, print, read_interactive_line: readInteractiveLine, open_browser }: Parameters<PersonToolCommandV1['run']>[0]) {
       const client = new SlackPersonClient(host);
       switch (name) {
-      case "slack-link-begin":
-        print( { ok: true, ...(await client.beginSlackIdentityLink(requiredText(values, "slack-user"))) });
-        break;
       case "slack-link": {
         const begun = await client.beginSlackIdentityLink(requiredText(values, "slack-user"));
         // Retain the code and opaque challenge handles in memory. The person
@@ -82,16 +77,6 @@ export function createSlackPersonCommandsV1(): readonly PersonToolCommandV1[] {
         });
         break;
       }
-      case "slack-link-complete":
-        print( {
-          ok: true,
-          result: await client.completeSlackIdentityLink({
-            challenge_attempt_id: requiredText(values, "challenge-attempt"),
-            challenge_message_ts: requiredText(values, "challenge-message-ts"),
-            challenge_code: (await readInput()).trim(),
-          }),
-        });
-        break;
       case "slack-connect-begin": {
         const begun = await beginSlackBrowserConnect(
           client,

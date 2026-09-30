@@ -249,17 +249,25 @@ export async function saveDocumentDownload(response: Response, outputPath: strin
   }
 }
 
+/** ADR-0023 renders a singleton projects audience as project; keep upload/retry metadata exact. */
+function reconciliationAudience(audience: PersonUploadAudienceV3): PersonUploadAudienceV3 {
+  return audience.kind === 'projects' && audience.project_ids.length === 1
+    ? { kind: 'project', project_id: audience.project_ids[0]! }
+    : audience;
+}
+
 /** A current, exact server status settles a retained uncertain upload without rereading its source. */
 export function reconcileDocumentSnapshot(homeDirectory: string, accountBinding: string, receipt: PersonDocumentStatusV1 | PersonDocumentStatusV2): void {
-  validatePersonUpdateRequestId(receipt.request_id);
+  // Status is the uploader's own read, so it always carries the request ID.
+  const requestId = validatePersonUpdateRequestId(receipt.request_id);
   // The authenticated status reader validates the exact account and request. A minimal
   // saved receipt deliberately exposes no original metadata after content access loss.
   if (receipt.kind !== 'echo-person-document-saved-v1' && receipt.kind !== 'echo-person-document-saved-v2') {
-    const directory = join(snapshotAccount(homeDirectory, accountBinding), receipt.request_id);
+    const directory = join(snapshotAccount(homeDirectory, accountBinding), requestId);
     if (!existsSync(directory)) return;
-    const metadata = snapshotManifest(directory, receipt.request_id);
+    const metadata = snapshotManifest(directory, requestId);
     for (const key of ['request_id', 'sha256', 'content_length', 'filename', 'title'] as const) if (metadata[key] !== receipt[key]) return;
-    if (metadata.schema_version !== receipt.schema_version || canonicalJson(metadata.audience) !== canonicalJson(receipt.audience)) return;
+    if (metadata.schema_version !== receipt.schema_version || canonicalJson(reconciliationAudience(metadata.audience)) !== canonicalJson(reconciliationAudience(receipt.audience))) return;
   }
-  abandonDocumentSnapshot(homeDirectory, accountBinding, receipt.request_id);
+  abandonDocumentSnapshot(homeDirectory, accountBinding, requestId);
 }
