@@ -126,6 +126,37 @@ describe('document CLI custody and bounded transport', () => {
     expect(status.code, status.stderr).toBe(0); expect(existsSync(pending)).toBe(false);
   });
 
+  it.each([
+    { label: 'the same project in its reader-visible shape', projects: [projectId], audience: { kind: 'project', project_id: projectId }, settles: true },
+    { label: 'a different project', projects: [projectId], audience: { kind: 'project', project_id: 'prj_10000000-0000-4000-8000-000000000002' }, settles: false },
+    { label: 'only a subset of the submitted audience', projects: [projectId, 'prj_10000000-0000-4000-8000-000000000002'], audience: { kind: 'project', project_id: projectId }, settles: false },
+    { label: 'organization sharing instead of project sharing', projects: [projectId], audience: { kind: 'team' }, settles: false },
+  ])('reconciles a lost V2 upload response against $label', async ({ projects, audience, settles }) => {
+    const f = setup();
+    const metadata = { schema_version: 2, kind: 'echo-person-document-upload-v2', request_id: requestId, filename: 'SCOUT.md', title: 'SCOUT PRD',
+      content_length: f.bytes.length, sha256: f.upload.sha256, association_project_ids: projects, audience: { kind: 'projects', project_ids: projects } };
+    const lost = await run(f.home, ['documents', 'upload-v2', '--file', f.file, '--title', metadata.title, '--request-id', requestId,
+      '--association-project-ids-json', JSON.stringify(projects), '--audience', 'projects', '--audience-project-ids-json', JSON.stringify(projects)], async (_url, init) => {
+      expect(JSON.parse(Buffer.from(new Headers(init?.headers).get('x-echo-document-metadata')!, 'base64url').toString())).toEqual(metadata);
+      expect(await consume(init)).toEqual(f.bytes);
+      throw new Error('upload response lost');
+    });
+    expect(lost.failure).toMatchObject({ code: 'outcome_unknown', mutation_outcome: 'unknown', request_id: requestId });
+    unlinkSync(f.file);
+    const offline = vi.fn();
+    expect((await run(f.home, ['documents', 'pending'], offline)).result).toMatchObject({ ok: true, result: { snapshots: [{ request_id: requestId, audience: metadata.audience }] } });
+    const status = await run(f.home, ['documents', 'status-v2', '--request-id', requestId], async url => {
+      expect(String(url)).toBe(`https://authority.example/v2/person/documents/requests/${requestId}`);
+      return json({ ...metadata, kind: 'echo-person-document-metadata-v2', audience, document_id: documentId, detected_media_type: 'text/markdown',
+        received_at: NOW, state: 'saved', extraction_state: 'ready', extraction_detail: null, extractor: 'fixture-v2', extracted_text_bytes: f.bytes.length });
+    });
+    expect(status.code, status.stderr).toBe(0);
+    expect(status.result).toMatchObject({ ok: true, result: { request_id: requestId, state: 'saved', audience } });
+    const pending = await run(f.home, ['documents', 'pending'], offline);
+    expect(pending.result).toMatchObject({ ok: true, result: { snapshots: settles ? [] : [{ request_id: requestId, audience: metadata.audience }] } });
+    expect(offline).not.toHaveBeenCalled();
+  });
+
   it('lists and retries retained original bytes by request ID after a fresh process without the source path', async () => {
     const f = setup();
     await run(f.home, uploadArgs(f.file), async (_url, init) => { await consume(init); throw new Error('lost'); });

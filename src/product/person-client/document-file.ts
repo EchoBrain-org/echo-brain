@@ -249,6 +249,13 @@ export async function saveDocumentDownload(response: Response, outputPath: strin
   }
 }
 
+/** ADR-0023 renders a singleton projects audience as project; keep upload/retry metadata exact. */
+function reconciliationAudience(audience: PersonUploadAudienceV3): PersonUploadAudienceV3 {
+  return audience.kind === 'projects' && audience.project_ids.length === 1
+    ? { kind: 'project', project_id: audience.project_ids[0]! }
+    : audience;
+}
+
 /** A current, exact server status settles a retained uncertain upload without rereading its source. */
 export function reconcileDocumentSnapshot(homeDirectory: string, accountBinding: string, receipt: PersonDocumentStatusV1 | PersonDocumentStatusV2): void {
   // Status is the uploader's own read, so it always carries the request ID.
@@ -260,7 +267,7 @@ export function reconcileDocumentSnapshot(homeDirectory: string, accountBinding:
     if (!existsSync(directory)) return;
     const metadata = snapshotManifest(directory, requestId);
     for (const key of ['request_id', 'sha256', 'content_length', 'filename', 'title'] as const) if (metadata[key] !== receipt[key]) return;
-    if (metadata.schema_version !== receipt.schema_version || canonicalJson(metadata.audience) !== canonicalJson(receipt.audience)) return;
+    if (metadata.schema_version !== receipt.schema_version || canonicalJson(reconciliationAudience(metadata.audience)) !== canonicalJson(reconciliationAudience(receipt.audience))) return;
   }
   abandonDocumentSnapshot(homeDirectory, accountBinding, requestId);
 }

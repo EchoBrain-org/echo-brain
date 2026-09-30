@@ -153,7 +153,9 @@ describe("a document's request ID is released only to its uploader", () => {
 
     expect(f.documents.readV2(uploader, modern.document_id).request_id).toBe(modern.request_id);
     expect(f.documents.read(uploader, legacy.document_id).request_id).toBe(legacy.request_id);
-    expect(validatePersonDocumentStatusV2(f.documents.statusV2(uploader, modern.request_id)).request_id).toBe(modern.request_id);
+    expect(validatePersonDocumentStatusV2(f.documents.statusV2(uploader, modern.request_id))).toMatchObject({
+      request_id: modern.request_id, audience: { kind: "project", project_id: SHARED },
+    });
   });
 });
 

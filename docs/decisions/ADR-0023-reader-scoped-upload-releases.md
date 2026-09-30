@@ -88,8 +88,12 @@ Contracts in `packages/organization-api`:
   route, Person client and Authority port use the union.
 
 The Person client narrows a status `request_id` before reconciling a retained
-document snapshot. The desktop app reads the saved-only note status as saved,
-and its fixture Authority serializes the new shapes.
+document snapshot. During status reconciliation only, `projects: [P]` and
+`project: P` are equivalent; a different project or a subset of a multi-project
+audience cannot settle the snapshot. Stored upload metadata and exact retry and
+admission-receipt comparisons retain their original shapes. The desktop app reads
+the saved-only note status as saved, and its fixture Authority serializes the new
+shapes.
 
 Out of scope: `/v2/person/updates/{id}` status keeps its current behavior. The
 Ask evidence desk still labels a transcript audience `projects` when its record
