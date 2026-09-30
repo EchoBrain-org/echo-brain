@@ -13,7 +13,7 @@ import {
   validateProjectContextReadV1, validateProjectContextReadV2, validatePersonUploadContextId, validatePersonUpdateRequestId,
   validatePersonUpdateSubmitV2, validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2,
   validatePersonUploadSearchV2, validatePersonUploadSearchResultV2, validatePersonUploadContentV2,
-  validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusV3,
+  validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
   validatePersonUploadSearchV3, validatePersonUploadSearchResultV3, validatePersonUploadContentV3,
 } from '@echo-brain/organization-api';
 import type { ProjectContextApplicationV1 } from '../application/ports/project-context-v1.js';
@@ -656,7 +656,7 @@ async function projectRoute(
   }
   const id = projectInput(validatePersonUpdateRequestId, uploadPath[0]);
   return response => uploadBase === PERSON_UPDATES_PATH_V3
-    ? projectResponse(response, 200, application.uploadStatusV3(token, id), validatePersonUpdateStatusV3)
+    ? projectResponse(response, 200, application.uploadStatusV3(token, id), validatePersonUpdateStatusResultV3)
     : projectResponse(response, 200, application.uploadStatus(token, id), validatePersonUpdateStatusV2);
 }
 

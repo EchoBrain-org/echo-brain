@@ -259,6 +259,16 @@ describe('document CLI custody and bounded transport', () => {
     expect(outcome.result).toMatchObject({ ok: true, result: { documents: [{ audience: { kind: 'projects', project_ids: [projectId] } }] } });
   });
 
+  it('accepts a V2 document someone else saved, whose request ID the Authority withholds', async () => {
+    const f = setup();
+    const theirs = { schema_version: 2, kind: 'echo-person-document-metadata-v2', request_id: null, filename: 'SCOUT.md', title: 'SCOUT PRD', content_length: f.bytes.length, sha256: f.upload.sha256,
+      audience: { kind: 'project', project_id: projectId }, association_project_ids: [projectId], document_id: documentId, detected_media_type: 'text/markdown', received_at: NOW, state: 'saved', extraction_state: 'ready', extraction_detail: null, extractor: 'fixture-v2', extracted_text_bytes: 18 };
+    const outcome = await run(f.home, ['documents', 'search-v2', '--project-id', projectId, '--query', 'SCOUT'], async () =>
+      json({ schema_version: 2, kind: 'echo-person-document-search-result-v2', documents: [{ ...theirs, excerpt: null, anchor: null }], next_cursor: null }));
+    expect(outcome.code, outcome.stderr).toBe(0);
+    expect(outcome.result).toMatchObject({ ok: true, result: { documents: [{ document_id: documentId, request_id: null }] } });
+  });
+
   it('reconciles extraction completion between metadata and text reads without losing provenance', async () => {
     const f = setup(); let reads = 0;
     const ready = { ...f.metadata, extractor: 'fixture-v1', extraction_state: 'ready', extracted_text_bytes: 18 };

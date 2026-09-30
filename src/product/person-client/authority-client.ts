@@ -61,7 +61,7 @@ import {
 } from '@echo-brain/organization-api';
 import {
   PERSON_UPDATES_PATH_V3,
-  validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusV3,
+  validatePersonUpdateSubmitV3, validatePersonUpdateReceiptV3, validatePersonUpdateStatusResultV3,
   validatePersonUploadContentV3, validatePersonUploadSearchV3, validatePersonUploadSearchResultV3,
   type PersonUpdateSubmitV3, type PersonUploadSearchV3,
 } from '@echo-brain/organization-api';
@@ -888,7 +888,7 @@ export class PersonAuthorityClient {
         result.project_id === request.project_id && result.operation === operation });
   }
 
-  private async documentStatusFor<T extends { request_id: string }>(accessToken: string, requestId: string, base: string, validate: (value: unknown) => T): Promise<T> {
+  private async documentStatusFor<T extends { readonly request_id: string | null }>(accessToken: string, requestId: string, base: string, validate: (value: unknown) => T): Promise<T> {
     validatePersonUpdateRequestId(requestId);
     const result = await this.documentResponse(await this.send(`${base}/requests/${requestId}`, {
       method: 'GET', headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
@@ -1169,7 +1169,7 @@ export class PersonAuthorityClient {
 
   async updateStatusV3(accessToken: string, requestId: string) {
     validatePersonUpdateRequestId(requestId);
-    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V3}/${requestId}`, validate: validatePersonUpdateStatusV3,
+    return this.contextRequest(accessToken, { path: `${PERSON_UPDATES_PATH_V3}/${requestId}`, validate: validatePersonUpdateStatusResultV3,
       matches: result => result.request_id === requestId });
   }
 

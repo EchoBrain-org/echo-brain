@@ -34,6 +34,12 @@ contributor's departure does not delete shared originals or project context.
 Organization sharing follows current organization access. Only-me material stays
 bound to the contributor's membership tenure.
 
+A reader sees only its own part of an audience. A read names only the audience
+projects the reader currently belongs to, and a single such project reads as a
+one-project audience. A reader cannot tell whether the audience also names
+projects it cannot see. Only the uploader sees a document's request ID. See
+[ADR-0023](../decisions/ADR-0023-reader-scoped-upload-releases.md).
+
 Global Ask retrieves authorized context across scopes. Project Ask additionally
 requires current project membership and an explicit association with that
 project. It does not fall back to global context. Association changes do not
@@ -54,9 +60,11 @@ project and commits the original, links, audience grants and receipt atomically.
 There is no sequence of per-project uploads or partially completed link updates.
 
 The request retains canonical, sorted, unique initial association and audience
-sets. Idempotent replay binds those sets and the original bytes. Status and full
-upload receipts report the initial association set; metadata reads report current
-authorized associations. A later association change cannot invalidate the
+sets. Idempotent replay binds those sets and the original bytes. Full upload
+receipts report the initial association set. Note and document status report it
+only while the uploader still belongs to every project it names; otherwise they
+return the minimal saved proof. Metadata reads report current authorized
+associations. A later association change cannot invalidate the
 original, its source provenance, or its original receipt.
 
 After a lost response, retry uses the same request, content and choices. A

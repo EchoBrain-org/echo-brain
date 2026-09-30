@@ -145,6 +145,8 @@ describe('view models copy only what the renderer may see', () => {
 
   it('reads a stored note or saved document as saved, anything else as unknown', () => {
     expect(writeStatusView({ kind: 'echo-person-update-status-v3', status: 'stored' }, 'note')).toEqual({ state: 'saved' });
+    // After leaving a project the note names, the Authority returns only the saved proof (ADR-0023).
+    expect(writeStatusView({ kind: 'echo-person-update-saved-v3', status: 'stored' }, 'note')).toEqual({ state: 'saved' });
     expect(writeStatusView({ ok: true, result: { state: 'saved' } }, 'document')).toEqual({ state: 'saved' });
     expect(writeStatusView({ kind: 'echo-person-update-status-v3', status: 'pending' }, 'note')).toEqual({ state: 'unknown' });
   });
@@ -350,6 +352,14 @@ describe('documents, members and project changes', () => {
     }] });
     expect(JSON.stringify(page)).not.toContain('SECRET');
     expect(JSON.stringify(page)).not.toContain(sha('1'));
+  });
+
+  it('lists a document someone else saved, whose request ID the Authority withholds', () => {
+    const page = documentPageView({ ok: true, result: {
+      schema_version: 2, kind: 'echo-person-document-search-result-v2', next_cursor: null,
+      documents: [{ ...metadata, request_id: null, audience: { kind: 'project', project_id: PROJECT }, excerpt: null, anchor: null }],
+    } });
+    expect(page.items).toEqual([expect.objectContaining({ document_id: DOCUMENT, audience: 'project', project_ids: [PROJECT] })]);
   });
 
   it('a text page must be of the document asked for, and of the same original', () => {

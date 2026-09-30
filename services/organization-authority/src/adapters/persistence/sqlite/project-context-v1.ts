@@ -6,7 +6,7 @@ import {
   validatePersonUpdateReceiptV2, validatePersonUpdateStatusV2, validatePersonUpdateSubmitV2,
   validatePersonUploadContentV2, validatePersonUploadContextId, validatePersonUploadSearchResultV2,
   validatePersonUploadSearchV2, validatePersonUpdateRequestId,
-  validatePersonUpdateReceiptV3, validatePersonUpdateStatusV3, validatePersonUpdateSubmitV3,
+  validatePersonUpdateReceiptV3, validatePersonUpdateSavedV3, validatePersonUpdateStatusV3, validatePersonUpdateSubmitV3,
   validatePersonUploadContentV3, validatePersonUploadSearchResultV3,
   validateProjectContextFeedV1, validateProjectContextFeedV2, validateProjectContextReadV1, validateProjectContextReadV2, validateProjectContextSearchResultV1, validateProjectContextSearchResultV2,
   validateProjectCreateReceiptV1, validateProjectListV1, validateProjectMembersV1,
@@ -18,7 +18,7 @@ import {
   type OrganizationDirectorySearchV1, type OrganizationDirectoryV1,
   type PersonUpdateReceiptV2, type PersonUpdateStatusV2, type PersonUpdateSubmitV2,
   type PersonUploadContentV2, type PersonUploadSearchV2, type PersonUploadSearchResultV2,
-  type PersonUpdateReceiptV3, type PersonUpdateStatusV3, type PersonUpdateSubmitV3,
+  type PersonUpdateReceiptV3, type PersonUpdateStatusResultV3, type PersonUpdateSubmitV3,
   type PersonUploadContentV3, type PersonUploadSearchResultV3, type PersonUploadAudienceV3,
   type ProjectContextAssociateV1, type ProjectContextBrowseV1, type ProjectContextDissociateV1,
   type ProjectContextFeedV1, type ProjectContextFeedV2, type ProjectContextReadV1, type ProjectContextReadV2, type ProjectContextSearchResultV1, type ProjectContextSearchResultV2,
@@ -34,6 +34,7 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { projectCommandIdentityV1 } from '../../../application/project-context-command-v1.js';
 import { assertPersonRequestNamespaceV1 } from './person-request-namespace-v1.js';
+import { releasedUploadAudienceV3 } from './person-upload-release-v1.js';
 import type {
   ProjectAuthorizationScopeV1, ProjectAuthorizationSnapshotV1, ProjectContextReadTransactionV1,
   ProjectContextRepositoryV1, ProjectContextWriteTransactionV1, ProjectMembershipGrantV1,
@@ -383,7 +384,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
   feedV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV2 {
     this.open(); const input = this.input(() => validateProjectContextBrowseV1(request)); this.require(snapshot, 'feed_v2', input.project_id);
     const limit=input.limit??10; const scope=cursorScope(snapshot,limit); const pos=decodeProjectCursorV1(input.cursor,scope); const rows=this.projectSourcesV3(snapshot,input.project_id).sort((a,b)=>b.received_at.localeCompare(a.received_at)||a.context_id.localeCompare(b.context_id)); const remaining=after(rows,pos,row=>[row.received_at,row.context_id]); const page=remaining.slice(0,limit);
-    return this.store.issue(snapshot,'feed_v2',validateProjectContextFeedV2({schema_version:2,kind:'echo-project-context-feed-v2',project_id:input.project_id,items:page.map((row)=>({context_id:row.context_id,received_at:row.received_at,title:row.title,excerpt:[...row.text.trim()].slice(0,300).join(''),audience:audienceV3(row)})),next_cursor:next(remaining,page,limit)?encodeProjectCursorV1(scope,[page.at(-1)!.received_at,page.at(-1)!.context_id]):null}));
+    return this.store.issue(snapshot,'feed_v2',validateProjectContextFeedV2({schema_version:2,kind:'echo-project-context-feed-v2',project_id:input.project_id,items:page.map((row)=>({context_id:row.context_id,received_at:row.received_at,title:row.title,excerpt:[...row.text.trim()].slice(0,300).join(''),audience:this.releasedAudience(snapshot,row)})),next_cursor:next(remaining,page,limit)?encodeProjectCursorV1(scope,[page.at(-1)!.received_at,page.at(-1)!.context_id]):null}));
   }
   feed(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextBrowseV1): ProjectContextFeedV1 {
     this.open(); const input = this.input(() => validateProjectContextBrowseV1(request)); this.require(snapshot, 'feed', input.project_id);
@@ -395,7 +396,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
   }
   searchV2(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextSearchV1): ProjectContextSearchResultV2 {
     this.open(); const input=this.input(()=>validateProjectContextSearchV1(request)); this.require(snapshot,'search_v2',input.project_id); const limit=input.limit??10; const scope=cursorScope(snapshot,limit,input.query); const pos=decodeProjectCursorV1(input.cursor,scope); const terms=projectSearchTermsV1(input.query); const rows=this.projectSourcesV3(snapshot,input.project_id).flatMap((row)=>{const n=score(row,terms);return n===undefined?[]:[{row,score:n}];}).sort((a,b)=>b.score-a.score||b.row.received_at.localeCompare(a.row.received_at)||a.row.context_id.localeCompare(b.row.context_id));const remaining=after(rows,pos,value=>[value.score,value.row.received_at,value.row.context_id]);const page=remaining.slice(0,limit);
-    return this.store.issue(snapshot,'search_v2',validateProjectContextSearchResultV2({schema_version:2,kind:'echo-project-context-search-result-v2',project_id:input.project_id,items:page.map(({row})=>({context_id:row.context_id,received_at:row.received_at,title:row.title,excerpt:[...row.text.trim()].slice(0,300).join(''),audience:audienceV3(row)})),next_cursor:next(remaining,page,limit)?encodeProjectCursorV1(scope,[page.at(-1)!.score,page.at(-1)!.row.received_at,page.at(-1)!.row.context_id]):null}));
+    return this.store.issue(snapshot,'search_v2',validateProjectContextSearchResultV2({schema_version:2,kind:'echo-project-context-search-result-v2',project_id:input.project_id,items:page.map(({row})=>({context_id:row.context_id,received_at:row.received_at,title:row.title,excerpt:[...row.text.trim()].slice(0,300).join(''),audience:this.releasedAudience(snapshot,row)})),next_cursor:next(remaining,page,limit)?encodeProjectCursorV1(scope,[page.at(-1)!.score,page.at(-1)!.row.received_at,page.at(-1)!.row.context_id]):null}));
   }
   search(snapshot: ProjectAuthorizationSnapshotV1, request: ProjectContextSearchV1): ProjectContextSearchResultV1 {
     this.open(); const input = this.input(() => validateProjectContextSearchV1(request)); this.require(snapshot, 'search', input.project_id);
@@ -409,7 +410,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
   }
   readContextV2(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1, contextId: string): ProjectContextReadV2 {
     this.open(); const input=this.input(()=>({project_id:validateProjectIdV1(projectId),context_id:validatePersonUploadContextId(contextId)})); this.require(snapshot,'context_read_v2',input.project_id); if(snapshot.scope.operation!=='context_read_v2'||snapshot.scope.context_id!==input.context_id)throw new Error('project context scope mismatch'); const row=this.projectSourcesV3(snapshot,input.project_id).find((value)=>value.context_id===input.context_id);if(row===undefined)denied();
-    return this.store.issue(snapshot,'context_read_v2',validateProjectContextReadV2({schema_version:2,kind:'echo-project-context-read-v2',project_id:input.project_id,context_id:row.context_id,received_at:row.received_at,title:row.title,text:row.text,audience:audienceV3(row)}));
+    return this.store.issue(snapshot,'context_read_v2',validateProjectContextReadV2({schema_version:2,kind:'echo-project-context-read-v2',project_id:input.project_id,context_id:row.context_id,received_at:row.received_at,title:row.title,text:row.text,audience:this.releasedAudience(snapshot,row)}));
   }
   readContext(snapshot: ProjectAuthorizationSnapshotV1, projectId: ProjectIdV1, contextId: string): ProjectContextReadV1 {
     this.open(); const input = this.input(() => ({ project_id: validateProjectIdV1(projectId), context_id: validatePersonUploadContextId(contextId) })); this.require(snapshot, 'context_read', input.project_id); if (snapshot.scope.operation !== 'context_read' || snapshot.scope.context_id !== input.context_id) throw new Error('project context scope mismatch');
@@ -432,13 +433,19 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       .sort((a,b) => b.score-a.score || b.row.received_at.localeCompare(a.row.received_at) || a.row.context_id.localeCompare(b.row.context_id)).slice(0, input.limit ?? 10);
     return this.store.issue(snapshot, 'upload_search', validatePersonUploadSearchResultV2({ schema_version: 2, kind: 'echo-person-upload-search-v2', results: rows.map(({row}) => ({ context_id: row.context_id, received_at: row.received_at, audience: audience(row), title: row.title, excerpt: [...row.text.trim()].slice(0, 300).join('') })) }));
   }
-  uploadStatusV3(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusV3 {
+  /** Like a document status, the full receipt needs a current grant on every project it names (ADR-0023). */
+  uploadStatusV3(snapshot: ProjectAuthorizationSnapshotV1, requestId: string): PersonUpdateStatusResultV3 {
     this.open(); const input = this.input(() => validatePersonUpdateRequestId(requestId)); this.require(snapshot, 'upload_status_v3'); if (snapshot.scope.operation !== 'upload_status_v3' || snapshot.scope.request_id !== input) throw new Error('project context scope mismatch'); const row = this.store.sourceOwned(snapshot.person, input); if (row === undefined || row.request_version !== 3) denied();
-    return this.store.issue(snapshot, 'upload_status_v3', validatePersonUpdateStatusV3({ schema_version: 3, kind: 'echo-person-update-status-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, association_project_ids: projectIds(row.submitted_association_project_ids_json), audience: audienceV3(row), status: 'stored', metadata: row.state }));
+    const association_project_ids = projectIds(row.submitted_association_project_ids_json); const audience = audienceV3(row);
+    const named = [...association_project_ids, ...(audience.kind === 'projects' ? audience.project_ids : audience.kind === 'project' ? [audience.project_id] : [])];
+    if (!named.every((project_id) => snapshot.grants.some((grant) => grant.project_id === project_id))) {
+      return this.store.issue(snapshot, 'upload_status_v3', validatePersonUpdateSavedV3({ schema_version: 3, kind: 'echo-person-update-saved-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, status: 'stored' }));
+    }
+    return this.store.issue(snapshot, 'upload_status_v3', validatePersonUpdateStatusV3({ schema_version: 3, kind: 'echo-person-update-status-v3', request_id: row.request_id, context_id: row.context_id, received_at: row.received_at, association_project_ids, audience, status: 'stored', metadata: row.state }));
   }
   readUploadV3(snapshot: ProjectAuthorizationSnapshotV1, contextId: string): PersonUploadContentV3 {
     this.open(); const input = this.input(() => validatePersonUploadContextId(contextId)); this.require(snapshot, 'upload_read_v3'); if (snapshot.scope.operation !== 'upload_read_v3' || snapshot.scope.context_id !== input) throw new Error('project context scope mismatch'); const row = this.store.source(input); if (row === undefined || row.request_version !== 3 || !this.store.readable(snapshot.person, snapshot.grants, row)) denied(); this.store.validateSource(row);
-    return this.store.issue(snapshot, 'upload_read_v3', validatePersonUploadContentV3({ schema_version: 3, kind: 'echo-person-upload-content-v3', context_id: row.context_id, received_at: row.received_at, audience: audienceV3(row), title: row.title, text: row.text }));
+    return this.store.issue(snapshot, 'upload_read_v3', validatePersonUploadContentV3({ schema_version: 3, kind: 'echo-person-upload-content-v3', context_id: row.context_id, received_at: row.received_at, audience: this.releasedAudience(snapshot, row), title: row.title, text: row.text }));
   }
   searchUploadsV3(snapshot: ProjectAuthorizationSnapshotV1, request: PersonUploadSearchV2): PersonUploadSearchResultV3 {
     this.open(); const input = this.input(() => validatePersonUploadSearchV2(request)); this.require(snapshot, 'upload_search_v3'); const terms = projectSearchTermsV1(input.query);
@@ -446,7 +453,7 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       .filter((row) => { if (!this.store.readable(snapshot.person, snapshot.grants, row)) return false; this.store.validateSource(row); return true; })
       .flatMap((row) => { const n = score(row, terms); return n === undefined ? [] : [{ row, score: n }]; })
       .sort((a,b) => b.score-a.score || b.row.received_at.localeCompare(a.row.received_at) || a.row.context_id.localeCompare(b.row.context_id)).slice(0, input.limit ?? 10);
-    return this.store.issue(snapshot, 'upload_search_v3', validatePersonUploadSearchResultV3({ schema_version: 3, kind: 'echo-person-upload-search-v3', results: rows.map(({row}) => ({ context_id: row.context_id, received_at: row.received_at, audience: audienceV3(row), title: row.title, excerpt: [...row.text.trim()].slice(0, 300).join('') })) }));
+    return this.store.issue(snapshot, 'upload_search_v3', validatePersonUploadSearchResultV3({ schema_version: 3, kind: 'echo-person-upload-search-v3', results: rows.map(({row}) => ({ context_id: row.context_id, received_at: row.received_at, audience: this.releasedAudience(snapshot, row), title: row.title, excerpt: [...row.text.trim()].slice(0, 300).join('') })) }));
   }
   revalidateAndAuditRelease<Response extends ProjectReadResponseV1>(snapshot: ProjectAuthorizationSnapshotV1, currentActor: PersonAccessAuthorization, response: Response): Response { this.open(); this.known(snapshot); return this.store.release(snapshot, currentActor, response); }
 
@@ -597,6 +604,9 @@ class ProjectTransaction implements ProjectContextWriteTransactionV1 {
       const result = validatePersonUpdateReceiptV3({ schema_version: 3, kind: 'echo-person-update-receipt-v3', request_id: request.request_id, context_id, received_at, association_project_ids: request.association_project_ids, audience: request.audience, state: 'received' });
       this.store.record(snapshot.person, mutation, result); return result;
     });
+  }
+  private releasedAudience(snapshot: ProjectAuthorizationSnapshotV1, row: SourceRow): PersonUploadAudienceV3 {
+    return releasedUploadAudienceV3(audienceV3(row), new Set(snapshot.grants.map((grant) => grant.project_id)));
   }
   private known(snapshot: ProjectAuthorizationSnapshotV1): void { if (!this.snapshots.has(snapshot)) throw new Error('project context snapshot escaped or was forged'); }
   private replay(snapshot: ProjectAuthorizationSnapshotV1, mutation: ProjectMutationV1): ProjectCreateReceiptV1 | ProjectMutationReceiptV1 | ProjectSettingsReceiptV1 | PersonUpdateReceiptV2 | PersonUpdateReceiptV3 | undefined {

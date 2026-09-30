@@ -242,6 +242,16 @@ describe('frozen project context CLI contract', () => {
     expect(code, stderr).toBe(0); expect(JSON.parse(stdout)).toEqual(response);
   });
 
+  it('prints the saved-only V3 note status an uploader gets after leaving a named project', async () => {
+    const { home } = setup(); let stdout = ''; let stderr = '';
+    const requestId = '00000000-0000-4000-8000-000000000031';
+    const saved = { schema_version: 3, kind: 'echo-person-update-saved-v3', request_id: requestId, context_id: `ctx_${'d'.repeat(64)}`, received_at: now, status: 'stored' };
+    const code = await runPersonClientCli(['updates', 'status-v3', '--request-id', requestId], { home_directory: home, now: () => now,
+      fetch: async url => { expect(String(url)).toBe(`https://authority.example/v3/person/updates/${requestId}`); return json(saved); },
+      stdout: { write: value => { stdout += value; } }, stderr: { write: value => { stderr += value; } } });
+    expect(code, stderr).toBe(0); expect(JSON.parse(stdout)).toEqual(saved);
+  });
+
   it('supports the full 8 KiB original under the 32 KiB wire bound', async () => {
     const item = operation('updates-read-v2');
     const response = { ...item.http.response, text: '\t'.repeat(8191) + 'x' };
