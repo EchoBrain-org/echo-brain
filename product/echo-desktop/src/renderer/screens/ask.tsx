@@ -109,7 +109,7 @@ function sourceName(source: AnswerSource, sources: SourcesState | null): string 
   return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
 
-const UNTITLED = 'Untitled meeting';
+export const UNTITLED = 'Untitled meeting';
 
 /** A source's first citation stands for it: its kind, its label, its record or its Slack message. */
 function firstSource(state: State, group: SourceGroup): AnswerSource {
@@ -352,19 +352,19 @@ const VISIBILITY: Record<ApprovedRecord['visibility'], string> = {
 
 /**
  * MEETING · APPROVED RECORD: who approved it, who was there, who can read it,
- * and what was approved. In the source pane, and in the reader.
+ * and what was approved. In the source pane, and in the reader, whose own
+ * head names it and who can read it (`headed` false).
  */
-export function RecordDetail({ record }: { record: ApprovedRecord }) {
+export function RecordDetail({ record, headed = true }: { record: ApprovedRecord; headed?: boolean }) {
   const participants = [...record.participants, ...(record.participants_more ? ['Additional participants not shown'] : [])];
   return (
     <div class="source-detail selectable" data-testid="record">
-      <h2>{record.title ?? UNTITLED}</h2>
+      {headed && <h2>{record.title ?? UNTITLED}</h2>}
       {record.started_at && <div class="meta">{meetingTime(record.started_at, record.timezone, record.all_day)}</div>}
       <dl class="fields">
         {record.approved_by && <><dt>Record approved by</dt><dd>{record.approved_by}</dd></>}
         {participants.length > 0 && <><dt>Participants</dt><dd>{participants.join(', ')}</dd></>}
-        <dt>Visibility</dt>
-        <dd data-testid="record-visibility">{VISIBILITY[record.visibility]}</dd>
+        {headed && <><dt>Visibility</dt><dd data-testid="record-visibility">{VISIBILITY[record.visibility]}</dd></>}
       </dl>
       {SECTIONS.map(([key, heading, kind]) => {
         const section = record[key];

@@ -84,8 +84,11 @@ test('a meeting opened from Mine is its approved record: More reads the rest, an
   await page.getByTestId('sidebar-mine').click();
   await page.getByTestId('mine-row').filter({ hasText: 'Pricing review' }).click();
   const record = page.getByTestId('record');
-  await expect(record.locator('h2')).toHaveText('Pricing review');
-  await expect(page.getByTestId('record-visibility')).toHaveText('Only the approver');
+  // Headed like any item read from Mine: its title, and who can read it in the row's words, with when it was added.
+  await expect(page.getByTestId('reader').locator('h1')).toHaveText('Pricing review');
+  await expect(page.getByTestId('reader-meta')).toHaveText(/^Only me · \S/);
+  await expect(record.locator('h2')).toHaveCount(0);
+  await expect(page.getByTestId('record-visibility')).toHaveCount(0);
   await expect(record).toContainText('Record approved by');
   await expect(record).toContainText('Ari, Maya Chen');
   await expect(page.getByTestId('back')).toHaveText('Mine');
@@ -267,7 +270,10 @@ test('a project\'s page lists its approved meetings too, and an owner\'s Mine ho
   await expect(page.getByTestId('item-projects')).toHaveCount(0);
   expect(lists().map(call => call.body)).toEqual([{ schema_version: 1, project_id: 'prj_44444444-4444-4444-8444-444444444444' }]);
   await rows.filter({ hasText: 'Beacon kickoff' }).click();
-  await expect(page.getByTestId('record-visibility')).toHaveText('Visible to project members');
+  // A project members' meeting, like its row, has no readers word.
+  await expect(page.getByTestId('reader').locator('h1')).toHaveText('Beacon kickoff');
+  await expect(page.getByTestId('reader-meta')).not.toHaveText(/Only me|Organization/);
+  await expect(page.getByTestId('reader-meta')).not.toBeEmpty();
   await expect(page.getByTestId('record')).toContainText('Maya Chen');
   await expect(page.getByTestId('back')).toHaveText('Beacon');
 

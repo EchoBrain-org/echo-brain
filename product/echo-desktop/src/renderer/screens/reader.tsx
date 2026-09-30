@@ -1,11 +1,11 @@
-import type { Visibility } from '../../shared/protocol.js';
+import type { ApprovedRecord, Visibility } from '../../shared/protocol.js';
 import { documentDetail, when } from '../format.js';
 import { message } from '../messages.js';
 import {
   addToProject, canFile, changeBlocked, closeReader, EXTRACTION, hasReaderMenu, loadProjects, moreRecord, nextTextPage, projectChoices, refreshDocument,
   removableFrom, removeFromProject, saveOriginal, showProjectChoices, toggleReaderMenu, type ReaderState, type State,
 } from '../store.js';
-import { RecordDetail } from './ask.js';
+import { RecordDetail, UNTITLED } from './ask.js';
 import { ChangeLine, changeShownInPlace, within } from './change.js';
 import { Chevron, Ellipsis } from './icons.js';
 
@@ -13,6 +13,9 @@ import { Chevron, Ellipsis } from './icons.js';
 function readersWord(audience: Visibility | undefined): string | null {
   return audience === 'only-me' ? 'Only me' : audience === 'team' ? 'Organization' : null;
 }
+
+/** A meeting's readers, as its row marks them: only its approver can read an approver-only meeting. */
+const RECORD_AUDIENCE: Record<ApprovedRecord['visibility'], Visibility> = { approver: 'only-me', organization: 'team', project: 'project' };
 
 /** What Save original… came to. */
 function saveLine(reader: ReaderState): { text: string; error: boolean } | null {
@@ -77,12 +80,13 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
   const content = reader.content;
   const document = reader.document;
   const record = reader.record;
-  const title = content?.title ?? document?.document.title;
-  const received = content?.received_at ?? document?.document.received_at;
-  const meta = [readersWord(content?.audience ?? document?.document.audience), received ? when(received) : null,
+  const title = content?.title ?? document?.document.title ?? (record ? record.title ?? UNTITLED : undefined);
+  const received = content?.received_at ?? document?.document.received_at ?? record?.added_at;
+  const audience = content?.audience ?? document?.document.audience ?? (record ? RECORD_AUDIENCE[record.visibility] : undefined);
+  const meta = [readersWord(audience), received ? when(received) : null,
     document ? documentDetail(document.document) : null].filter(Boolean).join(' · ');
   const saving = saveLine(reader);
-  const readable = Boolean(content || document);
+  const readable = Boolean(content || document || record);
   return (
     <article class="reader" data-testid="reader" aria-busy={reader.loading} onClick={event => {
       // A click anywhere but the menu or its ⋯ closes it.
@@ -117,7 +121,7 @@ export function Reader({ state, reader, backTo }: { state: State; reader: Reader
           ))}
         </div>
       ))}
-      {record && <RecordDetail record={record} />}
+      {record && <RecordDetail record={record} headed={false} />}
       {record && reader.recordNext && (
         <button type="button" class="link-button more" data-testid="reader-more" disabled={reader.loading} onClick={moreRecord}>More</button>
       )}

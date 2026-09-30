@@ -266,6 +266,8 @@ export interface RecordSection {
 /** An approved meeting record, as the source pane shows it. Every text is at most 2,000 characters. */
 export interface ApprovedRecord {
   readonly title?: string;
+  /** When it was approved (ISO 8601), as its row shows it: only on a record opened by its ref. */
+  readonly added_at?: string;
   /** When the meeting started (ISO 8601), in which time zone, and whether it was all day. */
   readonly started_at?: string;
   readonly timezone?: string;

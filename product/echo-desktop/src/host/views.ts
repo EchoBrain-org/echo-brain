@@ -643,7 +643,7 @@ function meetingRecord(value: Json, item: ListItem, first: boolean): ApprovedRec
   const timezone = typeof detail.timezone === 'string' && /^[A-Za-z0-9_+\-/]{1,64}$/.test(detail.timezone) ? detail.timezone : undefined;
   const approver = sourceText(detail.approved_by);
   return {
-    title: item.title,
+    title: item.title, added_at: item.added_at,
     ...(startedAt === undefined ? {} : { started_at: startedAt }),
     ...(timezone === undefined ? {} : { timezone }),
     all_day: detail.all_day === true,

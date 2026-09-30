@@ -271,7 +271,7 @@ describe('an item opened by its ref', () => {
       { kind: 'action', text: 'Send the sheet.', owner: 'Maya Chen', due_at: 'Friday' }, { kind: 'rationale', text: 'It funds the launch.' },
     ]), ref, true);
     expect(view).toEqual({ kind: 'meeting', next_cursor: null, record: {
-      title: 'Pricing review', started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Ari',
+      title: 'Pricing review', added_at: '2026-09-21T20:30:00.000Z', started_at: '2026-09-21T19:00:00.000Z', timezone: 'America/Los_Angeles', all_day: false, approved_by: 'Ari',
       participants: ['Ari', 'Maya Chen'], participants_more: false, visibility: 'approver',
       decisions: { more: false, items: [{ text: 'Annual plans first.', excerpts: [] }, { text: 'Keep the pilot.', status: 'proposed', excerpts: [] }] },
       actions: { more: false, items: [{ text: 'Send the sheet.', owner: 'Maya Chen', excerpts: [] }] },

@@ -318,7 +318,6 @@ button.marker:hover { background: rgba(240, 236, 230, 0.18); }
 /* Mine's list runs from the top, the full height of the page. */
 .page.top { align-items: flex-start; padding-top: 38px; }
 .page.top .column { height: 100%; }
-.reader .source-detail h2 { font-size: 18px; font-weight: 700; }
 button.toast { color: inherit; }
 button.toast:hover { background: #211f1f; }
 .empty-capture { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px; border: 0; border-radius: 12px; font-size: 14px; color: var(--muted); background: none; }
