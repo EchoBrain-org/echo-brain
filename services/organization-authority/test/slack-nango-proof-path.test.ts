@@ -67,7 +67,7 @@ function fakeSlack() {
       : request.headers.get("content-type")?.startsWith("application/json") ? await request.json() : Object.fromEntries(new URLSearchParams(await request.text()));
     if (method === "apps.manifest.create") {
       expect(token).toBe(CONFIGURATION_TOKEN);
-      expect(JSON.parse(p.manifest).oauth_config).toMatchObject({ redirect_urls: [`${NANGO_URL}/oauth/callback`, expect.any(String)], scopes: { bot: SLACK_PRIVATE_APP_BOT_SCOPES_V1 } });
+      expect(JSON.parse(p.manifest).oauth_config).toMatchObject({ redirect_urls: [`${NANGO_URL}/oauth/callback`, expect.any(String)], scopes: { bot: SLACK_PRIVATE_APP_BOT_SCOPES_V1, user: ["openid", "profile"] } });
       const { app_id, ...credentials } = APP;
       return reply({ ok: true, app_id, credentials: { ...credentials, verification_token: "unused" } });
     }

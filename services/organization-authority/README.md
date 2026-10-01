@@ -173,8 +173,9 @@ verbs), through Nango
 there is no Slack app scope to grant by hand, no separate signing-secret file,
 and no Interactivity Request URL to save — the app recipe sets all of that,
 including the four required bot scopes (`chat:write`, `im:history`,
-`im:write`, `users:read`). The `im:*` scopes are required for the
-meeting-owner DM lane.
+`im:write`, `users:read`) and the `openid` and `profile` user scopes that
+only the person's browser sign-in requests. The `im:*` scopes are required for
+the meeting-owner DM lane.
 
 Re-onboarding a staging lineage uses the same in-app setup and connect as a
 first connection; it does not reuse a Slack app's scopes or token by hand. Use

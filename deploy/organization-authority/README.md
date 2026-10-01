@@ -142,7 +142,10 @@ Interactivity Request URL, the OAuth redirect URLs, and the four required bot
 scopes (`chat:write`, `im:history`, `im:write`, `users:read`) are part of that
 recipe, so nobody sets them by hand
 ([ADR-0025](../../docs/decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
-`im:write` and `im:history` enable the private meeting-owner DM lane.
+`im:write` and `im:history` enable the private meeting-owner DM lane. The
+recipe also declares the user scopes `openid` and `profile`, which only the
+person's browser sign-in requests; the install requests only the bot scopes,
+so the Nango Slack integration must not add a user scope.
 
 Stage `nango-secret-key` in the input directory instead: Nango's environment
 secret key, one no-newline value of 32 to 4096 visible ASCII characters in a
@@ -164,8 +167,13 @@ another workspace, without a new setup token.
 
 "Sign in with Slack" for the person link is automatic once the organization's
 Slack connection is active: it is built from that connection's own app client
-ID and secret, so there is nothing to configure separately. The compatibility
-DM-code challenge
+ID and secret, and the recipe declares its `openid` and `profile` user scopes,
+so there is nothing to configure separately. An app created before the recipe
+declared those scopes lacks them: an owner reruns
+`person tools setup --tool slack` without `--reconnect`, pastes a new
+configuration token so ECHO updates the app to the current recipe, and then
+finishes the reinstall it opens. `--reconnect` skips the token and does not
+update the app. The compatibility DM-code challenge
 (`person tools connect --tool slack --method dm-code --slack-user U…`) remains
 available as the fallback for a machine without a browser.
 

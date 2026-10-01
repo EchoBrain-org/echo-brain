@@ -4,7 +4,7 @@ import {
   BoundedJsonFetchErrorV1,
   boundedJsonFetchV1,
 } from "../../../shared/bounded-json-fetch-v1.js";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 } from "../../application/slack-integration-contracts.js";
 
 /** Owned by the application contracts; re-exported for this adapter's existing importers. */
 export { SLACK_PRIVATE_APP_BOT_SCOPES_V1 };
@@ -38,8 +38,9 @@ function validateRecipeUrl(value: string, allowPath: boolean): URL {
  * update) one organization's private Slack app. The first redirect URL is
  * always Nango's OAuth callback, passed in by the caller; the second is
  * ECHO's own browser-link callback, reused verbatim from the Person API
- * module that already owns that path. Interactivity always points at this
- * Authority's signed interaction endpoint.
+ * module that already owns that path. The bot scopes are the install's; the
+ * user scopes serve only that browser sign-in. Interactivity always points at
+ * this Authority's signed interaction endpoint.
  */
 export function buildEchoSlackAppManifestV1(input: {
   readonly authority_url: string;
@@ -63,7 +64,7 @@ export function buildEchoSlackAppManifestV1(input: {
         input.nango_callback_url,
         `${authorityOrigin}${ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH}`,
       ]),
-      scopes: Object.freeze({ bot: SLACK_PRIVATE_APP_BOT_SCOPES_V1 }),
+      scopes: Object.freeze({ bot: SLACK_PRIVATE_APP_BOT_SCOPES_V1, user: SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 }),
     }),
     settings: Object.freeze({
       interactivity: Object.freeze({

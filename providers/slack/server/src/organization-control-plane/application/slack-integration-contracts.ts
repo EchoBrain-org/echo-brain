@@ -16,6 +16,16 @@ export const SLACK_PRIVATE_APP_BOT_SCOPES_V1 = Object.freeze([
   "users:read",
 ] as const);
 
+/**
+ * The user scopes the same app declares for the person's browser sign-in
+ * (Sign in with Slack). Sign-in only: the bot install never requests them and
+ * no organization connection contract records them.
+ */
+export const SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 = Object.freeze([
+  "openid",
+  "profile",
+] as const);
+
 export interface VerifiedSlackConnection {
   team_id: string;
   enterprise_id: string | null;

@@ -5,6 +5,7 @@ import {
   SlackAppManifestProviderErrorV1,
   SlackWebAppManifestProviderV1,
 } from "../../../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
+import { SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 } from "../../../../src/organization-control-plane/application/slack-integration-contracts.js";
 
 const AUTHORITY_URL = "https://authority.example";
 const NANGO_CALLBACK_URL = "https://api.nango.dev/oauth/callback";
@@ -24,7 +25,7 @@ const EXPECTED_MANIFEST = {
       "https://api.nango.dev/oauth/callback",
       "https://authority.example/v2/person/external-identities/slack/browser/callback",
     ],
-    scopes: { bot: ["chat:write", "im:history", "im:write", "users:read"] },
+    scopes: { bot: ["chat:write", "im:history", "im:write", "users:read"], user: ["openid", "profile"] },
   },
   settings: {
     interactivity: {
@@ -62,6 +63,14 @@ describe("SLACK_PRIVATE_APP_BOT_SCOPES_V1", () => {
       "users:read",
     ]);
     expect(Object.isFrozen(SLACK_PRIVATE_APP_BOT_SCOPES_V1)).toBe(true);
+  });
+});
+
+describe("SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1", () => {
+  it("is the exact frozen browser sign-in scope list, disjoint from the bot scopes", () => {
+    expect(SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1).toEqual(["openid", "profile"]);
+    expect(Object.isFrozen(SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1)).toBe(true);
+    expect(SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1.some((scope) => (SLACK_PRIVATE_APP_BOT_SCOPES_V1 as readonly string[]).includes(scope))).toBe(false);
   });
 });
 

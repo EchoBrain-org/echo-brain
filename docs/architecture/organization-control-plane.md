@@ -95,7 +95,11 @@ asks the owner for it directly. The required Slack scopes are exactly
 verified meeting owner's private DM and `im:history` reconciles a retry
 without duplicating that DM card. There is no public channel step: the
 public identity-link channel and its reaction-era scopes (`channels:history`,
-`channels:read`, `reactions:read`) are retired (revision 3).
+`channels:read`, `reactions:read`) are retired (revision 3). The recipe also
+declares the user scopes `openid` and `profile` for the person's browser
+sign-in alone: the install never requests them and no connection contract
+records them. Rerunning setup with a new configuration token updates an
+existing app to the current recipe.
 
 Provider verification requires the Nango install to be for the
 organization's own app (the credential bundle's app ID) and to grant the four
@@ -143,7 +147,8 @@ browser.
 
 The browser link (`person tools connect --tool slack`): the Person client
 opens a Slack sign-in page built from the organization app's client ID and
-secret, using Slack's OpenID Connect flow, and completes into the external
+secret, using Slack's OpenID Connect flow with the recipe's `openid` and
+`profile` user scopes, and completes into the external
 identity link once Slack identifies the human who approved it. Nango is not
 involved; the person link stays entirely Authority-owned.
 

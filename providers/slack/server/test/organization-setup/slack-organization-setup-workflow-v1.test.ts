@@ -209,13 +209,16 @@ describe("Slack organization setup workflow v1", () => {
     expect(secrets.listReferences()).toHaveLength(1);
   });
 
-  it("updates the connected app on a new token", async () => {
+  it("updates the connected app to the current recipe, sign-in scopes included, on a new token", async () => {
     const { workflow, manifest, secrets, connect } = setup();
     await connect();
     const references = secrets.listReferences().length;
     await expect(workflow.setup({ ...SETUP_REQUEST, request_id: `oss_${uuid(2)}` }, "owner")).resolves.toEqual({
       schema_version: 1, kind: "echo-organization-slack-setup-v1", app_id: "A0APP1", organization_setup: "connected" });
-    expect(manifest.updateApp).toHaveBeenLastCalledWith(expect.objectContaining({ app_id: "A0APP1" }));
+    // How an app created before the recipe declared the sign-in scopes gets them.
+    const recipe = buildEchoSlackAppManifestV1({ authority_url: AUTHORITY_URL, nango_callback_url: NANGO_CALLBACK });
+    expect((recipe.oauth_config as { scopes: { user: unknown } }).scopes.user).toEqual(["openid", "profile"]);
+    expect(manifest.updateApp).toHaveBeenLastCalledWith(expect.objectContaining({ app_id: "A0APP1", manifest: recipe }));
     expect(manifest.createApp).toHaveBeenCalledOnce();
     expect(secrets.listReferences()).toHaveLength(references);
   });
@@ -629,6 +632,9 @@ describe("Slack runtime bundle with organization setup", () => {
       expect(authorization.searchParams.get("client_id")).toBe("1234.5678");
       expect(authorization.searchParams.get("redirect_uri")).toBe(`${AUTHORITY_URL}/v2/person/external-identities/slack/browser/callback`);
       expect(authorization.searchParams.get("team")).toBe("T01");
+      // The sign-in requests exactly the user scopes the app the owner created declares.
+      const created = context.f.manifest.createApp.mock.calls[0]![0] as unknown as { manifest: { oauth_config: { scopes: { user: unknown } } } };
+      expect(authorization.searchParams.get("scope")!.split(" ")).toEqual(created.manifest.oauth_config.scopes.user);
     } finally {
       context.opened.close();
     }
