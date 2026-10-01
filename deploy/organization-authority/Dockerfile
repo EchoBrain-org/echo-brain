@@ -20,6 +20,7 @@ COPY providers/synthetic-demo/package.json ./providers/synthetic-demo/package.js
 COPY providers/slack/server/package.json ./providers/slack/server/package.json
 COPY providers/slack/client/package.json ./providers/slack/client/package.json
 COPY providers/granola/package.json ./providers/granola/package.json
+COPY providers/jira/package.json ./providers/jira/package.json
 # Keep dependency installation independent of application source.  BuildKit can
 # reuse this layer when a source-only change is rebuilt in CI.
 RUN npm ci

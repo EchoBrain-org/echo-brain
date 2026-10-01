@@ -22,6 +22,7 @@
     "provider_roots": [
       "providers/anthropic",
       "providers/granola",
+      "providers/jira",
       "providers/ollama",
       "providers/openai",
       "providers/openrouter",

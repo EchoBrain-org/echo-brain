@@ -69,6 +69,13 @@ pagination, cancellation and changed visibility. Run the adapter through the
 shared audited boundary. Code changes need focused tests and `npm run check`.
 Local fixtures do not prove a real account connection.
 
+The isolated implementation and its verified Cloud 3LO/direct-transport
+decision are documented in [the Jira provider](../../providers/jira/README.md).
+Its focused tests use the shared audited ticket boundary, including inventory
+visibility revalidation. The authenticated-fetch port still requires trusted
+server composition; this worktree does not implement an OAuth callback or a
+live Nango connection.
+
 Shared integration still owns authoritative read-grant/current-membership
 checks, durable release audit, connector-access endpoints, Evidence Desk
 registration and a versioned Ask/evidence response that admits tickets.

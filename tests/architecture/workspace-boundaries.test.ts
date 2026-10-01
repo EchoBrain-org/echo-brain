@@ -451,6 +451,11 @@ describe("workspace source boundaries", () => {
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-processing"
+      ],
+      "@echo-brain/provider-jira": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel"
       ]
     });;
   });

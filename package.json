@@ -22,7 +22,8 @@
     "providers/synthetic-demo",
     "providers/slack/server",
     "providers/slack/client",
-    "providers/granola"
+    "providers/granola",
+    "providers/jira"
   ],
   "license": "MIT",
   "type": "module",

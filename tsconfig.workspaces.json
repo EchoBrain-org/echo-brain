@@ -18,6 +18,7 @@
     { "path": "./providers/synthetic-demo" },
     { "path": "./providers/slack/server" },
     { "path": "./providers/slack/client" },
-    { "path": "./providers/granola" }
+    { "path": "./providers/granola" },
+    { "path": "./providers/jira" }
   ]
 }
