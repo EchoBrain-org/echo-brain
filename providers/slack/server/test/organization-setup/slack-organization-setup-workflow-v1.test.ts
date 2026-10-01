@@ -1,0 +1,408 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type Database from "better-sqlite3";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
+import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
+import { applyOrganizationControlBaselineV3, openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
+import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
+import { ORGANIZATION_API_SLACK_RECIPE_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
+import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
+import { buildEchoSlackAppManifestV1, SLACK_PRIVATE_APP_BOT_SCOPES_V1, SlackAppManifestProviderErrorV1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
+import { findPendingSlackAppCredentialsV1, serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
+import { SlackConnectionHealthV1 } from "../../src/organization-control-plane/application/slack-connection-health-v1.js";
+import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
+import { SlackOrganizationSetupWorkflowV1 } from "../../src/organization-setup/slack-organization-setup-workflow-v1.js";
+import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../src/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
+
+const AUTHORITY_ID = "oau_00000000-0000-4000-8000-000000000001";
+const ORGANIZATION_ID = "org_00000000-0000-4000-8000-000000000001";
+const STATE_LINEAGE_ID = "lineage-00000000-0000-4000-8000-000000000001";
+const AUTHORITY_URL = "https://authority.example.com";
+const NANGO_CALLBACK = "https://api.nango.dev/oauth/callback";
+const T0 = "2026-09-30T00:00:00.000Z";
+const CONFIG_TOKEN = "xoxe.xoxp-1-config-token-never-echoed";
+const CLIENT_SECRET = "client-secret-never-echoed";
+const SIGNING_SECRET = "signing-secret-never-echoed";
+const BOT_TOKEN = "xoxb-bot-token-never-echoed";
+const NANGO_KEY = "nango-secret-key-never-echoed";
+const SECRETS = [CONFIG_TOKEN, CLIENT_SECRET, SIGNING_SECRET, BOT_TOKEN, NANGO_KEY];
+const LINK = "https://connect.nango.dev/?session_token=opaque";
+const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+function person(membership_type: "owner" | "employee", n: number, family = n): PersonAccessAuthorization {
+  return {
+    organization_id: ORGANIZATION_ID, principal_id: `prn_${uuid(n)}`, membership_id: `mem_${uuid(n)}`, membership_type,
+    identity_binding_id: `oib_${uuid(n)}`, session_family_id: `psf_${uuid(family)}`,
+    access_credential_sha256: canonicalSha256("access"), access_expires_at: "2026-10-01T00:00:00.000Z",
+    hard_reauthentication_at: "2026-10-01T00:00:00.000Z", person_state_sha256: canonicalSha256("person"),
+    session_state_sha256: canonicalSha256("session"), checked_at: T0,
+  };
+}
+const SESSIONS: Record<string, PersonAccessAuthorization> = { owner: person("owner", 1), "owner-2": person("owner", 1, 2), employee: person("employee", 3) };
+const authentication = {
+  authenticateAccess: ({ access_token }: { readonly access_token: string }) => {
+    const found = SESSIONS[access_token];
+    if (found === undefined) throw new Error("unknown test session");
+    return found;
+  },
+};
+
+const directories: string[] = [];
+const contexts: { outputs: unknown[] }[] = [];
+
+afterEach(() => {
+  // Never echoes secrets: every response and thrown error of every test.
+  const text = JSON.stringify(contexts.splice(0).flatMap((context) => context.outputs));
+  for (const secret of SECRETS) expect(text).not.toContain(secret);
+  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
+
+function controlDatabase(): { directory: string; database: Database.Database } {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-setup-")));
+  directories.push(directory);
+  const database = openOrganizationControlDatabase(join(directory, "integrations.sqlite"));
+  applyOrganizationControlBaselineV3(database);
+  database.prepare(`INSERT INTO organization_control_plane_metadata (singleton, control_plane_id, organization_id, authority_id,
+    authority_descriptor_sha256, created_at) VALUES (1, ?, ?, ?, ?, ?)`)
+    .run(`ocp_${uuid(1)}`, ORGANIZATION_ID, AUTHORITY_ID, canonicalSha256({ descriptor: "test" }), T0);
+  return { directory, database };
+}
+
+function fakes() {
+  const connections = new Map<string, NangoSlackConnectionV1>();
+  const session = async (_input: { readonly tags: Readonly<Record<string, string>> }) => ({ connect_link: LINK, expires_at: "2026-09-30T00:30:00.000Z" });
+  const manifest = {
+    createApp: vi.fn(async (_input: { configuration_token: string }) => ({ app_id: "A0APP1", client_id: "1234.5678", client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET })),
+    updateApp: vi.fn(async (_input: { configuration_token: string; app_id: string }) => undefined),
+  };
+  const nango = {
+    createConnectSession: vi.fn(session),
+    createReconnectSession: vi.fn(session),
+    findConnectionIdByTag: vi.fn(async (input: { key: string; value: string }) =>
+      [...connections.values()].find((connection) => connection.tags[input.key] === input.value)?.connection_id),
+    getSlackConnection: vi.fn(async (input: { connection_id: string }) => {
+      const found = connections.get(input.connection_id);
+      if (found === undefined) throw new NangoClientErrorV1("not_found", "Nango connection was not found");
+      return found;
+    }),
+    deleteConnection: vi.fn(async () => undefined),
+  } satisfies NangoConnectionClientV1;
+  const verifier = {
+    verifyConnection: vi.fn(async (token: string) => {
+      const found = [...connections.values()].find((connection) => connection.bot_token === token)!;
+      return { team_id: found.team_id, enterprise_id: null, bot_user_id: found.bot_user_id, bot_id: "B01", app_id: found.app_id,
+        granted_scopes: found.granted_scopes, verification_evidence_sha256: canonicalSha256({ verified: found.connection_id }) };
+    }),
+  };
+  return { connections, manifest, nango, verifier };
+}
+
+/** Records every result and thrown error so the afterEach hook can prove none echoes a secret. */
+function recorded<T extends object>(target: T, outputs: unknown[]): T {
+  return new Proxy(target, {
+    get(object, key) {
+      const value = Reflect.get(object, key) as unknown;
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        const record = (error: unknown) => { outputs.push({ text: String(error), ...(error as object) }); throw error; };
+        try {
+          const result = (value as (...a: unknown[]) => unknown).apply(object, args);
+          if (result instanceof Promise) return result.then((resolved) => { outputs.push(resolved); return resolved; }, record);
+          outputs.push(result);
+          return result;
+        } catch (error) { return record(error); }
+      };
+    },
+  });
+}
+
+function setup() {
+  const { database } = controlDatabase();
+  const secrets = new FileOrganizationSecretStore(join(directories.at(-1)!, "secrets"));
+  const health = new SlackConnectionHealthV1();
+  const f = fakes();
+  const context = { outputs: [] as unknown[], clock: T0 };
+  contexts.push(context);
+  let connectionNumber = 0;
+  const workflow = recorded(new SlackOrganizationSetupWorkflowV1({
+    database, secrets, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID, state_lineage_id: STATE_LINEAGE_ID,
+    authentication, authority_url: AUTHORITY_URL, nango: { client: f.nango, callback_url: NANGO_CALLBACK },
+    manifest_provider: f.manifest, verifier: f.verifier, health,
+    now: () => context.clock, new_connection_id: () => `con_${uuid(++connectionNumber)}`,
+  }), context.outputs);
+  /** The owner finishing the Nango Connect flow for the last session ECHO created. */
+  const finishConnect = (overrides: Partial<NangoSlackConnectionV1> = {}): NangoSlackConnectionV1 => {
+    const tags = f.nango.createConnectSession.mock.lastCall![0]!.tags;
+    const id = `nango-conn-${String(f.connections.size + 1)}`;
+    const connection: NangoSlackConnectionV1 = {
+      connection_id: id, tags, team_id: "T01", enterprise_id: null, is_enterprise_install: false, app_id: "A0APP1",
+      bot_user_id: "UBOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: `${BOT_TOKEN}-${id}`, updated_at: T0, ...overrides,
+    };
+    f.connections.set(connection.connection_id, connection);
+    return connection;
+  };
+  const connect = async () => {
+    await workflow.setup({ request_id: `oss_${uuid(1)}`, configuration_token: CONFIG_TOKEN }, "owner");
+    const begun = await workflow.beginInstall({ request_id: `osi_${uuid(1)}`, confirm_replacement: false }, "owner");
+    finishConnect();
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete" });
+    return readActiveSlackConnectionV1(database)!;
+  };
+  return { ...f, database, secrets, health, context, workflow, finishConnect, connect };
+}
+
+function seedWaitingCard(database: Database.Database): void {
+  const active = readActiveSlackConnectionV1(database)!;
+  const linkSha = canonicalSha256({ link: "owner" });
+  database.prepare("INSERT INTO organization_external_human_link_contracts VALUES (?, ?, ?, ?)").run("clm_owner", linkSha, '{"link":"owner"}', T0);
+  database.prepare("INSERT INTO organization_external_human_link_current VALUES (?, ?, 'https://slack.com', 'workspace', ?, NULL, 'U_OWNER', 'prn_owner', 'mem_owner', 'active', ?)")
+    .run("clm_owner", linkSha, active.connection.provider_tenant_id, T0);
+  database.prepare(`INSERT INTO organization_private_approval_pending_contracts_v2 (approval_id, candidate_id, organization_id, authority_id,
+      pending_json, pending_sha256, card_binding_json, card_binding_sha256, stage_command_id, connection_id, connection_contract_sha256,
+      connection_state_sha256, external_identity_link_id, external_identity_link_contract_sha256, assignee_principal_id,
+      assignee_membership_id, slack_workspace_id, slack_enterprise_id, slack_subject_id, dm_channel_id, provider_message_ts, card_sha256, created_at)
+    VALUES ('apr_1', 'cnd_1', ?, ?, '{"pending":1}', ?, '{"card":1}', ?, 'pas_1', ?, ?, ?, 'clm_owner', ?, 'prn_owner', 'mem_owner', ?, NULL,
+      'U_OWNER', 'D_OWNER', '1.0001', ?, ?)`)
+    .run(ORGANIZATION_ID, AUTHORITY_ID, canonicalSha256({ pending: 1 }), canonicalSha256({ card_binding: 1 }), active.connection.connection_id,
+      active.contract_sha256, active.state_sha256, linkSha, active.connection.provider_tenant_id, canonicalSha256({ card: 1 }), T0);
+}
+
+const SETUP_REQUEST = { request_id: `oss_${uuid(1)}`, configuration_token: CONFIG_TOKEN };
+const BEGIN_REQUEST = { request_id: `osi_${uuid(1)}`, confirm_replacement: false };
+const credentialsRequest = (app_id: string) => ({ request_id: `osc_${uuid(1)}`, app_id, client_id: "9999.1111", client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET });
+
+describe("Slack organization setup workflow v1", () => {
+  it("refuses employees on every route", async () => {
+    const { workflow, manifest, nango } = setup();
+    const attempt = { attempt_id: `ssi_${uuid(1)}` };
+    for (const call of [
+      () => workflow.setup(SETUP_REQUEST, "employee"), () => workflow.appCredentials(credentialsRequest("A0APP2"), "employee"),
+      () => workflow.recipe("employee"), () => workflow.beginInstall(BEGIN_REQUEST, "employee"),
+      () => workflow.installStatus(attempt, "employee"), () => workflow.cancelInstall(attempt, "employee"),
+    ]) await expect(call()).rejects.toMatchObject({ code: "unauthorized" });
+    expect(workflow.organizationSetupForCaller("employee")).toBeNull();
+    expect(manifest.createApp).not.toHaveBeenCalled();
+    expect(nango.createConnectSession).not.toHaveBeenCalled();
+  });
+
+  it("creates the app once, stores a pending bundle and updates it on a new token", async () => {
+    const { workflow, manifest, secrets } = setup();
+    expect(workflow.organizationSetup()).toBe("not_set_up");
+    await expect(workflow.setup(SETUP_REQUEST, "owner")).resolves.toEqual({
+      schema_version: 1, kind: "echo-organization-slack-setup-v1", app_id: "A0APP1", organization_setup: "app_created" });
+    const recipe = buildEchoSlackAppManifestV1({ authority_url: AUTHORITY_URL, nango_callback_url: NANGO_CALLBACK });
+    expect(manifest.createApp).toHaveBeenCalledWith(expect.objectContaining({ configuration_token: CONFIG_TOKEN, manifest: recipe }));
+    expect(findPendingSlackAppCredentialsV1(secrets)?.credentials).toEqual({ kind: "echo-slack-app-credentials-v1", app_id: "A0APP1",
+      client_id: "1234.5678", client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET, nango_connection_id: null });
+    expect(workflow.organizationSetup()).toBe("app_created");
+    await workflow.setup({ ...SETUP_REQUEST, request_id: `oss_${uuid(2)}` }, "owner");
+    expect(manifest.createApp).toHaveBeenCalledOnce();
+    expect(manifest.updateApp).toHaveBeenCalledWith(expect.objectContaining({ app_id: "A0APP1", manifest: recipe }));
+    expect(secrets.listReferences()).toHaveLength(1);
+    await expect(workflow.recipe("owner")).resolves.toEqual({ schema_version: 1, kind: "echo-organization-slack-recipe-v1", manifest: recipe });
+  });
+
+  it("maps Slack setup errors to fixed messages and stores nothing", async () => {
+    const { workflow, manifest, secrets } = setup();
+    for (const [error, code] of [
+      [new SlackAppManifestProviderErrorV1("invalid_token", `rejected ${CONFIG_TOKEN}`), "invalid_request"],
+      [new SlackAppManifestProviderErrorV1("invalid_manifest", "bad manifest"), "invalid_output"],
+      [new Error(`socket closed ${CONFIG_TOKEN}`), "unavailable"],
+    ] as const) {
+      manifest.createApp.mockRejectedValueOnce(error);
+      await expect(workflow.setup(SETUP_REQUEST, "owner")).rejects.toMatchObject({ code });
+    }
+    expect(secrets.listReferences()).toHaveLength(0);
+    await expect(workflow.setup({ ...SETUP_REQUEST, configuration_token: "short" }, "owner")).rejects.toMatchObject({ code: "invalid_request" });
+  });
+
+  it("refuses a concurrent setup while one is in flight", async () => {
+    const { workflow, manifest } = setup();
+    let release!: () => void;
+    manifest.createApp.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { app_id: "A0APP1", client_id: "1234.5678", client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET };
+    });
+    const first = workflow.setup(SETUP_REQUEST, "owner");
+    await expect(workflow.setup(SETUP_REQUEST, "owner-2")).rejects.toMatchObject({ code: "conflict", message: "Slack setup is in progress" });
+    await expect(workflow.appCredentials(credentialsRequest("A0APP2"), "owner")).rejects.toMatchObject({ code: "conflict" });
+    release();
+    await expect(first).resolves.toMatchObject({ organization_setup: "app_created" });
+  });
+
+  it("replaces a pending app from hand-entered credentials but refuses the already connected app", async () => {
+    const { workflow, secrets, connect } = setup();
+    await workflow.appCredentials(credentialsRequest("A0APP2"), "owner");
+    await expect(workflow.appCredentials(credentialsRequest("A0APP3"), "owner")).resolves.toMatchObject({ app_id: "A0APP3", organization_setup: "app_created" });
+    expect(secrets.listReferences()).toHaveLength(1);
+    expect(findPendingSlackAppCredentialsV1(secrets)?.credentials.app_id).toBe("A0APP3");
+    await expect(workflow.appCredentials({ ...credentialsRequest("A0APP3"), client_secret: "has space" }, "owner")).rejects.toMatchObject({ code: "invalid_request" });
+    secrets.remove(findPendingSlackAppCredentialsV1(secrets)!.reference);
+    await connect();
+    await expect(workflow.appCredentials(credentialsRequest("A0APP1"), "owner")).rejects.toMatchObject({ code: "conflict", message: "This Slack app is already connected" });
+  });
+
+  it("begins a tagged connect session with the app's client and the recipe scopes, then completes as created", async () => {
+    const { workflow, nango, verifier, finishConnect, database, health } = setup();
+    await expect(workflow.beginInstall(BEGIN_REQUEST, "owner")).rejects.toMatchObject({ code: "conflict", message: "Slack app is not set up" });
+    await workflow.setup(SETUP_REQUEST, "owner");
+    const begun = await workflow.beginInstall(BEGIN_REQUEST, "owner");
+    expect(begun).toEqual({ schema_version: 1, kind: "echo-organization-slack-install-v1", attempt_id: expect.stringMatching(/^ssi_/),
+      connect_link: LINK, expires_at: "2026-09-30T00:10:00.000Z" });
+    expect(nango.createConnectSession).toHaveBeenCalledWith({
+      tags: { echo_organization_id: ORGANIZATION_ID, echo_membership_id: SESSIONS.owner!.membership_id, echo_attempt_id: begun.attempt_id },
+      client_id: "1234.5678", client_secret: CLIENT_SECRET, scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1 });
+    const pending = { schema_version: 1, kind: "echo-organization-slack-install-status-v1", attempt_id: begun.attempt_id,
+      status: "pending", failure_reason: null, outstanding_approvals: null, result: null };
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toEqual(pending);
+    expect(verifier.verifyConnection).not.toHaveBeenCalled();
+    finishConnect();
+    health.markNeedsReinstall("sha256:stale");
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toEqual({ ...pending, status: "complete",
+      result: { kind: "created", workspace_id: "T01", person_links_revoked: 0 } });
+    expect(readActiveSlackConnectionV1(database)).toMatchObject({ kind: "nango" });
+    expect(workflow.organizationSetup()).toBe("connected");
+    expect(health.needsReinstall("sha256:stale")).toBe(false);
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete" });
+  });
+
+  it("refuses a connection whose tags name another attempt, organization or owner", async () => {
+    const { workflow, nango, connections, finishConnect, database } = setup();
+    await workflow.setup(SETUP_REQUEST, "owner");
+    const foreign: Record<string, string>[] = [{ echo_organization_id: `org_${uuid(9)}` }, { echo_membership_id: `mem_${uuid(9)}` }, { echo_attempt_id: `ssi_${uuid(9)}` }];
+    for (const [index, tags] of foreign.entries()) {
+      const begun = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(index + 10)}` }, "owner");
+      const connection = finishConnect();
+      connections.set(connection.connection_id, { ...connection, tags: { ...connection.tags, ...tags } });
+      nango.findConnectionIdByTag.mockResolvedValueOnce(connection.connection_id);
+      await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", failure_reason: "workspace_mismatch" });
+    }
+    expect(readActiveSlackConnectionV1(database)).toBeUndefined();
+  });
+
+  it("lets only the beginning owner session read, commit or cancel the attempt", async () => {
+    const { workflow, finishConnect, verifier, database } = setup();
+    await workflow.setup(SETUP_REQUEST, "owner");
+    const begun = await workflow.beginInstall(BEGIN_REQUEST, "owner");
+    finishConnect();
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner-2")).rejects.toMatchObject({ code: "unauthorized" });
+    await expect(workflow.cancelInstall({ attempt_id: begun.attempt_id }, "owner-2")).rejects.toMatchObject({ code: "unauthorized" });
+    await expect(workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner-2")).rejects.toMatchObject({ code: "conflict" });
+    expect(verifier.verifyConnection).not.toHaveBeenCalled();
+    expect(readActiveSlackConnectionV1(database)).toBeUndefined();
+    await expect(workflow.cancelInstall({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
+  });
+
+  it("reconnects the connected app on the same Nango connection and keeps the state hash", async () => {
+    const { workflow, nango, connections, connect, health, database, secrets } = setup();
+    const before = await connect();
+    health.markNeedsReinstall(before.state_sha256);
+    expect(workflow.organizationSetup()).toBe("needs_reinstall");
+    // A stray pending bundle for the same app is dropped in favour of the active one (ruling P5).
+    secrets.create(serializeSlackAppCredentialsV1({ kind: "echo-slack-app-credentials-v1", app_id: "A0APP1", client_id: "1234.5678",
+      client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET, nango_connection_id: null }));
+    const begun = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
+    expect(findPendingSlackAppCredentialsV1(secrets)).toBeUndefined();
+    expect(nango.createConnectSession).toHaveBeenCalledOnce();
+    expect(nango.createReconnectSession).toHaveBeenCalledWith({ connection_id: "nango-conn-1",
+      tags: { echo_organization_id: ORGANIZATION_ID, echo_membership_id: SESSIONS.owner!.membership_id, echo_attempt_id: begun.attempt_id },
+      client_id: "1234.5678", client_secret: CLIENT_SECRET, scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1 });
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "pending" });
+    connections.set("nango-conn-1", { ...connections.get("nango-conn-1")!, updated_at: "2026-09-30T00:01:00.000Z" });
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete",
+      result: { kind: "reconnected", workspace_id: "T01", person_links_revoked: 0 } });
+    expect(readActiveSlackConnectionV1(database)?.state_sha256).toBe(before.state_sha256);
+    expect(workflow.organizationSetup()).toBe("connected");
+  });
+
+  it("reports the waiting-card count when a replacement is refused", async () => {
+    const { workflow, connect, database, finishConnect } = setup();
+    await connect();
+    seedWaitingCard(database);
+    await workflow.appCredentials(credentialsRequest("A0APP2"), "owner");
+    for (const [confirm, failure] of [[false, { failure_reason: "confirmation_required", outstanding_approvals: null }],
+      [true, { failure_reason: "approvals_outstanding", outstanding_approvals: 1 }]] as const) {
+      const begun = await workflow.beginInstall({ request_id: `osi_${uuid(confirm ? 3 : 2)}`, confirm_replacement: confirm }, "owner");
+      finishConnect({ app_id: "A0APP2", team_id: "T02" });
+      await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", ...failure });
+    }
+    expect(readActiveSlackConnectionV1(database)?.connection.provider_tenant_id).toBe("T01");
+  });
+
+  it("maps Nango and Slack failures during status to fixed reasons", async () => {
+    const { workflow, nango, verifier, finishConnect } = setup();
+    await workflow.setup(SETUP_REQUEST, "owner");
+    const cases = [
+      [() => nango.findConnectionIdByTag.mockRejectedValueOnce(new NangoClientErrorV1("unauthorized", `bad ${NANGO_KEY}`)), "provider_rejected"],
+      [() => verifier.verifyConnection.mockRejectedValueOnce(new Error(`auth.test failed for ${BOT_TOKEN}`)), "provider_unavailable"],
+    ] as const;
+    for (const [index, [arrange, reason]] of cases.entries()) {
+      const begun = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(index + 30)}` }, "owner");
+      finishConnect();
+      arrange();
+      await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", failure_reason: reason });
+    }
+  });
+
+  it("expires an attempt after ten minutes and treats an unknown attempt as expired", async () => {
+    const { workflow, context } = setup();
+    await workflow.setup(SETUP_REQUEST, "owner");
+    const begun = await workflow.beginInstall(BEGIN_REQUEST, "owner");
+    context.clock = "2026-09-30T00:10:00.000Z";
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "expired", failure_reason: null });
+    await expect(workflow.installStatus({ attempt_id: `ssi_${uuid(77)}` }, "owner")).resolves.toMatchObject({ status: "expired" });
+  });
+});
+
+describe("Slack runtime bundle with organization setup", () => {
+  function open(withSetup: boolean) {
+    const { directory, database } = controlDatabase();
+    database.close();
+    const f = fakes();
+    const context = { outputs: [] as unknown[] };
+    contexts.push(context);
+    const opened = createSlackPersonExternalIdentityRuntimeBundleV1({
+      identity_link_channel_id: "C123",
+      ...(withSetup ? { organization_setup: { authority_url: AUTHORITY_URL, nango: { client: f.nango, callback_url: NANGO_CALLBACK },
+        manifest_provider: f.manifest, verifier: f.verifier, health: new SlackConnectionHealthV1() } } : {}),
+    }).open({ state_directory: directory, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID, state_lineage_id: STATE_LINEAGE_ID,
+      authentication, membership_type: ({ membership_id }) => (membership_id === SESSIONS.owner!.membership_id ? "owner" : "employee") });
+    const call = async (path: string, token: string, body?: unknown) => {
+      const route = opened.application.routes.find((candidate) => candidate.path === path)!;
+      const response = await opened.application.accept({ route_id: route.route_id, method: route.method, path,
+        raw_body: Buffer.from(body === undefined ? "" : JSON.stringify(body)), content_type: "application/json",
+        headers: { authorization: `Bearer ${token}` } });
+      context.outputs.push(response);
+      return response;
+    };
+    return { opened, call };
+  }
+
+  it("mounts the setup routes only when setup options are provided", () => {
+    const without = open(false);
+    expect(without.opened.application.routes.some((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toBe(false);
+    without.opened.close();
+    const mounted = open(true);
+    expect(mounted.opened.application.routes.filter((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toHaveLength(6);
+    mounted.opened.close();
+  });
+
+  it("serves setup over the provider routes and reports the owner's setup status in tools", async () => {
+    const { opened, call } = open(true);
+    try {
+      await expect(opened.tools("owner")).resolves.toEqual([{ tool_id: "slack", display_name: "Slack", availability: "unavailable",
+        personal_status: "unavailable", external_scope_id: null, external_subject_id: null, organization_setup: "not_set_up" }]);
+      await expect(call(ORGANIZATION_API_SLACK_SETUP_PATH_V1, "owner", SETUP_REQUEST)).resolves.toMatchObject({ status: 201, body: { organization_setup: "app_created" } });
+      await expect(call(ORGANIZATION_API_SLACK_RECIPE_PATH_V1, "owner")).resolves.toMatchObject({ status: 200, body: { kind: "echo-organization-slack-recipe-v1" } });
+      await expect(opened.tools("owner")).resolves.toMatchObject([{ organization_setup: "app_created" }]);
+      await expect(opened.tools("employee")).resolves.toMatchObject([{ organization_setup: null }]);
+      await expect(call(ORGANIZATION_API_SLACK_RECIPE_PATH_V1, "employee")).rejects.toMatchObject({ code: "unauthorized" });
+    } finally {
+      opened.close();
+    }
+  });
+});
+

@@ -9,7 +9,8 @@
   "entry_points": [
     "providers/slack/client/src/organization-api/person-slack-identity-link.ts",
     "providers/slack/client/src/organization-api/person-slack-browser-link.ts",
-    "providers/slack/client/src/organization-api/person-tools.ts"
+    "providers/slack/client/src/organization-api/person-tools.ts",
+    "providers/slack/client/src/organization-api/organization-slack-setup-v1.ts"
   ],
   "owned_source_paths": [
     "providers/slack/client/src/**"

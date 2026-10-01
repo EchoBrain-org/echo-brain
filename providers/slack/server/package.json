@@ -29,6 +29,10 @@
       "types": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.d.ts",
       "import": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.js"
     },
+    "./organization-setup/slack-organization-setup-workflow-v1": {
+      "types": "./dist/organization-setup/slack-organization-setup-workflow-v1.d.ts",
+      "import": "./dist/organization-setup/slack-organization-setup-workflow-v1.js"
+    },
     "./adapters/oidc/slack-browser-identity-provider": {
       "types": "./dist/adapters/oidc/slack-browser-identity-provider.d.ts",
       "import": "./dist/adapters/oidc/slack-browser-identity-provider.js"

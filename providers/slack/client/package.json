@@ -17,6 +17,10 @@
       "types": "./dist/organization-api/person-tools.d.ts",
       "import": "./dist/organization-api/person-tools.js"
     },
+    "./organization-api/organization-slack-setup-v1": {
+      "types": "./dist/organization-api/organization-slack-setup-v1.d.ts",
+      "import": "./dist/organization-api/organization-slack-setup-v1.js"
+    },
     "./person/slack-commands": {
       "types": "./dist/person/slack-commands.d.ts",
       "import": "./dist/person/slack-commands.js"
