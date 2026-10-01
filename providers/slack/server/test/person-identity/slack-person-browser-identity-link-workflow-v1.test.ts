@@ -18,9 +18,9 @@ const authorization: PersonAccessAuthorization = {
   hard_reauthentication_at: "2026-09-11T00:00:00.000Z", person_state_sha256: canonicalSha256("person"),
   session_state_sha256: canonicalSha256("session"), checked_at: NOW,
 };
-const tool = Object.freeze({ kind: "legacy" as const, connection_attempt_id: "verify_1", connection_id: "con_00000000-0000-4000-8000-000000000001",
-  team_id: "T123", enterprise_id: null, bot_user_id: "Ubot", bot_id: "B123", app_id: "A123", channel_id: "C123",
-  approve_reaction: "white_check_mark", reject_reaction: "x", granted_scopes: [], secret: { secret_backend_id: "authority-file-v1" as const, secret_handle_id: "con_00000000-0000-4000-8000-000000000001" } });
+const tool = Object.freeze({ connection_attempt_id: "nango_1", connection_id: "con_00000000-0000-4000-8000-000000000001",
+  team_id: "T123", enterprise_id: null, bot_user_id: "Ubot", bot_id: "B123", app_id: "A123",
+  granted_scopes: [], secret: { secret_backend_id: "authority-file-v1" as const, secret_handle_id: "con_00000000-0000-4000-8000-000000000001" } });
 
 function setup(input: { now?: () => string; authorization?: () => PersonAccessAuthorization; proof?: { user_id: string; team_id: string };
   browser_provider?: (active: ActiveSlackOrganizationTool) => SlackBrowserIdentityProvider } = {}) {
@@ -37,7 +37,7 @@ function setup(input: { now?: () => string; authorization?: () => PersonAccessAu
     authority_id: "oau_00000000-0000-4000-8000-000000000001", organization_id: authorization.organization_id,
     authentication: { authenticateAccess: vi.fn(input.authorization ?? (() => authorization)) },
     repository,
-    browser_provider: input.browser_provider ?? provider, now: input.now ?? (() => NOW),
+    browser_provider: input.browser_provider ?? (() => provider), now: input.now ?? (() => NOW),
   });
   return { workflow, provider, authorizationUrl, verifyCallback, commit, repository };
 }
@@ -123,7 +123,7 @@ describe("Slack browser identity link workflow", () => {
     };
     const providerFor = vi.fn((_active: ActiveSlackOrganizationTool) => ownApp);
     const { workflow: dynamic, repository } = setup({ browser_provider: providerFor });
-    const nangoTool = { ...tool, kind: "nango" as const, channel_id: null, connection_id: "con_00000000-0000-4000-8000-000000000002" };
+    const nangoTool = { ...tool, connection_id: "con_00000000-0000-4000-8000-000000000002" };
     repository.activeSlackOrganizationTool.mockReturnValue(nangoTool);
     const begun = await dynamic.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
     expect(begun.authorization_url).toBe("https://slack.com/openid/connect/authorize?client_id=own-app");

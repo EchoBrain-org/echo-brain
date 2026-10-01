@@ -1,22 +1,12 @@
+// R2b: remove this module with its only caller, `setup/slack-browser-oauth-configuration-v1.ts`.
+// The browser link now uses the connected app's own client from its credential bundle.
 import {
   authorityCredentialPath,
   MAXIMUM_CREDENTIAL_BYTES,
   privateAuthorityCredentialFailure as fail,
-  readPrivateAuthorityCredential,
   readPrivateAuthorityCredentialFile,
 } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { lstatSync } from 'node:fs';
-
-/**
- * Slack signing secrets are provider credentials, not configuration values.
- * Keep their filesystem validation identical to other Authority secrets while
- * accepting Slack's visible-ASCII secret representation without logging it.
- */
-export function readPrivateAuthoritySlackSigningSecret(
-  reference: string,
-): string {
-  return readPrivateAuthorityCredential(reference);
-}
 
 export interface SlackBrowserOauthConfigurationV1 {
   readonly client_id: string;
@@ -58,7 +48,7 @@ export function readPrivateAuthoritySlackBrowserOauthConfiguration(
   return Object.freeze({ client_id: clientId, client_secret: clientSecret });
 }
 
-/** Missing configuration deliberately retains the existing Slack DM flow. */
+/** Missing configuration reads as undefined. */
 export function readOptionalPrivateAuthoritySlackBrowserOauthConfiguration(
   reference: string,
 ): SlackBrowserOauthConfigurationV1 | undefined {

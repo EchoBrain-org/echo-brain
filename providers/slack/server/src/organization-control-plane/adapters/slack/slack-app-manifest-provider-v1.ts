@@ -10,9 +10,8 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const MAXIMUM_TIMEOUT_MS = 60_000;
 
 /**
- * The exact bot scopes ECHO's private per-organization Slack app requests.
- * Distinct from the legacy `SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES` (7
- * scopes), which stays unchanged for legacy bot-token connections.
+ * The exact bot scopes ECHO's private per-organization Slack app requests,
+ * and the only scope set an organization connection contract accepts.
  */
 export const SLACK_PRIVATE_APP_BOT_SCOPES_V1 = Object.freeze([
   "chat:write",

@@ -3,16 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
+import { canonicalJson, canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
 import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { openOrganizationControlDatabase } from "../../../../../../packages/organization-control-plane/src/persistence/open-organization-control-database.js";
 import { FileOrganizationSecretStore } from "../../../../../../packages/organization-control-plane/src/security/file-secret-store.js";
 import type { NangoSlackConnectionV1 } from "../../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../../../src/organization-control-plane/application/slack-app-credentials-v1.js";
-import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES, type OrganizationSecretStore, type VerifiedSlackConnection } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { buildOrganizationToolConnectionContractV2 } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
+import type { OrganizationSecretStore, VerifiedSlackConnection } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
-import { connectSlackConnectionV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
 import { activateNangoSlackConnectionV1, SlackConnectionRefusedErrorV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 
 const COORDINATES = Object.freeze({
@@ -162,36 +162,30 @@ function seedPendingApproval(database: Database.Database, active: StoredSlackCon
     );
 }
 
-async function connectLegacy(state: TestState): Promise<void> {
-  await connectSlackConnectionV1({
-    ...COORDINATES,
-    connection_id: "con_legacy",
-    approval_channel_id: "C_APPROVAL",
-    slack_bot_token: "xoxb-legacy-token-only",
-    database: state.database,
-    secrets: state.secrets,
-    verifier: {
-      verifyConnection: async () => ({
-        team_id: "T01",
-        enterprise_id: null,
-        bot_user_id: "U_LEGACY",
-        bot_id: "B_LEGACY",
-        app_id: "A_LEGACY",
-        granted_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-        verification_evidence_sha256: canonicalSha256({ legacy: "connection" }),
-      }),
-      verifyChannel: async () => ({
-        team_id: "T01",
-        channel_id: "C_APPROVAL",
-        is_public_organization_channel: true,
-        is_active: true,
-        bot_membership_verified: true,
-        bot_access_verified: true,
-        verification_evidence_sha256: canonicalSha256({ legacy: "channel" }),
-      }),
-    },
-    now: () => NOW,
-  });
+const PREDATES_IN_APP_SETUP = "stored Slack connection predates in-app setup; run replace-rehearsal";
+const SEVEN_PRE_IN_APP_SCOPES = ["channels:history", "channels:read", "chat:write", "im:history", "im:write", "reactions:read", "users:read"];
+
+/** A connection stored by the removed bot-token-and-channel setup: seven scopes and a channel configuration. */
+function seedPreInAppConnection(database: Database.Database): void {
+  const contract = {
+    schema_version: 2, kind: "echo-organization-tool-connection-v2", ...COORDINATES, connection_id: "con_legacy",
+    provider_issuer: "https://slack.com", provider_tenant_kind: "workspace", provider_tenant_id: "T01", provider_enterprise_id: null,
+    tool_kind: "slack", provider_app_id: "A_LEGACY", provider_bot_id: "B_LEGACY", provider_bot_user_id: "U_LEGACY",
+    required_provider_scopes: SEVEN_PRE_IN_APP_SCOPES,
+    public_connection_configuration_sha256: canonicalSha256({ approval_channel_id: "C_APPROVAL", kind: "echo-clean-slack-connection-public-configuration-v1" }),
+  };
+  const state = {
+    schema_version: 2, kind: "echo-organization-tool-connection-state-v2", connection_id: "con_legacy",
+    connection_contract_sha256: canonicalSha256(contract), connection_status: "active",
+    credential_reference_sha256: canonicalSha256({ legacy: "token" }), observed_granted_scopes: contract.required_provider_scopes,
+    verification_event_id: "verify_con_legacy", verification_evidence_sha256: canonicalSha256({ legacy: "verified" }),
+    verification_revision: 1, verified_at: NOW,
+  };
+  database.prepare(`INSERT INTO organization_tool_connection_contracts (connection_id, contract_json, contract_sha256, created_at)
+    VALUES (?, ?, ?, ?)`).run("con_legacy", canonicalJson(contract), canonicalSha256(contract), NOW);
+  database.prepare(`INSERT INTO organization_tool_connection_current_state (connection_id, connection_contract_sha256, state_json,
+    state_sha256, current_status, updated_at) VALUES (?, ?, ?, ?, 'active', ?)`)
+    .run("con_legacy", canonicalSha256(contract), canonicalJson(state), canonicalSha256(state), NOW);
 }
 
 afterEach(() => {
@@ -219,7 +213,7 @@ describe("Nango Slack connection activation v1", () => {
     });
     expect(result.state).toMatchObject({ verification_event_id: "nango_con_nango_1", verification_revision: 1 });
     const active = readActiveSlackConnectionV1(state.database);
-    expect(active).toMatchObject({ kind: "nango", state_sha256: canonicalSha256(result.state) });
+    expect(active).toMatchObject({ connection: result.connection, state_sha256: canonicalSha256(result.state) });
     expect(state.secrets.listReferences()).toHaveLength(1);
     expect(refs(state)).not.toContain(pending.reference.secret_handle_id);
     const bundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, result.state.credential_reference_sha256);
@@ -255,7 +249,7 @@ describe("Nango Slack connection activation v1", () => {
     });
 
     expect(result.kind).toBe("created");
-    expect(readActiveSlackConnectionV1(state.database)).toMatchObject({ kind: "nango", connection: { connection_id: "con_nango_1" } });
+    expect(readActiveSlackConnectionV1(state.database)).toMatchObject({ connection: { connection_id: "con_nango_1" } });
     // Best-effort: the write already committed, so the orphaned pending bundle must not surface as a failure.
     expect(refs(state)).toContain(pending.reference.secret_handle_id);
   });
@@ -350,26 +344,28 @@ describe("Nango Slack connection activation v1", () => {
     expect(rowCount(state.database, "organization_private_approval_pending_contracts_v2")).toBe(1);
   });
 
-  it("refuses a Nango install while a legacy connection is active, writing nothing", async () => {
+  it("refuses an install while a connection from before in-app setup is stored, writing nothing", async () => {
     const state = setup();
-    await connectLegacy(state);
+    seedPreInAppConnection(state.database);
     const pending = pendingBundle(state);
     const before = refs(state);
 
-    await expectRefused(activate(state, { credential: pending, nango: nangoInstall() }), "already_connected");
+    expect(() => readActiveSlackConnectionV1(state.database)).toThrow(new Error(PREDATES_IN_APP_SETUP));
+    await expect(activate(state, { credential: pending, nango: nangoInstall() })).rejects.toThrow(new Error(PREDATES_IN_APP_SETUP));
 
     expect(refs(state)).toEqual(before);
-    expect(readActiveSlackConnectionV1(state.database)).toMatchObject({ kind: "legacy", connection: { connection_id: "con_legacy" } });
     expect(rowCount(state.database, "organization_tool_connection_contracts")).toBe(1);
   });
 
-  it("reads a connection made by today's legacy coordinator as kind legacy", async () => {
-    const state = setup();
-    await connectLegacy(state);
-
-    expect(readActiveSlackConnectionV1(state.database)).toMatchObject({
-      kind: "legacy",
-      connection: { connection_id: "con_legacy", required_provider_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES },
-    });
+  it("accepts only the recipe's four scopes in a connection contract", () => {
+    const contract = {
+      ...COORDINATES, connection_id: "con_nango_1", provider_issuer: "https://slack.com" as const, provider_tenant_kind: "workspace" as const,
+      provider_tenant_id: "T01", provider_enterprise_id: null, tool_kind: "slack" as const, provider_app_id: "A0APP1",
+      provider_bot_id: "B01", provider_bot_user_id: "U_BOT", public_connection_configuration_sha256: slackNangoAppPublicConfigurationSha256V1(),
+    };
+    expect(buildOrganizationToolConnectionContractV2({ ...contract, required_provider_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1 })
+      .required_provider_scopes).toEqual(SLACK_PRIVATE_APP_BOT_SCOPES_V1);
+    expect(() => buildOrganizationToolConnectionContractV2({ ...contract, required_provider_scopes: SEVEN_PRE_IN_APP_SCOPES }))
+      .toThrow("exact Slack approval scope set");
   });
 });

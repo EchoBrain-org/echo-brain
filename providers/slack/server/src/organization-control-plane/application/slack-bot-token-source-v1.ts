@@ -1,5 +1,4 @@
 import type { OrganizationSecretStore } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
-import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import type { NangoConnectionClientV1 } from "../adapters/nango/nango-connection-client-v1.js";
 import type { StoredSlackConnectionV1 } from "../persistence/sqlite-slack-active-connection-v1.js";
 import { findSlackAppCredentialsByReferenceSha256V1 } from "./slack-app-credentials-v1.js";
@@ -19,34 +18,14 @@ export type SlackBotTokenGetterV1 = (options?: {
 }) => Promise<string>;
 
 /**
- * The legacy rule of `SqliteSlackBotTokenReaderV1`: the one local secret whose
- * canonical reference digest the active state commits to.
- */
-function legacyBotToken(
-  secrets: OrganizationSecretStore,
-  connection: StoredSlackConnectionV1,
-): string {
-  const matches = secrets
-    .listReferences()
-    .filter(
-      (reference) =>
-        canonicalSha256(reference) === connection.state.credential_reference_sha256,
-    );
-  if (matches.length !== 1 || matches[0] === undefined) {
-    throw new Error("Slack bot credential reference is unavailable");
-  }
-  return secrets.read(matches[0]);
-}
-
-/**
- * Picks the bot token by connection kind: a legacy connection reads its local
- * secret on every use; a Nango connection asks Nango for the connection named
- * by its credential bundle and reuses that token for at most five minutes per
- * connection state. Thrown messages never include a token.
+ * Asks Nango for the connection named by the active connection's credential
+ * bundle and reuses that token for at most five minutes per connection state.
+ * There is no bot token in the Authority. Thrown messages never include a
+ * token.
  */
 export function createSlackBotTokenSourceV1(input: {
   readonly secrets: OrganizationSecretStore;
-  readonly nango?: NangoConnectionClientV1;
+  readonly nango: NangoConnectionClientV1;
   readonly now?: () => number;
 }): SlackBotTokenSourceV1 {
   const now = input.now ?? Date.now;
@@ -56,8 +35,6 @@ export function createSlackBotTokenSourceV1(input: {
       connection: StoredSlackConnectionV1,
       options: { force_refresh?: boolean } = {},
     ): Promise<string> {
-      if (connection.kind === "legacy") return legacyBotToken(input.secrets, connection);
-      if (input.nango === undefined) throw new Error("Nango is not configured");
       const forceRefresh = options.force_refresh === true;
       const cached = cache.get(connection.state_sha256);
       if (!forceRefresh && cached !== undefined && now() < cached.expires_at_ms) {
@@ -97,8 +74,8 @@ export function createSlackBotTokenSourceV1(input: {
 /**
  * The one rule for a bot token Slack rejects. The operation runs with a
  * token; on an auth failure it runs once more with a force-refreshed token,
- * unless the refresh returns the very token Slack just rejected (a legacy
- * local secret always does). Only a refreshed token that Slack still rejects
+ * unless the refresh returns the very token Slack just rejected (a bot token
+ * without rotation stays the same). Only a refreshed token that Slack still rejects
  * calls `on_auth_failure` (callers mark the connection "needs reinstall"); a
  * refresh that itself fails, such as Nango being down, proves nothing about
  * the install and reports nothing. A connection already marked is not

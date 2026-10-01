@@ -1,3 +1,5 @@
+// R2b: remove this module with its only caller, the service CLI. Its result is ignored:
+// the browser link now uses the connected app's own client from its credential bundle.
 import { resolve } from 'node:path';
 import { readOptionalPrivateAuthoritySlackBrowserOauthConfiguration } from '../slack-private-credentials-v1.js';
 export function readSlackBrowserOauthConfiguration(input: {

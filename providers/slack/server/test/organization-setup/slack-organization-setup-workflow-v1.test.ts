@@ -15,7 +15,6 @@ import { buildEchoSlackAppManifestV1, SLACK_PRIVATE_APP_BOT_SCOPES_V1, SlackAppM
 import { SlackIdentityProviderErrorV1 } from "../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { findPendingSlackAppCredentialsV1, serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
 import { SlackConnectionHealthV1 } from "../../src/organization-control-plane/application/slack-connection-health-v1.js";
-import { createSlackBotTokenSourceV1 } from "../../src/organization-control-plane/application/slack-bot-token-source-v1.js";
 import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { SlackOrganizationSetupWorkflowV1 } from "../../src/organization-setup/slack-organization-setup-workflow-v1.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../src/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
@@ -289,7 +288,7 @@ describe("Slack organization setup workflow v1", () => {
     health.markNeedsReinstall("sha256:stale");
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toEqual({ ...pending, status: "complete",
       result: { kind: "created", workspace_id: "T01" } });
-    expect(readActiveSlackConnectionV1(database)).toMatchObject({ kind: "nango" });
+    expect(readActiveSlackConnectionV1(database)).toMatchObject({ connection: { provider_app_id: "A0APP1" } });
     expect(workflow.organizationSetup()).toBe("connected");
     expect(health.needsReinstall("sha256:stale")).toBe(false);
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete" });
@@ -399,16 +398,14 @@ describe("Slack runtime bundle with organization setup", () => {
     // The DM link reaches Slack only through these fakes, with the token the bundle's source fetched from Nango.
     const provider = {
       verifyConnection: f.verifier.verifyConnection,
-      verifyChannel: vi.fn(async () => { throw new Error("a Nango connection has no channel"); }),
       verifyHuman: vi.fn(),
       openIdentityLinkDirectMessage: vi.fn(async (_token: string, user: string, team: string) => ({ team_id: team, channel_id: "D0EMPLOYEE", recipient_user_id: user })),
       postIdentityLinkChallenge: vi.fn(async (_token: string, input: { channel_id: string }) => ({ team_id: "T01", channel_id: input.channel_id, challenge_message_ts: "100.000001" })),
       observeIdentityLinkChallenge: vi.fn(),
     };
+    // No bot-token source: the bundle's default fetches the token through the setup options' Nango client.
     const opened = createSlackPersonExternalIdentityRuntimeBundleV1({
-      identity_link_channel_id: "C123",
       provider,
-      bot_token_source: createSlackBotTokenSourceV1({ secrets: new FileOrganizationSecretStore(join(directory, "secrets")), nango: f.nango }),
       ...(options.connection_health === undefined ? {} : { connection_health: options.connection_health }),
       ...(options.setup === false ? {} : { organization_setup: { authority_url: AUTHORITY_URL, nango: { client: f.nango, callback_url: NANGO_CALLBACK },
         manifest_provider: f.manifest, verifier: f.verifier, ...(options.setup_health === undefined ? {} : { health: options.setup_health }) } }),
@@ -449,11 +446,14 @@ describe("Slack runtime bundle with organization setup", () => {
     try { return readActiveSlackConnectionV1(database)!.state_sha256; } finally { database.close(); }
   }
 
-  it("mounts the setup routes only when setup options are provided", () => {
+  it("mounts the identity, browser and setup routes only with setup options", async () => {
     const without = open({ setup: false });
+    await expect(without.tools("owner")).resolves.toEqual([]);
+    await expect(without.call(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, "owner", {})).rejects.toMatchObject({ code: "unavailable" });
     expect(without.opened.application.routes.some((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toBe(false);
     without.opened.close();
     const mounted = open();
+    expect(mounted.opened.application.routes).toHaveLength(12);
     expect(mounted.opened.application.routes.filter((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toHaveLength(4);
     mounted.opened.close();
   });
@@ -504,7 +504,6 @@ describe("Slack runtime bundle with organization setup", () => {
         request_id: `psb_${uuid(1)}`, recipient_user_id: "U0EMPLOYEE",
         challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(Buffer.alloc(32).toString("base64url")),
       })).resolves.toMatchObject({ status: 201, body: { channel_id: "D0EMPLOYEE", provider_tenant_id: "T01" } });
-      expect(context.provider.verifyChannel).not.toHaveBeenCalled();
       expect(context.provider.postIdentityLinkChallenge).toHaveBeenCalledWith(`${BOT_TOKEN}-nango-conn-1`, expect.anything(), undefined);
       // The browser link is mounted by setup alone and uses the installed app's own client.
       const browser = await context.call(ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH, "owner", { request_id: `psb_${uuid(2)}` }) as { body: { authorization_url: string } };

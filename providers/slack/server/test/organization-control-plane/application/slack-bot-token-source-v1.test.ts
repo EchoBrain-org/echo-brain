@@ -21,14 +21,9 @@ function secretStore(): FileOrganizationSecretStore {
   return new FileOrganizationSecretStore(join(directory, "secrets"));
 }
 
-/** The source reads only kind, the provider ids, the reference digest and the state hash. */
-function stored(
-  kind: "legacy" | "nango",
-  reference: object,
-  stateSha256: `sha256:${string}` = canonicalSha256({ state: kind }),
-): StoredSlackConnectionV1 {
+/** The source reads only the provider ids, the reference digest and the state hash. */
+function stored(reference: object, stateSha256: `sha256:${string}` = canonicalSha256({ state: "nango" })): StoredSlackConnectionV1 {
   return {
-    kind,
     connection: { provider_tenant_id: "T0TEAM", provider_app_id: "A0APP1", provider_bot_user_id: "U0BOT" },
     state: { credential_reference_sha256: canonicalSha256(reference) },
     state_sha256: stateSha256,
@@ -52,24 +47,10 @@ function nangoConnection(secrets: FileOrganizationSecretStore) {
     client_secret: "client-secret-value", signing_secret: "signing-secret-value",
     nango_connection_id: "nango-conn-1",
   }));
-  return stored("nango", reference);
+  return stored(reference);
 }
 
 describe("Slack bot-token source V1", () => {
-  it("reads a legacy token from the one local secret the state commits to, without Nango", async () => {
-    const secrets = secretStore();
-    secrets.create("xoxb-unrelated-secret");
-    const reference = secrets.create("xoxb-legacy-local-token");
-    const nango = nangoFake();
-    const source = createSlackBotTokenSourceV1({ secrets, nango });
-
-    await expect(source.botToken(stored("legacy", reference))).resolves.toBe("xoxb-legacy-local-token");
-    await expect(source.botToken(stored("legacy", { secret_handle_id: "absent" }))).rejects.toThrow(
-      "Slack bot credential reference is unavailable",
-    );
-    expect(nango.getSlackConnection).not.toHaveBeenCalled();
-  });
-
   it("fetches a Nango token once, caches it per state for five minutes, then fetches again", async () => {
     const secrets = secretStore();
     const nango = nangoFake();
@@ -100,12 +81,9 @@ describe("Slack bot-token source V1", () => {
     expect(nango.getSlackConnection).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses a Nango kind without Nango, or a Nango token for another workspace or app", async () => {
+  it("refuses a Nango token for another workspace or app", async () => {
     const secrets = secretStore();
     const connection = nangoConnection(secrets);
-    await expect(createSlackBotTokenSourceV1({ secrets }).botToken(connection)).rejects.toThrow(
-      "Nango is not configured",
-    );
     const nango = nangoFake();
     const other = { ...connection, connection: { ...connection.connection, provider_tenant_id: "T0OTHER" } };
     const failure = await createSlackBotTokenSourceV1({ secrets, nango }).botToken(other).catch((error: Error) => error);

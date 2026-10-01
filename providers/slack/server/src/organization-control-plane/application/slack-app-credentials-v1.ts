@@ -108,7 +108,7 @@ export interface FoundSlackAppCredentialsV1 {
  * (bundle present, `nango_connection_id` still null). Secrets that are not a
  * Slack app credential bundle — unparseable JSON, or JSON whose `kind` does
  * not match — are silently skipped; they belong to other tools or other
- * secret kinds, including plain legacy bot-token secrets. A secret whose
+ * secret kinds. A secret whose
  * `kind` DOES match but whose other fields are invalid is not skipped: it is
  * a corrupt bundle, not a foreign secret, so parsing it throws and that
  * throw propagates out of this scan — failing loudly rather than hiding the
@@ -147,8 +147,8 @@ export function findPendingSlackAppCredentialsV1(
 
 /**
  * Resolves the one secret reference whose canonical digest matches
- * `referenceSha256`, the same rule the Slack bot-token reader uses to pin an
- * opaque reference inside immutable connection state.
+ * `referenceSha256`: the rule that pins an opaque reference inside immutable
+ * connection state.
  */
 export function findSlackAppCredentialsByReferenceSha256V1(
   store: SlackAppCredentialsLookupStore,

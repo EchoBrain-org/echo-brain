@@ -42,10 +42,8 @@ export interface SlackPersonBrowserIdentityLinkWorkflowOptionsV1 {
   readonly authentication: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   readonly repository: Pick<SqliteSlackPersonIdentityLinkRepositoryV1,
     "activeSlackOrganizationTool" | "completeBrowserSlackIdentityLink">;
-  /** A fixed provider, or one per active connection (a Nango app's own client). */
-  readonly browser_provider:
-    | SlackBrowserIdentityProvider
-    | ((tool: ActiveSlackOrganizationTool) => SlackBrowserIdentityProvider);
+  /** Built per active connection from the connected app's own client in its credential bundle. */
+  readonly browser_provider: (tool: ActiveSlackOrganizationTool) => SlackBrowserIdentityProvider;
   readonly now?: () => string;
 }
 
@@ -132,8 +130,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       let provider: SlackBrowserIdentityProvider;
       let authorizationUrl: string;
       try {
-        const configured = this.options.browser_provider;
-        provider = typeof configured === "function" ? configured(tool) : configured;
+        provider = this.options.browser_provider(tool);
         authorizationUrl = provider.authorizationUrl({ state, nonce, workspace_id: tool.team_id, code_verifier: codeVerifier });
       } catch { throw new AuthorityOperationError("unavailable", "Slack connection is temporarily unavailable"); }
       const attempt: BrowserAttempt = { attempt_id: attemptId, request_id: request.request_id, session, organization_tool: tool, provider,
@@ -191,7 +188,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
     });
   }
 
-  /** Called synchronously under the legacy workflow's disconnect write fence. */
+  /** Called synchronously under the DM workflow's disconnect write fence. */
   invalidateMembership(membershipId: string): void {
     for (const attempt of this.attempts.values()) {
       if (attempt.session.membership_id === membershipId && attempt.status === "pending") {

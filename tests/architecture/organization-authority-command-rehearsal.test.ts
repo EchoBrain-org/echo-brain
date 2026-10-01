@@ -10,8 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
-import { runSlackConnectionSetupCli } from "@echo-brain/provider-slack-server/organization-control-plane/composition/slack-connection-setup-cli";
-import { verifyOrganizationControlStateV1 } from "../../packages/organization-control-plane/src/persistence/verified-organization-control-state-v1.js";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../../services/organization-authority/src/application/person-identity-sessions.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
@@ -132,15 +130,6 @@ const fakeSlack: SlackIdentityProviderV1 = {
     ],
     verification_evidence_sha256: canonicalSha256("rehearsal-slack-connection"),
   }),
-  verifyChannel: async (_token, channelId) => ({
-    team_id: "T12345678",
-    channel_id: channelId,
-    is_public_organization_channel: true,
-    is_active: true,
-    bot_membership_verified: true,
-    bot_access_verified: true,
-    verification_evidence_sha256: canonicalSha256("rehearsal-slack-channel"),
-  }),
   verifyHuman: async () => {
     throw new Error("Person Slack identity linking observes a thread instead");
   },
@@ -174,60 +163,9 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
     initialize_credentials: async (stateDirectory) => {
       initializePersonSessionCredentials({ state_directory: stateDirectory });
     },
-    connect_slack: async (input) => {
-      if (input.connection_id === undefined) {
-        throw new Error("missing planned connection ID");
-      }
-      const output = commandOutput();
-      const status = await runSlackConnectionSetupCli(
-        [
-          "--state-dir",
-          input.state_directory,
-          "--approval-channel-id",
-          input.approval_channel_id,
-          "--connection-id",
-          input.connection_id,
-        ],
-        { stdout: output.write, read_stdin: input.read_stdin },
-        {
-          verify_state: verifyOrganizationControlStateV1,
-          create_verifier: () => fakeSlack,
-          now: () => "2026-08-22T12:00:00.000Z",
-        },
-      );
-      expect(status).toBe(0);
-      const verified = oneJson<{
-        provider_tenant_id: string;
-        provider_enterprise_id: string | null;
-        provider_app_id: string;
-        provider_bot_id: string;
-        provider_bot_user_id: string;
-        approval_channel_id: string;
-        required_scopes: readonly string[];
-        selected_channel_public: true;
-        selected_channel_active: true;
-        bot_membership_verified: true;
-        bot_access_verified: true;
-        verified_at: string;
-      }>(output);
-      return {
-        connection_id: input.connection_id,
-        verification: {
-          workspace_id: verified.provider_tenant_id,
-          enterprise_id: verified.provider_enterprise_id,
-          app_id: verified.provider_app_id,
-          bot_id: verified.provider_bot_id,
-          bot_user_id: verified.provider_bot_user_id,
-          identity_link_channel_id: verified.approval_channel_id,
-          required_scopes: verified.required_scopes,
-          identity_link_channel_access: "verified",
-          selected_channel_public: verified.selected_channel_public,
-          selected_channel_active: verified.selected_channel_active,
-          bot_membership_verified: verified.bot_membership_verified,
-          bot_access_verified: verified.bot_access_verified,
-          verified_at: verified.verified_at,
-        },
-      };
+    // R2b: the stopped-state Slack connection is removed; the rehearsal sets Slack up through the Authority routes.
+    connect_slack: async () => {
+      throw new Error("the stopped-state Slack connection is removed");
     },
     issue_invitation: async (input) => {
       issuePersonOnboardingInvitation({

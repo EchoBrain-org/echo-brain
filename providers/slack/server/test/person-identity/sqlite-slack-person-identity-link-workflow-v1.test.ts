@@ -8,7 +8,6 @@ import { SlackIdentityProviderErrorV1, type SlackIdentityProviderV1 } from "../.
 import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOrganizationControlBaselineV3 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
-import { connectSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
 import { activateNangoSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
@@ -61,7 +60,6 @@ function beginRequest(requestId = "psb_00000000-0000-4000-8000-000000000001") {
 
 async function setup(
   currentAuthorization: () => PersonAccessAuthorization = () => authorization,
-  connection: "legacy" | "nango" = "legacy",
 ) {
   const database = new Database(":memory:");
   databases.push(database);
@@ -89,25 +87,8 @@ async function setup(
       bot_user_id: "U12345678",
       bot_id: "B12345678",
       app_id: "A12345678",
-      granted_scopes: connection === "nango" ? SLACK_PRIVATE_APP_BOT_SCOPES_V1 : [
-        "channels:history",
-        "channels:read",
-        "chat:write",
-        "im:history",
-        "im:write",
-        "reactions:read",
-        "users:read",
-      ],
+      granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1,
       verification_evidence_sha256: canonicalSha256("connection"),
-    })),
-    verifyChannel: vi.fn(async (_token, channelId) => ({
-      team_id: "T12345678",
-      channel_id: channelId,
-      is_public_organization_channel: true,
-      is_active: true,
-      bot_membership_verified: true,
-      bot_access_verified: true,
-      verification_evidence_sha256: canonicalSha256("channel"),
     })),
     verifyHuman: vi.fn(async () => ({
       team_id: "T12345678",
@@ -128,25 +109,7 @@ async function setup(
       verification_evidence_sha256: canonicalSha256("observed"),
     })),
   };
-  if (connection === "nango") await activateNango(database, slack);
-  else await connectSlackConnectionV1({
-    authority_id: AUTHORITY_ID,
-    organization_id: ORGANIZATION_ID,
-    state_lineage_id: LINEAGE_ID,
-    connection_id: CONNECTION_ID,
-    approval_channel_id: "C12345678",
-    slack_bot_token: TOKEN,
-    database,
-    secrets: {
-      create: vi.fn(() => ({
-        secret_backend_id: "authority-file-v1" as const,
-        secret_handle_id: "sch_00000000-0000-4000-8000-000000000001",
-      })),
-      remove: vi.fn(),
-    },
-    verifier: slack,
-    now: () => NOW,
-  });
+  await activateNango(database, slack);
 
   return {
     database,
@@ -156,7 +119,6 @@ async function setup(
       authority_id: AUTHORITY_ID,
       organization_id: ORGANIZATION_ID,
       state_lineage_id: LINEAGE_ID,
-      approval_channel_id: "C12345678",
       authentication: {
         authenticateAccess: vi.fn(currentAuthorization),
       },
@@ -169,7 +131,7 @@ async function setup(
   };
 }
 
-/** The organization's own app installed through Nango: no channel, the recipe's four scopes. */
+/** The organization's own app installed through Nango: the recipe's four scopes, private DMs only. */
 async function activateNango(database: Database.Database, slack: SlackIdentityProviderV1): Promise<void> {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-identity-nango-")));
   directories.push(directory);
@@ -508,7 +470,7 @@ describe("Person Slack identity-link workflow", () => {
     expect(context.database.prepare("SELECT current_status FROM organization_external_human_link_current WHERE membership_id = ?").get(current.membership_id)).toEqual({ current_status: "revoked" });
   });
 
-  it("allows an explicit legacy reconnect after the existing delivery cooldown", async () => {
+  it("allows an explicit DM reconnect after the existing delivery cooldown", async () => {
     let current = authorization;
     const context = await setup(() => current);
     const first = await context.application.begin(beginRequest(), "bearer");
@@ -534,7 +496,7 @@ describe("Person Slack identity-link workflow", () => {
     expect((await context.application.tools("bearer")).tools).toMatchObject([{ personal_status: "linked", account_id: "U12345679" }]);
   });
 
-  it("invalidates a legacy begin that crosses a disconnect before it can persist", async () => {
+  it("invalidates a DM begin that crosses a disconnect before it can persist", async () => {
     const context = await setup();
     let release: (() => void) | undefined;
     const held = new Promise<void>((resolve) => { release = resolve; });
@@ -552,7 +514,7 @@ describe("Person Slack identity-link workflow", () => {
     expect(context.database.prepare("SELECT COUNT(*) AS count FROM organization_person_slack_link_challenges").get()).toEqual({ count: 0 });
   });
 
-  it("invalidates a legacy completion that crosses a disconnect", async () => {
+  it("invalidates a DM completion that crosses a disconnect", async () => {
     const context = await setup();
     const begun = await context.application.begin(beginRequest(), "bearer");
     let release: (() => void) | undefined;
@@ -594,7 +556,7 @@ describe("Person Slack identity-link workflow", () => {
       });
       return createSqliteSlackPersonIdentityLinkWorkflowV1({
         database: context.database, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID,
-        state_lineage_id: LINEAGE_ID, approval_channel_id: "C12345678",
+        state_lineage_id: LINEAGE_ID,
         authentication: { authenticateAccess: () => authorization }, membership_type: () => "employee" as const,
         slack: context.slack, slack_token_access: { readActiveSlackBotToken, onActiveSlackBotTokenRejected: onRejected },
         authorization_fence: new ReadableSearchAuthorizationFence(), now: () => NOW,
@@ -605,27 +567,12 @@ describe("Person Slack identity-link workflow", () => {
     expect(readActiveSlackBotToken.mock.calls.map((call) => call[1])).toEqual([undefined, { force_refresh: true }]);
     expect(onRejected).toHaveBeenCalledOnce();
     expect(onRejected.mock.calls[0]?.[0]).toMatchObject({
-      kind: "legacy",
       state_sha256: readActiveSlackConnectionV1(context.database)!.state_sha256,
     });
 
     await application(1).begin(beginRequest(), "bearer");
     expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledWith("xoxb-refreshed", expect.anything(), undefined);
     expect(onRejected).toHaveBeenCalledOnce();
-  });
-
-  it("links a Person over an active Nango connection with the recipe scopes and no channel", async () => {
-    const context = await setup(() => authorization, "nango");
-    expect(readActiveSlackConnectionV1(context.database)).toMatchObject({ kind: "nango" });
-    expect((await context.application.tools("bearer")).tools).toEqual([{ provider: "slack", availability: "enabled",
-      personal_status: "unlinked", workspace_id: "T12345678", account_id: null }]);
-    const begun = await context.application.begin(beginRequest(), "bearer");
-    expect(context.slack.verifyChannel).not.toHaveBeenCalled();
-    expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledWith(TOKEN, expect.objectContaining({ channel_id: "D12345678" }), undefined);
-    await expect(context.application.complete({ request_id: "psc_00000000-0000-4000-8000-000000000001",
-      challenge_attempt_id: begun.challenge_attempt_id, challenge_message_ts: begun.challenge_message_ts, challenge_code: CODE }, "bearer"))
-      .resolves.toMatchObject({ connection_id: CONNECTION_ID, provider_subject_id: "U12345679", channel_id: "D12345678" });
-    expect((await context.application.tools("bearer")).tools).toMatchObject([{ personal_status: "linked", account_id: "U12345679" }]);
   });
 
   it("wires disconnect to cancel an in-flight browser callback before it can link", async () => {
@@ -636,7 +583,6 @@ describe("Person Slack identity-link workflow", () => {
       authority_id: AUTHORITY_ID,
       organization_id: ORGANIZATION_ID,
       state_lineage_id: LINEAGE_ID,
-      approval_channel_id: "C12345678",
       authentication: { authenticateAccess: () => authorization },
       membership_type: () => "employee" as const,
       slack: context.slack,
@@ -658,14 +604,14 @@ describe("Person Slack identity-link workflow", () => {
       organization_id: ORGANIZATION_ID,
       authentication: configuration.authentication,
       repository: createSqliteSlackPersonIdentityLinkRepositoryV1(configuration),
-      browser_provider: {
+      browser_provider: () => ({
         authorizationUrl: (input) => { state = input.state; return "https://slack.com/openid/connect/authorize?opaque=yes"; },
         verifyCallback: async () => {
           markCallbackStarted!();
           await held;
           return { team_id: "T12345678", user_id: "U12345679", verification_evidence_sha256: canonicalSha256("browser-proof") };
         },
-      },
+      }),
       now: () => NOW,
     });
     const begun = await browser.begin({ request_id: "psb_00000000-0000-4000-8000-000000000099" }, "bearer");
@@ -782,12 +728,12 @@ describe("Person Slack identity-link workflow", () => {
       authentication: { authenticateAccess: () => authorization },
       repository: createSqliteSlackPersonIdentityLinkRepositoryV1({
         database: context.database, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID,
-        state_lineage_id: LINEAGE_ID, approval_channel_id: "C12345678",
+        state_lineage_id: LINEAGE_ID,
         authentication: { authenticateAccess: () => authorization }, membership_type: () => "employee",
         slack: context.slack, slack_token_access: { readActiveSlackBotToken: () => TOKEN },
         authorization_fence: new ReadableSearchAuthorizationFence(), now: () => NOW,
       }),
-      browser_provider: {
+      browser_provider: () => ({
         authorizationUrl: (input) => { state = input.state; return "https://slack.com/openid/connect/authorize?opaque=yes"; },
         verifyCallback: async (input) => {
           expect(input.parameters.getAll("state")).toEqual([state]);
@@ -798,7 +744,7 @@ describe("Person Slack identity-link workflow", () => {
             verification_evidence_sha256: canonicalSha256("browser-proof"),
           };
         },
-      },
+      }),
       now: () => NOW,
     });
     const http = createSlackExternalIdentityHttpApplicationV1({ service: context.application, browser });

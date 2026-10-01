@@ -5,7 +5,7 @@ import {
   canonicalSha256,
 } from "@echo-brain/federation-protocol";
 import { AUTHORITY_FILE_SECRET_BACKEND, type OrganizationSecretReference } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
-import { SLACK_DEFAULT_APPROVE_REACTION, SLACK_DEFAULT_REJECT_REACTION, type ActiveSlackOrganizationTool, type BeginPersonSlackIdentityLinkChallengeInput, type BegunSlackIdentityLinkChallenge, type CompletePersonSlackIdentityLinkChallengeInput, type CompletedPersonSlackIdentityLink, type PendingPersonSlackIdentityLinkChallenge, type PersonSlackIdentityLinkSession } from "../organization-control-plane/application/slack-integration-contracts.js";
+import { type ActiveSlackOrganizationTool, type BeginPersonSlackIdentityLinkChallengeInput, type BegunSlackIdentityLinkChallenge, type CompletePersonSlackIdentityLinkChallengeInput, type CompletedPersonSlackIdentityLink, type PendingPersonSlackIdentityLinkChallenge, type PersonSlackIdentityLinkSession } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { buildExternalHumanIdentityLinkContractV2, validateExternalHumanIdentityLinkContractV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { readActiveSlackConnectionV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
@@ -41,8 +41,6 @@ export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
-  /** Runtime configuration, bound to the stored public configuration digest. */
-  readonly approval_channel_id: string;
   readonly authentication: SlackPersonIdentityLinkAuthenticationPort;
   /** Current membership data remains Authority-owned, not copied into D2. */
   readonly membership_type: (input: {
@@ -120,9 +118,6 @@ function toolSha256(
     bot_user_id: tool.bot_user_id,
     bot_id: tool.bot_id,
     app_id: tool.app_id,
-    channel_id: tool.channel_id,
-    approve_reaction: tool.approve_reaction,
-    reject_reaction: tool.reject_reaction,
   });
 }
 
@@ -831,17 +826,7 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
     if (
       connection.authority_id !== this.options.authority_id ||
       connection.organization_id !== this.options.organization_id ||
-      connection.state_lineage_id !== this.options.state_lineage_id ||
-      // A Nango connection commits to the recipe, not to this runtime's channel.
-      (stored.kind === "legacy" &&
-        connection.public_connection_configuration_sha256 !==
-          canonicalSha256({
-            approval_adapter_id: "slack-reactions",
-            approval_channel_id: this.options.approval_channel_id,
-            approve_reaction: "white_check_mark",
-            kind: "echo-clean-slack-connection-public-configuration-v1",
-            reject_reaction: "x",
-          }))
+      connection.state_lineage_id !== this.options.state_lineage_id
     ) {
       throw new Error("stored Slack connection is inconsistent");
     }
@@ -850,7 +835,6 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
       state,
       stored,
       tool: Object.freeze({
-        kind: stored.kind,
         connection_attempt_id: state.verification_event_id,
         connection_id: connection.connection_id,
         team_id: connection.provider_tenant_id,
@@ -858,9 +842,6 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
         bot_user_id: connection.provider_bot_user_id,
         bot_id: connection.provider_bot_id,
         app_id: connection.provider_app_id,
-        channel_id: stored.kind === "nango" ? null : this.options.approval_channel_id,
-        approve_reaction: SLACK_DEFAULT_APPROVE_REACTION,
-        reject_reaction: SLACK_DEFAULT_REJECT_REACTION,
         granted_scopes: state.observed_granted_scopes,
         secret: Object.freeze({
           secret_backend_id: AUTHORITY_FILE_SECRET_BACKEND,
@@ -907,7 +888,7 @@ export function createSqliteSlackPersonIdentityLinkWorkflowV1(
   });
 }
 
-/** Shared durable-link repository for the legacy DM and browser proof flows. */
+/** Shared durable-link repository for the DM and browser proof flows. */
 export function createSqliteSlackPersonIdentityLinkRepositoryV1(
   input: CreateSqliteSlackPersonIdentityLinkWorkflowV1Input,
 ): SqliteSlackPersonIdentityLinkRepositoryV1 {

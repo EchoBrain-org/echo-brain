@@ -16,18 +16,6 @@ const BOT = {
   app_id: CONNECTION.app_id,
   deleted: false,
 } as const;
-const CHANNEL = {
-  id: "C123CHANNEL",
-  context_team_id: CONNECTION.team_id,
-  is_channel: true,
-  is_private: false,
-  is_im: false,
-  is_mpim: false,
-  is_archived: false,
-  is_member: true,
-  is_ext_shared: false,
-  is_pending_ext_shared: false,
-} as const;
 const CHALLENGE = {
   expected_team_id: CONNECTION.team_id,
   expected_enterprise_id: CONNECTION.enterprise_id,
@@ -127,9 +115,9 @@ function observedHuman() {
 }
 
 describe("SlackWebIdentityProviderV1", () => {
-  it("verifies a connected bot and public organization channel", async () => {
+  it("verifies a connected bot", async () => {
     const provider = new SlackWebIdentityProviderV1({
-      fetch: slackFetch(CONNECTION, { ok: true, bot: BOT }, { ok: true, channel: CHANNEL }),
+      fetch: slackFetch(CONNECTION, { ok: true, bot: BOT }),
     });
 
     await expect(provider.verifyConnection(TOKEN)).resolves.toMatchObject({
@@ -138,15 +126,6 @@ describe("SlackWebIdentityProviderV1", () => {
       bot_id: CONNECTION.bot_id,
       app_id: CONNECTION.app_id,
       granted_scopes: ["chat:write", "users:read"],
-    });
-    await expect(
-      provider.verifyChannel(TOKEN, CHANNEL.id, CONNECTION.team_id),
-    ).resolves.toMatchObject({
-      channel_id: CHANNEL.id,
-      team_id: CONNECTION.team_id,
-      is_public_organization_channel: true,
-      is_active: true,
-      bot_membership_verified: true,
     });
   });
 
@@ -258,7 +237,7 @@ describe("SlackWebIdentityProviderV1", () => {
     const missing = new SlackWebIdentityProviderV1({
       fetch: slackFetch({ ok: false, error: "channel_not_found" }),
     });
-    await expect(missing.verifyChannel(TOKEN, CHANNEL.id, CONNECTION.team_id)).rejects.toMatchObject({
+    await expect(missing.verifyHuman(TOKEN, "U123HUMAN")).rejects.toMatchObject({
       code: "not_observed",
       token_rejected: false,
     });

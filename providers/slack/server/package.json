@@ -49,10 +49,6 @@
       "types": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.d.ts",
       "import": "./dist/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js"
     },
-    "./organization-control-plane/composition/slack-connection-setup-cli": {
-      "types": "./dist/organization-control-plane/composition/slack-connection-setup-cli.d.ts",
-      "import": "./dist/organization-control-plane/composition/slack-connection-setup-cli.js"
-    },
     "./organization-control-plane/application/slack-integration-contracts": {
       "types": "./dist/organization-control-plane/application/slack-integration-contracts.d.ts",
       "import": "./dist/organization-control-plane/application/slack-integration-contracts.js"

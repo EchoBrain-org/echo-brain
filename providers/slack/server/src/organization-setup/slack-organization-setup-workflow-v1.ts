@@ -23,20 +23,19 @@ import { SlackIdentityProviderErrorV1 } from "../organization-control-plane/adap
 import { findPendingSlackAppCredentialsV1, findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, SLACK_APP_CREDENTIALS_KIND_V1, type FoundSlackAppCredentialsV1 } from "../organization-control-plane/application/slack-app-credentials-v1.js";
 import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
 import { readActiveSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
-import type { SlackConnectionVerifierV1 } from "../organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
-import { activateNangoSlackConnectionV1, SlackConnectionRefusedErrorV1 } from "../organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
+import { activateNangoSlackConnectionV1, SlackConnectionRefusedErrorV1, type SlackConnectionVerifierV1 } from "../organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 
 const ATTEMPT_LIFETIME_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 50;
 const IN_PROGRESS = "Slack setup is in progress";
 
-/** What the Authority composition passes when Nango is configured; absent, no setup route exists. */
+/** What the Authority composition passes for Slack; absent, no Slack route exists. */
 export interface SlackOrganizationSetupOptionsV1 {
   readonly authority_url: string;
   readonly nango: { readonly client: NangoConnectionClientV1; readonly callback_url: string };
   readonly manifest_provider: SlackAppManifestProviderV1;
   /** Defaults to the Slack identity provider's `auth.test` check. */
-  readonly verifier?: Pick<SlackConnectionVerifierV1, "verifyConnection">;
+  readonly verifier?: SlackConnectionVerifierV1;
   /** Defaults to the runtime bundle's `connection_health`; the two must be one instance. */
   readonly health?: SlackConnectionHealthV1;
 }
@@ -49,7 +48,7 @@ export interface SlackOrganizationSetupWorkflowOptionsV1 extends SlackOrganizati
   readonly organization_id: string;
   readonly state_lineage_id: string;
   readonly authentication: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
-  readonly verifier: Pick<SlackConnectionVerifierV1, "verifyConnection">;
+  readonly verifier: SlackConnectionVerifierV1;
   readonly now?: () => string;
   readonly new_connection_id?: () => string;
 }
@@ -298,9 +297,9 @@ export class SlackOrganizationSetupWorkflowV1 {
 
   private activeNangoBundle(): FoundSlackAppCredentialsV1 | undefined {
     const active = readActiveSlackConnectionV1(this.options.database);
-    return active?.kind === "nango"
-      ? findSlackAppCredentialsByReferenceSha256V1(this.options.secrets, active.state.credential_reference_sha256)
-      : undefined;
+    return active === undefined
+      ? undefined
+      : findSlackAppCredentialsByReferenceSha256V1(this.options.secrets, active.state.credential_reference_sha256);
   }
 
   /** The pending app, else the connected Nango app (a reconnect). */

@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,26 +15,24 @@ import { resolvePinnedOrganizationAuthority } from "../../../../../packages/orga
 import { COORDINATES, protocolAuthority } from "../../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import type { NangoConnectionClientV1, NangoSlackConnectionV1 } from "../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
-import { serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
+import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
 import { createSlackBotTokenSourceV1 } from "../../src/organization-control-plane/application/slack-bot-token-source-v1.js";
 import { SlackConnectionHealthV1 } from "../../src/organization-control-plane/application/slack-connection-health-v1.js";
-import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
-import { connectSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
 import { activateNangoSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 import { ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID } from "../../src/organization-control-plane/slack-approval-integration-v1.js";
 import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "../../src/private-approval/private-slack-approval-block-kit-card-v1.js";
 import { createActivePrivateSlackApprovalPosterV1, createPrivateSlackApprovalWorkflowBundleV1, type PrivateSlackApprovalWorkflowBundleConfigV1 } from "../../src/private-approval/private-slack-approval-workflow-bundle-v1.js";
-import { activePrivateSlackConnectionIdV1, resolveActivePrivateSlackConnectionV1 } from "../../src/private-approval/resolve-current-private-slack-connection-v1.js";
+import { resolveActivePrivateSlackConnectionV1 } from "../../src/private-approval/resolve-current-private-slack-connection-v1.js";
 
 const NOW = "2026-09-30T00:00:00.000Z";
-const LEGACY_ID = "con_00000000-0000-4000-8000-000000000001";
+const LATER = "2026-09-30T00:10:00.000Z";
 const NANGO_ID = "con_00000000-0000-4000-8000-000000000002";
-const LEGACY_TOKEN = "xoxb-legacy-local-token";
 const NANGO_TOKEN = "xoxb-nango-fetched-token-never-echoed";
-const FILE_SIGNING_SECRET = "legacy-signing-secret-from-the-file-0000";
 const APP_SIGNING_SECRET = "app-signing-secret-never-echoed";
+const OTHER_SIGNING_SECRET = "a-signing-secret-of-no-installed-app";
 const CARD = { approval_id: "apr_00000000-0000-4000-8000-000000000001" };
+const MARKER = { approval_id: CARD.approval_id, dm_channel_id: "D0OWNER" };
 
 const directories: string[] = [];
 const opened: { close?(): void }[] = [];
@@ -48,13 +46,8 @@ const NANGO: NangoSlackConnectionV1 = {
   app_id: "A0APP1", bot_user_id: "U0APPBOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: NANGO_TOKEN, updated_at: NOW,
 };
 
-/**
- * A stopped Authority state directory. With `legacy` (the default), its
- * pinned legacy connection is active, matching an organization not yet moved
- * to Nango. With `legacy: false`, nothing is active yet, matching an
- * organization installing Nango for the first time.
- */
-async function stateDirectory({ legacy = true }: { legacy?: boolean } = {}) {
+/** A stopped Authority state directory whose organization has not installed Slack yet. */
+function stateDirectory() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-approval-bundle-")));
   directories.push(directory);
   const authority = openAuthorityDatabase(join(directory, "authority.sqlite"));
@@ -67,34 +60,27 @@ async function stateDirectory({ legacy = true }: { legacy?: boolean } = {}) {
     authority_descriptor_sha256, created_at) VALUES (1, 'ocp_1', ?, ?, ?, ?)`)
     .run(COORDINATES.organization_id, COORDINATES.authority_id, canonicalSha256({ descriptor: "test" }), NOW);
   const secrets = new FileOrganizationSecretStore(join(directory, "secrets"));
-  const nango = token(NANGO_TOKEN);
-  const legacyToken = token(LEGACY_TOKEN);
   const verifier = {
-    verifyConnection: vi.fn(async (bot: string) => (bot === NANGO_TOKEN ? nango : legacyToken)),
-    verifyChannel: vi.fn(async (_bot: string, channel_id: string) => ({ team_id: "T01", channel_id, is_public_organization_channel: true,
-      is_active: true, bot_membership_verified: true, bot_access_verified: true, verification_evidence_sha256: canonicalSha256("channel") })),
+    verifyConnection: vi.fn(async () => ({ team_id: "T01", enterprise_id: null, bot_user_id: "U0APPBOT", bot_id: "B0APP", app_id: "A0APP1",
+      granted_scopes: [...SLACK_PRIVATE_APP_BOT_SCOPES_V1], verification_evidence_sha256: canonicalSha256({ bot: "nango" }) })),
   };
-  if (legacy) {
-    await connectSlackConnectionV1({ ...COORDINATES, connection_id: LEGACY_ID, approval_channel_id: "C0LEGACY", slack_bot_token: LEGACY_TOKEN,
-      database, secrets, verifier, now: () => NOW });
-  }
-  const signing_secret_file = join(directory, "slack-signing-secret");
-  writeFileSync(signing_secret_file, FILE_SIGNING_SECRET, { mode: 0o600 });
-  const credentials = { kind: "echo-slack-app-credentials-v1" as const, app_id: "A0APP1", client_id: "1234.5678",
+  const activate = (credential: { readonly reference: ReturnType<FileOrganizationSecretStore["create"]>; readonly credentials: SlackAppCredentialsV1 },
+    nango: NangoSlackConnectionV1) =>
+    activateNangoSlackConnectionV1({ database, secrets, verifier, ...COORDINATES, credential, nango, now: () => NOW, new_connection_id: () => NANGO_ID });
+  const credentials: SlackAppCredentialsV1 = { kind: "echo-slack-app-credentials-v1", app_id: "A0APP1", client_id: "1234.5678",
     client_secret: "client-secret-value", signing_secret: APP_SIGNING_SECRET, nango_connection_id: null };
-  /** The owner's Nango install. Refused as already_connected whenever a connection (legacy or Nango) is already active. */
-  const installNango = () => activateNangoSlackConnectionV1({ database, secrets, verifier, ...COORDINATES,
-    credential: { reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials },
-    nango: NANGO, now: () => NOW, new_connection_id: () => NANGO_ID });
+  /** The owner's first install through Nango. */
+  const installNango = () => activate({ reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials }, NANGO);
+  /** The owner's reinstall of the connected app: a Nango reconnect on the same connection id. */
+  const reconnectNango = () => activate(
+    findSlackAppCredentialsByReferenceSha256V1(secrets, readActiveSlackConnectionV1(database)!.state.credential_reference_sha256),
+    { ...NANGO, updated_at: LATER },
+  );
   const client = { getSlackConnection: vi.fn(async () => NANGO) } as unknown as NangoConnectionClientV1 & { getSlackConnection: ReturnType<typeof vi.fn> };
-  return { directory, database, secrets, signing_secret_file, installNango, client };
-}
-
-function token(bot: string) {
-  const nango = bot === NANGO_TOKEN;
-  return { team_id: "T01", enterprise_id: null, bot_user_id: nango ? "U0APPBOT" : "U0LEGACYBOT", bot_id: nango ? "B0APP" : "B0LEGACY",
-    app_id: nango ? "A0APP1" : "A0LEGACY", granted_scopes: nango ? [...SLACK_PRIVATE_APP_BOT_SCOPES_V1] : [...SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES],
-    verification_evidence_sha256: canonicalSha256({ bot: nango ? "nango" : "legacy" }) };
+  const health = new SlackConnectionHealthV1();
+  const bot_token_source = createSlackBotTokenSourceV1({ secrets, nango: client });
+  const config: PrivateSlackApprovalWorkflowBundleConfigV1 = { state_directory: directory, bot_token_source, connection_health: health };
+  return { database, secrets, installNango, reconnectNango, client, health, bot_token_source, config };
 }
 
 function context(): ApprovalWorkflowContextV1 {
@@ -140,76 +126,74 @@ async function load(config: PrivateSlackApprovalWorkflowBundleConfigV1) {
   return { components, accept: (secret: string) => ingress.accept(click(secret)) };
 }
 
-function slackRecording(authorizations: string[], response: unknown = { ok: true, channel: "D0OWNER", ts: "123.000001" }) {
-  return async (_url: unknown, init?: RequestInit) => {
-    authorizations.push(new Headers(init?.headers).get("authorization")!);
-    return new Response(JSON.stringify(response));
-  };
+/** A poster on the active connection, recording each Slack call's bearer token. */
+function recordingPoster(state: ReturnType<typeof stateDirectory>, response: unknown = { ok: true, channel: "D0OWNER", ts: "123.000001" }) {
+  const authorizations: string[] = [];
+  const poster = createActivePrivateSlackApprovalPosterV1({
+    connection: () => resolveActivePrivateSlackConnectionV1(state.database, COORDINATES).stored,
+    bot_token_source: state.bot_token_source, connection_health: state.health,
+    client_options: { fetchImpl: async (_url: unknown, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get("authorization")!);
+      return new Response(JSON.stringify(response));
+    } },
+  });
+  return { poster, authorizations };
 }
 
-describe("private Slack approval workflow bundle with Nango", () => {
-  it("refuses a Nango install while a legacy runtime is active, and keeps serving on its pinned connection", async () => {
-    const state = await stateDirectory();
-    const config = { state_directory: state.directory, signing_secret_file: state.signing_secret_file, connection_id: LEGACY_ID };
-    const legacy = await load(config);
-    await expect(legacy.accept(FILE_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
-    await expect(legacy.accept(APP_SIGNING_SECRET)).rejects.toMatchObject({ code: "unauthorized" });
-
-    await expect(state.installNango()).rejects.toMatchObject({ reason: "already_connected" });
-
-    // Nothing was written: the pinned legacy connection keeps serving, and a restart still resolves it.
-    await expect(legacy.accept(FILE_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
-    const restarted = await load(config);
-    await expect(restarted.accept(FILE_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
-  });
-
-  it("nango connection: card posts with the Nango-fetched token and its click verifies with the bundle signing secret", async () => {
-    const state = await stateDirectory({ legacy: false });
+describe("private Slack approval workflow bundle", () => {
+  it("first install: posts with the Nango-fetched token, verifies clicks with the bundle signing secret, and restarts on the same connection", async () => {
+    const state = stateDirectory();
     await expect(state.installNango()).resolves.toMatchObject({ kind: "created" });
-    const health = new SlackConnectionHealthV1();
-    const source = createSlackBotTokenSourceV1({ secrets: state.secrets, nango: state.client });
-    const config = { state_directory: state.directory, signing_secret_file: state.signing_secret_file, connection_id: NANGO_ID,
-      bot_token_source: source, connection_health: health };
-    const running = await load(config);
-    const authorizations: string[] = [];
-    const poster = createActivePrivateSlackApprovalPosterV1({
-      connection: () => resolveActivePrivateSlackConnectionV1(state.database, NANGO_ID, COORDINATES).stored,
-      bot_token_source: source, connection_health: health, client_options: { fetchImpl: slackRecording(authorizations) },
-    });
-    const marker = { approval_id: CARD.approval_id, dm_channel_id: "D0OWNER" };
+    const running = await load(state.config);
+    const { poster, authorizations } = recordingPoster(state);
 
-    // The active Nango connection: its fetched token and its app's own signing secret.
     await expect(running.accept(APP_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
-    await expect(running.accept(FILE_SIGNING_SECRET)).rejects.toMatchObject({ code: "unauthorized" });
-    await expect(poster.postMarker(marker)).resolves.toEqual({ kind: "posted", provider_message_ts: "123.000001" });
+    await expect(running.accept(OTHER_SIGNING_SECRET)).rejects.toMatchObject({ code: "unauthorized" });
+    await expect(poster.postMarker(MARKER)).resolves.toEqual({ kind: "posted", provider_message_ts: "123.000001" });
     expect(authorizations).toEqual([`Bearer ${NANGO_TOKEN}`]);
     expect(state.client.getSlackConnection).toHaveBeenCalledWith({ connection_id: "nango-conn-1", force_refresh: false });
-    expect(activePrivateSlackConnectionIdV1(state.database, NANGO_ID)).toBe(NANGO_ID);
 
-    // A restart resolves the same Nango connection.
-    const restarted = await load(config);
+    const restarted = await load(state.config);
     await expect(restarted.accept(APP_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
   });
 
+  it("reconnect keeps the connection, its state hash, and the running lane", async () => {
+    const state = stateDirectory();
+    await state.installNango();
+    const before = readActiveSlackConnectionV1(state.database)!;
+    const running = await load(state.config);
+
+    await expect(state.reconnectNango()).resolves.toMatchObject({ kind: "reconnected" });
+
+    expect(readActiveSlackConnectionV1(state.database)).toMatchObject({ contract_sha256: before.contract_sha256, state_sha256: before.state_sha256 });
+    await expect(running.accept(APP_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
+    const restarted = await load(state.config);
+    await expect(restarted.accept(APP_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
+    const { poster, authorizations } = recordingPoster(state);
+    await expect(poster.postMarker(MARKER)).resolves.toMatchObject({ kind: "posted" });
+    expect(authorizations).toEqual([`Bearer ${NANGO_TOKEN}`]);
+  });
+
+  it("refuses to start without an active connection or without its credential bundle", async () => {
+    const state = stateDirectory();
+    await expect(load(state.config)).rejects.toThrow("has no active Slack connection");
+
+    await state.installNango();
+    for (const reference of state.secrets.listReferences()) state.secrets.remove(reference);
+    await expect(load(state.config)).rejects.toThrow("Slack credential is missing");
+  });
+
   it("marks a Nango connection whose refreshed token Slack still rejects, then stops refreshing it", async () => {
-    const state = await stateDirectory({ legacy: false });
+    const state = stateDirectory();
     await state.installNango();
     state.client.getSlackConnection.mockImplementation(async (input: { force_refresh?: boolean }) =>
       ({ ...NANGO, bot_token: input.force_refresh === true ? `${NANGO_TOKEN}-refreshed` : NANGO_TOKEN }));
-    const health = new SlackConnectionHealthV1();
-    const source = createSlackBotTokenSourceV1({ secrets: state.secrets, nango: state.client });
-    const authorizations: string[] = [];
-    const poster = createActivePrivateSlackApprovalPosterV1({
-      connection: () => resolveActivePrivateSlackConnectionV1(state.database, NANGO_ID, COORDINATES).stored,
-      bot_token_source: source, connection_health: health,
-      client_options: { fetchImpl: slackRecording(authorizations, { ok: false, error: "invalid_auth" }) },
-    });
-    const marker = { approval_id: CARD.approval_id, dm_channel_id: "D0OWNER" };
-    await expect(poster.postMarker(marker)).resolves.toEqual({ kind: "retry_allowed" });
+    const { poster, authorizations } = recordingPoster(state, { ok: false, error: "invalid_auth" });
+    await expect(poster.postMarker(MARKER)).resolves.toEqual({ kind: "retry_allowed" });
     expect(authorizations).toEqual([`Bearer ${NANGO_TOKEN}`, `Bearer ${NANGO_TOKEN}-refreshed`]);
-    expect(health.needsReinstall(readActiveSlackConnectionV1(state.database)!.state_sha256)).toBe(true);
+    expect(state.health.needsReinstall(readActiveSlackConnectionV1(state.database)!.state_sha256)).toBe(true);
     // Marked: the next rejection is not refreshed again until an install clears the mark.
-    await expect(poster.postMarker(marker)).resolves.toEqual({ kind: "retry_allowed" });
+    await expect(poster.postMarker(MARKER)).resolves.toEqual({ kind: "retry_allowed" });
     expect(authorizations).toHaveLength(3);
     expect(state.client.getSlackConnection).toHaveBeenCalledTimes(2);
   });

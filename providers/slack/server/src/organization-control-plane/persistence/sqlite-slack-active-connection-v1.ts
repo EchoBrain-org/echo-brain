@@ -1,12 +1,8 @@
 import { canonicalJson, canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../adapters/slack/slack-app-manifest-provider-v1.js";
 import { validateOrganizationToolConnectionContractV2, validateOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
 import type Database from "better-sqlite3";
 
-/**
- * The public configuration every Nango-kind connection commits to. A legacy
- * bot-token-and-channel connection commits to its own channel configuration.
- */
+/** The public configuration every organization Slack connection commits to: the ECHO app recipe. */
 export function slackNangoAppPublicConfigurationSha256V1(): `sha256:${string}` {
   return canonicalSha256({
     kind: "echo-slack-nango-app-public-configuration-v1",
@@ -14,11 +10,8 @@ export function slackNangoAppPublicConfigurationSha256V1(): `sha256:${string}` {
   });
 }
 
-/** "nango": token from the Nango connection; "legacy": local bot-token secret. */
-export type SlackConnectionKindV1 = "nango" | "legacy";
-
+/** The organization's one active connection: the ECHO app installed through Nango. */
 export interface StoredSlackConnectionV1 {
-  readonly kind: SlackConnectionKindV1;
   readonly connection: OrganizationToolConnectionContractV2;
   readonly contract_sha256: `sha256:${string}`;
   readonly state: OrganizationToolConnectionStateV2;
@@ -33,20 +26,11 @@ function parseCanonical(json: string): unknown {
   return value;
 }
 
-/** Nango only for the recipe's configuration hash and exact bot scopes. */
-export function slackConnectionKindV1(
-  connection: OrganizationToolConnectionContractV2,
-): SlackConnectionKindV1 {
-  const scopes = connection.required_provider_scopes;
-  return connection.public_connection_configuration_sha256 ===
-    slackNangoAppPublicConfigurationSha256V1() &&
-    scopes.length === SLACK_PRIVATE_APP_BOT_SCOPES_V1.length &&
-    scopes.every((scope, index) => scope === SLACK_PRIVATE_APP_BOT_SCOPES_V1[index])
-    ? "nango"
-    : "legacy";
-}
-
-/** Reads the one active connection after proving its digest chain. */
+/**
+ * Reads the one active connection after proving its digest chain. A
+ * connection stored by the removed bot-token-and-channel setup commits to
+ * another configuration: it is refused, never served.
+ */
 export function readActiveSlackConnectionV1(
   database: Database.Database,
 ): StoredSlackConnectionV1 | undefined {
@@ -69,9 +53,15 @@ export function readActiveSlackConnectionV1(
       }
     | undefined;
   if (row === undefined) return undefined;
-  const connection = validateOrganizationToolConnectionContractV2(
-    parseCanonical(row.contract_json),
-  );
+  const body = parseCanonical(row.contract_json);
+  if (
+    typeof body === "object" && body !== null &&
+    (body as { readonly public_connection_configuration_sha256?: unknown })
+      .public_connection_configuration_sha256 !== slackNangoAppPublicConfigurationSha256V1()
+  ) {
+    throw new Error("stored Slack connection predates in-app setup; run replace-rehearsal");
+  }
+  const connection = validateOrganizationToolConnectionContractV2(body);
   const state = validateOrganizationToolConnectionStateV2(
     parseCanonical(row.state_json),
   );
@@ -84,7 +74,6 @@ export function readActiveSlackConnectionV1(
     throw new Error("stored Slack connection digest chain is invalid");
   }
   return Object.freeze({
-    kind: slackConnectionKindV1(connection),
     connection,
     contract_sha256: row.contract_sha256,
     state,
@@ -117,7 +106,7 @@ export function assertSlackConnectionMetadataV1(
 /**
  * Inserts one new active connection: the immutable contract and its current
  * state. The caller owns the surrounding `BEGIN IMMEDIATE` transaction and
- * must already have revoked any previously active connection.
+ * must already have proven that no connection is active.
  */
 export function insertActiveSlackConnectionV1(
   database: Database.Database,

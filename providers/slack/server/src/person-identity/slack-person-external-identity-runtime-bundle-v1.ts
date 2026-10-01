@@ -180,95 +180,84 @@ function unavailableSlackIdentityApplication(runtime: PersonExternalIdentityRunt
 }
 
 /**
- * Slack-owned composition for the existing Person-to-Slack identity-link
- * protocol. Its channel, control database, provider client, and token lookup
- * never enter the generic Person runtime.
+ * Slack-owned composition for the Person-to-Slack identity link and the
+ * owner's organization setup. Its control database, provider client, and
+ * token lookup never enter the generic Person runtime.
  */
 export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
+  // R2b: remove. Ignored: identity proofs use private DMs, never a channel.
   readonly identity_link_channel_id?: string;
-  readonly provider?: SlackIdentityProviderV1;
-  /** The legacy browser client. A Nango connection uses its own app's client instead. */
+  // R2b: remove. Ignored: the browser link uses the connected app's own client from its credential bundle.
   readonly browser_provider?: SlackBrowserIdentityProvider;
-  /** Absent: the legacy local-secret source. */
+  readonly provider?: SlackIdentityProviderV1;
+  /** Defaults to fetching the bot token from Nango through the setup options' client. */
   readonly bot_token_source?: SlackBotTokenSourceV1;
-  /** Marked when Slack keeps rejecting the bot token after one refresh. */
+  /** Marked when Slack keeps rejecting the bot token after one refresh; the owner's install clears it. */
   readonly connection_health?: SlackConnectionHealthV1;
-  /** Present only when Nango is configured: mounts the owner setup routes and the browser link. */
+  /** Nango and the app recipe. Present, the identity, browser and owner setup routes mount; absent, Slack is unavailable. */
   readonly organization_setup?: SlackOrganizationSetupOptionsV1;
 }): PersonExternalIdentityRuntimeBundleV1 {
   return Object.freeze({
     open(
       runtime: PersonExternalIdentityRuntimeInputV1,
     ): OpenedPersonExternalIdentityRuntimeV1 {
-      const setupHealth = input.organization_setup?.health;
-      if (input.connection_health !== undefined && setupHealth !== undefined && input.connection_health !== setupHealth) {
-        // Token rejections mark one instance and an owner's install clears it; two would never meet.
-        throw new Error("Slack connection health must be a single instance");
-      }
-      if (input.identity_link_channel_id === undefined) {
+      const setupOptions = input.organization_setup;
+      if (setupOptions === undefined) {
         return Object.freeze({
           application: unavailableSlackIdentityApplication(runtime),
           tools: async () => [],
           close: () => undefined,
         });
       }
-      const health = input.connection_health ?? setupHealth;
+      if (input.connection_health !== undefined && setupOptions.health !== undefined && input.connection_health !== setupOptions.health) {
+        // Token rejections mark one instance and an owner's install clears it; two would never meet.
+        throw new Error("Slack connection health must be a single instance");
+      }
+      const health = input.connection_health ?? setupOptions.health ?? new SlackConnectionHealthV1();
       const database = openOrganizationControlDatabase(
         `${runtime.state_directory}/integrations.sqlite`,
         { fileMustExist: true },
       );
       try {
+        const secrets = new FileOrganizationSecretStore(`${runtime.state_directory}/secrets`);
+        const botTokenSource = input.bot_token_source ?? createSlackBotTokenSourceV1({ secrets, nango: setupOptions.nango.client });
         const workflowInput = {
           database,
           authority_id: runtime.authority_id,
           organization_id: runtime.organization_id,
           state_lineage_id: runtime.state_lineage_id,
-          // The control-plane V2 contract retains this legacy field name.
-          approval_channel_id: input.identity_link_channel_id,
           authentication: runtime.authentication,
           membership_type: runtime.membership_type,
           slack: input.provider ?? new SlackWebIdentityProviderV1(),
           slack_token_access: {
-            // The default legacy source opens the secret store per read, as before.
-            readActiveSlackBotToken: (connection, options) =>
-              (input.bot_token_source ?? createSlackBotTokenSourceV1({
-                secrets: new FileOrganizationSecretStore(`${runtime.state_directory}/secrets`),
-              })).botToken(connection, options),
-            ...(health === undefined ? {} : {
-              onActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
-                health.markNeedsReinstall(connection.state_sha256),
-              isActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
-                health.needsReinstall(connection.state_sha256),
-            }),
+            readActiveSlackBotToken: (connection, options) => botTokenSource.botToken(connection, options),
+            onActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
+              health.markNeedsReinstall(connection.state_sha256),
+            isActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
+              health.needsReinstall(connection.state_sha256),
           },
           authorization_fence: new ReadableSearchAuthorizationFence(),
         } satisfies CreateSqliteSlackPersonIdentityLinkWorkflowV1Input;
         const repository = createSqliteSlackPersonIdentityLinkRepositoryV1(workflowInput);
-        const setupOptions = input.organization_setup;
-        let nangoBrowser: { readonly reference_sha256: string; readonly provider: SlackBrowserIdentityProvider } | undefined;
-        /** Legacy: the configured client. Nango: the installed app's own client, redirecting to this Authority. */
+        let appBrowser: { readonly reference_sha256: string; readonly provider: SlackBrowserIdentityProvider } | undefined;
+        /** The installed app's own client, redirecting to this Authority. */
         const browserProviderFor = (tool: ActiveSlackOrganizationTool): SlackBrowserIdentityProvider => {
-          if (tool.kind === "legacy") {
-            if (input.browser_provider === undefined) throw new Error("Slack browser connection is not configured");
-            return input.browser_provider;
-          }
           const active = readActiveSlackConnectionV1(database);
-          if (setupOptions === undefined || active?.kind !== "nango" || active.connection.connection_id !== tool.connection_id) {
+          if (active?.connection.connection_id !== tool.connection_id) {
             throw new Error("Slack browser connection is not configured");
           }
           const reference = active.state.credential_reference_sha256;
-          if (nangoBrowser?.reference_sha256 !== reference) {
-            const { credentials } = findSlackAppCredentialsByReferenceSha256V1(
-              new FileOrganizationSecretStore(`${runtime.state_directory}/secrets`), reference);
-            nangoBrowser = { reference_sha256: reference, provider: createSlackBrowserIdentityProvider({
+          if (appBrowser?.reference_sha256 !== reference) {
+            const { credentials } = findSlackAppCredentialsByReferenceSha256V1(secrets, reference);
+            appBrowser = { reference_sha256: reference, provider: createSlackBrowserIdentityProvider({
               client_id: credentials.client_id, client_secret: credentials.client_secret,
               // The recipe registers exactly this redirect for the app.
               redirect_uri: `${new URL(setupOptions.authority_url).origin}${ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH}`,
             }) };
           }
-          return nangoBrowser.provider;
+          return appBrowser.provider;
         };
-        const browser = input.browser_provider === undefined && setupOptions === undefined ? undefined : new SlackPersonBrowserIdentityLinkWorkflowV1({
+        const browser = new SlackPersonBrowserIdentityLinkWorkflowV1({
           authority_id: runtime.authority_id,
           organization_id: runtime.organization_id,
           authentication: runtime.authentication,
@@ -277,37 +266,31 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
         });
         const application = createSqliteSlackPersonIdentityLinkWorkflowV1({
           ...workflowInput,
-          invalidate_browser_attempts: browser === undefined
-            ? undefined
-            : (membershipId) => browser.invalidateMembership(membershipId),
+          invalidate_browser_attempts: (membershipId) => browser.invalidateMembership(membershipId),
         });
-        const setup = input.organization_setup === undefined ? undefined : new SlackOrganizationSetupWorkflowV1({
-          ...input.organization_setup,
+        const setup = new SlackOrganizationSetupWorkflowV1({
+          ...setupOptions,
           database,
-          secrets: new FileOrganizationSecretStore(`${runtime.state_directory}/secrets`),
+          secrets,
           authority_id: runtime.authority_id,
           organization_id: runtime.organization_id,
           state_lineage_id: runtime.state_lineage_id,
           authentication: runtime.authentication,
-          verifier: input.organization_setup.verifier ?? workflowInput.slack,
-          health: health ?? new SlackConnectionHealthV1(),
+          verifier: setupOptions.verifier ?? workflowInput.slack,
+          health,
         });
         return Object.freeze({
-          application: createSlackExternalIdentityHttpApplicationV1({
-            service: application,
-            ...(browser === undefined ? {} : { browser }),
-            ...(setup === undefined ? {} : { setup }),
-          }),
+          application: createSlackExternalIdentityHttpApplicationV1({ service: application, browser, setup }),
           tools: async (token: string): Promise<readonly OrganizationPersonToolV4[]> => {
             const current = validateOrganizationPersonTools(await application.tools(token));
-            const organizationSetup = setup?.organizationSetupForCaller(token) ?? null;
+            const organizationSetup = setup.organizationSetupForCaller(token);
             const tools = current.tools.map(tool => Object.freeze({
               tool_id: 'slack', display_name: 'Slack', availability: tool.availability,
               personal_status: tool.personal_status, external_scope_id: tool.workspace_id,
               external_subject_id: tool.account_id, organization_setup: organizationSetup,
             }));
-            // With setup mounted, Slack is listed before any connection exists so an owner can set it up.
-            if (tools.length > 0 || setup === undefined) return tools;
+            // Slack is listed before any connection exists so an owner can set it up.
+            if (tools.length > 0) return tools;
             return [Object.freeze({ tool_id: 'slack', display_name: 'Slack', availability: 'unavailable' as const,
               personal_status: 'unavailable' as const, external_scope_id: null, external_subject_id: null, organization_setup: organizationSetup })];
           },

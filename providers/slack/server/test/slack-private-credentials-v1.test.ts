@@ -1,4 +1,5 @@
-import { readOptionalPrivateAuthoritySlackBrowserOauthConfiguration, readPrivateAuthoritySlackSigningSecret } from "@echo-brain/provider-slack-server/slack-private-credentials-v1";
+// R2b: remove this file with the browser OAuth readers it tests.
+import { readOptionalPrivateAuthoritySlackBrowserOauthConfiguration } from "@echo-brain/provider-slack-server/slack-private-credentials-v1";
 import {
   chmodSync,
   mkdtempSync,
@@ -13,9 +14,9 @@ import { afterEach, describe, expect, it } from "vitest";
 const roots: string[] = [];
 
 function privateFile(value: string): string {
-  const root = mkdtempSync(join(tmpdir(), "echo-slack-signing-secret-"));
+  const root = mkdtempSync(join(tmpdir(), "echo-slack-browser-oauth-"));
   roots.push(root);
-  const path = join(root, "signing-secret");
+  const path = join(root, "slack-browser-oidc.json");
   writeFileSync(path, value, { encoding: "utf8", mode: 0o600 });
   chmodSync(path, 0o600);
   return path;
@@ -25,39 +26,6 @@ afterEach(() => {
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
-});
-
-describe("private Slack signing-secret file reader", () => {
-  it("accepts a bounded visible-ASCII value from a current-user 0600 regular file", () => {
-    const path = privateFile("a".repeat(32));
-    expect(readPrivateAuthoritySlackSigningSecret(`file:${path}`)).toBe(
-      "a".repeat(32),
-    );
-  });
-
-  it("rejects short, non-visible, non-private, and symlinked inputs", () => {
-    expect(() =>
-      readPrivateAuthoritySlackSigningSecret(`file:${privateFile("a".repeat(31))}`),
-    ).toThrow(/authority credential/);
-    expect(() =>
-      readPrivateAuthoritySlackSigningSecret(
-        `file:${privateFile(`${"a".repeat(31)}\n`)}`,
-      ),
-    ).toThrow(/authority credential/);
-
-    const publicPath = privateFile("a".repeat(32));
-    chmodSync(publicPath, 0o644);
-    expect(() =>
-      readPrivateAuthoritySlackSigningSecret(`file:${publicPath}`),
-    ).toThrow(/authority credential/);
-
-    const target = privateFile("a".repeat(32));
-    const link = join(roots[roots.length - 1]!, "link");
-    symlinkSync(target, link);
-    expect(() =>
-      readPrivateAuthoritySlackSigningSecret(`file:${link}`),
-    ).toThrow(/authority credential/);
-  });
 });
 
 describe("private Slack browser OAuth configuration reader", () => {

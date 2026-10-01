@@ -5,8 +5,22 @@ import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnect
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../application/slack-app-credentials-v1.js";
 import type { OrganizationSecretReference, OrganizationSecretStore, VerifiedSlackConnection } from "../application/slack-integration-contracts.js";
 import { assertSlackConnectionMetadataV1, insertActiveSlackConnectionV1, readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "./sqlite-slack-active-connection-v1.js";
-import { SlackConnectionConflictError, type SlackConnectionVerifierV1 } from "./sqlite-slack-connection-coordinator-v1.js";
 import type Database from "better-sqlite3";
+
+/** Slack's `auth.test` check of an installed bot token. */
+export interface SlackConnectionVerifierV1 {
+  verifyConnection(
+    token: string,
+    signal?: AbortSignal,
+  ): Promise<VerifiedSlackConnection>;
+}
+
+export class SlackConnectionConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SlackConnectionConflictError";
+  }
+}
 
 export type SlackConnectionRefusalReasonV1 =
   | "workspace_mismatch"
@@ -33,7 +47,7 @@ export class SlackConnectionRefusedErrorV1 extends Error {
 export interface ActivateNangoSlackConnectionInputV1 {
   readonly database: Database.Database;
   readonly secrets: OrganizationSecretStore;
-  readonly verifier: Pick<SlackConnectionVerifierV1, "verifyConnection">;
+  readonly verifier: SlackConnectionVerifierV1;
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -82,7 +96,7 @@ async function verifyInstall(
   return verified;
 }
 
-/** True when the active Nango connection is this exact install; false for any other active connection. */
+/** True when the active connection is this exact install; false for any other. */
 function isSameNangoConnection(
   active: StoredSlackConnectionV1,
   input: ActivateNangoSlackConnectionInputV1,
@@ -107,10 +121,11 @@ function isSameNangoConnection(
 /**
  * Turns a finished Nango install into the organization's Slack connection:
  * created when no connection is active, or reconnected (no write, same state
- * hash) on the exact same Nango connection. Any other active connection, of
- * either kind, refuses the install as already_connected and writes nothing:
- * replacing an organization's connection is out of scope for v1 because it
- * leaves decided approval cards unable to restart.
+ * hash) on the exact same Nango connection. Any other active connection
+ * refuses the install as already_connected and writes nothing: replacing an
+ * organization's connection is out of scope for v1 because it leaves decided
+ * approval cards unable to restart. A connection stored before in-app setup
+ * refuses it too, with the replace-rehearsal message.
  */
 export async function activateNangoSlackConnectionV1(
   input: ActivateNangoSlackConnectionInputV1,
@@ -118,7 +133,7 @@ export async function activateNangoSlackConnectionV1(
   assertSlackConnectionMetadataV1(input.database, input);
   const verified = await verifyInstall(input);
   const before = readActiveSlackConnectionV1(input.database);
-  if (before?.kind === "nango" && isSameNangoConnection(before, input, verified)) {
+  if (before !== undefined && isSameNangoConnection(before, input, verified)) {
     return Object.freeze({
       kind: "reconnected",
       connection: before.connection,

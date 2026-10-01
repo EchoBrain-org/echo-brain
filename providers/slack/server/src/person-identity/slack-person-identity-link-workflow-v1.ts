@@ -9,7 +9,6 @@ import type { OrganizationSecretReference } from "@echo-brain/organization-contr
 import { withSlackBotTokenV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
 import type { ActiveSlackOrganizationTool, BeginPersonSlackIdentityLinkChallengeInput, BegunSlackIdentityLinkChallenge, CompletePersonSlackIdentityLinkChallengeInput, CompletedPersonSlackIdentityLink, PendingPersonSlackIdentityLinkChallenge } from "../organization-control-plane/application/slack-integration-contracts.js";
 import type { SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
-import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { isSlackIdentityTokenRejectedV1, SlackIdentityProviderErrorV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -224,7 +223,7 @@ function repositoryOperation<T>(operation: () => T): T {
  * `application/` would weaken the Authority's inward dependency boundary.
  */
 export class SlackPersonIdentityLinkWorkflowV1 {
-  /** Fences legacy provider work that started before a local disconnect. */
+  /** Fences DM-proof provider work that started before a local disconnect. */
   private readonly disconnect_generation_by_membership = new Map<string, number>();
 
   constructor(
@@ -730,7 +729,6 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     connection: Awaited<
       ReturnType<SlackIdentityProviderV1["verifyConnection"]>
     >;
-    channel: Awaited<ReturnType<SlackIdentityProviderV1["verifyChannel"]>> | null;
   }> {
     try {
       return await this.withToolToken(tool, token, async (current) => {
@@ -738,10 +736,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
           current,
           signal,
         );
-        const requiredScopes = tool.kind === "nango"
-          ? SLACK_PRIVATE_APP_BOT_SCOPES_V1
-          : SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES;
-        for (const required of requiredScopes) {
+        for (const required of SLACK_PRIVATE_APP_BOT_SCOPES_V1) {
           if (!connection.granted_scopes.includes(required)) {
             throw new AuthorityOperationError(
               "invalid_request",
@@ -749,14 +744,8 @@ export class SlackPersonIdentityLinkWorkflowV1 {
             );
           }
         }
-        // A Nango connection has no channel: the private DM is the only destination.
-        const channel = tool.channel_id === null ? null : await this.options.slack.verifyChannel(
-          current,
-          tool.channel_id,
-          connection.team_id,
-          signal,
-        );
-        return { token: current, connection, channel };
+        // The private DM is the only destination: there is no channel to verify.
+        return { token: current, connection };
       });
     } catch (error) {
       providerFailure(error);
@@ -769,9 +758,6 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       connection: Awaited<
         ReturnType<SlackIdentityProviderV1["verifyConnection"]>
       >;
-      channel: Awaited<
-        ReturnType<SlackIdentityProviderV1["verifyChannel"]>
-      > | null;
     },
   ): boolean {
     return (
@@ -779,11 +765,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       verified.connection.enterprise_id === tool.enterprise_id &&
       verified.connection.bot_user_id === tool.bot_user_id &&
       verified.connection.bot_id === tool.bot_id &&
-      verified.connection.app_id === tool.app_id &&
-      (tool.channel_id === null
-        ? verified.channel === null
-        : verified.channel?.team_id === tool.team_id &&
-          verified.channel.channel_id === tool.channel_id)
+      verified.connection.app_id === tool.app_id
     );
   }
 
