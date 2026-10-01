@@ -81,6 +81,10 @@
       "types": "./dist/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.d.ts",
       "import": "./dist/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js"
     },
+    "./organization-control-plane/adapters/nango/nango-connection-client-v1": {
+      "types": "./dist/organization-control-plane/adapters/nango/nango-connection-client-v1.d.ts",
+      "import": "./dist/organization-control-plane/adapters/nango/nango-connection-client-v1.js"
+    },
     "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json",
     "./setup/initial-owner-slack-setup-v1": {
       "types": "./dist/setup/initial-owner-slack-setup-v1.d.ts",
