@@ -318,6 +318,11 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
         fetch: this.fetchImpl,
         timeoutMs: this.timeoutMs,
         maxBytes: MAXIMUM_RESPONSE_BYTES,
+        // Nango's protocol is carried by HTTP status, not by always having a
+        // body: a successful delete may be a 204/empty 200, and an error
+        // response may have no body at all. Status is classified below
+        // before the (possibly empty) body is ever inspected.
+        allowEmptyBody: true,
       });
     } catch (error) {
       if (error instanceof BoundedJsonFetchErrorV1) {

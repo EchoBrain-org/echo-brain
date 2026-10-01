@@ -58,6 +58,11 @@ function nangoFetch(...responses: ReadonlyArray<readonly [number, unknown]>) {
   });
 }
 
+/** A response with no body at all (e.g. a 204, or an empty-bodied error). */
+function emptyNangoFetch(status: number) {
+  return vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status }));
+}
+
 function fixtureWithRawPatch(patch: Record<string, unknown>): unknown {
   const clone = JSON.parse(JSON.stringify(A1_CONNECTION_FIXTURE)) as Record<string, any>;
   Object.assign(clone.credentials.raw, patch);
@@ -337,6 +342,13 @@ describe("HttpNangoConnectionClientV1.deleteConnection", () => {
     expect(url).toBe("https://api.nango.dev/connections/conn_123?provider_config_key=echo-slack");
     expect(init.method).toBe("DELETE");
   });
+
+  it("succeeds on a 204 No Content response (no JSON body at all)", async () => {
+    const fetch = emptyNangoFetch(204);
+    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+
+    await expect(client.deleteConnection({ connection_id: "conn_123" })).resolves.toBeUndefined();
+  });
 });
 
 describe("HttpNangoConnectionClientV1 error mapping", () => {
@@ -358,6 +370,36 @@ describe("HttpNangoConnectionClientV1 error mapping", () => {
 
     expect(failure).toBeInstanceOf(NangoClientErrorV1);
     expect((failure as NangoClientErrorV1).code).toBe("not_found");
+  });
+
+  it.each([401, 403])("maps an empty-bodied %s status to unauthorized (status decides, not body)", async (status) => {
+    const fetch = emptyNangoFetch(status);
+    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+
+    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
+
+    expect(failure).toBeInstanceOf(NangoClientErrorV1);
+    expect((failure as NangoClientErrorV1).code).toBe("unauthorized");
+  });
+
+  it("maps an empty-bodied 404 status to not_found (status decides, not body)", async () => {
+    const fetch = emptyNangoFetch(404);
+    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+
+    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
+
+    expect(failure).toBeInstanceOf(NangoClientErrorV1);
+    expect((failure as NangoClientErrorV1).code).toBe("not_found");
+  });
+
+  it("maps an empty 200 body on getSlackConnection to invalid_response (a body is required)", async () => {
+    const fetch = emptyNangoFetch(200);
+    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+
+    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
+
+    expect(failure).toBeInstanceOf(NangoClientErrorV1);
+    expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
   });
 
   it("maps any other non-2xx status to unavailable", async () => {

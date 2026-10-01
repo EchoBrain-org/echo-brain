@@ -47,13 +47,26 @@ export interface BoundedJsonFetchInputV1 {
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
   readonly maxBytes: number;
+  /**
+   * When true, a null or zero-byte response body is not an error: it
+   * resolves with `json: undefined` instead of throwing
+   * `BoundedJsonFetchErrorV1("transport", …)`. Defaults to false, which
+   * keeps today's behaviour (every existing caller, e.g. the Slack manifest
+   * provider, always expects a JSON body). Callers whose protocol is
+   * expressed through HTTP status rather than a body on every response
+   * (e.g. a 204 delete, or an empty-bodied error response) should pass
+   * `true` and classify by `status`/`ok` first.
+   */
+  readonly allowEmptyBody?: boolean;
 }
 
 async function readBoundedBytes(
   response: Response,
   maxBytes: number,
+  allowEmptyBody: boolean,
 ): Promise<Uint8Array> {
   if (response.body === null) {
+    if (allowEmptyBody) return new Uint8Array(0);
     throw new BoundedJsonFetchErrorV1("transport", "The response body is empty");
   }
   const reader = response.body.getReader();
@@ -81,6 +94,7 @@ async function readBoundedBytes(
     reader.releaseLock();
   }
   if (totalBytes === 0) {
+    if (allowEmptyBody) return new Uint8Array(0);
     throw new BoundedJsonFetchErrorV1("transport", "The response body is empty");
   }
   const bytes = new Uint8Array(totalBytes);
@@ -99,7 +113,10 @@ async function readBoundedBytes(
  * JSON body alongside the raw HTTP status/ok/headers so a caller can apply
  * its own protocol-specific error mapping; throws `BoundedJsonFetchErrorV1`
  * for every transport-level failure (never for a well-formed JSON body that
- * the caller's own protocol considers an error).
+ * the caller's own protocol considers an error). A null or zero-byte body is
+ * a transport failure (`"transport"`, unchanged default behaviour) unless
+ * `input.allowEmptyBody` is true, in which case it resolves normally with
+ * `json: undefined`.
  */
 export async function boundedJsonFetchV1(
   input: BoundedJsonFetchInputV1,
@@ -129,12 +146,18 @@ export async function boundedJsonFetchV1(
   ) {
     throw new BoundedJsonFetchErrorV1("oversized", "The response is oversized");
   }
-  const bytes = await readBoundedBytes(response, input.maxBytes);
+  const bytes = await readBoundedBytes(response, input.maxBytes, input.allowEmptyBody ?? false);
   let json: unknown;
-  try {
-    json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
-  } catch {
-    throw new BoundedJsonFetchErrorV1("invalid_json", "The response is not valid JSON");
+  if (bytes.byteLength === 0) {
+    // Only reachable when allowEmptyBody is true; readBoundedBytes throws
+    // otherwise. An empty body has no JSON to parse.
+    json = undefined;
+  } else {
+    try {
+      json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+    } catch {
+      throw new BoundedJsonFetchErrorV1("invalid_json", "The response is not valid JSON");
+    }
   }
   return Object.freeze({
     status: response.status,
