@@ -87,35 +87,6 @@ function dependencies(order: string[],): OrganizationAuthoritySetupCliDependenci
     initialize_credentials: async () => {
       order.push("credentials");
     },
-    connect_slack: async (input) => {
-      order.push(`slack:${await input.read_stdin()}`);
-      return {
-        connection_id: input.connection_id ?? "con_clean-founder",
-        verification: {
-          workspace_id: "T_WORKSPACE",
-          enterprise_id: null,
-          app_id: "A_APP",
-          bot_id: "B_BOT",
-          bot_user_id: "U_BOT",
-          identity_link_channel_id: input.approval_channel_id,
-          required_scopes: [
-            "channels:history",
-            "channels:read",
-            "chat:write",
-            "im:history",
-            "im:write",
-            "reactions:read",
-            "users:read",
-          ],
-          identity_link_channel_access: "verified" as const,
-          selected_channel_public: true,
-          selected_channel_active: true,
-          bot_membership_verified: true,
-          bot_access_verified: true,
-          verified_at: "2026-08-22T12:00:00.000Z",
-        },
-      };
-    },
     issue_invitation: async (input) => {
       order.push(`invite:${input.membership_id}`);
       expect(
@@ -133,6 +104,9 @@ function dependencies(order: string[],): OrganizationAuthoritySetupCliDependenci
     },
   };
 }
+
+/** Durable setup facts after the owner set up Slack in the ECHO app. */
+const CONNECTED_STAGE = Object.freeze({ credentials_ready: true, slack_connected: true, invitation_file_present: true });
 
 function readyStatusDependencies(
   order: string[],
@@ -791,38 +765,17 @@ describe("Organization Authority setup coordinator", () => {
     authorityUrl,
     "--oidc-config",
     join(dirname(state), "oidc.json"),
-    "--slack-approval-channel-id",
-    "C123",
   ];
 
-  it("runs reset, credentials, Slack, manifest, and invitation last", async () => {
+  it("bootstrap does not touch Slack: reset, credentials, manifest v2 and invitation", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     let stdout = "";
     let stderr = "";
+    // The legacy channel flag is accepted and ignored until the host scripts stop passing it.
     const status = await runOrganizationAuthoritySetupCli(
-      [
-        "bootstrap",
-        "--state-dir",
-        state,
-        "--organization-name",
-        "ECHO",
-        "--owner-display-name",
-        "Founder",
-        "--owner-email",
-        "founder@example.com",
-        "--authority-url",
-        "https://authority.example",
-        "--oidc-config",
-        join(dirname(state), "oidc.json"),
-        "--slack-approval-channel-id",
-        "C123",
-      ],
-      {
-        stdout: (value) => (stdout += value),
-        stderr: (value) => (stderr += value),
-        read_stdin: async () => "xoxb-test-token\n",
-      },
+      [...bootstrapArgs(state), "--slack-approval-channel-id", "C123"],
+      { stdout: (value) => (stdout += value), stderr: (value) => (stderr += value) },
       dependencies(order),
     );
 
@@ -831,55 +784,45 @@ describe("Organization Authority setup coordinator", () => {
     expect(order).toEqual([
       "initialize:2026-08-22T12:00:00.000Z:clean-founder-v1",
       "credentials",
-      "slack:xoxb-test-token\n",
       expect.stringMatching(/^invite:mem_/),
     ]);
-    const output = JSON.parse(stdout) as Record<string, string>;
-    expect(output).toEqual({
+    expect(JSON.parse(stdout)).toEqual({
       ok: true,
-      invitation_path: join(
-        state,
-        "onboarding",
-        "founder-person-invitation.json",
-      ),
-      slack_verification: {
-        workspace_id: "T_WORKSPACE",
-        enterprise_id: null,
-        app_id: "A_APP",
-        bot_id: "B_BOT",
-        bot_user_id: "U_BOT",
-        identity_link_channel_id: "C123",
-        required_scopes: [
-          "channels:history",
-          "channels:read",
-          "chat:write",
-          "im:history",
-          "im:write",
-          "reactions:read",
-          "users:read",
-        ],
-        identity_link_channel_access: "verified",
-        selected_channel_public: true,
-        selected_channel_active: true,
-        bot_membership_verified: true,
-        bot_access_verified: true,
-        verified_at: "2026-08-22T12:00:00.000Z",
-      },
+      invitation_path: join(state, "onboarding", "founder-person-invitation.json"),
       next_step: "resume_bootstrap",
       next_instruction:
         "Run echo-organization-authority-setup resume --state-dir <absolute-path>.",
     });
-    expect(stdout).not.toContain("xoxb-test-token");
-    expect(stdout).not.toContain("con_clean-founder");
 
     const manifestPath = join(state, "onboarding", "clean-founder-v1.json");
     expect(statSync(manifestPath).mode & 0o777).toBe(0o600);
-    expect(readFileSync(manifestPath, "utf8")).not.toContain("xoxb-test-token");
+    expect(readFileSync(manifestPath, "utf8")).not.toMatch(/slack|C123/);
     expect(readOrganizationAuthoritySetupManifest(state)).toMatchObject({
+      schema_version: 2,
+      kind: "echo-clean-founder-onboarding-manifest-v2",
       owner_membership_id: expect.stringMatching(/^mem_/),
-      slack_connection_id: expect.stringMatching(/^con_/),
       granola_credential_file: join(state, "credentials", "granola-credential"),
     });
+  });
+
+  it("refuses a v1 manifest from before in-app Slack setup", async () => {
+    const state = stateDirectory();
+    await runOrganizationAuthoritySetupCli(bootstrapArgs(state), { stdout: () => undefined, stderr: () => undefined }, dependencies([]));
+    const path = join(state, "onboarding", "clean-founder-v1.json");
+    const manifest = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> & { setup_seed: Record<string, unknown> };
+    const v1 = { ...manifest, schema_version: 1, kind: "echo-clean-founder-onboarding-manifest-v1",
+      slack_approval_channel_id: "C123", slack_connection_id: "con_00000000-0000-4000-8000-000000000001",
+      setup_seed: { ...manifest.setup_seed, slack_connection_id: "con_00000000-0000-4000-8000-000000000001" } };
+    writeFileSync(path, `${canonicalJson(v1)}\n`, { mode: 0o600 });
+    chmodSync(path, 0o600);
+
+    expect(() => readOrganizationAuthoritySetupManifest(state)).toThrow(
+      "organization setup manifest predates in-app Slack setup; run replace-rehearsal",
+    );
+    let stderr = "";
+    expect(await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state],
+      { stdout: () => undefined, stderr: (value) => (stderr += value) }, dependencies([]))).toBe(1);
+    expect(stderr).toContain("run replace-rehearsal");
   });
 
   it("keeps a default-path v2 owner invitation usable when bootstrap resumes", async () => {
@@ -925,9 +868,7 @@ describe("Organization Authority setup coordinator", () => {
     let stderr = "";
     const io = {
       stdout: () => undefined,
-      stderr: (value: string) => (stderr += value),
-      read_stdin: async () => "token",
-    };
+      stderr: (value: string) => (stderr += value) };
 
     const bootstrapStatus = await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
@@ -1107,14 +1048,10 @@ describe("Organization Authority setup coordinator", () => {
         "https://authority.example",
         "--oidc-config",
         join(dirname(state), "oidc.json"),
-        "--slack-approval-channel-id",
-        "C123",
       ],
       {
         stdout: () => undefined,
-        stderr: (value) => (stderr += value),
-        read_stdin: async () => "token",
-      },
+        stderr: (value) => (stderr += value) },
       dependencies(order),
     );
 
@@ -1131,7 +1068,7 @@ describe("Organization Authority setup coordinator", () => {
 
     const result = await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "token" ,},
+      { stdout: () => undefined, stderr: (value) => (stderr += value) },
       dependencies(order),
     );
 
@@ -1147,7 +1084,7 @@ describe("Organization Authority setup coordinator", () => {
     const order: string[] = [];
     await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" ,},
+      { stdout: () => undefined, stderr: () => undefined },
       dependencies(order),
     );
     const path = join(state, "onboarding", "clean-founder-v1.json");
@@ -1174,9 +1111,6 @@ describe("Organization Authority setup coordinator", () => {
       {
         stdout: () => undefined,
         stderr: (value) => (stderr += value),
-        read_stdin: async () => {
-          throw new Error("resume must not read Slack stdin without a plan");
-        },
       },
       dependencies([]),
     );
@@ -1205,14 +1139,10 @@ describe("Organization Authority setup coordinator", () => {
         "https://authority.example",
         "--oidc-config",
         join(dirname(state), "oidc.json"),
-        "--slack-approval-channel-id",
-        "C123",
       ],
       {
         stdout: () => undefined,
-        stderr: () => undefined,
-        read_stdin: async () => "token",
-      },
+        stderr: () => undefined },
       deps,
     );
     order.splice(0);
@@ -1221,11 +1151,10 @@ describe("Organization Authority setup coordinator", () => {
       ["finalize", "--state-dir", state],
       {
         stdout: (value) => (stdout += value),
-        stderr: () => undefined,
-        read_stdin: async () => "",
-      },
+        stderr: () => undefined },
       {
         ...deps,
+        read_setup_stage: () => CONNECTED_STAGE,
         read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: true,
@@ -1247,7 +1176,7 @@ describe("Organization Authority setup coordinator", () => {
     const state = stateDirectory("https://authority-staging.echobrain.org");
     const order: string[] = [];
     const deps = dependencies(order);
-    const io = { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" };
+    const io = { stdout: () => undefined, stderr: () => undefined };
     expect(
       await runOrganizationAuthoritySetupCli(
         bootstrapArgs(state, "https://authority-staging.echobrain.org"),
@@ -1267,6 +1196,7 @@ describe("Organization Authority setup coordinator", () => {
       io,
       {
         ...deps,
+        read_setup_stage: () => CONNECTED_STAGE,
         read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: true,
@@ -1293,6 +1223,7 @@ describe("Organization Authority setup coordinator", () => {
         { ...io, stderr: (value) => (stderr += value) },
         {
           ...deps,
+          read_setup_stage: () => CONNECTED_STAGE,
           read_initial_owner_setup_status: () => ({
             founder_oidc_bound: true,
             founder_slack_link_active: true,
@@ -1308,7 +1239,7 @@ describe("Organization Authority setup coordinator", () => {
   it("revalidates the immutable fixture admission on a synthetic finalize retry", async () => {
     const state = stateDirectory("https://authority-staging.echobrain.org");
     const order: string[] = [];
-    const io = { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" };
+    const io = { stdout: () => undefined, stderr: () => undefined };
     expect(
       await runOrganizationAuthoritySetupCli(
         bootstrapArgs(state, "https://authority-staging.echobrain.org"),
@@ -1329,6 +1260,7 @@ describe("Organization Authority setup coordinator", () => {
         io,
         {
           ...dependencies(order),
+          read_setup_stage: () => CONNECTED_STAGE,
           read_initial_owner_setup_status: () => ({
             founder_oidc_bound: true,
             founder_slack_link_active: true,
@@ -1357,9 +1289,7 @@ describe("Organization Authority setup coordinator", () => {
         ],
         {
           stdout: () => undefined,
-          stderr: (value) => (stderr += value),
-          read_stdin: async () => "",
-        },
+          stderr: (value) => (stderr += value) },
         dependencies([]),
       ),
     ).toBe(1);
@@ -1369,7 +1299,7 @@ describe("Organization Authority setup coordinator", () => {
   it("reports a synthetic admitted source without demanding the release canary record", async () => {
     const state = stateDirectory("https://authority-staging.echobrain.org");
     const order: string[] = [];
-    const io = { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" };
+    const io = { stdout: () => undefined, stderr: () => undefined };
     const deps: OrganizationAuthoritySetupCliDependencies = {
       ...dependencies(order),
       read_setup_stage: () => ({
@@ -1418,13 +1348,13 @@ describe("Organization Authority setup coordinator", () => {
     });
   });
 
-  it("refuses finalize before every initial-owner prerequisite without publishing anything", async () => {
+  it("finalize lists the organization Slack connection among the missing prerequisites without publishing anything", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const base = dependencies(order);
     await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" ,},
+      { stdout: () => undefined, stderr: () => undefined },
       base,
     );
     order.splice(0);
@@ -1432,7 +1362,7 @@ describe("Organization Authority setup coordinator", () => {
     let stderr = "";
     const result = await runOrganizationAuthoritySetupCli(
       ["finalize", "--state-dir", state],
-      { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "" ,},
+      { stdout: () => undefined, stderr: (value) => (stderr += value) },
       {
         ...base,
         read_initial_owner_setup_status: () => ({
@@ -1445,9 +1375,10 @@ describe("Organization Authority setup coordinator", () => {
     );
 
     expect(result).toBe(1);
-    expect(stderr).toContain("initial-owner OIDC binding");
-    expect(stderr).toContain("initial-owner Slack identity link");
-    expect(stderr).toContain("provider credentials");
+    // The real durable stage: nobody has set up Slack in the ECHO app yet.
+    expect(stderr).toContain(
+      "organization setup finalize requires initial-owner OIDC binding, organization Slack connection, initial-owner Slack identity link, provider credentials",
+    );
     expect(order).toEqual([]);
   });
 
@@ -1457,7 +1388,7 @@ describe("Organization Authority setup coordinator", () => {
     const base = dependencies(order);
     await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" ,},
+      { stdout: () => undefined, stderr: () => undefined },
       base,
     );
     order.splice(0);
@@ -1466,9 +1397,10 @@ describe("Organization Authority setup coordinator", () => {
     let stderr = "";
     const result = await runOrganizationAuthoritySetupCli(
       ["finalize", "--state-dir", state],
-      { stdout: () => undefined, stderr: (value) => (stderr += value), read_stdin: async () => "" ,},
+      { stdout: () => undefined, stderr: (value) => (stderr += value) },
       {
         ...base,
+        read_setup_stage: () => CONNECTED_STAGE,
         read_initial_owner_setup_status: () => ({
           founder_oidc_bound: true,
           founder_slack_link_active: true,
@@ -1489,7 +1421,7 @@ describe("Organization Authority setup coordinator", () => {
     const base = dependencies(order);
     await runOrganizationAuthoritySetupCli(
       bootstrapArgs(state),
-      { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "token" ,},
+      { stdout: () => undefined, stderr: () => undefined },
       base,
     );
     order.splice(0);
@@ -1511,8 +1443,9 @@ describe("Organization Authority setup coordinator", () => {
         full.granola_admission_present = true;
       },
       read_initial_owner_setup_status: () => ({ ...full }),
+      read_setup_stage: () => CONNECTED_STAGE,
     };
-    const io = { stdout: () => undefined, stderr: () => undefined, read_stdin: async () => "" ,};
+    const io = { stdout: () => undefined, stderr: () => undefined };
 
     expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying,),).toBe(1);
     expect(await runOrganizationAuthoritySetupCli(["finalize", "--state-dir", state], io, retrying,),).toBe(0);
@@ -1520,40 +1453,40 @@ describe("Organization Authority setup coordinator", () => {
     expect(order.filter((entry) => entry.startsWith("admit:"))).toHaveLength(2);
   });
 
-  it("reports the actual post-bootstrap action instead of sending a bound initial owner to login", async () => {
+  it("next step after login is connect_slack_in_app, then the owner's own Slack link", async () => {
     const state = stateDirectory();
     const order: string[] = [];
-    const completedStage = {
-      credentials_ready: true,
-      slack_connected: true,
-      invitation_file_present: false,
+    const stage = { credentials_ready: true, slack_connected: false, invitation_file_present: false };
+    const deps: OrganizationAuthoritySetupCliDependencies = {
+      ...dependencies(order),
+      read_setup_stage: () => stage,
+      read_initial_owner_setup_status: () => ({
+        founder_oidc_bound: true,
+        founder_slack_link_active: false,
+        granola_credentials_valid: false,
+        granola_admission_present: false,
+      }),
     };
     let stdout = "";
-    const result = await runOrganizationAuthoritySetupCli(
-      bootstrapArgs(state),
-      { stdout: (value) => (stdout += value), stderr: () => undefined, read_stdin: async () => "token" ,},
-      {
-        ...dependencies(order),
-        read_setup_stage: () => completedStage,
-        read_initial_owner_setup_status: () => ({
-          founder_oidc_bound: true,
-          founder_slack_link_active: false,
-          granola_credentials_valid: false,
-          granola_admission_present: false,
-        }),
-      },
-    );
-
-    expect(result).toBe(0);
+    const io = { stdout: (value: string) => (stdout += value), stderr: () => undefined };
+    expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps)).toBe(0);
     expect(JSON.parse(stdout)).toMatchObject({
-      next_step: "complete_founder_slack_link",
-      next_instruction:
-        "Complete the initial-owner Slack identity link in the Authority.",
+      next_step: "connect_slack_in_app",
+      next_instruction: "An owner sets up Slack in the ECHO app: Connected tools → Slack → Set up.",
     });
     expect(stdout).not.toContain("invitation_path");
-    expect(order).toEqual([
-      "initialize:2026-08-22T12:00:00.000Z:clean-founder-v1",
-    ]);
+    expect(order).toEqual(["initialize:2026-08-22T12:00:00.000Z:clean-founder-v1"]);
+
+    stage.slack_connected = true;
+    stdout = "";
+    expect(await runOrganizationAuthoritySetupCli(["status", "--state-dir", state], io, deps)).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ slack_connected: true, next_step: "complete_founder_slack_link" });
+    stdout = "";
+    expect(await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps)).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      next_step: "complete_founder_slack_link",
+      next_instruction: "The owner connects their own Slack: Connected tools → Slack → Connect.",
+    });
   });
 
   it("installs all provider credentials from private files without printing their values", async () => {
@@ -1563,9 +1496,7 @@ describe("Organization Authority setup coordinator", () => {
       bootstrapArgs(state),
       {
         stdout: () => undefined,
-        stderr: () => undefined,
-        read_stdin: async () => "xoxb-test-token",
-      },
+        stderr: () => undefined },
       dependencies(order),
     );
     const credentialDirectory = join(state, "credentials");
@@ -1603,9 +1534,7 @@ describe("Organization Authority setup coordinator", () => {
       ],
       {
         stdout: (value) => (stdout += value),
-        stderr: (value) => (stderr += value),
-        read_stdin: async () => "",
-      },
+        stderr: (value) => (stderr += value) },
     );
 
     expect(result).toBe(0);
@@ -1632,7 +1561,7 @@ describe("Organization Authority setup coordinator", () => {
     }
   });
 
-  it("resumes a lost bootstrap response from the durable plan without rereading connected Slack stdin", async () => {
+  it("resumes a lost bootstrap response from the durable plan", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const stage = {
@@ -1641,9 +1570,7 @@ describe("Organization Authority setup coordinator", () => {
       invitation_file_present: false,
     };
     let resetFails = true;
-    let failAfter: "credentials" | "slack" | "invitation" | undefined =
-      undefined;
-    let stdinReads = 0;
+    let failAfter: "credentials" | "invitation" | undefined = undefined;
     const base = dependencies(order);
     const deps: OrganizationAuthoritySetupCliDependencies = {
       ...base,
@@ -1656,14 +1583,6 @@ describe("Organization Authority setup coordinator", () => {
         stage.credentials_ready = true;
         if (failAfter === "credentials") throw new Error("injected after credentials");
       },
-      connect_slack: async (input) => {
-        stdinReads += 1;
-        await input.read_stdin();
-        order.push("slack");
-        stage.slack_connected = true;
-        if (failAfter === "slack") throw new Error("injected after slack");
-        return { connection_id: input.connection_id ?? "con_unexpected" };
-      },
       issue_invitation: async () => {
         order.push("invitation");
         stage.invitation_file_present = true;
@@ -1673,9 +1592,7 @@ describe("Organization Authority setup coordinator", () => {
     };
     const io = {
       stdout: () => undefined,
-      stderr: () => undefined,
-      read_stdin: async () => "xoxb-test-token",
-    };
+      stderr: () => undefined };
 
     expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps),).toBe(1);
     let status = "";
@@ -1688,7 +1605,6 @@ describe("Organization Authority setup coordinator", () => {
     expect(status).not.toContain("founder@example.com");
     expect(status).not.toContain(state);
     expect(status).not.toContain("oau_");
-    expect(status).not.toContain("xoxb-test-token");
     expect(JSON.parse(status)).toMatchObject({
       setup_plan_present: true,
       genesis_published: false,
@@ -1700,23 +1616,16 @@ describe("Organization Authority setup coordinator", () => {
     expect(
       await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
     ).toBe(1);
-    failAfter = "slack";
-    expect(
-      await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
-    ).toBe(1);
-    expect(order.filter((value) => value === "credentials")).toHaveLength(1);
     failAfter = "invitation";
     expect(
       await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
     ).toBe(1);
-    expect(order.filter((value) => value === "slack")).toHaveLength(1);
-    expect(stdinReads).toBe(1);
+    expect(order.filter((value) => value === "credentials")).toHaveLength(1);
     failAfter = undefined;
     expect(
       await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps,),
     ).toBe(0);
     expect(order.filter((value) => value === "invitation")).toHaveLength(1);
-    expect(stdinReads).toBe(1);
   });
 
   it("reports only safe incomplete and complete one-note canary evidence", async () => {
@@ -1726,9 +1635,7 @@ describe("Organization Authority setup coordinator", () => {
     const deps = readyStatusDependencies(order, () => canaryComplete);
     const io = {
       stdout: () => undefined,
-      stderr: () => undefined,
-      read_stdin: async () => "token",
-    };
+      stderr: () => undefined };
     expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps),).toBe(0);
 
     let incompleteOutput = "";
@@ -1838,9 +1745,7 @@ describe("Organization Authority setup coordinator", () => {
       };
       const io = {
         stdout: () => undefined,
-        stderr: () => undefined,
-        read_stdin: async () => "token",
-      };
+        stderr: () => undefined };
       expect(
         await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, productionDependencies,),
       ).toBe(0);
@@ -1880,9 +1785,7 @@ describe("Organization Authority setup coordinator", () => {
       const state = stateDirectory("https://authority-staging.echobrain.org");
       const io = {
         stdout: () => undefined,
-        stderr: () => undefined,
-        read_stdin: async () => "token",
-      };
+        stderr: () => undefined };
       const dependencies: OrganizationAuthoritySetupCliDependencies = {
         ...readyStatusDependencies([]),
         read_initial_owner_setup_status: () => ({
@@ -1921,9 +1824,7 @@ describe("Organization Authority setup coordinator", () => {
     const originalHost = process.env.ECHO_CLEAN_AUTHORITY_HOST;
     const io = {
       stdout: () => undefined,
-      stderr: () => undefined,
-      read_stdin: async () => "token",
-    };
+      stderr: () => undefined };
     const productionDependencies: OrganizationAuthoritySetupCliDependencies = {
       ...readyStatusDependencies([]),
       read_setup_canary_evidence: undefined,

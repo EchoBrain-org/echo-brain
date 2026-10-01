@@ -33,17 +33,30 @@ function currentOwnership(path: string, mode: number) {
   chmodSync(path, mode);
 }
 
-function externalTuple(image = "authority:test") {
+/** The developer's own Nango secret key file, as `up` requires it. */
+function nangoKeyFile(root: string, mode = 0o600) {
+  const path = join(realpathSync(root), `nango-secret-key-${mode.toString(8)}`);
+  writeFileSync(path, "local-nango-secret-key-0000000000000", { mode });
+  currentOwnership(path, mode);
+  return path;
+}
+
+function nangoEnvironment(secretKeyFile: string) {
+  return { ECHO_LOCAL_NANGO_SECRET_KEY_FILE: secretKeyFile, ECHO_LOCAL_NANGO_INTEGRATION: "slack" };
+}
+
+function externalTuple(secretKeyFile: string, image = "authority:test") {
   return {
     image,
     ports: { http: 49600, https: 49601 },
     release_id: "clean-v1-test",
     runtime_profile_sha256: "profile-test",
     source_revision: "a".repeat(40),
+    nango: { integration: "slack", secret_key_file: secretKeyFile },
   };
 }
 
-function completeOwnedState(root: string, tuple = externalTuple()) {
+function completeOwnedState(root: string, tuple = externalTuple(nangoKeyFile(root))) {
   const state = join(realpathSync(root), "state");
   mkdirSync(join(state, "private"), { recursive: true, mode: 0o700 });
   mkdirSync(join(state, "state", "onboarding"), {
@@ -189,9 +202,26 @@ describe("Authority local harness", () => {
     expect(() => realpathSync(calls)).toThrow();
   });
 
+  it("refuses to start without a configured Nango key before Docker", () => {
+    const root = temporaryRoot();
+    const trap = dockerTrap(root);
+    const state = join(root, "state");
+    for (const environment of [
+      { ECHO_LOCAL_NANGO_SECRET_KEY_FILE: "", ECHO_LOCAL_NANGO_INTEGRATION: "" },
+      { ...nangoEnvironment(nangoKeyFile(root)), ECHO_LOCAL_NANGO_INTEGRATION: "" },
+      nangoEnvironment(nangoKeyFile(root, 0o644)),
+    ]) {
+      const result = runTool(["up", "--state-dir", state], trap.path, environment);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/Nango is not configured|Nango secret key file has unsafe mode/);
+    }
+    expect(() => realpathSync(trap.calls)).toThrow();
+  });
+
   it("refuses a tuple change after down-like complete state before Docker", () => {
     const root = temporaryRoot();
-    const state = completeOwnedState(root);
+    const key = nangoKeyFile(root);
+    const state = completeOwnedState(root, externalTuple(key));
     const trap = dockerTrap(root);
     const result = runTool(
       [
@@ -209,6 +239,7 @@ describe("Authority local harness", () => {
         "--no-build",
       ],
       trap.path,
+      nangoEnvironment(key),
     );
 
     expect(result.status).toBe(1);
@@ -218,7 +249,7 @@ describe("Authority local harness", () => {
 
   it("refuses a generated overlay symlink before Docker", () => {
     const root = temporaryRoot();
-    const tuple = externalTuple();
+    const tuple = externalTuple(nangoKeyFile(root));
     const state = completeOwnedState(root, tuple);
     const generated = join(state, "generated");
     mkdirSync(generated, { mode: 0o700 });
@@ -244,6 +275,7 @@ describe("Authority local harness", () => {
       {
         ECHO_LOCAL_AUTHORITY_HTTP_PORT: String(tuple.ports.http),
         ECHO_LOCAL_AUTHORITY_HTTPS_PORT: String(tuple.ports.https),
+        ...nangoEnvironment(tuple.nango.secret_key_file),
       },
     );
 
@@ -269,7 +301,7 @@ describe("Authority local harness", () => {
     const state = completeOwnedState(root);
     symlinkSync(join(root, "outside"), join(state, "state", "unexpected"));
     const trap = dockerTrap(root);
-    const result = runTool(["reset", "--state-dir", state], trap.path);
+    const result = runTool(["reset", "--state-dir", state], trap.path, nangoEnvironment(nangoKeyFile(root)));
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -280,7 +312,7 @@ describe("Authority local harness", () => {
 
   it("refuses an unsafe generated input record before Docker", () => {
     const root = temporaryRoot();
-    const tuple = externalTuple();
+    const tuple = externalTuple(nangoKeyFile(root));
     const state = completeOwnedState(root, tuple);
     const generated = join(state, "generated");
     mkdirSync(generated, { mode: 0o700 });
@@ -292,6 +324,7 @@ describe("Authority local harness", () => {
         state,
         ports: tuple.ports,
         localSource: tuple.source_revision,
+        nango: tuple.nango,
       }),
       { mode: 0o600 },
     );
@@ -317,6 +350,7 @@ describe("Authority local harness", () => {
       {
         ECHO_LOCAL_AUTHORITY_HTTP_PORT: String(tuple.ports.http),
         ECHO_LOCAL_AUTHORITY_HTTPS_PORT: String(tuple.ports.https),
+        ...nangoEnvironment(tuple.nango.secret_key_file),
       },
     );
 
@@ -332,8 +366,14 @@ describe("Authority local harness", () => {
       state,
       ports: { http: 45678, https: 45679 },
       localSource: "local-nonreleasable-example",
+      nango: { integration: "slack-local", secret_key_file: "/Users/example/nango-secret-key" },
     });
 
+    // The Authority serves Slack through Nango: the key file is mounted read-only, never copied.
+    expect(overlay).toContain("command: !override");
+    expect(overlay).toContain('- "--nango-secret-key-file"\n      - "/echo-local/nango-secret-key"\n      - "--nango-integration"\n      - "slack-local"');
+    expect(overlay).toContain('"/Users/example/nango-secret-key:/echo-local/nango-secret-key:ro"');
+    expect(overlay).not.toContain("slack-signing-secret");
     expect(overlay).toContain("volumes: !override");
     expect(overlay).toContain("ports: !override");
     expect(overlay).toContain(`\"${state}:/echo-clean\"`);

@@ -1,5 +1,5 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,8 +23,7 @@ const runtimeState = vi.hoisted(() => ({
     ApprovedSearchBacklogObserver | undefined,
   startup_error: undefined as Error | undefined,
   open_gate: undefined as Promise<void> | undefined,
-  slack_signing_secret_file: undefined as string | undefined,
-  slack_connection_id: undefined as string | undefined,
+  slack_nango: undefined as object | undefined,
   openrouter_credential_file: undefined as string | undefined,
   staging_synthetic_meetings_directory: undefined as string | undefined,
   staging_synthetic_owner_email: undefined as string | undefined,
@@ -34,11 +33,6 @@ const runtimeState = vi.hoisted(() => ({
   staging_meeting_approval_journey_telemetry_enabled: undefined as
     | true
     | undefined,
-  slack_browser_oauth: undefined as {
-    readonly client_id: string;
-    readonly client_secret: string;
-    readonly redirect_uri: string;
-  } | undefined,
   agentic_ask_v1_enabled: undefined as true | undefined,
   agentic_ask_v1_small_scope_shortcut: undefined as true | undefined,
   authority_url: "https://authority.example",
@@ -52,8 +46,6 @@ vi.mock("../src/composition/organization-authority-setup-cli.js", () => ({
     authority_url: runtimeState.authority_url,
     oidc_config_path: "/private/oidc.json",
     pkce_key_file: "/private/pkce.key",
-    slack_connection_id: "con_manifest",
-    slack_approval_channel_id: "C_APPROVAL",
     granola_credential_file: "/private/granola.credential",
     granola_owner_email_file: "/private/granola-owner-email",
     llm_credential_file: "/private/llm.credential",
@@ -83,16 +75,10 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly staging_meeting_approval_journey_telemetry_enabled?: true;
     readonly agentic_ask_v1_enabled?: true;
     readonly agentic_ask_v1_small_scope_shortcut?: true;
-    readonly slack_signing_secret_file: string;
-    readonly slack_connection_id: string;
+    readonly slack_nango: object;
     readonly openrouter_credential_file: string;
     readonly staging_synthetic_meetings_directory?: string;
     readonly staging_synthetic_owner_email?: string;
-    readonly slack_browser_oauth?: {
-      readonly client_id: string;
-      readonly client_secret: string;
-      readonly redirect_uri: string;
-    };
   }) => {
     if (runtimeState.open_gate !== undefined) await runtimeState.open_gate;
     if (runtimeState.startup_error !== undefined) throw runtimeState.startup_error;
@@ -110,14 +96,12 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.agentic_ask_v1_enabled = config.agentic_ask_v1_enabled;
     runtimeState.agentic_ask_v1_small_scope_shortcut =
       config.agentic_ask_v1_small_scope_shortcut;
-    runtimeState.slack_signing_secret_file = config.slack_signing_secret_file;
-    runtimeState.slack_connection_id = config.slack_connection_id;
+    runtimeState.slack_nango = config.slack_nango;
     runtimeState.openrouter_credential_file = config.openrouter_credential_file;
     runtimeState.staging_synthetic_meetings_directory =
       config.staging_synthetic_meetings_directory;
     runtimeState.staging_synthetic_owner_email =
       config.staging_synthetic_owner_email;
-    runtimeState.slack_browser_oauth = config.slack_browser_oauth;
     return {
       address: { address: "127.0.0.1", port: 43179 },
       processing: runtimeState.processing,
@@ -180,15 +164,13 @@ afterEach(() => {
   runtimeState.approved_search_backlog = undefined;
   runtimeState.startup_error = undefined;
   runtimeState.open_gate = undefined;
-  runtimeState.slack_signing_secret_file = undefined;
-  runtimeState.slack_connection_id = undefined;
+  runtimeState.slack_nango = undefined;
   runtimeState.openrouter_credential_file = undefined;
   runtimeState.staging_synthetic_meetings_directory = undefined;
   runtimeState.staging_synthetic_owner_email = undefined;
   runtimeState.ask_journey_telemetry = undefined;
   runtimeState.meeting_approval_journey_telemetry = undefined;
   runtimeState.staging_meeting_approval_journey_telemetry_enabled = undefined;
-  runtimeState.slack_browser_oauth = undefined;
   runtimeState.agentic_ask_v1_enabled = undefined;
   runtimeState.agentic_ask_v1_small_scope_shortcut = undefined;
   runtimeState.authority_url = "https://authority.example";
@@ -201,10 +183,21 @@ afterEach(() => {
 });
 
 const temporaryRoots: string[] = [];
+const NANGO_KEY = "nango-secret-key-0000-never-printed-0000";
+
+function nangoKeyFile(mode = 0o600): string {
+  const root = mkdtempSync(join(tmpdir(), "echo-service-cli-nango-"));
+  temporaryRoots.push(root);
+  const path = join(root, "nango-secret-key");
+  writeFileSync(path, NANGO_KEY, { mode });
+  chmodSync(path, mode);
+  return path;
+}
 
 function start(
   io: { readonly stderr: (value: string) => void },
   stateDirectory = "/private/state",
+  nango: readonly string[] = ["--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack"],
 ) {
   return runOrganizationAuthorityServiceCli(
     [
@@ -215,8 +208,7 @@ function start(
       "127.0.0.1",
       "--port",
       "43179",
-      "--slack-signing-secret-file",
-      "/private/slack-signing-secret",
+      ...nango,
     ],
     { stdout: () => undefined, ...io },
   );
@@ -482,50 +474,44 @@ describe("admitted runtime CLI events", () => {
     );
   });
 
-  it("requires and forwards only the Slack signing-secret file path", async () => {
-    const stderr: string[] = [];
-    const running = start({ stderr: (value) => stderr.push(value) });
-    await vi.waitFor(() =>
-      expect(runtimeState.slack_signing_secret_file).toBe(
-        "/private/slack-signing-secret",
-      ),
-    );
-    process.emit("SIGTERM");
-    await expect(running).resolves.toBe(0);
-    expect(stderr.join("")).not.toContain("slack-signing-secret");
-    expect(runtimeState.slack_connection_id).toBe("con_manifest");
-    expect(runtimeState.openrouter_credential_file).toBe(
-      "/private/llm.credential",
-    );
-    expect(runtimeState.slack_browser_oauth).toBeUndefined();
-  });
+  it("service CLI requires the Nango flags and never prints the key", async () => {
+    const failure = `${canonicalJson({ schema_version: 1, kind: "echo-clean-live-startup-failed-v1" } as never)}\n`;
+    const key = nangoKeyFile();
+    for (const nango of [
+      ["--nango-integration", "slack"],
+      ["--nango-secret-key-file", key],
+      ["--nango-secret-key-file", nangoKeyFile(0o644), "--nango-integration", "slack"],
+    ]) {
+      const stderr: string[] = [];
+      await expect(start({ stderr: (value) => stderr.push(value) }, "/private/state", nango)).resolves.toBe(1);
+      expect(stderr).toEqual([failure]);
+    }
+    expect(runtimeState.slack_nango).toBeUndefined();
 
-  it("loads an optional private Slack browser OAuth configuration", async () => {
-    const root = mkdtempSync(join(tmpdir(), "echo-slack-browser-oauth-"));
-    temporaryRoots.push(root);
-    const privateDirectory = join(root, "private");
-    mkdirSync(privateDirectory, { mode: 0o700 });
-    const config = join(privateDirectory, "slack-browser-oidc.json");
-    writeFileSync(
-      config,
-      '{ "client_id": "1234567890.1234567890", "client_secret": "browser-secret" }',
-      { mode: 0o600 },
-    );
-    chmodSync(config, 0o600);
+    runtimeState.startup_error = new Error(`Nango refused ${NANGO_KEY}`);
+    const failed: string[] = [];
+    await expect(start({ stderr: (value) => failed.push(value) })).resolves.toBe(1);
+    expect(failed).toEqual([failure]);
+    runtimeState.startup_error = undefined;
+
     const stderr: string[] = [];
-    const running = start(
-      { stderr: (value) => stderr.push(value) },
-      join(root, "state"),
-    );
-    await vi.waitFor(() => expect(runtimeState.slack_browser_oauth).toEqual({
-      client_id: "1234567890.1234567890",
-      client_secret: "browser-secret",
-      redirect_uri:
-        "https://authority.example/v2/person/external-identities/slack/browser/callback",
+    // The signing-secret flag is accepted and ignored until the deployment stops passing it.
+    const running = start({ stderr: (value) => stderr.push(value) }, "/private/state", [
+      "--nango-secret-key-file", key, "--nango-integration", "slack", "--nango-base-url", "https://nango.example",
+      "--slack-signing-secret-file", "/private/slack-signing-secret",
+    ]);
+    await vi.waitFor(() => expect(runtimeState.slack_nango).toEqual({
+      secret_key: NANGO_KEY, integration_key: "slack", base_url: "https://nango.example",
     }));
     process.emit("SIGTERM");
     await expect(running).resolves.toBe(0);
-    expect(stderr.join("")).not.toContain("browser-secret");
+    expect(stderr.join("")).not.toContain(NANGO_KEY);
+    expect(runtimeState.openrouter_credential_file).toBe("/private/llm.credential");
+
+    const defaulted = start({ stderr: () => undefined });
+    await vi.waitFor(() => expect(runtimeState.slack_nango).toEqual({ secret_key: NANGO_KEY, integration_key: "slack" }));
+    process.emit("SIGTERM");
+    await expect(defaulted).resolves.toBe(0);
   });
 
   it("selects the staging fixture source from the deployment environment", async () => {

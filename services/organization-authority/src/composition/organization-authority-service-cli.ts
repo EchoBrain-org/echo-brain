@@ -1,7 +1,6 @@
 import { OPENROUTER_TELEMETRY_VOCABULARY_V1 } from "@echo-brain/provider-openrouter/openrouter-telemetry-vocabulary-v1";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import { readSlackBrowserOauthConfiguration } from '@echo-brain/provider-slack-server/setup/slack-browser-oauth-configuration-v1';
+import { readPrivateAuthorityCredential, readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";
 import { openOrganizationAuthorityService } from "./organization-authority-composition-root.js";
 import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";
@@ -17,7 +16,7 @@ import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/stagin
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
   "--state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> " +
-  "--slack-signing-secret-file <absolute-path> " +
+  "--nango-secret-key-file <absolute-path> --nango-integration <key> [--nango-base-url <https-origin>] " +
   "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>] " +
   "[--staging-synthetic-meetings-dir <absolute-path>]";
 const STAGING_CANARY_USAGE =
@@ -57,6 +56,10 @@ function flags(
     "--host",
     "--port",
     "--client-secret-file",
+    "--nango-secret-key-file",
+    "--nango-integration",
+    "--nango-base-url",
+    // Accepted and ignored until the deployment stops passing it: the signing secret is in the app's credential bundle.
     "--slack-signing-secret-file",
     "--worker-interval-ms",
     "--staging-synthetic-meetings-dir",
@@ -80,7 +83,8 @@ function flags(
     "--state-dir",
     "--host",
     "--port",
-    "--slack-signing-secret-file",
+    "--nango-secret-key-file",
+    "--nango-integration",
   ]) {
     if (parsed[required] === undefined) throw new Error(USAGE);
   }
@@ -121,12 +125,11 @@ function stagingCanaryReleaseId(argv: readonly string[]): string {
 }
 
 /**
- * Starts from the private, non-secret V1 onboarding manifest. It deliberately does
- * not repeat the Authority URL, OIDC configuration, PKCE key, or Slack
- * channel at the command line. Before the legacy compatibility command
- * legacy `clean-founder finalize` command, the same
- * command serves Person onboarding with an inert worker; after a restart it
- * opens the admitted source-processing chain.
+ * Starts from the private, non-secret onboarding manifest. It deliberately does
+ * not repeat the Authority URL, OIDC configuration or PKCE key at the command
+ * line. Before the setup `finalize` command, the same command serves Person
+ * onboarding and the owner's in-app Slack setup with an inert worker; after a
+ * restart it opens the admitted source-processing chain.
  */
 export async function runOrganizationAuthorityServiceCli(
   argv: readonly string[],
@@ -159,10 +162,12 @@ export async function runOrganizationAuthorityServiceCli(
         "organization authority service OIDC client-secret flags do not match config",
       );
     }
-    const slackBrowserOauth = readSlackBrowserOauthConfiguration({
-      state_directory: stateDirectory,
-      authority_url: manifest.authority_url,
-    });
+    // Read once into memory; the startup-failure event below never carries it.
+    const slackNango = {
+      ...(parsed["--nango-base-url"] === undefined ? {} : { base_url: parsed["--nango-base-url"] }),
+      secret_key: readPrivateAuthorityCredential(`file:${required(parsed, "--nango-secret-key-file")}`),
+      integration_key: required(parsed, "--nango-integration"),
+    };
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
     // Agentic Ask is the only Ask (ADR-0022). ECHO_AGENTIC_ASK_V1 is still
@@ -249,19 +254,10 @@ export async function runOrganizationAuthorityServiceCli(
       ...(agenticAskSmallScopeShortcut
         ? { agentic_ask_v1_small_scope_shortcut: true }
         : {}),
-      slack_signing_secret_file: required(
-        parsed,
-        "--slack-signing-secret-file",
-      ),
-      slack_connection_id: manifest.slack_connection_id,
-      // The V1 manifest keeps its compatibility-bound legacy field name.
-      slack_identity_link_channel_id: manifest.slack_approval_channel_id,
-      ...(slackBrowserOauth === undefined
-        ? {}
-        : { slack_browser_oauth: slackBrowserOauth }),
+      slack_nango: slackNango,
       granola_credential_file: manifest.granola_credential_file,
       granola_owner_email_file: manifest.granola_owner_email_file,
-      // The V1 manifest retains its serialized compatibility field.
+      // The manifest retains its serialized compatibility field.
       openrouter_credential_file: manifest.llm_credential_file,
       ...(stagingSyntheticMeetingsDirectory === undefined
         ? {}

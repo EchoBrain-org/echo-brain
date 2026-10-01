@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -10,6 +13,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
+import type { NangoConnectionClientV1, NangoSlackConnectionV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, type SlackAppManifestProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
+import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../../services/organization-authority/src/application/person-identity-sessions.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
@@ -23,8 +29,7 @@ import {
   issuePersonOnboardingInvitation,
 } from "../../services/organization-authority/src/composition/person-onboarding-service.js";
 import type { PersonSessionOidcAuthorizationProvider } from "../../services/organization-authority/src/composition/lazy-person-session-oidc-provider.js";
-import { openOrganizationAuthorityService } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
+import { openOrganizationAuthorityService, type OrganizationAuthorityServiceConfig } from "../../services/organization-authority/src/composition/organization-authority-composition-root.js";
 import { bootstrapOrganizationAuthorityState } from "../../services/organization-authority/src/composition/organization-authority-state-bootstrap.js";
 import type { OrganizationAuthorityProcessingCycleV1 } from "../../services/organization-authority/src/composition/organization-authority-service-lifecycle.js";
 import { runPersonClientCli } from "../../src/product/person-client/composition.js";
@@ -111,25 +116,24 @@ class MockOidcProvider implements PersonSessionOidcAuthorizationProvider {
   }
 }
 
+const CONFIGURATION_TOKEN = "xoxe.xoxp-1-rehearsal-configuration-token";
+const CLIENT_SECRET = "rehearsal-client-secret-never-stored-in-sqlite";
+const SIGNING_SECRET = "rehearsal-signing-secret-never-stored-in-sqlite";
+const BOT_TOKEN = "xoxb-rehearsal-bot-token-only-in-nango";
+const SLACK_NANGO = { secret_key: "rehearsal-nango-secret-key-000000000", integration_key: "slack" };
+const SECRETS = [CONFIGURATION_TOKEN, CLIENT_SECRET, SIGNING_SECRET, BOT_TOKEN, SLACK_NANGO.secret_key];
+
+/** Slack, seen only with the bot token Nango holds. */
 const fakeSlack: SlackIdentityProviderV1 = {
-  openIdentityLinkDirectMessage: async () => ({ team_id: "T12345678", channel_id: "D12345678", recipient_user_id: "U12345679" }),
-  verifyConnection: async () => ({
-    team_id: "T12345678",
-    enterprise_id: null,
-    bot_user_id: "U12345678",
-    bot_id: "B12345678",
-    app_id: "A12345678",
-    granted_scopes: [
-      "channels:history",
-      "channels:read",
-      "chat:write",
-      "im:history",
-      "im:write",
-      "reactions:read",
-      "users:read",
-    ],
-    verification_evidence_sha256: canonicalSha256("rehearsal-slack-connection"),
-  }),
+  openIdentityLinkDirectMessage: async (token) => {
+    expect(token).toBe(BOT_TOKEN);
+    return { team_id: "T12345678", channel_id: "D12345678", recipient_user_id: "U12345679" };
+  },
+  verifyConnection: async (token) => {
+    expect(token).toBe(BOT_TOKEN);
+    return { team_id: "T12345678", enterprise_id: null, bot_user_id: "U12345678", bot_id: "B12345678", app_id: "A12345678",
+      granted_scopes: [...SLACK_PRIVATE_APP_BOT_SCOPES_V1], verification_evidence_sha256: canonicalSha256("rehearsal-slack-connection") };
+  },
   verifyHuman: async () => {
     throw new Error("Person Slack identity linking observes a thread instead");
   },
@@ -148,6 +152,41 @@ const fakeSlack: SlackIdentityProviderV1 = {
   }),
 };
 
+const fakeManifest: SlackAppManifestProviderV1 = {
+  createApp: async (input) => {
+    expect(input.configuration_token).toBe(CONFIGURATION_TOKEN);
+    return { app_id: "A12345678", client_id: "1234.5678", client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET };
+  },
+  updateApp: async () => {
+    throw new Error("the rehearsal creates the app once");
+  },
+};
+
+/** Nango; `finishConnect` is the owner completing the Connect flow ECHO opened. */
+function fakeNango() {
+  const connections = new Map<string, NangoSlackConnectionV1>();
+  let tags: Readonly<Record<string, string>> | undefined;
+  const client: NangoConnectionClientV1 = {
+    createConnectSession: async (input) => {
+      tags = input.tags;
+      return { connect_link: "https://connect.nango.dev/?session_token=rehearsal", expires_at: "2099-01-01T00:00:00.000Z" };
+    },
+    createReconnectSession: async () => {
+      throw new Error("the rehearsal installs once");
+    },
+    findConnectionIdByTag: async ({ key, value }) =>
+      [...connections.values()].find((connection) => connection.tags[key] === value)?.connection_id,
+    getSlackConnection: async ({ connection_id }) => connections.get(connection_id)!,
+    deleteConnection: async () => undefined,
+  };
+  const finishConnect = () => connections.set("nango-rehearsal", {
+    connection_id: "nango-rehearsal", tags: tags!, team_id: "T12345678", enterprise_id: null, is_enterprise_install: false,
+    app_id: "A12345678", bot_user_id: "U12345678", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: BOT_TOKEN,
+    updated_at: "2026-08-22T12:00:00.000Z",
+  });
+  return { client, finishConnect };
+}
+
 const inactiveWorker: OrganizationAuthorityProcessingCycleV1 = {
   recoverV4Appends: async () => undefined,
   pollAndStageAdmittedMeetings: async () => undefined,
@@ -162,10 +201,6 @@ function setupDependencies(): OrganizationAuthoritySetupCliDependencies {
     initialize_state: bootstrapOrganizationAuthorityState,
     initialize_credentials: async (stateDirectory) => {
       initializePersonSessionCredentials({ state_directory: stateDirectory });
-    },
-    // R2b: the stopped-state Slack connection is removed; the rehearsal sets Slack up through the Authority routes.
-    connect_slack: async () => {
-      throw new Error("the stopped-state Slack connection is removed");
     },
     issue_invitation: async (input) => {
       issuePersonOnboardingInvitation({
@@ -234,85 +269,15 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
 });
 
-describe("Organization Authority command rehearsal", () => {
-  it("recovers durable Slack preflight proof after a lost bootstrap response", async () => {
-    const root = directory();
-    const stateDirectory = join(root, "state");
-    const oidcConfigPath = join(root, "oidc.json");
-    writeFileSync(
-      oidcConfigPath,
-      JSON.stringify({ ...OIDC, client_authentication: "none" }),
-      { mode: 0o600 },
-    );
-    chmodSync(oidcConfigPath, 0o600);
-    const args = [
-      "bootstrap",
-      "--state-dir",
-      stateDirectory,
-      "--organization-name",
-      "Example Organization",
-      "--owner-display-name",
-      "Initial Owner",
-      "--owner-email",
-      "owner@example.com",
-      "--authority-url",
-      AUTHORITY_URL,
-      "--oidc-config",
-      oidcConfigPath,
-      "--slack-approval-channel-id",
-      "C12345678",
-      "--artifact-revision",
-      "organization-authority-command-rehearsal",
-    ];
-    const first = commandOutput();
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        args,
-        { stdout: first.write, stderr: first.write, read_stdin: async () => "fake-slack-bot-token" },
-        setupDependencies(),
-      ),
-    ).toBe(0);
-    // Deliberately discard `first`: status and an exact bootstrap retry must
-    // reconstruct only durable, safe provider facts without a second token read.
-    const status = commandOutput();
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        ["status", "--state-dir", stateDirectory],
-        { stdout: status.write, stderr: status.write, read_stdin: async () => "" },
-      ),
-    ).toBe(0);
-    const safeStatus = oneJson<Record<string, unknown>>(status);
-    expect(safeStatus).toMatchObject({
-      slack_connected: true,
-      source_progress_observed: false,
-      approved_record_present: false,
-      active_generation_current: false,
-      owner_layer1_read_after_head: false,
-      owner_layer2_read_after_generation: false,
-    });
-    expect(safeStatus).not.toHaveProperty("slack_verification");
-    expect(JSON.stringify(safeStatus)).not.toContain("T12345678");
-    expect(JSON.stringify(safeStatus)).not.toContain("2026-08-22T12:00:00.000Z");
-    const resumed = commandOutput();
-    expect(
-      await runOrganizationAuthoritySetupCli(
-        args,
-        { stdout: resumed.write, stderr: resumed.write, read_stdin: async () => { throw new Error("Slack stdin must not be reread"); } },
-        setupDependencies(),
-      ),
-    ).toBe(0);
-    expect(oneJson<Record<string, unknown>>(resumed)).toMatchObject({
-      slack_verification: {
-        workspace_id: "T12345678",
-        selected_channel_public: true,
-        selected_channel_active: true,
-        bot_membership_verified: true,
-        bot_access_verified: true,
-      },
-    });
-  });
+async function setupStatus(stateDirectory: string): Promise<Record<string, unknown>> {
+  const output = commandOutput();
+  expect(await runOrganizationAuthoritySetupCli(["status", "--state-dir", stateDirectory],
+    { stdout: output.write, stderr: output.write })).toBe(0);
+  return oneJson(output);
+}
 
-  it("runs bootstrap, idle live login and Slack identity link, stopped finalize, then active live restart", async () => {
+describe("Organization Authority command rehearsal", () => {
+  it("runs bootstrap, owner login, Slack set up in the app, the owner's Slack link, stopped finalize, then active restart", async () => {
     const root = directory();
     const stateDirectory = join(root, "state");
     const oidcConfigPath = join(root, "oidc.json");
@@ -340,61 +305,31 @@ describe("Organization Authority command rehearsal", () => {
           AUTHORITY_URL,
           "--oidc-config",
           oidcConfigPath,
-          "--slack-approval-channel-id",
-          "C12345678",
           "--artifact-revision",
           "organization-authority-command-rehearsal",
         ],
-        {
-          stdout: bootstrap.write,
-          stderr: bootstrap.write,
-          read_stdin: async () => "fake-slack-bot-token",
-        },
+        { stdout: bootstrap.write, stderr: bootstrap.write },
         setupDependencies(),
       ),
     ).resolves.toBe(0);
     const bootstrapped = oneJson<{ invitation_path: string }>(bootstrap);
 
-    const idle = await openOrganizationAuthorityService(
-      {
-        state_directory: stateDirectory,
-        host: "127.0.0.1",
-        port: await availablePort(),
-        authority_url: AUTHORITY_URL,
-        oidc: OIDC,
-        client_authentication: { method: "none" },
-        pkce_key_file: join(
-          stateDirectory,
-          "credentials",
-          "person-session-pkce-sealing-key",
-        ),
-        slack_signing_secret_file: join(
-          stateDirectory,
-          "credentials",
-          "slack-signing-secret",
-        ),
-        // The provider-free idle branch must not inspect this exact-id input.
-        slack_connection_id: "con_not_read",
-        slack_identity_link_channel_id: "C12345678",
-        granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
-        granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
-        openrouter_credential_file: join(
-          stateDirectory,
-          "credentials",
-          "llm-credential",
-        ),
-      },
-      {
-        api: {
-          oidc_provider: new MockOidcProvider(),
-          external_identity_runtime_bundle:
-            createSlackPersonExternalIdentityRuntimeBundleV1({
-              identity_link_channel_id: "C12345678",
-              provider: fakeSlack,
-            }),
-        },
-      },
-    );
+    const nango = fakeNango();
+    const config: OrganizationAuthorityServiceConfig = {
+      state_directory: stateDirectory,
+      host: "127.0.0.1",
+      port: await availablePort(),
+      authority_url: AUTHORITY_URL,
+      oidc: OIDC,
+      client_authentication: { method: "none" },
+      pkce_key_file: join(stateDirectory, "credentials", "person-session-pkce-sealing-key"),
+      slack_nango: SLACK_NANGO,
+      granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
+      granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
+      openrouter_credential_file: join(stateDirectory, "credentials", "llm-credential"),
+    };
+    const slack = { nango: nango.client, manifest_provider: fakeManifest, provider: fakeSlack };
+    const idle = await openOrganizationAuthorityService(config, { slack, api: { oidc_provider: new MockOidcProvider() } });
     expect(idle.processing).toBe("idle_until_finalize");
     try {
       const loopback = `http://127.0.0.1:${String(idle.address.port)}`;
@@ -444,6 +379,25 @@ describe("Organization Authority command rehearsal", () => {
         }),
       ).resolves.toBe(0);
       expect(login.values.join("")).toContain('"phase":"installed"');
+      expect(await setupStatus(stateDirectory)).toMatchObject({ slack_connected: false, next_step: "connect_slack_in_app" });
+
+      // The owner sets up Slack in the app: the Authority's owner routes, Slack's manifest API and Nango.
+      const { access_token } = (JSON.parse(readFileSync(
+        join(homeDirectory, ".local", "share", "echo-brain", "person", "session.v1.json"), "utf8",
+      )) as { session: { access_token: string } }).session;
+      const owner = async (path: string, body: unknown) => {
+        const response = await fetch(`${loopback}${path}`, { method: "POST",
+          headers: { authorization: `Bearer ${access_token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+        return { status: response.status, body: await response.json() as Record<string, unknown> };
+      };
+      await expect(owner(ORGANIZATION_API_SLACK_SETUP_PATH_V1, { request_id: `oss_${randomUUID()}`, configuration_token: CONFIGURATION_TOKEN }))
+        .resolves.toMatchObject({ status: 201, body: { app_id: "A12345678", organization_setup: "app_created" } });
+      const begun = await owner(ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, { request_id: `osi_${randomUUID()}` });
+      expect(begun.status).toBe(201);
+      nango.finishConnect();
+      await expect(owner(ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, { attempt_id: begun.body.attempt_id }))
+        .resolves.toMatchObject({ status: 200, body: { status: "complete", result: { kind: "created", workspace_id: "T12345678" } } });
+      expect(await setupStatus(stateDirectory)).toMatchObject({ slack_connected: true, next_step: "complete_founder_slack_link" });
 
       const linked = commandOutput();
       await expect(
@@ -456,6 +410,7 @@ describe("Organization Authority command rehearsal", () => {
         }),
       ).resolves.toBe(0);
       expect(linked.values.join("")).toContain('"phase":"linked"');
+      expect(await setupStatus(stateDirectory)).toMatchObject({ founder_slack_link_active: true, next_step: "install_provider_credentials" });
     } finally {
       await idle.close();
     }
@@ -475,46 +430,16 @@ describe("Organization Authority command rehearsal", () => {
     const finalized = commandOutput();
     const finalizeStatus = await runOrganizationAuthoritySetupCli(
       ["finalize", "--state-dir", stateDirectory],
-      {
-        stdout: finalized.write,
-        stderr: finalized.write,
-        read_stdin: async () => "",
-      },
+      { stdout: finalized.write, stderr: finalized.write },
       setupDependencies(),
     );
     expect(finalizeStatus, finalized.values.join("")).toBe(0);
     expect(oneJson<{ ok: boolean }>(finalized).ok).toBe(true);
 
+    // The restart loads the approval lane on the in-app connection and its credential bundle.
     const active = await openOrganizationAuthorityService(
-      {
-        state_directory: stateDirectory,
-        host: "127.0.0.1",
-        port: await availablePort(),
-        authority_url: AUTHORITY_URL,
-        oidc: OIDC,
-        client_authentication: { method: "none" },
-        pkce_key_file: join(
-          stateDirectory,
-          "credentials",
-          "person-session-pkce-sealing-key",
-        ),
-        slack_signing_secret_file: join(
-          stateDirectory,
-          "credentials",
-          "slack-signing-secret",
-        ),
-        // The injected processing seam also remains provider-free.
-        slack_connection_id: "con_not_read",
-        slack_identity_link_channel_id: "C12345678",
-        granola_credential_file: join(stateDirectory, "credentials", "granola-credential"),
-        granola_owner_email_file: join(stateDirectory, "credentials", "granola-owner-email"),
-        openrouter_credential_file: join(
-          stateDirectory,
-          "credentials",
-          "llm-credential",
-        ),
-      },
-      { active_processing: inactiveWorker },
+      { ...config, port: await availablePort() },
+      { slack, active_processing: inactiveWorker },
     );
     try {
       expect(active.processing).toBe("active");
@@ -525,6 +450,10 @@ describe("Organization Authority command rehearsal", () => {
       ).toMatchObject({ status: 200 });
     } finally {
       await active.close();
+    }
+    for (const name of readdirSync(stateDirectory).filter((file) => file.includes(".sqlite"))) {
+      const bytes = readFileSync(join(stateDirectory, name)).toString("latin1");
+      for (const secret of SECRETS) expect(bytes, name).not.toContain(secret);
     }
   });
 });

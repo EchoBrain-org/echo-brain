@@ -44,16 +44,9 @@ type PrivateSlackApprovalPosterPortV1 = Pick<
  */
 export interface PrivateSlackApprovalWorkflowBundleConfigV1 {
   readonly state_directory: string;
-  // R2b: remove. Ignored: the signing secret comes from the connected app's credential bundle.
-  readonly signing_secret_file?: string;
-  // R2b: remove. Ignored: approvals follow the organization's one active connection.
-  readonly connection_id?: string;
-  /** Required, with `connection_health`, unless a test `poster` replaces the Slack poster. */
-  // R2b: remove the "?" once the composition root passes it.
-  readonly bot_token_source?: SlackBotTokenSourceV1;
+  readonly bot_token_source: SlackBotTokenSourceV1;
   /** Marked when Slack keeps rejecting a refreshed bot token; the owner's install clears it. */
-  // R2b: remove the "?" once the composition root passes it.
-  readonly connection_health?: SlackConnectionHealthV1;
+  readonly connection_health: SlackConnectionHealthV1;
   /** Provider-specific test seam; production posts with the Nango-fetched bot token. */
   readonly poster?: PrivateSlackApprovalPosterPortV1;
   /** Content-free diagnostic emitted only after Slack HMAC verification. */
@@ -162,9 +155,6 @@ function approvalPosterV1(
   connection: () => StoredSlackConnectionV1,
 ): PrivateSlackApprovalPosterPortV1 {
   if (config.poster !== undefined) return config.poster;
-  if (config.bot_token_source === undefined || config.connection_health === undefined) {
-    throw new Error("private Slack approvals need the Nango bot-token source and connection health");
-  }
   return createActivePrivateSlackApprovalPosterV1({
     connection,
     bot_token_source: config.bot_token_source,

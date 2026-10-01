@@ -83,12 +83,11 @@ function accessToken(headers: Readonly<Record<string, string | undefined>>): str
 }
 
 async function acceptOrganizationSetupRouteV1(
-  setup: SlackOrganizationSetupWorkflowV1 | undefined,
+  setup: SlackOrganizationSetupWorkflowV1,
   request: ProviderHttpRequestV1,
   token: string,
 ): Promise<ProviderHttpResponseV1 | undefined> {
   if (!SLACK_ORGANIZATION_SETUP_ROUTE_IDS_V1.has(request.route_id)) return undefined;
-  if (setup === undefined) throw new AuthorityOperationError("not_found", "external identity route is unavailable");
   const body = parseBody(request.raw_body);
   switch (request.route_id) {
     case "slack-setup": return Object.freeze({ status: 201 as const, body: await setup.setup(body, token) });
@@ -105,18 +104,13 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
     complete(input: unknown, accessToken: string): Promise<unknown>;
     disconnect(input: unknown, accessToken: string): Promise<unknown>;
   };
-  readonly browser?: SlackPersonBrowserIdentityLinkWorkflowV1;
-  readonly setup?: SlackOrganizationSetupWorkflowV1;
+  readonly browser: SlackPersonBrowserIdentityLinkWorkflowV1;
+  readonly setup: SlackOrganizationSetupWorkflowV1;
 }): ProviderHttpApplicationV1 {
   return Object.freeze({
-    routes: Object.freeze([
-      ...SLACK_IDENTITY_ROUTES_V1,
-      ...(input.browser === undefined ? [] : SLACK_BROWSER_IDENTITY_ROUTES_V1),
-      ...(input.setup === undefined ? [] : SLACK_ORGANIZATION_SETUP_ROUTES_V1),
-    ]),
+    routes: Object.freeze([...SLACK_IDENTITY_ROUTES_V1, ...SLACK_BROWSER_IDENTITY_ROUTES_V1, ...SLACK_ORGANIZATION_SETUP_ROUTES_V1]),
     async accept(request: ProviderHttpRequestV1) {
       if (request.route_id === "slack-browser-callback") {
-        if (input.browser === undefined) throw new AuthorityOperationError("not_found", "external identity route is unavailable");
         await input.browser.callback(request.query ?? new URLSearchParams());
         return Object.freeze({ status: 200 as const, body: "<!doctype html><meta charset=\"utf-8\"><title>ECHO</title><p>Return to ECHO to finish connecting. ECHO will show the connection status.</p>", content_type: "text/html" as const });
       }
@@ -129,15 +123,12 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
         return Object.freeze({ status: 200 as const, body: await input.service.disconnect(body, token) });
       }
       if (request.route_id === "slack-browser-begin") {
-        if (input.browser === undefined) throw new AuthorityOperationError("not_found", "external identity route is unavailable");
         return Object.freeze({ status: 201 as const, body: await input.browser.begin(body, token) });
       }
       if (request.route_id === "slack-browser-status") {
-        if (input.browser === undefined) throw new AuthorityOperationError("not_found", "external identity route is unavailable");
         return Object.freeze({ status: 200 as const, body: await input.browser.status(body, token) });
       }
       if (request.route_id === "slack-browser-cancel") {
-        if (input.browser === undefined) throw new AuthorityOperationError("not_found", "external identity route is unavailable");
         return Object.freeze({ status: 200 as const, body: await input.browser.cancel(body, token) });
       }
       if (request.route_id === "slack-begin") {
@@ -185,10 +176,6 @@ function unavailableSlackIdentityApplication(runtime: PersonExternalIdentityRunt
  * token lookup never enter the generic Person runtime.
  */
 export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
-  // R2b: remove. Ignored: identity proofs use private DMs, never a channel.
-  readonly identity_link_channel_id?: string;
-  // R2b: remove. Ignored: the browser link uses the connected app's own client from its credential bundle.
-  readonly browser_provider?: SlackBrowserIdentityProvider;
   readonly provider?: SlackIdentityProviderV1;
   /** Defaults to fetching the bot token from Nango through the setup options' client. */
   readonly bot_token_source?: SlackBotTokenSourceV1;

@@ -14,7 +14,6 @@
     "providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts",
     "providers/slack/server/src/person-identity/slack-person-external-identity-runtime-bundle-v1.ts",
     "providers/slack/server/src/organization-setup/slack-organization-setup-workflow-v1.ts",
-    "providers/slack/server/src/adapters/oidc/slack-browser-identity-provider.ts",
     "providers/slack/server/src/private-approval/private-slack-approval-interaction-protocol-v1.ts",
     "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1.ts",
     "providers/slack/server/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts",
@@ -22,7 +21,6 @@
     "providers/slack/server/src/organization-control-plane/application/slack-app-credentials-v1.ts",
     "providers/slack/server/src/organization-control-plane/application/slack-bot-token-source-v1.ts",
     "providers/slack/server/src/organization-control-plane/application/slack-connection-health-v1.ts",
-    "providers/slack/server/src/slack-private-credentials-v1.ts",
     "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.ts",
     "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.ts",
     "providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.ts",
@@ -185,7 +183,9 @@
       "providers/slack/server/src/organization-control-plane/slack-external-identity-integration-v1.ts",
       "providers/slack/server/src/organization-control-plane/composition/slack-connection-setup-cli.ts",
       "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.ts",
-      "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-bot-token-reader-v1.ts"
+      "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-bot-token-reader-v1.ts",
+      "providers/slack/server/src/setup/slack-browser-oauth-configuration-v1.ts",
+      "providers/slack/server/src/slack-private-credentials-v1.ts"
     ]
   }
 }

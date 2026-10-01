@@ -33,10 +33,6 @@
       "types": "./dist/organization-setup/slack-organization-setup-workflow-v1.d.ts",
       "import": "./dist/organization-setup/slack-organization-setup-workflow-v1.js"
     },
-    "./adapters/oidc/slack-browser-identity-provider": {
-      "types": "./dist/adapters/oidc/slack-browser-identity-provider.d.ts",
-      "import": "./dist/adapters/oidc/slack-browser-identity-provider.js"
-    },
     "./private-approval/private-slack-approval-interaction-protocol-v1": {
       "types": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.d.ts",
       "import": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.js"
@@ -64,10 +60,6 @@
     "./organization-control-plane/application/slack-connection-health-v1": {
       "types": "./dist/organization-control-plane/application/slack-connection-health-v1.d.ts",
       "import": "./dist/organization-control-plane/application/slack-connection-health-v1.js"
-    },
-    "./slack-private-credentials-v1": {
-      "types": "./dist/slack-private-credentials-v1.d.ts",
-      "import": "./dist/slack-private-credentials-v1.js"
     },
     "./composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1": {
       "types": "./dist/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.d.ts",
@@ -105,10 +97,6 @@
     "./setup/initial-owner-slack-setup-v1": {
       "types": "./dist/setup/initial-owner-slack-setup-v1.d.ts",
       "import": "./dist/setup/initial-owner-slack-setup-v1.js"
-    },
-    "./setup/slack-browser-oauth-configuration-v1": {
-      "types": "./dist/setup/slack-browser-oauth-configuration-v1.d.ts",
-      "import": "./dist/setup/slack-browser-oauth-configuration-v1.js"
     }
   },
   "files": [

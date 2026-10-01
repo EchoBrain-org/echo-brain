@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
-import { createSqliteSlackPersonIdentityLinkWorkflowV1, createSqliteSlackPersonIdentityLinkRepositoryV1 } from "../../src/person-identity/sqlite-slack-person-identity-link-repository-v1.js";
+import { createSqliteSlackPersonIdentityLinkWorkflowV1, createSqliteSlackPersonIdentityLinkRepositoryV1, type SlackBotTokenAccessV1 } from "../../src/person-identity/sqlite-slack-person-identity-link-repository-v1.js";
 import { createSlackExternalIdentityHttpApplicationV1 } from "../../src/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
 import { SlackPersonBrowserIdentityLinkWorkflowV1 } from "../../src/person-identity/slack-person-browser-identity-link-workflow-v1.js";
 import { createOrganizationAuthorityHttpServer } from "../../../../../services/organization-authority/src/presentation/organization-authority-http-server.js";
@@ -32,6 +32,11 @@ const MEMBERSHIP_ID = "mem_00000000-0000-4000-8000-000000000001";
 const CODE = Buffer.alloc(32).toString("base64url");
 const OTHER_CODE = Buffer.alloc(32, 1).toString("base64url");
 const TOKEN = "test-slack-token";
+/** The bot token source, with a connection never marked "needs reinstall". */
+const tokenAccess = (
+  readActiveSlackBotToken: SlackBotTokenAccessV1["readActiveSlackBotToken"] = () => TOKEN,
+  onActiveSlackBotTokenRejected: SlackBotTokenAccessV1["onActiveSlackBotTokenRejected"] = () => undefined,
+): SlackBotTokenAccessV1 => ({ readActiveSlackBotToken, onActiveSlackBotTokenRejected, isActiveSlackBotTokenRejected: () => false });
 
 const authorization: PersonAccessAuthorization = {
   organization_id: ORGANIZATION_ID,
@@ -124,7 +129,7 @@ async function setup(
       },
       membership_type: () => currentAuthorization().membership_type,
       slack,
-      slack_token_access: { readActiveSlackBotToken: vi.fn(() => TOKEN) },
+      slack_token_access: tokenAccess(vi.fn(() => TOKEN)),
       authorization_fence: new ReadableSearchAuthorizationFence(),
       now: () => NOW,
     }),
@@ -558,7 +563,7 @@ describe("Person Slack identity-link workflow", () => {
         database: context.database, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID,
         state_lineage_id: LINEAGE_ID,
         authentication: { authenticateAccess: () => authorization }, membership_type: () => "employee" as const,
-        slack: context.slack, slack_token_access: { readActiveSlackBotToken, onActiveSlackBotTokenRejected: onRejected },
+        slack: context.slack, slack_token_access: tokenAccess(readActiveSlackBotToken, onRejected),
         authorization_fence: new ReadableSearchAuthorizationFence(), now: () => NOW,
       });
     };
@@ -586,7 +591,7 @@ describe("Person Slack identity-link workflow", () => {
       authentication: { authenticateAccess: () => authorization },
       membership_type: () => "employee" as const,
       slack: context.slack,
-      slack_token_access: { readActiveSlackBotToken: () => TOKEN },
+      slack_token_access: tokenAccess(),
       authorization_fence: new ReadableSearchAuthorizationFence(),
       now: () => NOW,
     };
@@ -661,9 +666,8 @@ describe("Person Slack identity-link workflow", () => {
       oidc_provider: {} as never,
       expected_issuer: "https://issuer.example",
       person_external_identity_link:
-        createSlackExternalIdentityHttpApplicationV1({
-          service: context.application,
-        }),
+        // The browser and setup routes are not called here.
+        createSlackExternalIdentityHttpApplicationV1({ service: context.application, browser: {} as never, setup: {} as never }),
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -730,7 +734,7 @@ describe("Person Slack identity-link workflow", () => {
         database: context.database, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID,
         state_lineage_id: LINEAGE_ID,
         authentication: { authenticateAccess: () => authorization }, membership_type: () => "employee",
-        slack: context.slack, slack_token_access: { readActiveSlackBotToken: () => TOKEN },
+        slack: context.slack, slack_token_access: tokenAccess(),
         authorization_fence: new ReadableSearchAuthorizationFence(), now: () => NOW,
       }),
       browser_provider: () => ({
@@ -747,7 +751,7 @@ describe("Person Slack identity-link workflow", () => {
       }),
       now: () => NOW,
     });
-    const http = createSlackExternalIdentityHttpApplicationV1({ service: context.application, browser });
+    const http = createSlackExternalIdentityHttpApplicationV1({ service: context.application, browser, setup: {} as never });
     const server = createOrganizationAuthorityHttpServer({
       descriptor: {} as never,
       sessions: {} as never,

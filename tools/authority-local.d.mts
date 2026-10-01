@@ -8,10 +8,18 @@ export interface ValidateStateDirectoryOptions {
   productionData?: string;
 }
 
+/** The developer's own Nango key file, mounted read-only, and Slack integration key. */
+export interface AuthorityLocalNango {
+  integration: string;
+  secret_key_file: string;
+}
+
 export interface LocalOverlayInput {
   state: string;
   ports: AuthorityLocalPorts;
   localSource: string;
+  /** Absent only for a tuple stored before the Authority required Nango. */
+  nango?: AuthorityLocalNango;
 }
 
 export function canonicalWorktreeId(repo?: string): string;

@@ -18,7 +18,13 @@ import { createOpenRouterDecisionProcessorBundleV1 } from "@echo-brain/provider-
 import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { createPrivateSlackApprovalWorkflowBundleV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-workflow-bundle-v1";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
-import { createSlackBrowserIdentityProvider } from "@echo-brain/provider-slack-server/adapters/oidc/slack-browser-identity-provider";
+import { HttpNangoConnectionClientV1, type NangoConnectionClientV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1";
+import { SlackWebAppManifestProviderV1, type SlackAppManifestProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
+import type { SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
+import { createSlackBotTokenSourceV1, type SlackBotTokenSourceV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-bot-token-source-v1";
+import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-connection-health-v1";
+import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
+import { join } from "node:path";
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "@echo-brain/provider-slack-server/private-approval/private-slack-approval-interaction-protocol-v1";
 import { runStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1";
 import type { PrivateSlackApprovalCardPosterV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
@@ -40,14 +46,12 @@ export interface OrganizationAuthorityServiceConfig
   readonly staging_synthetic_meetings_directory?: string;
   readonly staging_synthetic_owner_email?: string;
   readonly openrouter_credential_file: string;
-  readonly slack_signing_secret_file: string;
-  readonly slack_connection_id: string;
-  readonly slack_identity_link_channel_id: string;
-  /** Optional browser OAuth configuration. It stays in process memory only. */
-  readonly slack_browser_oauth?: {
-    readonly client_id: string;
-    readonly client_secret: string;
-    readonly redirect_uri: string;
+  /** Nango holds the organization's Slack connection. The key stays in process memory only. */
+  readonly slack_nango: {
+    /** An https origin; defaults to Nango Cloud. */
+    readonly base_url?: string;
+    readonly secret_key: string;
+    readonly integration_key: string;
   };
   readonly on_private_approval_slack_rejection?: (event: {
     readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
@@ -71,11 +75,50 @@ type OrganizationAuthorityServiceAdapterOverrides = NonNullable<
 export interface OrganizationAuthorityServiceDependencies
   extends Omit<OrganizationAuthorityRuntimeDependencies, "processing_adapter_overrides"> {
   readonly processing_adapter_overrides?: OrganizationAuthorityServiceAdapterOverrides;
+  /** Test seams for Nango's and Slack's HTTP APIs. */
+  readonly slack?: {
+    readonly nango?: NangoConnectionClientV1;
+    readonly manifest_provider?: SlackAppManifestProviderV1;
+    readonly provider?: SlackIdentityProviderV1;
+  };
+}
+
+/**
+ * One Nango client, connection health and bot-token source serve both the
+ * owner's in-app setup with the Person identity flows and the approval lane:
+ * a token Slack rejects in one is marked for the other, and an install clears it.
+ */
+function composeSlackV1(
+  config: Pick<OrganizationAuthorityServiceConfig, "state_directory" | "authority_url" | "slack_nango">,
+  seams: OrganizationAuthorityServiceDependencies["slack"] = {},
+) {
+  const base_url = config.slack_nango.base_url ?? "https://api.nango.dev";
+  const callback_url = new URL("/oauth/callback", base_url).href;
+  const nango = seams.nango ?? new HttpNangoConnectionClientV1({ ...config.slack_nango, base_url, callback_url });
+  const connection_health = new SlackConnectionHealthV1();
+  // The secret store is opened on first use, after the runtime has verified its state directory.
+  let tokens: SlackBotTokenSourceV1 | undefined;
+  const bot_token_source: SlackBotTokenSourceV1 = {
+    botToken: (connection, options) => (tokens ??= createSlackBotTokenSourceV1({
+      secrets: new FileOrganizationSecretStore(join(config.state_directory, "secrets")), nango,
+    })).botToken(connection, options),
+  };
+  const external_identity = createSlackPersonExternalIdentityRuntimeBundleV1({
+    ...(seams.provider === undefined ? {} : { provider: seams.provider }),
+    bot_token_source,
+    connection_health,
+    organization_setup: {
+      authority_url: config.authority_url,
+      nango: { client: nango, callback_url },
+      manifest_provider: seams.manifest_provider ?? new SlackWebAppManifestProviderV1(),
+    },
+  });
+  return { bot_token_source, connection_health, external_identity };
 }
 
 /**
  * The deployable service selects the fixed Granola/OpenRouter/Slack profile.
- * The stopped-state V1 setup CLI selects the same profile; the shared runtime
+ * The stopped-state setup CLI selects the same profile; the shared runtime
  * remains provider-neutral. Changing a profile requires both bootstrap selections.
  */
 export async function openOrganizationAuthorityService(
@@ -88,13 +131,11 @@ export async function openOrganizationAuthorityService(
     staging_synthetic_meetings_directory,
     staging_synthetic_owner_email,
     openrouter_credential_file,
-    slack_signing_secret_file,
-    slack_connection_id,
-    slack_identity_link_channel_id,
-    slack_browser_oauth,
+    slack_nango,
     on_private_approval_slack_rejection,
     ...sharedConfig
   } = config;
+  const slack = composeSlackV1({ ...sharedConfig, slack_nango }, dependencies.slack);
   let meetingSourceBundle;
   if (staging_synthetic_meetings_directory === undefined) {
     if (
@@ -140,15 +181,7 @@ export async function openOrganizationAuthorityService(
     ]),
     external_identity_runtime_bundle:
       dependencies.api?.external_identity_runtime_bundle ??
-      composePersonExternalIdentityRuntimeBundlesV1([createSlackPersonExternalIdentityRuntimeBundleV1({
-        identity_link_channel_id: slack_identity_link_channel_id,
-        ...(slack_browser_oauth === undefined
-          ? {}
-          : {
-              browser_provider:
-                createSlackBrowserIdentityProvider(slack_browser_oauth),
-            }),
-      })]),
+      composePersonExternalIdentityRuntimeBundlesV1([slack.external_identity]),
   };
   return openOrganizationAuthorityRuntime(
     {
@@ -159,8 +192,8 @@ export async function openOrganizationAuthorityService(
       }),
       approval_workflow_bundle: createPrivateSlackApprovalWorkflowBundleV1({
         state_directory: sharedConfig.state_directory,
-        signing_secret_file: slack_signing_secret_file,
-        connection_id: slack_connection_id,
+        bot_token_source: slack.bot_token_source,
+        connection_health: slack.connection_health,
         ...(dependencies.processing_adapter_overrides?.private_approval_card_poster ===
         undefined
           ? {}

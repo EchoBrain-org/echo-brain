@@ -31,9 +31,9 @@ export interface SlackBotTokenAccessV1 {
     options?: { readonly force_refresh?: boolean },
   ): string | Promise<string>;
   /** Slack kept rejecting this connection's token after one refresh. */
-  onActiveSlackBotTokenRejected?(connection: StoredSlackConnectionV1): void;
+  onActiveSlackBotTokenRejected(connection: StoredSlackConnectionV1): void;
   /** True while this connection is marked "needs reinstall": no refresh is tried. */
-  isActiveSlackBotTokenRejected?(connection: StoredSlackConnectionV1): boolean;
+  isActiveSlackBotTokenRejected(connection: StoredSlackConnectionV1): boolean;
 }
 
 export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
@@ -625,18 +625,14 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
 
   /** Reports only the connection the reference still names; otherwise nothing. */
   reportSlackTokenRejected(reference: OrganizationSecretReference): void {
-    const access = this.options.slack_token_access;
-    if (access.onActiveSlackBotTokenRejected === undefined) return;
     const active = this.activeConnectionFor(reference);
-    if (active !== null) access.onActiveSlackBotTokenRejected(active.stored);
+    if (active !== null) this.options.slack_token_access.onActiveSlackBotTokenRejected(active.stored);
   }
 
   /** True only while the connection the reference still names is marked. */
   slackTokenRejected(reference: OrganizationSecretReference): boolean {
-    const access = this.options.slack_token_access;
-    if (access.isActiveSlackBotTokenRejected === undefined) return false;
     const active = this.activeConnectionFor(reference);
-    return active !== null && access.isActiveSlackBotTokenRejected(active.stored);
+    return active !== null && this.options.slack_token_access.isActiveSlackBotTokenRejected(active.stored);
   }
 
   /** The tool's secret reference is a pseudo-handle naming the active connection. */
