@@ -51,8 +51,12 @@ export interface PersonLiveEvidenceListInputV1 {
 }
 
 /** Created by provider composition for exactly this person's read binding. No method accepts credentials or another actor. */
+export interface PersonLiveEvidenceCoordinatesV1 { readonly object_id: string; readonly container_id?: string }
+
 export interface PersonLiveEvidenceReaderV1<C extends PersonLiveEvidenceCitationV1 = PersonLiveEvidenceCitationV1> {
   readonly binding: PersonConnectorReadBindingV1;
+  /** Adapter validates its citation and supplies neutral boundary coordinates. */
+  validateCitation(value: unknown): { readonly citation: C; readonly tool_id: string; readonly external_scope_id: string | null; readonly coordinates: PersonLiveEvidenceCoordinatesV1 };
   search(input: { readonly query: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidencePageV1<C>>;
   open(input: { readonly handle: string; readonly limit: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidencePageV1<C>>;
   list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<C>>;
@@ -65,6 +69,9 @@ export interface PersonLiveEvidenceReleaseV1<C extends PersonLiveEvidenceCitatio
   readonly schema_version: 1;
   readonly binding: PersonConnectorReadBindingV1;
   readonly operation: 'search' | 'open' | 'list';
+  readonly coordinates: readonly PersonLiveEvidenceCoordinatesV1[];
+  /** Commits all normalized released fields, including inventory metadata, without retaining their bytes. */
+  readonly value_digests: readonly Sha256Digest[];
   readonly citations: readonly C[];
 }
 

@@ -6,7 +6,7 @@ import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
   answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject,
-  matchesShown, openCompose, openMatch, openSlackSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, widenScope,
+  matchesShown, openCompose, openMatch, openSlackSource, openTicketSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, widenScope,
   type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
@@ -104,7 +104,7 @@ export function Bar({ state }: { state: State }) {
 /** What a source is called: a meeting's title once its record is read, a file's name as a person says it. */
 function sourceName(source: AnswerSource, sources: SourcesState | null): string {
   if (source.kind === 'original') return documentName(source.label).name;
-  if (source.kind === 'slack') return source.label;
+  if (source.kind === 'slack' || source.kind === 'ticket') return source.label;
   const read = sources?.records[source.record.record_sha256];
   return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
@@ -391,6 +391,16 @@ function SlackSource({ source, index }: { source: Extract<AnswerSource, { kind: 
   </div>;
 }
 
+function TicketSource({ source, index }: { source: Extract<AnswerSource, { kind: 'ticket' }>; index: number }) {
+  const [failed, setFailed] = useState(false);
+  return <div class="source-detail">
+    <h2>{source.label}</h2>
+    <button type="button" class="link-button" data-testid="open-ticket-source" title={source.permalink}
+      onClick={async () => { setFailed(false); setFailed(!(await openTicketSource(index))); }}>Open ticket</button>
+    {failed && <div class="error">The ticket could not be opened. Try again.</div>}
+  </div>;
+}
+
 /** A run of a passage: bold and code as the document marks them. */
 function Runs({ runs }: { runs: readonly Inline[] }) {
   return <>{runs.map((run, index) => run.bold ? <strong key={index}>{run.text}</strong> : run.code ? <code key={index}>{run.text}</code> : run.text)}</>;
@@ -464,6 +474,8 @@ export function SourcePane({ state }: { state: State }) {
       ) : <RecordDetail record={read.value} />;
   } else if (source.kind === 'slack') {
     body = <SlackSource key={source.permalink} source={source} index={group.indexes[0]!} />;
+  } else if (source.kind === 'ticket') {
+    body = <TicketSource key={source.permalink} source={source} index={group.indexes[0]!} />;
   } else {
     body = <OriginalSource state={state} group={group} source={source} />;
   }
@@ -472,7 +484,7 @@ export function SourcePane({ state }: { state: State }) {
       <div class="pane-head">
         <div class="pane-kind">
           <span class="marker on">{open + 1}</span>
-          <span class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : source.kind === 'slack' ? 'Slack message' : 'Original source'}</span>
+          <span class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : source.kind === 'slack' ? 'Slack message' : source.kind === 'ticket' ? 'Ticket' : 'Original source'}</span>
         </div>
         <button type="button" class="icon-button" aria-label="Close sources" data-testid="source-close" onClick={closeSources}><Close /></button>
       </div>

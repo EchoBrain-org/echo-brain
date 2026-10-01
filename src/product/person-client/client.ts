@@ -29,6 +29,7 @@ import {
   unknownDocumentMutation,
   type EmployeeRosterV1,
   type PersonAnswer,
+  type PersonAnswerV5,
   type PersonEvidenceDeskV1,
   type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
@@ -39,6 +40,7 @@ import {
   type PersonRecordListV1,
   type PersonRecordSearchV2,
 } from "./authority-client.js";
+import { validatePersonJiraCompletionV1 } from './jira-connection-v1.js';
 import {
   PersonClientSessionUnavailableError,
   PersonSessionStore,
@@ -658,6 +660,26 @@ export class PersonClient {
     validatePersonQueryText(question);
     if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
     return this.withReadSession((authority, token) => authority.askV3(token, question, scope, signal));
+  }
+
+  /** Explicit opt-in to the versioned ticket-capable response. */
+  async askWithTickets(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV5> {
+    validatePersonQueryText(question);
+    if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+    return this.withReadSession((authority, token) => authority.askV4(token, question, scope, signal));
+  }
+
+  async jiraConnect(signal?: AbortSignal) {
+    return this.withReadSession((authority, token) => authority.jiraConnect(token, signal));
+  }
+
+  async jiraComplete(attempt: string, connection?: string, signal?: AbortSignal) {
+    const request = validatePersonJiraCompletionV1({ schema_version: 1, attempt, ...(connection === undefined ? {} : { connection }) });
+    return this.withReadSession((authority, token) => authority.jiraComplete(token, request.attempt, request.connection, signal));
+  }
+
+  async jiraDisconnect(signal?: AbortSignal) {
+    return this.withReadSession((authority, token) => authority.jiraDisconnect(token, signal));
   }
 
   /** Each evidence invocation creates a new authenticated, scope-bound desk request. */

@@ -37,6 +37,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   readonly binding: PersonConnectorReadBindingV1;
   readonly transport: JiraCloudTransportV1;
   readonly signal?: AbortSignal;
+  readonly expected_origin?: string;
 }): Promise<PersonLiveEvidenceReaderV1<PersonTicketCitationV1>> {
   const binding = copyJiraBindingV1(options.binding);
   const bindingDigest = canonicalSha256(binding);
@@ -48,7 +49,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   const handles = new Map<string, string>();
   const issued = new Map<string, string>();
   const cursors = new Map<string, ListCursor>();
-  let pinnedOrigin: string | undefined;
+  let pinnedOrigin: string | undefined = options.expected_origin;
 
   async function safe<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     signal?.throwIfAborted();
@@ -139,6 +140,11 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
 
   return Object.freeze({
     binding,
+    validateCitation(value: unknown) {
+      const citation = validatePersonTicketCitationV1(value);
+      if (issued.get(canonicalSha256(citation)) !== citation.ticket_id || citation.tool_id !== 'jira' || citation.external_scope_id !== cloudid || !citation.permalink.startsWith(`${pinnedOrigin}/browse/`) || !JIRA_TICKET_KEY.test(new URL(citation.permalink).pathname.slice(8))) jiraFailure('invalid_output');
+      return Object.freeze({ citation, tool_id: 'jira', external_scope_id: cloudid, coordinates: Object.freeze({ object_id: citation.ticket_id }) });
+    },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = Math.min(limit(input.limit), 5);
       const jql = searchJql(input.query);

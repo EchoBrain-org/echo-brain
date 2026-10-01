@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import type { PersonConnectorAccessV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import { validatePersonSlackMessageCitationV1, validatePersonTicketCitationV1, type PersonConnectorAccessV1, type PersonSlackMessageCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '../../src/shared/audited-person-live-evidence-v1.js';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceCitationV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceReleaseV1, PersonLiveEvidenceValueV1 } from '../../src/shared/person-live-evidence-v1.js';
@@ -27,6 +27,10 @@ function fixture<C extends PersonLiveEvidenceCitationV1>(tool_id: string, initia
   const events: string[] = [];
   const reader: PersonLiveEvidenceReaderV1<C> = {
     binding: binding(tool_id),
+    validateCitation(value) {
+      const citation = tool_id === 'slack' ? validatePersonSlackMessageCitationV1(value) : validatePersonTicketCitationV1(value);
+      return { citation: citation as C, tool_id: citation.kind === 'ticket' ? citation.tool_id : 'slack', external_scope_id: citation.kind === 'ticket' ? citation.external_scope_id : citation.team_id, coordinates: { object_id: citation.kind === 'ticket' ? citation.ticket_id : citation.message_ts, ...(citation.kind === 'ticket' ? {} : { container_id: citation.channel_id }) } };
+    },
     search: vi.fn(async () => { events.push('read'); return selected; }),
     open: vi.fn(async () => { events.push('open'); return selected; }),
     list: vi.fn(async () => { events.push('list'); return selected; }),
@@ -49,6 +53,8 @@ describe('shared audited live evidence source V1', () => {
     expect(result.items[0]).not.toHaveProperty('handle');
     expect(JSON.stringify(f.releases)).not.toContain(item.text!);
     expect(f.releases[0]!.citations[0]).not.toHaveProperty('label');
+    const { handle: _handle, ...releasedValue } = item;
+    expect(f.releases[0]!.value_digests).toEqual([canonicalSha256(releasedValue)]);
     expect(JSON.stringify(f.releases)).not.toContain(item.handle);
     expect(Object.isFrozen(result.items[0])).toBe(true);
     expect(f.authorization.requireCurrent).toHaveBeenCalledWith(binding(tool_id), {});
@@ -112,7 +118,8 @@ describe('shared audited live evidence source V1', () => {
   });
 
   it('revalidates inventory metadata, repeated revisions and provider item visibility before reuse', async () => {
-    const f = fixture('tickets', page([{ ...ticket(), text: undefined }]));
+    const inventoryCitation = { ...ticket().citation, text_sha256: textDigest('') };
+    const f = fixture('tickets', page([{ ...ticket(), citation: inventoryCitation, text: undefined }]));
     const source = f.make();
     const inventory = await source.list({ container: 'ECHO' });
     expect(inventory.items[0]).not.toHaveProperty('text');
@@ -122,7 +129,7 @@ describe('shared audited live evidence source V1', () => {
     f.select(page([ticket('The ticket was edited')]));
     await source.search({ query: 'edited' });
     await source.revalidate({});
-    expect(f.reader.revalidate).toHaveBeenLastCalledWith({ citations: [ticket().citation, ticket('The ticket was edited').citation] });
+    expect(f.reader.revalidate).toHaveBeenLastCalledWith({ citations: [inventoryCitation, ticket().citation, ticket('The ticket was edited').citation] });
     vi.mocked(f.reader.revalidate).mockRejectedValueOnce(new AuthorityOperationError('unauthorized', 'Ticket is now hidden'));
     await expect(source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
   });

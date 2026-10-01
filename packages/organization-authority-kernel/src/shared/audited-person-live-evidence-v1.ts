@@ -2,13 +2,13 @@ import { createHash, randomBytes } from 'node:crypto';
 import { canonicalJsonBytes, canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1,
-  validateOrganizationPersonConnectorAccessV1, validatePersonSlackMessageCitationV1, validatePersonTicketCitationV1,
+  validateOrganizationPersonConnectorAccessV1,
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../domain/errors.js';
 import type {
   CreatePersonLiveEvidenceSourceV1Options, PersonConnectorReadBindingV1, PersonLiveEvidenceCitationV1,
   PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReleaseV1,
-  PersonLiveEvidenceResultV1, PersonLiveEvidenceSourceV1, PersonLiveEvidenceValueV1,
+  PersonLiveEvidenceResultV1, PersonLiveEvidenceSourceV1, PersonLiveEvidenceValueV1, PersonLiveEvidenceCoordinatesV1,
 } from './person-live-evidence-v1.js';
 
 export const PERSON_LIVE_EVIDENCE_MAX_ITEMS_V1 = 50;
@@ -72,6 +72,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
   const bindingDigest = canonicalSha256(binding);
   if (canonicalSha256(reader.binding) !== bindingDigest) throw new AuthorityOperationError('unauthorized', 'Live evidence reader belongs to a different binding');
   const stored = new Map<string, { readonly handle: string; readonly citation: C }>();
+  const released = new Map<string, C>();
   const cursors = new Map<string, { readonly provider: string; readonly selection: string }>();
   let cursorSequence = 0;
   const requestId = randomBytes(16).toString('hex');
@@ -80,15 +81,18 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     await authorization.requireCurrent(binding, { ...(signal === undefined ? {} : { signal }) });
   }, signal);
 
-  const prepare = (value: PersonLiveEvidenceValueV1<C>): PersonLiveEvidenceValueV1<C> => {
+  const prepare = (value: PersonLiveEvidenceValueV1<C>): PersonLiveEvidenceValueV1<C> & { readonly coordinates: PersonLiveEvidenceCoordinatesV1 } => {
     // Copy and validate the whole page before the first await/audit so adapters
     // cannot change the text or metadata while its release is being committed.
     try {
       closedRecord(value, ['citation', 'handle', 'label', 'visibility'], ['text', 'attributes', 'occurred_at']);
-      const citation = value.citation.kind === 'slack_message' ? validatePersonSlackMessageCitationV1(value.citation) : validatePersonTicketCitationV1(value.citation);
-      if (citation.kind === 'slack_message') {
-        if (binding.tool_id !== 'slack' || citation.team_id !== binding.external_scope_id) invalidOutput();
-      } else if (citation.tool_id !== binding.tool_id || citation.external_scope_id !== binding.external_scope_id) invalidOutput();
+      const validated = reader.validateCitation(value.citation);
+      const citation = validated.citation;
+      closedRecord(validated.coordinates, ['object_id'], ['container_id']);
+      boundedString(validated.coordinates.object_id, 512);
+      if (validated.coordinates.container_id !== undefined) boundedString(validated.coordinates.container_id, 512);
+      const coordinates = Object.freeze({ object_id: validated.coordinates.object_id, ...(validated.coordinates.container_id === undefined ? {} : { container_id: validated.coordinates.container_id }) });
+      if (validated.tool_id !== binding.tool_id || validated.external_scope_id !== binding.external_scope_id) invalidOutput();
       boundedString(value.handle, 512);
       boundedString(value.label, PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
       if (value.visibility !== 'only_me' && value.visibility !== 'team') invalidOutput();
@@ -97,6 +101,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
         const digest = `sha256:${createHash('sha256').update(value.text, 'utf8').digest('hex')}`;
         if (digest !== citation.text_sha256) invalidOutput();
       }
+      if (value.text === undefined && citation.text_sha256 !== `sha256:${createHash('sha256').update('').digest('hex')}`) invalidOutput();
       if (value.occurred_at !== undefined) day(value.occurred_at);
       let attributes: PersonLiveEvidenceValueV1['attributes'];
       if (value.attributes !== undefined) {
@@ -112,7 +117,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
         }
         attributes = Object.freeze(copied);
       }
-      return Object.freeze({ citation: citation as C, handle: value.handle, label: value.label, visibility: value.visibility,
+      return Object.freeze({ citation: citation as C, coordinates, handle: value.handle, label: value.label, visibility: value.visibility,
         ...(value.text === undefined ? {} : { text: value.text }), ...(attributes === undefined ? {} : { attributes }),
         ...(value.occurred_at === undefined ? {} : { occurred_at: value.occurred_at }) });
     } catch { invalidOutput(); }
@@ -128,8 +133,10 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     }
     if (page.next_cursor !== undefined && (operation !== 'list' || typeof page.next_cursor !== 'string' || page.next_cursor.length === 0 || page.next_cursor.length > 4096)) invalidOutput();
     const prepared = page.items.map(prepare);
-    const ids = prepared.map(value => `live_${canonicalSha256({ request_id: requestId, binding, citation: value.citation }).slice(7)}`);
+    const ids = prepared.map(value => `live_${canonicalSha256({ request_id: requestId, binding, kind: value.citation.kind, coordinates: value.coordinates }).slice(7)}`);
     if (new Set(ids).size !== ids.length) invalidOutput();
+    if (new Set([...released.keys(), ...prepared.map(value => canonicalSha256(value.citation))]).size > 512 ||
+        new Set([...stored.keys(), ...ids]).size > 512 || cursors.size >= 512) invalidOutput();
     const nextProviderCursor = page.next_cursor;
     const truncated = page.truncated || nextProviderCursor !== undefined;
     const nextCursor = nextProviderCursor === undefined ? undefined : `live_cursor_${requestId}_${++cursorSequence}`;
@@ -143,13 +150,16 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     });
     if (canonicalJsonBytes(withReceipt(`sha256:${'0'.repeat(64)}`)).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) invalidOutput();
     await current(signal);
-    const receipt = await safeCall(() => audit.record(Object.freeze({ schema_version: 1, binding, operation, citations: Object.freeze(prepared.map(value => value.citation)) })), signal);
+    const receipt = await safeCall(() => audit.record(Object.freeze({ schema_version: 1, binding, operation, coordinates: Object.freeze(prepared.map(value => value.coordinates)), value_digests: Object.freeze(prepared.map(({ handle: _handle, coordinates: _coordinates, ...value }) => canonicalSha256(value))), citations: Object.freeze(prepared.map(value => value.citation)) })), signal);
     if (typeof receipt !== 'string' || !DIGEST.test(receipt)) throw new AuthorityOperationError('unavailable', 'Live evidence release receipt is invalid');
     await current(signal);
     const result = withReceipt(receipt);
     // All audited citations remain tracked, including overwritten inventory
     // items and pages later omitted by a composing desk's result limit.
-    for (let i = 0; i < prepared.length; i += 1) stored.set(ids[i]!, { handle: prepared[i]!.handle, citation: prepared[i]!.citation });
+    for (let i = 0; i < prepared.length; i += 1) {
+      stored.set(ids[i]!, { handle: prepared[i]!.handle, citation: prepared[i]!.citation });
+      released.set(canonicalSha256(prepared[i]!.citation), prepared[i]!.citation);
+    }
     if (nextCursor !== undefined) cursors.set(nextCursor, { provider: nextProviderCursor!, selection: selection! });
     return result;
   };
@@ -187,7 +197,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     },
     async revalidate(input) {
       await current(input.signal);
-      const citations = Object.freeze([...stored.values()].map(value => value.citation));
+      const citations = Object.freeze([...released.values()]);
       await safeCall(() => reader.revalidate({ citations, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
       await current(input.signal);
     },

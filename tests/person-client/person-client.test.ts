@@ -170,6 +170,127 @@ async function runCli(
 
 afterEach(() => vi.restoreAllMocks());
 
+describe('person-bound Jira client commands', () => {
+  const attempt = '00000000-0000-4000-8000-000000000021';
+  const ticket = { kind: 'ticket', label: 'ECHO-7 · Release Jira', visibility: 'only_me', citation: {
+    kind: 'ticket', tool_id: 'jira', external_scope_id: '00000000-0000-4000-8000-000000000019', ticket_id: '10007',
+    permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: `sha256:${'a'.repeat(64)}`,
+  } };
+  function ticketAnswer(scope: unknown = { kind: 'global' }) {
+    return { ...v4Answer({ scope, citations: [ticket] }), schema_version: 5, kind: 'echo-clean-person-answer-v5',
+      parts: [{ question: 'Which ticket?', status: 'answered', statements: [{ text: 'ECHO-7 covers Jira.', citation_indexes: [0], private: true }] }] };
+  }
+
+  it('uses authenticated commands and keeps the connection locator and consent link out of stored sessions', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const store = new PersonSessionStore(home);
+      const stored = canonicalJson(store.read());
+      const fetchImpl: typeof fetch = async (input, init) => {
+        expect(init?.method).toBe('POST');
+        expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/person/jira/connect') {
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1 });
+          return json({ schema_version: 1, attempt, connect_link: 'https://connect.nango.dev/?session_token=synthetic-consent' });
+        }
+        if (path === '/v1/person/jira/complete') {
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt, connection: 'opaque-synthetic-connection' });
+          return json({ schema_version: 1, connected: true });
+        }
+        expect(path).toBe('/v1/person/jira/disconnect');
+        expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1 });
+        return json({ schema_version: 1, connected: false });
+      };
+      const dependencies = { home_directory: home, now: () => NOW, fetch: fetchImpl };
+      const begun = await runCli(['jira', 'connect'], dependencies);
+      expect(begun.code).toBe(0);
+      expect(JSON.parse(begun.stdout)).toEqual({ ok: true, result: {
+        schema_version: 1, attempt, connect_link: 'https://connect.nango.dev/?session_token=synthetic-consent',
+      } });
+      expect((await runCli(['jira', 'complete', '--attempt', attempt, '--connection', 'opaque-synthetic-connection'], dependencies)).code).toBe(0);
+      expect(JSON.parse((await runCli(['jira', 'disconnect'], dependencies)).stdout)).toEqual({ ok: true, result: { schema_version: 1, connected: false } });
+      expect(canonicalJson(store.read())).toBe(stored);
+    });
+  });
+
+  it('refuses person selectors and malformed locators before opening a session or making a request', async () => {
+    const fetchImpl = vi.fn();
+    const otherPerson = await runCli(['jira', 'connect', '--membership-id', ORGANIZATION_IDS.membership], { fetch: fetchImpl });
+    expect(otherPerson.code).toBe(2);
+    const invalid = await runCli(['jira', 'complete', '--attempt', attempt, '--connection', 'bad\nlocator'], { fetch: fetchImpl });
+    expect(invalid.code).toBe(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('completes a browser authorization using only the server-bound attempt', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const result = await runCli(['jira', 'complete', '--attempt', attempt], {
+        home_directory: home, now: () => NOW,
+        fetch: async (input, init) => {
+          expect(new URL(String(input)).pathname).toBe('/v1/person/jira/complete');
+          expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt });
+          return json({ schema_version: 1, connected: true });
+        },
+      });
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: { schema_version: 1, connected: true } });
+    });
+  });
+
+  it('selects V5 only with --tickets and rejects ticket responses on the strict V4 route', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const fetchImpl: typeof fetch = async (input, init) => {
+        expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'Which ticket?' });
+        const path = new URL(String(input)).pathname;
+        if (path === '/v4/person/ask') return json(ticketAnswer());
+        expect(path).toBe('/v3/person/ask');
+        return json({ ...ticketAnswer(), schema_version: 4, kind: 'echo-clean-person-answer-v4' });
+      };
+      const dependencies = { home_directory: home, now: () => NOW, fetch: fetchImpl };
+      const ticketResult = await runCli(['ask', '--question', 'Which ticket?', '--tickets'], dependencies);
+      expect(ticketResult.code).toBe(0);
+      expect(JSON.parse(ticketResult.stdout).result.citations[0]).toEqual(ticket);
+      const legacyResult = await runCli(['ask', '--question', 'Which ticket?'], dependencies);
+      expect(legacyResult.code).toBe(1);
+      expect(legacyResult.stdout).toBe('');
+      expect(legacyResult.stderr).toContain('invalid_response');
+    });
+  });
+
+  it('rejects a different ticket Ask scope and unsafe ticket links', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const wrongScope = fixtureClient(home, async () => json(ticketAnswer({ kind: 'mine' })));
+      await expect(wrongScope.askWithTickets('Which ticket?')).rejects.toMatchObject({ code: 'invalid_response' });
+      const unsafe = fixtureClient(home, async () => json({ ...ticketAnswer(), citations: [{ ...ticket, citation: { ...ticket.citation, permalink: 'https://user:password@example.atlassian.net/browse/ECHO-7' } }] }));
+      await expect(unsafe.askWithTickets('Which ticket?')).rejects.toMatchObject({ code: 'invalid_response' });
+    });
+  });
+
+  it('passes connection cancellation through to the authenticated transport', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const abort = new AbortController();
+      let ready!: () => void;
+      const started = new Promise<void>(resolve => { ready = resolve; });
+      const client = fixtureClient(home, async (_input, init) => {
+        expect(init?.signal).toBeDefined();
+        ready();
+        await new Promise<void>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), { once: true }));
+        throw new Error('unreachable');
+      });
+      const pending = client.jiraConnect(abort.signal);
+      await started;
+      abort.abort();
+      await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
+    });
+  });
+});
+
 describe("Person client", () => {
   it.each([false, true])("distinguishes same-version client builds in status (signed in: %s)", async (signedIn) => {
     await withHome(async (home) => {

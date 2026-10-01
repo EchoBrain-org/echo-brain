@@ -1,3 +1,4 @@
+import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceCitationV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 import type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
@@ -33,6 +34,37 @@ export class SqlitePersonAgenticAskAuditV1 {
       request_id: context.request_id,
     });
     return Object.freeze({ append: (entry: AgenticAskAuditEntryV1) => this.appendBound(boundContext, entry) });
+  }
+
+  /** A minimized pre-model release witness. The audited reader has already normalized its citations. */
+  forLiveRequest<C extends PersonLiveEvidenceCitationV1>(context: AgenticAskAuditRequestContextV1): PersonLiveEvidenceAuditV1<C> {
+    this.forRequest(context); // Same trusted session/context validation as terminal Ask audits.
+    const bound = Object.freeze({ authority_id: context.authority_id, organization_id: context.organization_id, state_lineage_id: context.state_lineage_id,
+      principal_id: context.principal_id, membership_id: context.membership_id, session_family_id: context.session_family_id, request_id: context.request_id });
+    // Research may release the same tickets repeatedly within one clock tick.
+    let releaseSequence = 0;
+    return Object.freeze<PersonLiveEvidenceAuditV1<C>>({ record: async (release) => {
+      if (release.schema_version !== 1 || !['search', 'open', 'list'].includes(release.operation) ||
+          release.binding.organization_id !== bound.organization_id || release.binding.principal_id !== bound.principal_id ||
+          release.binding.membership_id !== bound.membership_id || release.citations.length > 50 || release.coordinates.length !== release.citations.length || release.value_digests.length !== release.citations.length || !release.value_digests.every(digest => /^sha256:[a-f0-9]{64}$/.test(digest))) throw new Error('Live release audit binding is invalid');
+      // Copy an explicit allowlist. Never serialize adapter extras, handles or evidence bodies.
+      const binding = release.binding;
+      const read_binding = { organization_id: binding.organization_id, principal_id: binding.principal_id, membership_id: binding.membership_id,
+        tool_id: binding.tool_id, external_scope_id: binding.external_scope_id, external_subject_id: binding.external_subject_id, read_grant_sha256: binding.read_grant_sha256 };
+      const recorded_at = this.now();
+      const prompt_sha256 = canonicalSha256({ kind: 'echo-person-live-evidence-selection-v1', binding: read_binding, operation: release.operation });
+      const answer_sha256 = canonicalSha256(release.citations);
+      // Citation objects are closed at the adapter boundary. Commit their canonical bytes as digests;
+      // tool/tenant plus opaque citation commitments suffice without retaining presentation URLs.
+      const citations = release.citations.map((citation, index) => ({ kind: citation.kind, released_value_sha256: release.value_digests[index], coordinates: { object_id: release.coordinates[index]!.object_id, ...(release.coordinates[index]!.container_id === undefined ? {} : { container_id: release.coordinates[index]!.container_id }) }, text_sha256: citation.text_sha256, citation_sha256: canonicalSha256(citation) }));
+      const body = { schema_version: 1, kind: 'echo-person-live-evidence-release-audit-v1', context_kind: 'answer_composition', ...bound,
+        release_sequence: ++releaseSequence, binding: read_binding, operation: release.operation, citations, prompt_sha256, answer_sha256, recorded_at };
+      const receipt = canonicalSha256(body);
+      this.database.prepare(`INSERT INTO authority_person_read_decision_audit_v2
+        (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
+        VALUES (?, ?, 'answer_composition', ?, ?, ?)`).run(receipt, canonicalJson(body), prompt_sha256, answer_sha256, recorded_at);
+      return receipt;
+    } });
   }
 
   private appendBound(context: AgenticAskAuditRequestContextV1, entry: AgenticAskAuditEntryV1): Sha256Digest {

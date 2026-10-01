@@ -15,6 +15,13 @@ async function help(argv: readonly string[]): Promise<string> {
 }
 
 describe("Person client help", () => {
+  it('documents Jira connection commands and the explicit ticket-capable Ask version', async () => {
+    await expect(help(['jira', '--help'])).resolves.toContain('<connect|complete|disconnect>');
+    await expect(help(['jira', 'connect', '--help'])).resolves.toContain('short-lived consent link');
+    await expect(help(['jira', 'complete', '--help'])).resolves.toContain('--attempt <attempt-id> [--connection <opaque-connection-locator>]');
+    await expect(help(['jira', 'disconnect', '--help'])).resolves.toContain('Revokes your Jira read grant immediately');
+    await expect(help(['ask', '--help'])).resolves.toContain('--tickets');
+  });
   it("documents the supported Person commands without constructing a session", async () => {
     await expect(help(["--help"])).resolves.toContain(
       "usage: echo-brain person <command> [options]",

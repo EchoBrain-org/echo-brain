@@ -88,3 +88,22 @@ documented authentication/support boundary. Claim end-to-end Jira Ask only
 after the shared integration and separately authorized account validation are
 complete. Worktree setup itself does not authorize credentials, live account
 connection or deployment.
+
+
+## Expanded handoff: Jira to Ask (2026-10-01)
+
+The later user instruction broadens the provider-only ownership above for the
+smallest complete feature. Preserve the separately committed reader `52104ec`.
+The expanded implementation owns personal Nango custody, compact binding,
+existing-session authorization, generic release audit/desk wiring and additive
+Ask V5 ticket citations. It follows the current Slack Nango composition rather
+than retired Slack fields. Shared root/runtime/startup edits are isolated in a
+separate integration commit so the active Slack lane can merge them narrowly.
+
+The exact command/API flow and remaining human inputs are in
+[providers/jira/README.md](../../providers/jira/README.md). The focused proposal
+[ADR-0025](../decisions/ADR-0025-jira-person-live-evidence-nango.md) remains awaiting
+founder acceptance. Fixture-tested end-to-end Ask completion and live account
+qualification are distinct claims; runtime startup remains gated. Global Ask is
+supported, while mine/project scopes never acquire global Jira access. No live
+credentials, connections, AWS operations or deployment are part of this work.

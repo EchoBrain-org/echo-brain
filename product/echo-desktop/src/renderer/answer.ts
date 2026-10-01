@@ -14,7 +14,7 @@ export interface SourceGroup {
 function groupKey(source: AnswerSource): string {
   if (source.kind === 'record') return `record:${source.record.record_sha256}`;
   if (source.kind === 'original') return `original:${source.ref.source_id}`;
-  return `slack:${source.permalink}`;
+  return `${source.kind}:${source.permalink}`;
 }
 
 /** An answer's sources, in the order it first cites them. */

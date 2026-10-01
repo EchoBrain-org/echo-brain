@@ -5,6 +5,7 @@ export {
   type PersonAnswerCitationV3,
   type PersonAnswer,
   type PersonAnswerV4,
+  type PersonAnswerV5,
   type PersonEvidenceDeskV1,
   type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
@@ -16,6 +17,7 @@ export {
   type PersonRecordSearchItemV1,
   type PersonRecordSearchV2,
 } from "./authority-client.js";
+export { type PersonJiraConnectV1, type PersonJiraConnectionStateV1 } from './jira-connection-v1.js';
 export {
   EmployeeMutationError,
   PersonClient,

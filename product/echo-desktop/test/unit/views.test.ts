@@ -14,6 +14,23 @@ const { joinRecord } = await import('../../src/renderer/store.js');
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 
 describe('view models copy only what the renderer may see', () => {
+  it('displays ticket citations only in V5 and retains only the direct ticket link', () => {
+    const permalink = 'https://example.atlassian.net/browse/ECHO-7';
+    const reply = (link: unknown, version = 5) => ({ ok: true, result: { schema_version: version, kind: `echo-clean-person-answer-v${version}`,
+      scope: { kind: 'global' }, outcome: 'answered',
+      citations: [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
+        kind: 'ticket', tool_id: 'jira', external_scope_id: 'private-tenant', ticket_id: '10007', permalink: link, text_sha256: sha('a'),
+      } }], parts: [{ question: 'Which ticket?', status: 'answered', statements: [{ text: 'ECHO-7 covers launch.', citation_indexes: [0], private: true }] }],
+    } });
+    const answer = answerView(reply(permalink), { kind: 'global' });
+    expect(answer.sources).toEqual([{ kind: 'ticket', label: 'ECHO-7 · Jira launch', permalink }]);
+    expect(JSON.stringify(answer)).not.toContain('private-tenant');
+    expect(() => answerView(reply(permalink, 4), { kind: 'global' })).toThrow(ViewError);
+    for (const link of ['javascript:alert(1)', 'https://user:password@example.test/ticket/7', 'https://example.test/ticket/7?token=secret',
+      'https://example.test/ticket/7#token', 'https://example.test\\@evil.test/ticket/7', null]) {
+      expect(() => answerView(reply(link), { kind: 'global' })).toThrow(ViewError);
+    }
+  });
   it('status keeps the account and nothing else', () => {
     const view = statusView({
       schema_version: 1, kind: 'echo-person-client-status-v1', installed_version: '1', signed_in: true,

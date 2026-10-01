@@ -4,6 +4,7 @@ import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
   PERSON_ANSWER_PATH_V3,
+  PERSON_ANSWER_PATH_V4,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
@@ -20,6 +21,7 @@ import {
   validatePersonOpenResponseV1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV4,
+  validatePersonAnswerResponseV5,
   validatePersonCapabilitiesV1,
   validatePersonEvidenceSearchRequestV1,
   validatePersonEvidenceOpenRequestV1,
@@ -30,6 +32,7 @@ import {
   validatePersonMeetingTranscriptV1,
   type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
   type PersonAnswerResponseV4 as OrganizationPersonAnswerV4,
+  type PersonAnswerResponseV5 as OrganizationPersonAnswerV5,
   type PersonCapabilitiesV1,
   type PersonEvidenceSearchRequestV1,
   type PersonEvidenceOpenRequestV1,
@@ -51,6 +54,7 @@ import {
 } from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
+import { validatePersonJiraConnectV1, validatePersonJiraCompletionV1, validatePersonJiraStateV1, type PersonJiraConnectV1, type PersonJiraConnectionStateV1 } from './jira-connection-v1.js';
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
 import {
@@ -142,6 +146,8 @@ export interface PersonRecordSearchItemV1 {
 export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
 /** The Agentic Ask response, selected only after the authenticated capability probe. */
 export type PersonAnswerV4 = OrganizationPersonAnswerV4;
+/** Explicit ticket-capable Ask; the ordinary Ask response remains strict V4. */
+export type PersonAnswerV5 = OrganizationPersonAnswerV5;
 export type PersonAnswer = PersonAnswerV4;
 export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
 export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
@@ -1312,6 +1318,38 @@ export class PersonAuthorityClient {
       throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
     }
     return response;
+  }
+
+  async askV4(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV5> {
+    const request = validatePersonAnswerRequestV3({ schema_version: 3, question,
+      ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}) });
+    const response = await this.json({ path: PERSON_ANSWER_PATH_V4, body: request,
+      validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV5,
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
+    const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
+    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
+    }
+    return response;
+  }
+
+  /** The Authority binds this attempt to the authenticated session person. */
+  jiraConnect(accessToken: string, signal?: AbortSignal): Promise<PersonJiraConnectV1> {
+    return this.json({ path: '/v1/person/jira/connect', body: { schema_version: 1 },
+      validate_request: () => ({ schema_version: 1 }), validate_response: validatePersonJiraConnectV1,
+      access_token: accessToken, expected_status: 200, signal });
+  }
+
+  jiraComplete(accessToken: string, attempt: string, connection?: string, signal?: AbortSignal): Promise<PersonJiraConnectionStateV1> {
+    return this.json({ path: '/v1/person/jira/complete', body: { schema_version: 1, attempt, ...(connection === undefined ? {} : { connection }) },
+      validate_request: validatePersonJiraCompletionV1, validate_response: value => validatePersonJiraStateV1(value, true),
+      access_token: accessToken, expected_status: 200, signal });
+  }
+
+  jiraDisconnect(accessToken: string, signal?: AbortSignal): Promise<PersonJiraConnectionStateV1> {
+    return this.json({ path: '/v1/person/jira/disconnect', body: { schema_version: 1 },
+      validate_request: () => ({ schema_version: 1 }), validate_response: value => validatePersonJiraStateV1(value, false),
+      access_token: accessToken, expected_status: 200, signal });
   }
 
   async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {

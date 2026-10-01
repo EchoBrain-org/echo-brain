@@ -1,8 +1,10 @@
 # Jira person live reader
 
 Support and transport decision recorded on 2026-10-01, before implementation.
-This isolated slice implements the existing ticket reader contract; it does
-not connect an account or admit Jira to Ask.
+The isolated reader was committed first as `52104ec`. The expanded slice adds
+fixture-tested personal Nango connections and a ticket-capable Ask path.
+ADR-0025 remains proposed; production startup is disabled pending acceptance.
+No live account has been connected or qualified.
 
 ## Initial support boundary
 
@@ -29,7 +31,8 @@ not a claim that classic scopes are narrower than every granular alternative.
 Request `offline_access` separately when durable refresh is required; it is
 not an issue-read permission. Do not request write/admin scopes. Consent uses
 one distributable ECHO 3LO app, a validated unpredictable session-bound state
-and exact callback URL; this slice does not implement onboarding.
+and exact callback URL managed by Nango Connect; ECHO binds each attempt to
+its authenticated Person on the server.
 Sources: [search scopes and issue security](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/#api-rest-api-3-search-jql-post),
 [current-user scopes](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/#api-rest-api-3-myself-get),
 [issue read](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-issueidorkey-get),
@@ -74,9 +77,10 @@ scopes explicitly. Its Proxy can inject authorization, override the base URL and
 retry (default zero); it returns provider status/headers/body. Neither Proxy
 nor sync is necessary for the shared contract. Direct requests were selected
 to control redirects, streaming bounds and abort behavior locally without a
-new SDK. A later composition can supply Nango-managed authorization; do not
-use a sync or retained issue copy for this live reader.
-Sources: [Nango Jira](https://nango.dev/api-integrations/jira/),
+new SDK. The selecting Jira composition now supplies Nango-managed authorization. It
+fetches a fresh token just before each request without requesting refresh tokens;
+do not use a sync or retained issue copy for this live reader.
+Sources: [Nango Jira](https://nango.dev/docs/api-integrations/jira),
 [provider configuration](https://github.com/NangoHQ/nango/blob/master/packages/providers/providers.yaml),
 [Proxy guide](https://nango.dev/docs/guides/platform/proxy-requests),
 [Proxy API](https://nango.dev/docs/reference/backend/http-api/proxy/get).
@@ -134,17 +138,87 @@ ticket index or evidence cache.
 The focused suites in `test/` use synthetic transport and response fixtures.
 They exercise the shared audit boundary and prove authentication drift,
 permission loss, malformed payload refusal, pagination ownership, cancellation,
-exact text digests and audit failure. Workspace/build/source ownership and the
-component catalog are registration changes only; no shared provider branches,
-contracts or Authority composition are changed.
+exact text digests and audit failure. The shared audited wrapper now consumes adapter-validated citations and neutral
+coordinates without provider branches. Workspace/build/source registration is
+kept separate from behavior changes.
 
-## Remaining integration before Ask
+## Connection to Ask flow
 
-The shared lane must supply authoritative grants/current membership, durable
-audit, read-status endpoints, Evidence Desk registration, a versioned ticket
-answer/evidence schema, Authority composition and project-scope mapping.
-It also owns correction of the shared wrapper's existing Slack-specific
-branch. `mine` must exclude external Jira reads. Each model call and final
-response must revalidate all released evidence; model content capture must
-remain off. Person OAuth onboarding and separately authorized live account
-qualification remain necessary. Existing Ask V4 does not admit tickets.
+All commands reuse the authenticated ECHO Person session. There is no actor,
+organization, grant or site selector in model arguments or connection commands.
+
+1. `echo-brain person jira connect --open-browser` calls
+   `POST /v1/person/jira/connect` with `{schema_version:1}`. ECHO records an
+   expiring attempt before Nango creates the limited Jira Connect session. The
+   command returns only its attempt ID and private, short-lived consent link.
+2. Complete browser consent, then `echo-brain person jira complete --attempt <id>`.
+   `POST /v1/person/jira/complete` discovers the new connection by server tags;
+   an optional `--connection <locator>` is still verified, never trusted as a
+   grant. Nango integration, organization, Person, tenure and ownership tags
+   must match. Accessible resources, configured cloud ID, standard site URL,
+   read scopes and active human `/myself` account must pass independently.
+3. `echo-brain person ask --tickets --question 'What is blocking launch?'` uses
+   `POST /v4/person/ask`, the existing schema-3 request and strict V5 response.
+   The server creates a new Jira reader and audited source for this request.
+   Generic desk search/open/list keep item IDs and cursors in request memory.
+   Every release commits current Person/grant, ticket coordinates and exact
+   released-text digest and normalized-value digest (including inventory metadata)
+   to the immutable Authority read-decision table before
+   reaching a model. Revalidation includes inventory, earlier revisions and
+   evidence omitted from the answer, before every subsequent model call and
+   after the terminal audit. The desk rechecks its local snapshot after Jira I/O.
+4. V5 citations open the adapter-verified Jira permalink directly. The desktop
+   validates and displays V5 tickets, with a safe direct-link opener. Its
+   default Ask and `person ask` without `--tickets` retain strict V4 behavior.
+5. `echo-brain person jira disconnect` calls
+   `POST /v1/person/jira/disconnect`. Local revocation is committed before
+   remote deletion; a failed deletion cannot restore read access. Missing
+   remote connections are an idempotent disconnect success.
+
+Reconnect starts with the same connect command, immediately invalidates the old
+ECHO grant, deletes its Nango connection and opens a fresh Nango Connect session.
+Completion requires that session's new server-owned attempt tag and the previously
+verified Jira account. An old connection cannot complete the new attempt, even if
+token refresh advances its `updated_at`. This slice uses replacement authorization
+rather than Nango's in-place reconnect endpoint because that endpoint's connection
+timestamp does not prove completed consent. Successful completion creates a new
+grant version; ordinary refresh preserves it. A connection after disconnect also
+uses fresh consent and preserves the same-tenure account fence. Unfinished or
+expired attempts never become grants.
+Sources: [Connect sessions](https://nango.dev/docs/reference/backend/http-api/connect/sessions/create),
+[refresh behavior](https://nango.dev/docs/reference/backend/http-api/connections/get),
+[refresh implementation](https://github.com/NangoHQ/nango/blob/master/packages/shared/lib/services/connections/credentials/refresh.ts).
+
+The provider-owned SQLite file stores compact binding/attempt data only. It keeps
+no credential, consent URL, ticket body or provider cursor. Release audit rows keep
+neutral coordinates, digests, grant/session/tenure and request commitments; no
+body, label, permalink, Nango reference or cursor is retained there.
+
+Only global Ask enables Jira. Mine excludes it. ECHO project scopes have no mapping
+in this slice and never fall back to global Jira; explicit ticket inventory in an
+unsupported scope is refused. There is no Jira addition to Person list/mine,
+connector catalog, settings UI, sync/index or persistent ticket-open API.
+
+## Remaining human inputs and live qualification
+
+[ADR-0025](../../docs/decisions/ADR-0025-jira-person-live-evidence-nango.md) awaits
+founder acceptance of Nango custody and the new Person release path. Acceptance
+must extend INV-PERMISSIONS-015 and review the startup gate before enablement.
+The new selecting module owns `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=false`;
+startup refuses Jira flags while that gate is closed. Fixtures supply the optional
+configuration directly and use synthetic transport. Modern Slack Nango wiring is
+preserved and exercised with Jira in the same Authority composition proof.
+
+After acceptance, configure the Nango Cloud Jira integration and distributable
+Atlassian OAuth application, callback, classic read scopes, allowed origin and one
+server cloud ID. Supply the existing runtime Nango key through the reviewed custody
+mechanism, with Connect-session write, connection list/read-credentials/delete
+permissions. The narrow optional startup inputs are `--jira-cloud-id` and
+`--jira-nango-integration` alongside modern Nango configuration; there are no
+retired Slack credential/configuration fields in this path.
+
+Live qualification must exercise actual consent, tag discovery, refreshed token
+reads, fresh-consent reconnect, disconnect/reconnect, denied/changed issue visibility,
+account/site mismatch and abort behavior. Synthetic fixtures prove implementation
+behavior only. Real credentials, account connections, AWS and deployment remain
+outside this task. Project mappings and polished connection UI remain deferred.
