@@ -8,7 +8,10 @@
   "package_json": "providers/jira/package.json",
   "entry_points": [
     "providers/jira/src/jira-person-live-evidence-reader-v1.ts",
-    "providers/jira/src/jira-cloud-transport-v1.ts"
+    "providers/jira/src/jira-cloud-transport-v1.ts",
+    "providers/jira/src/jira-person-connection-v1.ts",
+    "providers/jira/src/jira-connection-store-v1.ts",
+    "providers/jira/src/jira-nango-v1.ts"
   ],
   "owned_source_paths": [
     "providers/jira/src/**"
@@ -21,7 +24,9 @@
     "@echo-brain/organization-api",
     "@echo-brain/organization-authority-kernel"
   ],
-  "allowed_external_packages": [],
+  "allowed_external_packages": [
+    "better-sqlite3"
+  ],
   "allowed_node_builtins": [
     "crypto"
   ],
@@ -38,7 +43,9 @@
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel"
       ],
-      "allowed_external_packages": [],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
       "allowed_node_builtins": [
         "crypto"
       ]

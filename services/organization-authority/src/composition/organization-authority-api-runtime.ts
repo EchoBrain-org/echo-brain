@@ -45,6 +45,8 @@ import { readableSearchGenerationContractV1 } from "./readable-search-generation
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
+import { createPersonAnswerV4Route } from './person-answer-v4-route.js';
+import type { PersonTicketLiveRuntimeFactoryV1, OpenedPersonTicketLiveRuntimeV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonOriginalItemsV1 } from "../adapters/persistence/sqlite/person-original-items-v1.js";
@@ -76,6 +78,8 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 }
 
 export interface OrganizationAuthorityApiRuntimeDependencies {
+  /** Absent by default. The selecting root owns provider construction and release approval. */
+  readonly ticket_live_runtime_factory?: PersonTicketLiveRuntimeFactoryV1;
   /** Server-only agentic Ask experiment: open the whole readable scope first when it is small. */
   readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Historical record protocol projection, independent of live ingress. */
@@ -159,6 +163,7 @@ export async function startOrganizationAuthorityApiRuntime(
   let externalIdentity:
     | OpenedPersonExternalIdentityRuntimeV1
     | undefined;
+  let ticketLive: OpenedPersonTicketLiveRuntimeV1 | undefined;
   try {
     recordDatabase = openOrganizationRecordDatabase(
       join(config.state_directory, "record-log.sqlite"),
@@ -187,6 +192,7 @@ export async function startOrganizationAuthorityApiRuntime(
       },
     );
     sessions.expireOidcLoginAttempts({ limit: 1000 });
+    ticketLive = dependencies.ticket_live_runtime_factory?.(sessions);
     externalIdentity = dependencies.external_identity_runtime_bundle?.open({
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
@@ -280,6 +286,7 @@ export async function startOrganizationAuthorityApiRuntime(
         audit: readAudit,
       }),
       person_record_search: recordSearch,
+      ...(ticketLive === undefined ? {} : { person_jira_connection: ticketLive.application }),
       person_meeting_transcript: createPersonMeetingTranscriptReadRouteV1({ originals }),
       person_source_evidence: createPersonSourceEvidenceRouteV1({ originals }),
       // Outside the answer-model gate: listing and opening never call a model.
@@ -313,6 +320,20 @@ export async function startOrganizationAuthorityApiRuntime(
               ...(dependencies.agentic_ask_v1_small_scope_shortcut === true
                 ? { small_scope_shortcut: true }
                 : {}),
+            }),
+            ...(ticketLive === undefined ? {} : {
+              person_answer_v4: createPersonAnswerV4Route({
+                authority_id: metadata.authority_id,
+                organization_id: metadata.organization_id,
+                state_lineage_id: lineage.root.state_lineage_id,
+                sessions, originals, records: recordSearch,
+                memberships: { membership: (id) => repository.read((transaction) => transaction.membership(id)) },
+                model: dependencies.answer_composition_generation.structured_output,
+                generation: dependencies.answer_composition_generation.generation,
+                audit: new SqlitePersonAgenticAskAuditV1(database),
+                ticket_for: input => ticketLive!.application.source(input),
+                ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+              }),
             }),
           }),
       person_documents: createPersonDocumentApplicationV1({
@@ -368,6 +389,7 @@ export async function startOrganizationAuthorityApiRuntime(
       close: async () => {
         stopAcceptingRequests();
         await Promise.all([serverClosed, documentWorker?.close()]);
+        ticketLive?.close();
         externalIdentity?.close();
         recordDatabase?.close();
         database.close();
@@ -375,6 +397,7 @@ export async function startOrganizationAuthorityApiRuntime(
     };
   } catch (error) {
     await documentWorker?.close();
+    ticketLive?.close();
     externalIdentity?.close();
     recordDatabase?.close();
     database.close();

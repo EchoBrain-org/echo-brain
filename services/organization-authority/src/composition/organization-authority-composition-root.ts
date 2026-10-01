@@ -29,6 +29,8 @@ import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "@echo-brai
 import { runStagingSyntheticPrivateDmCanaryV1 } from "@echo-brain/provider-slack-server/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-v1";
 import type { PrivateSlackApprovalCardPosterV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
+import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveConfigurationV1, type JiraPersonLiveRuntimeSeamsV1 } from './jira-person-live-runtime-v1.js';
+import type { PersonTicketLiveRuntimeFactoryV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 
 export interface OrganizationAuthorityServiceConfig
   extends Omit<
@@ -46,6 +48,8 @@ export interface OrganizationAuthorityServiceConfig
   readonly staging_synthetic_meetings_directory?: string;
   readonly staging_synthetic_owner_email?: string;
   readonly openrouter_credential_file: string;
+  /** Jira remains absent unless this explicit selection is supplied after release approval. */
+  readonly jira_person_live?: JiraPersonLiveConfigurationV1;
   /** Nango holds the organization's Slack connection. The key stays in process memory only. */
   readonly slack_nango: {
     /** An https origin; defaults to Nango Cloud. */
@@ -75,6 +79,7 @@ type OrganizationAuthorityServiceAdapterOverrides = NonNullable<
 export interface OrganizationAuthorityServiceDependencies
   extends Omit<OrganizationAuthorityRuntimeDependencies, "processing_adapter_overrides"> {
   readonly processing_adapter_overrides?: OrganizationAuthorityServiceAdapterOverrides;
+  readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
   /** Test seams for Nango's and Slack's HTTP APIs. */
   readonly slack?: {
     readonly nango?: NangoConnectionClientV1;
@@ -132,6 +137,7 @@ export async function openOrganizationAuthorityService(
     staging_synthetic_owner_email,
     openrouter_credential_file,
     slack_nango,
+    jira_person_live,
     on_private_approval_slack_rejection,
     ...sharedConfig
   } = config;
@@ -174,6 +180,7 @@ export async function openOrganizationAuthorityService(
         };
   const apiDependencies = {
     ...dependencies.api,
+    ...(jira_person_live === undefined ? {} : { ticket_live_runtime_factory: ((sessions) => openJiraPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, configuration: jira_person_live, ...(dependencies.jira_person_live_seams === undefined ? {} : { seams: dependencies.jira_person_live_seams }) })) satisfies PersonTicketLiveRuntimeFactoryV1 }),
     record_approver: composeRecordApproverProjectorsV1([
       projectPrivateSlackBlockApprovalApproverV1,
       projectPrivateSlackBlockApprovalApproverV2,

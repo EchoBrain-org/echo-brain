@@ -136,6 +136,10 @@
     "./composition/capture-stopped-state-command": {
       "types": "./dist/composition/capture-stopped-state-command.d.ts",
       "import": "./dist/composition/capture-stopped-state-command.js"
+    },
+    "./shared/evidence-desk-v2": {
+      "types": "./dist/shared/evidence-desk-v2.d.ts",
+      "import": "./dist/shared/evidence-desk-v2.js"
     }
   },
   "files": [

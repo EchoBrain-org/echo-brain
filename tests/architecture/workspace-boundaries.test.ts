@@ -383,6 +383,7 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-record",
         "@echo-brain/organization-retrieval",
         "@echo-brain/provider-granola",
+        "@echo-brain/provider-jira",
         "@echo-brain/provider-openrouter",
         "@echo-brain/provider-slack-server",
         "@echo-brain/provider-synthetic-demo"

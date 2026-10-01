@@ -90,7 +90,8 @@
       "name": "person-client-http-speaks-public-contracts",
       "from": "src/product/person-client/authority-client.ts",
       "allowed_imports": [
-        "src/product/person-client/document-file.ts"
+        "src/product/person-client/document-file.ts",
+        "src/product/person-client/jira-connection-v1.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -344,6 +345,14 @@
       "allowed_node_builtins": [
         "path"
       ]
+    },
+    {
+      "name": "person-client-jira-command-response-validation",
+      "from": "src/product/person-client/jira-connection-v1.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     }
   ]
 }

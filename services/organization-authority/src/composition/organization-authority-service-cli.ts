@@ -12,12 +12,14 @@ import { createAskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.j
 import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { OPENROUTER_DECISION_PROCESSOR_MODEL_V1, OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
+import { JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 } from './jira-person-live-runtime-v1.js';
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
   "--state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> " +
   "--nango-secret-key-file <absolute-path> --nango-integration <key> [--nango-base-url <https-origin>] " +
   "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>] " +
+  "[--jira-cloud-id <cloud-id> --jira-nango-integration <key>] " +
   "[--staging-synthetic-meetings-dir <absolute-path>]";
 const STAGING_CANARY_USAGE =
   "usage: echo-organization-authority-serve staging-private-dm-canary " +
@@ -59,6 +61,8 @@ function flags(
     "--nango-secret-key-file",
     "--nango-integration",
     "--nango-base-url",
+    "--jira-cloud-id",
+    "--jira-nango-integration",
     "--worker-interval-ms",
     "--staging-synthetic-meetings-dir",
   ]);
@@ -160,6 +164,10 @@ export async function runOrganizationAuthorityServiceCli(
         "organization authority service OIDC client-secret flags do not match config",
       );
     }
+    const jiraRequested = [parsed['--jira-cloud-id'], parsed['--jira-nango-integration']].some(value => value !== undefined);
+    if (jiraRequested && (!JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 || parsed['--jira-cloud-id'] === undefined || parsed['--jira-nango-integration'] === undefined || (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev'))) {
+      throw new Error('Jira live selection requires accepted ADR-0025, one configured cloud site and Nango Cloud');
+    }
     // Read once into memory; the startup-failure event below never carries it.
     const slackNango = {
       ...(parsed["--nango-base-url"] === undefined ? {} : { base_url: parsed["--nango-base-url"] }),
@@ -253,6 +261,12 @@ export async function runOrganizationAuthorityServiceCli(
         ? { agentic_ask_v1_small_scope_shortcut: true }
         : {}),
       slack_nango: slackNango,
+      ...(jiraRequested ? { jira_person_live: {
+        enabled: true as const,
+        cloud_id: parsed['--jira-cloud-id']!,
+        integration_id: parsed['--jira-nango-integration']!,
+        nango_authorization: () => slackNango.secret_key,
+      } } : {}),
       granola_credential_file: manifest.granola_credential_file,
       granola_owner_email_file: manifest.granola_owner_email_file,
       // The manifest retains its serialized compatibility field.

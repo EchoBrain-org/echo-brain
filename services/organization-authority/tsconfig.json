@@ -20,6 +20,7 @@
     { "path": "../../providers/openrouter" },
     { "path": "../../providers/slack/server" },
     { "path": "../../providers/granola" },
+    { "path": "../../providers/jira" },
     { "path": "../../providers/synthetic-demo" }
   ]
 }

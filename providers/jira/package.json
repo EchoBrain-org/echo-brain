@@ -12,6 +12,18 @@
     "./jira-cloud-transport-v1": {
       "types": "./dist/jira-cloud-transport-v1.d.ts",
       "import": "./dist/jira-cloud-transport-v1.js"
+    },
+    "./jira-person-connection-v1": {
+      "types": "./dist/jira-person-connection-v1.d.ts",
+      "import": "./dist/jira-person-connection-v1.js"
+    },
+    "./jira-connection-store-v1": {
+      "types": "./dist/jira-connection-store-v1.d.ts",
+      "import": "./dist/jira-connection-store-v1.js"
+    },
+    "./jira-nango-v1": {
+      "types": "./dist/jira-nango-v1.d.ts",
+      "import": "./dist/jira-nango-v1.js"
     }
   },
   "files": [
@@ -27,7 +39,8 @@
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-api": "0.0.0-dev.0",
-    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0"
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0"
   },
   "engines": {
     "node": "22.22.1",

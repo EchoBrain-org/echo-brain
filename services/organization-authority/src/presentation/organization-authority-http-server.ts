@@ -61,6 +61,7 @@ import {
 } from "./person-employee-http-application.js";
 import {
   PERSON_ANSWER_PATH_V3,
+  PERSON_ANSWER_PATH_V4,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
@@ -75,6 +76,12 @@ import {
 } from "@echo-brain/organization-api";
 import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
+import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-application.js";
+import {
+  PERSON_JIRA_CONNECT_PATH_V1, PERSON_JIRA_COMPLETE_PATH_V1, PERSON_JIRA_DISCONNECT_PATH_V1,
+  validateJiraPersonConnectionCommandV1, validateJiraPersonConnectionCompletionV1,
+  type JiraPersonConnectionHttpApplicationV1,
+} from './jira-person-connection-http-application-v1.js';
 import {
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
@@ -108,6 +115,10 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `GET ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V3}`,
+  `POST ${PERSON_ANSWER_PATH_V4}`,
+  `POST ${PERSON_JIRA_CONNECT_PATH_V1}`,
+  `POST ${PERSON_JIRA_COMPLETE_PATH_V1}`,
+  `POST ${PERSON_JIRA_DISCONNECT_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
@@ -149,6 +160,9 @@ export interface OrganizationAuthorityHttpServerOptions {
    * Optional until the active Organization Authority runtime has a configured answer model.
    */
   readonly person_answer_v3?: PersonAnswerV3HttpApplication;
+  /** Optional ticket-capable Ask and authenticated Jira commands, selected together. */
+  readonly person_answer_v4?: PersonAnswerV4HttpApplication;
+  readonly person_jira_connection?: JiraPersonConnectionHttpApplicationV1;
   /** Opening a cited original; it needs no answer model. */
   readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
   /** Explicit transcript release uses the same originals gate but no Ask model. */
@@ -722,6 +736,10 @@ export function createOrganizationAuthorityHttpServer(
     options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
+    [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input))],
+    [PERSON_JIRA_CONNECT_PATH_V1, personCancellablePost(options.person_jira_connection, validateJiraPersonConnectionCommandV1, (application, input) => application.connect(input))],
+    [PERSON_JIRA_COMPLETE_PATH_V1, personCancellablePost(options.person_jira_connection, validateJiraPersonConnectionCompletionV1, (application, input) => application.complete({ access_token: input.access_token, ...input.request, ...(input.signal === undefined ? {} : { signal: input.signal }) }))],
+    [PERSON_JIRA_DISCONNECT_PATH_V1, personCancellablePost(options.person_jira_connection, validateJiraPersonConnectionCommandV1, (application, input) => application.disconnect(input))],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
