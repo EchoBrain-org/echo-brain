@@ -19,6 +19,7 @@
     "providers/slack/server/src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.ts",
     "providers/slack/server/src/organization-control-plane/composition/slack-connection-setup-cli.ts",
     "providers/slack/server/src/organization-control-plane/application/slack-integration-contracts.ts",
+    "providers/slack/server/src/organization-control-plane/application/slack-app-credentials-v1.ts",
     "providers/slack/server/src/slack-private-credentials-v1.ts",
     "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.ts",
     "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.ts",

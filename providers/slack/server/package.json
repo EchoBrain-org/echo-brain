@@ -53,6 +53,10 @@
       "types": "./dist/organization-control-plane/application/slack-integration-contracts.d.ts",
       "import": "./dist/organization-control-plane/application/slack-integration-contracts.js"
     },
+    "./organization-control-plane/application/slack-app-credentials-v1": {
+      "types": "./dist/organization-control-plane/application/slack-app-credentials-v1.d.ts",
+      "import": "./dist/organization-control-plane/application/slack-app-credentials-v1.js"
+    },
     "./slack-private-credentials-v1": {
       "types": "./dist/slack-private-credentials-v1.d.ts",
       "import": "./dist/slack-private-credentials-v1.js"
