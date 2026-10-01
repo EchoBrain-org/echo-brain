@@ -1,5 +1,6 @@
 import { type ApprovalContractSha256 } from "../organization-control-plane/slack-approval-integration-v1.js";
 import { validateOrganizationToolConnectionContractV2, validateOrganizationToolConnectionStateV2 } from "../organization-control-plane/application/organization-tool-connection-contracts-v2.js";
+import { readActiveSlackConnectionV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 
@@ -113,4 +114,66 @@ export function resolveCurrentPrivateSlackConnectionV1(
     provider_tenant_id: contract.provider_tenant_id,
     provider_enterprise_id: contract.provider_enterprise_id,
   });
+}
+
+/** The connection approvals run on now, with the stored row a bot-token source reads. */
+export interface ActivePrivateSlackConnectionV1 {
+  readonly current: CurrentPrivateSlackConnectionV1;
+  readonly stored: StoredSlackConnectionV1;
+}
+
+/**
+ * With Nango configured, approvals follow the organization's one active
+ * connection when it is a Nango connection, so an owner's install takes
+ * effect without a restart. Any other state is exactly the pinned legacy
+ * check above, failures included.
+ */
+export function resolveActivePrivateSlackConnectionV1(
+  database: Database.Database,
+  configuredConnectionId: string,
+  coordinates: PrivateSlackConnectionCoordinatesV1,
+): ActivePrivateSlackConnectionV1 {
+  const active = readActiveSlackConnectionV1(database);
+  if (active?.kind !== "nango") {
+    const current = resolveCurrentPrivateSlackConnectionV1(database, configuredConnectionId, coordinates);
+    if (active?.connection.connection_id !== current.connection_id) {
+      throw new Error("private approval runtime configured Slack connection is missing, inactive, or drifted");
+    }
+    return Object.freeze({ current, stored: active });
+  }
+  const { connection } = active;
+  if (
+    connection.tool_kind !== "slack" ||
+    connection.authority_id !== coordinates.authority_id ||
+    connection.organization_id !== coordinates.organization_id ||
+    connection.state_lineage_id !== coordinates.state_lineage_id
+  ) {
+    throw new Error("private approval runtime active Slack connection is drifted");
+  }
+  return Object.freeze({
+    current: Object.freeze({
+      connection_id: connection.connection_id,
+      connection_contract_sha256: active.contract_sha256,
+      connection_state_sha256: active.state_sha256,
+      provider_app_id: connection.provider_app_id,
+      provider_bot_id: connection.provider_bot_id,
+      provider_bot_user_id: connection.provider_bot_user_id,
+      provider_tenant_id: connection.provider_tenant_id,
+      provider_enterprise_id: connection.provider_enterprise_id,
+    }),
+    stored: active,
+  });
+}
+
+/**
+ * The connection a new card is delivered on: an active Nango connection, else
+ * the pinned one. Never throws for a missing connection; delivery then finds
+ * no current target and stays pending.
+ */
+export function activePrivateSlackConnectionIdV1(
+  database: Database.Database,
+  configuredConnectionId: string,
+): string {
+  const active = readActiveSlackConnectionV1(database);
+  return active?.kind === "nango" ? active.connection.connection_id : configuredConnectionId;
 }

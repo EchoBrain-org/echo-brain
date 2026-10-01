@@ -98,16 +98,20 @@ export function createSlackBotTokenSourceV1(input: {
  * The one rule for a bot token Slack rejects. The operation runs with a
  * token; on an auth failure it runs once more with a force-refreshed token,
  * unless the refresh returns the very token Slack just rejected (a legacy
- * local secret always does). An auth failure that the refresh does not cure
- * calls `on_auth_failure` (callers mark the connection "needs reinstall")
- * and is rethrown. Other failures are rethrown untouched. A failing report
- * or refresh never replaces the Slack error.
+ * local secret always does). Only a refreshed token that Slack still rejects
+ * calls `on_auth_failure` (callers mark the connection "needs reinstall"); a
+ * refresh that itself fails, such as Nango being down, proves nothing about
+ * the install and reports nothing. A connection already marked is not
+ * refreshed again until an install clears it. Auth failures are rethrown as
+ * Slack's error, other failures untouched.
  */
 export async function withSlackBotTokenV1<T>(
   input: {
     readonly token: SlackBotTokenGetterV1;
     readonly is_auth_failure: (error: unknown) => boolean;
     readonly on_auth_failure?: (error: unknown) => void;
+    /** True while the connection is marked "needs reinstall". */
+    readonly needs_reinstall?: () => boolean;
   },
   operation: (token: string) => Promise<T>,
 ): Promise<T> {
@@ -119,13 +123,20 @@ export async function withSlackBotTokenV1<T>(
     if (!input.is_auth_failure(error)) throw error;
     failure = error;
   }
-  let refreshed: string | undefined;
+  let marked = false;
+  try {
+    marked = input.needs_reinstall?.() === true;
+  } catch {
+    // Health is advisory; an unreadable mark still allows the one refresh.
+  }
+  if (marked) throw failure;
+  let refreshed: string;
   try {
     refreshed = await input.token({ force_refresh: true });
   } catch {
-    refreshed = undefined;
+    throw failure;
   }
-  if (refreshed !== undefined && refreshed !== first) {
+  if (refreshed !== first) {
     try {
       return await operation(refreshed);
     } catch (error) {

@@ -9,6 +9,13 @@ import { readActiveSlackConnectionV1 } from "../../src/organization-control-plan
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOrganizationControlBaselineV3 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { connectSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
+import { activateNangoSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
+import { serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
+import { FileOrganizationSecretStore } from "../../../../../packages/organization-control-plane/src/security/file-secret-store.js";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
 import { createSqliteSlackPersonIdentityLinkWorkflowV1, createSqliteSlackPersonIdentityLinkRepositoryV1 } from "../../src/person-identity/sqlite-slack-person-identity-link-repository-v1.js";
@@ -54,6 +61,7 @@ function beginRequest(requestId = "psb_00000000-0000-4000-8000-000000000001") {
 
 async function setup(
   currentAuthorization: () => PersonAccessAuthorization = () => authorization,
+  connection: "legacy" | "nango" = "legacy",
 ) {
   const database = new Database(":memory:");
   databases.push(database);
@@ -81,7 +89,7 @@ async function setup(
       bot_user_id: "U12345678",
       bot_id: "B12345678",
       app_id: "A12345678",
-      granted_scopes: [
+      granted_scopes: connection === "nango" ? SLACK_PRIVATE_APP_BOT_SCOPES_V1 : [
         "channels:history",
         "channels:read",
         "chat:write",
@@ -120,7 +128,8 @@ async function setup(
       verification_evidence_sha256: canonicalSha256("observed"),
     })),
   };
-  await connectSlackConnectionV1({
+  if (connection === "nango") await activateNango(database, slack);
+  else await connectSlackConnectionV1({
     authority_id: AUTHORITY_ID,
     organization_id: ORGANIZATION_ID,
     state_lineage_id: LINEAGE_ID,
@@ -160,8 +169,27 @@ async function setup(
   };
 }
 
+/** The organization's own app installed through Nango: no channel, the recipe's four scopes. */
+async function activateNango(database: Database.Database, slack: SlackIdentityProviderV1): Promise<void> {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-identity-nango-")));
+  directories.push(directory);
+  const secrets = new FileOrganizationSecretStore(join(directory, "secrets"));
+  const credentials = { kind: "echo-slack-app-credentials-v1" as const, app_id: "A12345678", client_id: "1234.5678",
+    client_secret: "client-secret-value", signing_secret: "signing-secret-value", nango_connection_id: null };
+  await activateNangoSlackConnectionV1({
+    database, secrets, verifier: slack, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID, state_lineage_id: LINEAGE_ID,
+    credential: { reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials },
+    nango: { connection_id: "nango-conn-1", tags: {}, team_id: "T12345678", enterprise_id: null, is_enterprise_install: false,
+      app_id: "A12345678", bot_user_id: "U12345678", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: TOKEN, updated_at: NOW },
+    confirm_replacement: false, now: () => NOW, new_connection_id: () => CONNECTION_ID,
+  });
+}
+
+const directories: string[] = [];
+
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
+  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
 describe("Person Slack identity-link workflow", () => {
@@ -584,6 +612,20 @@ describe("Person Slack identity-link workflow", () => {
     await application(1).begin(beginRequest(), "bearer");
     expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledWith("xoxb-refreshed", expect.anything(), undefined);
     expect(onRejected).toHaveBeenCalledOnce();
+  });
+
+  it("links a Person over an active Nango connection with the recipe scopes and no channel", async () => {
+    const context = await setup(() => authorization, "nango");
+    expect(readActiveSlackConnectionV1(context.database)).toMatchObject({ kind: "nango" });
+    expect((await context.application.tools("bearer")).tools).toEqual([{ provider: "slack", availability: "enabled",
+      personal_status: "unlinked", workspace_id: "T12345678", account_id: null }]);
+    const begun = await context.application.begin(beginRequest(), "bearer");
+    expect(context.slack.verifyChannel).not.toHaveBeenCalled();
+    expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledWith(TOKEN, expect.objectContaining({ channel_id: "D12345678" }), undefined);
+    await expect(context.application.complete({ request_id: "psc_00000000-0000-4000-8000-000000000001",
+      challenge_attempt_id: begun.challenge_attempt_id, challenge_message_ts: begun.challenge_message_ts, challenge_code: CODE }, "bearer"))
+      .resolves.toMatchObject({ connection_id: CONNECTION_ID, provider_subject_id: "U12345679", channel_id: "D12345678" });
+    expect((await context.application.tools("bearer")).tools).toMatchObject([{ personal_status: "linked", account_id: "U12345679" }]);
   });
 
   it("wires disconnect to cancel an in-flight browser callback before it can link", async () => {

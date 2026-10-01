@@ -10,6 +10,7 @@ import { withSlackBotTokenV1 } from "../organization-control-plane/application/s
 import type { ActiveSlackOrganizationTool, BeginPersonSlackIdentityLinkChallengeInput, BegunSlackIdentityLinkChallenge, CompletePersonSlackIdentityLinkChallengeInput, CompletedPersonSlackIdentityLink, PendingPersonSlackIdentityLinkChallenge } from "../organization-control-plane/application/slack-integration-contracts.js";
 import type { SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../organization-control-plane/application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { isSlackIdentityTokenRejectedV1, SlackIdentityProviderErrorV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
@@ -95,6 +96,8 @@ export interface SlackPersonIdentityLinkWorkflowOptionsV1 {
     ): string | Promise<string>;
     /** Slack kept rejecting the token for `reference` after one refresh. */
     reportRejected?(reference: OrganizationSecretReference): void;
+    /** True while `reference`'s connection is marked "needs reinstall". */
+    isRejected?(reference: OrganizationSecretReference): boolean;
   };
   readonly slack: SlackIdentityProviderV1;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
@@ -712,6 +715,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
             : token,
         is_auth_failure: isSlackIdentityTokenRejectedV1,
         on_auth_failure: () => this.options.secrets.reportRejected?.(tool.secret),
+        needs_reinstall: () => this.options.secrets.isRejected?.(tool.secret) === true,
       },
       operation,
     );
@@ -726,7 +730,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     connection: Awaited<
       ReturnType<SlackIdentityProviderV1["verifyConnection"]>
     >;
-    channel: Awaited<ReturnType<SlackIdentityProviderV1["verifyChannel"]>>;
+    channel: Awaited<ReturnType<SlackIdentityProviderV1["verifyChannel"]>> | null;
   }> {
     try {
       return await this.withToolToken(tool, token, async (current) => {
@@ -734,7 +738,10 @@ export class SlackPersonIdentityLinkWorkflowV1 {
           current,
           signal,
         );
-        for (const required of SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES) {
+        const requiredScopes = tool.kind === "nango"
+          ? SLACK_PRIVATE_APP_BOT_SCOPES_V1
+          : SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES;
+        for (const required of requiredScopes) {
           if (!connection.granted_scopes.includes(required)) {
             throw new AuthorityOperationError(
               "invalid_request",
@@ -742,7 +749,8 @@ export class SlackPersonIdentityLinkWorkflowV1 {
             );
           }
         }
-        const channel = await this.options.slack.verifyChannel(
+        // A Nango connection has no channel: the private DM is the only destination.
+        const channel = tool.channel_id === null ? null : await this.options.slack.verifyChannel(
           current,
           tool.channel_id,
           connection.team_id,
@@ -763,7 +771,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       >;
       channel: Awaited<
         ReturnType<SlackIdentityProviderV1["verifyChannel"]>
-      >;
+      > | null;
     },
   ): boolean {
     return (
@@ -772,8 +780,10 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       verified.connection.bot_user_id === tool.bot_user_id &&
       verified.connection.bot_id === tool.bot_id &&
       verified.connection.app_id === tool.app_id &&
-      verified.channel.team_id === tool.team_id &&
-      verified.channel.channel_id === tool.channel_id
+      (tool.channel_id === null
+        ? verified.channel === null
+        : verified.channel?.team_id === tool.team_id &&
+          verified.channel.channel_id === tool.channel_id)
     );
   }
 

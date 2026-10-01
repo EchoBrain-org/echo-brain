@@ -170,6 +170,34 @@ describe("Slack bot-token auth-failure rule", () => {
     expect(operation).toHaveBeenCalledTimes(1);
     expect(onAuthFailure).toHaveBeenCalledWith(authFailure);
   });
+
+  it("marks nothing when the refresh itself fails, and rethrows Slack's error", async () => {
+    const onAuthFailure = vi.fn();
+    const operation = vi.fn(async () => { throw authFailure; });
+    const token = vi.fn(async (options?: { force_refresh?: boolean }) => {
+      if (options?.force_refresh === true) throw new Error("Nango is unavailable");
+      return "xoxb-cached";
+    });
+    await expect(withSlackBotTokenV1({ token, is_auth_failure: isAuthFailure, on_auth_failure: onAuthFailure }, operation))
+      .rejects.toBe(authFailure);
+    expect(token).toHaveBeenLastCalledWith({ force_refresh: true });
+    expect(operation).toHaveBeenCalledTimes(1);
+    expect(onAuthFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh a connection already marked as needing reinstall", async () => {
+    const context = await rule(["auth", "auth", "auth"]);
+    await expect(context.outcome).rejects.toBe(authFailure);
+    const token = vi.fn(async () => "xoxb-nango-2");
+    const operation = vi.fn(async () => { throw authFailure; });
+    await expect(withSlackBotTokenV1({
+      token, is_auth_failure: isAuthFailure,
+      needs_reinstall: () => context.health.needsReinstall(context.connection.state_sha256),
+    }, operation)).rejects.toBe(authFailure);
+    expect(token).toHaveBeenCalledOnce();
+    expect(token).toHaveBeenCalledWith();
+    expect(operation).toHaveBeenCalledOnce();
+  });
 });
 
 describe("Slack connection health V1", () => {

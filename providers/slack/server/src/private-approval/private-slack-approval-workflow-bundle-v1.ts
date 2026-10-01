@@ -2,7 +2,13 @@ import { bindApprovalWorkflowStateV1 } from "@echo-brain/organization-processing
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { join } from "node:path";
+import type Database from "better-sqlite3";
 import { FileOrganizationSecretStore } from "../organization-control-plane/slack-approval-integration-v1.js";
+import { findSlackAppCredentialsByReferenceSha256V1 } from "../organization-control-plane/application/slack-app-credentials-v1.js";
+import type { SlackBotTokenSourceV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
+import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
+import type { StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
+import type { SlackWebApiClientOptions } from "../processing/adapters/shared/slack/slack-web-api-client.js";
 import { SqliteSlackBotTokenReaderV1 } from "../organization-control-plane/persistence/sqlite-slack-bot-token-reader-v1.js";
 import { SqliteSlackDmApprovalPersistenceV1 } from "../organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import { readPrivateAuthoritySlackSigningSecret } from "../slack-private-credentials-v1.js";
@@ -18,26 +24,39 @@ import { PrivateSlackApprovalTerminalCoordinatorV1 } from "./private-slack-appro
 import { createPrivateSlackApprovalInteractionHandlerV1 } from "./private-slack-approval-interaction-handler-v1.js";
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-protocol-v1.js";
 import { resolveMeetingOwnerPrivateSlackApprovalReviewerV1 } from "./resolve-meeting-owner-private-slack-approval-reviewer-v1.js";
-import { resolveCurrentPrivateSlackConnectionV1, type CurrentPrivateSlackConnectionV1 } from "./resolve-current-private-slack-connection-v1.js";
+import { activePrivateSlackConnectionIdV1, resolveActivePrivateSlackConnectionV1, resolveCurrentPrivateSlackConnectionV1, type CurrentPrivateSlackConnectionV1, type PrivateSlackConnectionCoordinatesV1 } from "./resolve-current-private-slack-connection-v1.js";
 import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "./sqlite-private-slack-approval-assignment-state-v1.js";
 import { SqlitePrivateSlackApprovalTerminalAuthorityV1 } from "./sqlite-private-slack-approval-terminal-authority-v1.js";
 import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "./sqlite-stable-private-approval-authority-fence-v1.js";
 
+type PrivateSlackApprovalPosterPortV1 = Pick<
+  PrivateSlackApprovalCardPosterV1,
+  | "openDirectMessage"
+  | "postMarker"
+  | "reconcileMarker"
+  | "publish"
+  | "tombstone"
+  | "renderTerminal"
+>;
+
 export interface PrivateSlackApprovalWorkflowBundleConfigV1 {
   readonly state_directory: string;
-  /** Path only. The secret is read only after source admission. */
+  /** Path only, for a legacy connection. The secret is read only after source admission. */
   readonly signing_secret_file: string;
+  /** The manifest-pinned legacy connection. */
   readonly connection_id: string;
+  /**
+   * Present only when Nango is configured. The lane then reads the active
+   * connection at use time: a Nango connection takes over without a restart,
+   * with its bot token from this source and its signing secret from its
+   * credential bundle. A legacy connection keeps the pinned id and
+   * `signing_secret_file`. Absent, the lane is exactly the legacy one.
+   */
+  readonly bot_token_source?: SlackBotTokenSourceV1;
+  /** Marked when Slack keeps rejecting a refreshed bot token; the owner's install clears it. */
+  readonly connection_health?: SlackConnectionHealthV1;
   /** Provider-specific test seam; production reads the admitted Slack token. */
-  readonly poster?: Pick<
-    PrivateSlackApprovalCardPosterV1,
-    | "openDirectMessage"
-    | "postMarker"
-    | "reconcileMarker"
-    | "publish"
-    | "tombstone"
-    | "renderTerminal"
-  >;
+  readonly poster?: PrivateSlackApprovalPosterPortV1;
   /** Content-free diagnostic emitted only after Slack HMAC verification. */
   readonly on_rejection?: (event: {
     readonly stage: PrivateSlackApprovalInteractionRejectionStageV1;
@@ -68,6 +87,89 @@ function assertPrivateSlackApprovalPresentationOwnershipV1(
       throw new Error(`private Slack approval workflow cannot prove ownership of outstanding ${pending.state} presentation ${pending.approval_id}`);
     }
   }
+}
+
+/**
+ * One poster per connection state, so a replaced connection never reuses the
+ * old bot's retry gate or identity. Each Slack call takes its token from the
+ * source for the connection active at that moment; a connection that cannot
+ * be resolved behaves like an unavailable token.
+ */
+export function createActivePrivateSlackApprovalPosterV1(input: {
+  readonly connection: () => StoredSlackConnectionV1;
+  readonly bot_token_source: SlackBotTokenSourceV1;
+  readonly connection_health?: SlackConnectionHealthV1;
+  /** Test seam for the Slack transport. */
+  readonly client_options?: SlackWebApiClientOptions;
+}): PrivateSlackApprovalPosterPortV1 {
+  let current: { readonly state_sha256: string; readonly poster: PrivateSlackApprovalCardPosterV1 } | undefined;
+  const poster = (): PrivateSlackApprovalCardPosterV1 => {
+    let connection: StoredSlackConnectionV1;
+    try {
+      connection = input.connection();
+    } catch (error) {
+      return new PrivateSlackApprovalCardPosterV1(() => Promise.reject(error), input.client_options);
+    }
+    if (current?.state_sha256 !== connection.state_sha256) {
+      const health = input.connection_health;
+      current = {
+        state_sha256: connection.state_sha256,
+        poster: new PrivateSlackApprovalCardPosterV1(
+          (options) => input.bot_token_source.botToken(connection, options),
+          {
+            ...input.client_options,
+            ...(health === undefined ? {} : {
+              on_auth_failure: () => health.markNeedsReinstall(connection.state_sha256),
+              needs_reinstall: () => health.needsReinstall(connection.state_sha256),
+            }),
+          },
+        ),
+      };
+    }
+    return current.poster;
+  };
+  return Object.freeze({
+    openDirectMessage: (...args) => poster().openDirectMessage(...args),
+    postMarker: (...args) => poster().postMarker(...args),
+    reconcileMarker: (...args) => poster().reconcileMarker(...args),
+    publish: (...args) => poster().publish(...args),
+    tombstone: (...args) => poster().tombstone(...args),
+    renderTerminal: (...args) => poster().renderTerminal(...args),
+  });
+}
+
+/**
+ * The Nango-configured lane: every use reads the active connection, so an
+ * owner's install applies without a restart.
+ */
+function activeConnectionLaneV1(input: {
+  readonly config: PrivateSlackApprovalWorkflowBundleConfigV1;
+  readonly bot_token_source: SlackBotTokenSourceV1;
+  readonly database: Database.Database;
+  readonly coordinates: PrivateSlackConnectionCoordinatesV1;
+}) {
+  const { config, database, coordinates } = input;
+  const secrets = new FileOrganizationSecretStore(join(config.state_directory, "secrets"));
+  const active = () => resolveActivePrivateSlackConnectionV1(database, config.connection_id, coordinates);
+  let fileSigningSecret: string | undefined;
+  const signingSecret = (): string => {
+    const { stored } = active();
+    if (stored.kind === "nango") {
+      return findSlackAppCredentialsByReferenceSha256V1(secrets, stored.state.credential_reference_sha256).credentials.signing_secret;
+    }
+    fileSigningSecret ??= readPrivateAuthoritySlackSigningSecret(`file:${config.signing_secret_file}`);
+    return fileSigningSecret;
+  };
+  return {
+    active,
+    connection_id: () => activePrivateSlackConnectionIdV1(database, config.connection_id),
+    poster: () => createActivePrivateSlackApprovalPosterV1({
+      connection: () => active().stored,
+      bot_token_source: input.bot_token_source,
+      ...(config.connection_health === undefined ? {} : { connection_health: config.connection_health }),
+    }),
+    signing_secret: signingSecret,
+  };
 }
 
 /** Provider persistence owns its connections; none cross the application port. */
@@ -105,7 +207,9 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
     ): Promise<void> {
       const persistence = openPrivateApprovalPersistence(config.state_directory);
       try {
-        const slack = resolveCurrentPrivateSlackConnectionV1(persistence.control_plane_database, config.connection_id, context.coordinates);
+        const slack = config.bot_token_source === undefined
+          ? resolveCurrentPrivateSlackConnectionV1(persistence.control_plane_database, config.connection_id, context.coordinates)
+          : resolveActivePrivateSlackConnectionV1(persistence.control_plane_database, config.connection_id, context.coordinates).current;
         assertPrivateSlackApprovalPresentationOwnershipV1({
           ...context,
           state: bindProviderState(context, persistence.authority_database),
@@ -116,13 +220,23 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
       const persistence = openPrivateApprovalPersistence(config.state_directory);
       const state = bindProviderState(context, persistence.authority_database);
       try {
-        const slack = resolveCurrentPrivateSlackConnectionV1(
+        const lane = config.bot_token_source === undefined ? undefined : activeConnectionLaneV1({
+          config,
+          bot_token_source: config.bot_token_source,
+          database: persistence.control_plane_database,
+          coordinates: context.coordinates,
+        });
+        const loaded = lane?.active();
+        const slack = loaded?.current ?? resolveCurrentPrivateSlackConnectionV1(
           persistence.control_plane_database,
           config.connection_id,
           context.coordinates,
         );
+        // Fail at startup, as the legacy lane does, when the active legacy connection lacks its file.
+        if (lane !== undefined && loaded?.stored.kind === "legacy") lane.signing_secret();
         const poster =
           config.poster ??
+          lane?.poster() ??
           new PrivateSlackApprovalCardPosterV1(
             new SqliteSlackBotTokenReaderV1(
               persistence.control_plane_database,
@@ -149,7 +263,7 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
           authority_database: persistence.authority_database,
           control_plane_database: persistence.control_plane_database,
           coordinates: context.coordinates,
-          connection_id: slack.connection_id,
+          connection_id: lane?.connection_id ?? slack.connection_id,
           assignments,
           control_plane: controlPlane,
           poster,
@@ -178,7 +292,7 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
             : { journey_telemetry: context.journey_telemetry }),
         });
         const interactions = createPrivateSlackApprovalInteractionHandlerV1({
-          signing_secret: readPrivateAuthoritySlackSigningSecret(
+          signing_secret: lane?.signing_secret ?? readPrivateAuthoritySlackSigningSecret(
             `file:${config.signing_secret_file}`,
           ),
           persistence: controlPlane,

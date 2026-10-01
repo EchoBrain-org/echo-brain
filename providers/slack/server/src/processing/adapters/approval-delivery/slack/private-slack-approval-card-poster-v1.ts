@@ -9,6 +9,8 @@ const DEFINITIVE_POST_FAILURE_CODES = new Set([
   "invalid",
 ]);
 const SLACK_DIRECT_MESSAGE_CHANNEL = /^D[A-Z0-9]{2,255}$/;
+/** The bot token could not be obtained, so no request reached Slack. */
+const TOKEN_UNAVAILABLE = Symbol("Slack bot token unavailable");
 
 export interface PrivateSlackApprovalCardPresentationV1 {
   readonly text: string;
@@ -160,6 +162,7 @@ export class PrivateSlackApprovalCardPosterV1 {
   private readonly token: SlackBotTokenGetterV1;
   private readonly client_options: SlackWebApiClientOptions;
   private readonly on_auth_failure: ((error: SlackApiError) => void) | undefined;
+  private readonly needs_reinstall: (() => boolean) | undefined;
   private readonly now: () => number;
   /**
    * Slack's Retry-After is per process/token for this V1 delivery adapter.
@@ -174,20 +177,23 @@ export class PrivateSlackApprovalCardPosterV1 {
   /**
    * A function token is resolved for every Slack call. `on_auth_failure`
    * hears a Slack auth error that one refreshed token did not cure (see
-   * `withSlackBotTokenV1`); a fixed string token is never refreshed.
+   * `withSlackBotTokenV1`); a fixed string token is never refreshed, and
+   * neither is a connection `needs_reinstall` reports as already marked.
    */
   constructor(
     token: string | SlackBotTokenGetterV1,
     options: SlackWebApiClientOptions & {
       readonly now?: () => number;
       readonly on_auth_failure?: (error: SlackApiError) => void;
+      readonly needs_reinstall?: () => boolean;
     } = {},
   ) {
-    const { now, on_auth_failure, ...clientOptions } = options;
+    const { now, on_auth_failure, needs_reinstall, ...clientOptions } = options;
     this.now = now ?? Date.now;
     this.token = typeof token === "string" ? async () => token : token;
     this.client_options = clientOptions;
     this.on_auth_failure = on_auth_failure;
+    this.needs_reinstall = needs_reinstall;
   }
 
   private slack<T>(call: (client: SlackWebApiClient) => Promise<T>): Promise<T> {
@@ -196,9 +202,30 @@ export class PrivateSlackApprovalCardPosterV1 {
         token: this.token,
         is_auth_failure: isSlackAuthFailure,
         on_auth_failure: (error) => this.on_auth_failure?.(error as SlackApiError),
+        ...(this.needs_reinstall === undefined ? {} : { needs_reinstall: this.needs_reinstall }),
       },
       (token) => call(new SlackWebApiClient(token, this.client_options)),
     );
+  }
+
+  /**
+   * `slack`, except that a bot token the source cannot provide (a Nango
+   * outage, say) resolves to TOKEN_UNAVAILABLE: nothing reached Slack, so a
+   * step that is safe to repeat can answer `retry_allowed`.
+   */
+  private async slackOrNoToken<T>(
+    call: (client: SlackWebApiClient) => Promise<T>,
+  ): Promise<T | typeof TOKEN_UNAVAILABLE> {
+    let requested = false;
+    try {
+      return await this.slack((client) => {
+        requested = true;
+        return call(client);
+      });
+    } catch (error) {
+      if (requested) throw error;
+      return TOKEN_UNAVAILABLE;
+    }
   }
 
   private retryBlocked(): boolean {
@@ -224,9 +251,10 @@ export class PrivateSlackApprovalCardPosterV1 {
   ): Promise<PrivateSlackDirectMessageOutcomeV1> {
     if (this.retryBlocked()) return { kind: "retry_allowed" };
     try {
-      const opened = await this.slack((client) =>
+      const opened = await this.slackOrNoToken((client) =>
         client.openDirectMessage(providerSubjectId, signal),
       );
+      if (opened === TOKEN_UNAVAILABLE) return { kind: "retry_allowed" };
       return { kind: "opened", ...opened };
     } catch (error) {
       if (signal?.aborted === true) throw error;
@@ -245,7 +273,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "retry_allowed" };
     try {
-      const posted = await this.slack((client) =>
+      const posted = await this.slackOrNoToken((client) =>
         client.postMessage(
           {
             channel: input.dm_channel_id,
@@ -258,6 +286,7 @@ export class PrivateSlackApprovalCardPosterV1 {
           signal,
         ),
       );
+      if (posted === TOKEN_UNAVAILABLE) return { kind: "retry_allowed" };
       return { kind: "posted", provider_message_ts: posted.ts };
     } catch (error) {
       if (signal?.aborted === true) throw error;

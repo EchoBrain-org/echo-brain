@@ -113,6 +113,8 @@ export interface SlackIntegrationProvider {
 }
 
 export interface ActiveSlackOrganizationTool {
+  /** "nango": the organization's own app installed through Nango; "legacy": local bot token and channel. */
+  kind: "nango" | "legacy";
   connection_attempt_id: string;
   connection_id: string;
   team_id: string;
@@ -120,7 +122,8 @@ export interface ActiveSlackOrganizationTool {
   bot_user_id: string;
   bot_id: string;
   app_id: string | null;
-  channel_id: string;
+  /** The legacy identity-link channel; a Nango connection has none. */
+  channel_id: string | null;
   approve_reaction: string;
   reject_reaction: string;
   granted_scopes: readonly string[];

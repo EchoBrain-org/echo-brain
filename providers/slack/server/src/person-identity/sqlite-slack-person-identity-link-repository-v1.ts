@@ -6,9 +6,9 @@ import {
 } from "@echo-brain/federation-protocol";
 import { AUTHORITY_FILE_SECRET_BACKEND, type OrganizationSecretReference } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 import { SLACK_DEFAULT_APPROVE_REACTION, SLACK_DEFAULT_REJECT_REACTION, type ActiveSlackOrganizationTool, type BeginPersonSlackIdentityLinkChallengeInput, type BegunSlackIdentityLinkChallenge, type CompletePersonSlackIdentityLinkChallengeInput, type CompletedPersonSlackIdentityLink, type PendingPersonSlackIdentityLinkChallenge, type PersonSlackIdentityLinkSession } from "../organization-control-plane/application/slack-integration-contracts.js";
-import { buildExternalHumanIdentityLinkContractV2, validateExternalHumanIdentityLinkContractV2, validateOrganizationToolConnectionContractV2, validateOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../organization-control-plane/application/organization-tool-connection-contracts-v2.js";
+import { buildExternalHumanIdentityLinkContractV2, validateExternalHumanIdentityLinkContractV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
-import { slackConnectionKindV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
+import { readActiveSlackConnectionV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import type Database from "better-sqlite3";
 import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
 import { SlackPersonIdentityLinkWorkflowV1, type SlackPersonIdentityLinkAuthenticationPort, type SlackPersonIdentityLinkRepositoryPort } from "./slack-person-identity-link-workflow-v1.js";
@@ -32,6 +32,8 @@ export interface SlackBotTokenAccessV1 {
   ): string | Promise<string>;
   /** Slack kept rejecting this connection's token after one refresh. */
   onActiveSlackBotTokenRejected?(connection: StoredSlackConnectionV1): void;
+  /** True while this connection is marked "needs reinstall": no refresh is tried. */
+  isActiveSlackBotTokenRejected?(connection: StoredSlackConnectionV1): boolean;
 }
 
 export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
@@ -78,14 +80,6 @@ interface ChallengeRow {
   readonly reply_message_ts: string | null;
   readonly created_at: string;
   readonly expires_at: string;
-}
-
-function parseCanonical(value: string): unknown {
-  const parsed = JSON.parse(value) as unknown;
-  if (canonicalJson(parsed) !== value) {
-    throw new Error("stored Slack contract is not canonical");
-  }
-  return parsed;
 }
 
 function addChallengeLifetime(now: string): string {
@@ -642,6 +636,14 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
     if (active !== null) access.onActiveSlackBotTokenRejected(active.stored);
   }
 
+  /** True only while the connection the reference still names is marked. */
+  slackTokenRejected(reference: OrganizationSecretReference): boolean {
+    const access = this.options.slack_token_access;
+    if (access.isActiveSlackBotTokenRejected === undefined) return false;
+    const active = this.activeConnectionFor(reference);
+    return active !== null && access.isActiveSlackBotTokenRejected(active.stored);
+  }
+
   /** The tool's secret reference is a pseudo-handle naming the active connection. */
   private activeConnectionFor(
     reference: OrganizationSecretReference,
@@ -823,60 +825,32 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
   }
 
   private activeConnection(): ActiveSlackConnection | null {
-    const row = this.options.database
-      .prepare(
-        `SELECT contract.contract_json, contract.contract_sha256, current_state.state_json, current_state.state_sha256
-       FROM organization_tool_connection_current_state AS current_state
-       JOIN organization_tool_connection_contracts AS contract
-         ON contract.connection_id = current_state.connection_id
-        AND contract.contract_sha256 = current_state.connection_contract_sha256
-       WHERE current_state.current_status = 'active'`,
-      )
-      .get() as
-      | {
-          contract_json: string;
-          contract_sha256: `sha256:${string}`;
-          state_json: string;
-          state_sha256: `sha256:${string}`;
-        }
-      | undefined;
-    if (row === undefined) return null;
-    const connection = validateOrganizationToolConnectionContractV2(
-      parseCanonical(row.contract_json),
-    );
-    const state = validateOrganizationToolConnectionStateV2(
-      parseCanonical(row.state_json),
-    );
+    const stored = readActiveSlackConnectionV1(this.options.database);
+    if (stored === undefined) return null;
+    const { connection, state } = stored;
     if (
-      canonicalSha256(connection) !== row.contract_sha256 ||
-      canonicalSha256(state) !== row.state_sha256 ||
-      state.connection_contract_sha256 !== row.contract_sha256 ||
-      state.connection_status !== "active" ||
       connection.authority_id !== this.options.authority_id ||
       connection.organization_id !== this.options.organization_id ||
       connection.state_lineage_id !== this.options.state_lineage_id ||
-      connection.public_connection_configuration_sha256 !==
-        canonicalSha256({
-          approval_adapter_id: "slack-reactions",
-          approval_channel_id: this.options.approval_channel_id,
-          approve_reaction: "white_check_mark",
-          kind: "echo-clean-slack-connection-public-configuration-v1",
-          reject_reaction: "x",
-        })
+      // A Nango connection commits to the recipe, not to this runtime's channel.
+      (stored.kind === "legacy" &&
+        connection.public_connection_configuration_sha256 !==
+          canonicalSha256({
+            approval_adapter_id: "slack-reactions",
+            approval_channel_id: this.options.approval_channel_id,
+            approve_reaction: "white_check_mark",
+            kind: "echo-clean-slack-connection-public-configuration-v1",
+            reject_reaction: "x",
+          }))
     ) {
       throw new Error("stored Slack connection is inconsistent");
     }
     return Object.freeze({
       connection,
       state,
-      stored: Object.freeze({
-        kind: slackConnectionKindV1(connection),
-        connection,
-        contract_sha256: row.contract_sha256,
-        state,
-        state_sha256: row.state_sha256,
-      }),
+      stored,
       tool: Object.freeze({
+        kind: stored.kind,
         connection_attempt_id: state.verification_event_id,
         connection_id: connection.connection_id,
         team_id: connection.provider_tenant_id,
@@ -884,7 +858,7 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
         bot_user_id: connection.provider_bot_user_id,
         bot_id: connection.provider_bot_id,
         app_id: connection.provider_app_id,
-        channel_id: this.options.approval_channel_id,
+        channel_id: stored.kind === "nango" ? null : this.options.approval_channel_id,
         approve_reaction: SLACK_DEFAULT_APPROVE_REACTION,
         reject_reaction: SLACK_DEFAULT_REJECT_REACTION,
         granted_scopes: state.observed_granted_scopes,
@@ -924,6 +898,7 @@ export function createSqliteSlackPersonIdentityLinkWorkflowV1(
     secrets: {
       read: (reference, options) => repository.readSlackToken(reference, options),
       reportRejected: (reference) => repository.reportSlackTokenRejected(reference),
+      isRejected: (reference) => repository.slackTokenRejected(reference),
     },
     slack: input.slack,
     authorization_fence: input.authorization_fence,

@@ -8,11 +8,14 @@ import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonica
 import { applyOrganizationControlBaselineV3, openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_RECIPE_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
+import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
+import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
 import { buildEchoSlackAppManifestV1, SLACK_PRIVATE_APP_BOT_SCOPES_V1, SlackAppManifestProviderErrorV1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { SlackIdentityProviderErrorV1 } from "../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { findPendingSlackAppCredentialsV1, serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
 import { SlackConnectionHealthV1 } from "../../src/organization-control-plane/application/slack-connection-health-v1.js";
+import { createSlackBotTokenSourceV1 } from "../../src/organization-control-plane/application/slack-bot-token-source-v1.js";
 import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { SlackOrganizationSetupWorkflowV1 } from "../../src/organization-setup/slack-organization-setup-workflow-v1.js";
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "../../src/person-identity/slack-person-external-identity-runtime-bundle-v1.js";
@@ -430,8 +433,19 @@ describe("Slack runtime bundle with organization setup", () => {
     const f = fakes();
     const context = { outputs: [] as unknown[] };
     contexts.push(context);
+    // The DM link reaches Slack only through these fakes, with the token the bundle's source fetched from Nango.
+    const provider = {
+      verifyConnection: f.verifier.verifyConnection,
+      verifyChannel: vi.fn(async () => { throw new Error("a Nango connection has no channel"); }),
+      verifyHuman: vi.fn(),
+      openIdentityLinkDirectMessage: vi.fn(async (_token: string, user: string, team: string) => ({ team_id: team, channel_id: "D0EMPLOYEE", recipient_user_id: user })),
+      postIdentityLinkChallenge: vi.fn(async (_token: string, input: { channel_id: string }) => ({ team_id: "T01", channel_id: input.channel_id, challenge_message_ts: "100.000001" })),
+      observeIdentityLinkChallenge: vi.fn(),
+    };
     const opened = createSlackPersonExternalIdentityRuntimeBundleV1({
       identity_link_channel_id: "C123",
+      provider,
+      bot_token_source: createSlackBotTokenSourceV1({ secrets: new FileOrganizationSecretStore(join(directory, "secrets")), nango: f.nango }),
       ...(options.connection_health === undefined ? {} : { connection_health: options.connection_health }),
       ...(options.setup === false ? {} : { organization_setup: { authority_url: AUTHORITY_URL, nango: { client: f.nango, callback_url: NANGO_CALLBACK },
         manifest_provider: f.manifest, verifier: f.verifier, ...(options.setup_health === undefined ? {} : { health: options.setup_health }) } }),
@@ -455,7 +469,21 @@ describe("Slack runtime bundle with organization setup", () => {
         headers: { authorization: `Bearer ${token}` } });
     });
     const tools = (token: string) => record(() => opened.tools(token));
-    return { opened, call, tools, f, directory };
+    return { opened, call, tools, f, directory, provider };
+  }
+
+  /** The owner's whole setup over the provider routes, ending with an active Nango connection. */
+  async function installOverRoutes(context: ReturnType<typeof open>): Promise<void> {
+    await context.call(ORGANIZATION_API_SLACK_SETUP_PATH_V1, "owner", SETUP_REQUEST);
+    const begun = await context.call(ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, "owner", BEGIN_REQUEST) as { body: { attempt_id: string } };
+    finishConnectFor(context.f);
+    await expect(context.call(ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, "owner", { attempt_id: begun.body.attempt_id }))
+      .resolves.toMatchObject({ body: { status: "complete" } });
+  }
+
+  function activeStateSha256(directory: string): `sha256:${string}` {
+    const database = openOrganizationControlDatabase(join(directory, "integrations.sqlite"), { fileMustExist: true });
+    try { return readActiveSlackConnectionV1(database)!.state_sha256; } finally { database.close(); }
   }
 
   it("mounts the setup routes only when setup options are provided", () => {
@@ -487,6 +515,44 @@ describe("Slack runtime bundle with organization setup", () => {
     for (const file of [...secretFiles, ...databaseFiles]) expect(readFileSync(file).toString("latin1")).not.toContain(CONFIG_TOKEN);
     for (const file of databaseFiles) {
       for (const secret of [CLIENT_SECRET, SIGNING_SECRET]) expect(readFileSync(file).toString("latin1")).not.toContain(secret);
+    }
+  });
+
+  it("lists a connected Nango Slack to everyone, with the owner's connected and needs_reinstall status", async () => {
+    const health = new SlackConnectionHealthV1();
+    const context = open({ connection_health: health });
+    try {
+      await installOverRoutes(context);
+      const enabled = { tool_id: "slack", display_name: "Slack", availability: "enabled", personal_status: "unlinked",
+        external_scope_id: "T01", external_subject_id: null };
+      await expect(context.tools("owner")).resolves.toEqual([{ ...enabled, organization_setup: "connected" }]);
+      await expect(context.tools("employee")).resolves.toEqual([{ ...enabled, organization_setup: null }]);
+      health.markNeedsReinstall(activeStateSha256(context.directory));
+      await expect(context.tools("owner")).resolves.toEqual([{ ...enabled, organization_setup: "needs_reinstall" }]);
+      await expect(context.tools("employee")).resolves.toEqual([{ ...enabled, organization_setup: null }]);
+    } finally {
+      context.opened.close();
+    }
+  });
+
+  it("runs the DM link and the browser link on the Nango connection the owner installed", async () => {
+    const context = open();
+    try {
+      await installOverRoutes(context);
+      await expect(context.call(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, "employee", {
+        request_id: `psb_${uuid(1)}`, recipient_user_id: "U0EMPLOYEE",
+        challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(Buffer.alloc(32).toString("base64url")),
+      })).resolves.toMatchObject({ status: 201, body: { channel_id: "D0EMPLOYEE", provider_tenant_id: "T01" } });
+      expect(context.provider.verifyChannel).not.toHaveBeenCalled();
+      expect(context.provider.postIdentityLinkChallenge).toHaveBeenCalledWith(`${BOT_TOKEN}-nango-conn-1`, expect.anything(), undefined);
+      // The browser link is mounted by setup alone and uses the installed app's own client.
+      const browser = await context.call(ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH, "owner", { request_id: `psb_${uuid(2)}` }) as { body: { authorization_url: string } };
+      const authorization = new URL(browser.body.authorization_url);
+      expect(authorization.searchParams.get("client_id")).toBe("1234.5678");
+      expect(authorization.searchParams.get("redirect_uri")).toBe(`${AUTHORITY_URL}/v2/person/external-identities/slack/browser/callback`);
+      expect(authorization.searchParams.get("team")).toBe("T01");
+    } finally {
+      context.opened.close();
     }
   });
 

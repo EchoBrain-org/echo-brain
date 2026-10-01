@@ -371,6 +371,19 @@ describe("private Slack approval card poster V1", () => {
     expect(onAuthFailure).toHaveBeenCalledTimes(2);
   });
 
+  it("lets the DM open and marker post be retried when no bot token can be obtained", async () => {
+    const requests: string[] = [];
+    const poster = new PrivateSlackApprovalCardPosterV1(async () => { throw new Error("Nango is unavailable"); }, {
+      fetchImpl: async (url) => { requests.push(String(url)); return new Response(JSON.stringify({ ok: true })); },
+    });
+    await expect(poster.openDirectMessage("U123")).resolves.toEqual({ kind: "retry_allowed" });
+    await expect(poster.postMarker({ approval_id: "apr_123", dm_channel_id: "D123" })).resolves.toEqual({ kind: "retry_allowed" });
+    // Steps that may already have reached Slack keep failing loudly.
+    await expect(poster.publish({ approval_id: "apr_123", dm_channel_id: "D123", provider_message_ts: "123.000001", card: CARD }))
+      .rejects.toThrow("Nango is unavailable");
+    expect(requests).toEqual([]);
+  });
+
   it("honors Retry-After before retrying a direct-message open", async () => {
     let now = 10_000;
     let requests = 0;

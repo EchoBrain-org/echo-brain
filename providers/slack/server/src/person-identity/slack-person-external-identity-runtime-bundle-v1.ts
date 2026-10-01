@@ -10,7 +10,9 @@ import { SlackOrganizationSetupWorkflowV1, type SlackOrganizationSetupOptionsV1 
 import { SlackWebIdentityProviderV1, type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { createSlackBotTokenSourceV1, type SlackBotTokenSourceV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
 import { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
-import type { StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
+import { findSlackAppCredentialsByReferenceSha256V1 } from "../organization-control-plane/application/slack-app-credentials-v1.js";
+import type { ActiveSlackOrganizationTool } from "../organization-control-plane/application/slack-integration-contracts.js";
+import { readActiveSlackConnectionV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -21,7 +23,7 @@ import type {
 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
 import { createSqliteSlackPersonIdentityLinkWorkflowV1, createSqliteSlackPersonIdentityLinkRepositoryV1, type CreateSqliteSlackPersonIdentityLinkWorkflowV1Input } from "./sqlite-slack-person-identity-link-repository-v1.js";
 import { SlackPersonBrowserIdentityLinkWorkflowV1 } from "./slack-person-browser-identity-link-workflow-v1.js";
-import type { SlackBrowserIdentityProvider } from "../adapters/oidc/slack-browser-identity-provider.js";
+import { createSlackBrowserIdentityProvider, type SlackBrowserIdentityProvider } from "../adapters/oidc/slack-browser-identity-provider.js";
 import type {
   PersonExternalIdentityRuntimeBundleV1,
   PersonExternalIdentityRuntimeInputV1,
@@ -189,12 +191,13 @@ function unavailableSlackIdentityApplication(runtime: PersonExternalIdentityRunt
 export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
   readonly identity_link_channel_id?: string;
   readonly provider?: SlackIdentityProviderV1;
+  /** The legacy browser client. A Nango connection uses its own app's client instead. */
   readonly browser_provider?: SlackBrowserIdentityProvider;
   /** Absent: the legacy local-secret source. */
   readonly bot_token_source?: SlackBotTokenSourceV1;
   /** Marked when Slack keeps rejecting the bot token after one refresh. */
   readonly connection_health?: SlackConnectionHealthV1;
-  /** Present only when Nango is configured: mounts the owner setup routes. */
+  /** Present only when Nango is configured: mounts the owner setup routes and the browser link. */
   readonly organization_setup?: SlackOrganizationSetupOptionsV1;
 }): PersonExternalIdentityRuntimeBundleV1 {
   return Object.freeze({
@@ -238,17 +241,43 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
             ...(health === undefined ? {} : {
               onActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
                 health.markNeedsReinstall(connection.state_sha256),
+              isActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
+                health.needsReinstall(connection.state_sha256),
             }),
           },
           authorization_fence: new ReadableSearchAuthorizationFence(),
         } satisfies CreateSqliteSlackPersonIdentityLinkWorkflowV1Input;
         const repository = createSqliteSlackPersonIdentityLinkRepositoryV1(workflowInput);
-        const browser = input.browser_provider === undefined ? undefined : new SlackPersonBrowserIdentityLinkWorkflowV1({
+        const setupOptions = input.organization_setup;
+        let nangoBrowser: { readonly reference_sha256: string; readonly provider: SlackBrowserIdentityProvider } | undefined;
+        /** Legacy: the configured client. Nango: the installed app's own client, redirecting to this Authority. */
+        const browserProviderFor = (tool: ActiveSlackOrganizationTool): SlackBrowserIdentityProvider => {
+          if (tool.kind === "legacy") {
+            if (input.browser_provider === undefined) throw new Error("Slack browser connection is not configured");
+            return input.browser_provider;
+          }
+          const active = readActiveSlackConnectionV1(database);
+          if (setupOptions === undefined || active?.kind !== "nango" || active.connection.connection_id !== tool.connection_id) {
+            throw new Error("Slack browser connection is not configured");
+          }
+          const reference = active.state.credential_reference_sha256;
+          if (nangoBrowser?.reference_sha256 !== reference) {
+            const { credentials } = findSlackAppCredentialsByReferenceSha256V1(
+              new FileOrganizationSecretStore(`${runtime.state_directory}/secrets`), reference);
+            nangoBrowser = { reference_sha256: reference, provider: createSlackBrowserIdentityProvider({
+              client_id: credentials.client_id, client_secret: credentials.client_secret,
+              // The recipe registers exactly this redirect for the app.
+              redirect_uri: `${new URL(setupOptions.authority_url).origin}${ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH}`,
+            }) };
+          }
+          return nangoBrowser.provider;
+        };
+        const browser = input.browser_provider === undefined && setupOptions === undefined ? undefined : new SlackPersonBrowserIdentityLinkWorkflowV1({
           authority_id: runtime.authority_id,
           organization_id: runtime.organization_id,
           authentication: runtime.authentication,
           repository,
-          browser_provider: input.browser_provider,
+          browser_provider: browserProviderFor,
         });
         const application = createSqliteSlackPersonIdentityLinkWorkflowV1({
           ...workflowInput,
