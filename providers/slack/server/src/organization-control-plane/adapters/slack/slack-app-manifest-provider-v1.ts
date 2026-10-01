@@ -1,6 +1,9 @@
-import type { ReadableStreamReadResult } from "node:stream/web";
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import { PRIVATE_SLACK_APPROVAL_INTERACTION_PATH_V1 } from "../../../presentation/private-slack-approval-interaction-http-port-v1.js";
+import {
+  BoundedJsonFetchErrorV1,
+  boundedJsonFetchV1,
+} from "../../../shared/bounded-json-fetch-v1.js";
 
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -154,58 +157,6 @@ function parseCreatedSlackApp(value: Record<string, unknown>): CreatedSlackAppV1
   });
 }
 
-async function readBoundedManifestResponseBytes(response: Response): Promise<Uint8Array> {
-  if (response.body === null) {
-    throw new SlackAppManifestProviderErrorV1(
-      "unavailable",
-      "Slack returned an empty manifest response",
-    );
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    for (;;) {
-      let read: ReadableStreamReadResult<Uint8Array>;
-      try {
-        read = await reader.read();
-      } catch {
-        throw new SlackAppManifestProviderErrorV1(
-          "unavailable",
-          "Slack manifest request is unavailable",
-        );
-      }
-      if (read.done) break;
-      totalBytes += read.value.byteLength;
-      if (totalBytes > MAXIMUM_RESPONSE_BYTES) {
-        try {
-          await reader.cancel();
-        } catch {}
-        throw new SlackAppManifestProviderErrorV1(
-          "unavailable",
-          "Slack returned an oversized manifest response",
-        );
-      }
-      chunks.push(read.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (totalBytes === 0) {
-    throw new SlackAppManifestProviderErrorV1(
-      "unavailable",
-      "Slack returned an empty manifest response",
-    );
-  }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
 /**
  * Slack Manifest API client for one-time app configuration tokens. This is a
  * deliberately separate transport from `SlackWebIdentityProviderV1`, which
@@ -241,48 +192,34 @@ export class SlackWebAppManifestProviderV1 implements SlackAppManifestProviderV1
     parameters: Readonly<Record<string, string>>,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
-    const deadline = AbortSignal.timeout(this.timeoutMs);
-    const combined = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
-    let response: Response;
+    let result;
     try {
-      response = await this.fetchImpl(`https://slack.com/api/${method}`, {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${configurationToken}`,
-          "content-type": "application/x-www-form-urlencoded",
+      result = await boundedJsonFetchV1({
+        url: `https://slack.com/api/${method}`,
+        init: {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            authorization: `Bearer ${configurationToken}`,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams(parameters),
         },
-        body: new URLSearchParams(parameters),
-        redirect: "error",
-        signal: combined,
+        fetch: this.fetchImpl,
+        timeoutMs: this.timeoutMs,
+        signal,
+        maxBytes: MAXIMUM_RESPONSE_BYTES,
       });
-    } catch {
-      throw new SlackAppManifestProviderErrorV1(
-        "unavailable",
-        "Slack manifest request is unavailable",
-      );
+    } catch (error) {
+      if (error instanceof BoundedJsonFetchErrorV1) {
+        throw new SlackAppManifestProviderErrorV1(
+          "unavailable",
+          "Slack manifest request is unavailable",
+        );
+      }
+      throw error;
     }
-    const declared = response.headers.get("content-length");
-    if (
-      declared !== null &&
-      (!/^\d+$/.test(declared) || Number(declared) > MAXIMUM_RESPONSE_BYTES)
-    ) {
-      throw new SlackAppManifestProviderErrorV1(
-        "unavailable",
-        "Slack returned an oversized manifest response",
-      );
-    }
-    const bytes = await readBoundedManifestResponseBytes(response);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
-    } catch {
-      throw new SlackAppManifestProviderErrorV1(
-        "unavailable",
-        "Slack returned an invalid manifest response",
-      );
-    }
-    const value = record(parsed);
+    const value = record(result.json);
     if (value === undefined) {
       throw new SlackAppManifestProviderErrorV1(
         "unavailable",

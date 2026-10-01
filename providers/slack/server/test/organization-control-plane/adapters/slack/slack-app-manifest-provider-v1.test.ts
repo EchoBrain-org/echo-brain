@@ -116,6 +116,15 @@ describe("buildEchoSlackAppManifestV1", () => {
       }),
     ).not.toThrow();
   });
+
+  it("allows a bare-origin nango_callback_url with no path at all", () => {
+    expect(() =>
+      buildEchoSlackAppManifestV1({
+        authority_url: AUTHORITY_URL,
+        nango_callback_url: "https://api.nango.dev",
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe("SlackWebAppManifestProviderV1", () => {
@@ -291,6 +300,33 @@ describe("SlackWebAppManifestProviderV1", () => {
 
     expect(failure).toBeInstanceOf(SlackAppManifestProviderErrorV1);
     expect((failure as SlackAppManifestProviderErrorV1).code).toBe("unavailable");
+  });
+
+  it("maps an oversized response to unavailable, without leaking the configuration token", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async () =>
+        new Response(JSON.stringify({ ok: true, app_id: "A123APP" }), {
+          status: 200,
+          headers: { "content-type": "application/json", "content-length": "99999999" },
+        }),
+    );
+    const provider = new SlackWebAppManifestProviderV1({ fetch });
+    const manifest = buildEchoSlackAppManifestV1({
+      authority_url: AUTHORITY_URL,
+      nango_callback_url: NANGO_CALLBACK_URL,
+    });
+
+    const failure = await provider
+      .createApp({ configuration_token: CONFIGURATION_TOKEN, manifest })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(SlackAppManifestProviderErrorV1);
+    const error = failure as SlackAppManifestProviderErrorV1;
+    expect(error.code).toBe("unavailable");
+    expect(error.message).not.toContain(CONFIGURATION_TOKEN);
   });
 
   it("sends the request with redirect: error and a timeout signal", async () => {
