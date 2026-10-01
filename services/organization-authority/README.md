@@ -218,7 +218,9 @@ tools setup --tool slack` reads a Slack app configuration token from standard
 input — pipe it in, as above, rather than pasting interactively, since an
 interactive paste is echoed by the terminal — creates and installs the
 organization's private Slack app through Nango, and waits for the owner to
-finish in the browser. `person tools connect --tool slack` then opens the
+finish in the browser. Add `--reconnect` to resume an unfinished install, or
+reconnect after Slack was uninstalled, without a new setup token. `person
+tools connect --tool slack` then opens the
 owner's own Slack sign-in and waits the same way; on a machine without a
 browser, use `person tools connect --tool slack --method dm-code --slack-user U…`,
 which prints a challenge code to reply with in its Slack thread, then waits

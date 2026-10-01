@@ -146,13 +146,19 @@ recipe, so nobody sets them by hand
 
 Stage `nango-secret-key` in the input directory instead: Nango's environment
 secret key, one no-newline value of 32 to 4096 visible ASCII characters in a
-current-user `0600` regular non-symlink file. Do not put any secret in this
-README command or a shell argument. Add `nango_integration_key` (the Nango
+current-user `0600` regular non-symlink file. `doctor` and `prepare` reject a
+key outside that shape with `nango_secret_key_invalid`, without printing the
+key. Do not put any secret in this README command or a shell argument. Add
+`nango_integration_key` (the Nango
 Slack integration key, matching `^[a-z0-9][a-z0-9_-]{0,63}$`) to the
 onboarding JSON in place of the retired `slack_approval_channel_id`. Run the
 re-onboarding only with a wholly fresh provider-neutral V4 staging lineage; do
 not reuse an older V3 or shared-channel rehearsal state directory, database,
 or approval binding.
+
+The CLI equivalent of the app's Set up step is `person tools setup --tool slack`.
+Add `--reconnect` to resume an unfinished install, or reconnect after Slack was
+uninstalled, without a new setup token.
 
 ### Slack sign-in for the person link
 

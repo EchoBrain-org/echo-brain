@@ -87,3 +87,10 @@ and local descriptors before releasing that lock. It then requires the accepted
 release status to match its record with no staged candidate. It preserves demo
 state and meetings for later evidence or explicit archival; it never deletes
 either tree.
+
+Before upgrading the bundle to a version that requires Nango: a demo switched
+in before that change has a `private/runtime.env` with no
+`ECHO_DEMO_NANGO_INTEGRATION`, so its Compose file's required-variable
+interpolation fails `restore-clean` and `status` alike. Run `restore-clean`
+with the old bundle first, while `runtime.env` still matches the compose file
+it was written for, then transfer and prepare the new bundle.
