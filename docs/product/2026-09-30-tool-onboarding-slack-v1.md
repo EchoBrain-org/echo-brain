@@ -1,10 +1,12 @@
 # Tool onboarding v1: Slack set up and connected from the ECHO app (2026-09-30)
 
-Status: design approved in conversation on 2026-09-30, section by section.
-This file is the written spec; it awaits founder review before an
-implementation plan is written. It is a new dated doc. Older docs stay as
-they are; where this doc and an accepted ADR disagree, the ADR wins until an
-ADR records this change.
+Status: **revision 2, Nango** (2026-09-30). The founder chose Nango as the
+connection foundation. The product design is unchanged: sections 1, 2 and 4,
+apart from the CLI and browser-step wording noted in 4. The technical design in
+sections 3 and 5-11 is rewritten. Revision 1's custom OAuth install routes,
+local bot-token lifecycle and immediate host-onboarding removal are superseded;
+see commit `8cd60cf`. Where this doc and an accepted ADR disagree, the ADR wins
+until an ADR records this change.
 
 ## 1. Why
 
@@ -55,24 +57,62 @@ Rules:
 
 ## 3. Decisions
 
-- **Organization Slack app: a private copy per organization, created by ECHO
-  from its recipe** (founder chose option b on 2026-09-30). Rejected for now:
-  one shared ECHO Slack app with "Add to Slack". It needs a routing front door
-  for interaction callbacks and, without a Slack Marketplace listing, Slack
-  limits `conversations.history`/`conversations.replies` to one request per
-  minute and 15 objects for new installs of non-Marketplace distributed apps
-  ([Slack changelog, 2025-05-29](https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps/)).
-  Internal customer-built apps are not affected. Revisit when ECHO has enough
-  organizations to justify a Marketplace listing.
-- **ECHO creates the private app through Slack's Manifest API**
-  ([`apps.manifest.create`](https://docs.slack.dev/reference/methods/apps.manifest.create/)).
-  The owner pastes one app configuration token (generated in Slack, expires
-  after 12 hours). Slack returns the app's client ID, client secret and
-  signing secret, so the owner copies nothing else.
-- **Person link uses "Sign in with Slack"**, the existing browser identity flow.
-  The DM code exchange stays as a CLI fallback for machines without a browser.
-- **The public identity-link channel and the reaction-era permissions are
-  removed.**
+| Part | Decision |
+|---|---|
+| Connected tools page, owner setup, person connect/disconnect | **Keep.** ECHO's product experience (section 4). |
+| Custom OAuth install routes, code exchange, token lifecycle | **Replaced by Nango connections.** |
+| ECHO person ↔ Slack workspace/user binding | **Keep in ECHO.** Nango never decides who an ECHO person is. |
+| Private Slack app per organization and signed approval interactions | **Keep, reworked** to sit beside Nango. |
+| Removing host onboarding and changing deployment manifests | **Deferred** until the Nango path works end to end (section 7). |
+
+- **Nango holds the organization's Slack connection.** It runs the OAuth
+  install, keeps the bot token and handles reconnects. ECHO uses one Nango Slack
+  integration with **per-connection OAuth client overrides**. These are
+  `integrations_config_defaults.<integration>.connection_config.oauth_client_id_override`,
+  `oauth_client_secret_override` and `oauth_scopes_override`, all set on
+  `POST /connect/sessions`
+  ([docs](https://nango.dev/docs/reference/api/connect/sessions/create)), so each
+  organization keeps its own private app.
+- **The private app per organization stays** (founder, option b). ECHO creates
+  it from its recipe through Slack's Manifest API
+  ([`apps.manifest.create`](https://docs.slack.dev/reference/methods/apps.manifest.create/)),
+  and the owner pastes one app configuration token, which expires after 12
+  hours. Rejected for now: one shared ECHO app. Without a Marketplace listing,
+  Slack throttles `conversations.history` and `conversations.replies` for new
+  installs of distributed apps
+  ([changelog](https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps/)).
+- **Signed approval interactions stay with ECHO.** Nango's Slack webhook support
+  covers the Events API only
+  ([docs](https://nango.dev/docs/api-integrations/slack/webhooks)), and
+  interactivity payloads are not forwarded
+  ([NangoHQ/nango#5434](https://github.com/NangoHQ/nango/issues/5434), closed
+  as not planned). The recipe points Interactivity at the Authority, and the
+  existing handler verifies Slack's signature.
+- **The person link stays ECHO-owned.** It is "Sign in with Slack" (OpenID
+  Connect) using the organization app's client credentials, with the DM code as
+  fallback. Nango does not offer Slack's OpenID flow, and a person link needs
+  no stored user token. When Ask later reads Slack (RFC-0003), that feature
+  must use the asker's user token explicitly, because Nango's Slack proxy
+  defaults to the bot token
+  ([docs](https://nango.dev/docs/api-integrations/slack/slack-user-access-tokens)).
+- **Credential custody changes.** Nango holds the Slack bot token and a copy of
+  the organization app's client secret. The Authority keeps:
+  - the app's client ID and client secret, for connect sessions and person
+    sign-in;
+  - the signing secret, for interactions;
+  - the Nango connection ID.
+
+  This departs from "the Authority owns provider credentials"
+  ([identity and onboarding](../architecture/identity-and-onboarding.md)), so an
+  ADR records it before the cutover.
+- **Hosting is open** (founder decision). Free self-hosted Nango offers auth and
+  proxy only, with no webhooks
+  ([docs](https://nango.dev/docs/guides/platform/self-hosting)). The proof uses
+  Nango Cloud or an enterprise self-host. The Authority takes Nango's base URL
+  as configuration, so the choice does not change code.
+- **The public identity-link channel and the reaction-era permissions go** for
+  Nango-connected organizations. The legacy path keeps them until section 7's
+  phase 3.
 
 ## 4. What people experience
 
@@ -84,9 +124,9 @@ Account → Connected tools → Slack → **Set up**:
    settings page, where the owner clicks **Generate Token** under "Your App
    Configuration Tokens" and copies it.
 2. The owner pastes it. ECHO creates the private "ECHO" app in that workspace.
-3. **Install to Slack** opens Slack's install page; the owner approves. The
-   app shows "Finish in your browser…" with [Cancel] and ends on
-   "Connected to *Workspace*".
+3. **Install to Slack** opens the Connect page in the browser, which leads to
+   Slack's install page; the owner approves. The app shows "Finish in your
+   browser…" with [Cancel] and ends on "Connected to *Workspace*".
 
 The owner must be allowed to install apps in that Slack workspace. Steps can be
 repeated safely; nothing is left half-configured.
@@ -113,191 +153,172 @@ not.
 |---|---|
 | `person tools` | List tools; owners also see the organization line |
 | `person tools setup --tool slack` | Owner only. Reads the setup token from standard input, creates the app, opens Install, waits |
-| `person tools connect --tool slack` | Opens Slack, waits up to 5 minutes, prints `connected` |
+| `person tools connect --tool slack` | Opens Slack, waits, prints `connected` |
 | `person tools connect --tool slack --method dm-code --slack-user U…` | Today's DM code exchange, for machines without a browser |
 | `person tools disconnect --tool slack` | Disconnect |
+| `person tools status` / `person tools cancel --tool slack --attempt-id …` | Check or cancel a browser step started with `--no-wait` |
 | `person tools setup --tool slack --print-recipe` / `--app-credentials-stdin` | Fallback: print the recipe for manual creation in Slack, then accept the created app's client ID, client secret and signing secret as JSON on standard input |
 
-Retired: `slack-connect-begin`, `slack-connect-status`, `slack-disconnect`,
-and `slack-link` (folded into `--method dm-code`). Retired commands are
-refused as unknown, following PR #247's pattern.
+Retired once the desktop ships (phase 2): `slack-connect-begin`,
+`slack-connect-status`, `slack-disconnect`, and `slack-link`, which becomes
+`--method dm-code`. Retired commands are refused as unknown, following PR
+#247's pattern.
 
 ## 5. Authority changes
 
 ### 5.1 The recipe
 
-Built from the Authority URL; no organization-specific secrets.
+Built from the Authority URL and the Nango callback URL. It contains no
+organization-specific secrets.
 
 - Display name and bot user "ECHO".
-- Bot permissions, exactly four: `chat:write`, `im:write`, `im:history`,
-  `users:read`. (Today's seven in
-  [`slack-integration-contracts.ts`](../../providers/slack/server/src/organization-control-plane/application/slack-integration-contracts.ts)
-  lose `channels:read`, `channels:history` and `reactions:read`. The
-  implementation must confirm no remaining call needs them.)
-- Redirect URLs: the install callback (5.2) and the existing person browser
-  callback `/v2/person/external-identities/slack/browser/callback`.
-- Interactivity on, Request URL `/v2/integrations/slack/interactions`.
-- No Socket Mode, no Event Subscriptions, no token rotation, no org-wide
-  (Enterprise Grid) deployment.
+- Bot permissions, exactly four: `chat:write`, `im:history`, `im:write`,
+  `users:read`.
+- Redirect URLs:
+  - Nango's OAuth callback (configured). For Nango Cloud this is expected to be
+    `https://api.nango.dev/oauth/callback`, confirmed by the spike.
+  - The person browser callback `/v2/person/external-identities/slack/browser/callback`.
+- Interactivity on, with Request URL `/v2/integrations/slack/interactions` on
+  the Authority.
+- No Socket Mode, no Event Subscriptions, no token rotation, no Enterprise Grid
+  deployment.
 
-### 5.2 Owner setup routes (Slack provider-owned)
+### 5.2 Nango access
 
-Routes live in the Slack provider package, like today's identity routes, so
-provider semantics stay at the boundary
-([INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)).
-Every authenticated route re-checks that the caller's current membership is an
-owner.
+- **Configuration:** the Nango base URL, the Nango Slack integration key, and
+  the environment secret key. The key is read from a private credential file
+  and never logged.
+- **Calls:**
+  - `POST /connect/sessions`;
+  - `POST /connect/sessions/reconnect`, which keeps the connection ID;
+  - `GET /connections/{id}?provider_config_key=…`;
+  - `DELETE /connections/{id}`.
+- **Finding the connection a Connect flow created:** the session carries `tags`
+  (organization, membership and attempt IDs). The spike decides how the
+  Authority finds the new connection: by listing connections filtered by those
+  tags, which needs no webhook, or by receiving Nango's signed auth webhook
+  (`X-Nango-Hmac-Sha256`). Prefer the poll if Nango supports it, because it
+  adds no public route.
 
-1. **Setup** (owner, Bearer). Body: request ID plus the configuration token.
-   The Authority calls `apps.manifest.create` (or `apps.manifest.update` when
-   an ECHO app already exists for this organization), stores the returned
-   client ID, client secret and signing secret in the private file secret store,
-   records the app ID, and returns an install attempt. The configuration token
-   is used in memory once and never stored, logged or echoed.
-2. **Install begin** (owner, Bearer). Returns a Slack OAuth v2 authorize URL with
-   the four bot permissions, the install redirect URL and a one-shot `state`
-   (32 random bytes, 5-minute life). Resumable at any time after setup.
-3. **Install callback** (no authentication, like the existing browser callback).
-   Records the returned code against the attempt only and returns a static
-   "Return to ECHO" page. It cannot connect anything by itself.
-4. **Install status** (owner, Bearer, same session family as begin). Exchanges
-   the code with `oauth.v2.access`, re-runs the existing workspace and bot checks
-   ([`slack-web-identity-provider-v1.ts`](../../providers/slack/server/src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.ts)),
-   stores the bot token, and activates the connection through the existing
-   coordinator
-   ([`sqlite-slack-connection-coordinator-v1.ts`](../../providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.ts)).
-5. **Install cancel** (owner, Bearer).
+### 5.3 Owner setup and install (Slack provider routes)
 
-Only one setup or install attempt is in flight per organization; a second owner
-gets "Already set up" or "Setup in progress".
+Every authenticated route re-checks that the caller is a current owner.
 
-### 5.3 Slack switches on without a restart
+1. **Setup** (configuration token). Calls `apps.manifest.create`, or
+   `apps.manifest.update` when this organization already has an ECHO app, then
+   stores the app credential bundle in the Authority secret store. The token is
+   used once in memory and never stored, logged or echoed.
+2. **Install begin.** Creates a Nango connect session carrying the organization
+   app's client overrides, the four scopes and the attempt tags. When the bundle
+   already holds a Nango connection ID it creates a reconnect session instead.
+   It returns the session's `connect_link`, which the client opens in the
+   system browser. Session links last 30 minutes, and ECHO's attempt lasts 10
+   minutes.
+3. **Install status** (same owner session family):
+   1. finds the Nango connection for the attempt;
+   2. reads its Slack identifiers (team, app, bot user);
+   3. fetches the bot token from Nango;
+   4. re-runs ECHO's existing Slack checks (`auth.test`, `bots.info`, the four
+      permissions);
+   5. activates the organization connection and records the Nango connection ID
+      in the bundle.
+4. **Install cancel.**
 
-Today the service reads three Slack inputs once at startup
-([`organization-authority-service-cli.ts`](../../services/organization-authority/src/composition/organization-authority-service-cli.ts),
-[`organization-authority-composition-root.ts`](../../services/organization-authority/src/composition/organization-authority-composition-root.ts)):
-`--slack-signing-secret-file`, the manifest's `slack_connection_id` and
-`slack_approval_channel_id`, and the optional browser OAuth file. These become
-lookups of the single active connection and its stored secrets, cached per
-connection revision:
-
-- The approval workflow
-  ([`private-slack-approval-workflow-bundle-v1.ts`](../../providers/slack/server/src/private-approval/private-slack-approval-workflow-bundle-v1.ts))
-  resolves the active connection instead of a pinned ID, and verifies
-  interaction signatures with the stored signing secret.
-- The identity runtime
-  ([`slack-person-external-identity-runtime-bundle-v1.ts`](../../providers/slack/server/src/person-identity/slack-person-external-identity-runtime-bundle-v1.ts))
-  builds the browser sign-in provider from the stored client ID and secret.
-  The browser flow is therefore on whenever Slack is connected.
-- Before setup, Slack features answer "not set up by your organization"
-  instead of failing.
+One install attempt is in flight per organization.
 
 ### 5.4 Connection record
 
-Adjusted 2026-09-30 after mapping the code (founder approved). No
-control-plane DDL changes, so baseline V3
-([`organization-control-plane-baseline-v3.sql`](../../packages/organization-control-plane/baselines/organization-control-plane-baseline-v3.sql))
-stays as it is.
+No control-plane DDL change; baseline V3 stays.
 
-- **Contract shape unchanged.** The contract keeps `echo-organization-tool-connection-v2`.
-  `required_provider_scopes` becomes the four recipe permissions.
-  `public_connection_configuration_sha256` hashes a new channel-free
-  configuration kind, `echo-slack-private-app-public-configuration-v1`,
-  instead of the channel and reaction configuration.
-- **Credential.** The state's single `credential_reference_sha256` points at
-  one private secret holding the app credential bundle: bot token, client ID,
-  client secret and signing secret. SQLite keeps only the reference hash, as
-  today.
-- **Health is not stored.** "Needs reinstall" is detected live (5.5). Storing it
-  would need a DDL change.
-- **Compatibility gate.** Connections made by the old bot-token-and-channel
-  path no longer validate. The gate is the new setup manifest version (section
-  7), so staging needs a fresh setup through `replace-rehearsal`.
+- **Contract.** It keeps `echo-organization-tool-connection-v2` with the four
+  permissions. `public_connection_configuration_sha256` hashes the
+  configuration kind `echo-slack-nango-app-public-configuration-v1`.
+- **Credential bundle.** One Authority secret, referenced by the state's
+  `credential_reference_sha256`, holding `app_id`, `client_id`, `client_secret`,
+  `signing_secret` and `nango_connection_id`. The connection ID is `null` until
+  the first install completes. There is no bot token in the Authority.
+- **Legacy connections.** Connections from the old bot-token-and-channel path
+  keep working, with their local token and signing-secret file, until phase 3.
+  The runtime picks the token source by the connection's configuration kind.
 
-The DM code fallback stops re-verifying a channel.
+### 5.5 Reconnect, replacement and loss
 
-### 5.5 Replacing or losing the connection
-
-Adjusted 2026-09-30 (founder approved). Pending approval records in both the
-Authority and control-plane databases are immutable and bound to the exact
-connection state they were sent under. The private-approval runtime refuses to
-start if an outstanding card belongs to a connection that is no longer current.
-Re-sending cards would need a new mechanism across both databases, so this
-version avoids needing it:
-
-- **Same app, updated or reinstalled**, including after an uninstall in Slack:
-  the Authority replaces the stored credential bundle in place, under the same
-  secret reference. The connection, its state hash and waiting cards are
-  unchanged, so nothing needs re-sending.
-- **Different app or workspace:**
-  - allowed only while no approval card is outstanding under the current
-    connection, and only with an explicit confirmation;
+- **Reconnect or update of the same app.** This uses a Nango reconnect session
+  on the same connection ID. The bundle, the connection state hash and every
+  waiting approval card are unchanged. This is the required proof that
+  reconnect preserves outstanding cards.
+- **Different app or workspace.** Allowed only while no approval card is
+  outstanding under the current connection, and only with an explicit
+  confirmation. Then:
   - the old connection is revoked;
-  - a different workspace also revokes every person link, and people reconnect
-    with one click;
+  - a different workspace also revokes person links;
   - if cards are waiting, the refusal says how many.
-- **Uninstalled or revoked in Slack:** a Slack call failing with an
-  authentication-class error marks the connection "needs reinstall" in memory,
-  and the tools status shows it. After a restart it is detected again on the
-  next failing call. Cards wait and go out after the same-app reinstall.
+- **Lost token** (uninstalled in Slack, or Nango reports a failed refresh). A
+  Slack authentication error marks the connection "needs reinstall" in memory,
+  and the tools status shows it. The owner's Install then runs a reconnect.
 
-### 5.6 Person tools contract
+### 5.6 Using the bot token
 
-`/v3/person/tools` has exact keys, so the organization line ships as a v4
-contract at `/v4/person/tools`. It adds an `organization_setup` field to each
-tool:
+- The approval poster and the identity flows fetch the bot token from Nango at
+  use time.
+- The token is cached in memory per connection for at most five minutes.
+- On a Slack authentication error the Authority re-fetches once
+  (`force_refresh`), then marks the connection "needs reinstall".
+- The Authority calls Slack directly with the fetched token, not through the
+  Nango proxy, so ECHO's existing Slack clients and checks stay unchanged.
+
+### 5.7 Interactions and the person link
+
+- The interaction handler is unchanged. Its signing secret comes from the
+  bundle for Nango connections, or from the configured file for legacy ones.
+- The browser person-link provider is built from the bundle's client ID and
+  secret, so person Connect works whenever the organization is connected.
+
+### 5.8 Person tools contract
+
+`/v4/person/tools` adds `organization_setup` to each tool:
 - `not_set_up`, `app_created`, `connected` or `needs_reinstall` for owners;
 - `null` for everyone else.
 
-The v3 route keeps serving older clients until the matched client ships, then
-is retired. See
-[`person-tools-v3.ts`](../../packages/organization-api/src/person-tools-v3.ts).
+The v3 route strips the field and keeps serving older clients.
 
 ## 6. Client changes
 
-- **Desktop**
-  ([`account.tsx`](../../product/echo-desktop/src/renderer/screens/account.tsx),
-  [`host.ts`](../../product/echo-desktop/src/host/host.ts)):
-  Connected tools gains the rows and sheets in section 4. The host runs the new
-  `person tools` verbs in process. The setup token is handed over through an
-  in-process input channel, never as an argument; `read_input` throws today.
-  Browser waits poll every ~2 seconds for up to 5 minutes, and Cancel calls the
-  cancel route. Adds the Home nudge.
-- **CLI**
-  ([`slack-commands.ts`](../../providers/slack/client/src/person/slack-commands.ts)
-  and the person-client command table): the `person tools` verbs in section 4.
-  Browser waits print JSON phases (`open-browser`, `waiting`, `connected`).
-  Unknown-outcome rules follow the existing session fences.
+- **Phase 1, CLI:** the `person tools` verbs in section 4. `setup` and `connect`
+  open the returned link in the system browser, then poll every ~2 seconds for
+  up to 10 minutes. The setup token is read from standard input only.
+- **Phase 2, desktop:** the Connected tools rows, the Set up sheet, the waiting
+  state with Cancel, and the Home nudge from section 4. These are driven by the
+  same verbs, using `--no-wait` plus status polling. The setup token is handed
+  over in process, never as an argument.
 
-## 7. Host setup changes
+## 7. Host setup and phases
 
-- The onboarding input directory drops `slack-bot-token` and
-  `slack-signing-secret` (nine files become seven). The onboarding JSON drops
-  `slack_approval_channel_id`, and the manifest version is bumped.
-- `bootstrap` no longer connects Slack. The setup CLI's next steps
-  ([`organization-authority-setup-cli.ts`](../../services/organization-authority/src/composition/organization-authority-setup-cli.ts))
-  become:
-  1. create Authority
-  2. owner signs in
-  3. **owner sets up Slack in the app** (new `connect_slack_in_app`)
-  4. owner connects themselves
-  5. provider credentials
-  6. finalize
-  7. canary
+- **Phase 0, spike (throwaway).** With a real Nango environment and a Slack
+  sandbox workspace, confirm:
+  - the per-connection client override works for a private app;
+  - the Nango callback URL;
+  - where `team.id`, `app_id` and `bot_user_id` sit in `GET /connections`;
+  - how to find the connection a session created (tag filter or webhook);
+  - that reconnect keeps the ID with overrides;
+  - what `DELETE` does to the Slack token.
 
-  `finalize` still requires an active connection and the owner's link.
-- Removed: the stopped-state
-  [`slack-connection-setup-cli.ts`](../../providers/slack/server/src/organization-control-plane/composition/slack-connection-setup-cli.ts)
-  and
-  [`initial-owner-slack-setup-v1.ts`](../../providers/slack/server/src/setup/initial-owner-slack-setup-v1.ts)
-  path, `configure-slack-browser`, and the "set the Interactivity URL" step,
-  since the recipe sets it.
-- Docs updated in the same change:
-  - [identity and onboarding](../architecture/identity-and-onboarding.md)
-  - [person client architecture](../architecture/person-client-architecture.md)
-  - [organization control plane](../architecture/organization-control-plane.md)
-  - the deploy README
-  - [PB-OPERATIONS-001](../operations/PB-OPERATIONS-001-authority-operator-lane.md)
+  The answers are recorded here before phase 1 code relies on them.
+- **Phase 1, proof.** Authority and Slack provider changes (section 5) plus the
+  CLI. Host onboarding is unchanged, and the legacy bootstrap path keeps
+  working. Nango configuration reaches a local Authority through the
+  `authority:local` harness only. No compose, manifest or onboarding-input
+  change.
+- **Phase 2.** The desktop experience.
+- **Phase 3, retire the old setup path.** Revision 1's host changes:
+  - remove the Slack inputs, the stopped-state Slack CLI,
+    `configure-slack-browser` and the Interactivity URL step;
+  - add Nango configuration to host onboarding;
+  - setup manifest v2;
+  - remove legacy-connection support;
+  - the ADR on credential custody.
+
+  Phase 3 starts only after the phase 1 proof passes on staging.
 
 ## 8. Errors and edge cases
 
@@ -306,66 +327,71 @@ is retired. See
 | Setup token invalid, expired or lacking permission | "That token didn't work. Generate a new one in Slack." |
 | App created, install never finished | Row shows "App created" with [Install]; resumable without a new token |
 | New token while an ECHO app exists | Updates the same app; no duplicate |
-| Workspace requires admin approval for apps | "Waiting for your Slack admin to approve"; Install works after approval |
-| Two owners at once | One wins; the other sees "Already set up" or "Setup in progress" |
+| Workspace requires admin approval for apps | Not detectable. On expiry: "Not finished. If your Slack requires admin approval, try again once it's approved." |
+| Nango unavailable | "Slack setup is unavailable right now. Try again." Existing cards keep working while the cached token is valid |
+| Two owners at once | One wins; the other sees "Setup in progress" |
 | Browser on the wrong workspace (person) | "Sign in to the *Workspace* Slack workspace, then try again." |
 | Slack account linked to another ECHO person | "This Slack account is connected to another ECHO person." |
-| Over 5 minutes, or the Authority restarted | "That took too long. Try again." (attempts are in memory) |
+| Over 10 minutes, or the Authority restarted | "That took too long. Try again." (attempts are in memory) |
 | Person leaves the organization | Link stops working, as today |
 | Owner who set up leaves | Connection stays; it belongs to the organization |
 
 Known weaknesses kept for this version:
-- the browser identity flow does not tie the Slack sign-in to the connected
-  app's ID beyond the workspace;
+- the browser identity flow ties the Slack sign-in to the workspace, not to the
+  app ID;
 - Enterprise Grid is unsupported;
 - pending attempts are lost on restart.
 
 ## 9. Proof
 
-- **Fake-Slack automated tests:**
+- **Acceptance test (automated, phase 1),** against fake Nango and fake Slack HTTP
+  servers. One end-to-end path:
+  1. the owner sets up and connects Slack through Nango;
+  2. ECHO verifies the workspace and app;
+  3. the owner and an employee link their identity;
+  4. an approval card is delivered and approved;
+  5. a second card is delivered;
+  6. the owner reconnects through a Nango reconnect session;
+  7. the second card is still approved without `state_drift`.
+- **Safety tests:**
   - owner-only routes;
-  - the configuration token never reaches SQLite, logs or output;
-  - the recipe has exactly four permissions and Authority-derived URLs;
-  - the callback alone cannot connect;
-  - only the same owner session commits;
-  - single in-flight setup;
-  - same-app reinstall replaces the credential in place and a waiting card still
-    resolves;
-  - different app or workspace refused while a card is outstanding, allowed
-    with confirmation otherwise;
+  - the setup token and the Nango secret key never reach SQLite, logs or output;
+  - the recipe's exact permissions and URLs;
+  - a finished Connect flow is accepted only for its own attempt and owner
+    session;
+  - replacement is refused while cards are outstanding;
   - a different workspace revokes person links;
   - live needs-reinstall detection;
-  - connect-then-card-posts without a restart, with the interaction signature
-    verified by the stored signing secret.
-- **CLI:** setup token accepted only on standard input; retired commands
-  refused as unknown; DM-code fallback still works.
-- **Desktop end-to-end:** owner and non-owner rows, Set up sheet, Connect wait,
-  Cancel, Home nudge.
-- **Staging rehearsal on a fresh lineage**, using the human
-  `replace-rehearsal` lane:
-  1. the founder generates a real setup token, sets up Slack in the app and
-     connects;
-  2. the canary card is approved;
-  3. the teammate connects with one click.
+  - legacy connections still work.
+- **CLI:** the setup token is accepted only on standard input, and the DM-code
+  fallback still works.
+- **Manual phase 1 rehearsal** (human steps), on a local Authority with a real
+  Nango environment and a Slack sandbox:
+  1. the founder makes a setup token and runs `person tools setup --tool slack`;
+  2. the founder connects;
+  3. a synthetic card is approved;
+  4. a reconnect keeps a waiting card working.
 - **Test budget:** test lines roughly 1:1 with production lines; both reported.
 
 ## 10. Size
 
-Revised 2026-09-30 after mapping: about 1,200–1,500 production lines changed
-across the branch, much of it deletions, with tests at a similar scale.
+Rough estimate, after mapping:
 
-- **Authority and Slack provider:** about 600–800 lines.
-- **Desktop and CLI:** about 300–400 lines.
-- **Host setup:** net deletions, from the stopped-state Slack CLI, the
-  Slack inputs and `configure-slack-browser`.
+- **Phase 1:** about 700–900 production lines. That covers the Slack provider's
+  Nango client, setup and install, and token source; the Authority wiring added
+  beside the legacy path; and the CLI verbs.
+- **Phase 2:** about 300 lines.
+- **Phase 3:** mostly deletions, as revision 1 estimated.
 
 ## 11. Out of scope
 
 - One shared ECHO Slack app, Marketplace listing, or a callback router.
+- Nango Events API webhooks, syncs, actions and MCP.
+- Nango user tokens. They come with Slack as an Ask source (RFC-0003), which
+  must use the asker's user token.
 - Signing in to ECHO itself with Slack.
 - Enterprise Grid org-wide installs.
-- Slack as an Ask source (RFC-0003).
 - Meeting ingestion. That design was deferred on 2026-09-30 under the rule
   "ECHO takes in only what a person could export by hand".
 - Any tool other than Slack. Later tools reuse section 2's model and section
-  4's `person tools` verbs.
+  4's `person tools` verbs, and Nango makes adding them cheaper.
