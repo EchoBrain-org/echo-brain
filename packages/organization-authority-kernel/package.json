@@ -5,6 +5,14 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./shared/person-live-evidence-v1": {
+      "types": "./dist/shared/person-live-evidence-v1.d.ts",
+      "import": "./dist/shared/person-live-evidence-v1.js"
+    },
+    "./shared/audited-person-live-evidence-v1": {
+      "types": "./dist/shared/audited-person-live-evidence-v1.d.ts",
+      "import": "./dist/shared/audited-person-live-evidence-v1.js"
+    },
     "./shared/evidence-desk-v1": {
       "types": "./dist/shared/evidence-desk-v1.d.ts",
       "import": "./dist/shared/evidence-desk-v1.js"

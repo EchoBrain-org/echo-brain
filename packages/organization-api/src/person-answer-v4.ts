@@ -201,6 +201,13 @@ function evidenceCitation(value: unknown): PersonAnswerEvidenceCitationV4 {
   return input.kind === 'slack_message' ? slackCitation(input) : citation(input);
 }
 
+/** Reuses the existing closed Slack citation validator at the live-source boundary. */
+export function validatePersonSlackMessageCitationV1(value: unknown): PersonSlackMessageCitationV1 {
+  const input = object(value, 'Slack citation');
+  if (input.kind !== 'slack_message') fail('Slack citation kind is invalid');
+  return slackCitation(input);
+}
+
 function citation(value: unknown): PersonAnswerCitationV3 {
   const input = object(value, 'Ask citation');
   if (input.kind === 'approved_record') {
