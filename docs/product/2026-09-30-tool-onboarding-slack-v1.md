@@ -1,7 +1,17 @@
 # Tool onboarding v1: Slack set up and connected from the ECHO app (2026-09-30)
 
-Status: **revision 2, Nango** (2026-09-30). The founder chose Nango as the
-connection foundation. The product design is unchanged: sections 1, 2 and 4,
+Status: **revision 3, Nango and smaller** (2026-09-30).
+
+Revision 3 reverses three revision-2 choices. The founder approved this after a
+review found that replacing a connection breaks Authority restarts for any
+organization with decided approval cards.
+- **No legacy coexistence.** The branch switches to Nango-only on a fresh setup.
+  The host-onboarding cleanup is back in scope.
+- **No different-app or different-workspace replacement in v1.** Only the first
+  connect and a same-connection reconnect remain.
+- **No hand-entered app-credentials fallback.**
+
+Revision 2: the founder chose Nango as the connection foundation. The product design is unchanged: sections 1, 2 and 4,
 apart from the CLI and browser-step wording noted in 4. The technical design in
 sections 3 and 5-11 is rewritten. Revision 1's custom OAuth install routes,
 local bot-token lifecycle and immediate host-onboarding removal are superseded;
@@ -63,7 +73,7 @@ Rules:
 | Custom OAuth install routes, code exchange, token lifecycle | **Replaced by Nango connections.** |
 | ECHO person ↔ Slack workspace/user binding | **Keep in ECHO.** Nango never decides who an ECHO person is. |
 | Private Slack app per organization and signed approval interactions | **Keep, reworked** to sit beside Nango. |
-| Removing host onboarding and changing deployment manifests | **Deferred** until the Nango path works end to end (section 7). |
+| Removing host onboarding and changing deployment manifests | **In scope** (revision 3): switch over on a fresh setup, with no legacy coexistence (section 7). |
 
 - **Nango holds the organization's Slack connection.** It runs the OAuth
   install, keeps the bot token and handles reconnects. ECHO uses one Nango Slack
@@ -110,9 +120,8 @@ Rules:
   ([docs](https://nango.dev/docs/guides/platform/self-hosting)). The proof uses
   Nango Cloud or an enterprise self-host. The Authority takes Nango's base URL
   as configuration, so the choice does not change code.
-- **The public identity-link channel and the reaction-era permissions go** for
-  Nango-connected organizations. The legacy path keeps them until section 7's
-  phase 3.
+- **The public identity-link channel, the reaction-era permissions, the legacy
+  bot-token path and the stopped-state Slack CLI all go** (revision 3).
 
 ## 4. What people experience
 
@@ -157,12 +166,14 @@ not.
 | `person tools connect --tool slack --method dm-code --slack-user U…` | Today's DM code exchange, for machines without a browser |
 | `person tools disconnect --tool slack` | Disconnect |
 | `person tools status` / `person tools cancel --tool slack --attempt-id …` | Check or cancel a browser step started with `--no-wait` |
-| `person tools setup --tool slack --print-recipe` / `--app-credentials-stdin` | Fallback: print the recipe for manual creation in Slack, then accept the created app's client ID, client secret and signing secret as JSON on standard input |
 
-Retired once the desktop ships (phase 2): `slack-connect-begin`,
-`slack-connect-status`, `slack-disconnect`, and `slack-link`, which becomes
-`--method dm-code`. Retired commands are refused as unknown, following PR
-#247's pattern.
+Retired with phase 1 (revision 3):
+- `slack-connect-begin`, `slack-connect-status` and `slack-disconnect`;
+- `slack-link`, which becomes `--method dm-code`.
+
+Retired commands are refused as unknown, following PR #247's pattern. There is
+no hand-entered app-credentials fallback. If a setup token fails, the owner
+generates a new one.
 
 ## 5. Authority changes
 
@@ -237,9 +248,9 @@ No control-plane DDL change; baseline V3 stays.
   `credential_reference_sha256`, holding `app_id`, `client_id`, `client_secret`,
   `signing_secret` and `nango_connection_id`. The connection ID is `null` until
   the first install completes. There is no bot token in the Authority.
-- **Legacy connections.** Connections from the old bot-token-and-channel path
-  keep working, with their local token and signing-secret file, until phase 3.
-  The runtime picks the token source by the connection's configuration kind.
+- **No legacy connections** (revision 3). A Nango-kind connection is the only
+  kind. The old bot-token-and-channel path, its local token and its
+  signing-secret file are removed. Staging gets a fresh setup.
 
 ### 5.5 Reconnect, replacement and loss
 
@@ -247,12 +258,11 @@ No control-plane DDL change; baseline V3 stays.
   on the same connection ID. The bundle, the connection state hash and every
   waiting approval card are unchanged. This is the required proof that
   reconnect preserves outstanding cards.
-- **Different app or workspace.** Allowed only while no approval card is
-  outstanding under the current connection, and only with an explicit
-  confirmation. Then:
-  - the old connection is revoked;
-  - a different workspace also revokes person links;
-  - if cards are waiting, the refusal says how many.
+- **Different app or workspace: refused in v1** (revision 3). An install that
+  would change the connection fails with "Slack is already connected to a
+  different app or workspace." This avoids the restart failure that replacing a
+  connection causes for organizations with decided cards. Moving an
+  organization to another workspace is designed later if a real need appears.
 - **Lost token** (uninstalled in Slack, or Nango reports a failed refresh). A
   Slack authentication error marks the connection "needs reinstall" in memory,
   and the tools status shows it. The owner's Install then runs a reconnect.
@@ -269,8 +279,8 @@ No control-plane DDL change; baseline V3 stays.
 
 ### 5.7 Interactions and the person link
 
-- The interaction handler is unchanged. Its signing secret comes from the
-  bundle for Nango connections, or from the configured file for legacy ones.
+- The interaction handler is unchanged apart from where it gets its signing
+  secret, which now comes from the credential bundle.
 - The browser person-link provider is built from the bundle's client ID and
   secret, so person Connect works whenever the organization is connected.
 
@@ -304,21 +314,22 @@ The v3 route strips the field and keeps serving older clients.
   - what `DELETE` does to the Slack token.
 
   The answers are recorded here before phase 1 code relies on them.
-- **Phase 1, proof.** Authority and Slack provider changes (section 5) plus the
-  CLI. Host onboarding is unchanged, and the legacy bootstrap path keeps
-  working. Nango configuration reaches a local Authority through the
-  `authority:local` harness only. No compose, manifest or onboarding-input
-  change.
+- **Phase 1, switch over** (revision 3).
+  - The Authority and Slack provider changes in section 5, plus the CLI.
+  - Remove legacy-connection support, the stopped-state Slack CLI and the
+    initial-owner Slack bootstrap.
+  - Host onboarding drops `slack-bot-token`, `slack-signing-secret`,
+    `slack_approval_channel_id`, `configure-slack-browser` and the
+    Interactivity URL step.
+  - Host onboarding gains the Nango secret key as a private input file, plus
+    the Nango integration key in the onboarding JSON.
+  - The setup manifest becomes v2.
+  - The setup steps become: create Authority, owner signs in, **owner sets up
+    Slack in the app**, owner connects, provider credentials, finalize,
+    canary.
+  - Staging gets a fresh setup through `replace-rehearsal`.
+  - The ADR on credential custody lands with this phase.
 - **Phase 2.** The desktop experience.
-- **Phase 3, retire the old setup path.** Revision 1's host changes:
-  - remove the Slack inputs, the stopped-state Slack CLI,
-    `configure-slack-browser` and the Interactivity URL step;
-  - add Nango configuration to host onboarding;
-  - setup manifest v2;
-  - remove legacy-connection support;
-  - the ADR on credential custody.
-
-  Phase 3 starts only after the phase 1 proof passes on staging.
 
 ## 8. Errors and edge cases
 
@@ -359,10 +370,10 @@ Known weaknesses kept for this version:
   - the recipe's exact permissions and URLs;
   - a finished Connect flow is accepted only for its own attempt and owner
     session;
-  - replacement is refused while cards are outstanding;
-  - a different workspace revokes person links;
+  - an install for a different app or workspace is refused, and nothing changes;
   - live needs-reinstall detection;
-  - legacy connections still work.
+  - an Authority restart after a reconnect still starts and still verifies
+    waiting cards.
 - **CLI:** the setup token is accepted only on standard input, and the DM-code
   fallback still works.
 - **Manual phase 1 rehearsal** (human steps), on a local Authority with a real
@@ -377,15 +388,20 @@ Known weaknesses kept for this version:
 
 Rough estimate, after mapping:
 
-- **Phase 1:** about 700–900 production lines. That covers the Slack provider's
-  Nango client, setup and install, and token source; the Authority wiring added
-  beside the legacy path; and the CLI verbs.
-- **Phase 2:** about 300 lines.
-- **Phase 3:** mostly deletions, as revision 1 estimated.
+Revision 3 target: net production change against `main` well under revision
+2's projected ~4,000 lines. It removes:
+- the legacy-coexistence layer;
+- the replacement path;
+- the hand-entered fallback;
+- the stopped-state Slack CLI and the host Slack inputs.
+
+The phase 1 report gives exact production and test totals.
 
 ## 11. Out of scope
 
 - One shared ECHO Slack app, Marketplace listing, or a callback router.
+- Replacing an organization's Slack connection with a different app or
+  workspace, and the hand-entered app-credentials fallback (revision 3).
 - Nango Events API webhooks, syncs, actions and MCP.
 - Nango user tokens. They come with Slack as an Ask source (RFC-0003), which
   must use the asker's user token.
