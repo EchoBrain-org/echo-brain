@@ -9,7 +9,7 @@ import { FileOrganizationSecretStore } from "@echo-brain/organization-control-pl
 import { SlackOrganizationSetupWorkflowV1, type SlackOrganizationSetupOptionsV1 } from "../organization-setup/slack-organization-setup-workflow-v1.js";
 import { SlackWebIdentityProviderV1, type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { createSlackBotTokenSourceV1, type SlackBotTokenSourceV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
-import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
+import { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
 import type { StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
@@ -201,6 +201,11 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
     open(
       runtime: PersonExternalIdentityRuntimeInputV1,
     ): OpenedPersonExternalIdentityRuntimeV1 {
+      const setupHealth = input.organization_setup?.health;
+      if (input.connection_health !== undefined && setupHealth !== undefined && input.connection_health !== setupHealth) {
+        // Token rejections mark one instance and an owner's install clears it; two would never meet.
+        throw new Error("Slack connection health must be a single instance");
+      }
       if (input.identity_link_channel_id === undefined) {
         return Object.freeze({
           application: unavailableSlackIdentityApplication(runtime),
@@ -208,7 +213,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
           close: () => undefined,
         });
       }
-      const health = input.connection_health;
+      const health = input.connection_health ?? setupHealth;
       const database = openOrganizationControlDatabase(
         `${runtime.state_directory}/integrations.sqlite`,
         { fileMustExist: true },
@@ -260,6 +265,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
           state_lineage_id: runtime.state_lineage_id,
           authentication: runtime.authentication,
           verifier: input.organization_setup.verifier ?? workflowInput.slack,
+          health: health ?? new SlackConnectionHealthV1(),
         });
         return Object.freeze({
           application: createSlackExternalIdentityHttpApplicationV1({
