@@ -15,7 +15,7 @@ import type {
   MeetingSourceAdapter,
 } from "@echo-brain/organization-processing/core";
 import { AdapterError } from "@echo-brain/organization-processing/core";
-import { DEFAULT_GRANOLA_PAGE_SIZE, DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS, GRANOLA_API_KEY_RE, GranolaApiError, HttpGranolaApiClient, type GranolaApiClient, type GranolaListNote, type GranolaNoteDetail, type GranolaTranscriptItem } from "./granola-api-client.js";
+import { DEFAULT_GRANOLA_PAGE_SIZE, DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS, GRANOLA_API_KEY_RE, GranolaApiError, HttpGranolaApiClient, granolaNoteTimestamp, type GranolaApiClient, type GranolaListNote, type GranolaNoteDetail, type GranolaTranscriptItem } from "./granola-api-client.js";
 import { granolaRecordOwnerMatches, isCanonicalGranolaOwnerEmail } from "./record-owner-observation.js";
 
 export const GRANOLA_MEETING_SOURCE_ADAPTER_ID = "granola";
@@ -1171,7 +1171,7 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
         },
         { signal: operation?.signal },
       );
-      if (request.limit !== undefined && response.notes.length > pageSize) {
+      if (response.notes.length > pageSize) {
         throw new GranolaApiError(
           'Granola returned more notes than the requested page size',
           'pagination_failed',
@@ -1183,6 +1183,23 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
           "pagination_failed",
         );
       }
+      if (response.hasMore && response.cursor === cursor.page_cursor) {
+        throw new GranolaApiError(
+          "Granola pagination did not advance its cursor",
+          "pagination_failed",
+        );
+      }
+
+      // The provider filter is not an admission proof. Validate the whole
+      // incremental page before fetching content, then enforce it locally.
+      if (updatedAfter !== undefined && response.notes.some(
+        (note) => granolaNoteTimestamp(note.updated_at) === null,
+      )) {
+        throw new GranolaApiError(
+          "Granola incremental page was missing a valid update timestamp",
+          "pagination_failed",
+        );
+      }
 
       const meetings: MeetingDocument[] = [];
       let pageHighWatermark = cursor.page_high_watermark;
@@ -1191,8 +1208,14 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
         pageHighWatermark = maxIso(
           pageHighWatermark,
           listNote.updated_at,
-          listNote.created_at,
+          updatedAfter === undefined ? listNote.created_at : undefined,
         );
+        if (
+          updatedAfter !== undefined &&
+          granolaNoteTimestamp(listNote.updated_at)! <= updatedAfter
+        ) {
+          continue;
+        }
         if (
           this.settings.ownerEmail !== undefined &&
           !granolaRecordOwnerMatches(
@@ -1208,7 +1231,6 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
         if (
           this.settings.ownerEmail !== undefined &&
           noteDetail.owner !== undefined &&
-          noteDetail.owner !== null &&
           !granolaRecordOwnerMatches(
             noteDetail.owner,
             this.settings.ownerEmail,
@@ -1217,11 +1239,24 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
           continue;
         }
         const detail = mergeNote(listNote, noteDetail);
-        pageHighWatermark = maxIso(
-          pageHighWatermark,
-          detail.updated_at,
-          detail.created_at,
-        );
+        if (updatedAfter !== undefined) {
+          const detailUpdatedAt = granolaNoteTimestamp(detail.updated_at);
+          if (detailUpdatedAt === null) {
+            throw new GranolaApiError(
+              "Granola detail was missing a valid update timestamp",
+              "api_failed",
+            );
+          }
+          if (detailUpdatedAt < granolaNoteTimestamp(listNote.updated_at)!) {
+            throw new GranolaApiError(
+              "Granola detail was older than its list observation",
+              "api_failed",
+            );
+          }
+        }
+        // A detail can change after the list snapshot. Advancing to its newer
+        // time could skip another note changed while this page was fetched.
+        // Only list observations establish the next polling watermark.
         if (!hasCompletedMeetingContent(detail)) continue;
         meetings.push(this.toMeeting(detail, observedAt));
       }
