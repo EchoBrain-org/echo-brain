@@ -46,34 +46,42 @@ describe("Slack app credentials V1 serialization", () => {
     );
   });
 
-  it("rejects extra keys and never echoes values", () => {
+  it("rejects extra keys without ever echoing the real secret values that remain in the payload", () => {
+    // app_id/client_id/client_secret/signing_secret are the REAL, untouched
+    // values from `pending` here: only the extra key is what fails
+    // validation, so this proves the error never echoes live secrets rather
+    // than merely failing to echo a value that was already blanked out.
     const raw = JSON.stringify({ ...pending, extra: "x" });
-    expect(() => parseSlackAppCredentialsV1(raw)).toThrow("Slack app credentials are invalid");
     let caught: unknown;
     try {
-      parseSlackAppCredentialsV1(JSON.stringify({ ...pending, client_secret: "" }));
+      parseSlackAppCredentialsV1(raw);
     } catch (error) {
       caught = error;
     }
     expect(caught).toBeInstanceOf(Error);
-    expect(String(caught)).not.toContain("ccccc");
+    expect((caught as Error).message).toBe("Slack app credentials are invalid");
+    const rendered = String(caught);
+    expect(rendered).not.toContain(pending.client_secret);
+    expect(rendered).not.toContain(pending.signing_secret);
+    expect(rendered).not.toContain(pending.app_id);
+    expect(rendered).not.toContain(pending.client_id);
   });
 
   it("rejects an app_id, client_id, or nango_connection_id that does not match its shape", () => {
     expect(() =>
       serializeSlackAppCredentialsV1({ ...pending, app_id: "not-an-app-id" }),
-    ).toThrow("Slack app credentials are invalid");
+    ).toThrowError(/^Slack app credentials are invalid$/);
     expect(() =>
       serializeSlackAppCredentialsV1({ ...pending, client_id: "not-a-client-id" }),
-    ).toThrow("Slack app credentials are invalid");
+    ).toThrowError(/^Slack app credentials are invalid$/);
     expect(() =>
       serializeSlackAppCredentialsV1({ ...pending, nango_connection_id: "" }),
-    ).toThrow("Slack app credentials are invalid");
+    ).toThrowError(/^Slack app credentials are invalid$/);
   });
 
   it("rejects malformed JSON without ever echoing the input", () => {
-    expect(() => parseSlackAppCredentialsV1("{not json")).toThrow(
-      "Slack app credentials are invalid",
+    expect(() => parseSlackAppCredentialsV1("{not json")).toThrowError(
+      /^Slack app credentials are invalid$/,
     );
   });
 });
@@ -101,6 +109,17 @@ describe("findPendingSlackAppCredentialsV1", () => {
     store.create(serializeSlackAppCredentialsV1({ ...pending, app_id: "A0999ZZZZ" }));
     expect(() => findPendingSlackAppCredentialsV1(store)).toThrow(
       "more than one pending Slack app setup exists",
+    );
+  });
+
+  it("fails loudly on a stored secret with the bundle kind but invalid fields, instead of skipping it", () => {
+    const store = new FileOrganizationSecretStore(tempSecrets());
+    // kind matches, so this is not a foreign secret to skip — but app_id does
+    // not match its shape, so parsing it must throw rather than be treated as
+    // absent.
+    store.create(JSON.stringify({ ...pending, app_id: "not-an-app-id" }));
+    expect(() => findPendingSlackAppCredentialsV1(store)).toThrowError(
+      /^Slack app credentials are invalid$/,
     );
   });
 });
