@@ -30,9 +30,9 @@ describe('view models copy only what the renderer may see', () => {
 
   it('tools keep each name and state, never external ids, and only for the account asked about', () => {
     const reply = (membership: string) => ({ ok: true, result: {
-      schema_version: 3, kind: 'echo-organization-person-tools', organization_id: 'org_1', membership_id: membership,
+      schema_version: 4, kind: 'echo-organization-person-tools', organization_id: 'org_1', membership_id: membership,
       tools: [{ tool_id: 'slack', display_name: 'Slack', availability: 'enabled', personal_status: 'linked',
-        external_scope_id: 'T0SECRET', external_subject_id: 'U0SECRET' }],
+        external_scope_id: 'T0SECRET', external_subject_id: 'U0SECRET', organization_setup: 'connected' }],
     } });
     const view = toolsView(reply('mem_1'), 'mem_1');
     expect(view).toEqual({ tools: [{ name: 'Slack', enabled: true, linked: true }] });

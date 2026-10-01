@@ -41,8 +41,10 @@ describe("Person client help", () => {
   });
 
   it("documents sign-in, reads, session commands, and nested employee commands", async () => {
-    await expect(help(["tools", "--help"])).resolves.toContain("echo-brain person tools");
-    await expect(help(["slack-link", "--help"])).resolves.toContain("echo-brain person slack-link");
+    await expect(help(["tools", "--help"])).resolves.toContain("echo-brain person tools [<setup|connect|disconnect|status|cancel> --tool <tool>");
+    await expect(help(["tools", "setup", "--help"])).resolves.toContain("--tool slack [--reconnect] [--no-wait]");
+    await expect(help(["tools", "connect", "--help"])).resolves.toContain("--method dm-code --slack-user");
+    await expect(help(["tools", "status", "--help"])).resolves.toContain("--tool slack --attempt-id <value>");
     await expect(help(["login", "--help"])).resolves.toContain(
       "--invitation <path> | --authority-url <url>",
     );
@@ -121,7 +123,8 @@ describe("Person client help", () => {
       ["documents", "upload"], ["documents", "status"], ["documents", "read"], ["documents", "read-v2"], ["documents", "search"], ["documents", "download"],
       ["projects", "list"], ["projects", "read"], ["projects", "feed"], ["projects", "feed-v2"], ["projects", "search"], ["projects", "read-context"], ["projects", "read-context-v2"],
       ["updates", "submit"], ["updates", "status"], ["updates", "read"], ["updates", "read-v3"],
-      ["slack-connect-cancel"],
+      ["slack-connect-cancel"], ["slack-link"], ["slack-connect-begin"], ["slack-connect-status"], ["slack-disconnect"],
+      ["tools", "bogus"],
     ];
     for (const argv of retired.flatMap(command => [command, [...command, "--help"]])) {
       let stdout = "";

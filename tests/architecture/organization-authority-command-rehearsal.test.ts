@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   mkdtempSync,
@@ -15,7 +14,6 @@ import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
 import type { NangoConnectionClientV1, NangoSlackConnectionV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, type SlackAppManifestProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
-import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../../services/organization-authority/src/application/person-identity-sessions.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
@@ -121,6 +119,7 @@ const CLIENT_SECRET = "rehearsal-client-secret-never-stored-in-sqlite";
 const SIGNING_SECRET = "rehearsal-signing-secret-never-stored-in-sqlite";
 const BOT_TOKEN = "xoxb-rehearsal-bot-token-only-in-nango";
 const SLACK_NANGO = { secret_key: "rehearsal-nango-secret-key-000000000", integration_key: "slack" };
+const CONNECT_LINK = "https://connect.nango.dev/?session_token=rehearsal";
 const SECRETS = [CONFIGURATION_TOKEN, CLIENT_SECRET, SIGNING_SECRET, BOT_TOKEN, SLACK_NANGO.secret_key];
 
 /** Slack, seen only with the bot token Nango holds. */
@@ -169,7 +168,7 @@ function fakeNango() {
   const client: NangoConnectionClientV1 = {
     createConnectSession: async (input) => {
       tags = input.tags;
-      return { connect_link: "https://connect.nango.dev/?session_token=rehearsal", expires_at: "2099-01-01T00:00:00.000Z" };
+      return { connect_link: CONNECT_LINK, expires_at: "2099-01-01T00:00:00.000Z" };
     },
     createReconnectSession: async () => {
       throw new Error("the rehearsal installs once");
@@ -381,27 +380,28 @@ describe("Organization Authority command rehearsal", () => {
       expect(login.values.join("")).toContain('"phase":"installed"');
       expect(await setupStatus(stateDirectory)).toMatchObject({ slack_connected: false, next_step: "connect_slack_in_app" });
 
-      // The owner sets up Slack in the app: the Authority's owner routes, Slack's manifest API and Nango.
-      const { access_token } = (JSON.parse(readFileSync(
-        join(homeDirectory, ".local", "share", "echo-brain", "person", "session.v1.json"), "utf8",
-      )) as { session: { access_token: string } }).session;
-      const owner = async (path: string, body: unknown) => {
-        const response = await fetch(`${loopback}${path}`, { method: "POST",
-          headers: { authorization: `Bearer ${access_token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-        return { status: response.status, body: await response.json() as Record<string, unknown> };
-      };
-      await expect(owner(ORGANIZATION_API_SLACK_SETUP_PATH_V1, { request_id: `oss_${randomUUID()}`, configuration_token: CONFIGURATION_TOKEN }))
-        .resolves.toMatchObject({ status: 201, body: { app_id: "A12345678", organization_setup: "app_created" } });
-      const begun = await owner(ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, { request_id: `osi_${randomUUID()}` });
-      expect(begun.status).toBe(201);
-      nango.finishConnect();
-      await expect(owner(ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, { attempt_id: begun.body.attempt_id }))
-        .resolves.toMatchObject({ status: 200, body: { status: "complete", result: { kind: "created", workspace_id: "T12345678" } } });
+      // The owner sets up Slack: the CLI, the Authority's owner routes, Slack's manifest API and Nango.
+      const setup = commandOutput();
+      await expect(
+        runPersonClientCli(["tools", "setup", "--tool", "slack"], {
+          stdout: { write: setup.write },
+          stderr: { write: setup.write },
+          home_directory: homeDirectory,
+          fetch: rewriteFetch,
+          read_input: () => `${CONFIGURATION_TOKEN}\n`,
+          // The owner finishes the Connect page ECHO opened.
+          open_authorization_url: (url) => { expect(url).toBe(CONNECT_LINK); nango.finishConnect(); return true; },
+          sleep: async () => undefined,
+        }),
+      ).resolves.toBe(0);
+      expect(setup.values.join("")).toContain('"phase":"connected"');
+      expect(setup.values.join("")).toContain('"kind":"created","workspace_id":"T12345678"');
+      expect(setup.values.join("")).not.toContain(CONFIGURATION_TOKEN);
       expect(await setupStatus(stateDirectory)).toMatchObject({ slack_connected: true, next_step: "complete_founder_slack_link" });
 
       const linked = commandOutput();
       await expect(
-        runPersonClientCli(["slack-link", "--slack-user", "U12345679"], {
+        runPersonClientCli(["tools", "connect", "--tool", "slack", "--method", "dm-code", "--slack-user", "U12345679"], {
           stdout: { write: linked.write },
           stderr: { write: linked.write },
           home_directory: homeDirectory,

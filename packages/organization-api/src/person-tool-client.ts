@@ -26,16 +26,38 @@ export interface PersonToolHostV1 {
   /** The host authenticates first and verifies the same current account after the operation. */
   withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>): Promise<T>;
 }
-export interface PersonToolCommandV1 {
-  readonly name: string;
+/** The verbs of `echo-brain person tools <verb> --tool <tool_id>`, the same for every tool. */
+export type PersonToolVerbNameV1 = 'setup' | 'connect' | 'disconnect' | 'status' | 'cancel';
+
+export interface PersonToolVerbContextV1 {
+  readonly host: PersonToolHostV1;
+  readonly values: Readonly<Record<string, string | boolean | undefined>>;
+  /** Prints one JSON line to standard output. */
+  print(value: unknown): void;
+  /** One bounded line of standard input: the only way a verb receives a token. */
+  read_interactive_line(): Promise<string>;
+  open_browser(url: string): boolean | Promise<boolean>;
+  sleep(ms: number): Promise<void>;
+}
+
+export interface PersonToolVerbV1 {
   readonly description: string;
+  /** Options beyond `--tool`, parsed strictly. */
   readonly options: Readonly<Record<string, { readonly type: 'string' | 'boolean' }>>;
   readonly requires?: readonly string[];
-  run(input: {
-    readonly host: PersonToolHostV1;
-    readonly values: Readonly<Record<string, string | boolean | undefined>>;
-    print(value: unknown): void;
-    read_interactive_line(): Promise<string>;
-    open_browser(url: string): boolean | Promise<boolean>;
-  }): Promise<void>;
+  run(context: PersonToolVerbContextV1): Promise<void>;
+}
+
+/** One tool's verbs, registered only at the CLI's selecting entrypoint. */
+export interface PersonToolProviderV1 {
+  readonly tool_id: string;
+  readonly verbs: Readonly<Partial<Record<PersonToolVerbNameV1, PersonToolVerbV1>>>;
+}
+
+/** A refused, cancelled or unfinished tool step: fixed copy plus a machine-readable reason. */
+export class PersonToolOutcomeErrorV1 extends Error {
+  constructor(readonly reason: string, message: string) {
+    super(message);
+    this.name = 'PersonToolOutcomeErrorV1';
+  }
 }
