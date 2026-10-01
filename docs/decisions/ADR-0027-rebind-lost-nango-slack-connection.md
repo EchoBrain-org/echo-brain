@@ -96,9 +96,9 @@ Consequences:
 - **Custody.** The old Nango connection, and the connection made by any
   refused install, stays in Nango with a copy of a bot token. Nothing deletes
   it.
-- **Per-organization Nango environment is unconfirmed.** ADR-0025 states that
-  each organization gets its own Nango environment. The founder has not
-  confirmed that rule, so this record does not rely on it. The rebind's proof
+- **Per-organization Nango environment is unconfirmed.** ADR-0025 lists one
+  Nango environment per organization as an open item, not a founder
+  decision, so this record does not rely on it. The rebind's proof
   does not need it: exact evidence plus the organization and attempt tags.
   Its custody consequence does: in an environment shared between
   organizations, any of their keys can read an orphaned connection's bot

@@ -183,7 +183,7 @@ function seedPendingApproval(database: Database.Database, active: StoredSlackCon
     );
 }
 
-const PREDATES_IN_APP_SETUP = "stored Slack connection predates in-app setup; run replace-rehearsal";
+const PREDATES_IN_APP_SETUP = "stored Slack connection predates in-app setup; install this release's host tooling, then run replace-rehearsal";
 const SEVEN_PRE_IN_APP_SCOPES = ["channels:history", "channels:read", "chat:write", "im:history", "im:write", "reactions:read", "users:read"];
 
 /** A connection stored by the removed bot-token-and-channel setup: seven scopes and a channel configuration. */

@@ -56,12 +56,14 @@ local authority even if the remote revocation outcome is unknown. Every Person
 read and integration-link request rechecks the current session, membership, and
 revocation state on the Authority.
 
-Organization-tool onboarding is an owner operation done in the ECHO app, not
-an Authority administrator operation on the host. An owner opens Connected
-tools → Slack → Set up and pastes one Slack app configuration token; ECHO
-creates a private Slack app for that organization and installs it through
-Nango, which runs the OAuth exchange and holds the resulting bot token. The
-Authority verifies the workspace, app, bot, and scopes before activating the
+Organization-tool onboarding is an owner operation done from the owner's own
+ECHO client, not an Authority administrator operation on the host. An owner
+runs `echo-brain person tools setup --tool slack` and pastes one Slack app
+configuration token at its hidden prompt; the desktop app's Connected tools
+page shows status only for now. ECHO creates a private Slack app for that
+organization and installs it through Nango, which runs the OAuth exchange
+and holds the resulting bot token. The Authority verifies the workspace, app,
+bot, and scopes before activating the
 connection and storing the Nango connection ID, the app's client ID and
 secret, and the signing secret in its private credential store
 ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).

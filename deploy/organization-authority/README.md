@@ -89,7 +89,7 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 | `runtime-profile.json`     | Exact canonical runtime profile referenced by the release record. It contains the reviewed Compose and Caddy bytes, never a secret. |
 | `oidc-config.json`         | OIDC configuration, including the exact callback above.                                                                             |
 | `oidc-client-secret`       | OIDC client secret.                                                                                                                 |
-| `nango-secret-key`         | Nango environment secret key. The Authority uses it to create Slack connect sessions and fetch the bot token; Slack setup itself happens afterward, in the app. |
+| `nango-secret-key`         | Nango environment secret key. The Authority uses it to create Slack connect sessions and fetch the bot token; an owner sets Slack up afterward with `person tools setup --tool slack`. |
 | `granola-credential`       | Organization Granola credential.                                                                                                    |
 | `llm-credential`           | Retained LLM provider credential.                                                                                                   |
 
@@ -158,10 +158,13 @@ Slack integration setting in the onboarding JSON. Run the re-onboarding only
 with a wholly fresh provider-neutral V4 staging lineage; do not reuse an older
 V3 or shared-channel rehearsal state directory, database, or approval binding.
 
-The CLI equivalent of the app's Set up step is `person tools setup --tool slack`.
-Add `--reconnect` to resume an unfinished install, or reconnect after Slack was
-uninstalled, after Nango lost the connection, or after an install landed in
-another workspace, without a new setup token.
+An owner sets Slack up from their own machine with
+`"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack`,
+pasting a Slack app configuration token at its hidden prompt; the ECHO desktop
+app's Connected tools page shows status only for now. Add `--reconnect` to
+resume an unfinished install, or reconnect after Slack was uninstalled, after
+Nango lost the connection, or after an install landed in another workspace,
+without a new setup token.
 
 ### Slack sign-in for the person link
 
@@ -261,11 +264,25 @@ the release procedure below.
 A host prepared before Slack moved to Nango uses this same command, not the
 [provider-reuse path](#reuse-provider-credentials-for-a-fresh-staging-rehearsal)
 below: provider reuse needs a host already prepared with the Nango key and
-integration. Run `replace-rehearsal` without `--reuse-provider-inputs`, then
-transfer the full eight-file onboarding input directory (including
-`nango-secret-key`) and run `prepare` again. A rehearsal stage receipt staged
-before the move is refused as invalid; re-stage it under a new operation ID,
-and delete any leftover captured `slack-*` files by hand.
+integration. Keep this order:
+
+1. While the old rehearsal is still in place, install the target release's
+   reviewed host tooling through the
+   [current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
+   (`inspect-install`, then `install`, each with `--previous-tooling-source`). The
+   transfer runs the installed wrapper's `doctor` and `prepare`, and an older
+   wrapper still requires the retired `slack-*` input files. The lane checks
+   the host's accepted release record and environment, which
+   `replace-rehearsal` archives, so it refuses to install afterward.
+2. Run `replace-rehearsal --confirm-no-live-users` without
+   `--reuse-provider-inputs`.
+3. Transfer the full eight-file onboarding input directory (including
+   `nango-secret-key`); the transfer runs `doctor` and `prepare` on the host.
+   Then continue with `resume`.
+
+A rehearsal stage receipt staged before the move is refused as invalid;
+re-stage it under a new operation ID, and delete any leftover captured
+`slack-*` files by hand.
 
 ### Fresh four-meeting staging rehearsal
 

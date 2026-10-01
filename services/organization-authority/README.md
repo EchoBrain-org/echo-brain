@@ -151,8 +151,10 @@ echo-organization-authority-setup resume \
 ```
 
 `resume` reads no standard input. A manifest from before this change is
-refused: "organization setup manifest predates in-app Slack setup; run
-replace-rehearsal". If the setup plan is missing, restore that exact plan or
+refused: "organization setup manifest predates in-app Slack setup; install
+this release's host tooling, then run replace-rehearsal" (the
+[deployment runbook](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state)
+gives the order). If the setup plan is missing, restore that exact plan or
 start with a new clean state directory; do not try to recreate it around
 existing state. Use this safe status view at any time:
 
@@ -166,9 +168,9 @@ grants, bearer values, generated internal IDs, or note content.
 
 ### Slack setup, in the app
 
-Slack setup has no host-side steps left. The organization's Slack connection
-is created and installed from inside the ECHO app (or the Person CLI's tools
-verbs), through Nango
+Slack setup has no host-side steps left. An owner creates and installs the
+organization's Slack connection with the Person CLI's tools verbs (the ECHO
+desktop app's Connected tools page shows status only for now), through Nango
 ([ADR-0025](../../docs/decisions/ADR-0025-nango-holds-slack-connection-credentials.md)):
 there is no Slack app scope to grant by hand, no separate signing-secret file,
 and no Interactivity Request URL to save — the app recipe sets all of that,
@@ -216,11 +218,10 @@ echo-brain person tools connect --tool slack
 `person login` opens the OIDC authorization URL and receives the one-use
 session at a local loopback handoff; do not paste callback data. `person
 tools setup --tool slack` reads a Slack app configuration token from standard
-input — pipe it in, as above, rather than pasting interactively, since an
-interactive paste is echoed by the terminal — creates and installs the
-organization's private Slack app through Nango, and waits for the owner to
-finish in the browser. Add `--reconnect` to resume an unfinished install, or
-reconnect after Slack was uninstalled, after Nango lost the connection, or
+input — piped in, as above, or pasted at its hidden prompt — creates and
+installs the organization's private Slack app through Nango, and waits for
+the owner to finish in the browser. Add `--reconnect` to resume an unfinished
+install, or reconnect after Slack was uninstalled, after Nango lost the connection, or
 after an install landed in another workspace, without a new setup token. `person
 tools connect --tool slack` then opens the
 owner's own Slack sign-in and waits the same way; on a machine without a

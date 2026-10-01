@@ -466,7 +466,7 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV2 
   const record = value as Record<string, unknown>;
   if (record.kind === "echo-clean-founder-onboarding-manifest-v1") {
     // Its Slack connection was set up before the ECHO app could; staging moves to a fresh lineage.
-    throw new Error("organization setup manifest predates in-app Slack setup; run replace-rehearsal");
+    throw new Error("organization setup manifest predates in-app Slack setup; install this release's host tooling, then run replace-rehearsal");
   }
   const keys = [
     "artifact_revision",
@@ -984,9 +984,9 @@ function organizationAuthoritySetupInstruction(
     complete_founder_browser_login:
       "Start the Authority and complete the initial-owner browser login.",
     connect_slack_in_app:
-      "An owner sets up Slack in the ECHO app: Connected tools → Slack → Set up.",
+      "An owner runs person tools setup --tool slack and pastes a Slack app configuration token.",
     complete_founder_slack_link:
-      "The owner connects their own Slack: Connected tools → Slack → Connect.",
+      "The owner runs person tools connect --tool slack to link their own Slack.",
     install_provider_credentials:
       "Run the credentials-install command with the three private source files.",
     run_finalize: "Run the finalize command.",

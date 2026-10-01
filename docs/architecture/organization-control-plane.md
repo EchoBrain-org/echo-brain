@@ -67,7 +67,7 @@ no active organization Slack connection
 Slack is inactive and unavailable for employee connection
         |
         v
-owner pastes a Slack app configuration token in the ECHO app
+owner pastes a Slack app configuration token into person tools setup
         |
         v
 ECHO creates the private Slack app and installs it through a Nango connect session
@@ -83,13 +83,15 @@ private secret store + opaque handle and public metadata in SQLite
 organization Slack connection is active
 ```
 
-Onboarding is an owner-attributed ceremony run from the ECHO app (Connected
-tools → Slack → Set up), not a host credential ceremony. The owner generates a
-Slack app configuration token from Slack's own "Your App Configuration
-Tokens" page and pastes it once; ECHO creates its private Slack app for that
-organization through Slack's Manifest API, then opens a Nango connect session
-that carries that app's client ID and secret as a per-connection override.
-Nango runs the OAuth install and returns the bot token; the Authority never
+Onboarding is an owner-attributed ceremony run from the owner's Person client
+(`person tools setup --tool slack`; the desktop app's Connected tools page
+shows status only for now), not a host credential ceremony. The owner
+generates a Slack app configuration token from Slack's own "Your App
+Configuration Tokens" page and pastes it once; ECHO creates its private Slack
+app for that organization through Slack's Manifest API, then opens a Nango
+connect session that carries that app's client ID and secret as a
+per-connection override. Nango runs the OAuth install and returns the bot
+token; the Authority never
 asks the owner for it directly. The required Slack scopes are exactly
 `chat:write`, `im:history`, `im:write`, and `users:read`. `im:write` opens the
 verified meeting owner's private DM and `im:history` reconciles a retry
@@ -114,16 +116,23 @@ workspace or bot, so the connection reads "needs reinstall" until the owner
 reconnects to the original one. A failed, incomplete, or unavailable
 verification leaves no active connection; absence therefore means inactive. A
 reconnect of the same app reuses the same Nango connection ID and leaves every
-outstanding approval card untouched. When Nango no longer has that connection,
-the owner's Install opens a new one and, once it reproduces the stored
-verification evidence, rebinds the bundle's Nango connection ID under the same
-handle; the state hash and the cards stay unchanged
+outstanding approval card untouched. When Nango no longer has that connection
+(a 404 for it marks the connection "needs reinstall"), the owner's
+`person tools setup --tool slack --reconnect` opens a new install and, once it
+reproduces the stored verification evidence for the same app, workspace and
+bot, rebinds the bundle's Nango connection ID under the same handle; the state
+hash and the cards stay unchanged
 ([ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md),
 proposed).
 
 The Slack bot token is never written to Authority state: Nango holds it, and
 the Authority fetches it at use time and caches it in memory for at most five
 minutes ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
+While Nango is unreachable past that cache, card posts and updates, including
+the startup recovery of decided cards, retry quietly on later passes without
+stopping the Authority; only the owner's setup and install report "Slack setup
+is unavailable right now". Unavailability and Nango's 401 or 403 never mark
+the connection "needs reinstall".
 The organization-scoped Authority private secret store instead holds one
 credential bundle: the app's client ID and secret, its signing secret, and the
 Nango connection ID. `integrations.sqlite` receives only an opaque handle to

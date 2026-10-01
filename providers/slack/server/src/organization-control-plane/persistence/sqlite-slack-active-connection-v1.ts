@@ -59,7 +59,7 @@ export function readActiveSlackConnectionV1(
     (body as { readonly public_connection_configuration_sha256?: unknown })
       .public_connection_configuration_sha256 !== slackNangoAppPublicConfigurationSha256V1()
   ) {
-    throw new Error("stored Slack connection predates in-app setup; run replace-rehearsal");
+    throw new Error("stored Slack connection predates in-app setup; install this release's host tooling, then run replace-rehearsal");
   }
   const connection = validateOrganizationToolConnectionContractV2(body);
   const state = validateOrganizationToolConnectionStateV2(

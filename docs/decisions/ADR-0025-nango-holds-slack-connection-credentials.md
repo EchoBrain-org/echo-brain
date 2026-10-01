@@ -10,7 +10,7 @@ component_ids:
   - CMP-PERSON-CLIENT
 created_at: 2026-09-30
 reviewed_at: 2026-10-01
-reviewed_ref: 9ba7aa782f8d427401699ef5fbfabb46b524c208
+reviewed_ref: e3b6bdfc9f4e06d3695b4c0058664d1edd0b6c77
 status: accepted
 supersedes: []
 superseded_by: []
@@ -63,11 +63,8 @@ reads must use that person's token explicitly
 
 ## Decision and consequences
 
-**The founder accepted option B on 2026-09-30.** Each organization gets its
-own Nango environment, with its own environment secret key: an environment
-key can read every connection in that environment, so no environment is
-shared between organizations. Nango Cloud (or an enterprise self-host; the
-Authority takes Nango's base URL as configuration) holds:
+**The founder accepted option B on 2026-09-30.** Nango Cloud (or an enterprise
+self-host; the Authority takes Nango's base URL as configuration) holds:
 
 - the Slack bot token, fetched by the Authority at use time and cached in
   memory for at most five minutes; and
@@ -87,7 +84,9 @@ in [identity and onboarding](../architecture/identity-and-onboarding.md),
 which now links here instead of repeating it. ECHO still decides who an ECHO
 person is: Nango never sees a person identity, and interactivity and the
 person-link sign-in stay Authority-owned, verified with the Authority's own
-copy of the signing secret and client credentials.
+copy of the signing secret and client credentials. The app recipe declares
+the `openid` and `profile` user scopes for that sign-in alone; the Nango
+install requests only the four bot scopes.
 
 Consequences:
 
@@ -98,11 +97,12 @@ Consequences:
 - **Nango outage.** The browser person sign-in needs only the app's client
   credentials from the Authority's own bundle, so it keeps working. The
   DM-code person link needs the bot token, so it works only while the
-  in-memory cache (at most five minutes) still holds one. Approval-card
-  delivery past that window retries quietly (`retry_allowed`) until Nango
-  answers again; it shows no error. "Slack setup is unavailable right now"
-  belongs only to the owner's setup and install calls, since a new install or
-  reconnect cannot start.
+  in-memory cache (at most five minutes) still holds one. Past that window,
+  approval-card posts and updates, including the startup recovery of decided
+  cards, retry quietly on later passes until Nango answers again; they show
+  no error and do not stop the Authority. "Slack setup is unavailable right
+  now" belongs only to the owner's setup and install calls, since a new
+  install or reconnect cannot start.
 - **Reconnect preserves cards.** A reconnect or app update reuses the same
   Nango connection ID through a Nango reconnect session. The credential
   bundle, the connection state hash and every outstanding approval card are
@@ -110,21 +110,51 @@ Consequences:
   made the Authority fail to restart for an organization with decided
   approval cards. Replacing the connection with a different app or workspace
   is refused in v1 for the same reason; there is no replacement path yet.
+  ECHO writes nothing for a refused install, but a reconnect refused for
+  another workspace or bot has already changed Nango's connection: Nango
+  holds that install until the owner reconnects to the original workspace,
+  and the tools status shows `needs_reinstall` meanwhile.
+- **Lost Nango connection.** A 404 from Nango for the bound connection marks
+  it `needs_reinstall`; unavailability and Nango's 401 or 403 do not. The
+  owner then runs `person tools setup --tool slack --reconnect`, which opens a
+  fresh install. Once that install proves the same app, workspace and bot,
+  the Authority rebinds the bundle's Nango connection ID in place under the
+  same handle, so the state hash and every outstanding card are unchanged; a
+  different app or workspace is still refused. Because the rebind rewrites
+  the bundle, it is recorded separately in
+  [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md), proposed and
+  awaiting founder acceptance.
 - **Fresh lineage on staging.** Because credential custody changed shape, a
-  pre-Nango staging host cannot reuse its connection in place: it runs
-  `replace-rehearsal` and a full onboarding-input transfer, the same as any
-  other fresh rehearsal.
+  pre-Nango staging host cannot reuse its connection in place: after
+  installing the target release's host tooling, it runs `replace-rehearsal`
+  and a full onboarding-input transfer, the same as any other fresh
+  rehearsal (see below).
+
+**Open, not a founder decision: one Nango environment per organization.** A
+Nango environment secret key can read every connection in its environment.
+The proposed rule gives each organization its own Nango environment and
+secret key, so that no environment is shared between organizations. The
+founder has not confirmed it, and nothing enforces it: the staging demo and
+`replace-rehearsal --reuse-provider-inputs` reuse one environment across
+organizations, and the optional, disabled Jira composition would use the
+same key.
 
 ## Migration, rollback, and evidence
 
 There is no legacy coexistence. A Nango-kind connection is the only kind; the
 prior bot-token-and-channel path, its local token file and its signing-secret
 file are removed in the same change, and the stopped-state Slack setup CLI it
-depended on is retired. A pre-Nango organization re-onboards by running
-`replace-rehearsal` and transferring the full onboarding input directory,
-including the new `nango-secret-key` file described in the
-[deployment README](../../deploy/organization-authority/README.md); there is
-no in-place upgrade of an existing connection record, and old rehearsal
+depended on is retired. A pre-Nango organization re-onboards in this order,
+described in the
+[deployment README](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state):
+while the old rehearsal is still present, install the target release's
+reviewed host tooling through the current-host staging release lane; then
+run `replace-rehearsal`; then transfer the full onboarding input directory,
+including the new `nango-secret-key` file, which runs the installed
+wrapper's `doctor` and `prepare`. An older installed wrapper still requires
+the retired Slack input files, and once `replace-rehearsal` has archived the
+accepted release record the release lane refuses to install. There is no
+in-place upgrade of an existing connection record, and old rehearsal
 receipts staged before this change are refused rather than reused.
 
 Evidence:
@@ -136,3 +166,7 @@ Nango key reaches SQLite.
 `services/organization-authority/test/organization-authority-private-approval-runtime.test.ts`
 and `tests/architecture/organization-authority-command-rehearsal.test.ts` prove
 the Authority only ever reads the Slack bot token from Nango.
+`providers/slack/server/test/private-approval/private-slack-approval-terminal-coordinator-v1.test.ts`
+and `private-slack-approval-workflow-bundle-v1.test.ts` prove that startup
+recovery completes and card updates stay pending while no bot token can be
+obtained.

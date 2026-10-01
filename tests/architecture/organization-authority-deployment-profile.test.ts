@@ -458,7 +458,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain("ECHO_CLEAN_NANGO_INTEGRATION=$input_nango_integration");
     expect(source).toContain("connect_slack_in_app)");
     expect(source).toContain(
-      "ACTION: In the ECHO app, an owner opens Connected tools → Slack → Set up and follows the steps.",
+      'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack, paste a Slack app configuration token at its hidden prompt, and finish the install it opens. The ECHO app Connected tools page shows status only for now.',
     );
     expect(source).toContain('redirect: "error"');
     expect(source).toContain(".authority-operation-lock");
@@ -644,7 +644,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
   });
 
-  it("hands the owner the in-app Slack setup, then their own Slack connect", () => {
+  it("hands the owner the Slack setup command, then their own Slack connect", () => {
     const fixture = preparedStatusFixture();
     {
       const setup = fixture.run("resume", {
@@ -652,7 +652,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       });
       expect(setup.status, setup.stderr).toBe(0);
       expect(setup.stdout).toContain(
-        "ACTION: In the ECHO app, an owner opens Connected tools → Slack → Set up and follows the steps.\n",
+        'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack, paste a Slack app configuration token at its hidden prompt, and finish the install it opens. The ECHO app Connected tools page shows status only for now.\n',
       );
       expect(setup.stdout).toContain('status_json={"next_step":"connect_slack_in_app"}');
       const calls = readFileSync(fixture.calls, "utf8");
@@ -664,7 +664,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       });
       expect(connect.status, connect.stderr).toBe(0);
       expect(connect.stdout).toContain(
-        'ACTION: On the initial-owner machine, open the ECHO app: Connected tools → Slack → Connect. Without a browser: "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack --method dm-code --slack-user <U…>.\n',
+        'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack and finish the Slack sign-in it opens. Without a browser: "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack --method dm-code --slack-user <U…>.\n',
       );
       expect(connect.stdout).not.toContain("slack-link");
     }

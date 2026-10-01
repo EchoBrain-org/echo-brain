@@ -826,12 +826,12 @@ describe("Organization Authority setup coordinator", () => {
     chmodSync(path, 0o600);
 
     expect(() => readOrganizationAuthoritySetupManifest(state)).toThrow(
-      "organization setup manifest predates in-app Slack setup; run replace-rehearsal",
+      "organization setup manifest predates in-app Slack setup; install this release's host tooling, then run replace-rehearsal",
     );
     let stderr = "";
     expect(await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state],
       { stdout: () => undefined, stderr: (value) => (stderr += value) }, dependencies([]))).toBe(1);
-    expect(stderr).toContain("run replace-rehearsal");
+    expect(stderr).toContain("install this release's host tooling, then run replace-rehearsal");
   });
 
   it("keeps a default-path v2 owner invitation usable when bootstrap resumes", async () => {
@@ -1481,7 +1481,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(await runOrganizationAuthoritySetupCli(bootstrapArgs(state), io, deps)).toBe(0);
     expect(JSON.parse(stdout)).toMatchObject({
       next_step: "connect_slack_in_app",
-      next_instruction: "An owner sets up Slack in the ECHO app: Connected tools → Slack → Set up.",
+      next_instruction: "An owner runs person tools setup --tool slack and pastes a Slack app configuration token.",
     });
     expect(stdout).not.toContain("invitation_path");
     expect(order).toEqual(["initialize:2026-08-22T12:00:00.000Z:clean-founder-v1"]);
@@ -1494,7 +1494,7 @@ describe("Organization Authority setup coordinator", () => {
     expect(await runOrganizationAuthoritySetupCli(["resume", "--state-dir", state], io, deps)).toBe(0);
     expect(JSON.parse(stdout)).toMatchObject({
       next_step: "complete_founder_slack_link",
-      next_instruction: "The owner connects their own Slack: Connected tools → Slack → Connect.",
+      next_instruction: "The owner runs person tools connect --tool slack to link their own Slack.",
     });
   });
 

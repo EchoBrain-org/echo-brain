@@ -1969,13 +1969,13 @@ resume() {
         ;;
       connect_slack_in_app)
         start_runtime
-        printf 'ACTION: In the ECHO app, an owner opens Connected tools → Slack → Set up and follows the steps.\n'
+        printf 'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack, paste a Slack app configuration token at its hidden prompt, and finish the install it opens. The ECHO app Connected tools page shows status only for now.\n'
         print_status "$(setup_status)"
         return
         ;;
       complete_founder_slack_link)
         start_runtime
-        printf 'ACTION: On the initial-owner machine, open the ECHO app: Connected tools → Slack → Connect. Without a browser: "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack --method dm-code --slack-user <U…>.\n'
+        printf 'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack and finish the Slack sign-in it opens. Without a browser: "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack --method dm-code --slack-user <U…>.\n'
         print_status "$(setup_status)"
         return
         ;;
