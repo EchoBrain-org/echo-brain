@@ -4,7 +4,8 @@ import { once } from "node:events";
 import Database from "better-sqlite3";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
-import type { SlackIdentityProviderV1 } from "../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
+import { SlackIdentityProviderErrorV1, type SlackIdentityProviderV1 } from "../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
+import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOrganizationControlBaselineV3 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { connectSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
@@ -548,6 +549,41 @@ describe("Person Slack identity-link workflow", () => {
 
     await expect(completion).rejects.toMatchObject({ code: "conflict" });
     expect((await context.application.tools("bearer")).tools).toMatchObject([{ personal_status: "unlinked" }]);
+  });
+
+  it("retries a rejected bot token once with a refreshed one, then reports the active connection", async () => {
+    const context = await setup();
+    const rejected = new SlackIdentityProviderErrorV1("Slack rejected the integration verification request", "unauthorized", true);
+    const onRejected = vi.fn();
+    const readActiveSlackBotToken = vi.fn(async (_connection: unknown, options?: { force_refresh?: boolean }) =>
+      options?.force_refresh === true ? "xoxb-refreshed" : TOKEN);
+    const verifiedConnection = vi.mocked(context.slack.verifyConnection).getMockImplementation()!;
+    const application = (rejections: number) => {
+      let remaining = rejections;
+      vi.mocked(context.slack.verifyConnection).mockImplementation(async (token) => {
+        if (remaining > 0) { remaining -= 1; throw rejected; }
+        return verifiedConnection(token);
+      });
+      return createSqliteSlackPersonIdentityLinkWorkflowV1({
+        database: context.database, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID,
+        state_lineage_id: LINEAGE_ID, approval_channel_id: "C12345678",
+        authentication: { authenticateAccess: () => authorization }, membership_type: () => "employee" as const,
+        slack: context.slack, slack_token_access: { readActiveSlackBotToken, onActiveSlackBotTokenRejected: onRejected },
+        authorization_fence: new ReadableSearchAuthorizationFence(), now: () => NOW,
+      });
+    };
+
+    await expect(application(2).begin(beginRequest(), "bearer")).rejects.toMatchObject({ code: "invalid_request" });
+    expect(readActiveSlackBotToken.mock.calls.map((call) => call[1])).toEqual([undefined, { force_refresh: true }]);
+    expect(onRejected).toHaveBeenCalledOnce();
+    expect(onRejected.mock.calls[0]?.[0]).toMatchObject({
+      kind: "legacy",
+      state_sha256: readActiveSlackConnectionV1(context.database)!.state_sha256,
+    });
+
+    await application(1).begin(beginRequest(), "bearer");
+    expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledWith("xoxb-refreshed", expect.anything(), undefined);
+    expect(onRejected).toHaveBeenCalledOnce();
   });
 
   it("wires disconnect to cancel an in-flight browser callback before it can link", async () => {

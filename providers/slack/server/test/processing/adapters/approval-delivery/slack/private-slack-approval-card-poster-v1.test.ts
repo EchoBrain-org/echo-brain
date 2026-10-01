@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PrivateSlackApprovalCardPosterV1, type PrivateSlackApprovalCardPresentationV1 } from "../../../../../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 
 const CARD: PrivateSlackApprovalCardPresentationV1 = Object.freeze({
@@ -324,6 +324,51 @@ describe("private Slack approval card poster V1", () => {
       provider_message_ts: "123.000001",
     });
     expect(postRequests).toBe(2);
+  });
+
+  it("resolves a function token for every Slack call", async () => {
+    const tokens = ["xoxb-first", "xoxb-second"];
+    const authorizations: string[] = [];
+    const poster = new PrivateSlackApprovalCardPosterV1(async () => tokens.shift()!, {
+      fetchImpl: async (_url, init) => {
+        authorizations.push(new Headers(init?.headers).get("authorization")!);
+        return new Response(JSON.stringify({ ok: true, channel: "D123", ts: "123.000001" }));
+      },
+    });
+    const input = { approval_id: "apr_123", dm_channel_id: "D123" };
+
+    await expect(poster.postMarker(input)).resolves.toMatchObject({ kind: "posted" });
+    await expect(poster.postMarker(input)).resolves.toMatchObject({ kind: "posted" });
+    expect(authorizations).toEqual(["Bearer xoxb-first", "Bearer xoxb-second"]);
+  });
+
+  it("retries a Slack auth failure once with a refreshed token, then reports it", async () => {
+    const authorizations: string[] = [];
+    const onAuthFailure = vi.fn();
+    const rejectingSlack = async (_url: unknown, init?: RequestInit) => {
+      authorizations.push(new Headers(init?.headers).get("authorization")!);
+      return new Response(JSON.stringify({ ok: false, error: "invalid_auth" }));
+    };
+    const refreshing = new PrivateSlackApprovalCardPosterV1(
+      async (options?: { force_refresh?: boolean }) =>
+        options?.force_refresh === true ? "xoxb-refreshed" : "xoxb-cached",
+      { fetchImpl: rejectingSlack, on_auth_failure: onAuthFailure },
+    );
+    const input = { approval_id: "apr_123", dm_channel_id: "D123" };
+
+    await expect(refreshing.postMarker(input)).resolves.toEqual({ kind: "retry_allowed" });
+    expect(authorizations).toEqual(["Bearer xoxb-cached", "Bearer xoxb-refreshed"]);
+    expect(onAuthFailure).toHaveBeenCalledOnce();
+    expect(onAuthFailure.mock.calls[0]?.[0]).toMatchObject({ name: "SlackApiError", code: "auth" });
+
+    authorizations.length = 0;
+    const fixed = new PrivateSlackApprovalCardPosterV1("xoxb-fixed", {
+      fetchImpl: rejectingSlack,
+      on_auth_failure: onAuthFailure,
+    });
+    await expect(fixed.postMarker(input)).resolves.toEqual({ kind: "retry_allowed" });
+    expect(authorizations).toEqual(["Bearer xoxb-fixed"]);
+    expect(onAuthFailure).toHaveBeenCalledTimes(2);
   });
 
   it("honors Retry-After before retrying a direct-message open", async () => {

@@ -20,6 +20,8 @@
     "providers/slack/server/src/organization-control-plane/composition/slack-connection-setup-cli.ts",
     "providers/slack/server/src/organization-control-plane/application/slack-integration-contracts.ts",
     "providers/slack/server/src/organization-control-plane/application/slack-app-credentials-v1.ts",
+    "providers/slack/server/src/organization-control-plane/application/slack-bot-token-source-v1.ts",
+    "providers/slack/server/src/organization-control-plane/application/slack-connection-health-v1.ts",
     "providers/slack/server/src/slack-private-credentials-v1.ts",
     "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-control-v1.ts",
     "providers/slack/server/src/composition/staging/slack-private-approval/staging-synthetic-private-dm-canary-client-v1.ts",

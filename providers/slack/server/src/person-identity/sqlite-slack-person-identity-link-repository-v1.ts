@@ -4,10 +4,11 @@ import {
   canonicalJson,
   canonicalSha256,
 } from "@echo-brain/federation-protocol";
-import { AUTHORITY_FILE_SECRET_BACKEND, type OrganizationSecretReference, type OrganizationSecretStore } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
+import { AUTHORITY_FILE_SECRET_BACKEND, type OrganizationSecretReference } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 import { SLACK_DEFAULT_APPROVE_REACTION, SLACK_DEFAULT_REJECT_REACTION, type ActiveSlackOrganizationTool, type BeginPersonSlackIdentityLinkChallengeInput, type BegunSlackIdentityLinkChallenge, type CompletePersonSlackIdentityLinkChallengeInput, type CompletedPersonSlackIdentityLink, type PendingPersonSlackIdentityLinkChallenge, type PersonSlackIdentityLinkSession } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { buildExternalHumanIdentityLinkContractV2, validateExternalHumanIdentityLinkContractV2, validateOrganizationToolConnectionContractV2, validateOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
+import { slackConnectionKindV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import type Database from "better-sqlite3";
 import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
 import { SlackPersonIdentityLinkWorkflowV1, type SlackPersonIdentityLinkAuthenticationPort, type SlackPersonIdentityLinkRepositoryPort } from "./slack-person-identity-link-workflow-v1.js";
@@ -24,10 +25,13 @@ class PersonSlackIdentityLinkConflictError extends Error {
 }
 
 export interface SlackBotTokenAccessV1 {
-  readActiveSlackBotToken(input: {
-    readonly connection: OrganizationToolConnectionContractV2;
-    readonly state: OrganizationToolConnectionStateV2;
-  }): string;
+  /** The active connection's bot token, resolved per use (a token source may be async). */
+  readActiveSlackBotToken(
+    connection: StoredSlackConnectionV1,
+    options?: { readonly force_refresh?: boolean },
+  ): string | Promise<string>;
+  /** Slack kept rejecting this connection's token after one refresh. */
+  onActiveSlackBotTokenRejected?(connection: StoredSlackConnectionV1): void;
 }
 
 export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
@@ -54,6 +58,7 @@ export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
 interface ActiveSlackConnection {
   readonly connection: OrganizationToolConnectionContractV2;
   readonly state: OrganizationToolConnectionStateV2;
+  readonly stored: StoredSlackConnectionV1;
   readonly tool: ActiveSlackOrganizationTool;
 }
 
@@ -615,19 +620,38 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
     });
   }
 
-  readSlackToken(reference: OrganizationSecretReference): string {
-    const active = this.activeConnection();
-    if (
-      active === null ||
-      reference.secret_backend_id !== AUTHORITY_FILE_SECRET_BACKEND ||
-      reference.secret_handle_id !== active.connection.connection_id
-    ) {
+  async readSlackToken(
+    reference: OrganizationSecretReference,
+    options?: { readonly force_refresh?: boolean },
+  ): Promise<string> {
+    const active = this.activeConnectionFor(reference);
+    if (active === null) {
       throw new Error("active Slack credential is unavailable");
     }
-    return this.options.slack_token_access.readActiveSlackBotToken({
-      connection: active.connection,
-      state: active.state,
-    });
+    return await this.options.slack_token_access.readActiveSlackBotToken(
+      active.stored,
+      options,
+    );
+  }
+
+  /** Reports only the connection the reference still names; otherwise nothing. */
+  reportSlackTokenRejected(reference: OrganizationSecretReference): void {
+    const access = this.options.slack_token_access;
+    if (access.onActiveSlackBotTokenRejected === undefined) return;
+    const active = this.activeConnectionFor(reference);
+    if (active !== null) access.onActiveSlackBotTokenRejected(active.stored);
+  }
+
+  /** The tool's secret reference is a pseudo-handle naming the active connection. */
+  private activeConnectionFor(
+    reference: OrganizationSecretReference,
+  ): ActiveSlackConnection | null {
+    const active = this.activeConnection();
+    return active === null ||
+      reference.secret_backend_id !== AUTHORITY_FILE_SECRET_BACKEND ||
+      reference.secret_handle_id !== active.connection.connection_id
+      ? null
+      : active;
   }
 
   private membershipType(
@@ -845,6 +869,13 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
     return Object.freeze({
       connection,
       state,
+      stored: Object.freeze({
+        kind: slackConnectionKindV1(connection),
+        connection,
+        contract_sha256: row.contract_sha256,
+        state,
+        state_sha256: row.state_sha256,
+      }),
       tool: Object.freeze({
         connection_attempt_id: state.verification_event_id,
         connection_id: connection.connection_id,
@@ -885,17 +916,15 @@ export function createSqliteSlackPersonIdentityLinkWorkflowV1(
   input: CreateSqliteSlackPersonIdentityLinkWorkflowV1Input,
 ): SlackPersonIdentityLinkWorkflowV1 {
   const repository = createSqliteSlackPersonIdentityLinkRepositoryV1(input);
-  const secrets: Pick<OrganizationSecretStore, "read"> = {
-    read(reference) {
-      return repository.readSlackToken(reference);
-    },
-  };
   return new SlackPersonIdentityLinkWorkflowV1({
     authority_id: input.authority_id,
     organization_id: input.organization_id,
     authentication: input.authentication,
     repository,
-    secrets: secrets as OrganizationSecretStore,
+    secrets: {
+      read: (reference, options) => repository.readSlackToken(reference, options),
+      reportRejected: (reference) => repository.reportSlackTokenRejected(reference),
+    },
     slack: input.slack,
     authorization_fence: input.authorization_fence,
     invalidate_browser_attempts: input.invalidate_browser_attempts,

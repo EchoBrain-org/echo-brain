@@ -1,12 +1,14 @@
 import { validateOrganizationPersonTools } from '@echo-brain/provider-slack-client/organization-api/person-tools';
 import type { OrganizationPersonToolV3 } from '@echo-brain/organization-api';
 import { observeCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
-import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { ORGANIZATION_API_PERSON_TOOLS_PATH, ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH } from "@echo-brain/provider-slack-client/organization-api/person-tools";
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { SlackWebIdentityProviderV1, type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
+import { createSlackBotTokenSourceV1, type SlackBotTokenSourceV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
+import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
+import type { StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -149,6 +151,10 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
   readonly identity_link_channel_id?: string;
   readonly provider?: SlackIdentityProviderV1;
   readonly browser_provider?: SlackBrowserIdentityProvider;
+  /** Absent: the legacy local-secret source. */
+  readonly bot_token_source?: SlackBotTokenSourceV1;
+  /** Marked when Slack keeps rejecting the bot token after one refresh. */
+  readonly connection_health?: SlackConnectionHealthV1;
 }): PersonExternalIdentityRuntimeBundleV1 {
   return Object.freeze({
     open(
@@ -161,6 +167,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
           close: () => undefined,
         });
       }
+      const health = input.connection_health;
       const database = openOrganizationControlDatabase(
         `${runtime.state_directory}/integrations.sqlite`,
         { fileMustExist: true },
@@ -177,22 +184,15 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
           membership_type: runtime.membership_type,
           slack: input.provider ?? new SlackWebIdentityProviderV1(),
           slack_token_access: {
-            readActiveSlackBotToken: ({ state }) => {
-              const secrets = new FileOrganizationSecretStore(
-                `${runtime.state_directory}/secrets`,
-              );
-              const matches = secrets
-                .listReferences()
-                .filter(
-                  (reference) =>
-                    canonicalSha256(reference) ===
-                    state.credential_reference_sha256,
-                );
-              if (matches.length !== 1) {
-                throw new Error("active Slack credential is unavailable");
-              }
-              return secrets.read(matches[0]!);
-            },
+            // The default legacy source opens the secret store per read, as before.
+            readActiveSlackBotToken: (connection, options) =>
+              (input.bot_token_source ?? createSlackBotTokenSourceV1({
+                secrets: new FileOrganizationSecretStore(`${runtime.state_directory}/secrets`),
+              })).botToken(connection, options),
+            ...(health === undefined ? {} : {
+              onActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
+                health.markNeedsReinstall(connection.state_sha256),
+            }),
           },
           authorization_fence: new ReadableSearchAuthorizationFence(),
         } satisfies CreateSqliteSlackPersonIdentityLinkWorkflowV1Input;

@@ -57,6 +57,14 @@
       "types": "./dist/organization-control-plane/application/slack-app-credentials-v1.d.ts",
       "import": "./dist/organization-control-plane/application/slack-app-credentials-v1.js"
     },
+    "./organization-control-plane/application/slack-bot-token-source-v1": {
+      "types": "./dist/organization-control-plane/application/slack-bot-token-source-v1.d.ts",
+      "import": "./dist/organization-control-plane/application/slack-bot-token-source-v1.js"
+    },
+    "./organization-control-plane/application/slack-connection-health-v1": {
+      "types": "./dist/organization-control-plane/application/slack-connection-health-v1.d.ts",
+      "import": "./dist/organization-control-plane/application/slack-connection-health-v1.js"
+    },
     "./slack-private-credentials-v1": {
       "types": "./dist/slack-private-credentials-v1.d.ts",
       "import": "./dist/slack-private-credentials-v1.js"

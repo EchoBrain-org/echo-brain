@@ -33,7 +33,8 @@ function parseCanonical(json: string): unknown {
   return value;
 }
 
-function connectionKind(
+/** Nango only for the recipe's configuration hash and exact bot scopes. */
+export function slackConnectionKindV1(
   connection: OrganizationToolConnectionContractV2,
 ): SlackConnectionKindV1 {
   const scopes = connection.required_provider_scopes;
@@ -83,7 +84,7 @@ export function readActiveSlackConnectionV1(
     throw new Error("stored Slack connection digest chain is invalid");
   }
   return Object.freeze({
-    kind: connectionKind(connection),
+    kind: slackConnectionKindV1(connection),
     connection,
     contract_sha256: row.contract_sha256,
     state,

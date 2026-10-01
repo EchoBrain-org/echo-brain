@@ -27,10 +27,17 @@ export class SlackIdentityProviderErrorV1 extends Error {
     message: string,
     readonly code:
       "unauthorized" | "unavailable" | "invalid_response" | "not_observed",
+    /** Slack itself rejected the bot token (HTTP 401 or an auth error). */
+    readonly token_rejected = false,
   ) {
     super(message);
     this.name = "SlackIdentityProviderErrorV1";
   }
+}
+
+/** Only Slack's rejection of the token; identity mismatches are not one. */
+export function isSlackIdentityTokenRejectedV1(error: unknown): boolean {
+  return error instanceof SlackIdentityProviderErrorV1 && error.token_rejected;
 }
 
 interface SlackResponse {
@@ -346,6 +353,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
       throw new SlackIdentityProviderErrorV1(
         "Slack integration verification failed",
         response.status === 401 ? "unauthorized" : "unavailable",
+        response.status === 401,
       );
     }
     const bytes = await readBoundedResponseBytes(response);
@@ -384,6 +392,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
           : notObserved
             ? "not_observed"
             : "unavailable",
+        unauthorized,
       );
     }
     const scopesHeader = response.headers.get("x-oauth-scopes");

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SlackWebIdentityProviderV1 } from "../../../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
+import { isSlackIdentityTokenRejectedV1, SlackWebIdentityProviderV1 } from "../../../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 
 const TOKEN = "xoxb-test-token-12345678";
 const CONNECTION = {
@@ -241,7 +241,27 @@ describe("SlackWebIdentityProviderV1", () => {
 
     await expect(
       provider.observeIdentityLinkChallenge(TOKEN, OBSERVATION),
-    ).rejects.toMatchObject({ code: "unauthorized" });
+    ).rejects.toMatchObject({ code: "unauthorized", token_rejected: false });
+  });
+
+  it("flags only Slack's own rejection of the bot token", async () => {
+    const rejected = new SlackWebIdentityProviderV1({
+      fetch: slackFetch({ ok: false, error: "token_revoked" }),
+    });
+    const revoked = await rejected.verifyConnection(TOKEN).catch((error: unknown) => error);
+    expect(revoked).toMatchObject({ code: "unauthorized", token_rejected: true });
+    expect(isSlackIdentityTokenRejectedV1(revoked)).toBe(true);
+    const http401 = new SlackWebIdentityProviderV1({
+      fetch: vi.fn<typeof globalThis.fetch>(async () => new Response("", { status: 401 })),
+    });
+    await expect(http401.verifyConnection(TOKEN)).rejects.toMatchObject({ token_rejected: true });
+    const missing = new SlackWebIdentityProviderV1({
+      fetch: slackFetch({ ok: false, error: "channel_not_found" }),
+    });
+    await expect(missing.verifyChannel(TOKEN, CHANNEL.id, CONNECTION.team_id)).rejects.toMatchObject({
+      code: "not_observed",
+      token_rejected: false,
+    });
   });
   it.each([
     { id: "C123PUBLIC", is_im: false, user: "U123HUMAN" },
