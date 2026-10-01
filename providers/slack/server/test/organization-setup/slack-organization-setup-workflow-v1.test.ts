@@ -7,7 +7,7 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import { applyOrganizationControlBaselineV3, openOrganizationControlDatabase } from "@echo-brain/organization-control-plane/organization-control-database-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
-import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_RECIPE_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
+import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
@@ -153,7 +153,7 @@ function setup() {
   const heldAttempts = () => JSON.stringify([...(workflow as unknown as { attempts: Map<string, unknown> }).attempts.values()]);
   const connect = async () => {
     await workflow.setup({ request_id: `oss_${uuid(1)}`, configuration_token: CONFIG_TOKEN }, "owner");
-    const begun = await workflow.beginInstall({ request_id: `osi_${uuid(1)}`, confirm_replacement: false }, "owner");
+    const begun = await workflow.beginInstall({ request_id: `osi_${uuid(1)}` }, "owner");
     finishConnect();
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete" });
     return readActiveSlackConnectionV1(database)!;
@@ -178,16 +178,14 @@ function seedWaitingCard(database: Database.Database): void {
 }
 
 const SETUP_REQUEST = { request_id: `oss_${uuid(1)}`, configuration_token: CONFIG_TOKEN };
-const BEGIN_REQUEST = { request_id: `osi_${uuid(1)}`, confirm_replacement: false };
-const credentialsRequest = (app_id: string) => ({ request_id: `osc_${uuid(1)}`, app_id, client_id: "9999.1111", client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET });
+const BEGIN_REQUEST = { request_id: `osi_${uuid(1)}` };
 
 describe("Slack organization setup workflow v1", () => {
   it("refuses employees on every route", async () => {
     const { workflow, manifest, nango } = setup();
     const attempt = { attempt_id: `ssi_${uuid(1)}` };
     for (const call of [
-      () => workflow.setup(SETUP_REQUEST, "employee"), () => workflow.appCredentials(credentialsRequest("A0APP2"), "employee"),
-      () => workflow.recipe("employee"), () => workflow.beginInstall(BEGIN_REQUEST, "employee"),
+      () => workflow.setup(SETUP_REQUEST, "employee"), () => workflow.beginInstall(BEGIN_REQUEST, "employee"),
       () => workflow.installStatus(attempt, "employee"), () => workflow.cancelInstall(attempt, "employee"),
     ]) await expect(call()).rejects.toMatchObject({ code: "unauthorized" });
     expect(workflow.organizationSetupForCaller("employee")).toBeNull();
@@ -209,10 +207,9 @@ describe("Slack organization setup workflow v1", () => {
     expect(manifest.createApp).toHaveBeenCalledOnce();
     expect(manifest.updateApp).toHaveBeenCalledWith(expect.objectContaining({ app_id: "A0APP1", manifest: recipe }));
     expect(secrets.listReferences()).toHaveLength(1);
-    await expect(workflow.recipe("owner")).resolves.toEqual({ schema_version: 1, kind: "echo-organization-slack-recipe-v1", manifest: recipe });
   });
 
-  it("updates the connected app on a new token, even while another app is pending", async () => {
+  it("updates the connected app on a new token", async () => {
     const { workflow, manifest, secrets, connect } = setup();
     await connect();
     const references = secrets.listReferences().length;
@@ -221,12 +218,6 @@ describe("Slack organization setup workflow v1", () => {
     expect(manifest.updateApp).toHaveBeenLastCalledWith(expect.objectContaining({ app_id: "A0APP1" }));
     expect(manifest.createApp).toHaveBeenCalledOnce();
     expect(secrets.listReferences()).toHaveLength(references);
-    // A different, hand-entered app stays pending for a replacement install; the connected app is the one updated.
-    await workflow.appCredentials(credentialsRequest("A0APP2"), "owner");
-    await expect(workflow.setup({ ...SETUP_REQUEST, request_id: `oss_${uuid(3)}` }, "owner")).resolves.toMatchObject({ app_id: "A0APP1", organization_setup: "connected" });
-    expect(manifest.updateApp).toHaveBeenCalledTimes(2);
-    expect(manifest.updateApp).toHaveBeenLastCalledWith(expect.objectContaining({ app_id: "A0APP1" }));
-    expect(findPendingSlackAppCredentialsV1(secrets)?.credentials.app_id).toBe("A0APP2");
   });
 
   it("maps Slack setup errors to fixed messages and stores nothing", async () => {
@@ -252,41 +243,16 @@ describe("Slack organization setup workflow v1", () => {
     });
     const first = workflow.setup(SETUP_REQUEST, "owner");
     await expect(workflow.setup(SETUP_REQUEST, "owner-2")).rejects.toMatchObject({ code: "conflict", message: "Slack setup is in progress" });
-    await expect(workflow.appCredentials(credentialsRequest("A0APP2"), "owner")).rejects.toMatchObject({ code: "conflict" });
     release();
     await expect(first).resolves.toMatchObject({ organization_setup: "app_created" });
   });
 
-  it("replaces a pending app from hand-entered credentials but refuses the already connected app", async () => {
-    const { workflow, secrets, connect } = setup();
-    await workflow.appCredentials(credentialsRequest("A0APP2"), "owner");
-    await expect(workflow.appCredentials(credentialsRequest("A0APP3"), "owner")).resolves.toMatchObject({ app_id: "A0APP3", organization_setup: "app_created" });
-    expect(secrets.listReferences()).toHaveLength(1);
-    expect(findPendingSlackAppCredentialsV1(secrets)?.credentials.app_id).toBe("A0APP3");
-    await expect(workflow.appCredentials({ ...credentialsRequest("A0APP3"), client_secret: "has space" }, "owner")).rejects.toMatchObject({ code: "invalid_request" });
-    secrets.remove(findPendingSlackAppCredentialsV1(secrets)!.reference);
-    await connect();
-    await expect(workflow.appCredentials(credentialsRequest("A0APP1"), "owner")).rejects.toMatchObject({ code: "conflict", message: "This Slack app is already connected" });
-  });
-
-  it("lets hand-entered credentials cancel the owner's own install but not another session's", async () => {
-    const { workflow, secrets } = setup();
-    await workflow.setup(SETUP_REQUEST, "owner");
-    const own = await workflow.beginInstall(BEGIN_REQUEST, "owner");
-    await expect(workflow.appCredentials(credentialsRequest("A0APP2"), "owner-2")).rejects.toMatchObject({ code: "conflict", message: "Slack setup is in progress" });
-    expect(findPendingSlackAppCredentialsV1(secrets)?.credentials.app_id).toBe("A0APP1");
-    await expect(workflow.installStatus({ attempt_id: own.attempt_id }, "owner")).resolves.toMatchObject({ status: "pending" });
-    await expect(workflow.appCredentials(credentialsRequest("A0APP2"), "owner")).resolves.toMatchObject({ app_id: "A0APP2" });
-    await expect(workflow.installStatus({ attempt_id: own.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
-  });
-
-  it("replays a begin, refuses its request id with another confirmation, and replaces the owner's own attempt", async () => {
+  it("replays a begin with the same request id, and replaces the owner's own attempt on a new one", async () => {
     const { workflow, nango } = setup();
     await workflow.setup(SETUP_REQUEST, "owner");
     const first = await workflow.beginInstall(BEGIN_REQUEST, "owner");
     await expect(workflow.beginInstall(BEGIN_REQUEST, "owner")).resolves.toEqual(first);
     expect(nango.createConnectSession).toHaveBeenCalledOnce();
-    await expect(workflow.beginInstall({ ...BEGIN_REQUEST, confirm_replacement: true }, "owner")).rejects.toMatchObject({ code: "conflict" });
     const second = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
     expect(second.attempt_id).not.toBe(first.attempt_id);
     await expect(workflow.installStatus({ attempt_id: first.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
@@ -316,13 +282,13 @@ describe("Slack organization setup workflow v1", () => {
       tags: { echo_organization_id: ORGANIZATION_ID, echo_membership_id: SESSIONS.owner!.membership_id, echo_attempt_id: begun.attempt_id },
       client_id: "1234.5678", client_secret: CLIENT_SECRET, scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1 });
     const pending = { schema_version: 1, kind: "echo-organization-slack-install-status-v1", attempt_id: begun.attempt_id,
-      status: "pending", failure_reason: null, outstanding_approvals: null, result: null };
+      status: "pending", failure_reason: null, result: null };
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toEqual(pending);
     expect(verifier.verifyConnection).not.toHaveBeenCalled();
     finishConnect();
     health.markNeedsReinstall("sha256:stale");
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toEqual({ ...pending, status: "complete",
-      result: { kind: "created", workspace_id: "T01", person_links_revoked: 0 } });
+      result: { kind: "created", workspace_id: "T01" } });
     expect(readActiveSlackConnectionV1(database)).toMatchObject({ kind: "nango" });
     expect(workflow.organizationSetup()).toBe("connected");
     expect(health.needsReinstall("sha256:stale")).toBe(false);
@@ -380,23 +346,20 @@ describe("Slack organization setup workflow v1", () => {
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "pending" });
     connections.set("nango-conn-1", { ...connections.get("nango-conn-1")!, updated_at: "2026-09-30T00:01:00.000Z" });
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete",
-      result: { kind: "reconnected", workspace_id: "T01", person_links_revoked: 0 } });
+      result: { kind: "reconnected", workspace_id: "T01" } });
     expect(readActiveSlackConnectionV1(database)?.state_sha256).toBe(before.state_sha256);
     expect(workflow.organizationSetup()).toBe("connected");
   });
 
-  it("reports the waiting-card count when a replacement is refused", async () => {
-    const { workflow, connect, database, finishConnect } = setup();
-    await connect();
+  it("refuses a reconnect that lands in a different team, writing nothing and leaving the waiting card alone", async () => {
+    const { workflow, connections, connect, database } = setup();
+    const before = await connect();
     seedWaitingCard(database);
-    await workflow.appCredentials(credentialsRequest("A0APP2"), "owner");
-    for (const [confirm, failure] of [[false, { failure_reason: "confirmation_required", outstanding_approvals: null }],
-      [true, { failure_reason: "approvals_outstanding", outstanding_approvals: 1 }]] as const) {
-      const begun = await workflow.beginInstall({ request_id: `osi_${uuid(confirm ? 3 : 2)}`, confirm_replacement: confirm }, "owner");
-      finishConnect({ app_id: "A0APP2", team_id: "T02" });
-      await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", ...failure });
-    }
-    expect(readActiveSlackConnectionV1(database)?.connection.provider_tenant_id).toBe("T01");
+    const begun = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
+    // The owner's browser ends up authorizing a different workspace while nominally reconnecting the same app.
+    connections.set("nango-conn-1", { ...connections.get("nango-conn-1")!, team_id: "T02", updated_at: "2026-09-30T00:01:00.000Z" });
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", failure_reason: "already_connected" });
+    expect(readActiveSlackConnectionV1(database)?.state_sha256).toBe(before.state_sha256);
   });
 
   it("maps Nango and Slack failures during status to fixed reasons", async () => {
@@ -491,7 +454,7 @@ describe("Slack runtime bundle with organization setup", () => {
     expect(without.opened.application.routes.some((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toBe(false);
     without.opened.close();
     const mounted = open();
-    expect(mounted.opened.application.routes.filter((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toHaveLength(6);
+    expect(mounted.opened.application.routes.filter((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toHaveLength(4);
     mounted.opened.close();
   });
 
@@ -501,10 +464,8 @@ describe("Slack runtime bundle with organization setup", () => {
       await expect(tools("owner")).resolves.toEqual([{ tool_id: "slack", display_name: "Slack", availability: "unavailable",
         personal_status: "unavailable", external_scope_id: null, external_subject_id: null, organization_setup: "not_set_up" }]);
       await expect(call(ORGANIZATION_API_SLACK_SETUP_PATH_V1, "owner", SETUP_REQUEST)).resolves.toMatchObject({ status: 201, body: { organization_setup: "app_created" } });
-      await expect(call(ORGANIZATION_API_SLACK_RECIPE_PATH_V1, "owner")).resolves.toMatchObject({ status: 200, body: { kind: "echo-organization-slack-recipe-v1" } });
       await expect(tools("owner")).resolves.toMatchObject([{ organization_setup: "app_created" }]);
       await expect(tools("employee")).resolves.toMatchObject([{ organization_setup: null }]);
-      await expect(call(ORGANIZATION_API_SLACK_RECIPE_PATH_V1, "employee")).rejects.toMatchObject({ code: "unauthorized" });
       await expect(call(ORGANIZATION_API_SLACK_SETUP_PATH_V1, "owner", { ...SETUP_REQUEST, configuration_token: `${CONFIG_TOKEN} x` })).rejects.toMatchObject({ code: "invalid_request" });
     } finally {
       opened.close();

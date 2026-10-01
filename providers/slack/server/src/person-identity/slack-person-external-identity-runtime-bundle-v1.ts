@@ -4,7 +4,7 @@ import { observeCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { ORGANIZATION_API_PERSON_TOOLS_PATH, ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH } from "@echo-brain/provider-slack-client/organization-api/person-tools";
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
-import { ORGANIZATION_API_SLACK_APP_CREDENTIALS_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_RECIPE_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
+import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { SlackOrganizationSetupWorkflowV1, type SlackOrganizationSetupOptionsV1 } from "../organization-setup/slack-organization-setup-workflow-v1.js";
 import { SlackWebIdentityProviderV1, type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
@@ -60,8 +60,6 @@ const SLACK_BROWSER_IDENTITY_ROUTES_V1 = Object.freeze([
 /** Owner-only organization setup; mounted only when setup options are provided. */
 const SLACK_ORGANIZATION_SETUP_ROUTES_V1 = Object.freeze([
   Object.freeze({ route_id: "slack-setup", method: "POST" as const, path: ORGANIZATION_API_SLACK_SETUP_PATH_V1 }),
-  Object.freeze({ route_id: "slack-app-credentials", method: "POST" as const, path: ORGANIZATION_API_SLACK_APP_CREDENTIALS_PATH_V1 }),
-  Object.freeze({ route_id: "slack-recipe", method: "GET" as const, path: ORGANIZATION_API_SLACK_RECIPE_PATH_V1 }),
   Object.freeze({ route_id: "slack-install-begin", method: "POST" as const, path: ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1 }),
   Object.freeze({ route_id: "slack-install-status", method: "POST" as const, path: ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1 }),
   Object.freeze({ route_id: "slack-install-cancel", method: "POST" as const, path: ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1 }),
@@ -91,11 +89,9 @@ async function acceptOrganizationSetupRouteV1(
 ): Promise<ProviderHttpResponseV1 | undefined> {
   if (!SLACK_ORGANIZATION_SETUP_ROUTE_IDS_V1.has(request.route_id)) return undefined;
   if (setup === undefined) throw new AuthorityOperationError("not_found", "external identity route is unavailable");
-  if (request.route_id === "slack-recipe") return Object.freeze({ status: 200 as const, body: await setup.recipe(token) });
   const body = parseBody(request.raw_body);
   switch (request.route_id) {
     case "slack-setup": return Object.freeze({ status: 201 as const, body: await setup.setup(body, token) });
-    case "slack-app-credentials": return Object.freeze({ status: 201 as const, body: await setup.appCredentials(body, token) });
     case "slack-install-begin": return Object.freeze({ status: 201 as const, body: await setup.beginInstall(body, token) });
     case "slack-install-status": return Object.freeze({ status: 200 as const, body: await setup.installStatus(body, token) });
     default: return Object.freeze({ status: 200 as const, body: await setup.cancelInstall(body, token) });

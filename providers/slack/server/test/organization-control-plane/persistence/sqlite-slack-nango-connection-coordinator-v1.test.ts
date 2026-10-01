@@ -10,8 +10,8 @@ import { FileOrganizationSecretStore } from "../../../../../../packages/organiza
 import type { NangoSlackConnectionV1 } from "../../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../../../src/organization-control-plane/application/slack-app-credentials-v1.js";
-import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES, type VerifiedSlackConnection } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
-import { outstandingPrivateApprovalCountV1, readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
+import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES, type OrganizationSecretStore, type VerifiedSlackConnection } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { connectSlackConnectionV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
 import { activateNangoSlackConnectionV1, SlackConnectionRefusedErrorV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 
@@ -96,7 +96,6 @@ function activate(
     readonly credential: ReturnType<typeof pendingBundle>;
     readonly nango: NangoSlackConnectionV1;
     readonly verifier?: ReturnType<typeof authTest>;
-    readonly confirm_replacement?: boolean;
     readonly connection_id?: string;
   },
 ) {
@@ -107,16 +106,15 @@ function activate(
     verifier: input.verifier ?? authTest(input.nango),
     credential: input.credential,
     nango: input.nango,
-    confirm_replacement: input.confirm_replacement ?? false,
     now: () => NOW,
     new_connection_id: () => input.connection_id ?? "con_nango_1",
   });
 }
 
-async function expectRefused(promise: Promise<unknown>, reason: SlackConnectionRefusedErrorV1["reason"], outstanding: number | null = null) {
+async function expectRefused(promise: Promise<unknown>, reason: SlackConnectionRefusedErrorV1["reason"]) {
   const error = await promise.then(() => undefined, (caught: unknown) => caught);
   expect(error).toBeInstanceOf(SlackConnectionRefusedErrorV1);
-  expect(error).toMatchObject({ reason, outstanding_approvals: outstanding });
+  expect(error).toMatchObject({ reason });
 }
 
 function rowCount(database: Database.Database, table: string): unknown {
@@ -164,18 +162,6 @@ function seedPendingApproval(database: Database.Database, active: StoredSlackCon
     );
 }
 
-function seedPendingChallenge(database: Database.Database, connectionId: string): void {
-  database
-    .prepare(
-      `INSERT INTO organization_person_slack_link_challenges
-       (dm_channel_id, recipient_user_id, challenge_attempt_id, connection_id, principal_id,
-        membership_id, challenge_code_sha256, person_session_sha256, organization_tool_sha256,
-        status, created_at, expires_at)
-       VALUES ('D_OWNER', 'U_OWNER', 'cat_1', ?, 'prn_owner', 'mem_owner', ?, ?, ?, 'pending', ?, ?)`,
-    )
-    .run(connectionId, canonicalSha256({ code: 1 }), canonicalSha256({ session: 1 }), canonicalSha256({ tool: 1 }), NOW, LATER);
-}
-
 async function connectLegacy(state: TestState): Promise<void> {
   await connectSlackConnectionV1({
     ...COORDINATES,
@@ -221,7 +207,6 @@ describe("Nango Slack connection activation v1", () => {
     const result = await activate(state, { credential: pending, nango: nangoInstall(), verifier });
 
     expect(result.kind).toBe("created");
-    expect(result.person_links_revoked).toBe(0);
     expect(verifier.verifyConnection).toHaveBeenCalledWith(BOT_TOKEN, undefined);
     expect(result.connection).toMatchObject({
       connection_id: "con_nango_1",
@@ -249,6 +234,30 @@ describe("Nango Slack connection activation v1", () => {
         expect(bytes).not.toContain(secret);
       }
     }
+  });
+
+  it("commits the connection even when removing the superseded pending bundle afterward fails", async () => {
+    const state = setup();
+    const pending = pendingBundle(state);
+    const secrets: OrganizationSecretStore = {
+      create: (secret) => state.secrets.create(secret),
+      read: (reference) => state.secrets.read(reference),
+      listReferences: () => state.secrets.listReferences(),
+      remove: (reference) => {
+        if (reference.secret_handle_id === pending.reference.secret_handle_id) throw new Error("disk is full");
+        state.secrets.remove(reference);
+      },
+    };
+
+    const result = await activateNangoSlackConnectionV1({
+      ...COORDINATES, database: state.database, secrets, verifier: authTest(nangoInstall()),
+      credential: pending, nango: nangoInstall(), now: () => NOW, new_connection_id: () => "con_nango_1",
+    });
+
+    expect(result.kind).toBe("created");
+    expect(readActiveSlackConnectionV1(state.database)).toMatchObject({ kind: "nango", connection: { connection_id: "con_nango_1" } });
+    // Best-effort: the write already committed, so the orphaned pending bundle must not surface as a failure.
+    expect(refs(state)).toContain(pending.reference.secret_handle_id);
   });
 
   it("refuses partial scopes from Nango or from auth.test", async () => {
@@ -290,40 +299,40 @@ describe("Nango Slack connection activation v1", () => {
 
     const result = await activate(state, { credential: activeBundle, nango: nangoInstall({ updated_at: LATER }), connection_id: "con_nango_2" });
 
-    expect(result).toEqual({ kind: "reconnected", connection: created.connection, state: created.state, person_links_revoked: 0 });
+    expect(result).toEqual({ kind: "reconnected", connection: created.connection, state: created.state });
     expect(readActiveSlackConnectionV1(state.database)?.state_sha256).toBe(canonicalSha256(created.state));
     expect(refs(state)).toEqual(before);
     expect(rowCount(state.database, "organization_tool_connection_contracts")).toBe(1);
   });
 
-  it("requires the same Nango connection to reconnect the same app", async () => {
+  it("refuses a different Nango connection id for the same app, writing nothing", async () => {
     const state = setup();
     const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
     const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
 
     await expectRefused(
-      activate(state, { credential: activeBundle, nango: nangoInstall({ connection_id: "nango-conn-2" }), confirm_replacement: true, connection_id: "con_nango_2" }),
-      "workspace_mismatch",
+      activate(state, { credential: activeBundle, nango: nangoInstall({ connection_id: "nango-conn-2" }), connection_id: "con_nango_2" }),
+      "already_connected",
     );
     expect(readActiveSlackConnectionV1(state.database)?.connection.connection_id).toBe("con_nango_1");
     expect(state.secrets.listReferences()).toHaveLength(1);
   });
 
-  it("refuses a replacement without confirmation", async () => {
+  it("refuses a reconnect that lands in a different team, writing nothing", async () => {
     const state = setup();
     const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
-    const replacement = pendingBundle(state, "A0APP2");
-    const before = refs(state);
+    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const nango = nangoInstall({ team_id: "T02" });
 
     await expectRefused(
-      activate(state, { credential: replacement, nango: nangoInstall({ connection_id: "nango-conn-2", app_id: "A0APP2" }), connection_id: "con_nango_2" }),
-      "confirmation_required",
+      activate(state, { credential: activeBundle, nango, verifier: authTest(nango), connection_id: "con_nango_2" }),
+      "already_connected",
     );
-    expect(refs(state)).toEqual(before);
-    expect(readActiveSlackConnectionV1(state.database)?.state_sha256).toBe(canonicalSha256(created.state));
+    expect(readActiveSlackConnectionV1(state.database)?.connection.provider_tenant_id).toBe("T01");
+    expect(state.secrets.listReferences()).toHaveLength(1);
   });
 
-  it("refuses a replacement while an approval is outstanding and says how many", async () => {
+  it("refuses a different app while a connection is active, writing nothing and leaving every waiting card alone", async () => {
     const state = setup();
     await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
     const active = readActiveSlackConnectionV1(state.database)!;
@@ -332,54 +341,26 @@ describe("Nango Slack connection activation v1", () => {
     const before = refs(state);
 
     await expectRefused(
-      activate(state, { credential: replacement, nango: nangoInstall({ connection_id: "nango-conn-2", app_id: "A0APP2" }), confirm_replacement: true, connection_id: "con_nango_2" }),
-      "approvals_outstanding",
-      1,
+      activate(state, { credential: replacement, nango: nangoInstall({ connection_id: "nango-conn-2", app_id: "A0APP2" }), connection_id: "con_nango_2" }),
+      "already_connected",
     );
-    expect(outstandingPrivateApprovalCountV1(state.database, "con_nango_1")).toBe(1);
     expect(refs(state)).toEqual(before);
     expect(readActiveSlackConnectionV1(state.database)?.state_sha256).toBe(active.state_sha256);
     expect(rowCount(state.database, "organization_tool_connection_contracts")).toBe(1);
+    expect(rowCount(state.database, "organization_private_approval_pending_contracts_v2")).toBe(1);
   });
 
-  it("replaces a legacy connection with confirmation and no cards, revoking it by status only", async () => {
+  it("refuses a Nango install while a legacy connection is active, writing nothing", async () => {
     const state = setup();
     await connectLegacy(state);
-    const legacy = readActiveSlackConnectionV1(state.database)!;
-    const legacySecret = refs(state);
     const pending = pendingBundle(state);
+    const before = refs(state);
 
-    const result = await activate(state, { credential: pending, nango: nangoInstall(), confirm_replacement: true });
+    await expectRefused(activate(state, { credential: pending, nango: nangoInstall() }), "already_connected");
 
-    expect(result.kind).toBe("replaced");
-    expect(result.person_links_revoked).toBe(0);
-    expect(readActiveSlackConnectionV1(state.database)).toMatchObject({ kind: "nango", connection: { connection_id: "con_nango_1" } });
-    expect(
-      state.database.prepare("SELECT current_status, state_sha256 FROM organization_tool_connection_current_state WHERE connection_id = 'con_legacy'").get(),
-    ).toEqual({ current_status: "revoked", state_sha256: legacy.state_sha256 });
-    expect(refs(state)).toEqual(expect.arrayContaining(legacySecret));
-    expect(refs(state)).not.toContain(pending.reference.secret_handle_id);
-    expect(state.secrets.listReferences()).toHaveLength(2);
-  });
-
-  it("revokes person links and expires pending link challenges when the replacement is a different workspace", async () => {
-    const state = setup();
-    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
-    const old = readActiveSlackConnectionV1(state.database)!;
-    seedOwnerLink(state.database, old);
-    seedPendingChallenge(state.database, "con_nango_1");
-    const replacement = pendingBundle(state, "A0APP2");
-    const nango = nangoInstall({ connection_id: "nango-conn-2", app_id: "A0APP2", team_id: "T02" });
-
-    const result = await activate(state, { credential: replacement, nango, confirm_replacement: true, connection_id: "con_nango_2" });
-
-    expect(result).toMatchObject({ kind: "replaced", person_links_revoked: 1, connection: { provider_tenant_id: "T02" } });
-    expect(state.database.prepare("SELECT current_status FROM organization_external_human_link_current").pluck().get()).toBe("revoked");
-    expect(state.database.prepare("SELECT status, completed_at FROM organization_person_slack_link_challenges").get()).toEqual({ status: "expired", completed_at: NOW });
-    const bundles = state.secrets.listReferences();
-    expect(bundles).toHaveLength(1);
-    expect(canonicalSha256(bundles[0]!)).toBe(result.state.credential_reference_sha256);
-    expect(canonicalSha256(bundles[0]!)).not.toBe(created.state.credential_reference_sha256);
+    expect(refs(state)).toEqual(before);
+    expect(readActiveSlackConnectionV1(state.database)).toMatchObject({ kind: "legacy", connection: { connection_id: "con_legacy" } });
+    expect(rowCount(state.database, "organization_tool_connection_contracts")).toBe(1);
   });
 
   it("reads a connection made by today's legacy coordinator as kind legacy", async () => {

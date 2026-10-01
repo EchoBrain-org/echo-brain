@@ -4,28 +4,25 @@ import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../adapters/slack/slack-app-man
 import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../application/slack-app-credentials-v1.js";
 import type { OrganizationSecretReference, OrganizationSecretStore, VerifiedSlackConnection } from "../application/slack-integration-contracts.js";
-import { assertSlackConnectionMetadataV1, insertActiveSlackConnectionV1, outstandingPrivateApprovalCountV1, readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "./sqlite-slack-active-connection-v1.js";
+import { assertSlackConnectionMetadataV1, insertActiveSlackConnectionV1, readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "./sqlite-slack-active-connection-v1.js";
 import { SlackConnectionConflictError, type SlackConnectionVerifierV1 } from "./sqlite-slack-connection-coordinator-v1.js";
 import type Database from "better-sqlite3";
 
 export type SlackConnectionRefusalReasonV1 =
   | "workspace_mismatch"
   | "permissions_missing"
-  | "confirmation_required"
-  | "approvals_outstanding";
+  | "already_connected";
 
 const REFUSAL_MESSAGES: Readonly<Record<SlackConnectionRefusalReasonV1, string>> = {
   workspace_mismatch: "the Slack install does not match this organization's Slack app and workspace",
   permissions_missing: "the Slack install did not grant every permission ECHO needs",
-  confirmation_required: "replacing the active Slack connection requires confirmation",
-  approvals_outstanding: "approvals are still waiting under the active Slack connection",
+  already_connected: "Slack is already connected to a different app or workspace.",
 };
 
 /** An expected refusal the owner can act on; never carries a secret. */
 export class SlackConnectionRefusedErrorV1 extends Error {
   constructor(
     readonly reason: SlackConnectionRefusalReasonV1,
-    readonly outstanding_approvals: number | null,
     message: string = REFUSAL_MESSAGES[reason],
   ) {
     super(message);
@@ -45,17 +42,15 @@ export interface ActivateNangoSlackConnectionInputV1 {
     readonly credentials: SlackAppCredentialsV1;
   };
   readonly nango: NangoSlackConnectionV1;
-  readonly confirm_replacement: boolean;
   readonly now: () => string;
   readonly new_connection_id: () => string;
   readonly signal?: AbortSignal;
 }
 
 export type ActivatedNangoSlackConnectionV1 = {
-  readonly kind: "created" | "reconnected" | "replaced";
+  readonly kind: "created" | "reconnected";
   readonly connection: OrganizationToolConnectionContractV2;
   readonly state: OrganizationToolConnectionStateV2;
-  readonly person_links_revoked: number;
 };
 
 function grantsRecipeScopes(granted: readonly string[]): boolean {
@@ -68,10 +63,10 @@ async function verifyInstall(
 ): Promise<VerifiedSlackConnection> {
   const { nango } = input;
   if (nango.app_id !== input.credential.credentials.app_id || nango.is_enterprise_install) {
-    throw new SlackConnectionRefusedErrorV1("workspace_mismatch", null);
+    throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
   }
   if (!grantsRecipeScopes(nango.granted_scopes)) {
-    throw new SlackConnectionRefusedErrorV1("permissions_missing", null);
+    throw new SlackConnectionRefusedErrorV1("permissions_missing");
   }
   const verified = await input.verifier.verifyConnection(nango.bot_token, input.signal);
   if (
@@ -79,15 +74,15 @@ async function verifyInstall(
     verified.app_id !== nango.app_id ||
     verified.bot_user_id !== nango.bot_user_id
   ) {
-    throw new SlackConnectionRefusedErrorV1("workspace_mismatch", null);
+    throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
   }
   if (!grantsRecipeScopes(verified.granted_scopes)) {
-    throw new SlackConnectionRefusedErrorV1("permissions_missing", null);
+    throw new SlackConnectionRefusedErrorV1("permissions_missing");
   }
   return verified;
 }
 
-/** True when the active Nango connection is this exact install; refuses a second Nango connection for its app. */
+/** True when the active Nango connection is this exact install; false for any other active connection. */
 function isSameNangoConnection(
   active: StoredSlackConnectionV1,
   input: ActivateNangoSlackConnectionInputV1,
@@ -98,13 +93,7 @@ function isSameNangoConnection(
     active.state.credential_reference_sha256,
   ).credentials;
   if (bundle.app_id !== input.nango.app_id) return false;
-  if (bundle.nango_connection_id !== input.nango.connection_id) {
-    throw new SlackConnectionRefusedErrorV1(
-      "workspace_mismatch",
-      null,
-      "reconnect requires the same Nango connection",
-    );
-  }
+  if (bundle.nango_connection_id !== input.nango.connection_id) return false;
   const { connection } = active;
   return (
     connection.provider_app_id === verified.app_id &&
@@ -115,55 +104,13 @@ function isSameNangoConnection(
   );
 }
 
-/** Status-column-only revoke: waiting cards reference the old state by foreign key. */
-function retireConnection(
-  database: Database.Database,
-  old: StoredSlackConnectionV1,
-  next: OrganizationToolConnectionContractV2,
-  now: string,
-): number {
-  const revoked = database
-    .prepare(
-      `UPDATE organization_tool_connection_current_state
-       SET current_status = 'revoked', updated_at = ?
-       WHERE connection_id = ? AND current_status = 'active'`,
-    )
-    .run(now, old.connection.connection_id);
-  if (revoked.changes !== 1) {
-    throw new SlackConnectionConflictError("the active Slack connection changed during activation");
-  }
-  database
-    .prepare(
-      `UPDATE organization_person_slack_link_challenges
-       SET status = 'expired', completed_at = ?
-       WHERE connection_id = ? AND status = 'pending'`,
-    )
-    .run(now, old.connection.connection_id);
-  if (
-    old.connection.provider_tenant_id === next.provider_tenant_id &&
-    old.connection.provider_enterprise_id === next.provider_enterprise_id
-  ) {
-    return 0;
-  }
-  return database
-    .prepare(
-      `UPDATE organization_external_human_link_current
-       SET current_status = 'revoked', updated_at = ?
-       WHERE provider_issuer = 'https://slack.com'
-         AND provider_tenant_kind = 'workspace'
-         AND provider_tenant_id = ?
-         AND COALESCE(provider_enterprise_id, '') = COALESCE(?, '')
-         AND current_status = 'active'`,
-    )
-    .run(now, old.connection.provider_tenant_id, old.connection.provider_enterprise_id)
-    .changes;
-}
-
 /**
  * Turns a finished Nango install into the organization's Slack connection:
- * created when none is active, reconnected (no write, same state hash) on the
- * same Nango connection, or replaced only with confirmation and no waiting
- * approval card.
+ * created when no connection is active, or reconnected (no write, same state
+ * hash) on the exact same Nango connection. Any other active connection, of
+ * either kind, refuses the install as already_connected and writes nothing:
+ * replacing an organization's connection is out of scope for v1 because it
+ * leaves decided approval cards unable to restart.
  */
 export async function activateNangoSlackConnectionV1(
   input: ActivateNangoSlackConnectionInputV1,
@@ -176,11 +123,10 @@ export async function activateNangoSlackConnectionV1(
       kind: "reconnected",
       connection: before.connection,
       state: before.state,
-      person_links_revoked: 0,
     });
   }
-  if (before !== undefined && !input.confirm_replacement) {
-    throw new SlackConnectionRefusedErrorV1("confirmation_required", null);
+  if (before !== undefined) {
+    throw new SlackConnectionRefusedErrorV1("already_connected");
   }
 
   const now = input.now();
@@ -207,7 +153,6 @@ export async function activateNangoSlackConnectionV1(
     }),
   );
   let committed = false;
-  let personLinksRevoked = 0;
   let state: OrganizationToolConnectionStateV2;
   try {
     state = buildOrganizationToolConnectionStateV2({
@@ -224,22 +169,14 @@ export async function activateNangoSlackConnectionV1(
       verification_revision: 1,
       verified_at: now,
     });
-    personLinksRevoked = input.database
+    input.database
       .transaction(() => {
-        const current = readActiveSlackConnectionV1(input.database);
-        if (current?.state_sha256 !== before?.state_sha256) {
+        // `before` is always undefined by this point (the only other path returns earlier),
+        // so this is a plain TOCTOU guard: no connection may have appeared since it was read.
+        if (readActiveSlackConnectionV1(input.database) !== undefined) {
           throw new SlackConnectionConflictError("the active Slack connection changed during activation");
         }
-        let revoked = 0;
-        if (current !== undefined) {
-          const outstanding = outstandingPrivateApprovalCountV1(input.database, current.connection.connection_id);
-          if (outstanding > 0) {
-            throw new SlackConnectionRefusedErrorV1("approvals_outstanding", outstanding);
-          }
-          revoked = retireConnection(input.database, current, connection, now);
-        }
         insertActiveSlackConnectionV1(input.database, { connection, state, now });
-        return revoked;
       })
       .immediate();
     committed = true;
@@ -247,18 +184,12 @@ export async function activateNangoSlackConnectionV1(
     if (!committed) input.secrets.remove(bundle);
   }
 
-  input.secrets.remove(input.credential.reference);
-  if (before?.kind === "nango") {
-    for (const reference of input.secrets.listReferences()) {
-      if (canonicalSha256(reference) === before.state.credential_reference_sha256) {
-        input.secrets.remove(reference);
-      }
-    }
+  // Best-effort only: the connection already committed, so a failure removing
+  // the now-superseded pending bundle must never surface as an error.
+  try {
+    input.secrets.remove(input.credential.reference);
+  } catch {
+    // The pending bundle is orphaned but harmless: nothing reads it without the state's reference.
   }
-  return Object.freeze({
-    kind: before === undefined ? "created" : "replaced",
-    connection,
-    state,
-    person_links_revoked: personLinksRevoked,
-  });
+  return Object.freeze({ kind: "created", connection, state });
 }

@@ -92,25 +92,6 @@ export function readActiveSlackConnectionV1(
   });
 }
 
-/** Approval cards bound to this connection that have no terminal evidence yet. */
-export function outstandingPrivateApprovalCountV1(
-  database: Database.Database,
-  connectionId: string,
-): number {
-  return database
-    .prepare(
-      `SELECT count(*)
-       FROM organization_private_approval_pending_contracts_v2 AS pending
-       WHERE pending.connection_id = ?
-         AND NOT EXISTS (
-           SELECT 1 FROM organization_private_approval_terminal_evidence_v2 AS terminal
-           WHERE terminal.approval_id = pending.approval_id
-         )`,
-    )
-    .pluck()
-    .get(connectionId) as number;
-}
-
 /** Refuses a write whose coordinates are not this control plane's. */
 export function assertSlackConnectionMetadataV1(
   database: Database.Database,

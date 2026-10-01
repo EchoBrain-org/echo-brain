@@ -181,7 +181,7 @@ async function activateNango(database: Database.Database, slack: SlackIdentityPr
     credential: { reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials },
     nango: { connection_id: "nango-conn-1", tags: {}, team_id: "T12345678", enterprise_id: null, is_enterprise_install: false,
       app_id: "A12345678", bot_user_id: "U12345678", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: TOKEN, updated_at: NOW },
-    confirm_replacement: false, now: () => NOW, new_connection_id: () => CONNECTION_ID,
+    now: () => NOW, new_connection_id: () => CONNECTION_ID,
   });
 }
 

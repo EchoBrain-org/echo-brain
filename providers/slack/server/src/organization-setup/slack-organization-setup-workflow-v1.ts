@@ -5,25 +5,22 @@ import type { PersonAccessAuthorization } from "@echo-brain/organization-authori
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { OrganizationSecretStore } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 import {
-  validateOrganizationSlackAppCredentialsRequestV1,
   validateOrganizationSlackInstallAttemptRequestV1,
   validateOrganizationSlackInstallBeginRequestV1,
   validateOrganizationSlackInstallBeginResponseV1,
   validateOrganizationSlackInstallStatusResponseV1,
-  validateOrganizationSlackRecipeResponseV1,
   validateOrganizationSlackSetupRequestV1,
   validateOrganizationSlackSetupResponseV1,
   type OrganizationSlackInstallBeginResponseV1,
   type OrganizationSlackInstallFailureReasonV1,
   type OrganizationSlackInstallResultV1,
   type OrganizationSlackInstallStatusResponseV1,
-  type OrganizationSlackRecipeResponseV1,
   type OrganizationSlackSetupResponseV1,
 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../organization-control-plane/adapters/nango/nango-connection-client-v1.js";
 import { buildEchoSlackAppManifestV1, SLACK_PRIVATE_APP_BOT_SCOPES_V1, SlackAppManifestProviderErrorV1, type SlackAppManifestProviderV1 } from "../organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { SlackIdentityProviderErrorV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
-import { findPendingSlackAppCredentialsV1, findSlackAppCredentialsByReferenceSha256V1, parseSlackAppCredentialsV1, serializeSlackAppCredentialsV1, SLACK_APP_CREDENTIALS_KIND_V1, type FoundSlackAppCredentialsV1 } from "../organization-control-plane/application/slack-app-credentials-v1.js";
+import { findPendingSlackAppCredentialsV1, findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, SLACK_APP_CREDENTIALS_KIND_V1, type FoundSlackAppCredentialsV1 } from "../organization-control-plane/application/slack-app-credentials-v1.js";
 import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
 import { readActiveSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import type { SlackConnectionVerifierV1 } from "../organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.js";
@@ -57,7 +54,7 @@ export interface SlackOrganizationSetupWorkflowOptionsV1 extends SlackOrganizati
   readonly new_connection_id?: () => string;
 }
 
-type InstallState = Pick<OrganizationSlackInstallStatusResponseV1, "attempt_id" | "status" | "failure_reason" | "outstanding_approvals" | "result">;
+type InstallState = Pick<OrganizationSlackInstallStatusResponseV1, "attempt_id" | "status" | "failure_reason" | "result">;
 
 interface InstallAttempt extends InstallState {
   readonly request_id: string;
@@ -66,7 +63,6 @@ interface InstallAttempt extends InstallState {
   credential: FoundSlackAppCredentialsV1 | null;
   /** A reconnect reuses this Nango connection; `updated_at` is its timestamp at begin. */
   readonly reconnect: { readonly connection_id: string; readonly updated_at: string } | null;
-  readonly confirm_replacement: boolean;
   readonly connect_link: string;
   readonly expires_at: string;
 }
@@ -102,13 +98,13 @@ function tagsMatch(connection: NangoSlackConnectionV1, attempt: InstallAttempt, 
     (tags.echo_attempt_id === attempt.attempt_id && tags.echo_membership_id === attempt.session.membership_id));
 }
 
-function failureOf(error: unknown): { reason: OrganizationSlackInstallFailureReasonV1; outstanding: number | null } {
-  if (error instanceof SlackConnectionRefusedErrorV1) return { reason: error.reason, outstanding: error.outstanding_approvals };
+function failureOf(error: unknown): { reason: OrganizationSlackInstallFailureReasonV1 } {
+  if (error instanceof SlackConnectionRefusedErrorV1) return { reason: error.reason };
   if ((error instanceof NangoClientErrorV1 && error.code === "unauthorized") || error instanceof SlackAppManifestProviderErrorV1 ||
     (error instanceof SlackIdentityProviderErrorV1 && error.code === "unauthorized")) {
-    return { reason: "provider_rejected", outstanding: null };
+    return { reason: "provider_rejected" };
   }
-  return { reason: "provider_unavailable", outstanding: null };
+  return { reason: "provider_unavailable" };
 }
 
 function unavailable(): AuthorityOperationError {
@@ -134,7 +130,7 @@ function setupResponse(appId: string, setup: "app_created" | "connected"): Organ
 function statusResponse(state: InstallState): OrganizationSlackInstallStatusResponseV1 {
   return validateOrganizationSlackInstallStatusResponseV1({
     schema_version: 1, kind: "echo-organization-slack-install-status-v1", attempt_id: state.attempt_id, status: state.status,
-    failure_reason: state.failure_reason, outstanding_approvals: state.outstanding_approvals, result: state.result,
+    failure_reason: state.failure_reason, result: state.result,
   });
 }
 
@@ -178,35 +174,6 @@ export class SlackOrganizationSetupWorkflowV1 {
     });
   }
 
-  /** The manual fallback; it replaces any pending app (ruling R5). */
-  async appCredentials(input: unknown, accessToken: string): Promise<OrganizationSlackSetupResponseV1> {
-    const session = this.owner(accessToken);
-    const credentials = this.request(() => {
-      const request = validateOrganizationSlackAppCredentialsRequestV1(input);
-      return parseSlackAppCredentialsV1(JSON.stringify({ kind: SLACK_APP_CREDENTIALS_KIND_V1, app_id: request.app_id, client_id: request.client_id,
-        client_secret: request.client_secret, signing_secret: request.signing_secret, nango_connection_id: null }));
-    }, "Slack app credentials are invalid");
-    return this.exclusive(async () => {
-      if (this.activeNangoBundle()?.credentials.app_id === credentials.app_id) {
-        throw new AuthorityOperationError("conflict", "This Slack app is already connected");
-      }
-      this.expireAndTrim(this.now());
-      const install = this.pendingAttempt();
-      if (install !== undefined && !sameSession(install.session, session)) throw new AuthorityOperationError("conflict", IN_PROGRESS);
-      const pending = findPendingSlackAppCredentialsV1(this.options.secrets);
-      if (pending !== undefined) this.options.secrets.remove(pending.reference);
-      this.options.secrets.create(serializeSlackAppCredentialsV1(credentials));
-      // The owner's own install begun before this change could only finish as the old app.
-      if (install !== undefined) this.settle(install, "cancelled");
-      return setupResponse(credentials.app_id, "app_created");
-    });
-  }
-
-  async recipe(accessToken: string): Promise<OrganizationSlackRecipeResponseV1> {
-    this.owner(accessToken);
-    return validateOrganizationSlackRecipeResponseV1({ schema_version: 1, kind: "echo-organization-slack-recipe-v1", manifest: this.manifest });
-  }
-
   async beginInstall(input: unknown, accessToken: string): Promise<OrganizationSlackInstallBeginResponseV1> {
     const session = this.owner(accessToken);
     const request = this.request(() => validateOrganizationSlackInstallBeginRequestV1(input), "Slack install request is invalid");
@@ -216,12 +183,7 @@ export class SlackOrganizationSetupWorkflowV1 {
       const existing = this.pendingAttempt();
       if (existing !== undefined) {
         if (!sameSession(existing.session, session)) throw new AuthorityOperationError("conflict", IN_PROGRESS);
-        if (existing.request_id === request.request_id) {
-          if (existing.confirm_replacement !== request.confirm_replacement) {
-            throw new AuthorityOperationError("conflict", "Slack install request was already used differently");
-          }
-          return this.beginResponse(existing);
-        }
+        if (existing.request_id === request.request_id) return this.beginResponse(existing);
         this.settle(existing, "cancelled");
       }
       if (this.attempts.size >= MAX_ATTEMPTS) throw unavailable();
@@ -241,9 +203,9 @@ export class SlackOrganizationSetupWorkflowV1 {
         reconnect = Object.freeze({ connection_id: connectionId, updated_at: (await nango.getSlackConnection({ connection_id: connectionId })).updated_at });
       }
       const attempt: InstallAttempt = { attempt_id: attemptId, request_id: request.request_id, session, credential, reconnect,
-        confirm_replacement: request.confirm_replacement, connect_link: opened.connect_link,
+        connect_link: opened.connect_link,
         expires_at: new Date(Date.parse(now) + ATTEMPT_LIFETIME_MS).toISOString(),
-        status: "pending", failure_reason: null, outstanding_approvals: null, result: null };
+        status: "pending", failure_reason: null, result: null };
       const response = this.beginResponse(attempt);
       this.attempts.set(attemptId, attempt);
       return response;
@@ -269,20 +231,19 @@ export class SlackOrganizationSetupWorkflowV1 {
         throw error;
       }
       if (connection === undefined) return statusResponse(attempt);
-      if (!tagsMatch(connection, attempt, this.options.organization_id)) throw new SlackConnectionRefusedErrorV1("workspace_mismatch", null);
+      if (!tagsMatch(connection, attempt, this.options.organization_id)) throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
       const activated = await activateNangoSlackConnectionV1({
         database: this.options.database, secrets: this.options.secrets, verifier: this.options.verifier,
         authority_id: this.options.authority_id, organization_id: this.options.organization_id, state_lineage_id: this.options.state_lineage_id,
-        credential, nango: connection, confirm_replacement: attempt.confirm_replacement,
+        credential, nango: connection,
         now: () => this.now(), new_connection_id: this.options.new_connection_id ?? (() => `con_${randomUUID()}`),
       });
       this.options.health.clear();
-      const result: OrganizationSlackInstallResultV1 = { kind: activated.kind, workspace_id: activated.connection.provider_tenant_id,
-        person_links_revoked: activated.person_links_revoked };
-      this.settle(attempt, "complete", null, null, result);
+      const result: OrganizationSlackInstallResultV1 = { kind: activated.kind, workspace_id: activated.connection.provider_tenant_id };
+      this.settle(attempt, "complete", null, result);
     } catch (error) {
       const failure = failureOf(error);
-      this.settle(attempt, "failed", failure.reason, failure.outstanding);
+      this.settle(attempt, "failed", failure.reason);
     } finally {
       this.busy = false;
       this.checking = null;
@@ -376,7 +337,7 @@ export class SlackOrganizationSetupWorkflowV1 {
   }
 
   private expired(attemptId: string): OrganizationSlackInstallStatusResponseV1 {
-    return statusResponse({ attempt_id: attemptId, status: "expired", failure_reason: null, outstanding_approvals: null, result: null });
+    return statusResponse({ attempt_id: attemptId, status: "expired", failure_reason: null, result: null });
   }
 
   private expireAndTrim(now: string): void {
@@ -392,12 +353,10 @@ export class SlackOrganizationSetupWorkflowV1 {
     attempt: InstallAttempt,
     status: Exclude<InstallAttempt["status"], "pending">,
     failure_reason: InstallAttempt["failure_reason"] = null,
-    outstanding_approvals: number | null = null,
     result: InstallAttempt["result"] = null,
   ): void {
     attempt.status = status;
     attempt.failure_reason = failure_reason;
-    attempt.outstanding_approvals = outstanding_approvals;
     attempt.result = result;
     attempt.credential = null;
   }

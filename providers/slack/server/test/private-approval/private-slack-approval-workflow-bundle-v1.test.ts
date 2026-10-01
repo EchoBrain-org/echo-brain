@@ -48,8 +48,13 @@ const NANGO: NangoSlackConnectionV1 = {
   app_id: "A0APP1", bot_user_id: "U0APPBOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: NANGO_TOKEN, updated_at: NOW,
 };
 
-/** A stopped Authority state directory whose pinned legacy connection is active. */
-async function stateDirectory() {
+/**
+ * A stopped Authority state directory. With `legacy` (the default), its
+ * pinned legacy connection is active, matching an organization not yet moved
+ * to Nango. With `legacy: false`, nothing is active yet, matching an
+ * organization installing Nango for the first time.
+ */
+async function stateDirectory({ legacy = true }: { legacy?: boolean } = {}) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-approval-bundle-")));
   directories.push(directory);
   const authority = openAuthorityDatabase(join(directory, "authority.sqlite"));
@@ -63,22 +68,24 @@ async function stateDirectory() {
     .run(COORDINATES.organization_id, COORDINATES.authority_id, canonicalSha256({ descriptor: "test" }), NOW);
   const secrets = new FileOrganizationSecretStore(join(directory, "secrets"));
   const nango = token(NANGO_TOKEN);
-  const legacy = token(LEGACY_TOKEN);
+  const legacyToken = token(LEGACY_TOKEN);
   const verifier = {
-    verifyConnection: vi.fn(async (bot: string) => (bot === NANGO_TOKEN ? nango : legacy)),
+    verifyConnection: vi.fn(async (bot: string) => (bot === NANGO_TOKEN ? nango : legacyToken)),
     verifyChannel: vi.fn(async (_bot: string, channel_id: string) => ({ team_id: "T01", channel_id, is_public_organization_channel: true,
       is_active: true, bot_membership_verified: true, bot_access_verified: true, verification_evidence_sha256: canonicalSha256("channel") })),
   };
-  await connectSlackConnectionV1({ ...COORDINATES, connection_id: LEGACY_ID, approval_channel_id: "C0LEGACY", slack_bot_token: LEGACY_TOKEN,
-    database, secrets, verifier, now: () => NOW });
+  if (legacy) {
+    await connectSlackConnectionV1({ ...COORDINATES, connection_id: LEGACY_ID, approval_channel_id: "C0LEGACY", slack_bot_token: LEGACY_TOKEN,
+      database, secrets, verifier, now: () => NOW });
+  }
   const signing_secret_file = join(directory, "slack-signing-secret");
   writeFileSync(signing_secret_file, FILE_SIGNING_SECRET, { mode: 0o600 });
   const credentials = { kind: "echo-slack-app-credentials-v1" as const, app_id: "A0APP1", client_id: "1234.5678",
     client_secret: "client-secret-value", signing_secret: APP_SIGNING_SECRET, nango_connection_id: null };
-  /** The owner's Nango install replacing the legacy connection, while the runtime keeps running. */
+  /** The owner's Nango install. Refused as already_connected whenever a connection (legacy or Nango) is already active. */
   const installNango = () => activateNangoSlackConnectionV1({ database, secrets, verifier, ...COORDINATES,
     credential: { reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials },
-    nango: NANGO, confirm_replacement: true, now: () => NOW, new_connection_id: () => NANGO_ID });
+    nango: NANGO, now: () => NOW, new_connection_id: () => NANGO_ID });
   const client = { getSlackConnection: vi.fn(async () => NANGO) } as unknown as NangoConnectionClientV1 & { getSlackConnection: ReturnType<typeof vi.fn> };
   return { directory, database, secrets, signing_secret_file, installNango, client };
 }
@@ -141,53 +148,51 @@ function slackRecording(authorizations: string[], response: unknown = { ok: true
 }
 
 describe("private Slack approval workflow bundle with Nango", () => {
-  it("keeps a legacy runtime on its pinned connection and signing-secret file", async () => {
+  it("refuses a Nango install while a legacy runtime is active, and keeps serving on its pinned connection", async () => {
     const state = await stateDirectory();
     const config = { state_directory: state.directory, signing_secret_file: state.signing_secret_file, connection_id: LEGACY_ID };
     const legacy = await load(config);
     await expect(legacy.accept(FILE_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
     await expect(legacy.accept(APP_SIGNING_SECRET)).rejects.toMatchObject({ code: "unauthorized" });
-    await state.installNango();
-    // Without Nango configured nothing follows the new connection: the pinned one is gone, so a restart fails closed.
+
+    await expect(state.installNango()).rejects.toMatchObject({ reason: "already_connected" });
+
+    // Nothing was written: the pinned legacy connection keeps serving, and a restart still resolves it.
     await expect(legacy.accept(FILE_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
-    await expect(load(config)).rejects.toThrow("configured Slack connection is missing, inactive, or drifted");
+    const restarted = await load(config);
+    await expect(restarted.accept(FILE_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
   });
 
   it("nango connection: card posts with the Nango-fetched token and its click verifies with the bundle signing secret", async () => {
-    const state = await stateDirectory();
+    const state = await stateDirectory({ legacy: false });
+    await expect(state.installNango()).resolves.toMatchObject({ kind: "created" });
     const health = new SlackConnectionHealthV1();
     const source = createSlackBotTokenSourceV1({ secrets: state.secrets, nango: state.client });
-    const config = { state_directory: state.directory, signing_secret_file: state.signing_secret_file, connection_id: LEGACY_ID,
+    const config = { state_directory: state.directory, signing_secret_file: state.signing_secret_file, connection_id: NANGO_ID,
       bot_token_source: source, connection_health: health };
     const running = await load(config);
     const authorizations: string[] = [];
     const poster = createActivePrivateSlackApprovalPosterV1({
-      connection: () => resolveActivePrivateSlackConnectionV1(state.database, LEGACY_ID, COORDINATES).stored,
+      connection: () => resolveActivePrivateSlackConnectionV1(state.database, NANGO_ID, COORDINATES).stored,
       bot_token_source: source, connection_health: health, client_options: { fetchImpl: slackRecording(authorizations) },
     });
     const marker = { approval_id: CARD.approval_id, dm_channel_id: "D0OWNER" };
 
-    // Before the install: the pinned legacy connection, its local token and its signing-secret file.
-    await expect(running.accept(FILE_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
-    await expect(poster.postMarker(marker)).resolves.toEqual({ kind: "posted", provider_message_ts: "123.000001" });
-    expect(activePrivateSlackConnectionIdV1(state.database, LEGACY_ID)).toBe(LEGACY_ID);
-
-    await expect(state.installNango()).resolves.toMatchObject({ kind: "replaced" });
-    // After the install, with no restart: the Nango connection, its fetched token and its app's signing secret.
+    // The active Nango connection: its fetched token and its app's own signing secret.
     await expect(running.accept(APP_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
     await expect(running.accept(FILE_SIGNING_SECRET)).rejects.toMatchObject({ code: "unauthorized" });
     await expect(poster.postMarker(marker)).resolves.toEqual({ kind: "posted", provider_message_ts: "123.000001" });
-    expect(authorizations).toEqual([`Bearer ${LEGACY_TOKEN}`, `Bearer ${NANGO_TOKEN}`]);
+    expect(authorizations).toEqual([`Bearer ${NANGO_TOKEN}`]);
     expect(state.client.getSlackConnection).toHaveBeenCalledWith({ connection_id: "nango-conn-1", force_refresh: false });
-    expect(activePrivateSlackConnectionIdV1(state.database, LEGACY_ID)).toBe(NANGO_ID);
+    expect(activePrivateSlackConnectionIdV1(state.database, NANGO_ID)).toBe(NANGO_ID);
 
-    // A restart resolves the Nango connection although the pinned legacy one is revoked.
+    // A restart resolves the same Nango connection.
     const restarted = await load(config);
     await expect(restarted.accept(APP_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
   });
 
   it("marks a Nango connection whose refreshed token Slack still rejects, then stops refreshing it", async () => {
-    const state = await stateDirectory();
+    const state = await stateDirectory({ legacy: false });
     await state.installNango();
     state.client.getSlackConnection.mockImplementation(async (input: { force_refresh?: boolean }) =>
       ({ ...NANGO, bot_token: input.force_refresh === true ? `${NANGO_TOKEN}-refreshed` : NANGO_TOKEN }));
@@ -195,7 +200,7 @@ describe("private Slack approval workflow bundle with Nango", () => {
     const source = createSlackBotTokenSourceV1({ secrets: state.secrets, nango: state.client });
     const authorizations: string[] = [];
     const poster = createActivePrivateSlackApprovalPosterV1({
-      connection: () => resolveActivePrivateSlackConnectionV1(state.database, LEGACY_ID, COORDINATES).stored,
+      connection: () => resolveActivePrivateSlackConnectionV1(state.database, NANGO_ID, COORDINATES).stored,
       bot_token_source: source, connection_health: health,
       client_options: { fetchImpl: slackRecording(authorizations, { ok: false, error: "invalid_auth" }) },
     });
