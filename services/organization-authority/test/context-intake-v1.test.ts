@@ -1,4 +1,7 @@
-import type Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sourceContentSha256V1, type SourceAdmissionStoreV1 } from '@echo-brain/organization-processing/core';
 import { SqliteContextCaptureReaderV1 } from '../src/adapters/persistence/sqlite/context-capture-reader-v1.js';
@@ -11,7 +14,11 @@ import {
 } from './fixtures/context-capture-v1.js';
 
 const databases: Database.Database[] = [];
-afterEach(() => { for (const database of databases.splice(0)) database.close(); });
+const temporaryDirectories: string[] = [];
+afterEach(() => {
+  for (const database of databases.splice(0)) database.close();
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { force: true, recursive: true });
+});
 
 function database(): Database.Database {
   const value = projectContextDatabase();
@@ -48,6 +55,20 @@ function withContent(source: ContextCaptureEnvelopeV1, content: unknown): unknow
 }
 
 describe('context intake V1 shared gate', () => {
+  it('repeats the Authority retention fence inside the SQLite transaction after a queued admission', async () => {
+    const value = database(); let permitted = true;
+    const selected = authority({ requireCurrent: () => { if (!permitted) throw new Error('retention revoked'); } });
+    const real = new SqliteSourceAdmissionStoreV1(value, (source, scope) => {
+      expect(value.inTransaction).toBe(true);
+      selected.requireCurrent(source as ContextCaptureEnvelopeV1, { ...policy(), scope });
+    });
+    const queued: SourceAdmissionStoreV1 = { admitSourceRevision: async (input, context) => {
+      await Promise.resolve(); permitted = false;
+      return real.admitSourceRevision(input, context);
+    } };
+    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [contextCaptureV1()], authority: selected, store: queued })).rejects.toThrow('retention revoked');
+    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+  });
   it('retains exact permitted pointer, excerpt and full snapshot captures through one admission store', async () => {
     const value = database();
     const captures = [
@@ -66,6 +87,40 @@ describe('context intake V1 shared gate', () => {
     expect(retained.find(entry => entry.source.item.external_id === 'pointer')!.source.content.representation).toEqual(pointerRepresentationV1());
     expect(retained.find(entry => entry.source.item.external_id === 'excerpt')!.source.content.representation).toEqual(excerptRepresentationV1('The owner is Ada.'));
     expect(retained.find(entry => entry.source.item.external_id === 'snapshot')!.source.content.representation).toEqual(snapshotRepresentationV1('The release is Friday.'));
+  });
+
+  it('survives a real file-backed SQLite restart with exact representations, anchors, policy bindings and replay deduplication', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-context-intake-'));
+    temporaryDirectories.push(directory);
+    const path = join(directory, 'authority.sqlite');
+    const initial = projectContextDatabase(path);
+    const pointer = contextCaptureV1({ external_id: 'restart-pointer', representation: pointerRepresentationV1('synthetic://restart/pointer') });
+    const excerpt = contextCaptureV1({ external_id: 'restart-excerpt', representation: excerptRepresentationV1('A retained exact excerpt.') });
+    const snapshot = contextCaptureV1({
+      external_id: 'restart-snapshot', representation: snapshotRepresentationV1('A retained full snapshot.'),
+      observations: [{
+        kind: 'references', anchor_id: 'passage-1',
+        target: { source_id: pointer.item.source_id, revision_id: pointer.revision.revision_id }, occurred_at: '2026-10-01T00:00:00.000Z',
+      }],
+    });
+    const captures = [pointer, excerpt, snapshot];
+    await intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: captures, authority: authority(), store: new SqliteSourceAdmissionStoreV1(initial) });
+    initial.close();
+
+    const reopened = new Database(path);
+    reopened.pragma('foreign_keys = ON');
+    databases.push(reopened);
+    const reader = new SqliteContextCaptureReaderV1(reopened);
+    const retained = reader.list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id });
+    const ordered = [...captures].sort((left, right) => left.item.source_id.localeCompare(right.item.source_id));
+    expect(retained.map(entry => entry.source)).toEqual(ordered);
+    expect(retained.map(entry => entry.scope)).toEqual([CONTEXT_CAPTURE_SCOPE_V1, CONTEXT_CAPTURE_SCOPE_V1, CONTEXT_CAPTURE_SCOPE_V1]);
+    expect(retained.find(entry => entry.source.item.external_id === 'restart-snapshot')!.source.content.observations).toEqual(snapshot.content.observations);
+
+    const replay = captures.map(source => ({ ...source, revision: { ...source.revision, captured_at: '2026-10-01T00:02:00.000Z' } }));
+    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: replay, authority: authority(), store: new SqliteSourceAdmissionStoreV1(reopened) }))
+      .resolves.toMatchObject([{ admission: 'duplicate' }, { admission: 'duplicate' }, { admission: 'duplicate' }]);
+    expect(reader.list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id }).map(entry => entry.source)).toEqual(ordered);
   });
 
   it('rejects noncanonical identity, provenance, anchors, bounds, closed fields and Authority policy before storage', async () => {

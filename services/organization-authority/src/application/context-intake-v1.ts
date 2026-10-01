@@ -148,6 +148,7 @@ export async function intakeContextBatchV1(options: {
   readonly identity: SourceAdapterIdentityV1;
   readonly sources: readonly unknown[];
   readonly authority: ContextIntakeAuthorityV1;
+  /** Retained composition must repeat requireCurrent atomically with admission. */
   readonly store?: SourceAdmissionStoreV1;
   readonly context?: AdapterOperationContext;
 }): Promise<readonly { readonly source: ContextCaptureEnvelopeV1; readonly policy: ContextIntakePolicyV1; readonly admission: 'admitted' | 'duplicate' | 'request_only' }[]> {

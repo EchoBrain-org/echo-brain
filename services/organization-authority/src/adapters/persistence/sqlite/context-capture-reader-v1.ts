@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { canonicalSourceContentV1, sourceContentSha256V1, type SourceAdapterIdentityV1 } from '@echo-brain/organization-processing/core';
+import { assertSourceAdmissionScopeV1, canonicalSourceContentV1, sourceContentSha256V1, type SourceAdapterIdentityV1 } from '@echo-brain/organization-processing/core';
 import {
   assertContextCaptureEnvelopeV1, CONTEXT_CAPTURE_LIMITS_V1,
   type ContextCaptureEnvelopeV1, type ContextCaptureReadPortV1, type RetainedContextCaptureV1,
@@ -30,7 +30,7 @@ export class SqliteContextCaptureReaderV1 implements ContextCaptureReadPortV1 {
         ON c.organization_id=r.organization_id AND c.source_id=r.source_id AND c.revision_id=r.revision_id
       WHERE s.organization_id=? AND json_extract(c.content_json,'$.kind')='echo-context-capture-v1'
       ORDER BY s.source_id,r.revision_id LIMIT ?`).all(input.organization_id, limit + 1) as Row[];
-    // Refuse a partial input set: a generation must identify all retained revisions.
+    // Refuse a partial custody inventory rather than silently truncate revisions.
     if (rows.length > limit) throw new Error('Context retained input set exceeds its bound');
     return Object.freeze(rows.map(row => {
       const identity: SourceAdapterIdentityV1 = { kind: 'source', adapter_id: row.adapter_id, instance_id: row.instance_id, version: row.adapter_version };
@@ -44,6 +44,7 @@ export class SqliteContextCaptureReaderV1 implements ContextCaptureReadPortV1 {
       const { captured_at: _captured, ...immutableRevision } = source.revision;
       if (sourceContentSha256V1(immutableRevision) !== row.revision_sha256) throw new Error('Context retained revision integrity failed');
       const scope = { organization_id: input.organization_id, custody_ref: row.custody_ref, access_policy_ref: row.access_policy_ref, analysis_policy: row.analysis_policy } as const;
+      assertSourceAdmissionScopeV1(scope);
       if (scope.analysis_policy !== 'on_request') throw new Error('Context retained processing policy is unsupported');
       return deepFreeze({ source, scope, revision_sha256: row.revision_sha256 });
     }));
