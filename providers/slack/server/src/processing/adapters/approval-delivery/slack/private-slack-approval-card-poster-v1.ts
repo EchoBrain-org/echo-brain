@@ -210,8 +210,10 @@ export class PrivateSlackApprovalCardPosterV1 {
 
   /**
    * `slack`, except that a bot token the source cannot provide (a Nango
-   * outage, say) resolves to TOKEN_UNAVAILABLE: nothing reached Slack, so a
-   * step that is safe to repeat can answer `retry_allowed`.
+   * outage, say) resolves to TOKEN_UNAVAILABLE: nothing reached Slack for
+   * this call, so the step answers its retry outcome instead of throwing. An
+   * open or post answers `retry_allowed`; an update or reconciliation,
+   * `uncertain`.
    */
   private async slackOrNoToken<T>(
     call: (client: SlackWebApiClient) => Promise<T>,
@@ -313,28 +315,30 @@ export class PrivateSlackApprovalCardPosterV1 {
     if (this.retryBlocked()) return { kind: "retry_allowed" };
     try {
       if (this.auth_identity === undefined) {
-        this.auth_identity = await this.slack((client) => client.authIdentity(signal));
+        const authIdentity = await this.slackOrNoToken((client) => client.authIdentity(signal));
+        if (authIdentity === TOKEN_UNAVAILABLE) return { kind: "uncertain" };
+        this.auth_identity = authIdentity;
       }
       const identity = this.auth_identity;
       const approvalMarker = marker(input.approval_id);
-      const matches = (
-        await this.slack((client) =>
-          client.channelHistory(
-            {
-              channel: input.dm_channel_id,
-              oldest: slackTimestampFromCanonicalUtc(
-                input.post_started_at,
-                -POST_RECONCILIATION_LOOKBACK_MS,
-              ),
-              latest: slackTimestampFromCanonicalUtc(
-                input.post_started_at,
-                POST_RECONCILIATION_LOOKAHEAD_MS,
-              ),
-            },
-            signal,
-          ),
-        )
-      )
+      const history = await this.slackOrNoToken((client) =>
+        client.channelHistory(
+          {
+            channel: input.dm_channel_id,
+            oldest: slackTimestampFromCanonicalUtc(
+              input.post_started_at,
+              -POST_RECONCILIATION_LOOKBACK_MS,
+            ),
+            latest: slackTimestampFromCanonicalUtc(
+              input.post_started_at,
+              POST_RECONCILIATION_LOOKAHEAD_MS,
+            ),
+          },
+          signal,
+        ),
+      );
+      if (history === TOKEN_UNAVAILABLE) return { kind: "uncertain" };
+      const matches = history
         .filter(
           (message) =>
             message.text.endsWith(approvalMarker) &&
@@ -352,7 +356,7 @@ export class PrivateSlackApprovalCardPosterV1 {
       }
       for (const duplicate of duplicates) {
         try {
-          await this.slack((client) =>
+          const updated = await this.slackOrNoToken((client) =>
             client.updateMessage(
               {
                 channel: input.dm_channel_id,
@@ -369,6 +373,7 @@ export class PrivateSlackApprovalCardPosterV1 {
               signal,
             ),
           );
+          if (updated === TOKEN_UNAVAILABLE) return { kind: "uncertain" };
         } catch (error) {
           if (!messageIsAbsent(error)) throw error;
         }
@@ -398,7 +403,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "uncertain" };
     try {
-      await this.slack((client) =>
+      const updated = await this.slackOrNoToken((client) =>
         client.updateMessage(
           {
             channel: input.dm_channel_id,
@@ -412,6 +417,7 @@ export class PrivateSlackApprovalCardPosterV1 {
           signal,
         ),
       );
+      if (updated === TOKEN_UNAVAILABLE) return { kind: "uncertain" };
       return { kind: "done" };
     } catch (error) {
       if (signal?.aborted === true) throw error;
@@ -476,7 +482,7 @@ export class PrivateSlackApprovalCardPosterV1 {
     assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "uncertain" };
     try {
-      await this.slack((client) =>
+      const updated = await this.slackOrNoToken((client) =>
         client.updateMessage(
           {
             channel: input.dm_channel_id,
@@ -490,6 +496,7 @@ export class PrivateSlackApprovalCardPosterV1 {
           signal,
         ),
       );
+      if (updated === TOKEN_UNAVAILABLE) return { kind: "uncertain" };
       return { kind: "done" };
     } catch (error) {
       if (signal?.aborted === true) throw error;

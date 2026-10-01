@@ -371,17 +371,58 @@ describe("private Slack approval card poster V1", () => {
     expect(onAuthFailure).toHaveBeenCalledTimes(2);
   });
 
-  it("lets the DM open and marker post be retried when no bot token can be obtained", async () => {
+  it("answers each step's retry outcome without calling Slack when no bot token can be obtained", async () => {
     const requests: string[] = [];
     const poster = new PrivateSlackApprovalCardPosterV1(async () => { throw new Error("Nango is unavailable"); }, {
       fetchImpl: async (url) => { requests.push(String(url)); return new Response(JSON.stringify({ ok: true })); },
     });
+    const card = { approval_id: "apr_123", dm_channel_id: "D123", provider_message_ts: "123.000001" };
     await expect(poster.openDirectMessage("U123")).resolves.toEqual({ kind: "retry_allowed" });
     await expect(poster.postMarker({ approval_id: "apr_123", dm_channel_id: "D123" })).resolves.toEqual({ kind: "retry_allowed" });
-    // Steps that may already have reached Slack keep failing loudly.
-    await expect(poster.publish({ approval_id: "apr_123", dm_channel_id: "D123", provider_message_ts: "123.000001", card: CARD }))
-      .rejects.toThrow("Nango is unavailable");
+    // Past its window, but never `retry_allowed`: that would mean no marker exists and a repost is safe.
+    await expect(poster.reconcileMarker({
+      approval_id: "apr_123", dm_channel_id: "D123",
+      post_started_at: "2026-08-28T00:00:00.000Z", reconciliation_started_at: "2026-08-28T00:20:00.000Z",
+    })).resolves.toEqual({ kind: "uncertain" });
+    await expect(poster.publish({ ...card, card: CARD })).resolves.toEqual({ kind: "uncertain" });
+    await expect(poster.renderTerminal({ ...card, outcome: "rejected", policy_label: null })).resolves.toEqual({ kind: "uncertain" });
+    await expect(poster.tombstone({ ...card, successor_id: "cnd_456" })).resolves.toEqual({ kind: "uncertain" });
     expect(requests).toEqual([]);
+  });
+
+  it("keeps a marker reconciliation uncertain when the bot token fails after Slack answered", async () => {
+    const requests: string[] = [];
+    let tokens = 0;
+    const poster = new PrivateSlackApprovalCardPosterV1(async () => {
+      if ((tokens += 1) > 2) throw new Error("Nango is unavailable");
+      return "test-token";
+    }, {
+      fetchImpl: async (url) => {
+        const method = new URL(String(url)).pathname.split("/").at(-1)!;
+        requests.push(method);
+        if (method === "auth.test") {
+          return new Response(JSON.stringify({ ok: true, team_id: "T123", enterprise_id: null, user_id: "U999", bot_id: "B123", app_id: "A123" }),
+            { headers: { "x-oauth-scopes": "users:read" } });
+        }
+        if (method === "bots.info") {
+          return new Response(JSON.stringify({ ok: true, bot: { id: "B123", user_id: "U999", app_id: "A123", deleted: false } }));
+        }
+        return new Response(JSON.stringify({
+          ok: true, has_more: false, response_metadata: { next_cursor: "" },
+          messages: [
+            { ts: "1724292304.006000", text: "later\n[private-approval:apr_123]", bot_id: "B123" },
+            { ts: "1724292303.999999", text: "first\n[private-approval:apr_123]", bot_id: "B123" },
+          ],
+        }), { headers: { "x-oauth-scopes": "im:history" } });
+      },
+    });
+
+    // The duplicate is still live, so the earliest marker is not yet the card.
+    await expect(poster.reconcileMarker({
+      approval_id: "apr_123", dm_channel_id: "D123",
+      post_started_at: "2024-08-22T02:05:04.000Z", reconciliation_started_at: "2024-08-22T02:05:05.000Z",
+    })).resolves.toEqual({ kind: "uncertain" });
+    expect(requests).toEqual(["auth.test", "bots.info", "conversations.history"]);
   });
 
   it("honors Retry-After before retrying a direct-message open", async () => {

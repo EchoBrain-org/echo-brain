@@ -3,6 +3,7 @@ import { RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256, RESTRICTED_REVIEWER_
 import { PrivateApprovalFinalizationConflictError, PrivateApprovalFinalizationDeniedError, type DurablePrivateApprovalTerminalV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import { describe, expect, it } from "vitest";
 import { PrivateSlackApprovalTerminalCoordinatorV1, type PrivateSlackApprovalTerminalAuthorityV1, type PrivateSlackApprovalTerminalFrozenCandidateV1 } from "../../src/private-approval/private-slack-approval-terminal-coordinator-v1.js";
+import { PrivateSlackApprovalCardPosterV1 } from "../../src/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
 import type { PrivateApprovalResolutionV2 } from "../../src/organization-control-plane/application/slack/private-approval-policy-resolution-v2.js";
 import type {
   MeetingApprovalJourneyStageAttemptV1,
@@ -616,6 +617,43 @@ describe("private Slack approval terminal coordinator v1", () => {
         expect.objectContaining({ kind: "skip", stage: "meeting_search_publication" }),
       ]),
     );
+  });
+
+  it("completes recovery while no bot token can be obtained and renders the card once one can", async () => {
+    const value = terminal("rejected");
+    const harness = authorityHarness(value);
+    const requests: string[] = [];
+    let nangoAvailable = false;
+    const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
+      control_plane: {
+        listQueued: () => [],
+        listDenied: () => [],
+        listTerminals: () => [value],
+        finalize: async () => value,
+        recordDenied: () => undefined,
+      },
+      authority: harness.authority,
+      record_writer: { appendApproved: async () => { throw new Error("reject must never append"); } } as never,
+      poster: new PrivateSlackApprovalCardPosterV1(async () => {
+        if (!nangoAvailable) throw new Error("Nango is unavailable");
+        return "test-token";
+      }, {
+        fetchImpl: async (url) => {
+          requests.push(new URL(String(url)).pathname.split("/").at(-1)!);
+          return new Response(JSON.stringify({ ok: true, channel: "DPRIVATE", ts: "1.000001" }));
+        },
+      }),
+    });
+
+    await expect(coordinator.recoverV4Appends(new AbortController().signal)).resolves.toBeUndefined();
+    expect(harness.records).toHaveLength(1);
+    expect(harness.marks).toEqual([]);
+    expect(requests).toEqual([]);
+
+    nangoAvailable = true;
+    await coordinator.recoverV4Appends(new AbortController().signal);
+    expect(harness.marks).toEqual([APPROVAL_ID]);
+    expect(requests).toEqual(["chat.update"]);
   });
 
   it("closes an append failure, retries it, and only then marks search awaiting", async () => {
