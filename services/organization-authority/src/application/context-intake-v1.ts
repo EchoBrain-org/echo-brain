@@ -122,6 +122,7 @@ export function assertContextCaptureEnvelopeV1(value: unknown, identity: SourceA
       if (typeof representation.text !== 'string' || representation.text.trim() === '' || Buffer.byteLength(representation.text, 'utf8') > CONTEXT_CAPTURE_LIMITS_V1.snapshot_bytes) throw new Error('Context snapshot exceeds its bound');
     } else if (representation.text !== undefined) throw new Error('An excerpt cannot retain a full snapshot');
     let bytes = 0;
+    const excerpts: Pick<ContextPassageV1, 'source_anchor' | 'start' | 'end' | 'text'>[] = [];
     for (const value of representation.passages) {
       const passage = object(value, ['id', 'source_anchor', 'start', 'end', 'text'], 'Context passage');
       text(passage.id, 128, 'Context anchor id'); text(passage.source_anchor, 512, 'Context source anchor');
@@ -130,6 +131,20 @@ export function assertContextCaptureEnvelopeV1(value: unknown, identity: SourceA
       if (typeof passage.text !== 'string' || passage.text.trim() === '' || Buffer.byteLength(passage.text, 'utf8') > CONTEXT_CAPTURE_LIMITS_V1.passage_bytes ||
           !Number.isSafeInteger(passage.start) || !Number.isSafeInteger(passage.end) || Number(passage.start) < 0 || Number(passage.end) <= Number(passage.start) || Number(passage.end) - Number(passage.start) !== passage.text.length) throw new Error('Context passage is unbounded or unanchored');
       if (representation.kind === 'full_snapshot' && (Number(passage.end) > (representation.text as string).length || (representation.text as string).slice(Number(passage.start), Number(passage.end)) !== passage.text)) throw new Error('Context passage does not match its snapshot');
+      if (representation.kind === 'excerpt') {
+        const start = Number(passage.start);
+        const end = Number(passage.end);
+        for (const previous of excerpts) {
+          if (previous.source_anchor !== passage.source_anchor) continue;
+          const overlapStart = Math.max(previous.start, start);
+          const overlapEnd = Math.min(previous.end, end);
+          if (overlapStart < overlapEnd &&
+              previous.text.slice(overlapStart - previous.start, overlapEnd - previous.start) !== passage.text.slice(overlapStart - start, overlapEnd - start)) {
+            throw new Error('Context excerpts conflict at the same source anchor');
+          }
+        }
+        excerpts.push({ source_anchor: passage.source_anchor, start, end, text: passage.text });
+      }
       bytes += Buffer.byteLength(passage.text, 'utf8');
     }
     if (representation.kind === 'excerpt' && bytes > CONTEXT_CAPTURE_LIMITS_V1.excerpt_bytes) throw new Error('Context excerpts exceed their bound');

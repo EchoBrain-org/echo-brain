@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sourceContentSha256V1, type SourceAdmissionStoreV1 } from '@echo-brain/organization-processing/core';
 import { SqliteContextCaptureReaderV1 } from '../src/adapters/persistence/sqlite/context-capture-reader-v1.js';
+import { SqliteContextCaptureStoreV1 } from '../src/adapters/persistence/sqlite/context-capture-store-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../src/adapters/persistence/sqlite/source-admission-v1.js';
 import { intakeContextBatchV1, type ContextCaptureEnvelopeV1, type ContextIntakeAuthorityV1, type ContextIntakePolicyV1 } from '../src/application/context-intake-v1.js';
 import { projectContextDatabase } from './fixtures/project-context-sqlite.js';
@@ -178,6 +179,72 @@ describe('context intake V1 shared gate', () => {
         })).rejects.toThrow();
       }
     }
+    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+  });
+
+  it('rejects conflicting excerpt overlaps before either disposition or any batch write, regardless of passage order', async () => {
+    const value = database();
+    const first = { id: 'first', source_anchor: 'paragraph:1', start: 10, end: 16, text: 'abcdef' };
+    const conflicts = [
+      { id: 'identical-range', source_anchor: 'paragraph:1', start: 10, end: 16, text: 'abcXef' },
+      { id: 'partial-range', source_anchor: 'paragraph:1', start: 14, end: 18, text: 'eXgh' },
+      { id: 'contained-range', source_anchor: 'paragraph:1', start: 11, end: 14, text: 'bXd' },
+    ];
+    for (const disposition of ['retained', 'request_only'] as const) {
+      const selected = authority({ disposition });
+      const store = new SqliteContextCaptureStoreV1(value, selected, CONTEXT_CAPTURE_IDENTITY_V1);
+      for (const conflict of conflicts) {
+        for (const passages of [[first, conflict], [conflict, first]]) {
+          const source = contextCaptureV1({ representation: { kind: 'excerpt', passages } });
+          await expect(intakeContextBatchV1({
+            identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [contextCaptureV1({ external_id: 'valid-before-conflict' }), source], authority: selected, store,
+          })).rejects.toThrow('Context excerpts conflict at the same source anchor');
+        }
+      }
+    }
+    expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
+  });
+
+  it('preserves compatible excerpt overlaps, distinct anchors and separate ranges with JavaScript string offsets', async () => {
+    const value = database();
+    const passages = [
+      { id: 'first', source_anchor: 'paragraph:1', start: 10, end: 17, text: 'a😀bcde' },
+      { id: 'identical-range', source_anchor: 'paragraph:1', start: 10, end: 17, text: 'a😀bcde' },
+      { id: 'contained-range', source_anchor: 'paragraph:1', start: 11, end: 14, text: '😀b' },
+      { id: 'partial-range', source_anchor: 'paragraph:1', start: 15, end: 19, text: 'defg' },
+      { id: 'adjacent-range', source_anchor: 'paragraph:1', start: 19, end: 21, text: 'hi' },
+      { id: 'disjoint-range', source_anchor: 'paragraph:1', start: 25, end: 27, text: 'jk' },
+      { id: 'other-anchor', source_anchor: 'paragraph:2', start: 10, end: 17, text: 'totally' },
+    ];
+    const retained: ContextCaptureEnvelopeV1[] = [];
+    for (const disposition of ['retained', 'request_only'] as const) {
+      const selected = authority({ disposition });
+      const store = new SqliteContextCaptureStoreV1(value, selected, CONTEXT_CAPTURE_IDENTITY_V1);
+      for (const [index, ordered] of [passages, [...passages].reverse()].entries()) {
+        const source = contextCaptureV1({ external_id: `${disposition}-overlap-${index}`, representation: { kind: 'excerpt', passages: ordered } });
+        const result = await intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [source], authority: selected, store });
+        if (disposition === 'retained') {
+          expect(result).toMatchObject([{ admission: 'admitted' }]);
+          retained.push(source);
+        } else {
+          expect(result).toMatchObject([{ admission: 'request_only', source }]);
+        }
+      }
+    }
+    const stored = new SqliteContextCaptureReaderV1(value).list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id });
+    expect(stored.map(entry => entry.source)).toEqual(expect.arrayContaining(retained));
+    expect(counts(value)).toEqual({ sources: 2, revisions: 2, contents: 2, representations: 0 });
+  });
+
+  it('rejects contradictory excerpts at the SQLite capture boundary without the batch coordinator', async () => {
+    const value = database();
+    const source = contextCaptureV1({ representation: { kind: 'excerpt', passages: [
+      { id: 'first', source_anchor: 'paragraph:1', start: 0, end: 4, text: 'good' },
+      { id: 'second', source_anchor: 'paragraph:1', start: 0, end: 4, text: 'evil' },
+    ] } });
+    const store = new SqliteContextCaptureStoreV1(value, authority(), CONTEXT_CAPTURE_IDENTITY_V1);
+    await expect(store.admitSourceRevision({ source, scope: CONTEXT_CAPTURE_SCOPE_V1 }))
+      .rejects.toThrow('Context excerpts conflict at the same source anchor');
     expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
   });
 

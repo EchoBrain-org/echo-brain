@@ -82,7 +82,9 @@ V1 retains exactly the submitted, authorized representation:
 
 Character offsets use JavaScript string indexing; byte bounds use UTF-8.
 Excerpts commit each passage and its source anchor without claiming the
-unavailable whole body. Snapshot passages must match their committed text.
+unavailable whole body. Overlapping excerpts within the same source anchor must
+agree on every shared character; different source anchors are independent
+coordinate domains. Snapshot passages must match their committed text.
 Pointer metadata cannot support anchored observations in V1. Source identity,
 exact revision, provenance and policy references remain available even for a
 pointer capture.
