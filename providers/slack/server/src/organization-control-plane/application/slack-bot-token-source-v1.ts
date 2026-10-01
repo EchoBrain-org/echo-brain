@@ -1,5 +1,5 @@
 import type { OrganizationSecretStore } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
-import type { NangoConnectionClientV1 } from "../adapters/nango/nango-connection-client-v1.js";
+import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../adapters/nango/nango-connection-client-v1.js";
 import type { StoredSlackConnectionV1 } from "../persistence/sqlite-slack-active-connection-v1.js";
 import { findSlackAppCredentialsByReferenceSha256V1 } from "./slack-app-credentials-v1.js";
 import type { SlackConnectionHealthV1 } from "./slack-connection-health-v1.js";
@@ -21,9 +21,14 @@ export type SlackBotTokenGetterV1 = (options?: {
 /**
  * Asks Nango for the connection named by the active connection's credential
  * bundle and reuses that token for at most five minutes per connection state.
+ * A reconnect or rebind keeps the state and proves the same bot, so a cached
+ * token outlives it; a revoked one is re-read through `withSlackBotTokenV1`.
  * A Nango connection that names another workspace, app or bot user than the
- * active connection (say, after a refused reconnect) marks that state
- * "needs reinstall" before throwing. There is no bot token in the Authority.
+ * active connection (say, after a refused reconnect), or a 404 for it, marks
+ * that state "needs reinstall" before throwing. A 404 means Nango no longer
+ * has the connection under this Authority's Nango key and integration; it does
+ * not tell a deleted connection from a misconfigured key. A mark from a read
+ * that an install overtook is dropped. There is no bot token in the Authority.
  * Thrown messages never include a token.
  */
 export function createSlackBotTokenSourceV1(input: {
@@ -52,14 +57,24 @@ export function createSlackBotTokenSourceV1(input: {
         throw new Error("Slack app has no Nango connection");
       }
       const requestedAt = now();
+      const generation = input.health.generation();
+      let nango: NangoSlackConnectionV1;
+      try {
+        nango = await input.nango.getSlackConnection({ connection_id: credentials.nango_connection_id });
+      } catch (error) {
+        // Unavailable or unauthorized (the Authority's own Nango key) proves nothing about the install.
+        if (error instanceof NangoClientErrorV1 && error.code === "not_found") {
+          input.health.markNeedsReinstall(connection.state_sha256, generation);
+        }
+        throw error;
+      }
       // Nango reports no bot id; the bot user stands for the bot.
-      const nango = await input.nango.getSlackConnection({ connection_id: credentials.nango_connection_id });
       if (
         nango.team_id !== connection.connection.provider_tenant_id ||
         nango.app_id !== connection.connection.provider_app_id ||
         nango.bot_user_id !== connection.connection.provider_bot_user_id
       ) {
-        input.health.markNeedsReinstall(connection.state_sha256);
+        input.health.markNeedsReinstall(connection.state_sha256, generation);
         throw new Error("Nango Slack connection does not match the active connection");
       }
       for (const [state, entry] of cache) {
@@ -80,10 +95,12 @@ export function createSlackBotTokenSourceV1(input: {
  * Nango past the cache, unless that is the very token Slack just rejected (a
  * bot token without rotation stays the same until a reconnect). Only a
  * re-read token that Slack still rejects calls `on_auth_failure` (callers mark
- * the connection "needs reinstall"); a re-read that itself fails, such as
- * Nango being down, proves nothing about the install and reports nothing. A
- * connection already marked is not re-read until an install clears it. Auth
- * failures are rethrown as Slack's error, other failures untouched.
+ * the connection "needs reinstall"); a re-read that itself fails reports
+ * nothing here: Nango being down proves nothing about the install, and the
+ * token source has already marked a connection Nango no longer has or that
+ * names another bot. A connection already marked is not re-read until an
+ * install clears it. Auth failures are rethrown as Slack's error, other
+ * failures untouched.
  */
 export async function withSlackBotTokenV1<T>(
   input: {

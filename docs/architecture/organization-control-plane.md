@@ -104,10 +104,18 @@ Slack's report and Nango's to name the same app, workspace, and bot user. The
 bundle holds no workspace: verification compares Nango's and Slack's reports
 with each other, and a reconnect also compares them against the active
 connection. An install for a different app, workspace, or bot is refused and
-changes nothing; a missing scope is refused the same way. A failed, incomplete, or unavailable verification leaves no active
-connection; absence therefore means inactive. A reconnect of the same app
-reuses the same Nango connection ID and leaves every outstanding approval card
-untouched.
+ECHO writes nothing; a missing scope is refused the same way. A refused
+reconnect has still changed Nango's connection, which now holds the other
+workspace or bot, so the connection reads "needs reinstall" until the owner
+reconnects to the original one. A failed, incomplete, or unavailable
+verification leaves no active connection; absence therefore means inactive. A
+reconnect of the same app reuses the same Nango connection ID and leaves every
+outstanding approval card untouched. When Nango no longer has that connection,
+the owner's Install opens a new one and, once it reproduces the stored
+verification evidence, rebinds the bundle's Nango connection ID under the same
+handle; the state hash and the cards stay unchanged
+([ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md),
+proposed).
 
 The Slack bot token is never written to Authority state: Nango holds it, and
 the Authority fetches it at use time and caches it in memory for at most five
@@ -266,7 +274,8 @@ The current schema does not persist:
   rollback protection;
 - explicit organization-tool disconnect and replacing the organization
   connection with a different app or workspace; only a reconnect of the same
-  app is supported in v1. Organization access is disabled through membership
+  app, or a rebind of its lost Nango connection to the same app, workspace and
+  bot, is supported in v1. Organization access is disabled through membership
   revocation; a Person's own link is disabled through the personal disconnect
   or membership revocation.
 

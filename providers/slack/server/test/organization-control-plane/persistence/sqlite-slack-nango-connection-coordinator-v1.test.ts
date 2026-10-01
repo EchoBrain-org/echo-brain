@@ -13,7 +13,7 @@ import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredential
 import { buildOrganizationToolConnectionContractV2 } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import type { OrganizationSecretStore, VerifiedSlackConnection } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
-import { activateNangoSlackConnectionV1, SlackConnectionRefusedErrorV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
+import { activateNangoSlackConnectionV1, rebindNangoSlackConnectionV1, SlackConnectionConflictError, SlackConnectionRefusedErrorV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 
 const COORDINATES = Object.freeze({
   authority_id: "oau_00000000-0000-4000-8000-000000000001",
@@ -106,6 +106,29 @@ function activate(
     nango: input.nango,
     now: () => NOW,
     new_connection_id: () => input.connection_id ?? "con_nango_1",
+  });
+}
+
+/** A rebind of the active connection onto `nango`, whose auth.test reproduces the first install's evidence unless overridden. */
+function rebind(
+  state: TestState,
+  input: {
+    readonly credential: ReturnType<typeof pendingBundle>;
+    readonly nango: NangoSlackConnectionV1;
+    readonly rebind: { readonly state_sha256: `sha256:${string}`; readonly nango_connection_id: string };
+    readonly verified?: Partial<VerifiedSlackConnection>;
+  },
+) {
+  return rebindNangoSlackConnectionV1({
+    ...COORDINATES,
+    database: state.database,
+    secrets: state.secrets,
+    verifier: authTest(input.nango, { verification_evidence_sha256: canonicalSha256({ verified: "nango-conn-1" }), ...input.verified }),
+    credential: input.credential,
+    nango: input.nango,
+    rebind: input.rebind,
+    now: () => LATER,
+    new_connection_id: () => "con_nango_2",
   });
 }
 
@@ -234,6 +257,7 @@ describe("Nango Slack connection activation v1", () => {
     const secrets: OrganizationSecretStore = {
       create: (secret) => state.secrets.create(secret),
       read: (reference) => state.secrets.read(reference),
+      replace: (reference, secret) => state.secrets.replace(reference, secret),
       listReferences: () => state.secrets.listReferences(),
       remove: (reference) => {
         if (reference.secret_handle_id === pending.reference.secret_handle_id) throw new Error("disk is full");
@@ -301,18 +325,80 @@ describe("Nango Slack connection activation v1", () => {
     expect(state.secrets.listReferences()).toHaveLength(1);
   });
 
-  it("refuses a reconnect that lands in a different team, writing nothing", async () => {
+  it("refuses a reconnect that lands in a different team or bot as a workspace mismatch, writing nothing", async () => {
     const state = setup();
     const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
     const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
-    const nango = nangoInstall({ team_id: "T02" });
+    const team = nangoInstall({ team_id: "T02" });
 
+    await expectRefused(activate(state, { credential: activeBundle, nango: team, verifier: authTest(team), connection_id: "con_nango_2" }), "workspace_mismatch");
     await expectRefused(
-      activate(state, { credential: activeBundle, nango, verifier: authTest(nango), connection_id: "con_nango_2" }),
-      "already_connected",
+      activate(state, { credential: activeBundle, nango: nangoInstall(), verifier: authTest(nangoInstall(), { bot_id: "B02" }), connection_id: "con_nango_2" }),
+      "workspace_mismatch",
     );
     expect(readActiveSlackConnectionV1(state.database)?.connection.provider_tenant_id).toBe("T01");
     expect(state.secrets.listReferences()).toHaveLength(1);
+    expect(findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256)).toEqual(activeBundle);
+  });
+
+  it("rebinds a lost Nango connection under the same handle, keeping the state hash and every waiting card", async () => {
+    const state = setup();
+    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
+    const active = readActiveSlackConnectionV1(state.database)!;
+    seedPendingApproval(state.database, active, seedOwnerLink(state.database, active));
+    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const before = refs(state);
+
+    const result = await rebind(state, { credential: activeBundle, nango: nangoInstall({ connection_id: "nango-conn-2", updated_at: LATER }),
+      rebind: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" } });
+
+    expect(result).toEqual({ kind: "reconnected", connection: created.connection, state: created.state });
+    expect(readActiveSlackConnectionV1(state.database)).toEqual(active);
+    expect(refs(state)).toEqual(before);
+    const rebound = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    expect(rebound).toEqual({ reference: activeBundle.reference, credentials: { ...activeBundle.credentials, nango_connection_id: "nango-conn-2" } });
+    expect(rowCount(state.database, "organization_tool_connection_contracts")).toBe(1);
+    expect(state.database.prepare("SELECT connection_state_sha256 FROM organization_private_approval_pending_contracts_v2").pluck().all())
+      .toEqual([active.state_sha256]);
+  });
+
+  it("refuses a rebind to another team, bot or verification evidence as a workspace mismatch, writing nothing", async () => {
+    const state = setup();
+    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
+    const active = readActiveSlackConnectionV1(state.database)!;
+    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const lost = { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" };
+    const replacement = nangoInstall({ connection_id: "nango-conn-2" });
+
+    for (const [nango, verified] of [
+      [nangoInstall({ connection_id: "nango-conn-2", team_id: "T02" }), {}],
+      [replacement, { bot_id: "B02" }],
+      [replacement, { enterprise_id: "E01" }],
+      // Same ids, but auth.test no longer reproduces the stored evidence (say, other scopes).
+      [replacement, { verification_evidence_sha256: canonicalSha256({ verified: "nango-conn-2" }) }],
+    ] as const) {
+      await expectRefused(rebind(state, { credential: activeBundle, nango, rebind: lost, verified }), "workspace_mismatch");
+    }
+    expect(findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256)).toEqual(activeBundle);
+    expect(readActiveSlackConnectionV1(state.database)).toEqual(active);
+  });
+
+  it("refuses a rebind once the active state or its bundle changed since the install began", async () => {
+    const state = setup();
+    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
+    const active = readActiveSlackConnectionV1(state.database)!;
+    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const nango = nangoInstall({ connection_id: "nango-conn-2" });
+    const lost = { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" };
+
+    for (const [credential, rebound] of [
+      [activeBundle, { ...lost, state_sha256: canonicalSha256({ state: "other" }) }],
+      [activeBundle, { ...lost, nango_connection_id: "nango-conn-0" }],
+      [{ ...activeBundle, credentials: { ...activeBundle.credentials, signing_secret: "signing-secret-rotated" } }, lost],
+    ] as const) {
+      await expect(rebind(state, { credential, nango, rebind: rebound })).rejects.toBeInstanceOf(SlackConnectionConflictError);
+    }
+    expect(findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256)).toEqual(activeBundle);
   });
 
   it("refuses a different app while a connection is active, writing nothing and leaving every waiting card alone", async () => {

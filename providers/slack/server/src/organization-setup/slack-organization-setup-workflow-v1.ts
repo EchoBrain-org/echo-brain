@@ -24,7 +24,7 @@ import { findPendingSlackAppCredentialsV1, findSlackAppCredentialsByReferenceSha
 import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { readActiveSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
-import { activateNangoSlackConnectionV1, SlackConnectionRefusedErrorV1, type SlackConnectionVerifierV1 } from "../organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
+import { activateNangoSlackConnectionV1, rebindNangoSlackConnectionV1, SlackConnectionConflictError, SlackConnectionRefusedErrorV1, type SlackConnectionVerifierV1 } from "../organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 
 const ATTEMPT_LIFETIME_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 50;
@@ -62,7 +62,12 @@ interface InstallAttempt extends InstallState {
   /** Held only while pending: settling drops the client and signing secrets. */
   credential: FoundSlackAppCredentialsV1 | null;
   /** A reconnect reuses this Nango connection; `updated_at` is its timestamp at begin. */
-  readonly reconnect: { readonly connection_id: string; readonly updated_at: string } | null;
+  readonly reconnect: { readonly connection_id: string; readonly state_sha256: `sha256:${string}`; readonly updated_at: string } | null;
+  /**
+   * Nango no longer had the active connection's Nango connection at begin: the
+   * attempt runs as a first install, then the bundle is pointed at the new one.
+   */
+  readonly rebind: { readonly nango_connection_id: string; readonly state_sha256: `sha256:${string}` } | null;
   readonly connect_link: string;
   readonly expires_at: string;
 }
@@ -75,9 +80,10 @@ function sameSession(left: PersonAccessAuthorization, right: PersonAccessAuthori
 
 /**
  * Spike-sensitive (assumptions A3-A5, ruling P1); adjust here only. A first
- * install is found by its attempt tag. A reconnect keeps its connection id and
- * has finished once Nango's update timestamp passes the one read at begin:
- * Slack may return the same bot token on a reinstall, so the token is no signal.
+ * install or a rebind is found by its attempt tag. A reconnect keeps its
+ * connection id and has finished once Nango's update timestamp passes the one
+ * read at begin: Slack may return the same bot token on a reinstall, so the
+ * token is no signal.
  */
 async function finishedNangoConnectionV1(
   nango: NangoConnectionClientV1,
@@ -91,11 +97,25 @@ async function finishedNangoConnectionV1(
   return connectionId === undefined ? undefined : nango.getSlackConnection({ connection_id: connectionId });
 }
 
-/** A first install carries this attempt's tags; Nango may keep a reconnected connection's original tags. */
+/** A first install or a rebind carries this attempt's tags; Nango may keep a reconnected connection's original tags. */
 function tagsMatch(connection: NangoSlackConnectionV1, attempt: InstallAttempt, organizationId: string): boolean {
   const { tags } = connection;
   return tags.echo_organization_id === organizationId && (attempt.reconnect !== null ||
     (tags.echo_attempt_id === attempt.attempt_id && tags.echo_membership_id === attempt.session.membership_id));
+}
+
+/**
+ * Spike-sensitive like the above: a read of a connection id answers 404 once
+ * Nango no longer has it. A wrong Nango key or integration answers the same.
+ */
+async function missingNangoConnectionV1(nango: NangoConnectionClientV1, connectionId: string): Promise<boolean> {
+  try {
+    await nango.getSlackConnection({ connection_id: connectionId });
+    return false;
+  } catch (error) {
+    if (error instanceof NangoClientErrorV1 && error.code === "not_found") return true;
+    throw error;
+  }
 }
 
 function failureOf(error: unknown): { reason: OrganizationSlackInstallFailureReasonV1 } {
@@ -194,15 +214,24 @@ export class SlackOrganizationSetupWorkflowV1 {
       const nango = this.options.nango.client;
       const connectionId = credential.credentials.nango_connection_id;
       let reconnect: InstallAttempt["reconnect"] = null;
+      let rebind: InstallAttempt["rebind"] = null;
       let opened: { connect_link: string };
       if (connectionId === null) {
         opened = await nango.createConnectSession({ tags, ...client });
       } else {
-        opened = await nango.createReconnectSession({ connection_id: connectionId, tags, ...client });
-        // Read after the session exists, so its own effect on the connection is not mistaken for a finished reconnect.
-        reconnect = Object.freeze({ connection_id: connectionId, updated_at: (await nango.getSlackConnection({ connection_id: connectionId })).updated_at });
+        // Only the active connection's bundle names a Nango connection.
+        const stateSha256 = readActiveSlackConnectionV1(this.options.database)!.state_sha256;
+        if (await missingNangoConnectionV1(nango, connectionId)) {
+          opened = await nango.createConnectSession({ tags, ...client });
+          rebind = Object.freeze({ nango_connection_id: connectionId, state_sha256: stateSha256 });
+        } else {
+          opened = await nango.createReconnectSession({ connection_id: connectionId, tags, ...client });
+          // Read after the session exists, so its own effect on the connection is not mistaken for a finished reconnect.
+          reconnect = Object.freeze({ connection_id: connectionId, state_sha256: stateSha256,
+            updated_at: (await nango.getSlackConnection({ connection_id: connectionId })).updated_at });
+        }
       }
-      const attempt: InstallAttempt = { attempt_id: attemptId, request_id: request.request_id, session, credential, reconnect,
+      const attempt: InstallAttempt = { attempt_id: attemptId, request_id: request.request_id, session, credential, reconnect, rebind,
         connect_link: opened.connect_link,
         expires_at: new Date(Date.parse(now) + ATTEMPT_LIFETIME_MS).toISOString(),
         status: "pending", failure_reason: null, result: null };
@@ -225,6 +254,11 @@ export class SlackOrganizationSetupWorkflowV1 {
       let connection: NangoSlackConnectionV1 | undefined;
       try {
         connection = await finishedNangoConnectionV1(this.options.nango.client, attempt);
+        // A rebind needs its lost connection still gone; one that came back is reconnected by the owner's next Install.
+        if (connection !== undefined && attempt.rebind !== null &&
+          !await missingNangoConnectionV1(this.options.nango.client, attempt.rebind.nango_connection_id)) {
+          throw new SlackConnectionConflictError("the lost Nango connection is back");
+        }
       } catch (error) {
         // Ruling P8: a Nango blip while looking is not an outcome; the attempt lives until it expires.
         if (error instanceof NangoClientErrorV1 && error.code === "unavailable") return statusResponse(attempt);
@@ -238,12 +272,15 @@ export class SlackOrganizationSetupWorkflowV1 {
         this.owner(accessToken);
         return verified;
       } };
-      const activated = await activateNangoSlackConnectionV1({
+      const activation = {
         database: this.options.database, secrets: this.options.secrets, verifier,
         authority_id: this.options.authority_id, organization_id: this.options.organization_id, state_lineage_id: this.options.state_lineage_id,
         credential, nango: connection,
         now: () => this.now(), new_connection_id: this.options.new_connection_id ?? (() => `con_${randomUUID()}`),
-      });
+      };
+      const activated = attempt.rebind === null
+        ? await activateNangoSlackConnectionV1(activation)
+        : await rebindNangoSlackConnectionV1({ ...activation, rebind: attempt.rebind });
       this.options.health.clear();
       const result: OrganizationSlackInstallResultV1 = { kind: activated.kind, workspace_id: activated.connection.provider_tenant_id };
       this.settle(attempt, "complete", null, result);
@@ -253,7 +290,11 @@ export class SlackOrganizationSetupWorkflowV1 {
         this.settle(attempt, "cancelled");
         throw error;
       }
-      this.settle(attempt, "failed", failureOf(error).reason);
+      const { reason } = failureOf(error);
+      // The active connection's Nango connection now holds another workspace or bot, or is gone.
+      const bound = attempt.reconnect ?? attempt.rebind;
+      if (bound !== null && reason === "workspace_mismatch") this.options.health.markNeedsReinstall(bound.state_sha256);
+      this.settle(attempt, "failed", reason);
     } finally {
       this.busy = false;
       this.checking = null;

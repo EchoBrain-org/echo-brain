@@ -96,19 +96,22 @@ async function verifyInstall(
   return verified;
 }
 
-/** True when the active connection is this exact install; false for any other. */
-function isSameNangoConnection(
+/** True when the active connection's bundle names this app and this Nango connection. */
+function namesActiveNangoConnection(
   active: StoredSlackConnectionV1,
   input: ActivateNangoSlackConnectionInputV1,
-  verified: VerifiedSlackConnection,
 ): boolean {
   const bundle = findSlackAppCredentialsByReferenceSha256V1(
     input.secrets,
     active.state.credential_reference_sha256,
   ).credentials;
-  if (bundle.app_id !== input.nango.app_id) return false;
-  if (bundle.nango_connection_id !== input.nango.connection_id) return false;
-  const { connection } = active;
+  return bundle.app_id === input.nango.app_id && bundle.nango_connection_id === input.nango.connection_id;
+}
+
+function sameProviderIdentity(
+  connection: OrganizationToolConnectionContractV2,
+  verified: VerifiedSlackConnection,
+): boolean {
   return (
     connection.provider_app_id === verified.app_id &&
     connection.provider_tenant_id === verified.team_id &&
@@ -118,11 +121,24 @@ function isSameNangoConnection(
   );
 }
 
+function observedScopes(verified: VerifiedSlackConnection): string[] {
+  return [...new Set(verified.granted_scopes)].sort();
+}
+
+function stateVerificationEvidenceSha256(verified: VerifiedSlackConnection): `sha256:${string}` {
+  return canonicalSha256({
+    connection_verification_evidence_sha256: verified.verification_evidence_sha256,
+    kind: "echo-slack-nango-connection-verification-v1",
+  });
+}
+
 /**
  * Turns a finished Nango install into the organization's Slack connection:
  * created when no connection is active, or reconnected (no write, same state
- * hash) on the exact same Nango connection. Any other active connection
- * refuses the install as already_connected and writes nothing: replacing an
+ * hash) on the exact same Nango connection. That connection now holding
+ * another workspace or bot refuses it as workspace_mismatch; the owner
+ * reconnects to the original one. Any other active connection refuses the
+ * install as already_connected. ECHO writes nothing for either: replacing an
  * organization's connection is out of scope for v1 because it leaves decided
  * approval cards unable to restart. A connection stored before in-app setup
  * refuses it too, with the replace-rehearsal message.
@@ -133,15 +149,18 @@ export async function activateNangoSlackConnectionV1(
   assertSlackConnectionMetadataV1(input.database, input);
   const verified = await verifyInstall(input);
   const before = readActiveSlackConnectionV1(input.database);
-  if (before !== undefined && isSameNangoConnection(before, input, verified)) {
+  if (before !== undefined) {
+    if (!namesActiveNangoConnection(before, input)) {
+      throw new SlackConnectionRefusedErrorV1("already_connected");
+    }
+    if (!sameProviderIdentity(before.connection, verified)) {
+      throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
+    }
     return Object.freeze({
       kind: "reconnected",
       connection: before.connection,
       state: before.state,
     });
-  }
-  if (before !== undefined) {
-    throw new SlackConnectionRefusedErrorV1("already_connected");
   }
 
   const now = input.now();
@@ -175,12 +194,9 @@ export async function activateNangoSlackConnectionV1(
       connection_contract_sha256: canonicalSha256(connection),
       connection_status: "active",
       credential_reference_sha256: canonicalSha256(bundle),
-      observed_granted_scopes: [...new Set(verified.granted_scopes)].sort(),
+      observed_granted_scopes: observedScopes(verified),
       verification_event_id: `nango_${connection.connection_id}`,
-      verification_evidence_sha256: canonicalSha256({
-        connection_verification_evidence_sha256: verified.verification_evidence_sha256,
-        kind: "echo-slack-nango-connection-verification-v1",
-      }),
+      verification_evidence_sha256: stateVerificationEvidenceSha256(verified),
       verification_revision: 1,
       verified_at: now,
     });
@@ -207,4 +223,59 @@ export async function activateNangoSlackConnectionV1(
     // The pending bundle is orphaned but harmless: nothing reads it without the state's reference.
   }
   return Object.freeze({ kind: "created", connection, state });
+}
+
+export interface RebindNangoSlackConnectionInputV1 extends ActivateNangoSlackConnectionInputV1 {
+  /** The active state, and the Nango connection its bundle named, when Nango no longer had that connection. */
+  readonly rebind: { readonly state_sha256: `sha256:${string}`; readonly nango_connection_id: string };
+}
+
+/**
+ * Points the active connection's credential bundle at a new Nango connection
+ * after Nango lost the one it named; the caller checks the loss. The new
+ * install must reproduce the stored verification evidence and scopes, so it
+ * is the same app, workspace and bot. The bundle must still hold the begin's
+ * app credentials and the lost id, and only that id changes, under the same
+ * handle. The state row is untouched: the state hash and every outstanding
+ * approval card stay valid. Another identity is refused as workspace_mismatch.
+ */
+export async function rebindNangoSlackConnectionV1(
+  input: RebindNangoSlackConnectionInputV1,
+): Promise<ActivatedNangoSlackConnectionV1> {
+  assertSlackConnectionMetadataV1(input.database, input);
+  const verified = await verifyInstall(input);
+  return input.database
+    .transaction((): ActivatedNangoSlackConnectionV1 => {
+      const active = readActiveSlackConnectionV1(input.database);
+      if (active === undefined || active.state_sha256 !== input.rebind.state_sha256) {
+        throw new SlackConnectionConflictError("the active Slack connection changed during activation");
+      }
+      const scopes = observedScopes(verified);
+      if (
+        !sameProviderIdentity(active.connection, verified) ||
+        stateVerificationEvidenceSha256(verified) !== active.state.verification_evidence_sha256 ||
+        scopes.length !== active.state.observed_granted_scopes.length ||
+        scopes.some((scope, index) => scope !== active.state.observed_granted_scopes[index])
+      ) {
+        throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
+      }
+      const current = findSlackAppCredentialsByReferenceSha256V1(input.secrets, active.state.credential_reference_sha256);
+      const begun = input.credential;
+      if (
+        current.reference.secret_handle_id !== begun.reference.secret_handle_id ||
+        current.credentials.app_id !== begun.credentials.app_id ||
+        current.credentials.client_id !== begun.credentials.client_id ||
+        current.credentials.client_secret !== begun.credentials.client_secret ||
+        current.credentials.signing_secret !== begun.credentials.signing_secret ||
+        current.credentials.nango_connection_id !== input.rebind.nango_connection_id
+      ) {
+        throw new SlackConnectionConflictError("the Slack credential bundle changed during activation");
+      }
+      input.secrets.replace(
+        current.reference,
+        serializeSlackAppCredentialsV1({ ...current.credentials, nango_connection_id: input.nango.connection_id }),
+      );
+      return Object.freeze({ kind: "reconnected", connection: active.connection, state: active.state });
+    })
+    .immediate();
 }

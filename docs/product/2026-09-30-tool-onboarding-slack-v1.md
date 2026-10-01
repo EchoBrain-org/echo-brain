@@ -258,14 +258,23 @@ No control-plane DDL change; baseline V3 stays.
   on the same connection ID. The bundle, the connection state hash and every
   waiting approval card are unchanged. This is the required proof that
   reconnect preserves outstanding cards.
-- **Different app or workspace: refused in v1** (revision 3). An install that
-  would change the connection fails with "Slack is already connected to a
-  different app or workspace." This avoids the restart failure that replacing a
-  connection causes for organizations with decided cards. Moving an
+- **Different app or workspace: refused in v1** (revision 3). An install of a
+  different app fails with "Slack is already connected to a different app or
+  workspace." A reconnect that lands in another workspace or bot fails as a
+  workspace mismatch, and the owner reconnects choosing the organization's
+  workspace; until then Nango's connection holds the other one, so the
+  connection reads "needs reinstall". This avoids the restart failure that
+  replacing a connection causes for organizations with decided cards. Moving an
   organization to another workspace is designed later if a real need appears.
 - **Lost token** (uninstalled in Slack, or Nango reports a failed refresh). A
   Slack authentication error marks the connection "needs reinstall" in memory,
   and the tools status shows it. The owner's Install then runs a reconnect.
+- **Lost Nango connection** (proposed in
+  [ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md)).
+  A 404 from Nango for the connection marks it "needs reinstall" the same way.
+  The owner's Install then opens a new connection and, if it reproduces the
+  stored verification evidence, rebinds the bundle's Nango connection ID under
+  the same handle. The state hash and every waiting card are unchanged.
 
 ### 5.6 Using the bot token
 
@@ -275,8 +284,8 @@ No control-plane DDL change; baseline V3 stays.
 - On a Slack authentication error the Authority re-reads the connection from
   Nango once, past its cache but without `force_refresh` (rotation is off, so
   only a reconnect brings a new token), then marks the connection "needs
-  reinstall". A Nango connection that no longer matches the active one is
-  marked the same way.
+  reinstall". A Nango connection that no longer matches the active one, or a
+  404 for it, is marked the same way.
 - The Authority calls Slack directly with the fetched token, not through the
   Nango proxy, so ECHO's existing Slack clients and checks stay unchanged.
 

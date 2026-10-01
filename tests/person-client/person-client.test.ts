@@ -1307,12 +1307,13 @@ describe("Person client", () => {
         await installFixtureSession(home);
         const noToken = () => { throw new Error("reconnect must not read a token"); };
         const refused = await runTools(home, ["tools", "setup", "--tool", "slack", "--reconnect"], {
-          read_input: noToken, statuses: [installStatus("failed", { failure_reason: "already_connected" })],
+          read_input: noToken, statuses: [installStatus("failed", { failure_reason: "workspace_mismatch" })],
         });
         expect(refused.code).toBe(1);
         expect(refused.paths).toEqual(["/v2/organization/tools/slack/install/begin", "/v2/organization/tools/slack/install/status"]);
         expect(JSON.parse(refused.stderr)).toEqual({ ok: false, action: "tools-setup",
-          error: "Slack is already connected to a different app or workspace.", reason: "already_connected" });
+          error: "The install did not match this organization's Slack app and workspace. Run setup again with --reconnect and choose the organization's workspace.",
+          reason: "workspace_mismatch" });
 
         const started = await runTools(home, ["tools", "setup", "--tool", "slack", "--reconnect", "--no-wait"], { read_input: noToken });
         expect(started.code, started.stderr).toBe(0);

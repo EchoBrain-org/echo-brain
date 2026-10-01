@@ -44,7 +44,8 @@ type Bot = { readonly team_id: string; readonly app_id: string; readonly bot_id:
 const ECHO_BOT: Bot = { team_id: "T0PROOF", app_id: APP.app_id, bot_id: "B0PROOF", bot_user_id: "U0PROOFBOT" };
 const OWNER_SLACK = "U0OWNER";
 const EMPLOYEE_SLACK = "U0EMPLOYEE";
-const TOKENS = { first: "xoxb-proof-first-0001", rotated: "xoxb-proof-rotated-0002", other: "xoxb-proof-other-0003", reinstalled: "xoxb-proof-reinstalled-0004" };
+const TOKENS = { first: "xoxb-proof-first-0001", rotated: "xoxb-proof-rotated-0002", other: "xoxb-proof-other-0003", reinstalled: "xoxb-proof-reinstalled-0004",
+  recovered: "xoxb-proof-recovered-0005", rebound: "xoxb-proof-rebound-0006" };
 const SCOPES = SLACK_PRIVATE_APP_BOT_SCOPES_V1.join(",");
 
 type Message = { type: "message"; channel: string; ts: string; text: string; blocks: Record<string, any>[]; user: string; thread_ts?: string; bot_id?: string; app_id?: string };
@@ -105,6 +106,7 @@ function fakeNango(slack: ReturnType<typeof fakeSlack>) {
   const sessions: { tags: Record<string, string>; reconnect_connection_id: string | null }[] = [];
   let connection: { connection_id: string; tags: Record<string, string>; updated_at: string; credentials: Record<string, unknown> } | undefined;
   let revision = 0;
+  let created = 0;
   async function handle(request: Request): Promise<Response> {
     expect(request.headers.get("authorization")).toBe(`Bearer ${NANGO_KEY}`);
     const url = new URL(request.url);
@@ -120,7 +122,9 @@ function fakeNango(slack: ReturnType<typeof fakeSlack>) {
       const [, key, value] = /^tags\[([^\]]+)\]=(.+)$/.exec(decodeURIComponent(url.search.slice(1)))!;
       return Response.json({ connections: connection?.tags[key!] === value ? [{ connection_id: connection!.connection_id }] : [] });
     }
-    expect([url.pathname, url.searchParams.get("provider_config_key")]).toEqual([`/connections/${connection!.connection_id}`, "slack"]);
+    expect(url.searchParams.get("provider_config_key")).toBe("slack");
+    // Spike-sensitive: Nango answers 404 for a connection id it does not have.
+    if (url.pathname !== `/connections/${connection?.connection_id}`) return new Response(null, { status: 404 });
     return Response.json({ ...connection, provider_config_key: "slack", provider: "slack" });
   }
   /** The owner approves Slack's install page for the latest session; Slack issues `token`, revoking any earlier one. */
@@ -129,12 +133,19 @@ function fakeNango(slack: ReturnType<typeof fakeSlack>) {
     if (session.reconnect_connection_id !== null) expect(session.reconnect_connection_id).toBe(connection!.connection_id);
     for (const [held, holder] of slack.tokens) if (holder.team_id === bot.team_id) slack.tokens.delete(held);
     slack.tokens.set(token, bot);
-    connection = { connection_id: connection?.connection_id ?? "nango-proof-connection", tags: session.tags,
+    // A reconnect session keeps its connection; a connect session creates another.
+    const connection_id = session.reconnect_connection_id ?? `nango-proof-connection${++created === 1 ? "" : `-${created}`}`;
+    connection = { connection_id, tags: session.tags,
       updated_at: new Date(Date.parse(NOW) + ++revision * 60_000).toISOString(),
       credentials: { type: "OAUTH2", access_token: token, raw: { ok: true, app_id: bot.app_id, authed_user: { id: OWNER_SLACK }, scope: SCOPES, token_type: "bot",
         access_token: token, bot_user_id: bot.bot_user_id, team: { id: bot.team_id, name: "Proof" }, enterprise: null, is_enterprise_install: false } } };
   }
-  return { handle, finishConnect, sessions };
+  /** Nango no longer has the connection (deleted from its dashboard, say) and its token is revoked. */
+  function lose() {
+    slack.tokens.delete((connection!.credentials as { access_token: string }).access_token);
+    connection = undefined;
+  }
+  return { handle, finishConnect, lose, sessions };
 }
 
 class TestOidcProvider implements PersonSessionOidcAuthorizationProvider {
@@ -231,7 +242,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-it("sets up, connects, links, approves, reconnects and restarts Slack through Nango, then refuses a different workspace or bot", async () => {
+it("sets up, connects, links, approves, reconnects and restarts Slack through Nango, refuses a different workspace or bot, and recovers a lost connection", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-nango-proof-")));
   chmodSync(root, 0o700);
   roots.push(root);
@@ -398,24 +409,62 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
     expect(slack.calls.filter((entry) => entry.method === "chat.postMessage").at(-1)).toEqual({ method: "chat.postMessage", token: TOKENS.rotated });
     expect(count(control, "organization_private_approval_denied_action_receipts_v2")).toBe(0);
 
-    // 11. An install that lands in a different workspace is refused, and nothing changes.
+    // 11. A reconnect that lands in a different workspace is refused and ECHO writes nothing. Nango's
+    // connection now holds that workspace, so the owner sees needs_reinstall at once.
     const secrets = readdirSync(join(state, "secrets")).sort();
     const refused = await install({ ...ECHO_BOT, team_id: "T0OTHER", bot_id: "B0OTHER", bot_user_id: "U0OTHERBOT" }, TOKENS.other);
-    expect(refused).toMatchObject({ status: "failed", failure_reason: "already_connected", result: null });
+    expect(refused).toMatchObject({ status: "failed", failure_reason: "workspace_mismatch", result: null });
     expect(connectionState()).toEqual(before);
     expect(readdirSync(join(state, "secrets")).sort()).toEqual(secrets);
-    expect(await slackTool(owner)).toMatchObject({ personal_status: "linked", organization_setup: "connected" });
+    expect(await slackTool(owner)).toMatchObject({ personal_status: "linked", organization_setup: "needs_reinstall" });
     expect(errors).toEqual([]);
 
-    // 12. A reconnect that comes back with a different bot user is refused too, and Slack revoked the
-    // old token: the next card's Slack call re-reads Nango, finds the drift, and the owner sees needs_reinstall.
-    expect(await install({ ...ECHO_BOT, bot_user_id: "U0NEWBOT" }, TOKENS.reinstalled)).toMatchObject({ status: "failed", failure_reason: "already_connected" });
-    meetings.release(1);
-    for (let poll = 0; poll < 500 && (await slackTool(owner)).organization_setup === "connected"; poll += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    // 12. A reconnect that comes back with a different bot user is refused too; Slack revoked the old token.
+    expect(await install({ ...ECHO_BOT, bot_user_id: "U0NEWBOT" }, TOKENS.reinstalled)).toMatchObject({ status: "failed", failure_reason: "workspace_mismatch" });
     expect(await slackTool(owner)).toMatchObject({ organization_setup: "needs_reinstall" });
     expect(connectionState()).toEqual(before);
-    // The worker reports only Slack's refusal of the revoked token.
-    expect(errors.every((error) => (error as { providerError?: string }).providerError === "invalid_auth")).toBe(true);
+
+    // 13. The owner reconnects to the original workspace and bot: the state hash is unchanged, and
+    // the next card's Slack call meets the revoked cached token and succeeds on the one Nango now holds.
+    expect(await install(ECHO_BOT, TOKENS.recovered)).toMatchObject({ status: "complete", result: { kind: "reconnected", workspace_id: ECHO_BOT.team_id } });
+    expect(connectionState()).toEqual(before);
+    expect(await slackTool(owner)).toMatchObject({ organization_setup: "connected" });
+    meetings.release(1);
+    await waitFor(() => slack.waitingCards().length === 2, "fifth card", errors);
+    const fifth = slack.waitingCards()[1]!;
+    expect(slack.calls.filter((entry) => entry.method === "chat.postMessage").at(-1)).toEqual({ method: "chat.postMessage", token: TOKENS.recovered });
+
+    // 14. Nango loses the connection and its token is revoked. The owner approves the fifth card and
+    // its record is appended, but the card's update re-reads Nango, gets a 404, and the owner sees
+    // needs_reinstall. The update waits quietly; the worker reports no error.
+    nango.lose();
+    expect((await fetch(`${origin()}/v2/integrations/slack/interactions`, { method: "POST", ...signedApproval(fifth) })).status).toBe(200);
+    await waitFor(() => count(record, "organization_record_log") === 4, "the fifth card's record", errors);
+    for (let poll = 0; poll < 500 && (await slackTool(owner)).organization_setup === "connected"; poll += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(await slackTool(owner)).toMatchObject({ organization_setup: "needs_reinstall" });
+    expect(slack.waitingCards()).toContain(fifth);
+
+    // 15. The owner's next Install finds the connection gone and opens a connect session with its own
+    // attempt's tags. The new connection proves the same app, workspace and bot, so the bundle is
+    // pointed at it under the same handle; the state hash is unchanged, and the fifth card's update
+    // succeeds with the new connection's token.
+    expect(await install(ECHO_BOT, TOKENS.rebound)).toMatchObject({ status: "complete", result: { kind: "reconnected", workspace_id: ECHO_BOT.team_id } });
+    expect(nango.sessions.at(-1)).toMatchObject({ reconnect_connection_id: null, tags: { echo_organization_id: initialized.organization_id } });
+    expect(connectionState()).toEqual(before);
+    expect(readdirSync(join(state, "secrets")).sort()).toEqual(secrets);
+    expect(await slackTool(owner)).toMatchObject({ organization_setup: "connected" });
+    await waitFor(() => !slack.waitingCards().includes(fifth), "the fifth card's update", errors);
+    expect(slack.calls.filter((entry) => entry.method === "chat.update").at(-1)).toEqual({ method: "chat.update", token: TOKENS.rebound });
+
+    // 16. Restart: every outstanding card still belongs to the unchanged connection, and the fourth
+    // card, staged before the rebind, approves with the token read from the new Nango connection.
+    await runtime.close();
+    runtime = await active();
+    expect(runtime.processing).toBe("active");
+    await approve(slack.waitingCards()[0]!, 5);
+    expect(slack.calls.filter((entry) => entry.method === "chat.update").at(-1)).toEqual({ method: "chat.update", token: TOKENS.rebound });
+    expect(count(control, "organization_private_approval_denied_action_receipts_v2")).toBe(0);
+    expect(errors).toEqual([]);
     for (const name of readdirSync(state).filter((file) => file.includes(".sqlite"))) {
       const bytes = readFileSync(join(state, name)).toString("latin1");
       for (const secret of [CONFIGURATION_TOKEN, NANGO_KEY, APP.client_secret, APP.signing_secret, ...Object.values(TOKENS)]) expect(bytes, name).not.toContain(secret);

@@ -157,7 +157,8 @@ V3 or shared-channel rehearsal state directory, database, or approval binding.
 
 The CLI equivalent of the app's Set up step is `person tools setup --tool slack`.
 Add `--reconnect` to resume an unfinished install, or reconnect after Slack was
-uninstalled, without a new setup token.
+uninstalled, after Nango lost the connection, or after an install landed in
+another workspace, without a new setup token.
 
 ### Slack sign-in for the person link
 

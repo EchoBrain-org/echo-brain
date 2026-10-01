@@ -9,6 +9,8 @@ export interface OrganizationSecretReference {
 export interface OrganizationSecretStore {
   create(secret: string): OrganizationSecretReference;
   read(reference: OrganizationSecretReference): string;
+  /** Replaces an existing secret's bytes under the same handle. */
+  replace(reference: OrganizationSecretReference, secret: string): void;
   listReferences(): readonly OrganizationSecretReference[];
   remove(reference: OrganizationSecretReference): void;
 }

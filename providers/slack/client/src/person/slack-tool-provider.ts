@@ -27,7 +27,7 @@ const INSTALL_FAILURES = {
   provider_rejected: 'Slack refused the install. Try again.',
   provider_unavailable: 'Slack setup is unavailable right now. Try again.',
   permissions_missing: 'The install did not grant the permissions ECHO needs. Try again.',
-  workspace_mismatch: "The install did not match this organization's ECHO app. Try again.",
+  workspace_mismatch: "The install did not match this organization's Slack app and workspace. Run setup again with --reconnect and choose the organization's workspace.",
   already_connected: 'Slack is already connected to a different app or workspace.',
 };
 const SIGN_IN_FAILURES = {

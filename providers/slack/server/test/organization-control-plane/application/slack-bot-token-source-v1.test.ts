@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
 import { FileOrganizationSecretStore } from "../../../../../../packages/organization-control-plane/src/security/file-secret-store.js";
-import type { NangoConnectionClientV1, NangoSlackConnectionV1 } from "../../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
+import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
 import { serializeSlackAppCredentialsV1 } from "../../../src/organization-control-plane/application/slack-app-credentials-v1.js";
 import { createSlackBotTokenSourceV1, withSlackBotTokenV1 } from "../../../src/organization-control-plane/application/slack-bot-token-source-v1.js";
 import { SlackConnectionHealthV1 } from "../../../src/organization-control-plane/application/slack-connection-health-v1.js";
@@ -95,6 +95,42 @@ describe("Slack bot-token source V1", () => {
     }
     expect(health.needsReinstall(connection.state_sha256)).toBe(false);
   });
+
+  it("marks the state when Nango no longer has its connection, and not when Nango is down or refuses the key", async () => {
+    const secrets = secretStore();
+    const connection = nangoConnection(secrets);
+    for (const [code, marked] of [["not_found", true], ["unavailable", false], ["unauthorized", false]] as const) {
+      const health = new SlackConnectionHealthV1();
+      const nango = nangoFake();
+      nango.getSlackConnection.mockRejectedValueOnce(new NangoClientErrorV1(code, "Nango answered"));
+      await expect(createSlackBotTokenSourceV1({ secrets, nango, health }).botToken(connection)).rejects.toMatchObject({ code });
+      expect(health.needsReinstall(connection.state_sha256)).toBe(marked);
+    }
+  });
+
+  it("drops a mark from a Nango read that an install overtook", async () => {
+    const secrets = secretStore();
+    const connection = nangoConnection(secrets);
+    const health = new SlackConnectionHealthV1();
+    const nango = nangoFake();
+    const source = createSlackBotTokenSourceV1({ secrets, nango, health });
+    type Settle = { resolve: (value: NangoSlackConnectionV1) => void; reject: (error: Error) => void };
+    const answers: ReadonlyArray<(settle: Settle) => void> = [
+      (settle) => settle.reject(new NangoClientErrorV1("not_found", "Nango connection was not found")),
+      (settle) => settle.resolve({ connection_id: "nango-conn-1", tags: {}, team_id: "T0TEAM", app_id: "A0APP1", bot_user_id: "U0OTHER",
+        granted_scopes: [], bot_token: "xoxb-other", updated_at: "2026-09-30T00:00:00.000Z" }),
+    ];
+    for (const answer of answers) {
+      let settle!: Settle;
+      nango.getSlackConnection.mockImplementationOnce(() => new Promise((resolve, reject) => { settle = { resolve, reject }; }));
+      const read = source.botToken(connection, { force_refresh: true });
+      // A reconnect or rebind finished while the read waited on Nango.
+      health.clear();
+      answer(settle);
+      await expect(read).rejects.toThrow();
+      expect(health.needsReinstall(connection.state_sha256)).toBe(false);
+    }
+  });
 });
 
 describe("Slack bot-token auth-failure rule", () => {
@@ -184,13 +220,18 @@ describe("Slack bot-token auth-failure rule", () => {
 });
 
 describe("Slack connection health V1", () => {
-  it("marks a state as needing reinstall until cleared", () => {
+  it("marks a state as needing reinstall until cleared, dropping a mark taken before the clear", () => {
     const health = new SlackConnectionHealthV1();
     expect(health.needsReinstall(undefined)).toBe(false);
     health.markNeedsReinstall("sha256:state-a");
     expect(health.needsReinstall("sha256:state-a")).toBe(true);
     expect(health.needsReinstall("sha256:state-b")).toBe(false);
+    const before = health.generation();
     health.clear();
     expect(health.needsReinstall("sha256:state-a")).toBe(false);
+    health.markNeedsReinstall("sha256:state-a", before);
+    expect(health.needsReinstall("sha256:state-a")).toBe(false);
+    health.markNeedsReinstall("sha256:state-a", health.generation());
+    expect(health.needsReinstall("sha256:state-a")).toBe(true);
   });
 });
