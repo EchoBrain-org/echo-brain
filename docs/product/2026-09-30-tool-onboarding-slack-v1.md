@@ -194,32 +194,52 @@ connection revision:
 
 ### 5.4 Connection record
 
-Connection contracts are immutable and hashed, so dropping the channel and the
-reaction fields means a new contract version and a new control-plane baseline
-([`organization-control-plane-baseline-v3.sql`](../../packages/organization-control-plane/baselines/organization-control-plane-baseline-v3.sql)).
+Adjusted 2026-09-30 after mapping the code (founder approved). No
+control-plane DDL changes, so baseline V3
+([`organization-control-plane-baseline-v3.sql`](../../packages/organization-control-plane/baselines/organization-control-plane-baseline-v3.sql))
+stays as it is.
 
-The new contract:
-- drops `approval_channel_id`, `approval_adapter_id` (`slack-reactions`) and
-  the approve/reject reaction names from the public configuration hash, and
-  `channel_verification_evidence_sha256` from the state;
-- adds the Slack app ID and reference hashes for the stored client secret and
-  signing secret;
-- adds a `needs_reinstall` current state beside `active` and `revoked`.
+- **Contract shape unchanged.** The contract keeps `echo-organization-tool-connection-v2`.
+  `required_provider_scopes` becomes the four recipe permissions.
+  `public_connection_configuration_sha256` hashes a new channel-free
+  configuration kind, `echo-slack-private-app-public-configuration-v1`,
+  instead of the channel and reaction configuration.
+- **Credential.** The state's single `credential_reference_sha256` points at
+  one private secret holding the app credential bundle: bot token, client ID,
+  client secret and signing secret. SQLite keeps only the reference hash, as
+  today.
+- **Health is not stored.** "Needs reinstall" is detected live (5.5). Storing it
+  would need a DDL change.
+- **Compatibility gate.** Connections made by the old bot-token-and-channel
+  path no longer validate. The gate is the new setup manifest version (section
+  7), so staging needs a fresh setup through `replace-rehearsal`.
 
-SQLite keeps only reference hashes, as today. The DM code fallback stops
-re-verifying a channel.
+The DM code fallback stops re-verifying a channel.
 
 ### 5.5 Replacing or losing the connection
 
-- **Same workspace:** the old connection is retired and the new one activated.
-  Person links are keyed by workspace and stay valid. Approval cards still
-  waiting are re-sent from the new app. Today they would fail as
-  `state_drift`, so this needs its own test.
-- **Different workspace:** requires an explicit confirmation, revokes every
-  person link, and people reconnect with one click.
-- **Uninstalled or revoked in Slack:** the first Slack call failing with an
-  authentication-class error marks the connection `needs_reinstall`. Cards wait
-  and are re-sent after reinstall. Today nothing detects this.
+Adjusted 2026-09-30 (founder approved). Pending approval records in both the
+Authority and control-plane databases are immutable and bound to the exact
+connection state they were sent under. The private-approval runtime refuses to
+start if an outstanding card belongs to a connection that is no longer current.
+Re-sending cards would need a new mechanism across both databases, so this
+version avoids needing it:
+
+- **Same app, updated or reinstalled**, including after an uninstall in Slack:
+  the Authority replaces the stored credential bundle in place, under the same
+  secret reference. The connection, its state hash and waiting cards are
+  unchanged, so nothing needs re-sending.
+- **Different app or workspace:**
+  - allowed only while no approval card is outstanding under the current
+    connection, and only with an explicit confirmation;
+  - the old connection is revoked;
+  - a different workspace also revokes every person link, and people reconnect
+    with one click;
+  - if cards are waiting, the refusal says how many.
+- **Uninstalled or revoked in Slack:** a Slack call failing with an
+  authentication-class error marks the connection "needs reinstall" in memory,
+  and the tools status shows it. After a restart it is detected again on the
+  next failing call. Cards wait and go out after the same-app reinstall.
 
 ### 5.6 Person tools contract
 
@@ -309,8 +329,12 @@ Known weaknesses kept for this version:
   - the callback alone cannot connect;
   - only the same owner session commits;
   - single in-flight setup;
-  - same- and different-workspace replacement, including re-sent waiting cards;
-  - `needs_reinstall` detection;
+  - same-app reinstall replaces the credential in place and a waiting card still
+    resolves;
+  - different app or workspace refused while a card is outstanding, allowed
+    with confirmation otherwise;
+  - a different workspace revokes person links;
+  - live needs-reinstall detection;
   - connect-then-card-posts without a restart, with the interaction signature
     verified by the stored signing secret.
 - **CLI:** setup token accepted only on standard input; retired commands
@@ -327,9 +351,11 @@ Known weaknesses kept for this version:
 
 ## 10. Size
 
-Rough estimate:
-- **Authority:** about 600–800 production lines.
-- **Desktop and CLI:** about 300 lines.
+Revised 2026-09-30 after mapping: about 1,200–1,500 production lines changed
+across the branch, much of it deletions, with tests at a similar scale.
+
+- **Authority and Slack provider:** about 600–800 lines.
+- **Desktop and CLI:** about 300–400 lines.
 - **Host setup:** net deletions, from the stopped-state Slack CLI, the
   Slack inputs and `configure-slack-browser`.
 
