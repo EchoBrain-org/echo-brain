@@ -19,6 +19,8 @@ interface BrowserAttempt {
   readonly request_id: string;
   readonly session: PersonSlackIdentityLinkSession;
   readonly organization_tool: ActiveSlackOrganizationTool;
+  /** The provider that built the authorization URL also verifies its callback. */
+  readonly provider: SlackBrowserIdentityProvider;
   readonly state: string;
   readonly nonce: string;
   readonly code_verifier: string;
@@ -40,7 +42,8 @@ export interface SlackPersonBrowserIdentityLinkWorkflowOptionsV1 {
   readonly authentication: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   readonly repository: Pick<SqliteSlackPersonIdentityLinkRepositoryV1,
     "activeSlackOrganizationTool" | "completeBrowserSlackIdentityLink">;
-  readonly browser_provider: SlackBrowserIdentityProvider;
+  /** Built per active connection from the connected app's own client in its credential bundle. */
+  readonly browser_provider: (tool: ActiveSlackOrganizationTool) => SlackBrowserIdentityProvider;
   readonly now?: () => string;
 }
 
@@ -124,10 +127,13 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       const nonce = randomSecret();
       const codeVerifier = randomSecret();
       const expiresAt = new Date(Date.parse(this.now()) + ATTEMPT_LIFETIME_MS).toISOString();
+      let provider: SlackBrowserIdentityProvider;
       let authorizationUrl: string;
-      try { authorizationUrl = this.options.browser_provider.authorizationUrl({ state, nonce, workspace_id: tool.team_id, code_verifier: codeVerifier }); }
-      catch { throw new AuthorityOperationError("unavailable", "Slack connection is temporarily unavailable"); }
-      const attempt: BrowserAttempt = { attempt_id: attemptId, request_id: request.request_id, session, organization_tool: tool,
+      try {
+        provider = this.options.browser_provider(tool);
+        authorizationUrl = provider.authorizationUrl({ state, nonce, workspace_id: tool.team_id, code_verifier: codeVerifier });
+      } catch { throw new AuthorityOperationError("unavailable", "Slack connection is temporarily unavailable"); }
+      const attempt: BrowserAttempt = { attempt_id: attemptId, request_id: request.request_id, session, organization_tool: tool, provider,
         state, nonce, code_verifier: codeVerifier, authorization_url: authorizationUrl, expires_at: expiresAt,
         created_at: this.now(), status: "pending", failure_reason: null, proof: null };
       this.attempts.set(attemptId, attempt);
@@ -182,7 +188,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
     });
   }
 
-  /** Called synchronously under the legacy workflow's disconnect write fence. */
+  /** Called synchronously under the DM workflow's disconnect write fence. */
   invalidateMembership(membershipId: string): void {
     for (const attempt of this.attempts.values()) {
       if (attempt.session.membership_id === membershipId && attempt.status === "pending") {
@@ -206,7 +212,7 @@ export class SlackPersonBrowserIdentityLinkWorkflowV1 {
       // exchange an authorization code or overwrite the proof.
       this.attemptByState.delete(state);
       try {
-        const proof = await this.options.browser_provider.verifyCallback({ parameters, expectedState: attempt.state, expectedNonce: attempt.nonce,
+        const proof = await attempt.provider.verifyCallback({ parameters, expectedState: attempt.state, expectedNonce: attempt.nonce,
           workspace_id: attempt.organization_tool.team_id, code_verifier: attempt.code_verifier });
         if (attempt.status !== "pending" || this.now() >= attempt.expires_at) {
           this.expireAttempt(attempt, this.now());

@@ -5,11 +5,12 @@ import {
 } from "@echo-brain/federation-protocol";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256, validateOrganizationPersonSlackIdentityLinkBeginRequest, validateOrganizationPersonSlackIdentityLinkBeginResponse, validateOrganizationPersonSlackIdentityLinkCompleteRequest, validateOrganizationPersonSlackIdentityLinkResult, type OrganizationPersonSlackIdentityLinkBeginRequestV2, type OrganizationPersonSlackIdentityLinkBeginResponseV2, type OrganizationPersonSlackIdentityLinkCompleteRequestV2, type OrganizationPersonSlackIdentityLinkResultV2 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { validateOrganizationPersonTools, type OrganizationPersonToolV2, validateOrganizationPersonSlackDisconnectRequest } from "@echo-brain/provider-slack-client/organization-api/person-tools";
-import type { OrganizationSecretStore } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
+import type { OrganizationSecretReference } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
+import { withSlackBotTokenV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
 import type { ActiveSlackOrganizationTool, BeginPersonSlackIdentityLinkChallengeInput, BegunSlackIdentityLinkChallenge, CompletePersonSlackIdentityLinkChallengeInput, CompletedPersonSlackIdentityLink, PendingPersonSlackIdentityLinkChallenge } from "../organization-control-plane/application/slack-integration-contracts.js";
 import type { SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
-import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../organization-control-plane/application/slack-integration-contracts.js";
-import { SlackIdentityProviderErrorV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
+import { isSlackIdentityTokenRejectedV1, SlackIdentityProviderErrorV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { ReadableSearchAuthorizationFence } from "@echo-brain/organization-authority-kernel/application/readable-search-authorization-fence";
@@ -86,7 +87,17 @@ export interface SlackPersonIdentityLinkWorkflowOptionsV1 {
   readonly organization_id: string;
   readonly authentication: SlackPersonIdentityLinkAuthenticationPort;
   readonly repository: SlackPersonIdentityLinkRepositoryPort;
-  readonly secrets: OrganizationSecretStore;
+  /** Reads the active tool's bot token per use; a plain secret store also fits. */
+  readonly secrets: {
+    read(
+      reference: OrganizationSecretReference,
+      options?: { readonly force_refresh?: boolean },
+    ): string | Promise<string>;
+    /** Slack kept rejecting the token for `reference` after one refresh. */
+    reportRejected?(reference: OrganizationSecretReference): void;
+    /** True while `reference`'s connection is marked "needs reinstall". */
+    isRejected?(reference: OrganizationSecretReference): boolean;
+  };
   readonly slack: SlackIdentityProviderV1;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
   /** Synchronous invalidation of ephemeral provider proof held by this runtime. */
@@ -212,7 +223,7 @@ function repositoryOperation<T>(operation: () => T): T {
  * `application/` would weaken the Authority's inward dependency boundary.
  */
 export class SlackPersonIdentityLinkWorkflowV1 {
-  /** Fences legacy provider work that started before a local disconnect. */
+  /** Fences DM-proof provider work that started before a local disconnect. */
   private readonly disconnect_generation_by_membership = new Map<string, number>();
 
   constructor(
@@ -328,8 +339,12 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         expires_at: earlyReplay.expires_at,
       });
     }
-    const token = this.readToolSecret(activeTool);
-    const verified = await this.verifyTool(token, activeTool, signal);
+    const verified = await this.verifyTool(
+      await this.readToolSecret(activeTool),
+      activeTool,
+      signal,
+    );
+    const token = verified.token;
     let destination: { team_id: string; channel_id: string; recipient_user_id: string };
     try {
       if (this.options.slack.openIdentityLinkDirectMessage === undefined) throw new Error("DM delivery unavailable");
@@ -529,29 +544,32 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         now: before.checked_at,
       }),
     );
-    const token = this.readToolSecret(activeTool);
+    let token = await this.readToolSecret(activeTool);
     let observed: Awaited<
       ReturnType<SlackIdentityProviderV1["observeIdentityLinkChallenge"]>
     >;
     try {
-      observed = await this.options.slack.observeIdentityLinkChallenge(
-        token,
-        {
-          expected_team_id: activeTool.team_id,
-          expected_enterprise_id: activeTool.enterprise_id,
-          expected_bot_user_id: activeTool.bot_user_id,
-          expected_bot_id: activeTool.bot_id,
-          expected_app_id: activeTool.app_id,
-          challenge_attempt_id: request.challenge_attempt_id,
-          channel_id: challenge.channel_id,
-          recipient_user_id: challenge.recipient_user_id,
-          challenge_message_ts: request.challenge_message_ts,
-          challenge_code: request.challenge_code,
-          issued_at: challenge.created_at,
-          expires_at: challenge.expires_at,
-        },
-        signal,
-      );
+      ({ token, observed } = await this.withToolToken(activeTool, token, async (current) => ({
+        token: current,
+        observed: await this.options.slack.observeIdentityLinkChallenge(
+          current,
+          {
+            expected_team_id: activeTool.team_id,
+            expected_enterprise_id: activeTool.enterprise_id,
+            expected_bot_user_id: activeTool.bot_user_id,
+            expected_bot_id: activeTool.bot_id,
+            expected_app_id: activeTool.app_id,
+            challenge_attempt_id: request.challenge_attempt_id,
+            channel_id: challenge.channel_id,
+            recipient_user_id: challenge.recipient_user_id,
+            challenge_message_ts: request.challenge_message_ts,
+            challenge_code: request.challenge_code,
+            issued_at: challenge.created_at,
+            expires_at: challenge.expires_at,
+          },
+          signal,
+        ),
+      })));
     } catch (error) {
       providerFailure(error);
     }
@@ -668,9 +686,12 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     return tool;
   }
 
-  private readToolSecret(tool: ActiveSlackOrganizationTool): string {
+  private async readToolSecret(
+    tool: ActiveSlackOrganizationTool,
+    options?: { readonly force_refresh?: boolean },
+  ): Promise<string> {
     try {
-      return this.options.secrets.read(tool.secret);
+      return await this.options.secrets.read(tool.secret, options);
     } catch {
       throw new AuthorityOperationError(
         "unavailable",
@@ -679,36 +700,53 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     }
   }
 
+  /** A flow's first Slack call, under the shared rejected-token rule. */
+  private withToolToken<T>(
+    tool: ActiveSlackOrganizationTool,
+    token: string,
+    operation: (token: string) => Promise<T>,
+  ): Promise<T> {
+    return withSlackBotTokenV1(
+      {
+        token: async (options) =>
+          options?.force_refresh === true
+            ? await this.readToolSecret(tool, options)
+            : token,
+        is_auth_failure: isSlackIdentityTokenRejectedV1,
+        on_auth_failure: () => this.options.secrets.reportRejected?.(tool.secret),
+        needs_reinstall: () => this.options.secrets.isRejected?.(tool.secret) === true,
+      },
+      operation,
+    );
+  }
+
   private async verifyTool(
     token: string,
     tool: ActiveSlackOrganizationTool,
     signal?: AbortSignal,
   ): Promise<{
+    token: string;
     connection: Awaited<
       ReturnType<SlackIdentityProviderV1["verifyConnection"]>
     >;
-    channel: Awaited<ReturnType<SlackIdentityProviderV1["verifyChannel"]>>;
   }> {
     try {
-      const connection = await this.options.slack.verifyConnection(
-        token,
-        signal,
-      );
-      for (const required of SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES) {
-        if (!connection.granted_scopes.includes(required)) {
-          throw new AuthorityOperationError(
-            "invalid_request",
-            `Slack bot token is missing required scope ${required}`,
-          );
+      return await this.withToolToken(tool, token, async (current) => {
+        const connection = await this.options.slack.verifyConnection(
+          current,
+          signal,
+        );
+        for (const required of SLACK_PRIVATE_APP_BOT_SCOPES_V1) {
+          if (!connection.granted_scopes.includes(required)) {
+            throw new AuthorityOperationError(
+              "invalid_request",
+              `Slack bot token is missing required scope ${required}`,
+            );
+          }
         }
-      }
-      const channel = await this.options.slack.verifyChannel(
-        token,
-        tool.channel_id,
-        connection.team_id,
-        signal,
-      );
-      return { connection, channel };
+        // The private DM is the only destination: there is no channel to verify.
+        return { token: current, connection };
+      });
     } catch (error) {
       providerFailure(error);
     }
@@ -720,9 +758,6 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       connection: Awaited<
         ReturnType<SlackIdentityProviderV1["verifyConnection"]>
       >;
-      channel: Awaited<
-        ReturnType<SlackIdentityProviderV1["verifyChannel"]>
-      >;
     },
   ): boolean {
     return (
@@ -730,9 +765,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       verified.connection.enterprise_id === tool.enterprise_id &&
       verified.connection.bot_user_id === tool.bot_user_id &&
       verified.connection.bot_id === tool.bot_id &&
-      verified.connection.app_id === tool.app_id &&
-      verified.channel.team_id === tool.team_id &&
-      verified.channel.channel_id === tool.channel_id
+      verified.connection.app_id === tool.app_id
     );
   }
 

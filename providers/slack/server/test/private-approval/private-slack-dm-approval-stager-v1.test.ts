@@ -427,6 +427,24 @@ describe("private Slack DM approval stager V1", () => {
     expect(openDirectMessage).not.toHaveBeenCalled();
   });
 
+  it("reads a connection resolver for every card, so a new connection is used without a restart", async () => {
+    let connection = "con_1";
+    const resolveTarget = vi.fn((_input: { readonly connection_id: string }) => undefined);
+    const stager = new PrivateSlackDmApprovalStagerV1({
+      authority: { readApprovalDeliveryQuarantine: () => undefined, readCandidateByApprovalId: () => outbox() } as unknown as SqliteAuthorityMeetingProcessingStateV1,
+      authority_database: {} as never, control_plane_database: {} as never,
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => connection,
+      assignments: {} as never, control_plane: {} as never,
+      poster: { openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone: vi.fn() },
+      resolve_reviewer_target: resolveTarget,
+      canonical_sha256: canonicalSha256,
+    });
+    await expect(stager.stage(input)).resolves.toEqual({ kind: "delivery_pending" });
+    connection = "con_2";
+    await expect(stager.stage(input)).resolves.toEqual({ kind: "delivery_pending" });
+    expect(resolveTarget.mock.calls.map(([call]) => call.connection_id)).toEqual(["con_1", "con_2"]);
+  });
+
   it("keeps a frozen delivery pending when Slack defers opening the DM", async () => {
     const assignmentStage = vi.fn();
     const stager = new PrivateSlackDmApprovalStagerV1({

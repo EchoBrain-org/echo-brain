@@ -22,6 +22,8 @@ import { canonicalJsonForTest as canonicalJson } from "../support/test-canonical
 
 const REPO = resolve(import.meta.dirname, "../..");
 const DEPLOYMENT = "deploy/organization-authority";
+// The Nango secret key fixture: a bounded visible-ASCII private credential.
+const NANGO_SECRET_KEY = "nango-secret-key-fixture-must-never-print";
 const fixtureRoots: string[] = [];
 const RUNTIME_PROFILE_FILES = [
   "Caddyfile.clean-v1",
@@ -111,6 +113,7 @@ function preparedStatusFixture() {
   const failedUpMarker = join(root, "failed-first-up");
   const installWaitMarker = join(root, "credential-install-waiting");
   const installReleaseMarker = join(root, "credential-install-release");
+  const finalizedMarker = join(root, "finalized");
   const image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const source = "c".repeat(40);
   const releaseId = "clean-v1-status-test";
@@ -166,8 +169,7 @@ function preparedStatusFixture() {
     "onboard-clean-v1.conf": `runtime_user=${execFileSync("id", ["-un"]).toString().trim()}\nauthority_url=https://authority.example\n`,
     "oidc-config.json": "fixture",
     "oidc-client-secret": "fixture",
-    "slack-bot-token": "fixture",
-    "slack-signing-secret": "fixture",
+    "nango-secret-key": NANGO_SECRET_KEY,
     "granola-credential-source": `grn_${"a".repeat(40)}`,
     "granola-owner-email": "founder@example.com",
     "llm-credential-source": "b".repeat(43),
@@ -197,7 +199,7 @@ printf '%s\\n' "$*" >> ${JSON.stringify(calls)}
 if [[ "$1" == compose && "$2" == version ]]; then exit 0; fi
 if [[ "$1" == compose ]]; then
   case " $* " in
-    *" up -d --no-build --wait --wait-timeout 90 "*|*" up -d --no-build --force-recreate --wait --wait-timeout 90 "*)
+    *" up -d --no-build --wait --wait-timeout 90 "*)
       if [[ "$ECHO_FAKE_FAIL_FIRST_UP" == true && ! -f ${JSON.stringify(failedUpMarker)} ]]; then
         touch ${JSON.stringify(failedUpMarker)}
         exit 1
@@ -219,7 +221,15 @@ if [[ "$1" == compose ]]; then
       printf '%s\\n' '{"ok":true,"credentials_ready":true}'
       exit 0
       ;;
-    *" run "*) printf '%s\\n' "$ECHO_FAKE_SETUP_STATUS"; exit 0 ;;
+    *" finalize "*) touch ${JSON.stringify(finalizedMarker)}; exit 0 ;;
+    *" run "*)
+      if [[ -f ${JSON.stringify(finalizedMarker)} && -n "$ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE" ]]; then
+        printf '%s\\n' "$ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE"
+      else
+        printf '%s\\n' "$ECHO_FAKE_SETUP_STATUS"
+      fi
+      exit 0
+      ;;
     *" ps -q authority "*) printf '%s\\n' fake-authority; exit 0 ;;
     *" ps -q proxy "*) printf '%s\\n' fake-proxy; exit 0 ;;
   esac
@@ -256,7 +266,7 @@ exit 1
   writeFileSync(
     join(bin, "stat"),
     `#!/usr/bin/env bash
-if [[ "$ECHO_FAKE_UNSAFE_SOURCE_OWNER" == true && "$1 $2" == '-c %u' && "$3" == *llm-credential-source ]]; then
+if [[ -n "$ECHO_FAKE_UNSAFE_SOURCE_OWNER" && "$1 $2" == '-c %u' && "$3" == */"$ECHO_FAKE_UNSAFE_SOURCE_OWNER" ]]; then
   printf '%s\\n' 999999
   exit 0
 fi
@@ -292,17 +302,17 @@ exec /usr/bin/install "$@"
     ECHO_FAKE_RUNNING: "true",
     ECHO_FAKE_HEALTH: "healthy",
     ECHO_FAKE_SETUP_STATUS: '{"next_step":"complete"}',
+    ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE: "",
     ECHO_FAKE_FAIL_FIRST_UP: "false",
     ECHO_FAKE_FAIL_REHEARSAL_ARCHIVE: "false",
     ECHO_FAKE_WAIT_DURING_INSTALL: "false",
     ECHO_FAKE_CONTENT_TELEMETRY: "false",
-    ECHO_FAKE_UNSAFE_SOURCE_OWNER: "false",
+    ECHO_FAKE_UNSAFE_SOURCE_OWNER: "",
     ...overrides,
   });
   const run = (
     command:
       | "activate-provider-credentials"
-      | "configure-slack-browser"
       | "replace-rehearsal"
       | "stage-rehearsal-inputs"
       | "prepare-rehearsal"
@@ -367,7 +377,7 @@ function rehearsalInputs(
     owner_email: "founder@example.com",
     runtime_user: execFileSync("id", ["-un"]).toString().trim(),
     schema_version: 1,
-    slack_approval_channel_id: "C0123456789",
+    nango_integration_key: "slack",
   };
   writeFileSync(join(nonsecret, "onboarding.clean-v1.json"), `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
   writeFileSync(join(nonsecret, "release.json"), readFileSync(join(fixture.releaseDir, "current.clean-v1.json")), { mode: 0o600 });
@@ -393,7 +403,7 @@ function configureReusableProviderInputs(
   writeFileSync(
     join(fixture.privateDir, "onboard-clean-v1.conf"),
     readFileSync(join(fixture.privateDir, "onboard-clean-v1.conf"), "utf8") +
-      "owner_email=founder@example.com\nauthority_host=authority-staging.echobrain.org\naws_region=us-west-2\nslack_approval_channel_id=C0123456789\n",
+      "owner_email=founder@example.com\nauthority_host=authority-staging.echobrain.org\naws_region=us-west-2\nnango_integration_key=slack\n",
     { mode: 0o600 },
   );
 }
@@ -431,12 +441,25 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain(
       "activate-provider-credentials) shift; activate_provider_credentials",
     );
+    // Slack is set up in the ECHO app; the host holds only the Nango key.
+    for (const retired of [
+      "configure-slack-browser",
+      "slack-browser-oidc.json",
+      "slack-bot-token",
+      "slack-signing-secret",
+      "slack_approval_channel_id",
+      "slack-approval-channel-id",
+      "Interactivity & Shortcuts",
+    ]) {
+      expect(source).not.toContain(retired);
+    }
+    expect(source).toContain("INPUT_NANGO_SECRET_KEY_NAME='nango-secret-key'");
+    expect(source).toContain('"$PRIVATE_DIR/nango-secret-key"');
+    expect(source).toContain("ECHO_CLEAN_NANGO_INTEGRATION=$input_nango_integration");
+    expect(source).toContain("connect_slack_in_app)");
     expect(source).toContain(
-      "configure-slack-browser) shift; configure_slack_browser",
+      "ACTION: In the ECHO app, an owner opens Connected tools → Slack → Set up and follows the steps.",
     );
-    expect(source).toContain("SLACK_BROWSER_OAUTH_CONFIG_NAME='slack-browser-oidc.json'");
-    expect(source).toContain("validate_slack_browser_oauth_input");
-    expect(source).toContain("--force-recreate --wait --wait-timeout 90");
     expect(source).toContain('redirect: "error"');
     expect(source).toContain(".authority-operation-lock");
     expect(source).toContain("resume) [[ $# -eq 1 ]] || usage; resume");
@@ -453,19 +476,16 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     expect(source).toContain("runtime_profile_matches_prepared_tuple");
     expect(source).toContain("service_uses_accepted_runtime_profile authority");
     expect(source).toContain("service_uses_accepted_runtime_profile proxy");
-    expect(source).toContain("< \"$PRIVATE_DIR/slack-bot-token\"");
-    expect(source).toContain("slack-signing-secret");
-    expect(source).toContain("Interactivity & Shortcuts");
-    expect(deploymentFile("compose.clean-v1.yaml")).toContain(
-      "--slack-signing-secret-file",
+    const compose = deploymentFile("compose.clean-v1.yaml");
+    expect(compose).toContain(
+      "      - --nango-secret-key-file\n      - /echo-clean/private/nango-secret-key\n      - --nango-integration\n" +
+        '      - "${ECHO_CLEAN_NANGO_INTEGRATION:?',
     );
-    expect(deploymentFile("compose.clean-v1.yaml")).toContain(
-      "/echo-clean/private/slack-signing-secret",
-    );
+    expect(compose).not.toMatch(/slack-(signing|bot)/);
     expect(source).toContain("docker image inspect");
     expect(source).toContain("compose_clean pull authority");
     expect(source).toContain('"$SETUP_COMMAND" resume --state-dir /echo-clean/state');
-    expect(source).toContain("status_boolean \"$status_json\" slack_connected");
+    expect(source).not.toContain("< \"$PRIVATE_DIR/");
     expect(source).toContain("require_image_present");
     expect(source).toContain("healthy_authority()");
     expect(source).toContain("authority_uses_accepted_image()");
@@ -624,19 +644,29 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
   });
 
-  it("uses the kit-installed client for the founder Slack handoff", () => {
+  it("hands the owner the in-app Slack setup, then their own Slack connect", () => {
     const fixture = preparedStatusFixture();
     {
-      const result = fixture.run("resume", {
-        ECHO_FAKE_SETUP_STATUS:
-          '{"next_step":"complete_founder_slack_link"}',
+      const setup = fixture.run("resume", {
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"connect_slack_in_app"}',
       });
-
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(
-        '"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person slack-link',
+      expect(setup.status, setup.stderr).toBe(0);
+      expect(setup.stdout).toContain(
+        "ACTION: In the ECHO app, an owner opens Connected tools → Slack → Set up and follows the steps.\n",
       );
-      expect(result.stdout).not.toContain("run echo-brain person slack-link");
+      expect(setup.stdout).toContain('status_json={"next_step":"connect_slack_in_app"}');
+      const calls = readFileSync(fixture.calls, "utf8");
+      expect(calls).toContain(" up -d --no-build --wait --wait-timeout 90");
+      expect(calls).not.toMatch(/ (bootstrap|resume|finalize|credentials-install) /);
+
+      const connect = fixture.run("resume", {
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"complete_founder_slack_link"}',
+      });
+      expect(connect.status, connect.stderr).toBe(0);
+      expect(connect.stdout).toContain(
+        'ACTION: On the initial-owner machine, open the ECHO app: Connected tools → Slack → Connect. Without a browser: "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack --method dm-code --slack-user <U…>.\n',
+      );
+      expect(connect.stdout).not.toContain("slack-link");
     }
   });
 
@@ -695,20 +725,18 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         writeFileSync(join(fixture.releaseDir, "runtime-environments/clean-v1-status-test.env"), bytes);
         mkdirSync(join(fixture.deploy, "clean-data/meetings"), { mode: 0o700 });
       }
-      const finalized = fixture.run("resume", {
-        ECHO_FAKE_SETUP_STATUS: '{"next_step":"run_finalize"}',
-      });
-      expect(finalized.status, finalized.stderr).toBe(0);
-      const finalization = readFileSync(fixture.calls, "utf8").split("\n")
-        .find((line) => line.includes("clean-founder-main.js finalize"));
-      expect(finalization).toContain("finalize --state-dir /echo-clean/state");
-      expect(finalization?.includes("--staging-synthetic-meetings-dir /echo-clean/meetings"))
-        .toBe(synthetic);
-      expect(finalized.stdout.includes("Then create the bounded canary")).toBe(!synthetic);
+      // Finalize needs no human step: resume goes straight on to the ready handoff.
       const waiting = fixture.run("resume", {
-        ECHO_FAKE_SETUP_STATUS: '{"next_step":"ready_to_start"}',
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"run_finalize"}',
+        ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE: '{"next_step":"ready_to_start"}',
       });
       expect(waiting.status, waiting.stderr).toBe(0);
+      const finalizations = readFileSync(fixture.calls, "utf8").split("\n")
+        .filter((line) => line.includes("clean-founder-main.js finalize"));
+      expect(finalizations).toHaveLength(1);
+      expect(finalizations[0]).toContain("finalize --state-dir /echo-clean/state");
+      expect(finalizations[0]?.includes("--staging-synthetic-meetings-dir /echo-clean/meetings"))
+        .toBe(synthetic);
       if (synthetic) {
         expect(waiting.stdout).toContain("Approve the four synthetic meeting cards");
         expect(waiting.stdout).not.toContain("./update-clean-v1.sh canary");
@@ -786,74 +814,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
         "durable-work-must-survive",
       );
-    }
-  });
-
-  it("installs private Slack browser OAuth configuration and reloads the accepted runtime", () => {
-    const fixture = preparedStatusFixture();
-    {
-      const input = join(fixture.root, "slack-browser-oidc.json");
-      const source = '{ "client_id": "1234567890.1234567890", "client_secret": "browser-secret" }';
-      writeFileSync(input, source, { mode: 0o600 });
-      chmodSync(input, 0o600);
-
-      const result = fixture.run("configure-slack-browser", {}, ["--input", input]);
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("slack_browser_configured=true");
-      expect(result.stdout).toContain("authority_restarted=true");
-      const installed = join(fixture.privateDir, "slack-browser-oidc.json");
-      expect(readFileSync(installed, "utf8")).toBe(source);
-      expect(statSync(installed).mode & 0o777).toBe(0o600);
-      expect(result.stdout).not.toContain("browser-secret");
-      expect(result.stderr).not.toContain("browser-secret");
-      expect(readFileSync(fixture.calls, "utf8")).toContain(
-        "up -d --no-build --force-recreate --wait --wait-timeout 90",
-      );
-    }
-  });
-
-  it("refuses malformed Slack browser OAuth input before changing runtime state", () => {
-    const fixture = preparedStatusFixture();
-    {
-      const input = join(fixture.root, "slack-browser-oidc.json");
-      writeFileSync(input, '{"client_id":"only"}', { mode: 0o600 });
-      chmodSync(input, 0o600);
-
-      const result = fixture.run("configure-slack-browser", {}, ["--input", input]);
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Slack browser OAuth input must contain exactly");
-      expect(existsSync(join(fixture.privateDir, "slack-browser-oidc.json"))).toBe(false);
-      expect(readFileSync(fixture.calls, "utf8")).not.toContain("force-recreate");
-    }
-  });
-
-  it("restores the prior Slack browser OAuth configuration when reload fails", () => {
-    const fixture = preparedStatusFixture();
-    {
-      const previous = '{"client_id":"123.456","client_secret":"previous-secret"}';
-      const installed = join(fixture.privateDir, "slack-browser-oidc.json");
-      writeFileSync(installed, previous, { mode: 0o600 });
-      chmodSync(installed, 0o600);
-      const input = join(fixture.root, "slack-browser-oidc.json");
-      writeFileSync(
-        input,
-        '{"client_id":"123.456","client_secret":"replacement-secret"}',
-        { mode: 0o600 },
-      );
-      chmodSync(input, 0o600);
-
-      const result = fixture.run(
-        "configure-slack-browser",
-        { ECHO_FAKE_FAIL_FIRST_UP: "true" },
-        ["--input", input],
-      );
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("prior configuration was restored and verified");
-      expect(readFileSync(installed, "utf8")).toBe(previous);
-      expect(readFileSync(fixture.calls, "utf8").match(/force-recreate/g)?.length).toBe(2);
     }
   });
 
@@ -966,7 +926,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       const output = result.stdout + result.stderr;
       expect(output).not.toContain(contentSentinel);
       expect(output).not.toContain(fixture.root);
-      expect(output).not.toContain("C0123456789");
+      expect(output).not.toContain(NANGO_SECRET_KEY);
       expect(output.length).toBeLessThan(1600);
       expect(result.stderr).toContain(`unmet_preconditions=${missing.join(",")}\n`);
       expect(result.stderr).toContain("next_action=");
@@ -1037,7 +997,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         owner_email: "founder@example.com",
         runtime_user: execFileSync("id", ["-un"]).toString().trim(),
         schema_version: 1,
-        slack_approval_channel_id: "C0123456789",
+        nango_integration_key: "slack",
       };
       writeFileSync(join(nonsecret, "onboarding.clean-v1.json"), `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
       writeFileSync(join(nonsecret, "release.json"), readFileSync(join(fixture.releaseDir, "current.clean-v1.json")), { mode: 0o600 });
@@ -1054,7 +1014,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       writeFileSync(
         join(fixture.privateDir, "onboard-clean-v1.conf"),
         readFileSync(join(fixture.privateDir, "onboard-clean-v1.conf"), "utf8") +
-          "owner_email=founder@example.com\nauthority_host=authority-staging.echobrain.org\naws_region=us-west-2\nslack_approval_channel_id=C0123456789\n",
+          "owner_email=founder@example.com\nauthority_host=authority-staging.echobrain.org\naws_region=us-west-2\nnango_integration_key=slack\n",
         { mode: 0o600 },
       );
 
@@ -1157,6 +1117,17 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       writeFileSync(stagedRelease, releaseBytes, { mode: 0o600 });
       writeFileSync(capturedRelease, releaseBytes, { mode: 0o600 });
 
+      // A receipt from before in-app Slack setup names a Slack channel: refused, inputs kept.
+      const receipt = join(stage, "stage.json");
+      const receiptBytes = readFileSync(receipt, "utf8");
+      expect(receiptBytes).toContain('"nango_integration_key":"slack"');
+      writeFileSync(receipt, receiptBytes.replace('"nango_integration_key":"slack"', '"slack_approval_channel_id":"C0123456789"'));
+      const legacy = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
+      expect(legacy.status).toBe(1);
+      expect(legacy.stderr).toContain("rehearsal stage receipt is invalid");
+      expect(existsSync(join(stage, "input", "llm-credential"))).toBe(true);
+      writeFileSync(receipt, receiptBytes);
+
       const retry = fixture.run("prepare-rehearsal", {}, ["--operation-id", operationId]);
       expect(retry.status, retry.stderr).toBe(0);
       expect(retry.stdout).toContain("rehearsal_prepared=true");
@@ -1169,7 +1140,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     }
   });
 
-  it("rejects unsafe local provider sources before rehearsal shutdown", () => {
+  it.each(["llm-credential-source", "nango-secret-key"])("rejects an unsafe local %s before rehearsal shutdown", (name) => {
     const cases = ["missing", "mode", "symlink", "hard-link", "owner"] as const;
     for (const kind of cases) {
       const fixture = preparedStatusFixture();
@@ -1177,7 +1148,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       {
         stageRehearsalInputs(fixture, operationId);
         configureReusableProviderInputs(fixture);
-        const source = join(fixture.privateDir, "llm-credential-source");
+        const source = join(fixture.privateDir, name);
         if (kind === "missing") rmSync(source);
         if (kind === "mode") chmodSync(source, 0o644);
         if (kind === "symlink") {
@@ -1189,7 +1160,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         if (kind === "hard-link") linkSync(source, join(fixture.root, "credential-link"));
 
         const result = fixture.run("replace-rehearsal", {
-          ECHO_FAKE_UNSAFE_SOURCE_OWNER: String(kind === "owner"),
+          ECHO_FAKE_UNSAFE_SOURCE_OWNER: kind === "owner" ? name : "",
         }, [
           "--confirm-no-live-users", "--reuse-provider-inputs", operationId,
         ]);
@@ -1686,7 +1657,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
           owner_email: "founder@example.com",
           runtime_user: execFileSync("id", ["-un"]).toString().trim(),
           schema_version: 1,
-          slack_approval_channel_id: "C0123456789",
+          nango_integration_key: "slack",
         })}\n`,
       );
       writeFileSync(
@@ -1702,14 +1673,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       );
       for (const name of [
         "oidc-client-secret",
-        "slack-bot-token",
-        "slack-signing-secret",
         "granola-credential",
         "llm-credential",
       ]) {
         writeFileSync(join(inputDir, name), `${name}-value`);
       }
-      writeFileSync(join(inputDir, "slack-signing-secret"), "s".repeat(32));
+      writeFileSync(join(inputDir, "nango-secret-key"), NANGO_SECRET_KEY);
       for (const name of readdirSync(inputDir)) chmodSync(join(inputDir, name), 0o600);
       const prepareArguments = [
         join(deploy, "onboard-clean-v1.sh"),
@@ -1761,49 +1730,62 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         code: "ready",
         next_action: "Run prepare with the same input directory.",
       });
-      const signingSecret = join(inputDir, "slack-signing-secret");
-      rmSync(signingSecret);
-      const missingSigningSecretDoctor = execFileSync(
+      const doctorResult = () => execFileSync(
         "bash",
         [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
         commandEnvironment,
       ).toString();
-      expect(JSON.parse(missingSigningSecretDoctor)).toEqual({
+      const filesInvalid = {
         ok: false,
         code: "input_files_invalid",
         next_action:
           "Use exactly the documented current-executor-owned regular files with mode 0600.",
-      });
-      writeFileSync(signingSecret, "s".repeat(32), { mode: 0o600 });
-      chmodSync(signingSecret, 0o600);
+      };
+      // A leftover Slack input is an unexpected file, not an ignored one.
+      writeFileSync(join(inputDir, "slack-bot-token"), "xoxb-leftover", { mode: 0o600 });
+      expect(JSON.parse(doctorResult())).toEqual(filesInvalid);
+      rmSync(join(inputDir, "slack-bot-token"));
+      // The Nango key is a private file like the LLM credential.
+      const nangoKey = join(inputDir, "nango-secret-key");
+      rmSync(nangoKey);
+      expect(JSON.parse(doctorResult())).toEqual(filesInvalid);
+      writeFileSync(join(root, "outside-nango-key"), NANGO_SECRET_KEY, { mode: 0o600 });
+      symlinkSync(join(root, "outside-nango-key"), nangoKey);
+      expect(JSON.parse(doctorResult())).toEqual(filesInvalid);
+      rmSync(nangoKey);
+      writeFileSync(nangoKey, NANGO_SECRET_KEY, { mode: 0o644 });
+      chmodSync(nangoKey, 0o644);
+      expect(JSON.parse(doctorResult())).toEqual(filesInvalid);
+      for (const invalid of [`${NANGO_SECRET_KEY}\n`, "short-nango-key"]) {
+        writeFileSync(nangoKey, invalid);
+        chmodSync(nangoKey, 0o600);
+        const result = doctorResult();
+        expect(JSON.parse(result)).toEqual({
+          ok: false,
+          code: "nango_secret_key_invalid",
+          next_action:
+            "Write the Nango secret key as 32 to 4096 visible ASCII characters with no trailing newline.",
+        });
+        expect(result).not.toContain(NANGO_SECRET_KEY);
+      }
+      writeFileSync(nangoKey, NANGO_SECRET_KEY);
       const manifest = join(inputDir, "onboarding.clean-v1.json");
-      writeFileSync(
-        manifest,
-        readFileSync(manifest, "utf8").replace(
-          '"aws_region":"us-west-2"',
-          '"aws_region":"not-a-region"',
-        ),
-      );
-      chmodSync(manifest, 0o600);
-      const invalidRegionDoctor = execFileSync(
-        "bash",
-        [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
-        commandEnvironment,
-      ).toString();
-      expect(JSON.parse(invalidRegionDoctor)).toEqual({
-        ok: false,
-        code: "input_manifest_invalid",
-        next_action:
-          "Use the exact manifest schema and safe ordinary values from the committed example.",
-      });
-      writeFileSync(
-        manifest,
-        readFileSync(manifest, "utf8").replace(
-          '"aws_region":"not-a-region"',
-          '"aws_region":"us-west-2"',
-        ),
-      );
-      chmodSync(manifest, 0o600);
+      for (const [from, to] of [
+        ['"aws_region":"us-west-2"', '"aws_region":"not-a-region"'],
+        ['"nango_integration_key":"slack"', '"nango_integration_key":"Slack Prod"'],
+        // A manifest that still names a Slack channel predates in-app setup.
+        ['"nango_integration_key":"slack"', '"nango_integration_key":"slack","slack_approval_channel_id":"C0123456789"'],
+      ] as const) {
+        const valid = readFileSync(manifest, "utf8");
+        writeFileSync(manifest, valid.replace(from, to));
+        expect(JSON.parse(doctorResult())).toEqual({
+          ok: false,
+          code: "input_manifest_invalid",
+          next_action:
+            "Use the exact manifest schema and safe ordinary values from the committed example.",
+        });
+        writeFileSync(manifest, valid);
+      }
       const oidcConfig = join(inputDir, "oidc-config.json");
       writeFileSync(oidcConfig, '{"redirect_uri":"https://wrong.example/v2/session/oidc/callback"}\n');
       chmodSync(oidcConfig, 0o600);
@@ -1836,7 +1818,17 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         commandEnvironment,
       ).toString();
       expect(output).toContain("prepared=true");
+      expect(output).not.toContain(NANGO_SECRET_KEY);
       expect(readFileSync(calls, "utf8")).toContain("compose");
+      expect(readFileSync(calls, "utf8")).not.toContain(NANGO_SECRET_KEY);
+      expect(readFileSync(join(deploy, "clean-data/private/nango-secret-key"), "utf8")).toBe(NANGO_SECRET_KEY);
+      expect(readFileSync(join(deploy, "clean-data/private/onboard-clean-v1.conf"), "utf8")).toContain(
+        "\nnango_integration_key=slack\n",
+      );
+      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+        "\nECHO_CLEAN_NANGO_INTEGRATION=slack\n",
+      );
+      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).not.toContain("SLACK");
       expect(readFileSync(calls, "utf8")).not.toContain("pull");
       expect(readFileSync(join(deploy, "clean-data/private/granola-owner-email"), "utf8")).toBe("founder@example.com");
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(image);
@@ -1892,8 +1884,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "onboard-clean-v1.conf",
         "oidc-config.json",
         "oidc-client-secret",
-        "slack-bot-token",
-        "slack-signing-secret",
+        "nango-secret-key",
         "granola-credential-source",
         "granola-owner-email",
         "llm-credential-source",
@@ -1917,7 +1908,7 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         owner_email: "founder@example.com",
         runtime_user: execFileSync("id", ["-un"]).toString().trim(),
         schema_version: 1,
-        slack_approval_channel_id: "C0123456789",
+        nango_integration_key: "slack",
       })}\n`);
       chmodSync(manifest, 0o600);
       writeFileSync(

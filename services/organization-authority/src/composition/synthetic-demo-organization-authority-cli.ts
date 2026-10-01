@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
+import { readPrivateAuthorityCredential, readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { admitSyntheticDemoMeetingSource } from "@echo-brain/provider-synthetic-demo/synthetic-demo-meeting-source-admission";
 import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";
@@ -9,7 +9,7 @@ import { readOrganizationAuthoritySetupManifest } from "./organization-authority
 
 const USAGE = `usage:
   echo-synthetic-demo admit --state-dir <absolute-path> --meetings-dir <absolute-path>
-  echo-synthetic-demo serve --state-dir <absolute-path> --meetings-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> --slack-signing-secret-file <absolute-path> [--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>]`;
+  echo-synthetic-demo serve --state-dir <absolute-path> --meetings-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> --nango-secret-key-file <absolute-path> --nango-integration <key> [--nango-base-url <https-origin>] [--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>]`;
 // The demo source is admitted against the shared production processor identity.
 const ESTABLISHED_OPENROUTER_PROCESSOR_INSTANCE_ID_V1 = "founder-llm-v1";
 
@@ -110,7 +110,9 @@ async function runService(
       "--meetings-dir",
       "--host",
       "--port",
-      "--slack-signing-secret-file",
+      "--nango-secret-key-file",
+      "--nango-integration",
+      "--nango-base-url",
       "--client-secret-file",
       "--worker-interval-ms",
     ],
@@ -119,7 +121,8 @@ async function runService(
       "--meetings-dir",
       "--host",
       "--port",
-      "--slack-signing-secret-file",
+      "--nango-secret-key-file",
+      "--nango-integration",
     ],
   );
   const stateDirectory = absolutePath(required(flags, "--state-dir"));
@@ -150,11 +153,11 @@ async function runService(
     pkce_key_file: manifest.pkce_key_file,
     openrouter_credential_file: manifest.llm_credential_file,
     owner_email: manifest.owner_email,
-    slack_signing_secret_file: absolutePath(
-      required(flags, "--slack-signing-secret-file"),
-    ),
-    slack_connection_id: manifest.slack_connection_id,
-    slack_identity_link_channel_id: manifest.slack_approval_channel_id,
+    slack_nango: {
+      ...(flags["--nango-base-url"] === undefined ? {} : { base_url: flags["--nango-base-url"] }),
+      secret_key: readPrivateAuthorityCredential(`file:${absolutePath(flags["--nango-secret-key-file"])}`),
+      integration_key: required(flags, "--nango-integration"),
+    },
     ...(flags["--worker-interval-ms"] === undefined
       ? {}
       : { worker_interval_ms: positiveInteger(flags["--worker-interval-ms"]!) }),

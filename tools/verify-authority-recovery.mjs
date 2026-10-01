@@ -30,7 +30,7 @@ const RUNTIME_ENVIRONMENT_FIELDS = Object.freeze([
   "ECHO_CLEAN_RUNTIME_PROFILE_VERSION",
   "ECHO_CLEAN_AWS_REGION",
   "ECHO_CLEAN_AUTHORITY_LOG_GROUP",
-  "ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID",
+  "ECHO_CLEAN_NANGO_INTEGRATION",
   "ECHO_CLEAN_OWNER_EMAIL",
 ]);
 const RELEASE_BOUND_ENVIRONMENT_FIELDS = Object.freeze([
@@ -359,7 +359,7 @@ function verifyEnvironmentSnapshot(python3, path, release) {
     "if not __import__('re').fullmatch(r'[0-9]+', actual['ECHO_CLEAN_AUTHORITY_GID']): raise SystemExit(1)",
     "if not __import__('re').fullmatch(r'[a-z]{2}(?:-[a-z0-9]+)+-[1-9][0-9]*', actual['ECHO_CLEAN_AWS_REGION']): raise SystemExit(1)",
     "if actual['ECHO_CLEAN_AUTHORITY_LOG_GROUP'] != '/echo-brain/authority/' + host: raise SystemExit(1)",
-    "if not __import__('re').fullmatch(r'[CG][A-Z0-9]{8,}', actual['ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID']): raise SystemExit(1)",
+    "if not __import__('re').fullmatch(r'[a-z0-9][a-z0-9_-]{0,63}', actual['ECHO_CLEAN_NANGO_INTEGRATION']): raise SystemExit(1)",
     "if not __import__('re').fullmatch(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+', actual['ECHO_CLEAN_OWNER_EMAIL']): raise SystemExit(1)",
     "print(actual['ECHO_CLEAN_AUTHORITY_UID'])",
     "print(actual['ECHO_CLEAN_AUTHORITY_GID'])",

@@ -24,8 +24,11 @@ import {
   PrivateSlackApprovalTerminalCoordinatorV1,
 } from "../../../providers/slack/server/dist/private-approval/private-slack-approval-terminal-coordinator-v1.js";
 import {
-  resolveCurrentPrivateSlackConnectionV1,
+  resolveActivePrivateSlackConnectionV1,
 } from "../../../providers/slack/server/dist/private-approval/resolve-current-private-slack-connection-v1.js";
+import {
+  slackNangoAppPublicConfigurationSha256V1,
+} from "../../../providers/slack/server/dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import {
   resolveMeetingOwnerPrivateSlackApprovalReviewerV1,
 } from "../../../providers/slack/server/dist/private-approval/resolve-meeting-owner-private-slack-approval-reviewer-v1.js";
@@ -42,10 +45,8 @@ import {
   createPrivateSlackBlockV4RecordWriterV1,
 } from "../../../providers/slack/server/dist/processing/adapters/approval-resolution/slack/private-slack-block-v4-record-writer-v1.js";
 
-const SCOPES = Object.freeze([
-  "channels:history", "channels:read", "chat:write", "im:history",
-  "im:write", "reactions:read", "users:read",
-]);
+// The ECHO app's recipe scopes: an organization connection is always the in-app Nango install.
+const SCOPES = Object.freeze(["chat:write", "im:history", "im:write", "users:read"]);
 const CONNECTION_ID = "con_core_approval";
 const WORKSPACE_ID = "TCOREAPPROVAL";
 const APP_ID = "ACOREAPPROVAL";
@@ -98,7 +99,7 @@ function seedControlPlane({ control_plane_database, coordinates, owner, employee
     provider_bot_id: BOT_ID,
     provider_bot_user_id: BOT_USER_ID,
     required_provider_scopes: SCOPES,
-    public_connection_configuration_sha256: canonicalSha256({ kind: "echo-core-approval-deterministic-poster-v1" }),
+    public_connection_configuration_sha256: slackNangoAppPublicConfigurationSha256V1(),
   });
   const connection_sha256 = canonicalSha256(connection);
   const state = validateOrganizationToolConnectionStateV2({
@@ -259,7 +260,7 @@ export async function createCoreApproval({ context, owner, employee, sessions } 
     owner: ownerActor,
     ...(employeeActor === undefined ? {} : { employee: employeeActor }),
   });
-  const connection = resolveCurrentPrivateSlackConnectionV1(context.control_plane_database, CONNECTION_ID, location);
+  const connection = resolveActivePrivateSlackConnectionV1(context.control_plane_database, location).current;
   const poster = new DeterministicCoreApprovalPoster();
   const assignments = new SqlitePrivateSlackApprovalAssignmentStateV1(context.authority_database);
   const control_plane = new SqliteSlackDmApprovalPersistenceV1({

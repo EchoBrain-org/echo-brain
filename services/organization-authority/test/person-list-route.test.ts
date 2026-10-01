@@ -1,6 +1,6 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
-  OrganizationPersonToolV3,
+  OrganizationPersonToolV4,
   PersonListRequestV1,
   PersonListResponseV1,
   PersonOpenDocumentV1,
@@ -72,7 +72,7 @@ interface Options {
   readonly meetings?: readonly PersonStoreMeetingRowV1[];
   readonly mine?: readonly string[];
   readonly projects?: readonly PersonListJoinedProjectV1[];
-  readonly tools?: readonly OrganizationPersonToolV3[];
+  readonly tools?: readonly OrganizationPersonToolV4[];
 }
 
 function fixture(options: Options = {}) {
@@ -201,10 +201,10 @@ function fixture(options: Options = {}) {
       return canonicalSha256({ audit: audits.length });
     },
   };
-  const tools = async (): Promise<readonly OrganizationPersonToolV3[]> => {
+  const tools = async (): Promise<readonly OrganizationPersonToolV4[]> => {
     record("tools", {});
     hooks.tools?.();
-    return options.tools ?? [{ tool_id: "slack", display_name: "Slack", availability: "enabled", personal_status: "linked", external_scope_id: "T0SECRETSCOPE", external_subject_id: "U0SECRETSUBJECT" }];
+    return options.tools ?? [{ tool_id: "slack", display_name: "Slack", availability: "enabled", personal_status: "linked", external_scope_id: "T0SECRETSCOPE", external_subject_id: "U0SECRETSUBJECT", organization_setup: null }];
   };
   const tokens = { owner: OWNER, member: MEMBER } as const;
   const sessions = {

@@ -119,7 +119,6 @@ usage:
   onboard-clean-v1.sh stage-rehearsal-inputs --operation-id <onboarding-id> --artifact-sha256 <sha256> --input-dir <absolute-private-nonsecret-input-directory> --staging-synthetic-meetings-dir <absolute-private-four-note-directory>
   onboard-clean-v1.sh prepare-rehearsal --operation-id <onboarding-id>
   onboard-clean-v1.sh activate-provider-credentials --input-dir <absolute-private-provider-directory>
-  onboard-clean-v1.sh configure-slack-browser --input <absolute-private-json-file>
   onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users [--reuse-provider-inputs <onboarding-id> [--content-telemetry <true|false>]]
   onboard-clean-v1.sh resume
   onboard-clean-v1.sh status
@@ -132,19 +131,16 @@ INPUT_RELEASE_NAME='release.json'
 INPUT_RUNTIME_PROFILE_NAME='runtime-profile.json'
 INPUT_OIDC_CONFIG_NAME='oidc-config.json'
 INPUT_OIDC_SECRET_NAME='oidc-client-secret'
-INPUT_SLACK_TOKEN_NAME='slack-bot-token'
-INPUT_SLACK_SIGNING_SECRET_NAME='slack-signing-secret'
+INPUT_NANGO_SECRET_KEY_NAME='nango-secret-key'
 INPUT_GRANOLA_CREDENTIAL_NAME='granola-credential'
 INPUT_LLM_CREDENTIAL_NAME='llm-credential'
-SLACK_BROWSER_OAUTH_CONFIG_NAME='slack-browser-oidc.json'
 
 input_dir=''
 input_release=''
 input_runtime_profile=''
 input_oidc_config=''
 input_oidc_secret=''
-input_slack_token=''
-input_slack_signing_secret=''
+input_nango_secret_key=''
 input_granola_credential=''
 input_llm_credential=''
 input_runtime_user=''
@@ -153,7 +149,7 @@ input_owner_display_name=''
 input_owner_email=''
 input_authority_host=''
 input_aws_region=''
-input_channel=''
+input_nango_integration=''
 input_staging_synthetic_meetings_dir=''
 STAGING_MEETING_FILES=(
   01-revenue-signal-calibration.json
@@ -252,9 +248,9 @@ write_rehearsal_stage_marker() {
   temporary="$(mktemp "$stage/.stage.XXXXXX")" || return 1
   chmod 0600 "$temporary"
   python3 - "$temporary" "$stage" "$state" "$operation_id" "$artifact_sha256" "$telemetry" \
-    "$input_runtime_user" "$input_owner_email" "$input_authority_host" "$input_aws_region" "$input_channel" <<'PY'
+    "$input_runtime_user" "$input_owner_email" "$input_authority_host" "$input_aws_region" "$input_nango_integration" <<'PY'
 import hashlib, json, os, stat, sys
-path, stage, state, operation_id, artifact, telemetry, runtime_user, owner_email, host, region, channel = sys.argv[1:]
+path, stage, state, operation_id, artifact, telemetry, runtime_user, owner_email, host, region, integration = sys.argv[1:]
 if state not in {'staged', 'captured', 'reset', 'completed'} or telemetry not in {'unset', 'true', 'false'}:
     raise SystemExit(1)
 files = {}
@@ -279,7 +275,7 @@ value = {
     'owner_email': owner_email,
     'authority_host': host,
     'aws_region': region,
-    'slack_approval_channel_id': channel,
+    'nango_integration_key': integration,
     'content_telemetry': None if telemetry == 'unset' else telemetry == 'true',
     'file_sha256': files,
 }
@@ -297,7 +293,7 @@ read_rehearsal_stage_marker() {
 import json, sys
 try:
     value = json.load(open(sys.argv[1], encoding='utf-8'))
-    expected = {'schema_version', 'kind', 'state', 'operation_id', 'artifact_sha256', 'runtime_user', 'owner_email', 'authority_host', 'aws_region', 'slack_approval_channel_id', 'content_telemetry', 'file_sha256'}
+    expected = {'schema_version', 'kind', 'state', 'operation_id', 'artifact_sha256', 'runtime_user', 'owner_email', 'authority_host', 'aws_region', 'nango_integration_key', 'content_telemetry', 'file_sha256'}
     assert set(value) == expected
     assert value['schema_version'] == 1 and value['kind'] == 'echo-clean-v1-rehearsal-stage-v1'
     assert value['state'] in {'staged', 'captured', 'reset', 'completed'}
@@ -315,7 +311,7 @@ try:
     print(value['owner_email'])
     print(value['authority_host'])
     print(value['aws_region'])
-    print(value['slack_approval_channel_id'])
+    print(value['nango_integration_key'])
     print('unset' if value['content_telemetry'] is None else str(value['content_telemetry']).lower())
 except Exception:
     raise SystemExit(1)
@@ -352,15 +348,15 @@ prepared_rehearsal_matches_stage() {
 stage_marker_matches_current_preparation() {
   local stage="$1" expected_state="$2" values
   values="$(read_rehearsal_stage_marker "$stage")" || return 1
-  local state operation artifact runtime owner host region channel telemetry
+  local state operation artifact runtime owner host region integration telemetry
   local marker_line
   local -a _rehearsal_marker_values=()
   while IFS= read -r marker_line; do _rehearsal_marker_values+=("$marker_line"); done <<< "$values"
   [[ ${#_rehearsal_marker_values[@]} -eq 9 ]] || return 1
   state="${_rehearsal_marker_values[0]}"; operation="${_rehearsal_marker_values[1]}"; artifact="${_rehearsal_marker_values[2]}"
   runtime="${_rehearsal_marker_values[3]}"; owner="${_rehearsal_marker_values[4]}"; host="${_rehearsal_marker_values[5]}"
-  region="${_rehearsal_marker_values[6]}"; channel="${_rehearsal_marker_values[7]}"; telemetry="${_rehearsal_marker_values[8]}"
-  [[ "$state" == "$expected_state" && "$runtime" == "$(setup_value runtime_user)" && "$owner" == "$(setup_value owner_email)" && "$host" == "$(setup_value authority_host)" && "$region" == "$(setup_value aws_region)" && "$channel" == "$(setup_value slack_approval_channel_id)" ]] || return 1
+  region="${_rehearsal_marker_values[6]}"; integration="${_rehearsal_marker_values[7]}"; telemetry="${_rehearsal_marker_values[8]}"
+  [[ "$state" == "$expected_state" && "$runtime" == "$(setup_value runtime_user)" && "$owner" == "$(setup_value owner_email)" && "$host" == "$(setup_value authority_host)" && "$region" == "$(setup_value aws_region)" && "$integration" == "$(setup_value nango_integration_key)" ]] || return 1
   [[ "$telemetry" == unset || "$telemetry" == true || "$telemetry" == false ]] && stage_material_matches_marker "$stage"
 }
 
@@ -448,7 +444,7 @@ read_input_manifest() {
       3) input_owner_email="$value" ;;
       4) input_authority_host="$value" ;;
       5) input_aws_region="$value" ;;
-      6) input_channel="$value" ;;
+      6) input_nango_integration="$value" ;;
       *) return 1 ;;
     esac
     count=$((count + 1))
@@ -473,7 +469,7 @@ expected = {
     "owner_email",
     "authority_host",
     "aws_region",
-    "slack_approval_channel_id",
+    "nango_integration_key",
 }
 if not isinstance(value, dict) or set(value) != expected:
     raise SystemExit(1)
@@ -494,7 +490,7 @@ owner_display_name = text("owner_display_name")
 owner_email = text("owner_email", 254)
 authority_host = text("authority_host", 253)
 aws_region = text("aws_region", 32)
-channel = text("slack_approval_channel_id", 32)
+integration = text("nango_integration_key", 64)
 
 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", runtime_user):
     raise SystemExit(1)
@@ -510,12 +506,12 @@ if (
     )
 ):
     raise SystemExit(1)
-if not re.fullmatch(r"[CG][A-Z0-9]{8,}", channel):
+if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", integration):
     raise SystemExit(1)
 if not re.fullmatch(r"[a-z]{2}(?:-[a-z0-9]+)+-[1-9][0-9]*", aws_region):
     raise SystemExit(1)
 
-for item in (runtime_user, organization_name, owner_display_name, owner_email, authority_host, aws_region, channel):
+for item in (runtime_user, organization_name, owner_display_name, owner_email, authority_host, aws_region, integration):
     print(item)
 PY
 )
@@ -534,6 +530,22 @@ except Exception:
     raise SystemExit(1)
 
 if not isinstance(value, dict) or value.get("redirect_uri") != f"https://{sys.argv[2]}/v2/session/oidc/callback":
+    raise SystemExit(1)
+PY
+}
+
+validate_input_nango_secret_key() {
+  # The Authority reads exactly this shape; the key itself is never printed.
+  python3 - "$input_nango_secret_key" <<'PY'
+import re
+import sys
+
+try:
+    with open(sys.argv[1], "rb") as source:
+        value = source.read(4097)
+except Exception:
+    raise SystemExit(1)
+if re.fullmatch(rb"[\x21-\x7e]{32,4096}", value) is None:
     raise SystemExit(1)
 PY
 }
@@ -605,8 +617,7 @@ check_input_dir() {
     "$INPUT_RUNTIME_PROFILE_NAME"
     "$INPUT_OIDC_CONFIG_NAME"
     "$INPUT_OIDC_SECRET_NAME"
-    "$INPUT_SLACK_TOKEN_NAME"
-    "$INPUT_SLACK_SIGNING_SECRET_NAME"
+    "$INPUT_NANGO_SECRET_KEY_NAME"
     "$INPUT_GRANOLA_CREDENTIAL_NAME"
     "$INPUT_LLM_CREDENTIAL_NAME"
   )
@@ -626,8 +637,7 @@ check_input_dir() {
   input_runtime_profile="$input_dir/$INPUT_RUNTIME_PROFILE_NAME"
   input_oidc_config="$input_dir/$INPUT_OIDC_CONFIG_NAME"
   input_oidc_secret="$input_dir/$INPUT_OIDC_SECRET_NAME"
-  input_slack_token="$input_dir/$INPUT_SLACK_TOKEN_NAME"
-  input_slack_signing_secret="$input_dir/$INPUT_SLACK_SIGNING_SECRET_NAME"
+  input_nango_secret_key="$input_dir/$INPUT_NANGO_SECRET_KEY_NAME"
   input_granola_credential="$input_dir/$INPUT_GRANOLA_CREDENTIAL_NAME"
   input_llm_credential="$input_dir/$INPUT_LLM_CREDENTIAL_NAME"
   return 0
@@ -705,6 +715,7 @@ doctor() {
   if ! python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null 2>&1; then doctor_json false release_invalid 'Replace release.json with a canonical clean-v1 release record.'; return; fi
   if ! validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" >/dev/null 2>&1; then doctor_json false runtime_profile_invalid 'Replace runtime-profile.json with the exact canonical profile named by release.json.'; return; fi
   if ! validate_input_oidc_callback >/dev/null 2>&1; then doctor_json false oidc_callback_invalid 'Set oidc-config.json redirect_uri to the exact Authority callback URL.'; return; fi
+  if ! validate_input_nango_secret_key >/dev/null 2>&1; then doctor_json false nango_secret_key_invalid 'Write the Nango secret key as 32 to 4096 visible ASCII characters with no trailing newline.'; return; fi
   if ! safe_directory_target "$DATA_DIR"; then doctor_json false clean_data_path_invalid 'Remove or repair the unsafe clean-data path before preparing.'; return; fi
   if ! safe_directory_target "$PRIVATE_DIR"; then doctor_json false clean_private_path_invalid 'Remove or repair the unsafe clean private-input path before preparing.'; return; fi
   if ! safe_directory_target "$RELEASE_DIR"; then doctor_json false clean_release_path_invalid 'Remove or repair the unsafe clean release path before preparing.'; return; fi
@@ -984,7 +995,7 @@ require_prepared() {
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Compose environment is missing; run prepare again with the same inputs'
   python3 "$RELEASE_TOOL" validate "$RELEASE_FILE" >/dev/null || fail 'persisted release record is no longer canonical clean-v1'
   runtime_profile_matches_prepared_tuple || fail 'prepared runtime profile tuple is missing, noncanonical, or drifted from the accepted release'
-  for required in oidc-config.json oidc-client-secret slack-bot-token slack-signing-secret granola-credential-source granola-owner-email llm-credential-source; do
+  for required in oidc-config.json oidc-client-secret nango-secret-key granola-credential-source granola-owner-email llm-credential-source; do
     [[ -f "$PRIVATE_DIR/$required" && ! -L "$PRIVATE_DIR/$required" ]] || fail "fixed private input is missing: $required"
   done
   staging_meetings_directory >/dev/null
@@ -1035,12 +1046,6 @@ staged_candidate_present() {
 next_step_from_status() {
   python3 -c 'import json, sys; value=json.load(sys.stdin); step=value.get("next_step"); assert isinstance(step, str); print(step)' \
     <<<"$1" || fail 'initial-owner setup status was not the expected safe JSON'
-}
-
-status_boolean() {
-  local status_json="$1" field="$2"
-  python3 -c 'import json, sys; value=json.load(sys.stdin); result=value.get(sys.argv[1]); assert type(result) is bool; print("true" if result else "false")' \
-    "$field" <<<"$status_json" || fail "initial-owner setup status has no boolean $field"
 }
 
 start_runtime() {
@@ -1230,7 +1235,7 @@ prepare() {
   # Doctor runs the complete preflight. Read the same fixed sources again in
   # this process before persisting them, so prepare never accepts a different
   # shape than the one it just checked.
-  check_input_dir && read_input_manifest && check_staging_meeting_input && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && validate_input_oidc_callback || \
+  check_input_dir && read_input_manifest && check_staging_meeting_input && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && validate_input_oidc_callback && validate_input_nango_secret_key || \
     fail 'input directory changed after doctor; rerun prepare'
   require_host_prerequisites
   select_runtime_identity "$input_runtime_user"
@@ -1280,7 +1285,7 @@ authority_host=$input_authority_host
 authority_url=$authority_url
 aws_region=$input_aws_region
 authority_log_group=/echo-brain/authority/$input_authority_host
-slack_approval_channel_id=$input_channel
+nango_integration_key=$input_nango_integration
 release_id=$release_id
 authority_image=$image
 artifact_revision=$(release_field source-sha)
@@ -1298,7 +1303,7 @@ ECHO_CLEAN_RUNTIME_PROFILE_SHA256=$runtime_profile_sha256
 ECHO_CLEAN_RUNTIME_PROFILE_VERSION=$runtime_profile_version
 ECHO_CLEAN_AWS_REGION=$input_aws_region
 ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/$input_authority_host
-ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=$input_channel
+ECHO_CLEAN_NANGO_INTEGRATION=$input_nango_integration
 ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
   if [[ "$PREPARE_CONTENT_TELEMETRY_OVERRIDE" == true || "$PREPARE_CONTENT_TELEMETRY_OVERRIDE" == false ]]; then
     runtime_profile_supports_content_telemetry "$input_runtime_profile" || \
@@ -1316,8 +1321,7 @@ ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
   copy_exact_private "$input_runtime_profile" "$ACTIVE_RUNTIME_PROFILE_FILE" 'active runtime profile' host
   copy_exact_private "$input_oidc_config" "$PRIVATE_DIR/oidc-config.json" 'OIDC configuration'
   copy_exact_private "$input_oidc_secret" "$PRIVATE_DIR/oidc-client-secret" 'OIDC client secret'
-  copy_exact_private "$input_slack_token" "$PRIVATE_DIR/slack-bot-token" 'Slack bot token'
-  copy_exact_private "$input_slack_signing_secret" "$PRIVATE_DIR/slack-signing-secret" 'Slack signing secret'
+  copy_exact_private "$input_nango_secret_key" "$PRIVATE_DIR/nango-secret-key" 'Nango secret key'
   copy_exact_private "$input_granola_credential" "$PRIVATE_DIR/granola-credential-source" 'Granola credential'
   copy_exact_private "$input_llm_credential" "$PRIVATE_DIR/llm-credential-source" 'LLM credential'
   write_exact_private "$PRIVATE_DIR/granola-owner-email" "$input_owner_email" 'Granola owner email'
@@ -1353,9 +1357,7 @@ bootstrap() {
     --owner-email "$(setup_value owner_email)" \
     --authority-url "$(setup_value authority_url)" \
     --oidc-config /echo-clean/private/oidc-config.json \
-    --slack-approval-channel-id "$(setup_value slack_approval_channel_id)" \
-    --artifact-revision "$(setup_value artifact_revision)" \
-    < "$PRIVATE_DIR/slack-bot-token"
+    --artifact-revision "$(setup_value artifact_revision)"
 }
 
 capture_rehearsal_provider_inputs() {
@@ -1370,8 +1372,7 @@ capture_rehearsal_provider_inputs() {
   local -a sources=(
     "$PRIVATE_DIR/oidc-config.json:$INPUT_OIDC_CONFIG_NAME"
     "$PRIVATE_DIR/oidc-client-secret:$INPUT_OIDC_SECRET_NAME"
-    "$PRIVATE_DIR/slack-bot-token:$INPUT_SLACK_TOKEN_NAME"
-    "$PRIVATE_DIR/slack-signing-secret:$INPUT_SLACK_SIGNING_SECRET_NAME"
+    "$PRIVATE_DIR/nango-secret-key:$INPUT_NANGO_SECRET_KEY_NAME"
     "$PRIVATE_DIR/granola-credential-source:$INPUT_GRANOLA_CREDENTIAL_NAME"
     "$PRIVATE_DIR/llm-credential-source:$INPUT_LLM_CREDENTIAL_NAME"
   )
@@ -1382,7 +1383,7 @@ capture_rehearsal_provider_inputs() {
     install -m 0600 "$source" "$destination/$name" || return 1
   done
   input_dir="$destination"
-  check_input_dir && read_input_manifest && validate_input_oidc_callback && \
+  check_input_dir && read_input_manifest && validate_input_oidc_callback && validate_input_nango_secret_key && \
     check_staging_meeting_input && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" || return 1
 }
 
@@ -1392,8 +1393,8 @@ remove_rehearsal_captured_inputs() {
   destination="$stage/input"
   [[ -d "$destination" && ! -L "$destination" && "$(portable_stat_uid "$destination")" == "$(id -u)" && "$(portable_stat_mode "$destination")" == 700 ]] || return 1
   rm -f "$destination/$INPUT_MANIFEST_NAME" "$destination/$INPUT_RELEASE_NAME" "$destination/$INPUT_RUNTIME_PROFILE_NAME" \
-    "$destination/$INPUT_OIDC_CONFIG_NAME" "$destination/$INPUT_OIDC_SECRET_NAME" "$destination/$INPUT_SLACK_TOKEN_NAME" \
-    "$destination/$INPUT_SLACK_SIGNING_SECRET_NAME" "$destination/$INPUT_GRANOLA_CREDENTIAL_NAME" "$destination/$INPUT_LLM_CREDENTIAL_NAME" || return 1
+    "$destination/$INPUT_OIDC_CONFIG_NAME" "$destination/$INPUT_OIDC_SECRET_NAME" "$destination/$INPUT_NANGO_SECRET_KEY_NAME" \
+    "$destination/$INPUT_GRANOLA_CREDENTIAL_NAME" "$destination/$INPUT_LLM_CREDENTIAL_NAME" || return 1
   rmdir "$destination"
 }
 
@@ -1510,7 +1511,7 @@ replace_rehearsal() {
       runtime_profile_supports_content_telemetry "$input_runtime_profile" || \
       fail 'staged rehearsal inputs are invalid or incomplete'
     stage_marker_matches_current_preparation "$reuse_stage" staged || \
-      fail 'staged rehearsal inputs do not match the current Authority owner, host, runtime, region, and Slack channel'
+      fail 'staged rehearsal inputs do not match the current Authority owner, host, runtime, region, and Nango integration'
     local marker_line
     marker_values=()
     while IFS= read -r marker_line; do marker_values+=("$marker_line"); done <<< "$(read_rehearsal_stage_marker "$reuse_stage")"
@@ -1536,8 +1537,7 @@ replace_rehearsal() {
     fi
     local required_source
     for required_source in \
-      "$PRIVATE_DIR/oidc-config.json" "$PRIVATE_DIR/oidc-client-secret" \
-      "$PRIVATE_DIR/slack-bot-token" "$PRIVATE_DIR/slack-signing-secret" \
+      "$PRIVATE_DIR/oidc-config.json" "$PRIVATE_DIR/oidc-client-secret" "$PRIVATE_DIR/nango-secret-key" \
       "$PRIVATE_DIR/granola-credential-source" "$PRIVATE_DIR/llm-credential-source"; do
       require_runtime_private_file "$required_source" 'existing provider input'
     done
@@ -1653,15 +1653,8 @@ prepare_rehearsal() {
 }
 
 resume_bootstrap() {
-  local slack_connected="$1"
-  if [[ "$slack_connected" == true ]]; then
-    compose_clean run --rm --no-deps --entrypoint node authority \
-      "$SETUP_COMMAND" resume --state-dir /echo-clean/state
-    return
-  fi
   compose_clean run --rm --no-deps --entrypoint node authority \
-    "$SETUP_COMMAND" resume --state-dir /echo-clean/state \
-    < "$PRIVATE_DIR/slack-bot-token"
+    "$SETUP_COMMAND" resume --state-dir /echo-clean/state
 }
 
 install_credentials() {
@@ -1691,113 +1684,6 @@ require_runtime_private_file() {
     fail "$label destination is not mode 0600"
   [[ "$(portable_stat_nlink "$path")" == 1 ]] || \
     fail "$label destination must not be hard-linked"
-}
-
-validate_slack_browser_oauth_input() {
-  local path="$1" expected_uid
-  [[ "$path" = /* ]] || return 1
-  [[ -f "$path" && ! -L "$path" ]] || return 1
-  expected_uid="${SUDO_UID:-$(id -u)}"
-  [[ "$expected_uid" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
-  [[ "$(portable_stat_uid "$path")" == "$expected_uid" ]] || return 1
-  [[ "$(portable_stat_mode "$path")" == 600 ]] || return 1
-  [[ "$(portable_stat_nlink "$path")" == 1 ]] || return 1
-  python3 - "$path" "$expected_uid" <<'PY'
-import json, os, re, stat, sys
-
-path, expected_uid = sys.argv[1:]
-try:
-    state = os.lstat(path)
-    if (not stat.S_ISREG(state.st_mode) or state.st_uid != int(expected_uid) or
-            stat.S_IMODE(state.st_mode) != 0o600 or state.st_nlink != 1 or
-            state.st_size < 1 or state.st_size > 4096):
-        raise ValueError()
-    with open(path, encoding="utf-8") as source:
-        raw = source.read()
-    value = json.loads(raw)
-    if (not isinstance(value, dict) or set(value) != {"client_id", "client_secret"} or
-            not isinstance(value["client_id"], str) or
-            not re.fullmatch(r"[A-Za-z0-9._-]{1,255}", value["client_id"]) or
-            not isinstance(value["client_secret"], str) or
-            not 0 < len(value["client_secret"]) <= 4096 or
-            not re.fullmatch(r"[\x21-\x7e]+", value["client_secret"])):
-        raise ValueError()
-except (OSError, ValueError, TypeError, json.JSONDecodeError):
-    raise SystemExit(1)
-PY
-}
-
-configure_slack_browser_rollback() {
-  local destination="$1" backup="$2" existed="$3" was_running="$4"
-  if [[ "$existed" == true ]]; then
-    replace_runtime_private "$backup" "$destination" 'Slack browser OAuth configuration' || return 1
-  else
-    rm -f -- "$destination" || return 1
-  fi
-  if [[ "$was_running" == true ]]; then
-    activation_compose_quiet up -d --no-build --force-recreate --wait --wait-timeout 90 && \
-      running_authority && healthy_authority && authority_uses_accepted_image && \
-      runtime_uses_accepted_runtime_profile && wait_for_public_descriptor || return 1
-  fi
-}
-
-configure_slack_browser() {
-  [[ $# -eq 2 && "$1" == --input ]] || usage
-  local source="$2" destination backup='' existed=false restarted=false was_running=false
-  require_host_prerequisites
-  require_prepared
-  acquire_operation_lock
-  trap 'release_operation_lock' EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  staged_candidate_present && \
-    fail 'a candidate release is staged; finish its promotion or rollback before configuring Slack browser identity'
-  select_runtime_identity "$(setup_value runtime_user)"
-  validate_slack_browser_oauth_input "$source" || \
-    fail 'Slack browser OAuth input must contain exactly client_id and client_secret in a Session Manager-user-owned mode-0600 regular file'
-  if running_authority; then
-    was_running=true
-    healthy_authority && authority_uses_accepted_image && runtime_uses_accepted_runtime_profile && \
-      wait_for_public_descriptor || \
-      fail 'Slack browser OAuth configuration requires a healthy Authority using the accepted image and runtime profile'
-  fi
-  destination="$PRIVATE_DIR/$SLACK_BROWSER_OAUTH_CONFIG_NAME"
-  if [[ -e "$destination" || -L "$destination" ]]; then
-    require_runtime_private_file "$destination" 'Slack browser OAuth configuration'
-    backup="$(mktemp "$PRIVATE_DIR/.slack-browser-oauth.previous.XXXXXX" 2>/dev/null)" || \
-      fail 'could not prepare Slack browser OAuth rollback copy'
-    chmod 0600 "$backup"
-    backup_runtime_private "$destination" "$backup" || {
-      rm -f -- "$backup"
-      fail 'could not prepare Slack browser OAuth rollback copy'
-    }
-    existed=true
-  fi
-  replace_runtime_private "$source" "$destination" 'Slack browser OAuth configuration' || {
-    rm -f -- "$backup"
-    fail 'could not install Slack browser OAuth configuration'
-  }
-  require_runtime_private_file "$destination" 'Slack browser OAuth configuration'
-  if [[ "$was_running" == true ]]; then
-    restarted=true
-    if ! activation_compose_quiet up -d --no-build --force-recreate --wait --wait-timeout 90 || \
-      ! running_authority || ! healthy_authority || ! authority_uses_accepted_image || \
-      ! runtime_uses_accepted_runtime_profile || ! wait_for_public_descriptor; then
-      if ! configure_slack_browser_rollback "$destination" "$backup" "$existed" "$was_running"; then
-        rm -f -- "$backup"
-        fail 'Slack browser OAuth configuration failed and rollback could not be verified'
-      fi
-      rm -f -- "$backup"
-      fail 'Slack browser OAuth configuration failed; the prior configuration was restored and verified'
-    fi
-  fi
-  rm -f -- "$backup"
-  printf 'slack_browser_configured=true\n'
-  printf 'authority_restarted=%s\n' "$restarted"
-  if [[ "$restarted" == false ]]; then
-    printf 'next_action=Run onboard-clean-v1.sh resume to load the Slack browser configuration.\n'
-  fi
 }
 
 replace_runtime_private() {
@@ -2039,20 +1925,6 @@ finalize() {
     "$@"
 }
 
-slack_interactivity_request_url() {
-  printf '%s/v2/integrations/slack/interactions\n' "$(setup_value authority_url)"
-}
-
-print_slack_interactivity_action() {
-  if [[ -n "$(staging_meetings_directory)" ]]; then
-    printf 'ACTION: In Slack App settings, enable Interactivity & Shortcuts, set Request URL to %s, and save it. Rerun onboard-clean-v1.sh resume for the four-meeting approval and read checks.\n' \
-      "$(slack_interactivity_request_url)"
-    return
-  fi
-  printf 'ACTION: In Slack App settings, enable Interactivity & Shortcuts, set Request URL to %s, and save it. Then create the bounded canary and rerun onboard-clean-v1.sh resume.\n' \
-    "$(slack_interactivity_request_url)"
-}
-
 resume() {
   acquire_operation_lock resume
   trap 'release_operation_lock' EXIT
@@ -2075,7 +1947,7 @@ resume() {
         start_runtime
         ;;
       resume_bootstrap)
-        resume_bootstrap "$(status_boolean "$status_json" slack_connected)"
+        resume_bootstrap
         start_runtime
         ;;
       complete_founder_browser_login)
@@ -2095,9 +1967,15 @@ resume() {
         print_status "$(setup_status)"
         return
         ;;
+      connect_slack_in_app)
+        start_runtime
+        printf 'ACTION: In the ECHO app, an owner opens Connected tools → Slack → Set up and follows the steps.\n'
+        print_status "$(setup_status)"
+        return
+        ;;
       complete_founder_slack_link)
         start_runtime
-        printf 'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person slack-link and complete its one-time Slack code exchange.\n'
+        printf 'ACTION: On the initial-owner machine, open the ECHO app: Connected tools → Slack → Connect. Without a browser: "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools connect --tool slack --method dm-code --slack-user <U…>.\n'
         print_status "$(setup_status)"
         return
         ;;
@@ -2109,9 +1987,6 @@ resume() {
         compose_clean down
         finalize
         start_runtime
-        print_slack_interactivity_action
-        print_status "$(setup_status)"
-        return
         ;;
       ready_to_start)
         start_runtime
@@ -2168,7 +2043,6 @@ case "${1:-}" in
   stage-rehearsal-inputs) shift; stage_rehearsal_inputs "$@" ;;
   prepare-rehearsal) shift; prepare_rehearsal "$@" ;;
   activate-provider-credentials) shift; activate_provider_credentials "$@" ;;
-  configure-slack-browser) shift; configure_slack_browser "$@" ;;
   replace-rehearsal) shift; replace_rehearsal "$@" ;;
   resume) [[ $# -eq 1 ]] || usage; resume ;;
   status) [[ $# -eq 1 ]] || usage; status ;;

@@ -1,3 +1,4 @@
+import { withSlackBotTokenV1, type SlackBotTokenGetterV1 } from "../../../../organization-control-plane/application/slack-bot-token-source-v1.js";
 import { SlackApiError, SlackWebApiClient, type SlackWebApiClientOptions } from "../../shared/slack/slack-web-api-client.js";
 
 const POST_RECONCILIATION_LOOKBACK_MS = 5 * 60 * 1_000;
@@ -8,6 +9,8 @@ const DEFINITIVE_POST_FAILURE_CODES = new Set([
   "invalid",
 ]);
 const SLACK_DIRECT_MESSAGE_CHANNEL = /^D[A-Z0-9]{2,255}$/;
+/** The bot token could not be obtained, so no request reached Slack. */
+const TOKEN_UNAVAILABLE = Symbol("Slack bot token unavailable");
 
 export interface PrivateSlackApprovalCardPresentationV1 {
   readonly text: string;
@@ -137,6 +140,10 @@ function messageIsAbsent(error: unknown): boolean {
   );
 }
 
+function isSlackAuthFailure(error: unknown): boolean {
+  return error instanceof SlackApiError && error.code === "auth";
+}
+
 function assertDirectMessageChannel(channelId: string): void {
   if (!SLACK_DIRECT_MESSAGE_CHANNEL.test(channelId)) {
     throw new Error("private Slack approval requires a direct-message channel");
@@ -152,7 +159,10 @@ function assertDirectMessageChannel(channelId: string): void {
  * become actionable before its D2 binding is durable.
  */
 export class PrivateSlackApprovalCardPosterV1 {
-  private readonly client: SlackWebApiClient;
+  private readonly token: SlackBotTokenGetterV1;
+  private readonly client_options: SlackWebApiClientOptions;
+  private readonly on_auth_failure: ((error: SlackApiError) => void) | undefined;
+  private readonly needs_reinstall: (() => boolean) | undefined;
   private readonly now: () => number;
   /**
    * Slack's Retry-After is per process/token for this V1 delivery adapter.
@@ -164,13 +174,58 @@ export class PrivateSlackApprovalCardPosterV1 {
     | Awaited<ReturnType<SlackWebApiClient["authIdentity"]>>
     | undefined;
 
+  /**
+   * A function token is resolved for every Slack call. `on_auth_failure`
+   * hears a Slack auth error that one refreshed token did not cure (see
+   * `withSlackBotTokenV1`); a fixed string token is never refreshed, and
+   * neither is a connection `needs_reinstall` reports as already marked.
+   */
   constructor(
-    token: string,
-    options: SlackWebApiClientOptions & { readonly now?: () => number } = {},
+    token: string | SlackBotTokenGetterV1,
+    options: SlackWebApiClientOptions & {
+      readonly now?: () => number;
+      readonly on_auth_failure?: (error: SlackApiError) => void;
+      readonly needs_reinstall?: () => boolean;
+    } = {},
   ) {
-    const { now, ...clientOptions } = options;
+    const { now, on_auth_failure, needs_reinstall, ...clientOptions } = options;
     this.now = now ?? Date.now;
-    this.client = new SlackWebApiClient(token, clientOptions);
+    this.token = typeof token === "string" ? async () => token : token;
+    this.client_options = clientOptions;
+    this.on_auth_failure = on_auth_failure;
+    this.needs_reinstall = needs_reinstall;
+  }
+
+  private slack<T>(call: (client: SlackWebApiClient) => Promise<T>): Promise<T> {
+    return withSlackBotTokenV1(
+      {
+        token: this.token,
+        is_auth_failure: isSlackAuthFailure,
+        on_auth_failure: (error) => this.on_auth_failure?.(error as SlackApiError),
+        ...(this.needs_reinstall === undefined ? {} : { needs_reinstall: this.needs_reinstall }),
+      },
+      (token) => call(new SlackWebApiClient(token, this.client_options)),
+    );
+  }
+
+  /**
+   * `slack`, except that a bot token the source cannot provide (a Nango
+   * outage, say) resolves to TOKEN_UNAVAILABLE: nothing reached Slack, so a
+   * step that is safe to repeat can answer `retry_allowed`.
+   */
+  private async slackOrNoToken<T>(
+    call: (client: SlackWebApiClient) => Promise<T>,
+  ): Promise<T | typeof TOKEN_UNAVAILABLE> {
+    let requested = false;
+    try {
+      return await this.slack((client) => {
+        requested = true;
+        return call(client);
+      });
+    } catch (error) {
+      if (requested) throw error;
+      return TOKEN_UNAVAILABLE;
+    }
   }
 
   private retryBlocked(): boolean {
@@ -196,10 +251,10 @@ export class PrivateSlackApprovalCardPosterV1 {
   ): Promise<PrivateSlackDirectMessageOutcomeV1> {
     if (this.retryBlocked()) return { kind: "retry_allowed" };
     try {
-      const opened = await this.client.openDirectMessage(
-        providerSubjectId,
-        signal,
+      const opened = await this.slackOrNoToken((client) =>
+        client.openDirectMessage(providerSubjectId, signal),
       );
+      if (opened === TOKEN_UNAVAILABLE) return { kind: "retry_allowed" };
       return { kind: "opened", ...opened };
     } catch (error) {
       if (signal?.aborted === true) throw error;
@@ -218,17 +273,20 @@ export class PrivateSlackApprovalCardPosterV1 {
     assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "retry_allowed" };
     try {
-      const posted = await this.client.postMessage(
-        {
-          channel: input.dm_channel_id,
-          text: inertMarkerText(input.approval_id),
-          blocks: [],
-          unfurlLinks: false,
-          unfurlMedia: false,
-          mrkdwn: false,
-        },
-        signal,
+      const posted = await this.slackOrNoToken((client) =>
+        client.postMessage(
+          {
+            channel: input.dm_channel_id,
+            text: inertMarkerText(input.approval_id),
+            blocks: [],
+            unfurlLinks: false,
+            unfurlMedia: false,
+            mrkdwn: false,
+          },
+          signal,
+        ),
       );
+      if (posted === TOKEN_UNAVAILABLE) return { kind: "retry_allowed" };
       return { kind: "posted", provider_message_ts: posted.ts };
     } catch (error) {
       if (signal?.aborted === true) throw error;
@@ -255,24 +313,26 @@ export class PrivateSlackApprovalCardPosterV1 {
     if (this.retryBlocked()) return { kind: "retry_allowed" };
     try {
       if (this.auth_identity === undefined) {
-        this.auth_identity = await this.client.authIdentity(signal);
+        this.auth_identity = await this.slack((client) => client.authIdentity(signal));
       }
       const identity = this.auth_identity;
       const approvalMarker = marker(input.approval_id);
       const matches = (
-        await this.client.channelHistory(
-          {
-            channel: input.dm_channel_id,
-            oldest: slackTimestampFromCanonicalUtc(
-              input.post_started_at,
-              -POST_RECONCILIATION_LOOKBACK_MS,
-            ),
-            latest: slackTimestampFromCanonicalUtc(
-              input.post_started_at,
-              POST_RECONCILIATION_LOOKAHEAD_MS,
-            ),
-          },
-          signal,
+        await this.slack((client) =>
+          client.channelHistory(
+            {
+              channel: input.dm_channel_id,
+              oldest: slackTimestampFromCanonicalUtc(
+                input.post_started_at,
+                -POST_RECONCILIATION_LOOKBACK_MS,
+              ),
+              latest: slackTimestampFromCanonicalUtc(
+                input.post_started_at,
+                POST_RECONCILIATION_LOOKAHEAD_MS,
+              ),
+            },
+            signal,
+          ),
         )
       )
         .filter(
@@ -292,20 +352,22 @@ export class PrivateSlackApprovalCardPosterV1 {
       }
       for (const duplicate of duplicates) {
         try {
-          await this.client.updateMessage(
-            {
-              channel: input.dm_channel_id,
-              ts: duplicate.ts,
-              text: duplicateMarkerText({
-                approval_id: input.approval_id,
-                canonical_provider_message_ts: canonical.ts,
-              }),
-              blocks: [],
-              unfurlLinks: false,
-              unfurlMedia: false,
-              mrkdwn: false,
-            },
-            signal,
+          await this.slack((client) =>
+            client.updateMessage(
+              {
+                channel: input.dm_channel_id,
+                ts: duplicate.ts,
+                text: duplicateMarkerText({
+                  approval_id: input.approval_id,
+                  canonical_provider_message_ts: canonical.ts,
+                }),
+                blocks: [],
+                unfurlLinks: false,
+                unfurlMedia: false,
+                mrkdwn: false,
+              },
+              signal,
+            ),
           );
         } catch (error) {
           if (!messageIsAbsent(error)) throw error;
@@ -336,17 +398,19 @@ export class PrivateSlackApprovalCardPosterV1 {
     assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "uncertain" };
     try {
-      await this.client.updateMessage(
-        {
-          channel: input.dm_channel_id,
-          ts: input.provider_message_ts,
-          text: `${input.card.text}\n\n${marker(input.approval_id)}`,
-          blocks: input.card.blocks,
-          unfurlLinks: input.card.transport.unfurl_links,
-          unfurlMedia: input.card.transport.unfurl_media,
-          mrkdwn: input.card.transport.mrkdwn,
-        },
-        signal,
+      await this.slack((client) =>
+        client.updateMessage(
+          {
+            channel: input.dm_channel_id,
+            ts: input.provider_message_ts,
+            text: `${input.card.text}\n\n${marker(input.approval_id)}`,
+            blocks: input.card.blocks,
+            unfurlLinks: input.card.transport.unfurl_links,
+            unfurlMedia: input.card.transport.unfurl_media,
+            mrkdwn: input.card.transport.mrkdwn,
+          },
+          signal,
+        ),
       );
       return { kind: "done" };
     } catch (error) {
@@ -412,17 +476,19 @@ export class PrivateSlackApprovalCardPosterV1 {
     assertDirectMessageChannel(input.dm_channel_id);
     if (this.retryBlocked()) return { kind: "uncertain" };
     try {
-      await this.client.updateMessage(
-        {
-          channel: input.dm_channel_id,
-          ts: input.provider_message_ts,
-          text: input.text,
-          blocks: [],
-          unfurlLinks: false,
-          unfurlMedia: false,
-          mrkdwn: false,
-        },
-        signal,
+      await this.slack((client) =>
+        client.updateMessage(
+          {
+            channel: input.dm_channel_id,
+            ts: input.provider_message_ts,
+            text: input.text,
+            blocks: [],
+            unfurlLinks: false,
+            unfurlMedia: false,
+            mrkdwn: false,
+          },
+          signal,
+        ),
       );
       return { kind: "done" };
     } catch (error) {

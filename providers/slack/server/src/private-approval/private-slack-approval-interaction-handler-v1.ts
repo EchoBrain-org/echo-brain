@@ -39,8 +39,11 @@ export interface PrivateSlackApprovalInteractionResolutionPersistenceV1 {
 }
 
 export interface PrivateSlackApprovalInteractionHandlerInputV1 {
-  /** Private runtime input. It must never be logged or persisted. */
-  readonly signing_secret: string;
+  /**
+   * Private runtime input. It must never be logged or persisted. A getter is
+   * read per request, so the active connection's app secret applies at once.
+   */
+  readonly signing_secret: string | (() => string);
   readonly persistence: PrivateSlackApprovalInteractionResolutionPersistenceV1;
   /** Clock for request freshness and durable receipt timestamps. */
   readonly now_unix_seconds?: () => number;
@@ -198,11 +201,20 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
           "Slack interaction content type is invalid",
         );
       }
+      let signingSecret: string;
+      try {
+        signingSecret = typeof input.signing_secret === "string" ? input.signing_secret : input.signing_secret();
+      } catch {
+        throw new AuthorityOperationError(
+          "unavailable",
+          "Slack interaction verification is unavailable",
+        );
+      }
       let verified;
       try {
         verified = verifyPrivateSlackApprovalRequestV1({
           raw_body: request.raw_body,
-          signing_secret: input.signing_secret,
+          signing_secret: signingSecret,
           headers: {
             "x-slack-request-timestamp": request.slack_request_timestamp,
             "x-slack-signature": request.slack_signature,

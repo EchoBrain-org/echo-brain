@@ -7,7 +7,7 @@
  * compute every digest supplied to the builders below.
  */
 
-import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "./slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../adapters/slack/slack-app-manifest-provider-v1.js";
 import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/application/record-visibility-policy-contracts-v1";
 
 export type PersonMembershipType = "employee" | "owner";
@@ -267,11 +267,10 @@ export function validateOrganizationToolConnectionContractV2(
     record.required_provider_scopes,
     `${label} required_provider_scopes`,
   );
+  // Exactly the private ECHO Slack app recipe's bot scopes.
   if (
-    scopes.length !== SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES.length ||
-    scopes.some(
-      (scope, index) => scope !== SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES[index],
-    )
+    scopes.length !== SLACK_PRIVATE_APP_BOT_SCOPES_V1.length ||
+    scopes.some((scope, index) => scope !== SLACK_PRIVATE_APP_BOT_SCOPES_V1[index])
   ) {
     invalid(
       `${label} required_provider_scopes`,

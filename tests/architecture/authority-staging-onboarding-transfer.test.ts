@@ -30,10 +30,14 @@ const INPUT_FILES = [
   "runtime-profile.json",
   "oidc-config.json",
   "oidc-client-secret",
-  "slack-bot-token",
-  "slack-signing-secret",
+  "nango-secret-key",
   "granola-credential",
   "llm-credential",
+];
+const REUSABLE_INPUT_FILES = [
+  "onboarding.clean-v1.json",
+  "release.json",
+  "runtime-profile.json",
 ];
 const STAGING_SYNTHETIC_MEETING_FILES = [
   "01-revenue-signal-calibration.json",
@@ -62,7 +66,7 @@ function inputDirectory() {
 
 function reusableStagingInputDirectory() {
   const path = privateDirectory("echo-authority-rehearsal-input-");
-  for (const name of INPUT_FILES.slice(0, 3)) {
+  for (const name of REUSABLE_INPUT_FILES) {
     const file = join(path, name);
     writeFileSync(file, `${name}\n`, { mode: 0o600 });
     chmodSync(file, 0o600);
@@ -289,7 +293,7 @@ describe("Authority staging onboarding input preflight", () => {
     expect(report).toMatchObject({
       ready: true,
       reuse_current_provider_inputs: true,
-      required_files: INPUT_FILES.slice(0, 3).map((name) => ({ name, state: "ready" })),
+      required_files: REUSABLE_INPUT_FILES.map((name) => ({ name, state: "ready" })),
     });
   });
 
@@ -389,8 +393,8 @@ describe("Authority staging onboarding input preflight", () => {
     const source = inputDirectory();
     const archive = privateDirectory("echo-authority-onboarding-archive-");
     const meetings = stagingSyntheticMeetingsDirectory();
-    for (const name of INPUT_FILES) truncateSync(join(source, name), 5 * 1024 * 1024);
-    const totalBytes = 45 * 1024 * 1024 + STAGING_SYNTHETIC_MEETING_FILES
+    for (const name of INPUT_FILES) truncateSync(join(source, name), 6 * 1024 * 1024);
+    const totalBytes = 48 * 1024 * 1024 + STAGING_SYNTHETIC_MEETING_FILES
       .reduce((total, name) => total + readFileSync(join(meetings, name)).length, 0);
 
     const report = preflightOnboardingInput(privateConfig(source, archive, meetings));
@@ -427,7 +431,7 @@ describe("Authority staging onboarding input preflight", () => {
     const archive = privateDirectory("echo-authority-onboarding-archive-");
     // The three ways an operator actually arrives at the AWS step unready:
     // a credential never obtained, a file created empty, and one left readable.
-    rmSync(join(source, "slack-signing-secret"));
+    rmSync(join(source, "nango-secret-key"));
     writeFileSync(join(source, "llm-credential"), "", { mode: 0o600 });
     chmodSync(join(source, "granola-credential"), 0o644);
 
@@ -438,14 +442,14 @@ describe("Authority staging onboarding input preflight", () => {
     const byName = new Map(
       report.required_files.map((file) => [file.name, file.state]),
     );
-    expect(byName.get("slack-signing-secret")).toBe("missing");
+    expect(byName.get("nango-secret-key")).toBe("missing");
     expect(byName.get("llm-credential")).toBe("empty");
     expect(byName.get("granola-credential")).toBe("not_private_regular");
     expect(byName.get("release.json")).toBe("ready");
-    expect(report.next_action).toContain("slack-signing-secret");
+    expect(report.next_action).toContain("nango-secret-key");
     expect(report.next_action).toContain("llm-credential");
     // Metadata only. No file content may appear in a readiness report.
-    expect(JSON.stringify(report)).not.toContain("slack-bot-token\n");
+    expect(JSON.stringify(report)).not.toContain("oidc-client-secret\n");
   });
 
   it("redacts stray filenames and flags a non-private directory before any transfer", () => {
@@ -474,16 +478,16 @@ describe("Authority staging onboarding input preflight", () => {
   it("gives an actionable aggregate-size diagnosis when every file is individually valid", () => {
     const source = inputDirectory();
     const archive = privateDirectory("echo-authority-onboarding-archive-");
-    for (const name of INPUT_FILES) truncateSync(join(source, name), 5 * 1024 * 1024);
+    for (const name of INPUT_FILES) truncateSync(join(source, name), 6 * 1024 * 1024);
 
     const report = preflightOnboardingInput(privateConfig(source, archive));
 
     expect(report).toMatchObject({
       ready: false,
-      total_bytes: 45 * 1024 * 1024,
+      total_bytes: 48 * 1024 * 1024,
       total_bytes_limit: 40 * 1024 * 1024,
-      bytes_over_limit: 5 * 1024 * 1024,
-      next_action: "reduce total required input bytes by at least 5242880, to at most 41943040, then rerun preflight",
+      bytes_over_limit: 8 * 1024 * 1024,
+      next_action: "reduce total required input bytes by at least 8388608, to at most 41943040, then rerun preflight",
     });
     expect(report.required_files.every((file) => file.state === "ready")).toBe(true);
   });
@@ -607,7 +611,7 @@ describe("Authority staging onboarding transfer", () => {
     const source = inputDirectory();
     const output = privateDirectory("echo-authority-onboarding-archive-");
     rmSync(join(source, "llm-credential"));
-    symlinkSync("slack-bot-token", join(source, "llm-credential"));
+    symlinkSync("nango-secret-key", join(source, "llm-credential"));
 
     expect(() =>
       createOnboardingInputArchive({
@@ -617,10 +621,19 @@ describe("Authority staging onboarding transfer", () => {
     ).toThrow("input_file_not_private_regular");
   });
 
-  it("requires the Slack signing secret in the private input shape", () => {
+  it("requires the Nango secret key and refuses a leftover Slack input", () => {
     const source = inputDirectory();
     const output = privateDirectory("echo-authority-onboarding-archive-");
-    rmSync(join(source, "slack-signing-secret"));
+    writeFileSync(join(source, "slack-bot-token"), "slack-bot-token\n", { mode: 0o600 });
+
+    expect(() =>
+      createOnboardingInputArchive({
+        sourceDir: source,
+        output: join(output, "leftover.tar.gz"),
+      }),
+    ).toThrow("input_directory_shape_invalid");
+    rmSync(join(source, "slack-bot-token"));
+    rmSync(join(source, "nango-secret-key"));
 
     expect(() =>
       createOnboardingInputArchive({
@@ -650,9 +663,10 @@ describe("Authority staging onboarding transfer", () => {
     expect(joined).toContain("--expected-bucket-owner '123456789012'");
     expect(joined).toContain("member.issym() or member.islnk()");
     expect(joined).toContain("maximum_total_bytes");
-    expect(joined).toContain('"slack-signing-secret"');
-    expect(joined).toContain("slack-bot-token slack-signing-secret granola-credential");
-    expect(joined).toContain('tr -d " ")" = 9');
+    expect(joined).toContain('"nango-secret-key"');
+    expect(joined).toContain("oidc-client-secret nango-secret-key granola-credential llm-credential; do");
+    expect(joined).toContain('tr -d " ")" = 8');
+    expect(joined).not.toContain("slack");
     expect(joined).toContain("doctor --input-dir \"$input\" >/dev/null 2>&1");
     expect(joined).toContain("prepare --input-dir \"$input\" >/dev/null 2>&1");
     expect(joined).toContain("authority-staging-onboarding-input-transferred");
@@ -708,10 +722,10 @@ describe("Authority staging onboarding transfer", () => {
     });
 
     expect(tarEntries(archive.path).map((entry) => entry.name)).toEqual([
-      ...INPUT_FILES.slice(0, 3),
+      ...REUSABLE_INPUT_FILES,
       ...STAGING_SYNTHETIC_MEETING_FILES.map((name) => `staging-meetings/${name}`),
     ]);
-    expect(readFileSync(archive.path).includes(Buffer.from("slack-bot-token"))).toBe(false);
+    expect(readFileSync(archive.path).includes(Buffer.from("nango-secret-key"))).toBe(false);
     expect(readFileSync(archive.path).includes(Buffer.from("llm-credential"))).toBe(false);
   });
 
@@ -757,7 +771,7 @@ describe("Authority staging onboarding transfer", () => {
     expect(command).toContain(`--artifact-sha256 '${receipt.sha256}'`);
     expect(command).not.toContain(" doctor ");
     expect(command).not.toContain(" prepare ");
-    expect(command).not.toContain("slack-bot-token");
+    expect(command).not.toContain("nango-secret-key");
     expect(command).not.toContain("llm-credential");
   });
 

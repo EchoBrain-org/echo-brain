@@ -1,4 +1,4 @@
-import type { OrganizationPersonToolV3 } from '@echo-brain/organization-api';
+import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from "../application/ports/person-access-authorization.js";
 import type { ProviderHttpApplicationV1 } from "../application/ports/provider-http-application-v1.js";
 
@@ -26,7 +26,7 @@ export interface PersonExternalIdentityRuntimeInputV1 {
 export interface OpenedPersonExternalIdentityRuntimeV1 {
   /** The currently-versioned external-identity HTTP application. */
   readonly application: ProviderHttpApplicationV1;
-  tools(accessToken: string): Promise<readonly OrganizationPersonToolV3[]>;
+  tools(accessToken: string): Promise<readonly OrganizationPersonToolV4[]>;
   close(): void;
 }
 

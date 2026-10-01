@@ -7,6 +7,7 @@ import { createProjectContextApplicationV1 } from '../application/project-contex
 import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import { createRecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
 import { createPersonToolsHttpApplicationV3 } from '../presentation/person-tools-http-application-v3.js';
+import { createPersonToolsHttpApplicationV4 } from '../presentation/person-tools-http-application-v4.js';
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
@@ -332,6 +333,10 @@ export async function startOrganizationAuthorityApiRuntime(
         }),
       ),
       person_tools: createPersonToolsHttpApplicationV3({
+        authenticate: (access_token) => sessions.authenticateAccess({ access_token }),
+        tools: personTools,
+      }),
+      person_tools_v4: createPersonToolsHttpApplicationV4({
         authenticate: (access_token) => sessions.authenticateAccess({ access_token }),
         tools: personTools,
       }),
