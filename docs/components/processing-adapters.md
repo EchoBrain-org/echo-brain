@@ -58,6 +58,11 @@ are defined by [INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semant
 An adapter owns provider transport and canonicalization. It must not redefine
 core evidence, identity, authorization, or approval semantics.
 
+The current meeting composition has one organization-owned Granola
+export/admission bridge. Its credential and owner binding are selected by the
+Authority and stay out of Person clients; admitted revisions then use the
+provider-neutral meeting-source and approval contracts.
+
 ## Trust boundary
 
 Provider acknowledgements, stored provider objects, provider identities, and

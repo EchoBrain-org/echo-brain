@@ -118,9 +118,9 @@ the record facts appropriate for the selected product policy; it does not
 inspect an approval-surface payload.
 
 Approval and any future delivery remain separate capabilities. They may share
-a provider connection, but a generic Slack delivery channel must differ from
-the active Slack approval channel, preserving main's human-action/side-effect
-boundary.
+a provider connection, but a generic Slack delivery surface must differ from
+the active private Slack approval surface, preserving main's human-action/
+side-effect boundary.
 
 ## Cross-capability invariants
 
@@ -169,8 +169,9 @@ tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
 ## Current composition
 
-The Organization Authority composition root concretely selects Granola as the
-meeting source, OpenRouter with the pinned Claude Sonnet processing version as the
+The Organization Authority composition root concretely selects one
+organization-owned Granola export/admission bridge as the meeting source,
+OpenRouter with the pinned Claude Sonnet processing version as the
 decision processor, Slack for private approval cards, interactions, and
 identity, and Authority SQLite state. It separately
 composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter

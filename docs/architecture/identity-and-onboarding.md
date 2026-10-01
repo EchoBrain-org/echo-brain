@@ -7,8 +7,10 @@ ECHO processes organization meeting data on the organization Authority. A
 person's machine owns only its private Authority origin and rotating Person
 session credentials. The Authority owns OIDC verification, principals,
 memberships, organization authorization, meeting-source and provider
-credentials, processing state, and revocation, except the Slack bot token and
-a copy of the organization's Slack app client secret, which Nango holds
+credentials, processing state, and revocation. Nango holds the organization's
+Slack bot token and its OAuth install copy of the Slack app client secret;
+the Authority retains its own private client-secret copy for person-link
+sign-in and the signing secret for inbound-interaction verification
 ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
 
 ## Durable identity
@@ -65,6 +67,12 @@ secret, and the signing secret in its private credential store
 ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
 SQLite receives only that credential reference and verified public identity;
 it holds no bot token.
+
+Granola is one organization-owned meeting export and admission bridge. Its
+credential and canonical owner-email binding stay on the Authority; people do
+not connect Granola from the Person client or supply individual Granola keys.
+It emits revisions through the existing meeting-source admission and approval
+path before any meeting becomes readable context.
 
 After that organization tool is active, a signed-in Person runs
 `echo-brain person tools connect --tool slack`, which opens Slack's sign-in

@@ -96,6 +96,12 @@ export-equivalent API access, revision identity and cursor behavior; ECHO
 continues to bind custody, audience, immutable revisions and approval policy.
 An export grant does not automatically authorize retention or sharing.
 
+The current meeting profile selects one organization-owned Granola export
+bridge. Its organization credential and canonical owner-email binding are
+Authority-only inputs; every exported revision enters the same source-admission
+and approval path. There is no Person-client Granola connection flow or
+per-person Granola credential in this profile.
+
 ## Ownership and Nango
 
 | Work | Owner |

@@ -242,6 +242,8 @@ echo-brain person logout
 Stop the Organization Authority service. Each source file must contain exactly its value, without
 trailing whitespace. The Granola owner-email file must contain the same
 canonical lowercase email given to bootstrap and proved by OIDC.
+This installs the single organization-owned Granola export/admission bridge;
+it does not create a Person Granola connection or accept a per-person key.
 
 ```sh
 echo-organization-authority-setup credentials-install \
