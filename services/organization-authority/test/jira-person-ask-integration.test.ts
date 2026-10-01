@@ -72,7 +72,6 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     createConnectSession: vi.fn(async input => { slackTags = input.tags; return { connect_link: 'https://connect.nango.dev/fixture-slack', expires_at: new Date(Date.now() + 60_000).toISOString() }; }),
     createReconnectSession: vi.fn(), findConnectionIdByTag: vi.fn(async () => 'fixture-slack-reference'),
     getSlackConnection: vi.fn(async () => ({ connection_id: 'fixture-slack-reference', tags: slackTags, team_id: 'TFIXTURE', enterprise_id: null, is_enterprise_install: false, app_id: 'AFIXTURE', bot_user_id: 'UBOTFIXTURE', granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: 'xoxb-synthetic-slack', updated_at: new Date().toISOString() })),
-    deleteConnection: vi.fn(),
   };
   const verifySlack = vi.fn(async () => ({ team_id: 'TFIXTURE', enterprise_id: null, bot_user_id: 'UBOTFIXTURE', bot_id: 'BFIXTURE', app_id: 'AFIXTURE', granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, verification_evidence_sha256: canonicalSha256({ fixture: 'slack-identity' }) }));
   const audit = openAuthorityDatabase(join(state, 'authority.sqlite'), { fileMustExist: true });
