@@ -137,6 +137,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: ProviderHttpApplicationV1;
   readonly person_tools?: ProviderHttpApplicationV1;
+  readonly person_tools_v4?: ProviderHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
   readonly person_record_read?: PersonRecordReadHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
@@ -167,7 +168,7 @@ function providerIngressRoutes(
   options: OrganizationAuthorityHttpServerOptions,
 ): ReadonlyMap<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }> {
   const mounted = new Map<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }>();
-  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link, options.person_tools]) {
+  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link, options.person_tools, options.person_tools_v4]) {
     if (application === undefined) continue;
     const routeIds = new Set<string>();
     for (const route of application.routes) {

@@ -1,5 +1,5 @@
 import { validateOrganizationPersonTools } from '@echo-brain/provider-slack-client/organization-api/person-tools';
-import type { OrganizationPersonToolV3 } from '@echo-brain/organization-api';
+import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 import { observeCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { ORGANIZATION_API_PERSON_TOOLS_PATH, ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH } from "@echo-brain/provider-slack-client/organization-api/person-tools";
@@ -215,12 +215,13 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
             service: application,
             ...(browser === undefined ? {} : { browser }),
           }),
-          tools: async (token: string): Promise<readonly OrganizationPersonToolV3[]> => {
+          tools: async (token: string): Promise<readonly OrganizationPersonToolV4[]> => {
             const current = validateOrganizationPersonTools(await application.tools(token));
+            // Organization setup is owner-only and not computed yet; task 7 fills it in.
             return current.tools.map(tool => Object.freeze({
               tool_id: 'slack', display_name: 'Slack', availability: tool.availability,
               personal_status: tool.personal_status, external_scope_id: tool.workspace_id,
-              external_subject_id: tool.account_id,
+              external_subject_id: tool.account_id, organization_setup: null,
             }));
           },
           close: () => database.close(),
