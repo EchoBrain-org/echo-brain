@@ -52,7 +52,7 @@ import {
   validateProjectContextSearchResultV2,
   validateProjectPageRequestV2, validateProjectListV2, validateProjectSummaryV2, type ProjectPageRequestV2,
 } from '@echo-brain/organization-api';
-import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
+import { ORGANIZATION_API_PERSON_TOOLS_PATH_V4, validateOrganizationPersonToolsV4, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { validatePersonJiraConnectV1, validatePersonJiraCompletionV1, validatePersonJiraStateV1, type PersonJiraConnectV1, type PersonJiraConnectionStateV1 } from './jira-connection-v1.js';
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
@@ -1471,8 +1471,8 @@ export class PersonAuthorityClient {
   }
 
   tools(accessToken: string) {
-    return this.getJson({ path: ORGANIZATION_API_PERSON_TOOLS_PATH_V3, access_token: accessToken,
-      validate_response: validateOrganizationPersonToolsV3, maximum_response_bytes: 32768 });
+    return this.getJson({ path: ORGANIZATION_API_PERSON_TOOLS_PATH_V4, access_token: accessToken,
+      validate_response: validateOrganizationPersonToolsV4, maximum_response_bytes: 32768 });
   }
 
   employees(accessToken: string): Promise<EmployeeRosterV1> {

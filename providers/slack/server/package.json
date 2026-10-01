@@ -29,10 +29,6 @@
       "types": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.d.ts",
       "import": "./dist/person-identity/slack-person-external-identity-runtime-bundle-v1.js"
     },
-    "./organization-setup/slack-organization-setup-workflow-v1": {
-      "types": "./dist/organization-setup/slack-organization-setup-workflow-v1.d.ts",
-      "import": "./dist/organization-setup/slack-organization-setup-workflow-v1.js"
-    },
     "./private-approval/private-slack-approval-interaction-protocol-v1": {
       "types": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.d.ts",
       "import": "./dist/private-approval/private-slack-approval-interaction-protocol-v1.js"
@@ -84,10 +80,6 @@
     "./organization-control-plane/adapters/nango/nango-connection-client-v1": {
       "types": "./dist/organization-control-plane/adapters/nango/nango-connection-client-v1.d.ts",
       "import": "./dist/organization-control-plane/adapters/nango/nango-connection-client-v1.js"
-    },
-    "./organization-control-plane/persistence/sqlite-slack-active-connection-v1": {
-      "types": "./dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.d.ts",
-      "import": "./dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js"
     },
     "./organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1": {
       "types": "./dist/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.d.ts",

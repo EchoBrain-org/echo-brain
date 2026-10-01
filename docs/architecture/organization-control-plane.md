@@ -1,7 +1,7 @@
 # Organization control plane
 
-**Status:** current organization-owned Slack onboarding, Person Slack identity
-linking, and private Slack DM approval persistence.
+**Status:** current organization-owned Slack onboarding through Nango, Person
+Slack identity linking, and private Slack DM approval persistence.
 
 The control plane is a library linked into the Organization Authority. It owns
 no HTTP listener. The Authority composes neutral control contracts with the
@@ -9,10 +9,13 @@ Slack adapters under `providers/slack/server/src/organization-control-plane`:
 
 | Entry point | Responsibility |
 | --- | --- |
-| Slack provider `composition/slack-connection-setup-cli` | The owner-attributed Slack connection ceremony, which initial-owner setup runs in-process |
-| Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack identity provider |
+| Slack provider `organization-setup/slack-organization-setup-workflow-v1` | The owner's in-app Slack app setup and Nango-backed install ceremony (`person tools setup`/`connect --tool slack`) |
+| Slack provider `adapters/slack/slack-app-manifest-provider-v1` | Builds the ECHO Slack app recipe and calls Slack's Manifest API |
+| Slack provider `adapters/nango/nango-connection-client-v1` | Nango connect/reconnect sessions and bot-token reads |
+| Slack provider `adapters/oidc/slack-browser-identity-provider` | The person's browser sign-in link, with the installed app's own client |
+| Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack `auth.test` checks of an install and the DM-code person link |
 | Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
-| `security/file-secret-store` | The private secret store for the Slack bot credential |
+| `security/file-secret-store` | The private secret store for the organization's Slack app credential bundle: client ID/secret, signing secret, and Nango connection ID ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)) |
 | Slack provider `slack-approval-integration-v1` | Private DM approval policy resolution, reviewer targeting, and approval persistence |
 | `organization-control-database-v1` | Opening the control database and applying the current V3 baseline |
 | `record-visibility-policy-contracts-v1` | Provider-neutral Person visibility policy contracts consumed by approval resolution |
@@ -21,7 +24,7 @@ Slack adapters under `providers/slack/server/src/organization-control-plane`:
 
 1. A current Authority owner can make one organization-owned Slack connection
    active only after the Authority independently verifies its provider
-   identity, scopes, and public channel access.
+   identity, scopes, and workspace through Nango. Nango holds the bot token.
 2. A signed-in Person can prove ownership of one Slack human identity and link
    it to their current ECHO membership, review that link under Connected
    tools, and disconnect it. Linking creates no approval capability, role, or
@@ -64,68 +67,88 @@ no active organization Slack connection
 Slack is inactive and unavailable for employee connection
         |
         v
-current Authority owner submits bot token + public channel ID
+owner pastes a Slack app configuration token in the ECHO app
         |
         v
-Authority verifies bot, app, workspace, required scopes, and channel access
+ECHO creates the private Slack app and installs it through a Nango connect session
         |
         v
-mode-0600 customer secret file + opaque handle and public metadata in SQLite
+Authority verifies the app, workspace, bot, and the four required scopes
+        |
+        v
+credential bundle (client ID/secret, signing secret, Nango connection ID) in the
+private secret store + opaque handle and public metadata in SQLite
         |
         v
 organization Slack connection is active
 ```
 
-Onboarding is an owner-attributed direct credential ceremony, not OAuth. The
-required Slack scopes are `channels:history`, `channels:read`, `chat:write`,
-`im:history`, `im:write`, `reactions:read`, and `users:read`. `im:write` opens
-the verified meeting owner's private DM and `im:history` reconciles a retry
-without duplicating that DM card. The configured public channel is verified
-for bot membership only; it receives neither Person identity challenges nor
-approval cards.
+Onboarding is an owner-attributed ceremony run from the ECHO app (Connected
+tools → Slack → Set up), not a host credential ceremony. The owner generates a
+Slack app configuration token from Slack's own "Your App Configuration
+Tokens" page and pastes it once; ECHO creates its private Slack app for that
+organization through Slack's Manifest API, then opens a Nango connect session
+that carries that app's client ID and secret as a per-connection override.
+Nango runs the OAuth install and returns the bot token; the Authority never
+asks the owner for it directly. The required Slack scopes are exactly
+`chat:write`, `im:history`, `im:write`, and `users:read`. `im:write` opens the
+verified meeting owner's private DM and `im:history` reconciles a retry
+without duplicating that DM card. There is no public channel step: the
+public identity-link channel and its reaction-era scopes (`channels:history`,
+`channels:read`, `reactions:read`) are retired (revision 3).
 
-Provider verification first uses Slack `auth.test` for the token-bound
-workspace, bot user, bot ID, and granted scopes. It then uses `bots.info` for
-that exact bot ID and requires the returned bot ID and user ID to agree, the
-bot not to be deleted, and a canonical non-null Slack app ID. If `auth.test`
-also returns an app ID, it is only a corroborating value and must agree with
-`bots.info`; its omission is not proof that there is no app. The selected
-channel must be an unarchived public `C...` channel and the verified bot must
-be a current member. Its Slack `context_team_id` must equal the workspace
-proven by the bot token, and externally shared or pending-external Slack
-Connect channels are rejected. A failed, incomplete, or unavailable
-verification leaves no active connection; absence therefore means inactive.
+Provider verification requires the Nango install to be for the
+organization's own app (the credential bundle's app ID) and to grant the four
+scopes, then calls Slack `auth.test` with the Nango-held bot token and requires
+Slack's report and Nango's to name the same app, workspace, and bot user. The
+bundle holds no workspace: verification compares Nango's and Slack's reports
+with each other, and a reconnect also compares them against the active
+connection. An install for a different app, workspace, or bot is refused and
+changes nothing; a missing scope is refused the same way. A failed, incomplete, or unavailable verification leaves no active
+connection; absence therefore means inactive. A reconnect of the same app
+reuses the same Nango connection ID and leaves every outstanding approval card
+untouched.
 
-Raw bot-token bytes are written only to the organization-scoped Authority
-private directory as a mode-0600 file. `integrations.sqlite` receives an opaque
-handle plus the verified workspace, bot identity, app ID, granted scopes,
-public channel configuration, evidence digests, and activation audit. The
-database never receives the token.
+The Slack bot token is never written to Authority state: Nango holds it, and
+the Authority fetches it at use time and caches it in memory for at most five
+minutes ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
+The organization-scoped Authority private secret store instead holds one
+credential bundle: the app's client ID and secret, its signing secret, and the
+Nango connection ID. `integrations.sqlite` receives only an opaque handle to
+that bundle plus the verified workspace, bot identity, app ID, granted scopes,
+evidence digests, and activation audit. The database never receives the bot
+token, the client secret, or the signing secret.
 
 The `slack-organization-tool-v1` ready state is accepted only while its opaque
 credential reference resolves to a private readable secret during Authority
-startup. Private approval additionally needs the same app's Interactivity
-Request URL at `/v2/integrations/slack/interactions` and its signing secret.
-Event Subscriptions and Socket Mode are not used.
+startup. Private approval additionally needs that same bundle's signing
+secret to verify Slack's Interactivity Request URL at
+`/v2/integrations/slack/interactions`; the Slack app recipe sets that URL, so
+no operator saves it by hand. Event Subscriptions and Socket Mode are not
+used.
 
 ## Person Slack identity link
 
-A signed-in Person can link one Slack human identity in two ways.
+A signed-in Person can link one Slack human identity in two ways: Slack's own
+browser sign-in, the default, or a DM-code challenge for a machine without a
+browser.
 
-The manual challenge: the Person client keeps a one-time code, the Authority
-opens a one-to-one DM with the requested recipient through the organization
-bot (`conversations.open` with `return_im=true`), verifies the recipient, and
-posts a code-free challenge. Slack identifies the one human who replies with
-that code in the exact thread. Completion verifies the exact bot-authored
-thread and one human code reply, then rechecks the current session,
-connection, DM, and recipient before it creates or reuses that membership's
-external identity link. No shared-channel fallback is supported.
+The browser link (`person tools connect --tool slack`): the Person client
+opens a Slack sign-in page built from the organization app's client ID and
+secret, using Slack's OpenID Connect flow, and completes into the external
+identity link once Slack identifies the human who approved it. Nango is not
+involved; the person link stays entirely Authority-owned.
 
-The browser link: when the owner has configured the optional Slack browser
-OAuth file during onboarding, the Person client can instead open a browser
-attempt that proves the same Slack human through Slack's OAuth redirect and
-completes into the same external identity link. Without that configuration
-the browser route reports unavailable and the manual challenge remains.
+The DM-code challenge
+(`person tools connect --tool slack --method dm-code --slack-user U…`): the
+Person client keeps a one-time code, the Authority opens a one-to-one DM with
+the requested recipient through the organization bot (`conversations.open`
+with `return_im=true`), verifies the recipient, and posts a code-free
+challenge. Slack identifies the one human who replies with that code in the
+exact thread. Completion verifies the exact bot-authored thread and one human
+code reply, then rechecks the current session, connection, DM, and recipient
+before it creates or reuses that membership's external identity link. No
+shared-channel fallback is supported.
 
 Both paths prove one exact Slack `U...` or Enterprise Grid `W...` human in the
 exact workspace of the active connection. Provider issuer, tenant, subject,
@@ -241,10 +264,11 @@ The current schema does not persist:
 - control-plane signing delegation or recovery epochs;
 - offline authorization, multi-replica operation, HA, or witnessed backup
   rollback protection;
-- Slack credential or channel rotation, explicit organization-tool disconnect,
-  and operator actions for replacing the organization connection. Organization
-  access is disabled through membership revocation; a Person's own link is
-  disabled through the personal disconnect or membership revocation.
+- explicit organization-tool disconnect and replacing the organization
+  connection with a different app or workspace; only a reconnect of the same
+  app is supported in v1. Organization access is disabled through membership
+  revocation; a Person's own link is disabled through the personal disconnect
+  or membership revocation.
 
 These are design possibilities, not scheduled schema. They may be added only
 when an accepted milestone has an externally observable behavior that cannot

@@ -207,7 +207,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
       );
       try {
         const secrets = new FileOrganizationSecretStore(`${runtime.state_directory}/secrets`);
-        const botTokenSource = input.bot_token_source ?? createSlackBotTokenSourceV1({ secrets, nango: setupOptions.nango.client });
+        const botTokenSource = input.bot_token_source ?? createSlackBotTokenSourceV1({ secrets, nango: setupOptions.nango.client, health });
         const workflowInput = {
           database,
           authority_id: runtime.authority_id,

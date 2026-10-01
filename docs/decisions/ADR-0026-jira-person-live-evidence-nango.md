@@ -1,6 +1,6 @@
 ---
 schema_version: 1
-id: ADR-0025
+id: ADR-0026
 kind: decision
 status: proposed
 title: Person-bound Jira live evidence with Nango custody
@@ -19,7 +19,7 @@ updates:
   - ADR-0024
 ---
 
-# ADR-0025: Person-bound Jira live evidence with Nango custody
+# ADR-0026: Person-bound Jira live evidence with Nango custody
 
 This is a proposal awaiting founder acceptance. Fixture implementation is allowed;
 the new Authority composition is opt-in and disabled by default. Acceptance must

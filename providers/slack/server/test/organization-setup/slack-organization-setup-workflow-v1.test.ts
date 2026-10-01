@@ -90,7 +90,6 @@ function fakes() {
       if (found === undefined) throw new NangoClientErrorV1("not_found", "Nango connection was not found");
       return found;
     }),
-    deleteConnection: vi.fn(async () => undefined),
   } satisfies NangoConnectionClientV1;
   const verifier = {
     verifyConnection: vi.fn(async (token: string) => {
@@ -107,7 +106,7 @@ function finishConnectFor(f: ReturnType<typeof fakes>, overrides: Partial<NangoS
   const tags = f.nango.createConnectSession.mock.lastCall![0]!.tags;
   const id = `nango-conn-${String(f.connections.size + 1)}`;
   const connection: NangoSlackConnectionV1 = {
-    connection_id: id, tags, team_id: "T01", enterprise_id: null, is_enterprise_install: false, app_id: "A0APP1",
+    connection_id: id, tags, team_id: "T01", app_id: "A0APP1",
     bot_user_id: "UBOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: `${BOT_TOKEN}-${id}`, updated_at: T0, ...overrides,
   };
   f.connections.set(connection.connection_id, connection);
@@ -186,7 +185,7 @@ describe("Slack organization setup workflow v1", () => {
     for (const call of [
       () => workflow.setup(SETUP_REQUEST, "employee"), () => workflow.beginInstall(BEGIN_REQUEST, "employee"),
       () => workflow.installStatus(attempt, "employee"), () => workflow.cancelInstall(attempt, "employee"),
-    ]) await expect(call()).rejects.toMatchObject({ code: "unauthorized" });
+    ]) await expect(call()).rejects.toMatchObject({ code: "unauthorized", message: "Only an organization owner can set up Slack." });
     expect(workflow.organizationSetupForCaller("employee")).toBeNull();
     expect(manifest.createApp).not.toHaveBeenCalled();
     expect(nango.createConnectSession).not.toHaveBeenCalled();
@@ -321,6 +320,28 @@ describe("Slack organization setup workflow v1", () => {
     expect(readActiveSlackConnectionV1(database)).toBeUndefined();
     await expect(workflow.cancelInstall({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
+  });
+
+  it("re-checks ownership after Slack's check: an owner demoted mid-status activates nothing", async () => {
+    const { workflow, verifier, finishConnect, database } = setup();
+    SESSIONS.demoted = person("owner", 5);
+    try {
+      await workflow.setup(SETUP_REQUEST, "demoted");
+      const begun = await workflow.beginInstall(BEGIN_REQUEST, "demoted");
+      finishConnect();
+      const verify = verifier.verifyConnection.getMockImplementation()!;
+      verifier.verifyConnection.mockImplementationOnce(async (token: string) => {
+        SESSIONS.demoted = person("employee", 5);
+        return verify(token);
+      });
+      await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "demoted")).rejects.toMatchObject({ code: "unauthorized" });
+      expect(verifier.verifyConnection).toHaveBeenCalledOnce();
+      expect(readActiveSlackConnectionV1(database)).toBeUndefined();
+      // The attempt ended, so another owner may begin at once.
+      await expect(workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner")).resolves.toMatchObject({ attempt_id: expect.stringMatching(/^ssi_/) });
+    } finally {
+      delete SESSIONS.demoted;
+    }
   });
 
   it("reconnects the connected app on the same Nango connection and keeps the state hash", async () => {
@@ -491,6 +512,24 @@ describe("Slack runtime bundle with organization setup", () => {
       health.markNeedsReinstall(activeStateSha256(context.directory));
       await expect(context.tools("owner")).resolves.toEqual([{ ...enabled, organization_setup: "needs_reinstall" }]);
       await expect(context.tools("employee")).resolves.toEqual([{ ...enabled, organization_setup: null }]);
+    } finally {
+      context.opened.close();
+    }
+  });
+
+  it("keeps the owner's tools listing serving when the secret store holds two pending apps or a corrupt one", async () => {
+    const context = open();
+    try {
+      const secrets = new FileOrganizationSecretStore(join(context.directory, "secrets"));
+      for (const app_id of ["A0APP1", "A0APP2"]) {
+        secrets.create(serializeSlackAppCredentialsV1({ kind: "echo-slack-app-credentials-v1", app_id, client_id: "1234.5678",
+          client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET, nango_connection_id: null }));
+      }
+      await expect(context.tools("owner")).resolves.toMatchObject([{ availability: "unavailable", organization_setup: "needs_reinstall" }]);
+      await expect(context.tools("employee")).resolves.toMatchObject([{ organization_setup: null }]);
+      for (const reference of secrets.listReferences()) secrets.remove(reference);
+      secrets.create(JSON.stringify({ kind: "echo-slack-app-credentials-v1", app_id: "corrupt" }));
+      await expect(context.tools("owner")).resolves.toMatchObject([{ organization_setup: "needs_reinstall" }]);
     } finally {
       context.opened.close();
     }

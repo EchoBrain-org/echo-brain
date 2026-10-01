@@ -1,9 +1,8 @@
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import type { NangoSlackConnectionV1 } from "../adapters/nango/nango-connection-client-v1.js";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../adapters/slack/slack-app-manifest-provider-v1.js";
 import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../application/slack-app-credentials-v1.js";
-import type { OrganizationSecretReference, OrganizationSecretStore, VerifiedSlackConnection } from "../application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, type OrganizationSecretReference, type OrganizationSecretStore, type VerifiedSlackConnection } from "../application/slack-integration-contracts.js";
 import { assertSlackConnectionMetadataV1, insertActiveSlackConnectionV1, readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "./sqlite-slack-active-connection-v1.js";
 import type Database from "better-sqlite3";
 
@@ -76,7 +75,8 @@ async function verifyInstall(
   input: ActivateNangoSlackConnectionInputV1,
 ): Promise<VerifiedSlackConnection> {
   const { nango } = input;
-  if (nango.app_id !== input.credential.credentials.app_id || nango.is_enterprise_install) {
+  // The Nango parser already refuses an Enterprise Grid org-wide install.
+  if (nango.app_id !== input.credential.credentials.app_id) {
     throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
   }
   if (!grantsRecipeScopes(nango.granted_scopes)) {

@@ -6,7 +6,7 @@ import { validatePersonUpdateSubmitV3, validatePersonUpdateRequestId, validatePr
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import { validatePersonSourceEvidenceReadRequestV1, validatePersonMeetingTranscriptReadRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonListRequestV1, validatePersonOpenRequestV1, type PersonListRequestV1, type PersonOpenRequestV1 } from '@echo-brain/organization-api';
-import type { PersonToolCommandV1 } from '@echo-brain/organization-api';
+import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbNameV1, type PersonToolVerbV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
@@ -28,7 +28,7 @@ interface Output {
   write(value: string): unknown;
 }
 export interface PersonClientCliDependencies {
-  readonly tool_commands?: readonly PersonToolCommandV1[];
+  readonly tool_providers?: readonly PersonToolProviderV1[];
   readonly stdout?: Output;
   readonly stderr?: Output;
   readonly home_directory?: string;
@@ -37,8 +37,11 @@ export interface PersonClientCliDependencies {
   readonly now?: () => string;
   readonly random_bytes?: (size: number) => Uint8Array;
   readonly random_uuid?: () => string;
-  readonly read_input?: () => string | Promise<string>;
+  /** Replaces standard input; a secret read passes its terminal prompt. */
+  readonly read_input?: (secret_prompt?: string) => string | Promise<string>;
   readonly open_authorization_url?: (url: string) => boolean | Promise<boolean>;
+  /** Waits between a tool step's status reads. */
+  readonly sleep?: (ms: number) => Promise<void>;
   /** Desktop cancellation aborts the underlying fetch rather than hiding a late reply. */
   readonly abort_signal?: AbortSignal;
 }
@@ -195,7 +198,7 @@ Commands:
   updates     Save and search original notes with your chosen visibility.
   documents   Upload, search, and download exact document originals.
   employee    List, invite, reissue, or revoke an employee.
-  tools       Read organization tools and your current link status.
+  tools       List tools, or set up, connect and disconnect one.
 
 Run \`echo-brain person <command> --help\` for command options.
 `,
@@ -208,7 +211,12 @@ Provide exactly one identity option. --open-browser opens the handoff automatica
 Shows installed_version, client_build source_sha/source_kind, sign-in state, membership type, and Authority origin.
 Client provenance does not identify the Authority build serving requests. Status is local and makes no network request.
 `,
-  tools: `usage: echo-brain person tools\n\nShows organization tools and your current link status. Provider command help remains available through each command.\n`,
+  tools: `usage: echo-brain person tools [<setup|connect|disconnect|status|cancel> --tool <tool> [options]]
+
+Without a verb, lists your organization's tools and your link to each; owners also see each tool's organization setup.
+setup (owners only) and connect open the tool's page in your browser and wait. A token is read only from standard input.
+Run \`echo-brain person tools <verb> --help\` for each tool's options.
+`,
   logout: `usage: echo-brain person logout
 
 Removes the local session. A revoked session is also removed locally.
@@ -421,14 +429,53 @@ Shows each employee's name, canonical email, membership state, and invitation st
 `,
 };
 
-/** Returns supported human CLI help without constructing a client or session. */
-function personClientCliHelp(argv: readonly string[], commands: readonly PersonToolCommandV1[]): string | undefined {
-  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents' || argv[0] === 'evidence' || argv[0] === 'jira') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
-  const tool = commands.find(command => command.name === argv[0]);
-  if (tool && argv.length === 2 && argv[1] === '--help') {
-    return `usage: echo-brain person ${tool.name}${Object.keys(tool.options).map(option => ' --' + option + ' <value>').join('')}\n\n${tool.description}\n`;
+const TOOL_VERBS: readonly PersonToolVerbNameV1[] = ['setup', 'connect', 'disconnect', 'status', 'cancel'];
+
+function toolVerb(value: string | undefined): PersonToolVerbNameV1 | undefined {
+  return TOOL_VERBS.find((verb) => verb === value);
+}
+
+/** Built from each registered tool, so help never names an option the parser refuses. */
+function toolVerbHelp(value: string | undefined, providers: readonly PersonToolProviderV1[]): string | undefined {
+  const verb = toolVerb(value);
+  if (verb === undefined) return undefined;
+  const tools = providers.flatMap((provider) => {
+    const definition = provider.verbs[verb];
+    if (definition === undefined) return [];
+    const options = Object.entries(definition.options).map(([name, { type }]) => {
+      const text = type === 'boolean' ? `--${name}` : `--${name} <value>`;
+      return definition.requires?.includes(name) === true ? ` ${text}` : ` [${text}]`;
+    }).join('');
+    return [`  --tool ${provider.tool_id}${options}\n      ${definition.description}\n`];
+  });
+  return `usage: echo-brain person tools ${verb} --tool <tool> [options]\n\n${tools.join('')}`;
+}
+
+/** Tool ids are unique; a verb's options never shadow a core option or `--tool`, nor change type between tools. */
+function registerToolProviders(list: readonly PersonToolProviderV1[]) {
+  const providers = new Map<string, PersonToolProviderV1>();
+  const options: Record<string, { readonly type: 'string' | 'boolean' }> = {};
+  for (const provider of list) {
+    let valid = !providers.has(provider.tool_id) && /^[a-z][a-z0-9-]*$/.test(provider.tool_id);
+    for (const [verb, definition] of Object.entries(provider.verbs)) {
+      valid &&= toolVerb(verb) !== undefined && definition !== undefined &&
+        (definition.requires ?? []).every((name) => Object.hasOwn(definition.options, name));
+      for (const [name, option] of Object.entries(definition?.options ?? {})) {
+        valid &&= name !== 'tool' && !Object.hasOwn(OPTIONS, name) && (options[name] ?? option).type === option.type;
+        options[name] = option;
+      }
+    }
+    if (!valid) throw new Error('Person tool provider registration is invalid or duplicated');
+    providers.set(provider.tool_id, provider);
   }
-  if (argv.length === 1 && argv[0] === "--help") return HELP.person + commands.map(command => `  ${command.name}  ${command.description}\n`).join('');
+  return { providers, options };
+}
+
+/** Returns supported human CLI help without constructing a client or session. */
+function personClientCliHelp(argv: readonly string[], providers: readonly PersonToolProviderV1[]): string | undefined {
+  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents' || argv[0] === 'evidence' || argv[0] === 'jira') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
+  if (argv.length === 3 && argv[0] === 'tools' && argv[2] === '--help') return toolVerbHelp(argv[1], providers);
+  if (argv.length === 1 && argv[0] === "--help") return HELP.person;
   if (argv.length === 2 && argv[1] === "--help") return HELP[argv[0] ?? ""];
   if (
     argv.length === 3 &&
@@ -511,11 +558,29 @@ function contextPaging(values: Record<Option, string | boolean | undefined>) {
   };
 }
 
-async function readBoundedStdinLine(): Promise<string> {
-  const prompt = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
+/**
+ * Reads one secret line that is never echoed. A terminal gets one prompt line
+ * on standard error, then raw-mode input read with no output stream at all;
+ * closing the reader restores the terminal on Enter, Ctrl-C and every error.
+ * Piped input gets no prompt and no echo.
+ */
+export async function readSecretLine(
+  prompt: string,
+  input: NodeJS.ReadableStream & { readonly isTTY?: boolean } = process.stdin,
+  output: NodeJS.WritableStream = process.stderr,
+): Promise<string> {
+  const terminal = input.isTTY === true;
+  if (terminal) output.write(`${prompt}\n`);
+  return await readBoundedLine(input, undefined, terminal);
+}
+
+/** Shown as typed, for an acknowledgement such as a DM code's Enter. */
+function readBoundedStdinLine(): Promise<string> {
+  return readBoundedLine(process.stdin, process.stderr);
+}
+
+async function readBoundedLine(input: NodeJS.ReadableStream, output: NodeJS.WritableStream | undefined, terminal?: boolean): Promise<string> {
+  const prompt = createInterface({ input, output, terminal });
   try {
     const value = await prompt.question("");
     if (Buffer.byteLength(value, "utf8") > MAXIMUM_INPUT_BYTES) {
@@ -734,16 +799,9 @@ export async function runPersonClientCli(
 ): Promise<number> {
   const stdout = dependencies.stdout ?? process.stdout;
   const stderr = dependencies.stderr ?? process.stderr;
-  const toolCommands = dependencies.tool_commands ?? [];
-  const registered = new Map<string, PersonToolCommandV1>();
-  for (const command of toolCommands) {
-    if (registered.has(command.name) || (command.name === 'updates' || command.name === 'projects' || command.name === 'documents') || Object.hasOwn(RULES, command.name) || !/^[a-z][a-z0-9-]*$/.test(command.name) ||
-        command.requires?.some(name => !Object.hasOwn(command.options, name))) {
-      throw new Error('Person tool command registration is invalid or duplicated');
-    }
-    registered.set(command.name, command);
-  }
-  const help = personClientCliHelp(argv, toolCommands);
+  const toolProviders = dependencies.tool_providers ?? [];
+  const { providers, options: toolOptions } = registerToolProviders(toolProviders);
+  const help = personClientCliHelp(argv, toolProviders);
   if (help !== undefined) {
     stdout.write(help);
     return 0;
@@ -764,9 +822,11 @@ export async function runPersonClientCli(
   const jiraAction = argv[0] === 'jira' ? `jira-${argv[1] ?? ''}` : undefined;
   const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
-  const action = documentAction ?? evidenceAction ?? jiraAction ?? projectAction ?? updateAction ?? employeeAction ?? (argv[0] ?? "");
-  const toolCommand = registered.get(action);
-  const rule = RULES[action] ?? (toolCommand === undefined ? undefined : { accepts: Object.keys(toolCommand.options), requires: toolCommand.requires });
+  // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of the five.
+  const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;
+  const verbName = toolAction === undefined ? undefined : toolVerb(argv[1]);
+  const action = documentAction ?? evidenceAction ?? jiraAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction ?? (argv[0] ?? "");
+  const rule = RULES[action] ?? (verbName === undefined ? undefined : { accepts: ['tool', ...Object.keys(toolOptions)], requires: ['tool'] });
   if (rule === undefined) {
     print(stderr, { ok: false, error: usage() });
     return 2;
@@ -775,8 +835,9 @@ export async function runPersonClientCli(
   let values: Record<Option, string | boolean | undefined> = {};
   let listRequest: PersonListRequestV1 | undefined;
   let openRequest: PersonOpenRequestV1 | undefined;
+  let toolVerbDefinition: PersonToolVerbV1 | undefined;
   try {
-    const args = [...argv.slice(employeeAction === undefined && updateAction === undefined && projectAction === undefined && documentAction === undefined && evidenceAction === undefined && jiraAction === undefined ? 1 : 2)];
+    const args = [...argv.slice(employeeAction === undefined && updateAction === undefined && projectAction === undefined && documentAction === undefined && evidenceAction === undefined && jiraAction === undefined && toolAction === undefined ? 1 : 2)];
     // Accept a negative integer as a limit value so the existing bounds explain
     // it. Other dash-prefixed values retain parseArgs' strict option behavior.
     if (action === "records") {
@@ -791,7 +852,7 @@ export async function runPersonClientCli(
       strict: true,
       tokens: true,
       allowPositionals: false,
-      options: { ...OPTIONS, ...toolCommand?.options },
+      options: { ...OPTIONS, ...(verbName === undefined ? {} : { tool: { type: 'string' as const }, ...toolOptions }) },
     });
     values = parsed.values as Record<Option, string | boolean | undefined>;
     if (isContextAction(action)) {
@@ -818,6 +879,21 @@ export async function runPersonClientCli(
         throw new Error(
           `\`echo-brain person ${action}\` requires --${required}`,
         );
+      }
+    }
+    if (verbName !== undefined) {
+      const tool = String(values.tool);
+      toolVerbDefinition = providers.get(tool)?.verbs[verbName];
+      // An unknown tool is a usage error that never repeats the caller's value.
+      if (toolVerbDefinition === undefined) throw new Error(usage());
+      const command = `echo-brain person tools ${verbName} --tool ${tool}`;
+      for (const [name, value] of Object.entries(values)) {
+        if (value !== undefined && value !== false && name !== 'tool' && !Object.hasOwn(toolVerbDefinition.options, name)) {
+          throw new Error(`--${name} is not valid with \`${command}\``);
+        }
+      }
+      for (const required of toolVerbDefinition.requires ?? []) {
+        if (values[required] === undefined) throw new Error(`\`${command}\` requires --${required}`);
       }
     }
     if (
@@ -901,10 +977,12 @@ export async function runPersonClientCli(
   const readInteractiveLine = dependencies.read_input ?? readBoundedStdinLine;
 
   try {
-    if (toolCommand !== undefined) {
-      await toolCommand.run({ host: client, values, print: (value) => print(stdout, value),
+    if (toolVerbDefinition !== undefined) {
+      await toolVerbDefinition.run({ host: client, values, print: (value) => print(stdout, value),
         read_interactive_line: async () => await readInteractiveLine(),
-        open_browser: dependencies.open_authorization_url ?? openAuthorizationUrl });
+        read_secret_line: async (prompt) => await (dependencies.read_input?.(prompt) ?? readSecretLine(prompt)),
+        open_browser: dependencies.open_authorization_url ?? openAuthorizationUrl,
+        sleep: dependencies.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))) });
       return 0;
     }
     switch (action) {
@@ -1256,6 +1334,7 @@ export async function runPersonClientCli(
         ? (error as Error).message : "Person request could not be completed",
       ...(error instanceof PersonAuthorityClientError ? { code: error.code, status: error.status } : {}),
       ...(error instanceof PersonQueryInputError ? { code: error.code } : {}),
+      ...(error instanceof PersonToolOutcomeErrorV1 ? { reason: error.reason } : {}),
       ...(error instanceof EmployeeMutationError
         ? { code: error.code, mutation_outcome: error.mutation_outcome }
         : {}),

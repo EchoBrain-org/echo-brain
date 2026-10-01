@@ -6,10 +6,10 @@ import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 
-/** Remains false while ADR-0025 is proposed. Recording acceptance requires a reviewed change. */
+/** Remains false while ADR-0026 is proposed. Recording acceptance requires a reviewed change. */
 export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = false;
 
-/** Explicit selecting configuration, absent until ADR-0025 is accepted and enabled by an operator. */
+/** Explicit selecting configuration, absent until ADR-0026 is accepted and enabled by an operator. */
 export interface JiraPersonLiveConfigurationV1 {
   readonly enabled: true;
   readonly cloud_id: string;

@@ -191,6 +191,7 @@ organization-specific secrets.
   - The person browser callback `/v2/person/external-identities/slack/browser/callback`.
 - Interactivity on, with Request URL `/v2/integrations/slack/interactions` on
   the Authority.
+- The app's Messages tab on and writable, so a person can reply to ECHO's DM.
 - No Socket Mode, no Event Subscriptions, no token rotation, no Enterprise Grid
   deployment.
 
@@ -202,8 +203,7 @@ organization-specific secrets.
 - **Calls:**
   - `POST /connect/sessions`;
   - `POST /connect/sessions/reconnect`, which keeps the connection ID;
-  - `GET /connections/{id}?provider_config_key=…`;
-  - `DELETE /connections/{id}`.
+  - `GET /connections/{id}?provider_config_key=…`.
 - **Finding the connection a Connect flow created:** the session carries `tags`
   (organization, membership and attempt IDs). The spike decides how the
   Authority finds the new connection: by listing connections filtered by those
@@ -272,8 +272,11 @@ No control-plane DDL change; baseline V3 stays.
 - The approval poster and the identity flows fetch the bot token from Nango at
   use time.
 - The token is cached in memory per connection for at most five minutes.
-- On a Slack authentication error the Authority re-fetches once
-  (`force_refresh`), then marks the connection "needs reinstall".
+- On a Slack authentication error the Authority re-reads the connection from
+  Nango once, past its cache but without `force_refresh` (rotation is off, so
+  only a reconnect brings a new token), then marks the connection "needs
+  reinstall". A Nango connection that no longer matches the active one is
+  marked the same way.
 - The Authority calls Slack directly with the fetched token, not through the
   Nango proxy, so ECHO's existing Slack clients and checks stay unchanged.
 

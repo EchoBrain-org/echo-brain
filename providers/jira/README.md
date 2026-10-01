@@ -3,7 +3,7 @@
 Support and transport decision recorded on 2026-10-01, before implementation.
 The isolated reader was committed first as `52104ec`. The expanded slice adds
 fixture-tested personal Nango connections and a ticket-capable Ask path.
-ADR-0025 remains proposed; production startup is disabled pending acceptance.
+ADR-0026 remains proposed; production startup is disabled pending acceptance.
 No live account has been connected or qualified.
 
 ## Initial support boundary
@@ -201,7 +201,7 @@ connector catalog, settings UI, sync/index or persistent ticket-open API.
 
 ## Remaining human inputs and live qualification
 
-[ADR-0025](../../docs/decisions/ADR-0025-jira-person-live-evidence-nango.md) awaits
+[ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md) awaits
 founder acceptance of Nango custody and the new Person release path. Acceptance
 must extend INV-PERMISSIONS-015 and review the startup gate before enablement.
 The new selecting module owns `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=false`;

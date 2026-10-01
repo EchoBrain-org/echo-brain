@@ -102,7 +102,7 @@ separate integration commit so the active Slack lane can merge them narrowly.
 
 The exact command/API flow and remaining human inputs are in
 [providers/jira/README.md](../../providers/jira/README.md). The focused proposal
-[ADR-0025](../decisions/ADR-0025-jira-person-live-evidence-nango.md) remains awaiting
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) remains awaiting
 founder acceptance. Fixture-tested end-to-end Ask completion and live account
 qualification are distinct claims; runtime startup remains gated. Global Ask is
 supported, while mine/project scopes never acquire global Jira access. No live

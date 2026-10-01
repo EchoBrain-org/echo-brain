@@ -38,7 +38,8 @@ export {
 
 export { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type OrganizationPersonToolV3, type OrganizationPersonToolsV3 } from './person-tools-v3.js';
 export { ORGANIZATION_API_PERSON_TOOLS_PATH_V4, validateOrganizationPersonToolsV4, organizationPersonToolV3FromV4, type OrganizationPersonToolV4, type OrganizationPersonToolsV4, type OrganizationToolSetupStatusV4 } from './person-tools-v4.js';
-export type { PersonToolJsonRequestV1, PersonToolGetRequestV1, PersonToolTransportV1, PersonToolSessionV1, PersonToolHostV1, PersonToolCommandV1 } from './person-tool-client.js';
+export type { PersonToolJsonRequestV1, PersonToolGetRequestV1, PersonToolTransportV1, PersonToolSessionV1, PersonToolHostV1, PersonToolVerbNameV1, PersonToolVerbContextV1, PersonToolVerbV1, PersonToolProviderV1 } from './person-tool-client.js';
+export { PersonToolOutcomeErrorV1 } from './person-tool-client.js';
 
 export { PersonQueryInputError, validatePersonQueryText } from "./person-query.js";
 

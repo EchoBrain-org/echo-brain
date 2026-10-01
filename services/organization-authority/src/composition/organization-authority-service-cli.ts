@@ -166,7 +166,7 @@ export async function runOrganizationAuthorityServiceCli(
     }
     const jiraRequested = [parsed['--jira-cloud-id'], parsed['--jira-nango-integration']].some(value => value !== undefined);
     if (jiraRequested && (!JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 || parsed['--jira-cloud-id'] === undefined || parsed['--jira-nango-integration'] === undefined || (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev'))) {
-      throw new Error('Jira live selection requires accepted ADR-0025, one configured cloud site and Nango Cloud');
+      throw new Error('Jira live selection requires accepted ADR-0026, one configured cloud site and Nango Cloud');
     }
     // Read once into memory; the startup-failure event below never carries it.
     const slackNango = {

@@ -11,7 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
-  - ADR-0025
+  - ADR-0026
   - ADR-0001
   - ADR-0002
   - ADR-0013
@@ -26,6 +26,7 @@ decision_ids:
   - ADR-0022
   - ADR-0023
   - ADR-0024
+  - ADR-0025
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-RUNTIME-001

@@ -671,7 +671,7 @@ export function evidenceView(raw: unknown): SourceEvidence {
 /** Connected tools: each name and state. External workspace and account ids stay behind. */
 export function toolsView(raw: unknown, membershipId: string): ConnectedTools {
   const value = object(unwrap(raw));
-  if (value.schema_version !== 3 || value.kind !== 'echo-organization-person-tools' || value.membership_id !== membershipId) {
+  if (value.schema_version !== 4 || value.kind !== 'echo-organization-person-tools' || value.membership_id !== membershipId) {
     throw new ViewError();
   }
   const tools = list(value.tools);

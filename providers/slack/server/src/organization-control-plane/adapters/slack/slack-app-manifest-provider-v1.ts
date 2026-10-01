@@ -4,21 +4,14 @@ import {
   BoundedJsonFetchErrorV1,
   boundedJsonFetchV1,
 } from "../../../shared/bounded-json-fetch-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../application/slack-integration-contracts.js";
+
+/** Owned by the application contracts; re-exported for this adapter's existing importers. */
+export { SLACK_PRIVATE_APP_BOT_SCOPES_V1 };
 
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAXIMUM_TIMEOUT_MS = 60_000;
-
-/**
- * The exact bot scopes ECHO's private per-organization Slack app requests,
- * and the only scope set an organization connection contract accepts.
- */
-export const SLACK_PRIVATE_APP_BOT_SCOPES_V1 = Object.freeze([
-  "chat:write",
-  "im:history",
-  "im:write",
-  "users:read",
-] as const);
 
 function validateRecipeUrl(value: string, allowPath: boolean): URL {
   let url: URL;
@@ -61,6 +54,8 @@ export function buildEchoSlackAppManifestV1(input: {
       description: "Private approval cards and identity links for ECHO.",
     }),
     features: Object.freeze({
+      // A person replies to ECHO's DM (the identity-link code) in the app's Messages tab.
+      app_home: Object.freeze({ home_tab_enabled: false, messages_tab_enabled: true, messages_tab_read_only_enabled: false }),
       bot_user: Object.freeze({ display_name: "ECHO", always_online: false }),
     }),
     oauth_config: Object.freeze({

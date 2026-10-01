@@ -5,6 +5,17 @@ export {
   type OrganizationSecretStore,
 } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 
+/**
+ * The exact bot scopes ECHO's private per-organization Slack app requests,
+ * and the only scope set an organization connection contract accepts.
+ */
+export const SLACK_PRIVATE_APP_BOT_SCOPES_V1 = Object.freeze([
+  "chat:write",
+  "im:history",
+  "im:write",
+  "users:read",
+] as const);
+
 export interface VerifiedSlackConnection {
   team_id: string;
   enterprise_id: string | null;
