@@ -98,8 +98,8 @@ echo-organization-authority-state-bootstrap \
 
 Normally use the initial-owner setup below instead: it creates this same clean
 state with a durable setup plan, generated internal IDs, Person credentials,
-Slack connection, and initial-owner invitation. Do not run reset into a directory
-that already contains state.
+and initial-owner invitation; Slack is connected afterward, in the app. Do not
+run reset into a directory that already contains state.
 
 ## Initial-owner setup internals
 
@@ -110,11 +110,11 @@ development and custom deployments; they are not the staging runbook.
 
 Bootstrap and finalization are stopped-state operations. The path is:
 
-1. Bootstrap the clean lineage, initialize Person credentials, verify the Slack
-   bot and temporary public initial-owner identity-link channel, and issue the
-   initial-owner invitation. That channel never receives an approval card.
-2. Start the Organization Authority service, complete the initial owner's browser OIDC sign-in, and link the
-   signed-in person to Slack.
+1. Bootstrap the clean lineage, initialize Person credentials, and issue the
+   initial-owner invitation. Bootstrap takes no Slack input.
+2. Start the Organization Authority service, complete the initial owner's
+   browser OIDC sign-in, set up the organization's Slack connection in the
+   app, and connect the signed-in person's own Slack.
 3. Stop the Organization Authority service, install the three provider credentials, then finalize.
 4. Restart the Organization Authority service and complete the post-admission canary.
 
@@ -126,12 +126,8 @@ canonical lowercase.
 
 ### 1. Bootstrap while stopped
 
-Pass the Slack bot token through standard input. The token file contains the
-token with at most one trailing newline; it is never recorded in the setup
-manifest or command output. `--slack-approval-channel-id` is a transitional
-legacy name: it supplies only the temporary public channel used to complete the
-initial owner's Slack identity-link challenge. It is not an approval destination or
-approval-readiness gate.
+Bootstrap takes no Slack input. Slack is connected afterward, in the app
+(see [Slack setup, in the app](#slack-setup-in-the-app) below).
 
 ```sh
 echo-organization-authority-setup bootstrap \
@@ -140,29 +136,25 @@ echo-organization-authority-setup bootstrap \
   --owner-display-name 'Initial Owner' \
   --owner-email owner@example.com \
   --authority-url https://authority.example.com \
-  --oidc-config /absolute/private/oidc-config.json \
-  --slack-approval-channel-id C0123456789 \
-  < /absolute/private/slack-bot-token
+  --oidc-config /absolute/private/oidc-config.json
 ```
 
 `--artifact-revision <revision>` is optional and defaults to `clean-founder-v1`.
 The private, non-secret setup plan is
 `/absolute/clean-state/onboarding/clean-founder-v1.json`; do not edit or move
-it. If the command stops or its response is lost, resume from that plan without
-repeating the organization, owner, OIDC, origin, channel, or revision inputs:
+it. If the command stops or its response is lost, resume from that plan
+without repeating the organization, owner, OIDC, origin, or revision inputs:
 
 ```sh
 echo-organization-authority-setup resume \
-  --state-dir /absolute/clean-state \
-  < /absolute/private/slack-bot-token
+  --state-dir /absolute/clean-state
 ```
 
-When Slack is already connected, `resume` does not read standard input, so the
-redirection may be omitted. If Slack was not yet connected, it still requires
-the token on standard input and performs the same verification. If the setup
-plan is missing, restore that exact plan or start with a new clean state
-directory; do not try to recreate it around existing state. Use this safe
-status view at any time:
+`resume` reads no standard input. A manifest from before this change is
+refused: "organization setup manifest predates in-app Slack setup; run
+replace-rehearsal". If the setup plan is missing, restore that exact plan or
+start with a new clean state directory; do not try to recreate it around
+existing state. Use this safe status view at any time:
 
 ```sh
 echo-organization-authority-setup status \
@@ -172,54 +164,37 @@ echo-organization-authority-setup status \
 It reports the next step and durable readiness facts, but not credentials,
 grants, bearer values, generated internal IDs, or note content.
 
-### Slack re-onboarding checklist for private approval V1
+### Slack setup, in the app
 
-Use one Slack app for the connection token and interactive signing secret.
-Before bootstrap, update that app's scopes, then reinstall it to the staging
-workspace:
+Slack setup has no host-side steps left. The organization's Slack connection
+is created and installed from inside the ECHO app (or the Person CLI's tools
+verbs), through Nango
+([ADR-0025](../../docs/decisions/ADR-0025-nango-holds-slack-connection-credentials.md)):
+there is no Slack app scope to grant by hand, no separate signing-secret file,
+and no Interactivity Request URL to save — the app recipe sets all of that,
+including the four required bot scopes (`chat:write`, `im:history`,
+`im:write`, `users:read`). The `im:*` scopes are required for the
+meeting-owner DM lane.
 
-1. Grant the exact required bot scopes:
-   `channels:history`, `channels:read`, `chat:write`, `im:history`,
-   `im:write`, `reactions:read`, and `users:read`. The `im:*` scopes are
-   required for the meeting-owner DM lane.
-2. Reinstall the app after the scope change, then use the new bot token from
-   that same installation.
-3. Put the signing secret from that same Slack app in a separate current-user
-   `0600` regular file containing one value with no trailing newline. Do not
-   reuse a signing secret from another Slack app.
-4. Use a wholly fresh Authority V10 staging lineage with the
-   [current storage baselines](#state-and-baselines). Use the supported rehearsal
-   reset before preparing state from an earlier release.
+Re-onboarding a staging lineage uses the same in-app setup and connect as a
+first connection; it does not reuse a Slack app's scopes or token by hand. Use
+a wholly fresh Authority V10 staging lineage with the
+[current storage baselines](#state-and-baselines); use the supported
+rehearsal reset before preparing state from an earlier release.
 
-Complete bootstrap, the initial-owner identity link, credential installation, and
-finalization first, then start the active runtime. Only after that runtime is
-healthy, enable **Interactivity & Shortcuts** and save this Request URL before
-running the release-bound synthetic staging canary:
-
-```text
-https://<staging-authority-host>/v2/integrations/slack/interactions
-```
-
-The callback deliberately returns `503` before finalization, so do not try to
-validate or save that URL against a pre-finalize runtime. Event Subscriptions,
-Socket Mode, and a Slack OAuth redirect are not required for this V1.
-
-The temporary public identity-link channel is still required only until the
-linking transport is moved to a private surface. It receives the initial owner's
-challenge thread, never shared approval cards.
-
-### 2. Start Person service, sign in, and link Slack
+### 2. Start Person service, sign in, set up and connect Slack
 
 Before finalization, the compatibility-named `clean-live` command exposes the Person surface with an inert
-processing worker. The manifest supplies the Authority URL, OIDC configuration,
-PKCE key, and Slack channel, so they are not repeated here.
+processing worker. The manifest supplies the Authority URL and OIDC
+configuration, so they are not repeated here.
 
 ```sh
 echo-organization-authority-serve serve \
   --state-dir /absolute/clean-state \
   --host 127.0.0.1 \
   --port 39479 \
-  --slack-signing-secret-file /absolute/private/slack-signing-secret
+  --nango-secret-key-file /absolute/private/nango-secret-key \
+  --nango-integration slack
 ```
 
 For `client_secret_basic` or `client_secret_post`, append
@@ -233,14 +208,23 @@ bootstrap:
 ```sh
 echo-brain person login \
   --invitation /absolute/clean-state/onboarding/founder-person-invitation.json
-echo-brain person slack-link
+pbpaste | echo-brain person tools setup --tool slack
+echo-brain person tools connect --tool slack
 ```
 
 `person login` opens the OIDC authorization URL and receives the one-use
 session at a local loopback handoff; do not paste callback data. `person
-slack-link` prints a challenge code to reply with in its Slack thread, then
-waits for an empty Enter acknowledgement. The Slack link is required for the
-initial owner to finalize; it is not required for a read-only employee.
+tools setup --tool slack` reads a Slack app configuration token from standard
+input — pipe it in, as above, rather than pasting interactively, since an
+interactive paste is echoed by the terminal — creates and installs the
+organization's private Slack app through Nango, and waits for the owner to
+finish in the browser. `person tools connect --tool slack` then opens the
+owner's own Slack sign-in and waits the same way; on a machine without a
+browser, use `person tools connect --tool slack --method dm-code --slack-user U…`,
+which prints a challenge code to reply with in its Slack thread, then waits
+for an empty Enter acknowledgement. Both the organization's Slack connection
+and the owner's own link are required for the initial owner to finalize;
+neither is required for a read-only employee.
 
 The Person session surface also supports refresh and logout. The packaged
 client owns those details:

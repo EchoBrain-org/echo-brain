@@ -6,8 +6,8 @@
 > isolated demo switchover for new work.
 
 This document preserves the earlier isolated switchover as historical
-compatibility material until the new path reaches full evaluator and card-preview
-parity. Do not use it to start a new rehearsal or to reset the normal staging
+compatibility material until the new path reaches full evaluator parity. Do
+not use it to start a new rehearsal or to reset the normal staging
 organization.
 
 This lane runs the synthetic-demo composition on the existing disposable staging
@@ -55,8 +55,10 @@ demo/staging/switch-synthetic-demo-v1.sh start-setup
 ```
 
 Securely transfer the newly generated initial-owner invitation without printing
-its contents into logs or an AI session. Complete the owner browser login and the
-one-time Slack identity link against the staging hostname. Then check:
+its contents into logs or an AI session. Complete the owner browser login,
+then set up Slack in the ECHO app (`person tools setup --tool slack`) and
+connect the owner's own Slack (`person tools connect --tool slack`) against
+the staging hostname. Then check:
 
 ```sh
 demo/staging/switch-synthetic-demo-v1.sh setup-status

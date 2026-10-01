@@ -36,7 +36,7 @@ describe("Authority operator playbook", () => {
     );
     expect(PLAYBOOK).not.toContain('runs `"<release-matched-kit>/Start ECHO.command"');
     expect(PLAYBOOK).not.toContain('Library/Application Support/ECHO/bin/echo-brain" person');
-    expect(PLAYBOOK).toContain("person slack-link");
+    expect(PLAYBOOK).toContain("person tools connect --tool slack");
     expect(PLAYBOOK).toContain("./update-clean-v1.sh canary");
     expect(PLAYBOOK).toContain("Do not create a live Granola note for this flow.");
     expect(PLAYBOOK).toContain("local operator on the designated owner Mac");

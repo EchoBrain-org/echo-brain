@@ -124,9 +124,9 @@ Use the actor below; preserve the underlying identity, approval and health check
 | Task | Actor |
 | --- | --- |
 | Valid-session checks, planning, receipt polling, artifact verification, kit installation, authenticated Person reads and telemetry inspection | Local operator within the authorized lane. |
-| Missing/expired login, MFA, provider secret entry, account switching/logout, Slack identity-link exchange and Interactivity setup | Human. The operator prepares the exact next action and resumes after completion. |
+| Missing/expired login, MFA, provider secret entry, account switching/logout, and Slack setup/connect in the ECHO app | Human. The operator prepares the exact next action and resumes after completion. |
 | Initial host `resume`, `status`, and release-canary `./update-clean-v1.sh canary` | Human in Session Manager. The remote release CLI does not support host onboarding. Group consecutive host commands only when no intervening human action is needed. |
-| Optional Slack browser-identity configuration | Human in Session Manager runs the reviewed `./onboard-clean-v1.sh configure-slack-browser --input <private-json>` action after Slack's OAuth redirect is configured. It validates a human-owned `0600` two-field file, restarts only the accepted runtime, and verifies rollback on failure. |
+| Organization Slack setup token | Human generates a setup token from Slack's "Your App Configuration Tokens" page and pipes it to `person tools setup --tool slack` (for example `pbpaste \| "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack`), so the terminal never echoes a pasted token. |
 | Unreleased rehearsal replacement and `prepare-rehearsal` using retained provider inputs | Human in Session Manager after the nonsecret transfer completes. Credentials stay on the host; use the exact operation ID from its receipt. |
 | Private Slack-card approval | Human, for each card. |
 | Infrastructure change set or private handoff not yet approved for its exact scope | Human reviews the prepared result once. |
@@ -138,8 +138,11 @@ command-line kit, runs `"<release-matched-kit>/Start-ECHO.sh" --install-only`,
 then runs
 `"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person login --invitation <transferred-absolute-path> --open-browser`.
 Keep invitation mode `0600`; never print or paste its grant. The human completes
-browser login, any required logout, and `person slack-link`. Export does not
-advance onboarding. Confirm Interactivity only when its configuration needs work.
+browser login, any required logout, and Slack setup and connect: an owner runs
+`person tools setup --tool slack`, then everyone runs
+`person tools connect --tool slack` (or, without a browser,
+`person tools connect --tool slack --method dm-code --slack-user U…`). Export
+does not advance onboarding.
 A host wrapper installed before the Swift app was retired still prints
 `Start ECHO.command` and the `ECHO/bin` command path; neither exists any more,
 so use the command-line kit steps here.

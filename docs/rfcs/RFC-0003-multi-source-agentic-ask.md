@@ -193,8 +193,9 @@ The contract changes are additive to `EvidenceDeskPortV1`.
 
 - Per-person OAuth with the user scopes above. The Slack provider owns the
   flow.
-- Tokens are encrypted at rest with the existing Slack credential custody
-  (`slack-private-credentials-v1`).
+- Tokens are encrypted at rest in the Authority's private secret store, the
+  same custody now used for the organization's Nango connection credentials
+  ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
 - Disconnecting deletes the token.
 - A desk request binds the asker's token at creation time. The model cannot
   name, choose or see a token.

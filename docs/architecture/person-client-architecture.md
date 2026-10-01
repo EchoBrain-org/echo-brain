@@ -188,15 +188,20 @@ changes and reloaded on return. Runtime processing and telemetry are unchanged.
 The desktop app's **Account → Connected tools…** reads the organization's
 supported tools and the signed-in person's connection status from the
 Authority through `person tools`. Slack is supported today. The page shows
-status only. Connecting uses the Person CLI: `person slack-connect-begin` opens
-the browser and `person slack-connect-status` checks completion.
+status only; it has no Connect or Disconnect button yet. Connecting uses the
+Person CLI's tools verbs: `person tools connect --tool slack` opens Slack's
+sign-in page and polls for completion, or, on a machine without a browser,
+`person tools connect --tool slack --method dm-code --slack-user U…` runs the
+DM-code challenge. An owner sets up the organization's Slack connection the
+same way, with `person tools setup --tool slack`
+([identity and onboarding](identity-and-onboarding.md)).
 
-`person slack-disconnect` removes only the current person's Slack identity link.
-It keeps the organization's Slack installation, Person membership, and approved
-records. Ask and Sources continue to use the Person session. The server resolves
-the caller rather than accepting a target membership, revokes the current link,
-and invalidates pending linking attempts so they cannot restore it later.
-Connecting again requires a new browser sign-in.
+`person tools disconnect --tool slack` removes only the current person's Slack
+identity link. It keeps the organization's Slack installation, Person
+membership, and approved records. Ask and Sources continue to use the Person
+session. The server resolves the caller rather than accepting a target
+membership, revokes the current link, and invalidates pending linking attempts
+so they cannot restore it later. Connecting again requires a new sign-in.
 
 ## Agents
 
@@ -251,10 +256,13 @@ every current or future machine interface.
 The repository root is workspace orchestration only. It is private and has no
 runtime export or executable.
 
-The neutral client uses `/v3/person/tools`, a bounded generic status contract.
-Provider commands are composed at explicit entrypoints. Supported v2 routes
-remain in the Slack provider for existing clients; the disconnect command
-decodes that retained response there.
+The neutral client uses `/v4/person/tools`, a bounded generic status contract
+that adds `organization_setup` for owners; the v3 route strips that field and
+keeps serving older clients. Each tool registers its own verbs (`setup`,
+`connect`, `disconnect`, `status`, `cancel`) as a `PersonToolProviderV1` at an
+explicit entrypoint; `person tools` dispatches to them by `--tool`. Supported
+v2 routes remain in the Slack provider for existing clients; the disconnect
+command decodes that retained response there.
 
 ## Deliberate context uploads
 
