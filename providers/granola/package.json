@@ -28,6 +28,10 @@
     "./granola-setup-proof-v1": {
       "types": "./dist/granola-setup-proof-v1.d.ts",
       "import": "./dist/granola-setup-proof-v1.js"
+    },
+    "./context/granola-context-source-v1": {
+      "types": "./dist/context/granola-context-source-v1.d.ts",
+      "import": "./dist/context/granola-context-source-v1.js"
     }
   },
   "files": [

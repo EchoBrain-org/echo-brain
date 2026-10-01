@@ -10,6 +10,14 @@ defines the same ingestion-only scope. `feat/context-foundation-v1` is based on 
 `8578b58ab708caa4bda7b59e707c7870c00a73c4`; it uses existing main interfaces
 and has no dependency on PR 250.
 
+The subsequent [connector integration](2026-10-01-connector-context-integration-v1.md)
+composes that foundation with the connector branch. It moves provider-neutral
+capture types, validation and the semantic envelope builder into
+`organization-processing/core` and adds opt-in Granola/Jira intake profiles.
+Authority policy and custody remain service-owned. The original foundation scope
+below describes the independent slice; the integration document owns the added
+provider mappings and their activation limits.
+
 ## Logical Layer 1 and ownership
 
 Layer 1 includes permitted immutable source captures alongside the separately
@@ -23,8 +31,9 @@ The service's existing `authority_sources_v1`, `authority_source_revisions_v1`
 and `authority_source_contents_v1` tables suffice for this bounded capability.
 The versioned content contract is nested in `SourceEnvelopeV1` and passed through
 the existing `SourceAdmissionStoreV1`; no SQL baseline changes or new database
-roles are introduced. Source keys reuse `sourceItemIdV1`. Adapter version belongs
-to the revision, rather than changing the stable source identity. A typed content
+roles are introduced. Source keys reuse `sourceItemIdV1`. Adapter version records
+the implementation in the envelope without changing stable source identity or
+creating a new revision by itself. A typed content
 digest commits metadata, representation, provenance, anchors and observations.
 Admission also commits the immutable revision manifest and Authority custody
 and policy references. Replay capture time is observational, as in existing

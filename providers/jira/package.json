@@ -24,6 +24,10 @@
     "./jira-nango-v1": {
       "types": "./dist/jira-nango-v1.d.ts",
       "import": "./dist/jira-nango-v1.js"
+    },
+    "./jira-context-source-v1": {
+      "types": "./dist/jira-context-source-v1.d.ts",
+      "import": "./dist/jira-context-source-v1.js"
     }
   },
   "files": [
@@ -40,6 +44,7 @@
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-api": "0.0.0-dev.0",
     "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "@echo-brain/organization-processing": "0.0.0-dev.0",
     "better-sqlite3": "12.10.0"
   },
   "engines": {

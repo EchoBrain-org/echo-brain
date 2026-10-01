@@ -112,6 +112,11 @@ would weaken the Authority boundary.
 
 ## Current references
 
+An opt-in [connector capture composition](../product/2026-10-01-connector-context-integration-v1.md)
+binds provider-neutral capture envelopes to explicit Authority disposition,
+organization, read authorization and atomic retention checks. It is not installed
+in the production root and grants no retrieval or release authority.
+
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)
 - [Permission release-boundary invariant](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)

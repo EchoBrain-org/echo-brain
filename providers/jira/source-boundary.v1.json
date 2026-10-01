@@ -11,7 +11,8 @@
     "providers/jira/src/jira-cloud-transport-v1.ts",
     "providers/jira/src/jira-person-connection-v1.ts",
     "providers/jira/src/jira-connection-store-v1.ts",
-    "providers/jira/src/jira-nango-v1.ts"
+    "providers/jira/src/jira-nango-v1.ts",
+    "providers/jira/src/jira-context-source-v1.ts"
   ],
   "owned_source_paths": [
     "providers/jira/src/**"
@@ -22,7 +23,8 @@
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-api",
-    "@echo-brain/organization-authority-kernel"
+    "@echo-brain/organization-authority-kernel",
+    "@echo-brain/organization-processing"
   ],
   "allowed_external_packages": [
     "better-sqlite3"
@@ -41,7 +43,8 @@
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
-        "@echo-brain/organization-authority-kernel"
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-processing"
       ],
       "allowed_external_packages": [
         "better-sqlite3"
@@ -57,6 +60,11 @@
         "name": "Jira person live evidence reader",
         "path": "providers/jira/src/jira-person-live-evidence-reader-v1.ts",
         "export": "createJiraPersonLiveEvidenceReaderV1"
+      },
+      {
+        "name": "Jira context source",
+        "path": "providers/jira/src/jira-context-source-v1.ts",
+        "export": "createJiraContextSourceV1"
       }
     ],
     "compatibility_entrypoints": [],

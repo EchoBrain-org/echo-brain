@@ -43,7 +43,8 @@
       "services/organization-authority/src/composition/organization-authority-person-administration-cli.ts",
       "src/product/person-client/main.ts",
       "src/product/person-client/composition.ts",
-      "services/organization-authority/src/composition/jira-person-live-runtime-v1.ts"
+      "services/organization-authority/src/composition/jira-person-live-runtime-v1.ts",
+      "services/organization-authority/src/composition/provider-context-intakes-v1.ts"
     ],
     "source_assemblies": [
       "deploy/organization-authority/journey-explorer-assembly.v1.json"

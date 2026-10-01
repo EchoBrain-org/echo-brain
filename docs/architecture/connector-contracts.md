@@ -6,6 +6,14 @@ protocols and transport remain in their provider workspaces. The contracts are
 additive: existing Person tools, Ask responses, source admission and Slack
 onboarding continue through their current interfaces.
 
+The [connector/context integration](../product/2026-10-01-connector-context-integration-v1.md)
+also provides opt-in typed source capture for Granola and Jira. This is an intake
+capability alongside the live release contracts below, with no production source
+registration or new Ask wiring. Shared capture types live in
+`organization-processing/core`; Authority owns the fixed disposition and current
+retention fence. Granola reuses its configured adapter; the Jira profile is
+request-only. Slack onboarding does not provide a content reader.
+
 ## Personal access
 
 [`PersonConnectorAccessV1`](../../packages/organization-api/src/person-connector-access-v1.ts)

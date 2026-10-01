@@ -25,6 +25,9 @@
     },
     {
       "path": "../../packages/organization-authority-kernel"
+    },
+    {
+      "path": "../../packages/organization-processing"
     }
   ]
 }

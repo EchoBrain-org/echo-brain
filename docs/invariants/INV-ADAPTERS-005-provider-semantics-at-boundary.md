@@ -35,6 +35,13 @@ or a future external-capability provider. The shared runtime must receive only
 their ports, identity/configuration commitments, generic presentation
 references, and approved-record policy projectors.
 
+The opt-in [context capture integration](../product/2026-10-01-connector-context-integration-v1.md)
+adds a declared selecting module, `provider-context-intakes-v1.ts`, for the
+versioned source capture capability. It selects Granola/Jira adapters into the
+provider-neutral intake; all classification, API parsing and cursor grammar stay
+in providers. Authority fixes organization and disposition independently of
+returned data. This module does not register a production source or scheduler.
+
 This invariant is about external-capability providers. The current local
 platform still deliberately selects SQLite, file-backed keys, Node crypto and
 clock implementations, and the OIDC protocol in Authority composition. An
@@ -147,8 +154,9 @@ Granola/OpenRouter/Slack product profile. Setup status, planning and finalizatio
 require Slack and are not provider-swappable. Provider neutrality covers the
 shared runtime and contracts, not this stopped-state bootstrap workflow. A
 non-Slack setup profile needs an explicit versioned bootstrap design and its own
-qualification; changing only the runtime bundle is insufficient. The retained V1
-operator flags and persisted vocabulary remain supported;
+qualification; changing only the runtime bundle is insufficient. Historical
+persisted vocabulary remains supported; the Nango Slack profile retires the old
+host-side Slack credential flags and uses `person tools setup --tool slack`.
 provider verification and wire/state interpretation are delegated to their
 provider folders. Adding a provider can require a new versioned domain capability,
 but cannot silently widen an existing canonical contract. V2 Person compatibility
