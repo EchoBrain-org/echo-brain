@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AdapterError, type AdapterConfig } from "@echo-brain/organization-processing/core";
+import { AdapterError, MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1, meetingSourceEnvelopeV1, type AdapterConfig } from "@echo-brain/organization-processing/core";
 import { GranolaApiError, HttpGranolaApiClient, type GranolaApiClient, type GranolaListParams, type GranolaListResponse, type GranolaNoteDetail } from "../../src/source/granola-api-client.js";
 import { GranolaMeetingSourceAdapter, createGranolaPostCutoffCursor, granolaCursorPhase } from "../../src/source/meeting-source-adapter.js";
 import { adapterConformance } from "../../../../tests/support/adapter-conformance.js";
@@ -167,11 +167,15 @@ function emptyClient(): GranolaApiClient {
 function ownerBoundaryAdapter(
   responses: GranolaListResponse[],
   details?: ReadonlyMap<string, GranolaNoteDetail>,
+  pageSize = 2,
 ): { client: FakeClient; adapter: GranolaMeetingSourceAdapter } {
   const client = new FakeClient(responses, details);
   return {
     client,
-    adapter: new GranolaMeetingSourceAdapter(ownerBoundaryConfig, {
+    adapter: new GranolaMeetingSourceAdapter({
+      ...ownerBoundaryConfig,
+      settings: { ...ownerBoundaryConfig.settings, page_size: pageSize },
+    }, {
       client,
       now: () => "2026-07-16T00:00:00.000Z",
     }),
@@ -981,7 +985,7 @@ describe("Granola owner boundary", () => {
         hasMore: false,
         cursor: null,
       },
-    ]);
+    ], undefined, 30);
 
     const result = await adapter.pull({});
 
@@ -1153,7 +1157,204 @@ describe("Granola adapter failures", () => {
   });
 });
 
+describe("Granola export boundary regressions", () => {
+  it("enforces the configured page bound even when no pull limit is supplied", async () => {
+    const client = new FakeClient([{
+      notes: [{ id: "one" }, { id: "two" }, { id: "three" }],
+      hasMore: false,
+      cursor: null,
+    }]);
+    const adapter = new GranolaMeetingSourceAdapter(config, { client });
+    await expect(adapter.pull({})).rejects.toMatchObject({
+      code: "temporarily_unavailable", retryable: true,
+    });
+    expect(client.detailCalls).toEqual([]);
+  });
+
+  it.each([null, "", "   "])("rejects a missing continuation token (%s) before fetching detail", async (cursor) => {
+    const client = new FakeClient([{
+      notes: [{ id: detail.id }], hasMore: true, cursor,
+    }]);
+    const adapter = new GranolaMeetingSourceAdapter(config, { client });
+    await expect(adapter.pull({})).rejects.toMatchObject({
+      code: "temporarily_unavailable", retryable: true,
+    });
+    expect(client.detailCalls).toEqual([]);
+  });
+
+  it("rejects a provider continuation that makes no progress", async () => {
+    const client = new FakeClient([
+      { notes: [], hasMore: true, cursor: "page-a" },
+      { notes: [{ id: detail.id }], hasMore: true, cursor: "page-a" },
+    ]);
+    const adapter = new GranolaMeetingSourceAdapter(config, { client });
+    const first = await adapter.pull({});
+    await expect(adapter.pull({ cursor: first.next_cursor })).rejects.toMatchObject({
+      code: "temporarily_unavailable", retryable: true,
+    });
+    expect(client.detailCalls).toEqual([]);
+  });
+
+  it("locally enforces the post-cutoff update boundary and keeps it through skipped pages", async () => {
+    const cutoff = "2026-07-15T17:00:00.000Z";
+    const eligible = { ...detail, owner: { email: "audrey@echobrain.org" }, updated_at: "2026-07-15T18:00:00.000Z" };
+    const { adapter, client } = ownerBoundaryAdapter([
+      {
+        notes: [
+          { id: "before", owner: eligible.owner, updated_at: "2026-07-15T16:59:00.000Z" },
+          { id: "at-cutoff", owner: eligible.owner, updated_at: cutoff },
+        ],
+        hasMore: true, cursor: "eligible-page",
+      },
+      { notes: [{ id: eligible.id, owner: eligible.owner, updated_at: eligible.updated_at }], hasMore: false, cursor: null },
+    ], new Map([[eligible.id, eligible]]));
+    const first = await adapter.pull({ cursor: createGranolaPostCutoffCursor(cutoff) });
+    expect(first.meetings).toEqual([]);
+    const second = await adapter.pull({ cursor: first.next_cursor });
+    expect(second.meetings).toHaveLength(1);
+    expect(client.detailCalls).toEqual([eligible.id]);
+    expect(client.listCalls).toEqual([
+      { updated_after: cutoff, page_size: 2 },
+      { updated_after: cutoff, cursor: "eligible-page", page_size: 2 },
+    ]);
+  });
+
+  it.each([undefined, "not-a-date", "2026-02-30T00:00:00.000Z"])("refuses an incremental row without a usable update time (%s)", async (updatedAt) => {
+    const client = new FakeClient([{
+      notes: [{ id: detail.id, updated_at: updatedAt }], hasMore: false, cursor: null,
+    }]);
+    const adapter = new GranolaMeetingSourceAdapter(config, { client });
+    await expect(adapter.pull({ cursor: createGranolaPostCutoffCursor("2026-07-15T16:00:00.000Z") })).rejects.toMatchObject({
+      code: "temporarily_unavailable", retryable: true,
+    });
+    expect(client.detailCalls).toEqual([]);
+  });
+
+  it("refuses a stale detail without advancing the page and excludes explicitly removed ownership", async () => {
+    const owner = { email: "audrey@echobrain.org" };
+    const old = { ...detail, id: "old-detail", owner };
+    const removedOwner = { ...detail, id: "removed-owner", owner: null, updated_at: "2026-07-15T18:00:00.000Z" };
+    const { adapter } = ownerBoundaryAdapter([{
+      notes: [
+        { id: old.id, owner, updated_at: "2026-07-15T18:00:00.000Z" },
+        { id: removedOwner.id, owner, updated_at: removedOwner.updated_at },
+      ],
+      hasMore: false, cursor: null,
+    }], new Map<string, GranolaNoteDetail>([[old.id, old], [removedOwner.id, removedOwner]]));
+    await expect(adapter.pull({ cursor: createGranolaPostCutoffCursor("2026-07-15T17:30:00.000Z") })).rejects.toMatchObject({
+      code: "temporarily_unavailable", retryable: true,
+    });
+    const removed = ownerBoundaryAdapter([{
+      notes: [{ id: removedOwner.id, owner, updated_at: removedOwner.updated_at }],
+      hasMore: false, cursor: null,
+    }], new Map([[removedOwner.id, removedOwner]]));
+    expect((await removed.adapter.pull({})).meetings).toEqual([]);
+  });
+
+  it("keeps the poll watermark at the list observation when detail changes during the pull", async () => {
+    const changed = { ...detail, updated_at: "2026-07-15T19:00:00.000Z" };
+    const client = new FakeClient([
+      { notes: [{ id: detail.id, updated_at: detail.updated_at }], hasMore: false, cursor: null },
+      { notes: [], hasMore: false, cursor: null },
+    ], new Map([[changed.id, changed]]));
+    const adapter = new GranolaMeetingSourceAdapter(config, { client });
+    const result = await adapter.pull({ cursor: createGranolaPostCutoffCursor("2026-07-15T16:30:00.000Z") });
+    expect(result.meetings[0]!.provenance.source_updated_at).toBe(changed.updated_at);
+    await adapter.pull({ cursor: result.next_cursor });
+    expect(client.listCalls[1]!.updated_after).toBe("2026-07-15T16:59:59.000Z");
+  });
+
+  it("admits no part of a page when a later detail has the wrong identity", async () => {
+    const client = new FakeClient([{
+      notes: [{ id: detail.id }, { id: "wrong-detail" }], hasMore: false, cursor: null,
+    }], new Map([
+      [detail.id, detail],
+      ["wrong-detail", { ...detail, id: "another-meeting" }],
+    ]));
+    const source = new MeetingSourceBridgeV1(new GranolaMeetingSourceAdapter(config, { client }));
+    const retained: unknown[] = [];
+    await expect(pullAndAdmitSourceBatchV1({
+      source, request: { limit: 2 }, admission: {
+        scope: { organization_id: "org-synthetic", custody_ref: "echo-owner", access_policy_ref: "echo-review-only", analysis_policy: "automatic" },
+        store: { admitSourceRevision: async (input) => { retained.push(input); return "admitted"; } },
+      },
+    })).rejects.toMatchObject({ code: "temporarily_unavailable", retryable: true });
+    expect(retained).toEqual([]);
+  });
+
+  it("keeps revision identity and bridge digests stable across observation and JSON key order", async () => {
+    const reordered: GranolaNoteDetail = {
+      ...detail,
+      owner: { email: "owner@example.com", name: "Owner" },
+      provider_fields: { b: { y: 2, x: 1 }, a: true },
+    };
+    const original = { ...detail, provider_fields: { a: true, b: { x: 1, y: 2 } } };
+    async function normalize(note: GranolaNoteDetail, observedAt: string) {
+      const adapter = new GranolaMeetingSourceAdapter(config, {
+        client: new FakeClient([{ notes: [{ id: note.id }], hasMore: false, cursor: null }], new Map([[note.id, note]])),
+        now: () => observedAt,
+      });
+      return (await adapter.pull({})).meetings[0]!;
+    }
+    const first = await normalize(original, "2026-07-16T00:00:00.000Z");
+    const later = await normalize(reordered, "2026-07-17T00:00:00.000Z");
+    expect(later.id).toBe(first.id);
+    expect(later.provenance.canonical_revision).toBe(first.provenance.canonical_revision);
+    const firstEnvelope = meetingSourceEnvelopeV1(first);
+    const laterEnvelope = meetingSourceEnvelopeV1(later);
+    expect(laterEnvelope.revision.content_sha256).toBe(firstEnvelope.revision.content_sha256);
+    expect(laterEnvelope.revision.captured_at).not.toBe(firstEnvelope.revision.captured_at);
+
+    for (const changed of [
+      { ...original, summary_markdown: "An edited summary." },
+      { ...original, transcript: [{ text: "An edited transcript.", speaker: { source: "microphone" } }] },
+      { ...original, provider_fields: { a: true, b: { x: 1, y: 3 } } },
+    ]) {
+      const revision = await normalize(changed, "2026-07-17T00:00:00.000Z");
+      expect(revision.id).toBe(first.id);
+      expect(revision.provenance.canonical_revision).not.toBe(first.provenance.canonical_revision);
+      expect(meetingSourceEnvelopeV1(revision).revision.content_sha256).not.toBe(firstEnvelope.revision.content_sha256);
+    }
+  });
+});
+
 describe("Granola HTTP response parsing", () => {
+  it("normalizes a paginated transcript to the same immutable revision as an inline export", async () => {
+    const owned = { ...detail, owner: { email: "audrey@echobrain.org" } };
+    const metadata = { ...owned, transcript: undefined };
+    const listing = {
+      notes: [{ id: owned.id, owner: owned.owner, updated_at: owned.updated_at }],
+      hasMore: false, cursor: null,
+    };
+    async function normalize(responses: Array<{ body: unknown; status?: number }>) {
+      const client = new HttpGranolaApiClient("grn_synthetic_export", {
+        fetchImpl: async () => {
+          const response = responses.shift();
+          if (response === undefined) throw new Error("Unexpected fixture request");
+          return new Response(JSON.stringify(response.body), { status: response.status ?? 200 });
+        },
+      });
+      const adapter = new GranolaMeetingSourceAdapter(ownerBoundaryConfig, {
+        client, now: () => "2026-07-16T00:00:00.000Z",
+      });
+      const batch = await adapter.pull({ cursor: createGranolaPostCutoffCursor("2026-07-15T16:30:00.000Z") });
+      expect(responses).toEqual([]);
+      return batch;
+    }
+    const inline = await normalize([{ body: listing }, { body: owned }]);
+    const paginated = await normalize([
+      { body: listing },
+      { body: { code: "TRANSCRIPT_TOO_LARGE" }, status: 413 },
+      { body: metadata },
+      { body: { transcript: owned.transcript!.slice(0, 1), hasMore: true, cursor: "next-transcript" } },
+      { body: { transcript: owned.transcript!.slice(1), hasMore: false, cursor: null } },
+      { body: metadata },
+    ]);
+    expect(paginated.meetings).toHaveLength(1);
+    expect(paginated).toEqual(inline);
+    expect(meetingSourceEnvelopeV1(paginated.meetings[0]!)).toEqual(meetingSourceEnvelopeV1(inline.meetings[0]!));
+  });
+
   it("preserves official speaker shapes and unmapped provider fields", async () => {
     let requestedUrl = "";
     const client = new HttpGranolaApiClient("grn_test_key", {
