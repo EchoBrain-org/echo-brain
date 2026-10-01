@@ -59,8 +59,6 @@ function flags(
     "--nango-secret-key-file",
     "--nango-integration",
     "--nango-base-url",
-    // Accepted and ignored until the deployment stops passing it: the signing secret is in the app's credential bundle.
-    "--slack-signing-secret-file",
     "--worker-interval-ms",
     "--staging-synthetic-meetings-dir",
   ]);

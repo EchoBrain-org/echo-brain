@@ -63,12 +63,16 @@ const INPUT_FILES = Object.freeze([
   "runtime-profile.json",
   "oidc-config.json",
   "oidc-client-secret",
-  "slack-bot-token",
-  "slack-signing-secret",
+  "nango-secret-key",
   "granola-credential",
   "llm-credential",
 ]);
-const REUSABLE_STAGING_INPUT_FILES = Object.freeze(INPUT_FILES.slice(0, 3));
+// Provider reuse carries only the non-secret inputs; the host keeps its current secrets.
+const REUSABLE_STAGING_INPUT_FILES = Object.freeze([
+  "onboarding.clean-v1.json",
+  "release.json",
+  "runtime-profile.json",
+]);
 const STAGING_SYNTHETIC_MEETING_FILES = Object.freeze([
   "01-revenue-signal-calibration.json",
   "02-data-handling-review.json",

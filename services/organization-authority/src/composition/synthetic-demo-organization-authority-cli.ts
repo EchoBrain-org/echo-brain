@@ -113,8 +113,6 @@ async function runService(
       "--nango-secret-key-file",
       "--nango-integration",
       "--nango-base-url",
-      // Accepted and ignored until the demo deployment stops passing it.
-      "--slack-signing-secret-file",
       "--client-secret-file",
       "--worker-interval-ms",
     ],

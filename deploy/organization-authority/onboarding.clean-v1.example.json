@@ -2,10 +2,10 @@
   "authority_host": "authority.example.com",
   "aws_region": "us-west-2",
   "kind": "echo-clean-v1-onboarding-input-v1",
+  "nango_integration_key": "slack",
   "organization_name": "Example Organization",
   "owner_display_name": "Owner Name",
   "owner_email": "owner@example.com",
   "runtime_user": "echo-authority",
-  "schema_version": 1,
-  "slack_approval_channel_id": "C0123456789"
+  "schema_version": 1
 }

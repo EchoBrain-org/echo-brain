@@ -481,6 +481,8 @@ describe("admitted runtime CLI events", () => {
       ["--nango-integration", "slack"],
       ["--nango-secret-key-file", key],
       ["--nango-secret-key-file", nangoKeyFile(0o644), "--nango-integration", "slack"],
+      // The retired signing-secret flag is refused: the signing secret is in the app's credential bundle.
+      ["--nango-secret-key-file", key, "--nango-integration", "slack", "--slack-signing-secret-file", "/private/slack-signing-secret"],
     ]) {
       const stderr: string[] = [];
       await expect(start({ stderr: (value) => stderr.push(value) }, "/private/state", nango)).resolves.toBe(1);
@@ -495,10 +497,8 @@ describe("admitted runtime CLI events", () => {
     runtimeState.startup_error = undefined;
 
     const stderr: string[] = [];
-    // The signing-secret flag is accepted and ignored until the deployment stops passing it.
     const running = start({ stderr: (value) => stderr.push(value) }, "/private/state", [
       "--nango-secret-key-file", key, "--nango-integration", "slack", "--nango-base-url", "https://nango.example",
-      "--slack-signing-secret-file", "/private/slack-signing-secret",
     ]);
     await vi.waitFor(() => expect(runtimeState.slack_nango).toEqual({
       secret_key: NANGO_KEY, integration_key: "slack", base_url: "https://nango.example",

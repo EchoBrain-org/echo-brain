@@ -194,7 +194,7 @@ describe("Authority staging host bundle", () => {
       "candidate.clean-v1.json",
       "runtime-profile.active",
       "oidc-client-secret",
-      "slack-bot-token",
+      "nango-secret-key",
       "granola-credential-source",
       "llm-credential-source",
     ]) {

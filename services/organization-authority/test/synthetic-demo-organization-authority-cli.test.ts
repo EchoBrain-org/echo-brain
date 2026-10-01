@@ -53,7 +53,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function start(io: { readonly stderr: (value: string) => void }) {
+function start(io: { readonly stderr: (value: string) => void }, extra: readonly string[] = []) {
   const root = mkdtempSync(join(tmpdir(), "echo-synthetic-demo-nango-"));
   roots.push(root);
   const key = join(root, "nango-secret-key");
@@ -74,9 +74,7 @@ function start(io: { readonly stderr: (value: string) => void }) {
       key,
       "--nango-integration",
       "slack",
-      // Accepted and ignored until the demo deployment stops passing it.
-      "--slack-signing-secret-file",
-      "/private/slack-signing-secret",
+      ...extra,
     ],
     { stdout: () => undefined, ...io },
   );
@@ -98,5 +96,15 @@ describe("synthetic demo runtime CLI events", () => {
         processing: "active",
       } as never)}\n`,
     ]);
+  });
+
+  it("refuses the retired Slack signing-secret flag before opening the runtime", async () => {
+    const stderr: string[] = [];
+    await expect(
+      start({ stderr: (value) => stderr.push(value) }, ["--slack-signing-secret-file", "/private/slack-signing-secret"]),
+    ).resolves.toBe(1);
+    expect(runtimeState.opened).toBe(false);
+    expect(stderr.join("")).toMatch(/^usage:/);
+    expect(stderr.join("")).not.toContain(NANGO_KEY);
   });
 });

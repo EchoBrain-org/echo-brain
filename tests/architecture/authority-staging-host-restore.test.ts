@@ -195,6 +195,6 @@ fi
     expect(script).toContain("require_authority_identity");
     expect(script).not.toMatch(/get-secret-value|batch-get-secret-value/i);
     expect(script).not.toContain("oidc-client-secret");
-    expect(script).not.toContain("slack-bot-token");
+    expect(script).not.toContain("nango-secret-key");
   });
 });

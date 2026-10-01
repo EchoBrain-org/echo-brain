@@ -306,8 +306,6 @@ function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
     "--owner-email",
     "--authority-url",
     "--oidc-config",
-    // Accepted and ignored until the host scripts stop passing it: Slack is set up in the ECHO app.
-    "--slack-approval-channel-id",
     "--artifact-revision",
   ]);
   const required = (key: string): string => {

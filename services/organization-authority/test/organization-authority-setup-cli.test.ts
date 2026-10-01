@@ -772,9 +772,18 @@ describe("Organization Authority setup coordinator", () => {
     const order: string[] = [];
     let stdout = "";
     let stderr = "";
-    // The legacy channel flag is accepted and ignored until the host scripts stop passing it.
-    const status = await runOrganizationAuthoritySetupCli(
+    // The retired channel flag is refused before bootstrap changes anything.
+    expect(await runOrganizationAuthoritySetupCli(
       [...bootstrapArgs(state), "--slack-approval-channel-id", "C123"],
+      { stdout: (value) => (stdout += value), stderr: (value) => (stderr += value) },
+      dependencies(order),
+    )).toBe(1);
+    expect(order).toEqual([]);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("usage:");
+    stderr = "";
+    const status = await runOrganizationAuthoritySetupCli(
+      bootstrapArgs(state),
       { stdout: (value) => (stdout += value), stderr: (value) => (stderr += value) },
       dependencies(order),
     );

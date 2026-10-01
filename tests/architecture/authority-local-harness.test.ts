@@ -3,6 +3,7 @@ import {
   chownSync,
   mkdtempSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -34,9 +35,9 @@ function currentOwnership(path: string, mode: number) {
 }
 
 /** The developer's own Nango secret key file, as `up` requires it. */
-function nangoKeyFile(root: string, mode = 0o600) {
-  const path = join(realpathSync(root), `nango-secret-key-${mode.toString(8)}`);
-  writeFileSync(path, "local-nango-secret-key-0000000000000", { mode });
+function nangoKeyFile(root: string, mode = 0o600, value = "local-nango-secret-key-0000000000000") {
+  const path = join(realpathSync(root), `nango-secret-key-${mode.toString(8)}-${String(value.length)}`);
+  writeFileSync(path, value, { mode });
   currentOwnership(path, mode);
   return path;
 }
@@ -102,13 +103,14 @@ function completeOwnedState(root: string, tuple = externalTuple(nangoKeyFile(roo
   return state;
 }
 
+/** A fake docker that records each call with the Nango integration Compose would see. */
 function dockerTrap(root: string) {
   const bin = join(root, "bin");
   const calls = join(root, "docker-called");
   mkdirSync(bin);
   writeFileSync(
     join(bin, "docker"),
-    `#!/usr/bin/env sh\ntouch ${JSON.stringify(calls)}\nexit 0\n`,
+    `#!/usr/bin/env sh\nprintf 'integration=%s %s\\n' "$ECHO_CLEAN_NANGO_INTEGRATION" "$*" >> ${JSON.stringify(calls)}\nexit 0\n`,
     { mode: 0o755 },
   );
   return { calls, path: `${bin}:${process.env.PATH}` };
@@ -210,10 +212,16 @@ describe("Authority local harness", () => {
       { ECHO_LOCAL_NANGO_SECRET_KEY_FILE: "", ECHO_LOCAL_NANGO_INTEGRATION: "" },
       { ...nangoEnvironment(nangoKeyFile(root)), ECHO_LOCAL_NANGO_INTEGRATION: "" },
       nangoEnvironment(nangoKeyFile(root, 0o644)),
+      // The Authority reads at least 32 visible ASCII bytes; a short or newline-ended key never starts it.
+      nangoEnvironment(nangoKeyFile(root, 0o600, "short-nango-key")),
+      nangoEnvironment(nangoKeyFile(root, 0o600, "local-nango-secret-key-0000000000000\n")),
     ]) {
       const result = runTool(["up", "--state-dir", state], trap.path, environment);
       expect(result.status).toBe(1);
-      expect(result.stderr).toMatch(/Nango is not configured|Nango secret key file has unsafe mode/);
+      expect(result.stderr).toMatch(
+        /Nango is not configured|Nango secret key file has unsafe mode|Nango secret key file must hold 32 to 4096 visible ASCII characters/,
+      );
+      expect(result.stderr).not.toContain("local-nango-secret-key");
     }
     expect(() => realpathSync(trap.calls)).toThrow();
   });
@@ -243,8 +251,58 @@ describe("Authority local harness", () => {
     );
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("different tuple; run reset");
+    expect(result.stderr).toContain("different tuple or Nango settings; run reset");
     expect(() => realpathSync(trap.calls)).toThrow();
+
+    // The same tuple with another Nango integration is refused too.
+    const tuple = externalTuple(key);
+    const otherIntegration = runTool(
+      [
+        "up", "--state-dir", state, "--image", tuple.image, "--source-revision", tuple.source_revision,
+        "--release-id", tuple.release_id, "--runtime-profile-sha256", tuple.runtime_profile_sha256, "--no-build",
+      ],
+      trap.path,
+      {
+        ECHO_LOCAL_AUTHORITY_HTTP_PORT: String(tuple.ports.http),
+        ECHO_LOCAL_AUTHORITY_HTTPS_PORT: String(tuple.ports.https),
+        ...nangoEnvironment(key),
+        ECHO_LOCAL_NANGO_INTEGRATION: "slack-other",
+      },
+    );
+    expect(otherIntegration.status).toBe(1);
+    expect(otherIntegration.stderr).toContain("different tuple or Nango settings; run reset");
+    expect(() => realpathSync(trap.calls)).toThrow();
+  });
+
+  it("still stops a state stored before Nango, giving Compose the variable it parses", () => {
+    const root = temporaryRoot();
+    const { nango: _nango, ...tuple } = externalTuple(nangoKeyFile(root));
+    const state = completeOwnedState(root, tuple as ReturnType<typeof externalTuple>);
+    const generated = join(state, "generated");
+    mkdirSync(generated, { mode: 0o700 });
+    currentOwnership(generated, 0o700);
+    // The overlay a pre-Nango harness wrote: no command override and one state mount.
+    const overlay = localOverlay({ state, ports: tuple.ports, localSource: tuple.source_revision });
+    expect(overlay).not.toContain("command:");
+    expect(overlay).not.toContain("nango");
+    expect(overlay).toContain(`    volumes: !override\n      - "${state}:/echo-clean"\n    ports: !override`);
+    for (const [name, bytes] of [
+      ["compose.local.yaml", overlay],
+      ["local-input.json", `${JSON.stringify(tuple)}\n`],
+    ] as const) {
+      writeFileSync(join(generated, name), bytes, { mode: 0o600 });
+      currentOwnership(join(generated, name), 0o600);
+    }
+    const trap = dockerTrap(root);
+    const result = runTool(["down", "--state-dir", state], trap.path, {
+      ECHO_LOCAL_NANGO_SECRET_KEY_FILE: "",
+      ECHO_LOCAL_NANGO_INTEGRATION: "",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(trap.calls, "utf8")).toMatch(
+      /^integration=\S+ compose --project-name \S+ --file \S+compose\.clean-v1\.yaml --file \S+compose\.local\.yaml down --volumes --remove-orphans$/m,
+    );
   });
 
   it("refuses a generated overlay symlink before Docker", () => {
@@ -357,6 +415,34 @@ describe("Authority local harness", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("generated local input record");
     expect(() => realpathSync(trap.calls)).toThrow();
+  });
+
+  it("overrides only the Nango key path of the base Compose serve command", () => {
+    const items = (block: string) =>
+      block.trimEnd().split("\n").map((line) => {
+        const item = line.replace(/^ {6}- /, "");
+        return item.startsWith('"') ? (JSON.parse(item) as string) : item;
+      });
+    const base = /\n {4}command:\n((?: {6}- .*\n)+)/.exec(
+      readFileSync(join(REPO, "deploy/organization-authority/compose.clean-v1.yaml"), "utf8"),
+    );
+    const overlay = /\n {4}command: !override\n((?: {6}- .*\n)+)/.exec(
+      localOverlay({
+        state: "/Users/example/state",
+        ports: { http: 45678, https: 45679 },
+        localSource: "local-nonreleasable-example",
+        nango: { integration: "slack-local", secret_key_file: "/Users/example/nango-secret-key" },
+      }),
+    );
+    const expected = items(base![1]!).map((item) =>
+      item === "/echo-clean/private/nango-secret-key"
+        ? "/echo-local/nango-secret-key"
+        : item.startsWith("${ECHO_CLEAN_NANGO_INTEGRATION")
+          ? "slack-local"
+          : item,
+    );
+    expect(expected).toContain("--nango-integration");
+    expect(items(overlay![1]!)).toEqual(expected);
   });
 
   it("materializes a local overlay that replaces, rather than extends, state and ports", () => {

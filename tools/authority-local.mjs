@@ -44,6 +44,10 @@ const CADDY_IMAGE =
 // mounted read-only outside the state directory; it is never copied into it.
 const NANGO_KEY_TARGET = "/echo-local/nango-secret-key";
 const NANGO_INTEGRATION = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+// The Authority reads the key as 32 to 4096 visible ASCII bytes.
+const NANGO_SECRET_KEY = /^[\x21-\x7e]{32,4096}$/;
+// The base Compose serve command up to its Nango flags; the overlay repeats it
+// with the key mounted outside the state directory. A test keeps the two equal.
 const SERVE_COMMAND = [
   "serve",
   "--state-dir",
@@ -352,6 +356,8 @@ function localNangoConfiguration() {
   if (!isAbsolute(secretKeyFile) || resolve(secretKeyFile) !== secretKeyFile)
     fail("ECHO_LOCAL_NANGO_SECRET_KEY_FILE must be an absolute normalized path");
   assertRegularFile(secretKeyFile, 0o600, "Nango secret key file");
+  if (statSync(secretKeyFile).size > 4096 || !NANGO_SECRET_KEY.test(readFileSync(secretKeyFile, "latin1")))
+    fail("Nango secret key file must hold 32 to 4096 visible ASCII characters with no trailing newline");
   if (!NANGO_INTEGRATION.test(integration))
     fail("ECHO_LOCAL_NANGO_INTEGRATION is not a Nango integration key");
   return { integration, secret_key_file: secretKeyFile };
@@ -371,10 +377,14 @@ function localEnvironment({
   ports,
   state,
   image,
+  nango,
   releaseId,
   runtimeProfileSha256,
 }) {
   return {
+    // Compose needs the variable to parse the base profile, even to stop a
+    // state stored before Nango, whose overlay never starts that command.
+    ECHO_CLEAN_NANGO_INTEGRATION: nango?.integration ?? "not-configured",
     ECHO_CLEAN_AUTHORITY_GID: String(process.getgid?.() ?? 0),
     ECHO_CLEAN_AUTHORITY_HOST: "localhost",
     ECHO_CLEAN_AUTHORITY_IMAGE: image,
@@ -431,7 +441,7 @@ function readTuple(state) {
 function assertTuple(values, state) {
   if (JSON.stringify(readTuple(state)) !== JSON.stringify(inputFor(values))) {
     fail(
-      "complete synthetic state belongs to a different tuple; run reset before changing it",
+      "complete synthetic state belongs to a different tuple or Nango settings; run reset before changing it",
     );
   }
 }

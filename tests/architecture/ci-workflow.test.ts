@@ -150,6 +150,10 @@ describe("CI workflow", () => {
     );
     expect(authorityJob).toContain("--runtime-profile-sha256");
     expect(authorityJob).toContain("--no-build");
+    // The Compose profile requires the Nango integration, and the harness a private Nango key.
+    expect(authorityJob).toContain("export ECHO_CLEAN_NANGO_INTEGRATION=slack");
+    expect(authorityJob).toContain('export ECHO_LOCAL_NANGO_SECRET_KEY_FILE="$RUNNER_TEMP/');
+    expect(authorityJob).toContain('export ECHO_LOCAL_NANGO_INTEGRATION="$ECHO_CLEAN_NANGO_INTEGRATION"');
     expect(authorityJob).not.toContain("curl --connect-timeout");
     expect(authorityJob).not.toContain('data="$deployment/clean-data"');
     expect(authorityJob).not.toContain('docker compose --file "$compose" up');
