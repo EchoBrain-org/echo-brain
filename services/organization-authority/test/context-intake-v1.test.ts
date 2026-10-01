@@ -129,7 +129,7 @@ describe('context intake V1 shared gate', () => {
     const base = contextCaptureV1();
     const invalid = [
       { ...base, item: { ...base.item, source_id: 'source:not-canonical' } },
-      { ...base, content: { ...base.content, provenance: { ...base.content.provenance, observed_at: '2026-10-01' } } },
+      { ...base, content: { ...base.content, provenance: { ...base.content.provenance, source_updated_at: '2026-10-01' } } },
       { ...base, content: { ...base.content, representation: { kind: 'excerpt', passages: [{ id: 'bad', source_anchor: 'p:1', start: 0, end: 3, text: 'four' }] } } },
       { ...base, content: { ...base.content, representation: snapshotRepresentationV1('x'.repeat(128 * 1024 + 1)) } },
       { ...base, content: { ...base.content, extra: 'provider-cannot-widen-contract' } },

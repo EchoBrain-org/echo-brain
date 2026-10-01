@@ -2,6 +2,7 @@ import { sourceContentSha256V1, sourceItemIdV1, type SourceAdapterIdentityV1 } f
 import type {
   ContextCaptureContentV1, ContextCaptureEnvelopeV1, ContextObservationV1, ContextRepresentationV1,
 } from '../../src/application/context-intake-v1.js';
+import type { ContextStructuredPayloadV1, ContextStructuredSourceTypeV1 } from '../../src/application/context-structured-payload-v1.js';
 
 export const CONTEXT_CAPTURE_IDENTITY_V1 = Object.freeze({
   kind: 'source', adapter_id: 'synthetic-context', instance_id: 'fixture', version: '1',
@@ -32,6 +33,20 @@ export function snapshotRepresentationV1(text = 'Hardware handoff is Friday.'): 
   };
 }
 
+/** Synthetic provider metadata is intentionally separate from retained body text. */
+export function contextStructuredPayloadV1(source_type: ContextStructuredSourceTypeV1 = 'document'): ContextStructuredPayloadV1 {
+  switch (source_type) {
+    case 'document': return { schema_version: 1, kind: 'document', media_type: 'text/markdown', language: 'en' };
+    case 'note': return { schema_version: 1, kind: 'note', format: 'markdown' };
+    case 'message': return { schema_version: 1, kind: 'message', channel_ref: 'channel:fixture', sent_at: CAPTURED_AT, thread_ref: 'thread:fixture', author_ref: 'author:fixture' };
+    case 'ticket': return { schema_version: 1, kind: 'ticket', key: 'FIX-1', status: 'open', priority: 'normal', assignee_ref: 'assignee:fixture', due_at: CAPTURED_AT, labels: ['fixture'] };
+    case 'meeting': return { schema_version: 1, kind: 'meeting', started_at: CAPTURED_AT, ended_at: '2026-10-01T01:00:00.000Z', participant_refs: ['participant:fixture'] };
+    case 'activity': return { schema_version: 1, kind: 'activity', action: 'updated', occurred_at: CAPTURED_AT, subject_ref: 'subject:fixture', actor_ref: 'actor:fixture' };
+    case 'task': return { schema_version: 1, kind: 'task', status: 'open', due_at: CAPTURED_AT, assignee_ref: 'assignee:fixture' };
+    case 'decision': return { schema_version: 1, kind: 'decision', status: 'approved', decided_at: CAPTURED_AT, decider_refs: ['decider:fixture'] };
+  }
+}
+
 export function contextCaptureV1(options: {
   readonly external_id?: string;
   readonly revision_id?: string;
@@ -40,17 +55,21 @@ export function contextCaptureV1(options: {
   readonly source_type?: ContextCaptureContentV1['source_type'];
   readonly label?: string;
   readonly origin_ref?: string;
-  readonly observed_at?: string;
+  /** A source-stable semantic timestamp, omitted when the source exposes none. */
+  readonly source_updated_at?: string;
+  readonly payload?: ContextStructuredPayloadV1;
   readonly representation?: ContextRepresentationV1;
   readonly observations?: readonly ContextObservationV1[];
 } = {}): ContextCaptureEnvelopeV1 {
   const externalId = options.external_id ?? 'brief-1';
   const sourceId = sourceItemIdV1(CONTEXT_CAPTURE_IDENTITY_V1, externalId);
+  const sourceType = options.source_type ?? 'document';
   const content: ContextCaptureContentV1 = {
     schema_version: 1, kind: 'echo-context-capture-v1',
-    source_type: options.source_type ?? 'document', truth_status: 'source_observation',
+    source_type: sourceType, truth_status: 'source_observation',
     label: options.label ?? 'Synthetic context brief',
-    provenance: { origin_ref: options.origin_ref ?? `synthetic://context/${externalId}`, observed_at: options.observed_at ?? CAPTURED_AT },
+    provenance: { origin_ref: options.origin_ref ?? `synthetic://context/${externalId}`, ...(options.source_updated_at === undefined ? {} : { source_updated_at: options.source_updated_at }) },
+    payload: options.payload ?? contextStructuredPayloadV1(sourceType),
     representation: options.representation ?? snapshotRepresentationV1(),
     observations: options.observations ?? [],
   };

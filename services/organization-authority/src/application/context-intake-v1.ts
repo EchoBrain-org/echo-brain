@@ -4,6 +4,9 @@ import {
   type AdapterOperationContext, type SourceAdapterIdentityV1, type SourceAdmissionScopeV1,
   type SourceAdmissionStoreV1, type SourceEnvelopeV1,
 } from '@echo-brain/organization-processing/core';
+import {
+  assertContextStructuredPayloadV1, type ContextStructuredPayloadV1, type ContextStructuredSourceTypeV1,
+} from './context-structured-payload-v1.js';
 
 export const CONTEXT_CAPTURE_LIMITS_V1 = Object.freeze({
   envelope_bytes: 256 * 1024, snapshot_bytes: 128 * 1024, excerpt_bytes: 32 * 1024,
@@ -32,10 +35,12 @@ export interface ContextObservationV1 {
 export interface ContextCaptureContentV1 {
   readonly schema_version: 1;
   readonly kind: 'echo-context-capture-v1';
-  readonly source_type: 'document' | 'note' | 'message' | 'ticket' | 'meeting' | 'activity' | 'task' | 'decision';
+  readonly source_type: ContextStructuredSourceTypeV1;
   readonly truth_status: 'source_observation';
   readonly label: string;
-  readonly provenance: { readonly origin_ref: string; readonly observed_at: string };
+  /** Source time is stable for this revision; the read/poll time is revision.captured_at. */
+  readonly provenance: { readonly origin_ref: string; readonly source_updated_at?: string };
+  readonly payload: ContextStructuredPayloadV1;
   readonly representation: ContextRepresentationV1;
   readonly observations: readonly ContextObservationV1[];
 }
@@ -97,12 +102,14 @@ export function assertContextCaptureEnvelopeV1(value: unknown, identity: SourceA
   if (value.item.adapter.kind !== 'source' || value.item.source_id !== sourceItemIdV1(identity, value.item.external_id)) throw new Error('Context source identity is not canonical');
   // V1 owns its typed retained bytes; external artifact/derived-output custody is deferred.
   if (value.revision.artifact_refs.length !== 0 || value.revision.representation_refs.length !== 0 || value.revision.contributor !== undefined) throw new Error('Context V1 does not accept artifact, derived or identity claims');
-  const content = object(value.content, ['schema_version', 'kind', 'source_type', 'truth_status', 'label', 'provenance', 'representation', 'observations'], 'Context capture');
+  const content = object(value.content, ['schema_version', 'kind', 'source_type', 'truth_status', 'label', 'provenance', 'payload', 'representation', 'observations'], 'Context capture');
   if (content.schema_version !== 1 || content.kind !== 'echo-context-capture-v1' || content.truth_status !== 'source_observation' ||
       typeof content.source_type !== 'string' || !['document', 'note', 'message', 'ticket', 'meeting', 'activity', 'task', 'decision'].includes(content.source_type)) throw new Error('Context capture contract is unsupported');
   text(content.label, 200, 'Context label');
-  const provenance = object(content.provenance, ['origin_ref', 'observed_at'], 'Context provenance');
-  text(provenance.origin_ref, 2048, 'Context origin'); timestamp(provenance.observed_at);
+  const provenance = object(content.provenance, ['origin_ref', 'source_updated_at'], 'Context provenance');
+  text(provenance.origin_ref, 2048, 'Context origin');
+  if (provenance.source_updated_at !== undefined) timestamp(provenance.source_updated_at);
+  assertContextStructuredPayloadV1(content.payload, content.source_type as ContextStructuredSourceTypeV1);
   const representation = object(content.representation, ['kind', 'pointer', 'text', 'passages'], 'Context representation');
   const anchors = new Set<string>();
   if (representation.kind === 'pointer') {
@@ -143,6 +150,42 @@ export function assertContextCaptureEnvelopeV1(value: unknown, identity: SourceA
   }
 }
 
+/** Shared policy validation for intake and the persistence owner's atomic fence. */
+export function selectContextIntakePolicyV1(source: ContextCaptureEnvelopeV1, authority: ContextIntakeAuthorityV1): ContextIntakePolicyV1 {
+  const raw = authority.select(source);
+  plainData(raw);
+  object(raw, ['disposition', 'scope', 'permitted_representations'], 'Context Authority policy');
+  assertSourceAdmissionScopeV1(raw.scope);
+  if (!['retained', 'request_only'].includes(raw.disposition) || raw.scope.analysis_policy !== 'on_request' ||
+      !Array.isArray(raw.permitted_representations) || raw.permitted_representations.length < 1 || raw.permitted_representations.length > 3 ||
+      raw.permitted_representations.some(kind => !['pointer', 'excerpt', 'full_snapshot'].includes(kind)) ||
+      new Set(raw.permitted_representations).size !== raw.permitted_representations.length ||
+      !raw.permitted_representations.includes(source.content.representation.kind)) throw new Error('Context retention is not authorized');
+  return freeze(JSON.parse(canonicalSourceContentV1(raw)) as ContextIntakePolicyV1);
+}
+
+/** Authority checks must finish synchronously, including inside a custody transaction. */
+export function requireCurrentContextIntakePolicyV1(source: ContextCaptureEnvelopeV1, policy: ContextIntakePolicyV1, authority: ContextIntakeAuthorityV1): void {
+  const result: unknown = authority.requireCurrent(source, policy);
+  if (result !== undefined) {
+    // An invalid async fence must not also turn recovery into an unhandled rejection.
+    if (result instanceof Promise) void result.catch(() => undefined);
+    throw new Error('Context Authority fence must complete synchronously');
+  }
+}
+
+/** The persistence adapter shares the gate even when called without the batch coordinator. */
+export function snapshotContextCaptureAdmissionV1(
+  input: { readonly source: SourceEnvelopeV1; readonly scope: SourceAdmissionScopeV1 },
+  identity: SourceAdapterIdentityV1,
+): { readonly source: ContextCaptureEnvelopeV1; readonly scope: SourceAdmissionScopeV1 } {
+  plainData(input);
+  object(input, ['source', 'scope'], 'Context admission');
+  assertContextCaptureEnvelopeV1(input.source, identity);
+  assertSourceAdmissionScopeV1(input.scope);
+  return freeze(JSON.parse(canonicalSourceContentV1(input)) as { readonly source: ContextCaptureEnvelopeV1; readonly scope: SourceAdmissionScopeV1 });
+}
+
 /** Shared gate. Request-only policy cannot accidentally fall through to storage. */
 export async function intakeContextBatchV1(options: {
   readonly identity: SourceAdapterIdentityV1;
@@ -162,16 +205,7 @@ export async function intakeContextBatchV1(options: {
   const bindings = new Map<string, string>();
   for (const source of sources) {
     assertContextCaptureEnvelopeV1(source, options.identity);
-    const raw = options.authority.select(source);
-    plainData(raw);
-    object(raw, ['disposition', 'scope', 'permitted_representations'], 'Context Authority policy');
-    assertSourceAdmissionScopeV1(raw.scope);
-    if (!['retained', 'request_only'].includes(raw.disposition) || raw.scope.analysis_policy !== 'on_request' ||
-        !Array.isArray(raw.permitted_representations) || raw.permitted_representations.length < 1 || raw.permitted_representations.length > 3 ||
-        raw.permitted_representations.some(kind => !['pointer', 'excerpt', 'full_snapshot'].includes(kind)) ||
-        new Set(raw.permitted_representations).size !== raw.permitted_representations.length ||
-        !raw.permitted_representations.includes(source.content.representation.kind)) throw new Error('Context retention is not authorized');
-    const policy = freeze(JSON.parse(canonicalSourceContentV1(raw)) as ContextIntakePolicyV1);
+    const policy = selectContextIntakePolicyV1(source, options.authority);
     if (policy.disposition === 'retained' && options.store === undefined) throw new Error('Retained context requires an admission store');
     const key = canonicalSourceContentV1([policy.scope.organization_id, source.item.source_id, source.revision.revision_id]);
     const { captured_at: _captured, ...immutable } = source.revision;
@@ -182,13 +216,13 @@ export async function intakeContextBatchV1(options: {
     const binding = canonicalSourceContentV1(policy.scope);
     if (bindings.has(bindingKey) && bindings.get(bindingKey) !== binding) throw new Error('Context batch contains custody conflicts');
     bindings.set(bindingKey, binding);
-    options.authority.requireCurrent(source, policy); policies.push(policy);
+    requireCurrentContextIntakePolicyV1(source, policy, options.authority); policies.push(policy);
   }
   const results = [];
   for (const [index, source] of sources.entries()) {
     options.context?.signal.throwIfAborted();
     const policy = policies[index]!;
-    options.authority.requireCurrent(source, policy);
+    requireCurrentContextIntakePolicyV1(source, policy, options.authority);
     const admission = policy.disposition === 'request_only' ? 'request_only' as const :
       await options.store!.admitSourceRevision({ source, scope: policy.scope }, options.context);
     options.context?.signal.throwIfAborted();

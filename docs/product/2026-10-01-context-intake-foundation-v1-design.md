@@ -6,8 +6,9 @@ and capture. Production activation and acceptance of this proposal remain
 separate decisions. This proposal does not amend accepted ADRs, including
 [ADR-0010](../decisions/ADR-0010-disposable-related-atom-projection-v1.md).
 The [worktree brief](2026-10-01-shared-context-intake-foundation-worktree.md)
-describes the broader target; this milestone implements only its intake and
-durable capture foundation.
+defines the same ingestion-only scope. `feat/context-foundation-v1` is based on main
+`8578b58ab708caa4bda7b59e707c7870c00a73c4`; it uses existing main interfaces
+and has no dependency on PR 250.
 
 ## Logical Layer 1 and ownership
 
@@ -47,6 +48,30 @@ message, ticket, meeting, activity, task and decision. Every capture has the fix
 truth status `source_observation`, including a decision-shaped source; approval
 requires the separately owned signed human-act record contract.
 
+The required `payload` is a closed, versioned structured value whose `kind`
+matches `source_type`. It preserves selected source fields rather than flattening
+every input into a title and text body:
+
+| Source type | Structured payload fields (besides version and kind) |
+| --- | --- |
+| Document | Media type; optional language |
+| Note | Plain-text or Markdown format |
+| Message | Channel reference and sent time; optional thread and author references |
+| Ticket | Key, status and labels; optional priority, assignee reference and due time |
+| Meeting | Start time and participant references; optional end time |
+| Activity | Action, occurrence time and subject reference; optional actor reference |
+| Task | Status; optional due time, completion time and assignee reference |
+| Decision | Source status and decider references; optional decision time |
+
+External references remain opaque source coordinates. They cannot create or merge
+directory identities or memberships. A provider's decision status is still a
+source observation, not an ECHO approval. Unknown fields and unversioned provider
+blobs are rejected; provider mappings select only fields covered by this contract
+and the Authority retention decision. Bodies belong in the representation, not a
+duplicate field hidden in the payload. These structured metadata/state fields
+are retained content even for a pointer and require explicit retention permission.
+They are not given a free metadata exemption.
+
 V1 retains exactly the submitted, authorized representation:
 
 | Representation | Preserved evidence |
@@ -69,11 +94,31 @@ never imply permissions or identity links. This contract performs no inference
 or traversal. Contributor identity claims, artifacts and derived representation
 references are excluded from this bounded V1 intake contract.
 
-Provenance `observed_at` is the source-read observation time, revision
-`captured_at` is custody capture time, and observation `occurred_at` is the
-source-declared event time. These are independent explicit time semantics.
-Provenance and event timestamps use canonical UTC strings. Provider-generated
-approval, custody and access fields are rejected rather than interpreted.
+The time and revision semantics follow existing main admission:
+
+| Time | Meaning and immutable commitment |
+| --- | --- |
+| `revision.captured_at` | Read/poll observation and capture time; excluded from the immutable revision witness |
+| `provenance.source_updated_at` | Optional provider-declared time stable for this exact source revision; included in content digest |
+| Payload/event times, including `observation.occurred_at` | Source event times, included in content digest |
+
+An adapter never substitutes its current fetch time for a missing source time.
+It omits `source_updated_at` when unavailable. Fetch-time `observed_at` is rejected
+in content. Re-polling unchanged source evidence changes only `captured_at`, so
+the same revision deduplicates. SQLite retains the first successful capture time;
+there is no durable last-seen or poll-history log in this capability. Request-only
+results retain that request's observation time and disappear with the request.
+
+Adapters use an immutable provider revision token where available. Otherwise
+they derive a deterministic revision ID from canonical semantic content, excluding
+capture/poll fields. Content includes the selected representation, structured
+payload, provenance and source anchors. A changed field, corrected source time,
+different retained representation or incompatible normalization requires a new
+capture revision; provider coordinates/tokens can be incorporated into that key.
+It cannot overwrite or silently enrich an existing revision. Adapter version
+alone cannot distinguish revisions. New revisions preserve their source identity
+and may name their exact predecessor. Provider timestamps use canonical UTC
+strings; provider approval, custody and access claims are rejected.
 
 ## One logical intake boundary
 
@@ -92,10 +137,29 @@ retention authorization. Representation permission cannot widen custody or
 release permissions.
 
 For retained capture, the persistence owner must repeat the retention fence
-atomically with admission. Fixture composition binds Authority's current check
-through the existing SQLite store's `beforeAdmit` callback inside its transaction.
-An asynchronous store's pre-call check alone is insufficient. The fixtures prove
-that revocation while admission is queued prevents durable writes.
+atomically with admission, including duplicate/replay paths. The additive
+`SqliteContextCaptureStoreV1` implements that requirement using the existing main
+store's `beforeAdmit` callback; it is opt-in and not installed in production.
+Its constructor requires the server-configured adapter identity. The store uses
+the same envelope validator and snapshots/freezes source and scope at entry, so
+calling the store directly cannot bypass identity checks or mutate captured bytes.
+Inside the same transaction and before any writes, it must:
+
+1. Check cancellation and revalidate the exact typed envelope.
+2. Reselect current Authority policy for the source; reject revoked retention,
+   `request_only`, a disallowed representation or unsupported processing policy.
+3. Compare organization, custody, access-policy reference and processing binding
+   with the selected admission scope. Fail on drift rather than widening custody.
+4. Run `requireCurrent` synchronously, then check cancellation again.
+
+Authority policy selection and the fence must complete synchronously. A returned
+Promise is not a completed check and fails closed. No awaited provider read or
+queue work can sit between the final fence and the writes. Other implementations
+of `SourceAdmissionStoreV1` must provide an equivalent transactional fence; the
+generic main port and a pre-call check alone do not guarantee it. A read grant
+cannot satisfy this requirement. Authority must authorize the complete selected
+capture, including labels, pointers and structured fields, under the current
+configured adapter and retention policy.
 
 For request-only intake, the coordinator returns a validated frozen value owned
 by the request and never invokes a supplied admission store. It creates no
@@ -112,6 +176,7 @@ Evidence Desk and Ask remain outside this milestone.
 | Full snapshot text | 128 KiB |
 | Total excerpt text | 32 KiB |
 | Individual passage | 4 KiB |
+| Canonical structured payload | 16 KiB; at most 32 entries per reference/label list |
 | Passage anchors per capture | 32 |
 | Observations per capture | 32 |
 | Intake batch or custody inventory read | 100 captures |
@@ -138,6 +203,25 @@ sources; restart; transactional policy revocation; malformed and oversized input
 cancellation; atomic storage failure; partial-batch recovery; and request-only
 non-retention under the same rules. No model or external endpoint is involved.
 
+Provider conformance fixtures emit existing main `SourceAdapterV1` /
+`SourceEnvelopeV1` values. Provider code keeps those inward dependencies;
+Authority composition owns mapping validation and intake, and a provider never
+imports Authority service internals. Synthetic mappings for each payload kind
+prove exact structured-field roundtrip, stable revision replay with later poll
+time, semantic-time conflicts/new revisions, closed-field/bound rejection in both
+dispositions, and queued disposition/representation/scope drift at the atomic
+fence. The conformance helper accepts a provider-owned map and adapter identity;
+it is fixture composition, not another production intake pipeline.
+
+Authority integration tests can reuse
+[`ContextProviderConformanceAdapterV1(rawValues, mapRaw, identity)`](../../services/organization-authority/test/fixtures/context-provider-conformance-v1.ts)
+with a provider-owned raw mapper. Pull its existing `SourceBatchV1`, run the
+shared intake coordinator, and supply
+`SqliteContextCaptureStoreV1(database, authority, identity)` for retained cases.
+The [conformance suite](../../services/organization-authority/test/context-intake-conformance-v1.test.ts)
+is the executable acceptance matrix. Provider production packages continue to
+depend only on inward source contracts; composing tests belong to Authority.
+
 ## Future consumers and deferred decisions
 
 Future consumers can use the preserved source coordinates, exact revision
@@ -158,8 +242,8 @@ Automatic learning, personalization, full task management, model-generated
 relationships and cross-tool identity inference are deferred. New capture
 semantics require a new version rather than silent contract widening.
 
-Reserved provider, Nango, onboarding, route, Person, deployment and current
-composition files remain owned by Claude's PR 250 review. This implementation
-changes only new provider-neutral modules and fixtures, so no shared-file
-ownership transfer is needed. Before opening a foundation PR, reconcile the
-finalized dependency as required by the brief; this local work does not merge it.
+Provider, Nango, onboarding, route, Person, deployment and current composition
+files remain outside this scope. The foundation consumes existing main interfaces
+without changing them; no PR 250 integration or ownership transfer is required.
+Only the foundation modules, fixtures and proposed documents are part of this
+foundation change. Nothing here merges, deploys or activates a provider.
