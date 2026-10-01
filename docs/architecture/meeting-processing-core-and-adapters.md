@@ -167,6 +167,14 @@ The Slack approval adapter owns its narrow Web API transport and its own
 authorization, idempotency, and receipt semantics. Slack actors are
 tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
+Finalized private approvals have two ordered responsibilities. The durable
+worker materializes the terminal and, for an approval, its V4 receipt before
+Authority startup can serve. Card redraw is provider presentation only: a
+later periodic pass tries one unrendered terminal card, records `rendered` only
+after Slack confirms the replacement update, and rotates after an uncertain
+result. This keeps a Nango outage out of the startup gate while preserving a
+bounded, cancellable retry path for every card.
+
 ## Current composition
 
 The Organization Authority composition root concretely selects one

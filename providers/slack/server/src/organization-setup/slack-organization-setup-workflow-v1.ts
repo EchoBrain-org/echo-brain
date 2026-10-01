@@ -254,11 +254,6 @@ export class SlackOrganizationSetupWorkflowV1 {
       let connection: NangoSlackConnectionV1 | undefined;
       try {
         connection = await finishedNangoConnectionV1(this.options.nango.client, attempt);
-        // A rebind needs its lost connection still gone; one that came back is reconnected by the owner's next Install.
-        if (connection !== undefined && attempt.rebind !== null &&
-          !await missingNangoConnectionV1(this.options.nango.client, attempt.rebind.nango_connection_id)) {
-          throw new SlackConnectionConflictError("the lost Nango connection is back");
-        }
       } catch (error) {
         // Ruling P8: a Nango blip while looking is not an outcome; the attempt lives until it expires.
         if (error instanceof NangoClientErrorV1 && error.code === "unavailable") return statusResponse(attempt);
@@ -280,7 +275,18 @@ export class SlackOrganizationSetupWorkflowV1 {
       };
       const activated = attempt.rebind === null
         ? await activateNangoSlackConnectionV1(activation)
-        : await rebindNangoSlackConnectionV1({ ...activation, rebind: attempt.rebind });
+        : await rebindNangoSlackConnectionV1({
+          ...activation,
+          rebind: attempt.rebind,
+          assert_lost: async () => {
+            if (!await missingNangoConnectionV1(this.options.nango.client, attempt.rebind!.nango_connection_id)) {
+              throw new SlackConnectionConflictError("the lost Nango connection is back");
+            }
+          },
+          // This is synchronous and runs after the final Nango read, just
+          // before the coordinator's state and credential compare-and-swap.
+          assert_owner: () => { this.owner(accessToken); },
+        });
       this.options.health.clear();
       const result: OrganizationSlackInstallResultV1 = { kind: activated.kind, workspace_id: activated.connection.provider_tenant_id };
       this.settle(attempt, "complete", null, result);
@@ -290,10 +296,16 @@ export class SlackOrganizationSetupWorkflowV1 {
         this.settle(attempt, "cancelled");
         throw error;
       }
+      // The rebind's final old-connection read is still provider observation:
+      // a Nango outage leaves the attempt pending, just like the status read.
+      if (error instanceof NangoClientErrorV1 && error.code === "unavailable") return statusResponse(attempt);
       const { reason } = failureOf(error);
       // The active connection's Nango connection now holds another workspace or bot, or is gone.
       const bound = attempt.reconnect ?? attempt.rebind;
-      if (bound !== null && reason === "workspace_mismatch") this.options.health.markNeedsReinstall(bound.state_sha256);
+      if (bound !== null && (reason === "workspace_mismatch" ||
+        (error instanceof NangoClientErrorV1 && error.code === "not_found"))) {
+        this.options.health.markNeedsReinstall(bound.state_sha256);
+      }
       this.settle(attempt, "failed", reason);
     } finally {
       this.busy = false;

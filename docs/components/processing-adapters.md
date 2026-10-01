@@ -71,6 +71,13 @@ local durable state are distinct evidence. Any adapter that causes an external
 effect requires explicit retry, crash, concurrency, and reconciliation
 semantics.
 
+For the private Slack approval surface, Authority completes terminal and V4
+materialization before startup readiness. Terminal-card redraw is a separate,
+bounded periodic presentation reconciliation: one pending card per pass,
+fairly rotated after uncertain outcomes, with the worker cancellation signal
+passed to Slack. A card becomes rendered only after the provider confirms its
+replacement update.
+
 ## Current references
 
 - [Meeting processing core and adapters](../architecture/meeting-processing-core-and-adapters.md)

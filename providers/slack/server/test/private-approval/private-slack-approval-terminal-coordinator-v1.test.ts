@@ -235,6 +235,7 @@ describe("private Slack approval terminal coordinator v1", () => {
     });
     await coordinator.appendFinalizedApprovalsToV4(new AbortController().signal);
     await coordinator.recoverV4Appends(new AbortController().signal);
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
     expect(v2Appends).toBe(1);
     expect(harness.records[0]?.resolution).toEqual(value.resolution);
     expect(renders).toEqual([expect.objectContaining({ outcome: "approved", policy_label: "Projects" })]);
@@ -546,6 +547,7 @@ describe("private Slack approval terminal coordinator v1", () => {
 
     await coordinator.appendFinalizedApprovalsToV4(new AbortController().signal);
     await coordinator.recoverV4Appends(new AbortController().signal);
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
     expect(appends).toHaveLength(1);
     expect(harness.records[0]).toMatchObject({ candidate_id: CANDIDATE_ID });
     expect(harness.records[0]?.v4_receipt).not.toBeNull();
@@ -609,6 +611,9 @@ describe("private Slack approval terminal coordinator v1", () => {
     await coordinator.recoverV4Appends(new AbortController().signal);
     expect(appendCalls).toBe(0);
     expect(harness.records[0]?.v4_receipt).toBeUndefined();
+    expect(renderCalls).toBe(0);
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
     expect(renderCalls).toBe(2);
     expect(harness.marks).toEqual([APPROVAL_ID]);
     expect(journey.events).toEqual(
@@ -650,10 +655,71 @@ describe("private Slack approval terminal coordinator v1", () => {
     expect(harness.marks).toEqual([]);
     expect(requests).toEqual([]);
 
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
+    expect(harness.marks).toEqual([]);
+    expect(requests).toEqual([]);
+
     nangoAvailable = true;
-    await coordinator.recoverV4Appends(new AbortController().signal);
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
     expect(harness.marks).toEqual([APPROVAL_ID]);
     expect(requests).toEqual(["chat.update"]);
+  });
+
+  it("defers a terminal-card backlog from recovery and gives uncertain cards fair turns", async () => {
+    const terminals = ["one", "two", "three"].map((suffix) => {
+      const value = terminal("rejected");
+      return {
+        ...value,
+        resolution: { ...value.resolution, approval_id: `approval_${suffix}` },
+        audit: { ...value.audit, approval_id: `approval_${suffix}` },
+      } as DurablePrivateApprovalTerminalV1;
+    });
+    const receipts = new Map(terminals.map((value) => [
+      value.resolution.approval_id,
+      {
+        approval_id: value.resolution.approval_id,
+        candidate_id: `candidate_${value.resolution.approval_id}`,
+        outcome: "rejected" as const,
+        resolution: value.resolution,
+        resolution_sha256: digest(`resolution_${value.resolution.approval_id}`),
+        v4_receipt: null,
+        v4_receipt_sha256: null,
+        card_render_state: "unrendered" as const,
+        card_rendered_at: null,
+        recorded_at: "2026-08-28T00:00:00.000Z",
+      },
+    ]));
+    const renders: string[] = [];
+    const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
+      control_plane: {
+        listQueued: () => [], listDenied: () => [], listTerminals: () => terminals,
+        finalize: async () => terminals[0]!, recordDenied: () => undefined,
+      },
+      authority: {
+        readTerminal: (approvalId) => receipts.get(approvalId) as any,
+        readFrozenCandidateForApproval: () => { throw new Error("unexpected terminal materialization"); },
+        recordTerminal: () => { throw new Error("unexpected terminal materialization"); },
+        readForPresentation: () => ({
+          assignment: { dm_channel: { channel_id: "DPRIVATE" } },
+          provider_message_ts: "1.000001",
+        }) as any,
+        markTerminalCardRendered: () => { throw new Error("uncertain card must not be acknowledged"); },
+      },
+      record_writer: { appendApproved: async () => { throw new Error("rejected terminal must not append"); } } as never,
+      poster: { renderTerminal: async (input) => {
+        renders.push(input.approval_id);
+        return { kind: "uncertain" as const };
+      } },
+    });
+
+    await coordinator.recoverV4Appends(new AbortController().signal);
+    expect(renders).toEqual([]);
+
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
+    expect(renders).toEqual(["approval_one", "approval_two", "approval_three", "approval_one"]);
   });
 
   it("closes an append failure, retries it, and only then marks search awaiting", async () => {

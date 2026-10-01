@@ -37,6 +37,11 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   /** Appends finalized actions to V4; rejected actions produce no readable fact. */
   appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void>;
   /**
+   * Optional bounded provider presentation reconciliation. It is called only
+   * by a periodic cycle after durable approval work, never at startup.
+   */
+  reconcileApprovalPresentations?(signal: AbortSignal): Promise<void>;
+  /**
    * Reconciles the immutable permission-aware search generation with the V4
    * record head after the complete append phase. Implementations may no-op
    * while the processing service is waiting for its activation prerequisites.
@@ -212,6 +217,10 @@ export async function startOrganizationAuthorityServiceLifecycle(
       }, dependencies.core_runtime_observation),
       reportError,
     );
+    let closing = false;
+    let presentationPending = false;
+    let presentationTail: Promise<void> = Promise.resolve();
+    let requestApprovalPresentation!: () => void;
     const worker = new SerializedMeetingProcessingWorker({
       ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
@@ -229,10 +238,27 @@ export async function startOrganizationAuthorityServiceLifecycle(
           throw error;
         }
       },
-      onCycleComplete: () => search.request(),
+      onCycleComplete: () => {
+        // Search is durable-derived work and must be requested even when the
+        // later, provider-only terminal-card redraw fails.
+        search.request();
+        requestApprovalPresentation();
+      },
       onError: dependencies.on_worker_error,
     });
-    let closing = false;
+    requestApprovalPresentation = (): void => {
+      if (closing || presentationPending || dependencies.processing.reconcileApprovalPresentations === undefined) return;
+      presentationPending = true;
+      presentationTail = worker
+        .runExclusive((signal) => dependencies.processing.reconcileApprovalPresentations!(signal))
+        .catch((failure: unknown) => {
+          // The terminal and record phases already committed. Report a
+          // provider-presentation defect without suppressing this cycle's
+          // search wake or turning a retryable redraw into a worker failure.
+          if (!closing) reportError(failure);
+        })
+        .finally(() => { presentationPending = false; });
+    };
     const shutdown = new AbortController();
     let publicationPending = false;
     let publicationImmediate: ReturnType<typeof setImmediate> | undefined;
@@ -301,15 +327,20 @@ export async function startOrganizationAuthorityServiceLifecycle(
         try {
           await Promise.race([cancelled, (async () => {
             let observedPublication: Promise<void>;
+            let observedPresentation: Promise<void>;
             do {
               observedPublication = publicationTail;
-              await observedPublication;
+              observedPresentation = presentationTail;
+              await Promise.all([observedPublication, observedPresentation]);
               signal.throwIfAborted();
               await worker.runExclusive(async () => undefined);
               signal.throwIfAborted();
               await search.drain();
               signal.throwIfAborted();
-            } while (publicationTail !== observedPublication);
+            } while (
+              publicationTail !== observedPublication ||
+              presentationTail !== observedPresentation
+            );
           })()]);
         } finally { signal.removeEventListener("abort", abort); }
       },

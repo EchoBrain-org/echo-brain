@@ -226,6 +226,10 @@ class OrganizationAuthorityProcessingCoordinator
     return this.approvals.appendFinalizedApprovalsToV4(signal);
   }
 
+  reconcileApprovalPresentations(signal: AbortSignal): Promise<void> {
+    return this.approvals.reconcileApprovalPresentations?.(signal) ?? Promise.resolve();
+  }
+
   async reconcileReadableSearchGeneration(signal: AbortSignal): ReturnType<OrganizationAuthorityProcessingCycleV1["reconcileReadableSearchGeneration"]> {
     let attempts: readonly MeetingApprovalJourneyStageAttemptV1[] = [];
     try {

@@ -10,6 +10,12 @@ export interface ApprovalWorkflowProcessingV1 {
   recoverV4Appends(signal: AbortSignal): Promise<void>;
   observeAndFinalizePendingApprovals(signal: AbortSignal): Promise<void>;
   appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void>;
+  /**
+   * Reconciles at most a bounded amount of provider presentation work after
+   * its durable decision and record work completed. It must never be needed
+   * to make an approval terminal or readable fact durable.
+   */
+  reconcileApprovalPresentations?(signal: AbortSignal): Promise<void>;
 }
 
 /** Generic Authority resources made available to the selected approval surface. */

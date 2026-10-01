@@ -93,6 +93,13 @@ export interface PrivateSlackApprovalTerminalCoordinatorV1Options {
  * and Slack terminal rendering is a replacement update.
  */
 export class PrivateSlackApprovalTerminalCoordinatorV1 {
+  /**
+   * The most recently attempted terminal card. It is intentionally
+   * process-local: the durable receipt decides whether a card remains due,
+   * while this cursor prevents one unavailable card from starving the rest.
+   */
+  private presentation_cursor: string | undefined;
+
   constructor(
     private readonly options: PrivateSlackApprovalTerminalCoordinatorV1Options,
   ) {}
@@ -159,18 +166,41 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
     }
   }
 
-  /** Append only approved terminals, then finish their private DM projection. */
+  /** Append only approved terminals. Private DM projection is a later, optional phase. */
   async appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void> {
     await this.materializeDurableTerminals(signal);
+  }
+
+  /**
+   * Tries at most one unrendered terminal card after the durable worker phases.
+   * This is deliberately separate from startup recovery: an unavailable Nango
+   * token must not delay durable V4 recovery or API readiness. Advancing the
+   * cursor before the provider call gives every unrendered card a turn when a
+   * prior call is uncertain or fails.
+   */
+  async reconcileApprovalPresentations(signal: AbortSignal): Promise<void> {
+    const terminals = this.options.control_plane.listTerminals();
+    if (terminals.length === 0) return;
+    const previous = this.presentation_cursor === undefined
+      ? -1
+      : terminals.findIndex((terminal) => terminal.resolution.approval_id === this.presentation_cursor);
+    for (let offset = 1; offset <= terminals.length; offset += 1) {
+      signal.throwIfAborted();
+      const terminal = terminals[(previous + offset + terminals.length) % terminals.length];
+      if (terminal === undefined) continue;
+      const receipt = await this.options.authority.readTerminal(terminal.resolution.approval_id);
+      if (receipt === undefined || receipt.card_render_state === "rendered") continue;
+      this.presentation_cursor = receipt.approval_id;
+      await this.reconcileTerminalCard(receipt, signal);
+      return;
+    }
   }
 
   private async materializeDurableTerminals(signal: AbortSignal): Promise<void> {
     for (const terminal of this.options.control_plane.listTerminals()) {
       signal.throwIfAborted();
       this.synthesizeTerminalSuccessIfMissing(terminal);
-      const authorityTerminal = await this.materializeTerminal(terminal);
-      signal.throwIfAborted();
-      await this.reconcileTerminalCard(authorityTerminal);
+      await this.materializeTerminal(terminal);
     }
   }
 
@@ -391,6 +421,7 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
 
   private async reconcileTerminalCard(
     terminal: PrivateApprovalTerminalReceiptV1,
+    signal: AbortSignal,
   ): Promise<void> {
     if (terminal.card_render_state === "rendered") return;
     const presentation = await this.options.authority.readForPresentation(
@@ -413,7 +444,7 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
           : null,
       dm_channel_id: presentation.assignment.dm_channel.channel_id,
       provider_message_ts: presentation.provider_message_ts,
-      });
+      }, signal);
       annotateCoreRuntimeV1({ result: result.kind === "done" ? "done" : "uncertain" });
       return result;
     });

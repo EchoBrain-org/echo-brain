@@ -242,6 +242,12 @@ describe("Slack persisted staging canary", () => {
     expect(assignments.readTerminal(approvalId)).toMatchObject({
       candidate_id: candidateId,
       outcome: "rejected",
+      card_render_state: "unrendered",
+    });
+    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
+    expect(assignments.readTerminal(approvalId)).toMatchObject({
+      candidate_id: candidateId,
+      outcome: "rejected",
       card_render_state: "rendered",
     });
   });

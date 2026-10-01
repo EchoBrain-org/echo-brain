@@ -396,6 +396,25 @@ describe("Slack organization setup workflow v1", () => {
     expect(workflow.organizationSetup()).toBe("connected");
   });
 
+  it("marks needs reinstall when Nango loses a reconnecting connection before status", async () => {
+    const { workflow, connections, connect, nango, health } = setup();
+    const before = await connect();
+    const begun = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
+    // It existed at begin, so this was a reconnect, but disappears before the
+    // first status read can observe the completed session.
+    connections.delete("nango-conn-1");
+
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({
+      status: "failed", failure_reason: "provider_unavailable",
+    });
+    expect(health.needsReinstall(before.state_sha256)).toBe(true);
+    expect(workflow.organizationSetup()).toBe("needs_reinstall");
+
+    await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(3)}` }, "owner");
+    expect(nango.createReconnectSession).toHaveBeenCalledOnce();
+    expect(nango.createConnectSession).toHaveBeenCalledTimes(2);
+  });
+
   it("rebinds the active connection to a new Nango connection after Nango lost it, keeping the handle and the state hash", async () => {
     const { workflow, nango, connections, connect, finishConnect, database, secrets, health } = setup();
     const before = await connect();
@@ -461,6 +480,32 @@ describe("Slack organization setup workflow v1", () => {
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", failure_reason: "provider_unavailable" });
     expect(findSlackAppCredentialsByReferenceSha256V1(secrets, before.state.credential_reference_sha256)).toEqual(bundle);
     await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(3)}` }, "owner");
+    expect(nango.createReconnectSession).toHaveBeenCalledWith(expect.objectContaining({ connection_id: "nango-conn-1" }));
+  });
+
+  it("refuses a rebind when the old Nango connection returns during Slack verification", async () => {
+    const { workflow, connections, connect, finishConnect, secrets, verifier, nango } = setup();
+    const before = await connect();
+    const bundle = findSlackAppCredentialsByReferenceSha256V1(secrets, before.state.credential_reference_sha256);
+    const old = connections.get("nango-conn-1")!;
+    connections.delete("nango-conn-1");
+    const begun = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
+    finishConnect({ connection_id: "nango-conn-2" });
+    const verify = verifier.verifyConnection.getMockImplementation()!;
+    verifier.verifyConnection.mockImplementationOnce(async (token: string) => {
+      const verified = await verify(token);
+      // Nango restores the old connection while Slack's auth.test is in flight.
+      connections.set("nango-conn-1", old);
+      return verified;
+    });
+
+    await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({
+      status: "failed", failure_reason: "provider_unavailable",
+    });
+    expect(findSlackAppCredentialsByReferenceSha256V1(secrets, before.state.credential_reference_sha256)).toEqual(bundle);
+
+    await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(3)}` }, "owner");
+    expect(connections.get("nango-conn-1")).toEqual(old);
     expect(nango.createReconnectSession).toHaveBeenCalledWith(expect.objectContaining({ connection_id: "nango-conn-1" }));
   });
 

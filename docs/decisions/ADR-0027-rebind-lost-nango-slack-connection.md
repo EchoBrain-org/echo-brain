@@ -63,9 +63,11 @@ message about a different app.
   connection ID can be rebound.
 - **Trigger.** The owner's Install first reads the bound Nango connection. A
   404 opens a connect session with the attempt's own organization, membership
-  and attempt tags, which is found and checked like a first install. Just
-  before the write the old ID is read again and must still answer 404; if it
-  is back, the attempt fails and the owner's next Install reconnects it.
+  and attempt tags, which is found and checked like a first install. After
+  Slack verifies the new token and before any further provider await, the old
+  ID is read again and must still answer 404. The owner and current-state
+  fences then run synchronously before the bundle write; if the old ID is
+  back, the attempt fails and the owner's next Install reconnects it.
 - **Proof.** Slack's `auth.test` and `bots.info` on the new token must
   reproduce the stored evidence digest exactly, with the same team,
   enterprise, app, bot, bot user and sorted scopes, and Nango's report must
@@ -81,10 +83,12 @@ message about a different app.
   the owner to run setup again with `--reconnect` and choose the
   organization's workspace. `already_connected` stays for a different app,
   and for a different Nango connection outside a rebind.
-- **Health.** A 404 for the bound connection on a bot-token read marks it
-  "needs reinstall"; Nango's 401 or 403 (this Authority's own key) and
-  unavailability do not. A mark from a read that an install overtook is
-  dropped. The five-minute token cache is keyed by the unchanged state hash
+- **Health.** A 404 for the bound connection on a bot-token read or reconnect
+  status read marks it "needs reinstall". A 404 for a newly found replacement
+  during rebind status does too; the final old-ID 404 instead proves that the
+  rebind may proceed. Nango's 401 or 403 (this Authority's own key) and
+  unavailability do not mark it. A mark from a read that an install overtook
+  is dropped. The five-minute token cache is keyed by the unchanged state hash
   and survives a rebind; that is safe only because the proof requires the
   same bot.
 

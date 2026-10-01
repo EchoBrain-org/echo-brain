@@ -128,11 +128,16 @@ proposed).
 The Slack bot token is never written to Authority state: Nango holds it, and
 the Authority fetches it at use time and caches it in memory for at most five
 minutes ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
-While Nango is unreachable past that cache, card posts and updates, including
-the startup recovery of decided cards, retry quietly on later passes without
-stopping the Authority; only the owner's setup and install report "Slack setup
-is unavailable right now". Unavailability and Nango's 401 or 403 never mark
-the connection "needs reinstall".
+Startup recovery first materializes every finalized approval and its V4 receipt
+without contacting Slack. Private terminal-card redraw is an optional,
+post-durable periodic step: it tries one unrendered card per pass, rotates
+after an uncertain result, and forwards cancellation to the provider call. A
+Nango outage therefore leaves the durable decision intact and the card-render
+marker pending for a later pass without delaying Authority readiness or letting one
+card starve the rest. Only a confirmed Slack update records the card as
+rendered. The owner's setup and install report "Slack setup is unavailable
+right now". Unavailability and Nango's 401 or 403 never mark the connection
+"needs reinstall".
 The organization-scoped Authority private secret store instead holds one
 credential bundle: the app's client ID and secret, its signing secret, and the
 Nango connection ID. `integrations.sqlite` receives only an opaque handle to

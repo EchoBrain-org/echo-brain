@@ -228,11 +228,19 @@ export async function activateNangoSlackConnectionV1(
 export interface RebindNangoSlackConnectionInputV1 extends ActivateNangoSlackConnectionInputV1 {
   /** The active state, and the Nango connection its bundle named, when Nango no longer had that connection. */
   readonly rebind: { readonly state_sha256: `sha256:${string}`; readonly nango_connection_id: string };
+  /**
+   * Reads Nango after Slack verification to prove the old connection is still
+   * gone. It may await; the two fences below deliberately do not.
+   */
+  readonly assert_lost: () => Promise<void>;
+  /** Re-checks that the caller remains an owner after the final provider read. */
+  readonly assert_owner: () => void;
 }
 
 /**
  * Points the active connection's credential bundle at a new Nango connection
- * after Nango lost the one it named; the caller checks the loss. The new
+ * after Nango lost the one it named; the caller proves that loss again after
+ * Slack verification and immediately before this synchronous write. The new
  * install must reproduce the stored verification evidence and scopes, so it
  * is the same app, workspace and bot. The bundle must still hold the begin's
  * app credentials and the lost id, and only that id changes, under the same
@@ -244,6 +252,10 @@ export async function rebindNangoSlackConnectionV1(
 ): Promise<ActivatedNangoSlackConnectionV1> {
   assertSlackConnectionMetadataV1(input.database, input);
   const verified = await verifyInstall(input);
+  // No provider await follows this check. The owner and database fences below
+  // make this the last external observation before replacing the bundle bytes.
+  await input.assert_lost();
+  input.assert_owner();
   return input.database
     .transaction((): ActivatedNangoSlackConnectionV1 => {
       const active = readActiveSlackConnectionV1(input.database);

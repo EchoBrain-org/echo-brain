@@ -117,16 +117,21 @@ function rebind(
     readonly nango: NangoSlackConnectionV1;
     readonly rebind: { readonly state_sha256: `sha256:${string}`; readonly nango_connection_id: string };
     readonly verified?: Partial<VerifiedSlackConnection>;
+    readonly verifier?: ReturnType<typeof authTest>;
+    readonly assert_lost?: () => Promise<void>;
+    readonly assert_owner?: () => void;
   },
 ) {
   return rebindNangoSlackConnectionV1({
     ...COORDINATES,
     database: state.database,
     secrets: state.secrets,
-    verifier: authTest(input.nango, { verification_evidence_sha256: canonicalSha256({ verified: "nango-conn-1" }), ...input.verified }),
+    verifier: input.verifier ?? authTest(input.nango, { verification_evidence_sha256: canonicalSha256({ verified: "nango-conn-1" }), ...input.verified }),
     credential: input.credential,
     nango: input.nango,
     rebind: input.rebind,
+    assert_lost: input.assert_lost ?? (async () => undefined),
+    assert_owner: input.assert_owner ?? (() => undefined),
     now: () => LATER,
     new_connection_id: () => "con_nango_2",
   });
@@ -398,6 +403,42 @@ describe("Nango Slack connection activation v1", () => {
     ] as const) {
       await expect(rebind(state, { credential, nango, rebind: rebound })).rejects.toBeInstanceOf(SlackConnectionConflictError);
     }
+    expect(findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256)).toEqual(activeBundle);
+  });
+
+  it("runs the lost-connection and owner fences after Slack verification, before replacing the bundle", async () => {
+    const state = setup();
+    const created = await activate(state, { credential: pendingBundle(state), nango: nangoInstall() });
+    const active = readActiveSlackConnectionV1(state.database)!;
+    const activeBundle = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    let verified = false;
+    let lostChecked = false;
+    let ownerChecked = false;
+    const nango = nangoInstall({ connection_id: "nango-conn-2" });
+    const verifier = {
+      verifyConnection: vi.fn(async () => {
+        verified = true;
+        return authTest(nango, { verification_evidence_sha256: canonicalSha256({ verified: "nango-conn-1" }) }).verifyConnection();
+      }),
+    };
+
+    await expect(rebind(state, {
+      credential: activeBundle,
+      nango,
+      rebind: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" },
+      verifier,
+      assert_lost: async () => {
+        expect(verified).toBe(true);
+        lostChecked = true;
+      },
+      assert_owner: () => {
+        expect(lostChecked).toBe(true);
+        ownerChecked = true;
+        throw new SlackConnectionConflictError("the owner changed during activation");
+      },
+    })).rejects.toBeInstanceOf(SlackConnectionConflictError);
+    expect(lostChecked).toBe(true);
+    expect(ownerChecked).toBe(true);
     expect(findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256)).toEqual(activeBundle);
   });
 
