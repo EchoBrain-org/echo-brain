@@ -32,6 +32,8 @@
     "providers/slack/server/src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.ts",
     "providers/slack/server/src/organization-control-plane/adapters/nango/nango-connection-client-v1.ts",
     "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.ts",
+    "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.ts",
+    "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.ts",
     "providers/slack/server/src/person-identity/sqlite-slack-person-identity-link-repository-v1.ts",
     "providers/slack/server/src/person-identity/slack-person-browser-identity-link-workflow-v1.ts",
     "providers/slack/server/src/private-approval/sqlite-private-slack-approval-terminal-authority-v1.ts",

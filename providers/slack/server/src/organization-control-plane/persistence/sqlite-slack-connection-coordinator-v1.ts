@@ -1,7 +1,8 @@
-import { canonicalJson, canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
+import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import { type OrganizationSecretReference, type OrganizationSecretStore } from "../application/slack-integration-contracts.js";
 import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES, type VerifiedSlackChannel, type VerifiedSlackConnection } from "../application/slack-integration-contracts.js";
-import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, validateOrganizationToolConnectionContractV2, validateOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
+import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
+import { assertSlackConnectionMetadataV1, insertActiveSlackConnectionV1, readActiveSlackConnectionV1, type StoredSlackConnectionV1 } from "./sqlite-slack-active-connection-v1.js";
 import type Database from "better-sqlite3";
 
 /** A provider seam deliberately limited to Slack connection setup. */
@@ -56,19 +57,6 @@ export class SlackConnectionConflictError extends Error {
   }
 }
 
-interface StoredActiveConnection {
-  readonly connection: OrganizationToolConnectionContractV2;
-  readonly state: OrganizationToolConnectionStateV2;
-}
-
-function parseCanonical(json: string): unknown {
-  const value = JSON.parse(json) as unknown;
-  if (canonicalJson(value) !== json) {
-    throw new Error("stored Slack connection body is not canonical");
-  }
-  return value;
-}
-
 function publicConfigurationSha256(
   input: SlackConnectionSetupInputV1,
 ): `sha256:${string}` {
@@ -81,47 +69,8 @@ function publicConfigurationSha256(
   });
 }
 
-function activeConnection(
-  database: Database.Database,
-): StoredActiveConnection | undefined {
-  const row = database
-    .prepare(
-      `SELECT contract.contract_json, contract.contract_sha256,
-              current_state.state_json, current_state.state_sha256
-       FROM organization_tool_connection_current_state AS current_state
-       JOIN organization_tool_connection_contracts AS contract
-         ON contract.connection_id = current_state.connection_id
-        AND contract.contract_sha256 = current_state.connection_contract_sha256
-       WHERE current_state.current_status = 'active'`,
-    )
-    .get() as
-    | {
-        contract_json: string;
-        contract_sha256: string;
-        state_json: string;
-        state_sha256: string;
-      }
-    | undefined;
-  if (row === undefined) return undefined;
-  const connection = validateOrganizationToolConnectionContractV2(
-    parseCanonical(row.contract_json),
-  );
-  const state = validateOrganizationToolConnectionStateV2(
-    parseCanonical(row.state_json),
-  );
-  if (
-    canonicalSha256(connection) !== row.contract_sha256 ||
-    canonicalSha256(state) !== row.state_sha256 ||
-    state.connection_contract_sha256 !== row.contract_sha256 ||
-    state.connection_status !== "active"
-  ) {
-    throw new Error("stored Slack connection digest chain is invalid");
-  }
-  return Object.freeze({ connection, state });
-}
-
 function samePublicConnection(
-  existing: StoredActiveConnection,
+  existing: StoredSlackConnectionV1,
   input: SlackConnectionSetupInputV1,
 ): boolean {
   return (
@@ -138,7 +87,7 @@ function existingResult(
   database: Database.Database,
   input: SlackConnectionSetupInputV1,
 ): ConnectedSlackConnectionV1 | undefined {
-  const existing = activeConnection(database);
+  const existing = readActiveSlackConnectionV1(database);
   if (existing === undefined) return undefined;
   if (!samePublicConnection(existing, input)) {
     throw new SlackConnectionConflictError(
@@ -156,27 +105,6 @@ function existingResult(
       bot_access_verified: true,
     }),
   });
-}
-
-function assertMetadata(
-  database: Database.Database,
-  input: SlackConnectionSetupInputV1,
-): void {
-  const metadata = database
-    .prepare(
-      `SELECT authority_id, organization_id
-       FROM organization_control_plane_metadata WHERE singleton = 1`,
-    )
-    .get() as { authority_id: string; organization_id: string } | undefined;
-  if (
-    metadata === undefined ||
-    metadata.authority_id !== input.authority_id ||
-    metadata.organization_id !== input.organization_id
-  ) {
-    throw new Error(
-      "Slack connection coordinates do not match control metadata",
-    );
-  }
 }
 
 function normalizedScopes(
@@ -205,7 +133,7 @@ function normalizedScopes(
 export async function connectSlackConnectionV1(
   input: ConnectSlackConnectionInputV1,
 ): Promise<ConnectedSlackConnectionV1> {
-  assertMetadata(input.database, input);
+  assertSlackConnectionMetadataV1(input.database, input);
   const replay = existingResult(input.database, input);
   if (replay !== undefined) return replay;
 
@@ -269,7 +197,6 @@ export async function connectSlackConnectionV1(
       verification_revision: 1,
       verified_at: input.now(),
     });
-    const stateSha256 = canonicalSha256(state);
 
     input.database.exec("BEGIN IMMEDIATE");
     try {
@@ -278,33 +205,11 @@ export async function connectSlackConnectionV1(
         input.database.exec("COMMIT");
         return racedReplay;
       }
-      const now = input.now();
-      input.database
-        .prepare(
-          `INSERT INTO organization_tool_connection_contracts
-           (connection_id, contract_json, contract_sha256, created_at)
-           VALUES (?, ?, ?, ?)`,
-        )
-        .run(
-          connection.connection_id,
-          canonicalJson(connection),
-          connectionSha256,
-          now,
-        );
-      input.database
-        .prepare(
-          `INSERT INTO organization_tool_connection_current_state
-           (connection_id, connection_contract_sha256, state_json, state_sha256,
-            current_status, updated_at)
-           VALUES (?, ?, ?, ?, 'active', ?)`,
-        )
-        .run(
-          connection.connection_id,
-          connectionSha256,
-          canonicalJson(state),
-          stateSha256,
-          now,
-        );
+      insertActiveSlackConnectionV1(input.database, {
+        connection,
+        state,
+        now: input.now(),
+      });
       input.database.exec("COMMIT");
       retainedSecret = true;
       return Object.freeze({

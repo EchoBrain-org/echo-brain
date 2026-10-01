@@ -7,6 +7,7 @@
  * compute every digest supplied to the builders below.
  */
 
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../adapters/slack/slack-app-manifest-provider-v1.js";
 import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "./slack-integration-contracts.js";
 import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/application/record-visibility-policy-contracts-v1";
 
@@ -20,6 +21,11 @@ export const EXTERNAL_HUMAN_LINK_CONTRACT_KIND =
   "echo-external-human-link-contract-v2" as const;
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
+/** Legacy bot-token connections, or the private ECHO Slack app recipe. */
+const SLACK_CONNECTION_SCOPE_SETS: readonly (readonly string[])[] = [
+  SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
+  SLACK_PRIVATE_APP_BOT_SCOPES_V1,
+];
 const UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 type UnknownRecord = Record<string, unknown>;
@@ -268,9 +274,10 @@ export function validateOrganizationToolConnectionContractV2(
     `${label} required_provider_scopes`,
   );
   if (
-    scopes.length !== SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES.length ||
-    scopes.some(
-      (scope, index) => scope !== SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES[index],
+    !SLACK_CONNECTION_SCOPE_SETS.some(
+      (allowed) =>
+        scopes.length === allowed.length &&
+        scopes.every((scope, index) => scope === allowed[index]),
     )
   ) {
     invalid(
