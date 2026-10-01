@@ -64,8 +64,6 @@ function nangoInstall(overrides: Partial<NangoSlackConnectionV1> = {}): NangoSla
     connection_id: "nango-conn-1",
     tags: {},
     team_id: "T01",
-    enterprise_id: null,
-    is_enterprise_install: false,
     app_id: "A0APP1",
     bot_user_id: "U_BOT",
     granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1,
@@ -79,7 +77,7 @@ function authTest(nango: NangoSlackConnectionV1, overrides: Partial<VerifiedSlac
   return {
     verifyConnection: vi.fn(async (): Promise<VerifiedSlackConnection> => ({
       team_id: nango.team_id,
-      enterprise_id: nango.enterprise_id,
+      enterprise_id: null,
       bot_user_id: nango.bot_user_id,
       bot_id: "B01",
       app_id: nango.app_id,
@@ -264,15 +262,6 @@ describe("Nango Slack connection activation v1", () => {
     await expectRefused(activate(state, { credential: pending, nango: nangoInstall(), verifier: authTest(nangoInstall(), { granted_scopes: partial }) }), "permissions_missing");
     expect(refs(state)).toEqual([pending.reference.secret_handle_id]);
     expect(rowCount(state.database, "organization_tool_connection_contracts")).toBe(0);
-  });
-
-  it("refuses an enterprise install", async () => {
-    const state = setup();
-    const pending = pendingBundle(state);
-    const verifier = authTest(nangoInstall());
-    await expectRefused(activate(state, { credential: pending, nango: nangoInstall({ is_enterprise_install: true, enterprise_id: "E01" }), verifier }), "workspace_mismatch");
-    expect(verifier.verifyConnection).not.toHaveBeenCalled();
-    expect(refs(state)).toEqual([pending.reference.secret_handle_id]);
   });
 
   it("refuses an app or team mismatch between Nango and auth.test", async () => {

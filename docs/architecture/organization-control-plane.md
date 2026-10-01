@@ -12,7 +12,8 @@ Slack adapters under `providers/slack/server/src/organization-control-plane`:
 | Slack provider `organization-setup/slack-organization-setup-workflow-v1` | The owner's in-app Slack app setup and Nango-backed install ceremony (`person tools setup`/`connect --tool slack`) |
 | Slack provider `adapters/slack/slack-app-manifest-provider-v1` | Builds the ECHO Slack app recipe and calls Slack's Manifest API |
 | Slack provider `adapters/nango/nango-connection-client-v1` | Nango connect/reconnect sessions and bot-token reads |
-| Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack identity provider for the person sign-in link |
+| Slack provider `adapters/oidc/slack-browser-identity-provider` | The person's browser sign-in link, with the installed app's own client |
+| Slack provider `adapters/slack/slack-web-identity-provider-v1` | Slack `auth.test` checks of an install and the DM-code person link |
 | Slack provider `application/organization-tool-connection-contracts-v2` | External human-link and organization-tool connection contracts |
 | `security/file-secret-store` | The private secret store for the organization's Slack app credential bundle: client ID/secret, signing secret, and Nango connection ID ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)) |
 | Slack provider `slack-approval-integration-v1` | Private DM approval policy resolution, reviewer targeting, and approval persistence |
@@ -96,12 +97,14 @@ without duplicating that DM card. There is no public channel step: the
 public identity-link channel and its reaction-era scopes (`channels:history`,
 `channels:read`, `reactions:read`) are retired (revision 3).
 
-Provider verification compares the Nango install's app ID, workspace, and
-granted scopes against the organization's own Slack app credentials, fetches
-the bot token from Nango, and calls Slack `auth.test` with it, requiring the
-same app ID, workspace, and bot user ID. An install for a different app or
-workspace is refused and changes nothing; a missing scope is refused the same
-way. A failed, incomplete, or unavailable verification leaves no active
+Provider verification requires the Nango install to be for the
+organization's own app (the credential bundle's app ID) and to grant the four
+scopes, then calls Slack `auth.test` with the Nango-held bot token and requires
+Slack's report and Nango's to name the same app, workspace, and bot user. The
+bundle holds no workspace: verification compares Nango's and Slack's reports
+with each other, and a reconnect also compares them against the active
+connection. An install for a different app, workspace, or bot is refused and
+changes nothing; a missing scope is refused the same way. A failed, incomplete, or unavailable verification leaves no active
 connection; absence therefore means inactive. A reconnect of the same app
 reuses the same Nango connection ID and leaves every outstanding approval card
 untouched.

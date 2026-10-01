@@ -34,8 +34,10 @@ export interface PersonToolVerbContextV1 {
   readonly values: Readonly<Record<string, string | boolean | undefined>>;
   /** Prints one JSON line to standard output. */
   print(value: unknown): void;
-  /** One bounded line of standard input: the only way a verb receives a token. */
+  /** One bounded line of standard input, echoed as typed: never a token. */
   read_interactive_line(): Promise<string>;
+  /** One bounded hidden line, the only way a verb receives a token; a terminal first shows `prompt`. */
+  read_secret_line(prompt: string): Promise<string>;
   open_browser(url: string): boolean | Promise<boolean>;
   sleep(ms: number): Promise<void>;
 }

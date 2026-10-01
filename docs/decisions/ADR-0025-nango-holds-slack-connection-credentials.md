@@ -63,8 +63,11 @@ reads must use that person's token explicitly
 
 ## Decision and consequences
 
-**The founder accepted option B on 2026-09-30.** Nango Cloud (or an enterprise
-self-host; the Authority takes Nango's base URL as configuration) holds:
+**The founder accepted option B on 2026-09-30.** Each organization gets its
+own Nango environment, with its own environment secret key: an environment
+key can read every connection in that environment, so no environment is
+shared between organizations. Nango Cloud (or an enterprise self-host; the
+Authority takes Nango's base URL as configuration) holds:
 
 - the Slack bot token, fetched by the Authority at use time and cached in
   memory for at most five minutes; and
@@ -92,11 +95,14 @@ Consequences:
   boundary for the first time. A Nango compromise can act as the
   organization's bot; it cannot read the Authority's signing secret, client
   secret or database, and it cannot mint a Person session or an approval.
-- **Nango outage.** The Authority's in-memory token cache keeps existing
-  approval delivery and the person-link sign-in working for up to five
-  minutes after Nango becomes unreachable; a new connect, a reconnect, and a
-  token refresh past that window fail with "Slack setup is unavailable right
-  now."
+- **Nango outage.** The browser person sign-in needs only the app's client
+  credentials from the Authority's own bundle, so it keeps working. The
+  DM-code person link needs the bot token, so it works only while the
+  in-memory cache (at most five minutes) still holds one. Approval-card
+  delivery past that window retries quietly (`retry_allowed`) until Nango
+  answers again; it shows no error. "Slack setup is unavailable right now"
+  belongs only to the owner's setup and install calls, since a new install or
+  reconnect cannot start.
 - **Reconnect preserves cards.** A reconnect or app update reuses the same
   Nango connection ID through a Nango reconnect session. The credential
   bundle, the connection state hash and every outstanding approval card are
@@ -122,9 +128,11 @@ no in-place upgrade of an existing connection record, and old rehearsal
 receipts staged before this change are refused rather than reused.
 
 Evidence:
+`services/organization-authority/test/slack-nango-proof-path.test.ts` runs the
+founder's path through the production composition: an Authority restart after
+a reconnect still takes a waiting card's click, a different workspace or bot
+is refused, and no setup token, client secret, signing secret, bot token or
+Nango key reaches SQLite.
 `services/organization-authority/test/organization-authority-private-approval-runtime.test.ts`
 and `tests/architecture/organization-authority-command-rehearsal.test.ts` prove
-the Authority only ever reads the Slack bot token from Nango, that an
-Authority restart after a reconnect still verifies a waiting card, and that no
-setup token, client secret, signing secret, bot token or Nango key reaches
-SQLite.
+the Authority only ever reads the Slack bot token from Nango.

@@ -18,10 +18,11 @@ import {
   type OrganizationSlackSetupResponseV1,
 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../organization-control-plane/adapters/nango/nango-connection-client-v1.js";
-import { buildEchoSlackAppManifestV1, SLACK_PRIVATE_APP_BOT_SCOPES_V1, SlackAppManifestProviderErrorV1, type SlackAppManifestProviderV1 } from "../organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
+import { buildEchoSlackAppManifestV1, SlackAppManifestProviderErrorV1, type SlackAppManifestProviderV1 } from "../organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { SlackIdentityProviderErrorV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { findPendingSlackAppCredentialsV1, findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, SLACK_APP_CREDENTIALS_KIND_V1, type FoundSlackAppCredentialsV1 } from "../organization-control-plane/application/slack-app-credentials-v1.js";
 import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { readActiveSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { activateNangoSlackConnectionV1, SlackConnectionRefusedErrorV1, type SlackConnectionVerifierV1 } from "../organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 
@@ -231,8 +232,14 @@ export class SlackOrganizationSetupWorkflowV1 {
       }
       if (connection === undefined) return statusResponse(attempt);
       if (!tagsMatch(connection, attempt, this.options.organization_id)) throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
+      // Ownership is re-checked after Slack's auth.test, the last round-trip before the only durable write.
+      const verifier: SlackConnectionVerifierV1 = { verifyConnection: async (token, signal) => {
+        const verified = await this.options.verifier.verifyConnection(token, signal);
+        this.owner(accessToken);
+        return verified;
+      } };
       const activated = await activateNangoSlackConnectionV1({
-        database: this.options.database, secrets: this.options.secrets, verifier: this.options.verifier,
+        database: this.options.database, secrets: this.options.secrets, verifier,
         authority_id: this.options.authority_id, organization_id: this.options.organization_id, state_lineage_id: this.options.state_lineage_id,
         credential, nango: connection,
         now: () => this.now(), new_connection_id: this.options.new_connection_id ?? (() => `con_${randomUUID()}`),
@@ -241,8 +248,12 @@ export class SlackOrganizationSetupWorkflowV1 {
       const result: OrganizationSlackInstallResultV1 = { kind: activated.kind, workspace_id: activated.connection.provider_tenant_id };
       this.settle(attempt, "complete", null, result);
     } catch (error) {
-      const failure = failureOf(error);
-      this.settle(attempt, "failed", failure.reason);
+      if (error instanceof AuthorityOperationError) {
+        // The caller is no longer an owner: nothing was written, and the attempt ends.
+        this.settle(attempt, "cancelled");
+        throw error;
+      }
+      this.settle(attempt, "failed", failureOf(error).reason);
     } finally {
       this.busy = false;
       this.checking = null;
@@ -264,18 +275,23 @@ export class SlackOrganizationSetupWorkflowV1 {
     return findPendingSlackAppCredentialsV1(this.options.secrets) === undefined ? "not_set_up" : "app_created";
   }
 
-  /** The setup status for an owner; null for everyone else. */
+  /**
+   * The setup status for an owner; null for everyone else. A corrupt or second
+   * pending app bundle reads as needing reinstall, so the tools listing still serves.
+   */
   organizationSetupForCaller(accessToken: string): OrganizationToolSetupStatusV4 | null {
     const caller = this.options.authentication.authenticateAccess({ access_token: accessToken });
-    return caller.organization_id === this.options.organization_id && caller.membership_type === "owner" ? this.organizationSetup() : null;
+    if (caller.organization_id !== this.options.organization_id || caller.membership_type !== "owner") return null;
+    try { return this.organizationSetup(); } catch { return "needs_reinstall"; }
   }
 
   /** Re-checked on every call. */
   private owner(accessToken: string): PersonAccessAuthorization {
     const caller = this.options.authentication.authenticateAccess({ access_token: accessToken });
-    if (caller.organization_id !== this.options.organization_id || caller.membership_type !== "owner") {
+    if (caller.organization_id !== this.options.organization_id) {
       throw new AuthorityOperationError("unauthorized", "person authentication failed");
     }
+    if (caller.membership_type !== "owner") throw new AuthorityOperationError("unauthorized", "Only an organization owner can set up Slack.");
     return caller;
   }
 

@@ -48,7 +48,7 @@ describe("initial-owner Slack setup status", () => {
         verifier: { verifyConnection: vi.fn(async () => ({ team_id: "T01", enterprise_id: null, bot_user_id: "U_BOT", bot_id: "B01",
           app_id: "A0APP1", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, verification_evidence_sha256: canonicalSha256("verified") })) },
         credential: { reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials },
-        nango: { connection_id: "nango-conn-1", tags: {}, team_id: "T01", enterprise_id: null, is_enterprise_install: false, app_id: "A0APP1",
+        nango: { connection_id: "nango-conn-1", tags: {}, team_id: "T01", app_id: "A0APP1",
           bot_user_id: "U_BOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: "xoxb-token", updated_at: NOW },
         now: () => NOW, new_connection_id: () => "con_nango_1" });
       expect(plannedSlackConnectionIsActiveV1(state_directory)).toBe(true);

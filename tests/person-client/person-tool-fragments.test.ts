@@ -1,7 +1,17 @@
+import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import type { PersonToolProviderV1, PersonToolVerbContextV1 } from '@echo-brain/organization-api';
-import { runPersonClientCli } from '../../src/product/person-client/commands.js';
+import { readSecretLine, runPersonClientCli } from '../../src/product/person-client/commands.js';
+
+/** Standard input as a terminal (raw mode recorded) or a pipe, and a captured standard error. */
+function streams(terminal: boolean) {
+  const raw: boolean[] = [];
+  const input = Object.assign(new PassThrough(), terminal ? { isTTY: true, setRawMode: (mode: boolean) => { raw.push(mode); } } : {});
+  let written = '';
+  const output = new Writable({ write: (chunk, _encoding, done) => { written += String(chunk); done(); } });
+  return { input, output, raw, written: () => written };
+}
 
 describe('neutral Person tool extension boundary', () => {
   it('keeps credential-bearing transport on the Authority with fixed size/time bounds', async () => {
@@ -19,6 +29,29 @@ describe('neutral Person tool extension boundary', () => {
     await transport.getJson({ path: '/v3/tools/mail', validate_response: value => value, maximum_response_bytes: 100 });
     expect(String(fetch.mock.calls[0]?.[0])).toBe('https://authority.example/v3/tools/mail');
     expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get('authorization')).toBe('Bearer test-credential');
+  });
+  it('reads a secret at a terminal behind one prompt with no echo, restoring the terminal on Enter and Ctrl-C', async () => {
+    const typed = streams(true);
+    const read = readSecretLine('Paste the token (input hidden).', typed.input, typed.output);
+    typed.input.write('xoxe.typed-token\r');
+    await expect(read).resolves.toBe('xoxe.typed-token');
+    expect(typed.written()).toBe('Paste the token (input hidden).\n');
+    expect(typed.raw).toEqual([true, false]);
+
+    const interrupted = streams(true);
+    const aborted = readSecretLine('Paste the token (input hidden).', interrupted.input, interrupted.output);
+    interrupted.input.write('xoxe.partial\u0003');
+    await expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
+    expect(interrupted.raw).toEqual([true, false]);
+    expect(interrupted.written()).not.toContain('xoxe');
+  });
+  it('reads a piped secret silently, with no prompt and no echo', async () => {
+    const piped = streams(false);
+    const read = readSecretLine('Paste the token (input hidden).', piped.input, piped.output);
+    piped.input.end('xoxe.piped-token\n');
+    await expect(read).resolves.toBe('xoxe.piped-token');
+    expect(piped.written()).toBe('');
+    expect(piped.raw).toEqual([]);
   });
   it('dispatches a verb to an independently supplied tool and refuses colliding registrations', async () => {
     let output = '';

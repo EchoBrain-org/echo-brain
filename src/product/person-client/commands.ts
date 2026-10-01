@@ -36,7 +36,8 @@ export interface PersonClientCliDependencies {
   readonly now?: () => string;
   readonly random_bytes?: (size: number) => Uint8Array;
   readonly random_uuid?: () => string;
-  readonly read_input?: () => string | Promise<string>;
+  /** Replaces standard input; a secret read passes its terminal prompt. */
+  readonly read_input?: (secret_prompt?: string) => string | Promise<string>;
   readonly open_authorization_url?: (url: string) => boolean | Promise<boolean>;
   /** Waits between a tool step's status reads. */
   readonly sleep?: (ms: number) => Promise<void>;
@@ -531,11 +532,29 @@ function contextPaging(values: Record<Option, string | boolean | undefined>) {
   };
 }
 
-async function readBoundedStdinLine(): Promise<string> {
-  const prompt = createInterface({
-    input: process.stdin,
-    output: process.stderr,
-  });
+/**
+ * Reads one secret line that is never echoed. A terminal gets one prompt line
+ * on standard error, then raw-mode input read with no output stream at all;
+ * closing the reader restores the terminal on Enter, Ctrl-C and every error.
+ * Piped input gets no prompt and no echo.
+ */
+export async function readSecretLine(
+  prompt: string,
+  input: NodeJS.ReadableStream & { readonly isTTY?: boolean } = process.stdin,
+  output: NodeJS.WritableStream = process.stderr,
+): Promise<string> {
+  const terminal = input.isTTY === true;
+  if (terminal) output.write(`${prompt}\n`);
+  return await readBoundedLine(input, undefined, terminal);
+}
+
+/** Shown as typed, for an acknowledgement such as a DM code's Enter. */
+function readBoundedStdinLine(): Promise<string> {
+  return readBoundedLine(process.stdin, process.stderr);
+}
+
+async function readBoundedLine(input: NodeJS.ReadableStream, output: NodeJS.WritableStream | undefined, terminal?: boolean): Promise<string> {
+  const prompt = createInterface({ input, output, terminal });
   try {
     const value = await prompt.question("");
     if (Buffer.byteLength(value, "utf8") > MAXIMUM_INPUT_BYTES) {
@@ -932,6 +951,7 @@ export async function runPersonClientCli(
     if (toolVerbDefinition !== undefined) {
       await toolVerbDefinition.run({ host: client, values, print: (value) => print(stdout, value),
         read_interactive_line: async () => await readInteractiveLine(),
+        read_secret_line: async (prompt) => await (dependencies.read_input?.(prompt) ?? readSecretLine(prompt)),
         open_browser: dependencies.open_authorization_url ?? openAuthorizationUrl,
         sleep: dependencies.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))) });
       return 0;

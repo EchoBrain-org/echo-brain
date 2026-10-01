@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 const NANGO: NangoSlackConnectionV1 = {
-  connection_id: "nango-conn-1", tags: {}, team_id: "T01", enterprise_id: null, is_enterprise_install: false,
+  connection_id: "nango-conn-1", tags: {}, team_id: "T01",
   app_id: "A0APP1", bot_user_id: "U0APPBOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: NANGO_TOKEN, updated_at: NOW,
 };
 
@@ -78,7 +78,7 @@ function stateDirectory() {
   );
   const client = { getSlackConnection: vi.fn(async () => NANGO) } as unknown as NangoConnectionClientV1 & { getSlackConnection: ReturnType<typeof vi.fn> };
   const health = new SlackConnectionHealthV1();
-  const bot_token_source = createSlackBotTokenSourceV1({ secrets, nango: client });
+  const bot_token_source = createSlackBotTokenSourceV1({ secrets, nango: client, health });
   const config: PrivateSlackApprovalWorkflowBundleConfigV1 = { state_directory: directory, bot_token_source, connection_health: health };
   return { database, secrets, installNango, reconnectNango, client, health, bot_token_source, config };
 }
@@ -151,7 +151,7 @@ describe("private Slack approval workflow bundle", () => {
     await expect(running.accept(OTHER_SIGNING_SECRET)).rejects.toMatchObject({ code: "unauthorized" });
     await expect(poster.postMarker(MARKER)).resolves.toEqual({ kind: "posted", provider_message_ts: "123.000001" });
     expect(authorizations).toEqual([`Bearer ${NANGO_TOKEN}`]);
-    expect(state.client.getSlackConnection).toHaveBeenCalledWith({ connection_id: "nango-conn-1", force_refresh: false });
+    expect(state.client.getSlackConnection).toHaveBeenCalledWith({ connection_id: "nango-conn-1" });
 
     const restarted = await load(state.config);
     await expect(restarted.accept(APP_SIGNING_SECRET)).resolves.toMatchObject({ status: 200 });
@@ -183,11 +183,11 @@ describe("private Slack approval workflow bundle", () => {
     await expect(load(state.config)).rejects.toThrow("Slack credential is missing");
   });
 
-  it("marks a Nango connection whose refreshed token Slack still rejects, then stops refreshing it", async () => {
+  it("marks a Nango connection whose re-read token Slack still rejects, then stops re-reading it", async () => {
     const state = stateDirectory();
     await state.installNango();
-    state.client.getSlackConnection.mockImplementation(async (input: { force_refresh?: boolean }) =>
-      ({ ...NANGO, bot_token: input.force_refresh === true ? `${NANGO_TOKEN}-refreshed` : NANGO_TOKEN }));
+    let reads = 0;
+    state.client.getSlackConnection.mockImplementation(async () => ({ ...NANGO, bot_token: (reads += 1) === 1 ? NANGO_TOKEN : `${NANGO_TOKEN}-refreshed` }));
     const { poster, authorizations } = recordingPoster(state, { ok: false, error: "invalid_auth" });
     await expect(poster.postMarker(MARKER)).resolves.toEqual({ kind: "retry_allowed" });
     expect(authorizations).toEqual([`Bearer ${NANGO_TOKEN}`, `Bearer ${NANGO_TOKEN}-refreshed`]);
@@ -195,6 +195,7 @@ describe("private Slack approval workflow bundle", () => {
     // Marked: the next rejection is not refreshed again until an install clears the mark.
     await expect(poster.postMarker(MARKER)).resolves.toEqual({ kind: "retry_allowed" });
     expect(authorizations).toHaveLength(3);
-    expect(state.client.getSlackConnection).toHaveBeenCalledTimes(2);
+    // Each read skips the cache but never asks Nango to refresh: rotation is off, only a reconnect changes the token.
+    expect(state.client.getSlackConnection.mock.calls).toEqual([[{ connection_id: "nango-conn-1" }], [{ connection_id: "nango-conn-1" }]]);
   });
 });

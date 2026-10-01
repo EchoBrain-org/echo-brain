@@ -73,18 +73,26 @@ async function openAndWait(context: PersonToolVerbContextV1, begun: Attempt, url
   throw new PersonToolOutcomeErrorV1('timed_out', 'That took too long. Try again.');
 }
 
+const SETUP_TOKEN_PROMPT = 'Paste the Slack app configuration token (input hidden). Generate one at https://api.slack.com/apps → Your App Configuration Tokens.';
+
 async function setup(context: PersonToolVerbContextV1): Promise<void> {
   const client = new SlackPersonClient(context.host);
-  if (context.values.reconnect !== true) {
-    const app = await client.setupSlackApp((await context.read_interactive_line()).trim());
-    context.print({ ok: true, phase: 'app-ready', app_id: app.app_id, organization_setup: app.organization_setup });
+  try {
+    if (context.values.reconnect !== true) {
+      const app = await client.setupSlackApp((await context.read_secret_line(SETUP_TOKEN_PROMPT)).trim());
+      context.print({ ok: true, phase: 'app-ready', app_id: app.app_id, organization_setup: app.organization_setup });
+    }
+    const begun = await client.beginSlackInstall();
+    await openAndWait(context, begun, begun.connect_link, 'Slack connect page could not be opened', {
+      polls: INSTALL_POLLS, failures: INSTALL_FAILURES,
+      read: () => client.slackInstallStatus(begun.attempt_id), cancel: () => client.cancelSlackInstall(begun.attempt_id),
+      expired: "Not finished. If your Slack requires admin approval, try again once it's approved.",
+    });
+  } catch (error) {
+    // The Authority refuses a non-owner on every setup route with only its `unauthorized` code.
+    if ((error as { code?: unknown } | null)?.code !== 'unauthorized') throw error;
+    throw new PersonToolOutcomeErrorV1('unauthorized', 'Only an organization owner can set up Slack.');
   }
-  const begun = await client.beginSlackInstall();
-  await openAndWait(context, begun, begun.connect_link, 'Slack connect page could not be opened', {
-    polls: INSTALL_POLLS, failures: INSTALL_FAILURES,
-    read: () => client.slackInstallStatus(begun.attempt_id), cancel: () => client.cancelSlackInstall(begun.attempt_id),
-    expired: "Not finished. If your Slack requires admin approval, try again once it's approved.",
-  });
 }
 
 /** For machines without a browser: the person replies in a Slack DM with a code, then presses Enter. */
@@ -135,7 +143,7 @@ const noWait = { type: 'boolean' } as const;
 export function createSlackPersonToolProviderV1(): PersonToolProviderV1 {
   const verbs: PersonToolProviderV1['verbs'] = {
     setup: {
-      description: 'Owner only. Reads a Slack app configuration token from standard input, creates or updates the ECHO app, opens Install and waits up to 10 minutes. --reconnect reads no token and installs the app already set up.',
+      description: 'Owner only. Reads a Slack app configuration token from standard input (hidden at a terminal), creates or updates the ECHO app, opens Install and waits up to 10 minutes. --reconnect reads no token and installs the app already set up.',
       options: { reconnect: { type: 'boolean' }, 'no-wait': noWait },
       run: setup,
     },

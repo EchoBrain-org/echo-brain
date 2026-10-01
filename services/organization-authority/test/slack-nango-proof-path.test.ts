@@ -44,7 +44,7 @@ type Bot = { readonly team_id: string; readonly app_id: string; readonly bot_id:
 const ECHO_BOT: Bot = { team_id: "T0PROOF", app_id: APP.app_id, bot_id: "B0PROOF", bot_user_id: "U0PROOFBOT" };
 const OWNER_SLACK = "U0OWNER";
 const EMPLOYEE_SLACK = "U0EMPLOYEE";
-const TOKENS = { first: "xoxb-proof-first-0001", rotated: "xoxb-proof-rotated-0002", other: "xoxb-proof-other-0003" };
+const TOKENS = { first: "xoxb-proof-first-0001", rotated: "xoxb-proof-rotated-0002", other: "xoxb-proof-other-0003", reinstalled: "xoxb-proof-reinstalled-0004" };
 const SCOPES = SLACK_PRIVATE_APP_BOT_SCOPES_V1.join(",");
 
 type Message = { type: "message"; channel: string; ts: string; text: string; blocks: Record<string, any>[]; user: string; thread_ts?: string; bot_id?: string; app_id?: string };
@@ -231,7 +231,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-it("sets up, connects, links, approves, reconnects and restarts Slack through Nango, then refuses a different workspace", async () => {
+it("sets up, connects, links, approves, reconnects and restarts Slack through Nango, then refuses a different workspace or bot", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-slack-nango-proof-")));
   chmodSync(root, 0o700);
   roots.push(root);
@@ -406,6 +406,16 @@ it("sets up, connects, links, approves, reconnects and restarts Slack through Na
     expect(readdirSync(join(state, "secrets")).sort()).toEqual(secrets);
     expect(await slackTool(owner)).toMatchObject({ personal_status: "linked", organization_setup: "connected" });
     expect(errors).toEqual([]);
+
+    // 12. A reconnect that comes back with a different bot user is refused too, and Slack revoked the
+    // old token: the next card's Slack call re-reads Nango, finds the drift, and the owner sees needs_reinstall.
+    expect(await install({ ...ECHO_BOT, bot_user_id: "U0NEWBOT" }, TOKENS.reinstalled)).toMatchObject({ status: "failed", failure_reason: "already_connected" });
+    meetings.release(1);
+    for (let poll = 0; poll < 500 && (await slackTool(owner)).organization_setup === "connected"; poll += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(await slackTool(owner)).toMatchObject({ organization_setup: "needs_reinstall" });
+    expect(connectionState()).toEqual(before);
+    // The worker reports only Slack's refusal of the revoked token.
+    expect(errors.every((error) => (error as { providerError?: string }).providerError === "invalid_auth")).toBe(true);
     for (const name of readdirSync(state).filter((file) => file.includes(".sqlite"))) {
       const bytes = readFileSync(join(state, name)).toString("latin1");
       for (const secret of [CONFIGURATION_TOKEN, NANGO_KEY, APP.client_secret, APP.signing_secret, ...Object.values(TOKENS)]) expect(bytes, name).not.toContain(secret);

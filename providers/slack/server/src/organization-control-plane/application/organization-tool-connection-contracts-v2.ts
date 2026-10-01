@@ -7,7 +7,7 @@
  * compute every digest supplied to the builders below.
  */
 
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../adapters/slack/slack-app-manifest-provider-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "./slack-integration-contracts.js";
 import type { ApprovalContractSha256 } from "@echo-brain/organization-control-plane/application/record-visibility-policy-contracts-v1";
 
 export type PersonMembershipType = "employee" | "owner";

@@ -269,8 +269,6 @@ describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
       connection_id: "conn_123",
       tags: TAGS,
       team_id: "T0123456",
-      enterprise_id: null,
-      is_enterprise_install: false,
       app_id: "A0123456",
       bot_user_id: "U0123456",
       granted_scopes: ["chat:write", "im:history", "im:write", "users:read"],
@@ -281,18 +279,6 @@ describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.nango.dev/connections/conn_123?provider_config_key=echo-slack");
     expect(init.method).toBe("GET");
-  });
-
-  it("adds force_refresh=true when requested", async () => {
-    const fetch = nangoFetch([200, A1_CONNECTION_FIXTURE]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    await client.getSlackConnection({ connection_id: "conn_123", force_refresh: true });
-
-    const [url] = fetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      "https://api.nango.dev/connections/conn_123?provider_config_key=echo-slack&force_refresh=true",
-    );
   });
 
   it("refuses a connection with a missing team id", async () => {
@@ -328,26 +314,6 @@ describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
 
     expect(failure).toBeInstanceOf(NangoClientErrorV1);
     expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
-  });
-});
-
-describe("HttpNangoConnectionClientV1.deleteConnection", () => {
-  it("sends DELETE with the provider_config_key query", async () => {
-    const fetch = nangoFetch([200, { success: true }]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    await expect(client.deleteConnection({ connection_id: "conn_123" })).resolves.toBeUndefined();
-
-    const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://api.nango.dev/connections/conn_123?provider_config_key=echo-slack");
-    expect(init.method).toBe("DELETE");
-  });
-
-  it("succeeds on a 204 No Content response (no JSON body at all)", async () => {
-    const fetch = emptyNangoFetch(204);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    await expect(client.deleteConnection({ connection_id: "conn_123" })).resolves.toBeUndefined();
   });
 });
 
@@ -474,8 +440,6 @@ describe("parseNangoSlackConnectionV1", () => {
       connection_id: "conn_123",
       tags: TAGS,
       team_id: "T0123456",
-      enterprise_id: null,
-      is_enterprise_install: false,
       app_id: "A0123456",
       bot_user_id: "U0123456",
       granted_scopes: ["chat:write", "im:history", "im:write", "users:read"],
@@ -486,8 +450,7 @@ describe("parseNangoSlackConnectionV1", () => {
 
   it("accepts a non-null enterprise object (Grid single-workspace install) when is_enterprise_install is false", () => {
     const fixture = fixtureWithRawPatch({ enterprise: { id: "E0123456", name: "Acme Enterprise" } });
-    const parsed = parseNangoSlackConnectionV1(fixture);
-    expect(parsed.enterprise_id).toBe("E0123456");
+    expect(parseNangoSlackConnectionV1(fixture).team_id).toBe("T0123456");
   });
 
   it("throws NangoClientErrorV1 invalid_response for a non-object value", () => {

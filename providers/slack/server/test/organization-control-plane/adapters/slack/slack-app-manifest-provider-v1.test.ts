@@ -15,7 +15,10 @@ const EXPECTED_MANIFEST = {
     name: "ECHO",
     description: "Private approval cards and identity links for ECHO.",
   },
-  features: { bot_user: { display_name: "ECHO", always_online: false } },
+  features: {
+    app_home: { home_tab_enabled: false, messages_tab_enabled: true, messages_tab_read_only_enabled: false },
+    bot_user: { display_name: "ECHO", always_online: false },
+  },
   oauth_config: {
     redirect_urls: [
       "https://api.nango.dev/oauth/callback",

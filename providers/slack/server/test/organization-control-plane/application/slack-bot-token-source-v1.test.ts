@@ -34,8 +34,7 @@ function nangoFake(): NangoConnectionClientV1 & { getSlackConnection: ReturnType
   let issued = 0;
   return {
     getSlackConnection: vi.fn(async (): Promise<NangoSlackConnectionV1> => ({
-      connection_id: "nango-conn-1", tags: {}, team_id: "T0TEAM", enterprise_id: null,
-      is_enterprise_install: false, app_id: "A0APP1", bot_user_id: "U0BOT",
+      connection_id: "nango-conn-1", tags: {}, team_id: "T0TEAM", app_id: "A0APP1", bot_user_id: "U0BOT",
       granted_scopes: [], bot_token: `xoxb-nango-${(issued += 1)}`, updated_at: "2026-09-30T00:00:00.000Z",
     })),
   } as unknown as NangoConnectionClientV1 & { getSlackConnection: ReturnType<typeof vi.fn> };
@@ -55,40 +54,46 @@ describe("Slack bot-token source V1", () => {
     const secrets = secretStore();
     const nango = nangoFake();
     let now = 1_000;
-    const source = createSlackBotTokenSourceV1({ secrets, nango, now: () => now });
+    const source = createSlackBotTokenSourceV1({ secrets, nango, health: new SlackConnectionHealthV1(), now: () => now });
     const connection = nangoConnection(secrets);
 
     await expect(source.botToken(connection)).resolves.toBe("xoxb-nango-1");
     now += 299_999;
     await expect(source.botToken(connection)).resolves.toBe("xoxb-nango-1");
     expect(nango.getSlackConnection).toHaveBeenCalledTimes(1);
-    expect(nango.getSlackConnection).toHaveBeenCalledWith({ connection_id: "nango-conn-1", force_refresh: false });
+    expect(nango.getSlackConnection).toHaveBeenCalledWith({ connection_id: "nango-conn-1" });
     now += 1;
     await expect(source.botToken(connection)).resolves.toBe("xoxb-nango-2");
     expect(nango.getSlackConnection).toHaveBeenCalledTimes(2);
   });
 
-  it("bypasses the cache on force_refresh and keeps the refreshed token", async () => {
+  it("bypasses the cache on force_refresh without asking Nango to refresh, and keeps the re-read token", async () => {
     const secrets = secretStore();
     const nango = nangoFake();
-    const source = createSlackBotTokenSourceV1({ secrets, nango, now: () => 0 });
+    const source = createSlackBotTokenSourceV1({ secrets, nango, health: new SlackConnectionHealthV1(), now: () => 0 });
     const connection = nangoConnection(secrets);
 
     await source.botToken(connection);
     await expect(source.botToken(connection, { force_refresh: true })).resolves.toBe("xoxb-nango-2");
-    expect(nango.getSlackConnection).toHaveBeenLastCalledWith({ connection_id: "nango-conn-1", force_refresh: true });
+    expect(nango.getSlackConnection).toHaveBeenLastCalledWith({ connection_id: "nango-conn-1" });
     await expect(source.botToken(connection)).resolves.toBe("xoxb-nango-2");
     expect(nango.getSlackConnection).toHaveBeenCalledTimes(2);
   });
 
-  it("refuses a Nango token for another workspace or app", async () => {
+  it("refuses a Nango token for another workspace, app or bot user, marking that state as needing reinstall", async () => {
     const secrets = secretStore();
     const connection = nangoConnection(secrets);
-    const nango = nangoFake();
-    const other = { ...connection, connection: { ...connection.connection, provider_tenant_id: "T0OTHER" } };
-    const failure = await createSlackBotTokenSourceV1({ secrets, nango }).botToken(other).catch((error: Error) => error);
-    expect(failure).toEqual(new Error("Nango Slack connection does not match the active connection"));
-    expect(String(failure)).not.toContain("xoxb-");
+    const health = new SlackConnectionHealthV1();
+    const source = createSlackBotTokenSourceV1({ secrets, nango: nangoFake(), health });
+    for (const [field, value] of [["provider_tenant_id", "T0OTHER"], ["provider_app_id", "A0OTHER"], ["provider_bot_user_id", "U0OTHER"]] as const) {
+      const state = canonicalSha256({ state: field });
+      const other = { ...connection, connection: { ...connection.connection, [field]: value }, state_sha256: state };
+      const failure = await source.botToken(other).catch((error: Error) => error);
+      expect(failure).toEqual(new Error("Nango Slack connection does not match the active connection"));
+      expect(String(failure)).not.toContain("xoxb-");
+      expect(health.needsReinstall(state)).toBe(true);
+    }
+    expect(health.needsReinstall(connection.state_sha256)).toBe(false);
   });
 });
 
@@ -99,9 +104,9 @@ describe("Slack bot-token auth-failure rule", () => {
   async function rule(results: ReadonlyArray<"auth" | "ok" | "other">) {
     const secrets = secretStore();
     const nango = nangoFake();
-    const source = createSlackBotTokenSourceV1({ secrets, nango, now: () => 0 });
-    const connection = nangoConnection(secrets);
     const health = new SlackConnectionHealthV1();
+    const source = createSlackBotTokenSourceV1({ secrets, nango, health, now: () => 0 });
+    const connection = nangoConnection(secrets);
     const used: string[] = [];
     const outcome = withSlackBotTokenV1(
       {
@@ -119,11 +124,11 @@ describe("Slack bot-token auth-failure rule", () => {
     return { outcome, used, health, connection, nango };
   }
 
-  it("retries an auth failure once with a refreshed token, then marks the connection and rethrows", async () => {
+  it("retries an auth failure once with a token re-read from Nango, then marks the connection and rethrows", async () => {
     const context = await rule(["auth", "auth"]);
     await expect(context.outcome).rejects.toBe(authFailure);
     expect(context.used).toEqual(["xoxb-nango-1", "xoxb-nango-2"]);
-    expect(context.nango.getSlackConnection).toHaveBeenLastCalledWith({ connection_id: "nango-conn-1", force_refresh: true });
+    expect(context.nango.getSlackConnection.mock.calls).toEqual([[{ connection_id: "nango-conn-1" }], [{ connection_id: "nango-conn-1" }]]);
     expect(context.health.needsReinstall(context.connection.state_sha256)).toBe(true);
   });
 

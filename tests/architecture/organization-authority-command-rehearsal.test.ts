@@ -176,10 +176,9 @@ function fakeNango() {
     findConnectionIdByTag: async ({ key, value }) =>
       [...connections.values()].find((connection) => connection.tags[key] === value)?.connection_id,
     getSlackConnection: async ({ connection_id }) => connections.get(connection_id)!,
-    deleteConnection: async () => undefined,
   };
   const finishConnect = () => connections.set("nango-rehearsal", {
-    connection_id: "nango-rehearsal", tags: tags!, team_id: "T12345678", enterprise_id: null, is_enterprise_install: false,
+    connection_id: "nango-rehearsal", tags: tags!, team_id: "T12345678",
     app_id: "A12345678", bot_user_id: "U12345678", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: BOT_TOKEN,
     updated_at: "2026-08-22T12:00:00.000Z",
   });
@@ -436,7 +435,8 @@ describe("Organization Authority command rehearsal", () => {
     expect(finalizeStatus, finalized.values.join("")).toBe(0);
     expect(oneJson<{ ok: boolean }>(finalized).ok).toBe(true);
 
-    // The restart loads the approval lane on the in-app connection and its credential bundle.
+    // The worker is inactive, so this restart proves only that the finalized Authority serves its
+    // descriptor; slack-nango-proof-path.test.ts proves the approval lane loads on the in-app connection.
     const active = await openOrganizationAuthorityService(
       { ...config, port: await availablePort() },
       { slack, active_processing: inactiveWorker },

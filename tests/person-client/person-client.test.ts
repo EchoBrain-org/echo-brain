@@ -1095,8 +1095,11 @@ describe("Person client", () => {
       readonly authorization_url?: string;
       readonly opens?: boolean;
       readonly read_input?: () => string;
+      /** The Authority refuses a non-owner on its setup routes with only this code. */
+      readonly employee?: boolean;
     } = {}) {
       const statuses = [...input.statuses ?? []];
+      const prompts: (string | undefined)[] = [];
       const paths: string[] = [];
       const bodies: unknown[] = [];
       const sleeps: number[] = [];
@@ -1105,7 +1108,7 @@ describe("Person client", () => {
         home_directory: home,
         now: () => NOW,
         random_uuid: () => "00000000-0000-4000-8000-000000000021",
-        read_input: input.read_input ?? (() => `${SETUP_TOKEN}\n`),
+        read_input: (prompt) => { prompts.push(prompt); return (input.read_input ?? (() => `${SETUP_TOKEN}\n`))(); },
         open_authorization_url: (url) => { opened.push(url); return input.opens ?? true; },
         sleep: async (ms) => { sleeps.push(ms); },
         fetch: async (request, init) => {
@@ -1113,6 +1116,9 @@ describe("Person client", () => {
           expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
           paths.push(path);
           bodies.push(JSON.parse(String(init?.body)));
+          if (input.employee === true && path.startsWith("/v2/organization/tools/slack/")) {
+            return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
+          }
           switch (path) {
           case "/v2/organization/tools/slack/setup":
             return json({ schema_version: 1, kind: "echo-organization-slack-setup-v1", app_id: "A0APP1", organization_setup: "app_created" }, 201);
@@ -1134,7 +1140,7 @@ describe("Person client", () => {
           }
         },
       });
-      return { ...result, paths, bodies, sleeps, opened };
+      return { ...result, prompts, paths, bodies, sleeps, opened };
     }
 
     it("sets up Slack from a token on standard input, opens the connect link and reports connected", async () => {
@@ -1151,6 +1157,7 @@ describe("Person client", () => {
           { attempt_id: INSTALL },
         ]);
         expect(run.opened).toEqual([CONNECT_LINK]);
+        expect(run.prompts).toEqual(["Paste the Slack app configuration token (input hidden). Generate one at https://api.slack.com/apps → Your App Configuration Tokens."]);
         expect(run.sleeps).toEqual([2000, 2000]);
         expect(lines(run.stdout)).toEqual([
           { ok: true, phase: "app-ready", app_id: "A0APP1", organization_setup: "app_created" },
@@ -1166,6 +1173,11 @@ describe("Person client", () => {
         expect(flagged.code).toBe(2);
         expect(flagged.paths).toEqual([]);
         expect(flagged.stderr).not.toContain(SETUP_TOKEN);
+        // An employee is told why, under the Authority's own code.
+        const employee = await runTools(home, ["tools", "setup", "--tool", "slack"], { employee: true });
+        expect(employee.code).toBe(1);
+        expect(JSON.parse(employee.stderr)).toEqual({ ok: false, action: "tools-setup",
+          error: "Only an organization owner can set up Slack.", reason: "unauthorized" });
       });
     });
 
@@ -2560,7 +2572,8 @@ describe("Person client", () => {
         now: () => NOW,
         random_bytes: () => Buffer.from(challengeCode, "base64url"),
         random_uuid: () => "00000000-0000-4000-8000-000000000008",
-        read_input: () => "\n",
+        // The Enter acknowledgement is an ordinary visible read, never the hidden token reader.
+        read_input: (secretPrompt) => { expect(secretPrompt).toBeUndefined(); return "\n"; },
         fetch: async (input, init) => {
           const path = new URL(String(input)).pathname;
           if (path === "/v2/integration-links/slack/challenges")

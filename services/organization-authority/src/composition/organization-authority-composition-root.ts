@@ -100,7 +100,7 @@ function composeSlackV1(
   let tokens: SlackBotTokenSourceV1 | undefined;
   const bot_token_source: SlackBotTokenSourceV1 = {
     botToken: (connection, options) => (tokens ??= createSlackBotTokenSourceV1({
-      secrets: new FileOrganizationSecretStore(join(config.state_directory, "secrets")), nango,
+      secrets: new FileOrganizationSecretStore(join(config.state_directory, "secrets")), nango, health: connection_health,
     })).botToken(connection, options),
   };
   const external_identity = createSlackPersonExternalIdentityRuntimeBundleV1({

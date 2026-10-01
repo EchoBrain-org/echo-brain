@@ -11,9 +11,11 @@ import type { ReadableStreamReadResult } from "node:stream/web";
  * may be carrying secrets (tokens) in the request or sensitive detail in the
  * response.
  *
- * `SlackWebIdentityProviderV1` (slack-web-identity-provider-v1.ts) still has
- * its own, separate copy of this logic; it is intentionally out of scope for
- * this extraction and migrates to this module in a later task.
+ * `SlackWebIdentityProviderV1` (slack-web-identity-provider-v1.ts) keeps its
+ * own copy on purpose: it classifies Slack's HTTP status before reading any
+ * body (a 401 is a rejected token whatever the body holds), and it gives a
+ * failed request and an empty body different codes, which this helper's
+ * single `transport` code merges.
  */
 
 export type BoundedJsonFetchErrorCodeV1 =

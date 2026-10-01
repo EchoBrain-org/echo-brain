@@ -100,7 +100,7 @@ async function seedSlack(initialized) {
     await activateNangoSlackConnectionV1({ database: db, secrets, ...coordinates, now: () => NOW, new_connection_id: () => `con_${randomUUID()}`,
       verifier: { verifyConnection: async () => ({ team_id: SLACK.workspace, enterprise_id: null, bot_user_id: SLACK.botUser, bot_id: SLACK.bot, app_id: SLACK.app, granted_scopes: SCOPES, verification_evidence_sha256: canonicalSha256({ fixture: 'verified' }) }) },
       credential: { reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials },
-      nango: { connection_id: 'nango-journey', tags: {}, team_id: SLACK.workspace, enterprise_id: null, is_enterprise_install: false, app_id: SLACK.app, bot_user_id: SLACK.botUser, granted_scopes: SCOPES, bot_token: 'xoxb-synthetic-provider-token', updated_at: NOW } });
+      nango: { connection_id: 'nango-journey', tags: {}, team_id: SLACK.workspace, app_id: SLACK.app, bot_user_id: SLACK.botUser, granted_scopes: SCOPES, bot_token: 'xoxb-synthetic-provider-token', updated_at: NOW } });
     db.prepare('INSERT INTO organization_external_human_link_contracts VALUES (?, ?, ?, ?)').run(link.external_identity_link_id, linkSha, canonicalJson(link), NOW);
     db.prepare("INSERT INTO organization_external_human_link_current VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)").run(link.external_identity_link_id, linkSha, link.provider_issuer, link.provider_tenant_kind, link.provider_tenant_id, null, link.provider_subject_id, link.principal_id, link.membership_id, NOW);
   } finally { db.close(); }

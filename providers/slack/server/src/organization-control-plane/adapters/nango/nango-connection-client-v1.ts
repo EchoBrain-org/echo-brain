@@ -41,8 +41,6 @@ export interface NangoSlackConnectionV1 {
   readonly connection_id: string;
   readonly tags: Readonly<Record<string, string>>;
   readonly team_id: string; // T…
-  readonly enterprise_id: string | null;
-  readonly is_enterprise_install: boolean;
   readonly app_id: string; // A…
   readonly bot_user_id: string; // U…
   readonly granted_scopes: readonly string[]; // sorted, from raw.scope
@@ -65,11 +63,7 @@ export interface NangoConnectionClientV1 {
     scopes: readonly string[];
   }): Promise<{ connect_link: string; expires_at: string }>;
   findConnectionIdByTag(input: { key: string; value: string }): Promise<string | undefined>;
-  getSlackConnection(input: {
-    connection_id: string;
-    force_refresh?: boolean;
-  }): Promise<NangoSlackConnectionV1>;
-  deleteConnection(input: { connection_id: string }): Promise<void>;
+  getSlackConnection(input: { connection_id: string }): Promise<NangoSlackConnectionV1>;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -102,9 +96,8 @@ function invalidConnection(): never {
  * timestamp. Strict: throws `NangoClientErrorV1("invalid_response", …)` for
  * any missing or malformed field, and never includes a candidate value
  * (including the bot token) in its thrown message. Refuses an
- * Enterprise-Grid org-wide install (`is_enterprise_install: true`); a
- * single-workspace install inside a Grid org (non-null `enterprise`, but
- * `is_enterprise_install: false`) is accepted.
+ * Enterprise-Grid org-wide install (`is_enterprise_install: true`), so no
+ * caller sees one; a single-workspace install inside a Grid org is accepted.
  */
 export function parseNangoSlackConnectionV1(value: unknown): NangoSlackConnectionV1 {
   const top = record(value);
@@ -142,17 +135,6 @@ export function parseNangoSlackConnectionV1(value: unknown): NangoSlackConnectio
     invalidConnection();
   }
 
-  let enterpriseId: string | null;
-  const enterpriseRaw = raw.enterprise;
-  if (enterpriseRaw === null) {
-    enterpriseId = null;
-  } else {
-    const enterpriseRecord = record(enterpriseRaw);
-    const id = enterpriseRecord === undefined ? undefined : nonEmptyString(enterpriseRecord.id);
-    if (id === undefined) invalidConnection();
-    enterpriseId = id;
-  }
-
   const grantedScopes = Object.freeze(
     scopeRaw
       .split(",")
@@ -165,8 +147,6 @@ export function parseNangoSlackConnectionV1(value: unknown): NangoSlackConnectio
     connection_id: connectionId,
     tags: Object.freeze({ ...tags }),
     team_id: teamId,
-    enterprise_id: enterpriseId,
-    is_enterprise_install: isEnterpriseInstall,
     app_id: appId,
     bot_user_id: botUserId,
     granted_scopes: grantedScopes,
@@ -257,7 +237,7 @@ function connectionConfigOverrides(
 
 /**
  * Nango (Cloud) HTTP client: connect/reconnect sessions, finding a
- * connection by tag, reading a Slack connection, and deleting one. Every
+ * connection by tag, and reading a Slack connection. Every
  * request goes through the shared `boundedJsonFetchV1` transport
  * (`redirect: "error"`, a combined timeout, a 512 KiB response cap, strict
  * JSON); transport failures always map to `NangoClientErrorV1("unavailable",
@@ -295,7 +275,7 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
   }
 
   private async request(input: {
-    readonly method: "GET" | "POST" | "DELETE";
+    readonly method: "GET" | "POST";
     readonly path: string;
     readonly body?: Readonly<Record<string, unknown>>;
   }): Promise<unknown> {
@@ -319,9 +299,8 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
         timeoutMs: this.timeoutMs,
         maxBytes: MAXIMUM_RESPONSE_BYTES,
         // Nango's protocol is carried by HTTP status, not by always having a
-        // body: a successful delete may be a 204/empty 200, and an error
-        // response may have no body at all. Status is classified below
-        // before the (possibly empty) body is ever inspected.
+        // body: an error response may have no body at all. Status is
+        // classified below before the (possibly empty) body is ever inspected.
         allowEmptyBody: true,
       });
     } catch (error) {
@@ -396,23 +375,12 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
     return ids[0];
   }
 
-  async getSlackConnection(input: {
-    connection_id: string;
-    force_refresh?: boolean;
-  }): Promise<NangoSlackConnectionV1> {
-    let query = `provider_config_key=${encodeURIComponent(this.integrationKey)}`;
-    if (input.force_refresh === true) query += "&force_refresh=true";
+  /** Bot-token rotation is off in the recipe, so this never asks Nango to refresh: a new token comes only from a reconnect. */
+  async getSlackConnection(input: { connection_id: string }): Promise<NangoSlackConnectionV1> {
     const json = await this.request({
       method: "GET",
-      path: `/connections/${encodeURIComponent(input.connection_id)}?${query}`,
-    });
-    return parseNangoSlackConnectionV1(json);
-  }
-
-  async deleteConnection(input: { connection_id: string }): Promise<void> {
-    await this.request({
-      method: "DELETE",
       path: `/connections/${encodeURIComponent(input.connection_id)}?provider_config_key=${encodeURIComponent(this.integrationKey)}`,
     });
+    return parseNangoSlackConnectionV1(json);
   }
 }
