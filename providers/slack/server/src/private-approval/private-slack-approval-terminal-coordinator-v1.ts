@@ -25,6 +25,7 @@ import type {
   MeetingApprovalJourneyStageAttemptV1,
   MeetingApprovalJourneyTelemetryPortV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1";
+import type { ApprovalPresentationReconciliationResultV1 } from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
 
 type Awaitable<T> = T | Promise<T>;
 type DurablePrivateApprovalTerminal = Omit<DurablePrivateApprovalTerminalV1, "resolution"> & {
@@ -178,9 +179,11 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
    * cursor before the provider call gives every unrendered card a turn when a
    * prior call is uncertain or fails.
    */
-  async reconcileApprovalPresentations(signal: AbortSignal): Promise<void> {
+  async reconcileApprovalPresentations(
+    signal: AbortSignal,
+  ): Promise<ApprovalPresentationReconciliationResultV1> {
     const terminals = this.options.control_plane.listTerminals();
-    if (terminals.length === 0) return;
+    if (terminals.length === 0) return "idle";
     const previous = this.presentation_cursor === undefined
       ? -1
       : terminals.findIndex((terminal) => terminal.resolution.approval_id === this.presentation_cursor);
@@ -191,9 +194,9 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
       const receipt = await this.options.authority.readTerminal(terminal.resolution.approval_id);
       if (receipt === undefined || receipt.card_render_state === "rendered") continue;
       this.presentation_cursor = receipt.approval_id;
-      await this.reconcileTerminalCard(receipt, signal);
-      return;
+      return this.reconcileTerminalCard(receipt, signal);
     }
+    return "idle";
   }
 
   private async materializeDurableTerminals(signal: AbortSignal): Promise<void> {
@@ -422,8 +425,8 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
   private async reconcileTerminalCard(
     terminal: PrivateApprovalTerminalReceiptV1,
     signal: AbortSignal,
-  ): Promise<void> {
-    if (terminal.card_render_state === "rendered") return;
+  ): Promise<ApprovalPresentationReconciliationResultV1> {
+    if (terminal.card_render_state === "rendered") return "idle";
     const presentation = await this.options.authority.readForPresentation(
       terminal.approval_id,
     );
@@ -448,11 +451,11 @@ export class PrivateSlackApprovalTerminalCoordinatorV1 {
       annotateCoreRuntimeV1({ result: result.kind === "done" ? "done" : "uncertain" });
       return result;
     });
-    if (outcome.kind === "done") {
-      await this.options.authority.markTerminalCardRendered(
-        terminal.approval_id,
-      );
-    }
+    if (outcome.kind !== "done") return "uncertain";
+    const marked = await this.options.authority.markTerminalCardRendered(
+      terminal.approval_id,
+    );
+    return marked?.card_render_state === "rendered" ? "rendered" : "uncertain";
   }
 }
 

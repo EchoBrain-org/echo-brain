@@ -130,8 +130,10 @@ the Authority fetches it at use time and caches it in memory for at most five
 minutes ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
 Startup recovery first materializes every finalized approval and its V4 receipt
 without contacting Slack. Private terminal-card redraw is an optional,
-post-durable periodic step: it tries one unrendered card per pass, rotates
-after an uncertain result, and forwards cancellation to the provider call. A
+post-durable step requested immediately after approval publication, with periodic
+recovery. It tries one unrendered card per writer turn, continues after confirmed
+progress, rotates after an uncertain result, and forwards cancellation to the
+provider call. A
 Nango outage therefore leaves the durable decision intact and the card-render
 marker pending for a later pass without delaying Authority readiness or letting one
 card starve the rest. Only a confirmed Slack update records the card as

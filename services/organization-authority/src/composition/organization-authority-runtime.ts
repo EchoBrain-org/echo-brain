@@ -228,7 +228,7 @@ class OrganizationAuthorityProcessingCoordinator
     return this.approvals.appendFinalizedApprovalsToV4(signal);
   }
 
-  reconcileApprovalPresentations(signal: AbortSignal): Promise<void> {
+  reconcileApprovalPresentations(signal: AbortSignal): ReturnType<NonNullable<ApprovalWorkflowProcessingV1["reconcileApprovalPresentations"]>> {
     return this.approvals.reconcileApprovalPresentations?.(signal) ?? Promise.resolve();
   }
 

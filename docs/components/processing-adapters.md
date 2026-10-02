@@ -87,10 +87,12 @@ semantics.
 
 For the private Slack approval surface, Authority completes terminal and V4
 materialization before startup readiness. Terminal-card redraw is a separate,
-bounded periodic presentation reconciliation: one pending card per pass,
-fairly rotated after uncertain outcomes, with the worker cancellation signal
-passed to Slack. A card becomes rendered only after the provider confirms its
-replacement update.
+bounded presentation reconciliation, requested immediately after approval
+publication and by periodic recovery. Each writer turn attempts one pending
+card; confirmed progress requests another turn, while uncertain outcomes and
+failures wait for a new wake. Cards rotate fairly, and the worker cancellation
+signal is passed to Slack. A card becomes rendered only after the provider
+confirms its replacement update.
 
 ## Current references
 

@@ -6,6 +6,7 @@ import {
   type OrganizationAuthorityProcessingCycleV1,
 } from "../src/composition/organization-authority-service-lifecycle.js";
 import type { MeetingProcessingWorkerTelemetryEventV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-worker-lifecycle";
+import type { ApprovalPresentationReconciliationResultV1 } from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
 import { AdapterError } from "@echo-brain/organization-processing/core/contracts/adapter";
 import type {
   OrganizationAuthorityApiRuntimeConfig,
@@ -715,6 +716,265 @@ describe("Organization Authority service lifecycle", () => {
     expect(events).toEqual(["finalize", "append", "reconcile"]);
     await runtime.close();
     vi.useRealTimers();
+  });
+
+  it("wakes approval-card presentation after requested publication without waiting for the next cycle", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 30_000 },
+      {
+        processing: {
+          ...processing(events),
+          reconcileApprovalPresentations: async () => { events.push("presentation"); },
+        },
+        start_api_runtime: async () => apiRuntime(events),
+      },
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      await runtime.drain(new AbortController().signal);
+      events.length = 0;
+
+      runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      await runtime.drain(new AbortController().signal);
+
+      // The next 30 s periodic tick has not elapsed. A completed requested
+      // approval must wake both its search-derived work and its terminal-card
+      // redraw, after the durable approval phases release the writer gate.
+      expect(events).toContain("reconcile");
+      expect(events).toContain("presentation");
+      expect(events).not.toContain("stage");
+      expect(events.indexOf("finalize")).toBeLessThan(events.indexOf("append"));
+      expect(events.indexOf("append")).toBeLessThan(events.indexOf("reconcile"));
+      expect(events.indexOf("append")).toBeLessThan(events.indexOf("presentation"));
+    } finally {
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps immediate search wake when requested approval-card presentation fails", async () => {
+    vi.useFakeTimers();
+    const errors: Error[] = [];
+    let searchCalls = 0;
+    let presentationCalls = 0;
+    let failPresentation = false;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 30_000 },
+      {
+        processing: {
+          ...processing([]),
+          reconcileReadableSearchGeneration: async () => { searchCalls += 1; },
+          reconcileApprovalPresentations: async () => {
+            presentationCalls += 1;
+            if (failPresentation) throw new Error("terminal card unavailable");
+          },
+        },
+        start_api_runtime: async () => apiRuntime([]),
+        on_worker_error: (error) => errors.push(error),
+      },
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      await runtime.drain(new AbortController().signal);
+      searchCalls = 0;
+      presentationCalls = 0;
+      failPresentation = true;
+
+      runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      await runtime.drain(new AbortController().signal);
+
+      expect(searchCalls).toBe(1);
+      expect(presentationCalls).toBe(1);
+      expect(errors.map((error) => error.message)).toEqual(["terminal card unavailable"]);
+
+      // A provider redraw failure reports once, and waits for a normal later
+      // trigger instead of generating an immediate retry loop.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(searchCalls).toBe(1);
+      expect(presentationCalls).toBe(1);
+    } finally {
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("drains a rendered approval-card backlog before the next periodic cycle", async () => {
+    vi.useFakeTimers();
+    let presentationCalls = 0;
+    const outcomes = ["rendered", "rendered", "idle"] as const satisfies readonly ApprovalPresentationReconciliationResultV1[];
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 30_000, scheduling: "manual" },
+      {
+        processing: {
+          ...processing([]),
+          reconcileApprovalPresentations: async () => {
+            presentationCalls += 1;
+            return outcomes[presentationCalls - 1] ?? "idle";
+          },
+        },
+        start_api_runtime: async () => apiRuntime([]),
+      },
+    );
+    try {
+      runtime.requestApprovalPublication();
+      // Approval publication and each rendered card run in their own event
+      // loop turn. Advance enough turns for the bounded three-card backlog.
+      for (let turn = 0; turn < 5; turn += 1) await vi.advanceTimersByTimeAsync(1);
+      await runtime.drain(new AbortController().signal);
+
+      // A rendered card can reveal another ready card. Drain that bounded
+      // backlog now; do not leave it to the 30 s source-processing timer.
+      expect(presentationCalls).toBe(3);
+    } finally {
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not self-retry an uncertain approval-card presentation", async () => {
+    vi.useFakeTimers();
+    let presentationCalls = 0;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 30_000, scheduling: "manual" },
+      {
+        processing: {
+          ...processing([]),
+          reconcileApprovalPresentations: async () => {
+            presentationCalls += 1;
+            return "uncertain";
+          },
+        },
+        start_api_runtime: async () => apiRuntime([]),
+      },
+    );
+    try {
+      runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      await runtime.drain(new AbortController().signal);
+      expect(presentationCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(presentationCalls).toBe(1);
+    } finally {
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains an approval-card wake that arrives during an active presentation", async () => {
+    vi.useFakeTimers();
+    const active = deferred();
+    let presentationCalls = 0;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 30_000, scheduling: "manual" },
+      {
+        processing: {
+          ...processing([]),
+          reconcileApprovalPresentations: async () => {
+            presentationCalls += 1;
+            if (presentationCalls === 1) await active.promise;
+            return "idle";
+          },
+        },
+        start_api_runtime: async () => apiRuntime([]),
+      },
+    );
+    try {
+      runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(presentationCalls).toBe(1);
+
+      runtime.requestApprovalPublication();
+      active.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+      await runtime.drain(new AbortController().signal);
+
+      expect(presentationCalls).toBe(2);
+    } finally {
+      active.resolve();
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a scheduled approval-card follow-up when closing", async () => {
+    vi.useFakeTimers();
+    const active = deferred();
+    let presentationCalls = 0;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 30_000, scheduling: "manual" },
+      {
+        processing: {
+          ...processing([]),
+          reconcileApprovalPresentations: async () => {
+            presentationCalls += 1;
+            if (presentationCalls === 1) await active.promise;
+            return presentationCalls === 1 ? "rendered" : "idle";
+          },
+        },
+        start_api_runtime: async () => apiRuntime([]),
+      },
+    );
+    try {
+      runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(presentationCalls).toBe(1);
+
+      active.resolve();
+      // Settle the active redraw and let it queue, but do not run, its
+      // rendered-backlog follow-up.
+      for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await runtime.close();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(presentationCalls).toBe(1);
+    } finally {
+      active.resolve();
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for an active approval-card presentation before closing the API", async () => {
+    vi.useFakeTimers();
+    const active = deferred();
+    const events: string[] = [];
+    let presentationCalls = 0;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 30_000, scheduling: "manual" },
+      {
+        processing: {
+          ...processing(events),
+          reconcileApprovalPresentations: async () => {
+            presentationCalls += 1;
+            await active.promise;
+            return "idle";
+          },
+        },
+        start_api_runtime: async () => apiRuntime(events),
+      },
+    );
+    try {
+      runtime.requestApprovalPublication();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(presentationCalls).toBe(1);
+
+      const closing = runtime.close();
+      expect(events).not.toContain("api-close");
+      active.resolve();
+      await closing;
+
+      expect(events.at(-1)).toBe("api-close");
+    } finally {
+      active.resolve();
+      await runtime.close();
+      vi.useRealTimers();
+    }
   });
 
   it("coalesces requests that arrive while one is waiting for the gate", async () => {
