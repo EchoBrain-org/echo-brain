@@ -55,7 +55,8 @@ export function createJiraNangoV1(options: { readonly integration_id: string; re
       return Object.freeze({ tags: Object.freeze(copied), access_token: jiraString(credentials.access_token, 16 * 1024) });
     },
     async find(tags, signal) {
-      const query = new URLSearchParams({ limit: '2', page: '1' });
+      // Nango connection-list pages are zero-based, so page 0 is the first page.
+      const query = new URLSearchParams({ limit: '2', page: '0' });
       for (const [key, value] of Object.entries(tags)) query.set(`tags[${key}]`, value);
       const data = jiraRecord(await call(`/connections?${query}`, 'GET', undefined, signal));
       const connections = jiraArray(data.connections, 2);

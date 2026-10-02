@@ -73,6 +73,11 @@ authenticated Person connection. Both changes have synthetic-provider source
 proof; see the [capture integration scope](../product/2026-10-01-connector-context-integration-v1.md)
 for the remaining live profile and qualification work.
 
+Jira discovers a server-tagged Nango connection on zero-based page 0 with a
+two-item limit. `providers/jira/test/jira-nango-v1.test.ts` source-tests that
+one matching connection is found and multiple matches are refused; live
+qualification remains pending.
+
 ## Trust boundary
 
 Provider acknowledgements, stored provider objects, provider identities, and
