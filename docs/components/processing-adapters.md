@@ -64,6 +64,15 @@ export/admission bridge. Its credential and owner binding are selected by the
 Authority and stay out of Person clients; admitted revisions then use the
 provider-neutral meeting-source and approval contracts.
 
+The Granola HTTP client bounds each streamed JSON body before parsing and the
+total assembled transcript across pages. Oversized inline transcripts use the
+paged fallback; bounds reject excess without truncation. These transport bounds
+are separate from representation-specific capture limits. Jira's server-only
+capture handoff derives its transport and current-grant fences from an
+authenticated Person connection. Both changes have synthetic-provider source
+proof; see the [capture integration scope](../product/2026-10-01-connector-context-integration-v1.md)
+for the remaining live profile and qualification work.
+
 ## Trust boundary
 
 Provider acknowledgements, stored provider objects, provider identities, and

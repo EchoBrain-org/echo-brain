@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { granolaNoteTimestamp, HttpGranolaApiClient } from "../../src/source/granola-api-client.js";
+import {
+  GRANOLA_JSON_RESPONSE_MAX_BYTES,
+  granolaNoteTimestamp,
+  HttpGranolaApiClient,
+} from "../../src/source/granola-api-client.js";
 
 const note = {
   id: "note-1",
@@ -20,6 +24,34 @@ function json(value: unknown, status = 200): Response {
 
 function tooLarge(): Response {
   return new Response(null, { status: 413 });
+}
+
+function streamed(
+  chunks: readonly Uint8Array[],
+  headers: Record<string, string> = {},
+  blockAfterChunks = false,
+): { readonly response: Response; readonly wasCancelled: () => boolean } {
+  let index = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = chunks[index];
+      index += 1;
+      if (chunk === undefined) {
+        if (blockAfterChunks) return new Promise<void>(() => {});
+        controller.close();
+        return undefined;
+      }
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return {
+    response: new Response(body, { headers: { "content-type": "application/json", ...headers } }),
+    wasCancelled: () => cancelled,
+  };
 }
 
 function fixtureClient(responses: unknown[]) {
@@ -222,6 +254,103 @@ describe("Granola complete transcript transport", () => {
       reason: "api_failed", status: 503,
     });
     expect(requests).toHaveLength(4);
+  });
+});
+
+describe("Granola response and assembled-transcript bounds", () => {
+  it("rejects a declared response larger than the streaming byte bound and cancels its body", async () => {
+    const body = streamed(
+      [new TextEncoder().encode("{}")],
+      { "content-length": String(GRANOLA_JSON_RESPONSE_MAX_BYTES + 1) },
+    );
+    const { client, requests } = fixtureClient([body.response, tooLarge()]);
+
+    await expect(client.getNote(note.id)).rejects.toMatchObject({ reason: "api_failed" });
+    expect(requests).toHaveLength(2);
+    expect(body.wasCancelled()).toBe(true);
+  });
+
+  it("rejects a chunked response that exceeds the bound despite a misleading content length", async () => {
+    const body = streamed([
+      new Uint8Array(GRANOLA_JSON_RESPONSE_MAX_BYTES),
+      new Uint8Array([0]),
+    ], { "content-length": "1" }, true);
+    const { client, requests } = fixtureClient([body.response, tooLarge()]);
+
+    await expect(client.getNote(note.id)).rejects.toMatchObject({ reason: "api_failed" });
+    expect(requests).toHaveLength(2);
+    expect(body.wasCancelled()).toBe(true);
+  });
+
+  it("accepts a streamed response without Content-Length when its actual bytes are bounded", async () => {
+    const body = streamed([new TextEncoder().encode(JSON.stringify({
+      ...note,
+      transcript: [{ text: "Synthetic turn." }],
+    }))]);
+    const { client } = fixtureClient([body.response]);
+
+    await expect(client.getNote(note.id)).resolves.toMatchObject({
+      transcript: [{ text: "Synthetic turn." }],
+    });
+  });
+
+  it("uses paged transcript fallback when the initial inline response exceeds the local byte bound", async () => {
+    const inline = streamed([new Uint8Array(GRANOLA_JSON_RESPONSE_MAX_BYTES + 1)], {}, true);
+    const { client, requests } = fixtureClient([
+      inline.response, note, page("Synthetic turn."), note,
+    ]);
+
+    await expect(client.getNote(note.id)).resolves.toMatchObject({
+      transcript: [{ text: "Synthetic turn." }],
+    });
+    expect(requests).toHaveLength(4);
+    expect(inline.wasCancelled()).toBe(true);
+  });
+
+  it.each([
+    { stage: "metadata", responses: [tooLarge(), streamed([new Uint8Array(GRANOLA_JSON_RESPONSE_MAX_BYTES + 1)], {}, true).response] },
+    { stage: "transcript page", responses: [tooLarge(), note, streamed([new Uint8Array(GRANOLA_JSON_RESPONSE_MAX_BYTES + 1)], {}, true).response] },
+  ])("does not fall back after an oversized $stage response", async ({ responses }) => {
+    const { client } = fixtureClient([...responses]);
+    await expect(client.getNote(note.id)).rejects.toMatchObject({ reason: "api_failed" });
+  });
+
+  it("stops a blocked response reader when the parent request is cancelled", async () => {
+    const controller = new AbortController();
+    let started!: () => void;
+    const reading = new Promise<void>((resolve) => { started = resolve; });
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        started();
+        return new Promise<void>(() => {});
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const { client } = fixtureClient([new Response(body, {
+      headers: { "content-type": "application/json" },
+    })]);
+    const pending = client.getNote(note.id, { signal: controller.signal });
+    await reading;
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ reason: "timeout" });
+    expect(cancelled).toBe(true);
+  });
+
+  it("refuses a paged transcript whose assembled transport bytes exceed its provider bound", async () => {
+    const pageText = "x".repeat(1_900_000);
+    const pages = Array.from({ length: 9 }, (_, index) =>
+      page(pageText, index < 8 ? `next-${index}` : null),
+    );
+    const { client, requests } = fixtureClient([
+      tooLarge(), note, ...pages,
+    ]);
+
+    await expect(client.getNote(note.id)).rejects.toMatchObject({ reason: "pagination_failed" });
+    expect(requests).toHaveLength(11);
   });
 });
 

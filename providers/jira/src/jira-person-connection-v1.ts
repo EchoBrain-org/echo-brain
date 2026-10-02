@@ -4,13 +4,26 @@ import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { JiraConnectionStoreV1, type JiraConnectionAttemptFailureV1, type JiraConnectionAttemptV1, type JiraPersonV1, type JiraStoredConnectionV1 } from './jira-connection-store-v1.js';
-import { createJiraCloudTransportV1, type JiraCloudAuthenticatedFetchV1 } from './jira-cloud-transport-v1.js';
+import { createJiraCloudTransportV1, type JiraCloudAuthenticatedFetchV1, type JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { createJiraPersonLiveEvidenceReaderV1 } from './jira-person-live-evidence-reader-v1.js';
 import type { JiraNangoV1 } from './jira-nango-v1.js';
 import { jiraSiteOrigin } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_CLOUD_ID, jiraArray, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 export interface JiraPersonAuthorizationV1 extends JiraPersonV1 { readonly authorization_sha256: Sha256Digest }
+/**
+ * Trusted server-only handoff for context capture. Its transport closes over
+ * the provider-owned Nango reference; callers receive no credential, locator,
+ * actor selector, or Jira site selector.
+ */
+export interface JiraCurrentCaptureConnectionV1 {
+  readonly transport: JiraCloudTransportV1;
+  /** Synchronous final Authority-runner fence over the same actor and grant. */
+  require_current(): void;
+  readonly read_grant_fence: {
+    requireCurrent(input: { readonly binding: PersonConnectorReadBindingV1; readonly signal?: AbortSignal }): Promise<void>;
+  };
+}
 type JiraAttemptResponseV1 = Readonly<{
   schema_version: 1;
   attempt: string;
@@ -164,6 +177,23 @@ export function createJiraPersonConnectionV1(options: {
       options.store.revoke(person); // Local revocation wins even if remote deletion/abort fails.
       if (stored !== undefined) await options.nango.disconnect(stored.reference, input.signal);
       requirePerson(); return Object.freeze({ schema_version: 1 as const, connected: false as const });
+    },
+    async captureConnection(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<JiraCurrentCaptureConnectionV1> {
+      const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
+      const stored = options.store.current(person);
+      if (stored === undefined || !stored.active) jiraFailure('unauthorized');
+      const binding = copyJiraBindingV1(stored.binding);
+      const current = () => { requirePerson(); options.store.requireCurrent(binding); };
+      current(); input.signal?.throwIfAborted();
+      const transport = createJiraCloudTransportV1(authenticated(binding, stored.reference, tags(person, stored.attempt), current));
+      const read_grant_fence = Object.freeze({
+        async requireCurrent(request: { readonly binding: PersonConnectorReadBindingV1; readonly signal?: AbortSignal }): Promise<void> {
+          request.signal?.throwIfAborted();
+          if (canonicalSha256(copyJiraBindingV1(request.binding)) !== canonicalSha256(binding)) jiraFailure('stale_access_state');
+          current(); request.signal?.throwIfAborted();
+        },
+      });
+      return Object.freeze({ transport, require_current: current, read_grant_fence });
     },
     async source(input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined> {
       const { person, requirePerson } = actor(input.access_token); const stored: JiraStoredConnectionV1 | undefined = options.store.current(person);

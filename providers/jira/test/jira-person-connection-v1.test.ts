@@ -92,6 +92,55 @@ describe('Nango-backed personal Jira connection', () => {
     } finally { f.database.close(); }
   });
 
+  it('derives a trusted capture handoff from only the current person connection', async () => {
+    const f = fixture(); try {
+      await f.connected(); const stored = f.store.current(person)!;
+      const capability = await f.service.captureConnection({ access_token: f.token });
+      expect(Object.keys(capability).sort()).toEqual(['read_grant_fence', 'require_current', 'transport']);
+      expect(capability.transport.binding).toEqual(stored.binding);
+      expect(JSON.stringify(capability)).not.toContain(stored.reference);
+      capability.require_current();
+      await capability.read_grant_fence.requireCurrent({ binding: capability.transport.binding });
+      await capability.transport.request({ path: '/oauth/token/accessible-resources' });
+      expect(f.nango.connection).toHaveBeenLastCalledWith(stored.reference, expect.any(AbortSignal));
+      expect(f.transport).toHaveBeenLastCalledWith('https://api.atlassian.com/oauth/token/accessible-resources', expect.objectContaining({
+        redirect: 'error', headers: expect.any(Headers),
+      }));
+    } finally { f.database.close(); }
+  });
+
+  it('does not create a capture handoff without the current person grant or for another actor', async () => {
+    const f = fixture(); try {
+      await expect(f.service.captureConnection({ access_token: f.token })).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(f.nango.connection).not.toHaveBeenCalled();
+      await f.connected();
+      await expect(f.service.captureConnection({ access_token: 'synthetic-person-two' })).rejects.toMatchObject({ code: 'unauthorized' });
+      const capability = await f.service.captureConnection({ access_token: f.token });
+      const calls = vi.mocked(f.nango.connection).mock.calls.length;
+      await expect(capability.read_grant_fence.requireCurrent({ binding: { ...capability.transport.binding, principal_id: 'person-two' } })).rejects.toMatchObject({ code: 'stale_access_state' });
+      expect(f.nango.connection).toHaveBeenCalledTimes(calls);
+    } finally { f.database.close(); }
+  });
+
+  it('revokes a capture handoff before its transport can obtain another Jira credential', async () => {
+    const f = fixture(); try {
+      await f.connected(); const capability = await f.service.captureConnection({ access_token: f.token });
+      const calls = vi.mocked(f.nango.connection).mock.calls.length;
+      await f.service.disconnect({ access_token: f.token });
+      expect(() => capability.require_current()).toThrow(expect.objectContaining({ code: 'stale_access_state' }));
+      await expect(capability.read_grant_fence.requireCurrent({ binding: capability.transport.binding })).rejects.toMatchObject({ code: 'stale_access_state' });
+      await expect(capability.transport.request({ path: '/oauth/token/accessible-resources' })).rejects.toMatchObject({ code: 'stale_access_state' });
+      expect(f.nango.connection).toHaveBeenCalledTimes(calls);
+    } finally { f.database.close(); }
+  });
+
+  it('refuses a capture handoff after the authenticated membership is revoked', async () => {
+    const f = fixture(); try {
+      await f.connected(); f.setActive(false);
+      await expect(f.service.captureConnection({ access_token: f.token })).rejects.toMatchObject({ code: 'unauthorized' });
+    } finally { f.database.close(); }
+  });
+
   it('reports pending consent, completes it only after exact tagged consent, and retains terminal polling state', async () => {
     const f = fixture(); try {
       const begun = await f.service.connect({ access_token: f.token });

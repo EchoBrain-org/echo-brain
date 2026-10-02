@@ -93,6 +93,38 @@ pull command, source registration, scheduler, retention grant or Jira production
 enablement. See [the Jira provider](../../providers/jira/README.md) for commands
 and the remaining live qualification boundary.
 
+## First live-round preparation
+
+The selected target is a disposable local Authority with test accounts. The
+[preparation command](../../services/organization-authority/README.md#disposable-local-connector-preparation)
+creates isolated configuration and checks the required private input paths.
+It does not reuse the installed client's staging session. Public HTTPS and
+OIDC callbacks, provider credentials and human consent remain prerequisites.
+There is no live execution profile or authenticated capture command yet.
+
+Two source-tested building blocks narrow that remaining integration:
+
+- Jira's server-only `captureConnection` derives a transport and current-grant
+  fences from the authenticated Person's stored connection. It accepts no
+  caller-selected account, site or connection locator. The
+  [connected-capture test](../../services/organization-authority/test/jira-connected-capture-intake-v1.test.ts)
+  connects this actual handoff to shared request-only intake and proves that
+  reconnect and disconnect invalidate it before another provider read.
+- `runContextCaptureRehearsalV1` performs one pull of 1–5 items through an
+  already-authorized intake with a cooperative deadline. Its receipt contains
+  source identity and revision hashes, source type, admission results and
+  counts. It emits neither provider contents nor opaque cursors. The trusted
+  intake remains responsible for checking limits and current authorization
+  before any durable admission; a receipt wrapper cannot undo prior writes.
+
+Granola HTTP JSON is now limited to 2 MiB while streaming, before parsing.
+Missing or misleading Content-Length cannot bypass that limit. Oversized inline
+transcripts use the existing paged fallback; each page is bounded and assembled
+transcripts are limited to 16 MiB. These are provider transport limits, separate
+from the selected context snapshot's 128 KiB limit. Oversized data is rejected,
+never silently truncated. Focused source tests cover cancellation and fallback;
+real provider qualification is still pending.
+
 ## Boundaries before activation
 
 Neither profile is registered in the production composition root or a scheduler.
@@ -105,9 +137,9 @@ Malformed or oversized provider items fail the bounded pull without returning a
 cursor. Earlier committed captures can be replayed and deduplicate, but a
 permanently invalid item still requires intervention. This slice adds no retry
 loop, rejection ledger or skip policy. Durable rejection accounting and cursor
-progress past bad items must be designed before unattended ingestion. Existing
-Granola HTTP response-size and bad-note retry concerns are not solved by a
-post-fetch capture size bound.
+progress past bad items must be designed before unattended ingestion. Granola's
+transport bounds limit memory use; they do not solve the existing bad-note
+retry problem.
 
 Production activation additionally needs accepted capture policy, registered
 current read and retention authorities, retention lifecycle/deletion decisions,

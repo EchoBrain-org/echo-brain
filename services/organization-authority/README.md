@@ -101,6 +101,42 @@ state with a durable setup plan, generated internal IDs, Person credentials,
 and initial-owner invitation; Slack is connected afterward, in the app. Do not
 run reset into a directory that already contains state.
 
+## Disposable local connector preparation
+
+Use the [operator router](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
+for actor and secret-handling rules. The local connector preparation command
+creates a new private rehearsal directory with a nonsecret configuration
+template, isolated Person directory, private input directory and receipts
+directory. It reserves an absent Authority state path for later bootstrap.
+It never reads installed Person sessions or copies staging inputs.
+
+```sh
+npm run authority:connector-rehearsal -- prepare --directory /absolute/new-rehearsal
+npm run authority:connector-rehearsal -- preflight --directory /absolute/new-rehearsal
+```
+
+Fill the generated configuration with the rehearsal Authority's public HTTPS
+origin, test owner, OIDC configuration path, Nango integration keys, and Jira
+site/project. Private provider input paths are separate from their values.
+Preflight checks configuration shape and private-file ownership/modes; it
+prints missing field names, never credential contents. A configuration-ready
+result does not prove provider credentials or permissions work.
+
+The public HTTPS origin is this test Authority's URL. A local tunnel or proxy
+must forward it to the Authority's loopback listener. Register its
+`/v2/session/oidc/callback` in the test OIDC application. Slack's generated app
+also points identity and interactive-card callbacks at this origin. The
+existing staging Authority URL reaches staging, not the isolated local state.
+
+This command currently supports preparation and preflight only. It does not
+create a tunnel, bootstrap state, start a live profile or request OAuth consent.
+`authority:local` remains the synthetic harness. Jira remains disabled in the
+normal service CLI; an explicit local execution profile and authenticated
+capture entrypoint still need wiring before a three-provider live round can
+run. The bounded capture operation and connection bridge are source-tested
+building blocks, not live qualification. See the
+[integration scope](../../docs/product/2026-10-01-connector-context-integration-v1.md).
+
 ## Initial-owner setup internals
 
 For deployed staging, use the resumable wrapper in the

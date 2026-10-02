@@ -3,6 +3,10 @@ export const DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS = 15_000;
 // Granola caps page_size at 30; values above 30 return HTTP 400.
 export const DEFAULT_GRANOLA_PAGE_SIZE = 30;
 export const GRANOLA_API_KEY_RE = /^grn_[A-Za-z0-9][A-Za-z0-9_-]*$/;
+/** Raw provider JSON is bounded before parsing, independent of Content-Length. */
+export const GRANOLA_JSON_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
+/** Finite provider transport bound, independent of the selected capture representation. */
+export const GRANOLA_TRANSCRIPT_MAX_BYTES = 16 * 1024 * 1024;
 const GRANOLA_TRANSCRIPT_PAGE_SIZE = 100;
 // These are admission bounds, not truncation limits. An incomplete export fails.
 const MAX_GRANOLA_TRANSCRIPT_PAGES = 100;
@@ -85,10 +89,85 @@ export class GranolaApiError extends Error {
     public readonly reason: GranolaApiErrorReason,
     public readonly status?: number,
     public readonly retryAfterMs?: number,
+    /** Only the initial inline transcript read may retry through transcript pages. */
+    public readonly permitsTranscriptPaging = false,
   ) {
     super(message);
     this.name = "GranolaApiError";
   }
+}
+
+function responseTooLarge(permitsTranscriptPaging = false): GranolaApiError {
+  return new GranolaApiError(
+    "Granola API response exceeded the byte bound",
+    "api_failed",
+    undefined,
+    undefined,
+    permitsTranscriptPaging,
+  );
+}
+
+async function cancelResponseBody(response: Response | undefined): Promise<void> {
+  if (response?.body !== null && response?.body !== undefined && !response.body.locked) {
+    await response.body.cancel().catch(() => undefined);
+  }
+}
+
+/** Reads exact bytes so a false or absent Content-Length cannot bypass the cap. */
+async function boundedJson(
+  response: Response,
+  maximumBytes: number,
+  signal: AbortSignal,
+  permitsTranscriptPaging = false,
+): Promise<unknown> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    if (!/^(?:0|[1-9][0-9]*)$/.test(declaredLength)) {
+      await cancelResponseBody(response);
+      throw responseTooLarge(permitsTranscriptPaging);
+    }
+    const declaredBytes = Number(declaredLength);
+    if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maximumBytes) {
+      await cancelResponseBody(response);
+      throw responseTooLarge(permitsTranscriptPaging);
+    }
+  }
+  const body = response.body;
+  if (body === null) throw new Error("Granola API response was empty");
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  const abort = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    for (;;) {
+      if (signal.aborted) throw new Error("Request aborted");
+      const part = await reader.read();
+      if (signal.aborted) throw new Error("Request aborted");
+      if (part.done) break;
+      bytes += part.value.byteLength;
+      if (bytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw responseTooLarge(permitsTranscriptPaging);
+      }
+      chunks.push(part.value);
+    }
+    const joined = new Uint8Array(bytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      joined.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(joined)) as unknown;
+  } finally {
+    signal.removeEventListener("abort", abort);
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
+
+function transcriptByteLength(items: readonly GranolaTranscriptItem[]): number {
+  return new TextEncoder().encode(JSON.stringify(items)).byteLength;
 }
 
 export class HttpGranolaApiClient implements GranolaApiClient {
@@ -140,9 +219,20 @@ export class HttpGranolaApiClient implements GranolaApiClient {
     const url = this.url(`/notes/${encodeURIComponent(noteId)}`);
     url.searchParams.set("include", "transcript");
     try {
-      return parseNoteDetail(await this.fetchJson(url, options.signal), noteId);
+      const detail = parseNoteDetail(await this.fetchJson(url, options.signal, true), noteId);
+      if (
+        detail.transcript !== undefined &&
+        detail.transcript !== null &&
+        transcriptByteLength(detail.transcript) > GRANOLA_TRANSCRIPT_MAX_BYTES
+      ) {
+        throw new GranolaApiError(
+          "Granola transcript exceeded the provider byte bound",
+          "api_failed",
+        );
+      }
+      return detail;
     } catch (err) {
-      if (!(err instanceof GranolaApiError && err.status === 413)) throw err;
+      if (!(err instanceof GranolaApiError && (err.status === 413 || err.permitsTranscriptPaging))) throw err;
     }
 
     // Granola documents HTTP 413 for this exact inline-transcript request but
@@ -162,6 +252,7 @@ export class HttpGranolaApiClient implements GranolaApiClient {
     }
     const metadata = metadataIdentity(detail);
     const transcript: GranolaTranscriptItem[] = [];
+    let transcriptBytes = 0;
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
     for (
@@ -183,6 +274,13 @@ export class HttpGranolaApiClient implements GranolaApiClient {
       if (transcript.length + page.transcript.length > MAX_GRANOLA_TRANSCRIPT_ITEMS) {
         throw new GranolaApiError(
           "Granola transcript exceeded the item bound",
+          "pagination_failed",
+        );
+      }
+      transcriptBytes += transcriptByteLength(page.transcript);
+      if (transcriptBytes > GRANOLA_TRANSCRIPT_MAX_BYTES) {
+        throw new GranolaApiError(
+          "Granola transcript exceeded the provider byte bound",
           "pagination_failed",
         );
       }
@@ -227,6 +325,7 @@ export class HttpGranolaApiClient implements GranolaApiClient {
   private async fetchJson(
     url: URL,
     parentSignal: AbortSignal | undefined,
+    permitsTranscriptPaging = false,
   ): Promise<unknown> {
     if (parentSignal?.aborted === true) {
       throw new GranolaApiError("Granola API request was cancelled", "timeout");
@@ -240,8 +339,9 @@ export class HttpGranolaApiClient implements GranolaApiClient {
       controller.abort();
     }, this.opts.requestTimeoutMs ?? DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS);
     const fetchImpl = this.opts.fetchImpl ?? fetch;
+    let response: Response | undefined;
     try {
-      const response = await fetchImpl(url, {
+      response = await fetchImpl(url, {
         redirect: "error",
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
@@ -275,7 +375,12 @@ export class HttpGranolaApiClient implements GranolaApiClient {
           response.status,
         );
       }
-      const value: unknown = await response.json();
+      const value = await boundedJson(
+        response,
+        GRANOLA_JSON_RESPONSE_MAX_BYTES,
+        controller.signal,
+        permitsTranscriptPaging,
+      );
       if (controller.signal.aborted) throw new Error("Request aborted");
       return value;
     } catch (err) {
@@ -290,6 +395,7 @@ export class HttpGranolaApiClient implements GranolaApiClient {
       if (err instanceof GranolaApiError) throw err;
       throw new GranolaApiError("Granola API request failed", "api_failed");
     } finally {
+      await cancelResponseBody(response);
       clearTimeout(timeout);
       parentSignal?.removeEventListener("abort", onParentAbort);
     }
