@@ -33,11 +33,11 @@ The opt-in provider profiles in
 [`provider-context-intakes-v1.ts`](../../services/organization-authority/src/composition/provider-context-intakes-v1.ts)
 make the integration choices explicit:
 
-| Source | Mapping and representation | Authority disposition |
-| --- | --- | --- |
-| Granola | Reuses the one configured meeting adapter. Selected normalized summaries, notes and transcripts become a bounded exact snapshot, or a pointer. A source start time produces a meeting payload; otherwise a plain-text note payload. Participant refs remain opaque. | Explicit retained policy with synchronous transaction fence, or request-only |
-| Jira | Uses the existing person-bound transport and fixed configured project. Preserves ticket key, status, labels, provider update time, optional priority and opaque assignee account reference. Body is an excerpt or omitted for a pointer. | Request-only; profile accepts no database or retained mode |
-| Slack | Existing organization setup, personal identity links and private approval cards. | No content capture adapter is registered |
+| Source  | Mapping and representation                                                                                                                                                                                                                                          | Authority disposition                                                                                                                            |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Granola | Reuses the one configured meeting adapter. Selected normalized summaries, notes and transcripts become a bounded exact snapshot, or a pointer. A source start time produces a meeting payload; otherwise a plain-text note payload. Participant refs remain opaque. | Explicit retained policy with synchronous transaction fence, or request-only                                                                     |
+| Jira    | Uses the existing person-bound transport and fixed configured project. Preserves ticket key, status, labels, provider update time, optional priority and opaque assignee account reference. Body is omitted for a pointer.                                          | Request-only by default. An explicit Authority binding may retain pointers only through the shared SQLite admission fence; excerpts are refused. |
+| Slack   | A provider-only, pointer-only adapter reads one fixed authorized channel and maps message coordinates, selected metadata and a Slack-provided permalink. It has no Authority composition, configured read scopes or registration.                                   | No content capture source is registered.                                                                                                         |
 
 Granola still uses its existing organization API credential directly. This
 integration does not add another setup, Nango sync or background poller. Jira
@@ -57,7 +57,8 @@ The Authority integration tests compose actual provider implementations with
 fake provider responses, then use the shared intake and real SQLite:
 
 - [Granola integration](../../services/organization-authority/test/granola-context-source-intake-v1.test.ts): actual meeting adapter over a fake Granola API client; one configured pull, retained captures, immutable replay/change, restart and retention revocation.
-- [Jira integration](../../services/organization-authority/test/jira-context-source-intake-v1.test.ts): actual bounded HTTP transport/parser over fake HTTP responses; request-only captures, grant revocation, fixed organization/disposition and no durable-admission invocation.
+- [Jira integration](../../services/organization-authority/test/jira-context-source-intake-v1.test.ts): actual bounded HTTP transport/parser over fake HTTP responses; default request-only capture, explicit retained-pointer admission, replay/change, SQLite restart, grant and custody-fence revocation, and organization/disposition refusal.
+- [Slack provider adapter](../../providers/slack/server/test/context/slack-context-source-v1.test.ts) and [transport](../../providers/slack/server/test/context/slack-context-transport-v1.test.ts): fake Slack API responses exercise fixed-channel pointer mapping, grant fences, bounded paging and provider-response validation. They do not compose an Authority intake or prove configured Slack scopes.
 - [Intake composition](../../services/organization-authority/test/context-source-intake-v1.test.ts): provider-byte ownership across async checks, concurrent pull exclusion, retry cursor ownership, cancellation and identity drift.
 
 These are local source proofs. They are not provider-live, artifact, deployment
@@ -220,6 +221,14 @@ Production activation additionally needs accepted capture policy, registered
 current read and retention authorities, retention lifecycle/deletion decisions,
 capacity checks and live provider qualification. The factories require these
 authority ports; they do not synthesize permission from a working credential.
+
+The user-approved next-round Slack direction is pointers plus a retained message
+snapshot under explicit Authority composition. It is deferred: no current Slack
+adapter retains message text, and no read grant selects retention. That round
+must also define the policy for provider message edits and deletes, including
+which revisions remain retained and when retained snapshots are removed. The
+current local and staging runners remain Jira request-only and have no Slack
+source.
 
 Graph projection, enrichment/learning, Evidence Desk, retrieval, Ask, release
 audits and response schemas are unchanged. Request-only Jira captures disappear
