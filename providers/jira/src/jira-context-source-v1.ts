@@ -119,7 +119,7 @@ export class JiraContextSourceV1 implements SourceAdapterV1<ContextCaptureConten
     await this.requireCurrent(context?.signal);
     context?.signal.throwIfAborted();
     const origin = await this.verifyConnection(context?.signal);
-    const project = parseJiraProject(await this.transport.request({ path: `${this.pathPrefix}/project/${this.project}`, signal: context?.signal }), origin, this.pathPrefix);
+    const project = parseJiraProject(await this.transport.request({ path: `${this.pathPrefix}/project/${this.project}`, signal: context?.signal }), origin, `https://api.atlassian.com/ex/jira/${this.binding.external_scope_id}`);
     context?.signal.throwIfAborted();
     const page = jiraRecord(await this.transport.request({
       path: `${this.pathPrefix}/search/jql`,
