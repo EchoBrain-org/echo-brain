@@ -94,6 +94,14 @@ failures wait for a new wake. Cards rotate fairly, and the worker cancellation
 signal is passed to Slack. A card becomes rendered only after the provider
 confirms its replacement update.
 
+Slack reconnect completion requires the existing Nango connection to report the
+current attempt, organization and owner membership tags, followed by fresh Slack
+identity and permission checks. A connection's `updated_at` is not authorization
+completion evidence: it can stay unchanged after a successful reconnect. Focused
+source tests cover this case, stale or foreign tags, and preservation of existing
+approval cards and person links. The repaired completion path still requires a
+live rehearsal after deployment.
+
 ## Current references
 
 - [Meeting processing core and adapters](../architecture/meeting-processing-core-and-adapters.md)

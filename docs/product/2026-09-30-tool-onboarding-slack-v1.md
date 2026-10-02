@@ -210,6 +210,14 @@ organization-specific secrets.
   tags, which needs no webhook, or by receiving Nango's signed auth webhook
   (`X-Nango-Hmac-Sha256`). Prefer the poll if Nango supports it, because it
   adds no public route.
+- **Reconnect completion:** poll the existing connection ID and require the
+  current attempt's organization, membership and attempt tags before the fresh
+  Slack checks. Nango's top-level `updated_at` is provider metadata, not proof
+  that this attempt completed. Creating a reconnect session alone must leave
+  the attempt pending. Nango documents [tags as authorization correlation](https://nango.dev/docs/guides/auth/connection-tags-configuration-metadata)
+  and [reconnect sessions](https://nango.dev/docs/reference/backend/http-api/connect/sessions/reconnect);
+  the matching-tag completion path is source-tested, with live revalidation
+  pending after deployment.
 
 ### 5.3 Owner setup and install (Slack provider routes)
 

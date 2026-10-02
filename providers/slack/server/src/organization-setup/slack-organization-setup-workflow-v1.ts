@@ -63,8 +63,8 @@ interface InstallAttempt extends InstallState {
   readonly session: PersonAccessAuthorization;
   /** Held only while pending: settling drops the client and signing secrets. */
   credential: FoundSlackAppCredentialsV1 | null;
-  /** A reconnect reuses this Nango connection; `updated_at` is its timestamp at begin. */
-  readonly reconnect: { readonly connection_id: string; readonly state_sha256: `sha256:${string}`; readonly updated_at: string } | null;
+  /** A reconnect reuses this exact Nango connection. */
+  readonly reconnect: { readonly connection_id: string; readonly state_sha256: `sha256:${string}` } | null;
   /**
    * Nango no longer had the active connection's Nango connection at begin: the
    * attempt runs as a first install, then the bundle is pointed at the new one.
@@ -83,9 +83,9 @@ function sameSession(left: PersonAccessAuthorization, right: PersonAccessAuthori
 /**
  * Spike-sensitive (assumptions A3-A5, ruling P1); adjust here only. A first
  * install or a rebind is found by its attempt tag. A reconnect keeps its
- * connection id and has finished once Nango's update timestamp passes the one
- * read at begin: Slack may return the same bot token on a reinstall, so the
- * token is no signal.
+ * connection id and completes only once that exact connection reports this
+ * attempt's tag. Slack may return the same bot token on a reinstall, so the
+ * token is no signal; Nango's top-level timestamp is not a completion signal.
  */
 async function finishedNangoConnectionV1(
   nango: NangoConnectionClientV1,
@@ -93,17 +93,18 @@ async function finishedNangoConnectionV1(
 ): Promise<NangoSlackConnectionV1 | undefined> {
   if (attempt.reconnect !== null) {
     const connection = await nango.getSlackConnection({ connection_id: attempt.reconnect.connection_id });
-    return Date.parse(connection.updated_at) > Date.parse(attempt.reconnect.updated_at) ? connection : undefined;
+    return connection.tags.echo_attempt_id === attempt.attempt_id ? connection : undefined;
   }
   const connectionId = await nango.findConnectionIdByTag({ key: "echo_attempt_id", value: attempt.attempt_id });
   return connectionId === undefined ? undefined : nango.getSlackConnection({ connection_id: connectionId });
 }
 
-/** A first install or a rebind carries this attempt's tags; Nango may keep a reconnected connection's original tags. */
+/** Every completed Nango flow must carry the exact organization, owner and attempt tags. */
 function tagsMatch(connection: NangoSlackConnectionV1, attempt: InstallAttempt, organizationId: string): boolean {
   const { tags } = connection;
-  return tags.echo_organization_id === organizationId && (attempt.reconnect !== null ||
-    (tags.echo_attempt_id === attempt.attempt_id && tags.echo_membership_id === attempt.session.membership_id));
+  return tags.echo_organization_id === organizationId &&
+    tags.echo_attempt_id === attempt.attempt_id &&
+    tags.echo_membership_id === attempt.session.membership_id;
 }
 
 /**
@@ -233,9 +234,7 @@ export class SlackOrganizationSetupWorkflowV1 {
           rebind = Object.freeze({ nango_connection_id: connectionId, state_sha256: stateSha256 });
         } else {
           opened = await nango.createReconnectSession({ connection_id: connectionId, tags, ...client });
-          // Read after the session exists, so its own effect on the connection is not mistaken for a finished reconnect.
-          reconnect = Object.freeze({ connection_id: connectionId, state_sha256: stateSha256,
-            updated_at: (await nango.getSlackConnection({ connection_id: connectionId })).updated_at });
+          reconnect = Object.freeze({ connection_id: connectionId, state_sha256: stateSha256 });
         }
       }
       const attempt: InstallAttempt = { attempt_id: attemptId, request_id: request.request_id, session, credential, reconnect, rebind,
