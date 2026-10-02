@@ -45,7 +45,7 @@ export interface NangoSlackConnectionV1 {
   readonly bot_user_id: string; // U…
   readonly granted_scopes: readonly string[]; // sorted, from raw.scope
   readonly bot_token: string; // xoxb-… (only held in memory by callers)
-  readonly updated_at: string; // connection update timestamp (A5); advances when a reconnect completes
+  readonly updated_at: string; // provider metadata; not proof that this authorization attempt completed
 }
 
 export interface NangoConnectionClientV1 {
