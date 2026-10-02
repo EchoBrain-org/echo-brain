@@ -10,8 +10,8 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERSON-CLIENT
 created_at: 2026-10-01
-reviewed_at: 2026-10-01
-reviewed_ref: b350962a2917dadb4b96f6144aa23e10a6ca361f
+reviewed_at: 2026-10-02
+reviewed_ref: 1d7e72bd75babcfbc8025b4a089a8517aef80d7b
 supersedes: []
 superseded_by: []
 updates:
