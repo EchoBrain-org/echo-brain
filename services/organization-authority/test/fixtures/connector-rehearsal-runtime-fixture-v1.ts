@@ -9,6 +9,7 @@ import type { JiraNangoV1 } from '@echo-brain/provider-jira/jira-nango-v1';
 import type { NangoConnectionClientV1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1';
 import type { ObserveSlackIdentityLinkChallengeInput, SlackIntegrationProvider } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1';
+import { slackConnectionVerificationEvidenceSha256V1 } from '../../../../providers/slack/server/src/organization-control-plane/application/slack-connection-verification-evidence-v1.js';
 import type { BegunPersonOidcLogin } from '../../src/application/person-identity-sessions.js';
 import { runConnectorRehearsalV1, type ConnectorRehearsalConfigurationV1 } from '../../src/composition/connector-rehearsal-runtime-v1.js';
 import { prepare } from '../../../../tools/connector-rehearsal.mjs';
@@ -88,29 +89,34 @@ export function providerSeams() {
   };
   let slackTags: Readonly<Record<string, string>> = {};
   let slackConnection: Awaited<ReturnType<NangoConnectionClientV1['getSlackConnection']>> | undefined;
+  let slackRevision = 0;
   const slackNango: NangoConnectionClientV1 = {
     createConnectSession: vi.fn(async input => {
       slackTags = input.tags;
       return { connect_link: 'https://connect.nango.dev/fixture-slack', expires_at: new Date(Date.now() + 60_000).toISOString() };
     }),
-    createReconnectSession: vi.fn(),
+    createReconnectSession: vi.fn(async input => {
+      slackTags = input.tags;
+      return { connect_link: 'https://connect.nango.dev/fixture-slack', expires_at: new Date(Date.now() + 60_000).toISOString() };
+    }),
     findConnectionIdByTag: vi.fn(async input => slackTags[input.key] === input.value ? 'fixture-slack-connection' : undefined),
     getSlackConnection: vi.fn(async () => {
       if (slackConnection === undefined) throw new Error('fixture Slack connection has not completed');
       return slackConnection;
     }),
   };
-  const finishSlack = () => {
+  const finishSlack = (scopes: readonly string[] = SLACK_PRIVATE_APP_BOT_SCOPES_V1) => {
     slackConnection = {
       connection_id: 'fixture-slack-connection', tags: slackTags, team_id: 'TFIXTURE', app_id: 'AFIXTURE', bot_user_id: 'UBOTFIXTURE',
-      granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: 'xoxb-synthetic-slack', updated_at: new Date().toISOString(),
+      granted_scopes: scopes, bot_token: 'xoxb-synthetic-slack', updated_at: new Date(Date.now() + ++slackRevision).toISOString(),
     };
   };
   const provider: SlackIntegrationProvider = {
-    verifyConnection: vi.fn(async () => ({
-      team_id: 'TFIXTURE', enterprise_id: null, bot_user_id: 'UBOTFIXTURE', bot_id: 'BFIXTURE', app_id: 'AFIXTURE',
-      granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, verification_evidence_sha256: canonicalSha256({ fixture: 'slack-connection' }),
-    })),
+    verifyConnection: vi.fn(async () => {
+      const verified = { team_id: 'TFIXTURE', enterprise_id: null, bot_user_id: 'UBOTFIXTURE', bot_id: 'BFIXTURE', app_id: 'AFIXTURE',
+        granted_scopes: slackConnection?.granted_scopes ?? SLACK_PRIVATE_APP_BOT_SCOPES_V1 };
+      return { ...verified, verification_evidence_sha256: slackConnectionVerificationEvidenceSha256V1(verified) };
+    }),
     verifyHuman: vi.fn(async (_token: string, userId: string) => ({ team_id: 'TFIXTURE', user_id: userId, verification_evidence_sha256: canonicalSha256({ fixture: userId }) })),
     openIdentityLinkDirectMessage: vi.fn(async (_token: string, userId: string) => ({ team_id: 'TFIXTURE', channel_id: `D${userId.slice(1)}`, recipient_user_id: userId })),
     postIdentityLinkChallenge: vi.fn(async (_token: string, input: { channel_id: string }) => ({ team_id: 'TFIXTURE', channel_id: input.channel_id, challenge_message_ts: '1727700000.000001' })),

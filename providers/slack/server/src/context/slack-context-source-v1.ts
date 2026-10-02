@@ -21,6 +21,8 @@ export interface SlackContextSourceOptionsV1 {
   readonly expected_bot_user_id: string;
   readonly identity: SourceAdapterIdentityV1;
   readonly representation: 'pointer';
+  /** Explicit public-channel capability. A C prefix alone does not prove visibility. */
+  readonly public_channel_only?: true;
   readonly now?: () => Date;
 }
 
@@ -34,6 +36,7 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
   private readonly team: string;
   private readonly channel: string;
   private readonly botUser: string;
+  private readonly publicChannelOnly: boolean;
   private readonly now: () => Date;
 
   constructor(options: SlackContextSourceOptionsV1) {
@@ -45,6 +48,9 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
     this.team = slackContextStringV1(options.team_id, 64, SLACK_CONTEXT_TEAM_V1);
     this.channel = slackContextStringV1(options.channel_id, 64, SLACK_CONTEXT_CHANNEL_V1);
     this.botUser = slackContextStringV1(options.expected_bot_user_id, 64, SLACK_CONTEXT_USER_V1);
+    if (options.public_channel_only !== undefined && options.public_channel_only !== true) throw new Error('Slack context source visibility is invalid');
+    this.publicChannelOnly = options.public_channel_only === true;
+    if (this.publicChannelOnly && !this.channel.startsWith('C')) throw new Error('Slack public-channel context requires a public channel coordinate');
     if (this.binding.external_scope_id !== this.team) slackContextFailureV1('unauthorized');
     this.originalTransport = options.transport;
     this.request = options.transport.request.bind(options.transport);
@@ -75,6 +81,7 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
     const origin = slackContextWorkspaceOriginV1(auth.url);
     const conversation = slackContextRecordV1((await this.read({ method: 'conversations.info', query: { channel: this.channel }, signal })).channel);
     if (conversation.id !== this.channel || conversation.is_member !== true ||
+        (this.publicChannelOnly && conversation.is_private !== false) ||
         (conversation.context_team_id !== undefined && conversation.context_team_id !== this.team)) slackContextFailureV1('unauthorized');
     const page = await this.read({ method: 'conversations.history',
       query: { channel: this.channel, limit: String(limit), ...(cursor === undefined ? {} : { cursor }) }, signal });

@@ -111,6 +111,89 @@ function response(profileValue: ReturnType<typeof profile>, action: 'status' | '
 }
 
 describe('staging connector rehearsal wrapper', () => {
+  it('selects V2 retained Jira and Slack receipts without widening the V1 request', async () => {
+    const directory = root();
+    const home = join(directory, 'person-home');
+    const profilePath = join(directory, 'profile.json');
+    const predecessor = profile(profilePath);
+    const configured = {
+      schema_version: 2,
+      kind: 'echo-staging-connector-rehearsal-profile-v2',
+      capture_policy: 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2',
+      predecessor_profile_sha256: canonicalSha256(predecessor),
+      jira: { ...predecessor.jira, project: 'TEST' },
+      slack: { channel_id: 'CTEST123' },
+    };
+    writeFileSync(profilePath, JSON.stringify(configured));
+    install(home);
+    for (const tool of ['jira', 'slack'] as const) {
+      const receipt = {
+        schema_version: 2,
+        kind: 'echo-staging-connector-rehearsal-receipt-v2',
+        release_id: 'clean-v1-fixture-release',
+        profile_sha256: canonicalSha256(configured),
+        action: 'capture', tool, qualified: false,
+        receipt: {
+          schema_version: 1, kind: 'echo-context-capture-rehearsal-receipt-v1',
+          source_identity_sha256: canonicalSha256({ source: tool }),
+          captures: [{ source_type: tool === 'jira' ? 'ticket' : 'message', admission: 'admitted',
+            source_id_sha256: canonicalSha256('source'), revision_id_sha256: canonicalSha256('revision'),
+            content_sha256: canonicalSha256('content').slice(7) }],
+          counts: { captured: 1, admitted: 1, duplicate: 0, request_only: 0 },
+        },
+      };
+      let captureCalls = 0;
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        const target = url(input);
+        assert.equal(target.origin, STAGING);
+        if (target.pathname === '/v1/authority-descriptor') return Response.json(descriptor());
+        assert.equal(target.pathname, '/v1/staging/connector-rehearsal');
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          schema_version: 2, release_id: receipt.release_id, profile_sha256: receipt.profile_sha256,
+          action: 'capture', tool, limit: 1,
+        });
+        captureCalls += 1;
+        return Response.json(receipt);
+      };
+      assert.deepEqual(await runStagingConnectorRehearsal({ action: 'capture', release_id: receipt.release_id,
+        profile_path: profilePath, person_home: home, tool, limit: 1 }, { fetch }), receipt);
+      assert.equal(captureCalls, 1);
+    }
+
+    profile(profilePath);
+    let calls = 0;
+    await assert.rejects(runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release',
+      profile_path: profilePath, person_home: home, tool: 'slack', limit: 1 }, {
+      fetch: async () => { calls += 1; return Response.json({}); },
+    }), /Staging connector rehearsal failed/);
+    assert.equal(calls, 0);
+  });
+
+  it('refuses a V1 or request-only receipt for the selected retained V2 profile', async () => {
+    const directory = root();
+    const home = join(directory, 'person-home');
+    const profilePath = join(directory, 'profile.json');
+    const predecessor = profile(profilePath);
+    const configured = { schema_version: 2, kind: 'echo-staging-connector-rehearsal-profile-v2',
+      capture_policy: 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2',
+      predecessor_profile_sha256: canonicalSha256(predecessor), jira: predecessor.jira, slack: { channel_id: 'CTEST123' } };
+    writeFileSync(profilePath, JSON.stringify(configured));
+    install(home);
+    const old = { ...response(predecessor, 'capture', 'jira'), profile_sha256: canonicalSha256(configured) };
+    for (const receipt of [old, { ...old, schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2' }]) {
+      let captureCalls = 0;
+      await assert.rejects(runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release',
+        profile_path: profilePath, person_home: home, tool: 'jira', limit: 1 }, {
+        fetch: async (input: RequestInfo | URL) => {
+          if (url(input).pathname === '/v1/authority-descriptor') return Response.json(descriptor());
+          captureCalls += 1;
+          return Response.json(receipt);
+        },
+      }), /Staging connector rehearsal failed/);
+      assert.equal(captureCalls, 1);
+    }
+  });
+
   it('uses the installed owner session only against staging and prints no credential through its result', async () => {
     const directory = root();
     const home = join(directory, 'person-home');

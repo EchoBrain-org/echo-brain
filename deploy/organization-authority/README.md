@@ -95,9 +95,9 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 
 ### Optional staging connector rehearsal
 
-The ordinary manifest omits `staging_connector_rehearsal`. To enable the
-staging-only Granola/Jira rehearsal, add this closed, nonsecret object to
-`onboarding.clean-v1.json`:
+The ordinary manifest omits `staging_connector_rehearsal`. Initial preparation
+can enable the staging-only V1 Granola/Jira rehearsal with this closed,
+nonsecret object in `onboarding.clean-v1.json`:
 
 ```json
 {
@@ -126,22 +126,61 @@ input lane.
 
 The profile contains no Nango secret. The Authority continues to read the
 existing `nango-secret-key`; the profile's Jira integration key is an ordinary
-Nango integration identifier. Granola keeps its existing organization-owned
-credential. Jira remains request-only under this profile, and its person
-connection sidecar is owned by the Authority runtime beside its retained state
-directory.
+Nango integration identifier. Granola keeps its existing organization-owned credential. Jira remains
+request-only under V1, and its person connection sidecar is owned by the
+Authority runtime beside its retained state directory.
 
 The runtime creates and validates its own
 `clean-data/staging-connector-rehearsal-v1/binding.json`. It binds the
 Authority lineage, initial owner, and canonical profile digest. Recovery allows
 only the exact retained sidecar with that binding; a missing, unsafe, or
 mismatched sidecar fails closed during ordinary same-volume host reconstruction.
-The offline whole-volume backup verifier refuses any enabled connector profile
-or sidecar, so a backup restore always requires provider revocation and a fresh
-rehearsal. Do not delete or edit that directory to make a startup pass. The
-human host operator must first disconnect or revoke the affected Jira connection
-at the provider, then use the candidate release's documented recovery procedure
-to prepare a fresh profile.
+The offline whole-volume backup verifier refuses an enabled V1 or V2 connector
+profile or its sidecar. A retained-volume restore with V2 selected is therefore
+unsupported and fails closed before it starts Authority. It does not discard
+that volume or imply that a replacement preserves its retained pointers or
+connections. Preserve the failed volume and obtain explicit authorization before
+any replacement. The approved recovery lane is provider revocation followed by a
+fresh rehearsal and fresh profile preparation. Do not delete or edit the
+sidecar to make a startup pass.
+
+### V2 retained-pointer rebind
+
+After a reviewed release that supports V2 is installed and the accepted host is
+terminal green, the human host operator may use the exact reviewed command:
+
+```text
+./onboard-clean-v1.sh configure-connector-rehearsal \
+  --profile-base64 <canonical-nonsecret-v2-profile> \
+  --profile-sha256 <sha256-of-canonical-profile>
+```
+
+The V2 profile has the fixed kind
+`echo-staging-connector-rehearsal-profile-v2`, policy
+`initial-owner-granola-retained-jira-pointer-slack-pointer-v2`, and only the
+reviewed predecessor digest plus Jira cloud, integration and project coordinates
+and one public Slack channel ID. The wrapper accepts standard base64 only when
+it decodes to bounded canonical JSON with the supplied digest. It never accepts
+a file path or a secret. The predecessor must equal the canonical digest of the
+existing V1 profile.
+
+The action preserves the V1 profile, V1 sidecar and Jira connection database. It
+writes the V2 profile at the fixed private path, switches the exact accepted
+environment snapshot and setup digest together, and restarts the same accepted
+image. It refuses a staged candidate and requires the existing host to be
+terminal green. A failed start restores and verifies the V1 selector. An
+interrupted transition retains a private journal and blocks `status`, `resume`,
+release preparation and other ordinary wrapper actions. Re-run only the same
+reviewed V2 command to reconcile that journal when the operation locks are free.
+A killed process can leave an operation lock: investigate that lock through the
+existing operation-lock recovery procedure; never delete it or the journal by
+hand. Do not edit the environment, profiles or sidecar.
+
+The transition is not an onboarding reset and does not grant production release
+or provider consent. Normal candidate rollback continues to restore the exact
+accepted release tuple. Do not stage an image that lacks V2 selection once this
+profile is active; the ordinary current-host release lane must verify the exact
+candidate and its rollback path before promotion.
 
 Check that directory before spending an AWS session on it:
 

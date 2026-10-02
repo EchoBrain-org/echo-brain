@@ -67,7 +67,7 @@ function matchingResponse(response, request) {
 
 async function dependencies() {
   const [contract, federation, client, store, authority] = await Promise.all([
-    import("../services/organization-authority/dist/composition/staging-connector-rehearsal-protocol-v1.js"),
+    import("../services/organization-authority/dist/composition/staging-connector-rehearsal-protocol.js"),
     import("@echo-brain/federation-protocol"),
     import("../src/product/person-client/dist/client.js"),
     import("../src/product/person-client/dist/session-store.js"),
@@ -85,12 +85,13 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
     if (input === null || typeof input !== "object") fail();
     if (input.action !== "status" && input.action !== "capture") fail();
     const { contract, federation, client, store, authority } = await dependencies();
-    const profile = contract.validateStagingConnectorRehearsalProfileV1(profileFile(input.profile_path));
+    const profile = contract.validateStagingConnectorRehearsalProfile(profileFile(input.profile_path));
+    const protocol = contract.stagingConnectorRehearsalProtocol(profile);
     const releaseId = input.release_id;
-    const request = contract.validateStagingConnectorRehearsalRequestV1(
+    const request = protocol.validate_request(
       input.action === "status"
-        ? { schema_version: 1, release_id: releaseId, profile_sha256: federation.canonicalSha256(profile), action: "status" }
-        : { schema_version: 1, release_id: releaseId, profile_sha256: federation.canonicalSha256(profile), action: "capture", tool: input.tool, limit: input.limit },
+        ? { schema_version: protocol.schema_version, release_id: releaseId, profile_sha256: federation.canonicalSha256(profile), action: "status" }
+        : { schema_version: protocol.schema_version, release_id: releaseId, profile_sha256: federation.canonicalSha256(profile), action: "capture", tool: input.tool, limit: input.limit },
     );
     const personHome = absolutePath(input.person_home ?? homedir(), "person home");
     const fetchImplementation = options.fetch ?? globalThis.fetch;
@@ -107,8 +108,8 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
       return session.transport.json({
         path: contract.STAGING_CONNECTOR_REHEARSAL_PATH_V1,
         body: request,
-        validate_request: contract.validateStagingConnectorRehearsalRequestV1,
-        validate_response: contract.validateStagingConnectorRehearsalResponseV1,
+        validate_request: protocol.validate_request,
+        validate_response: protocol.validate_response,
         maximum_response_bytes: 64 * 1024,
         timeout_ms: 75_000,
       });
@@ -122,7 +123,7 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
 }
 
 function usage() {
-  return "usage: node tools/staging-connector-rehearsal.mjs <status|capture> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--person-home <absolute-home>] [--tool <granola|jira> --limit <1..5>]";
+  return "usage: node tools/staging-connector-rehearsal.mjs <status|capture> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--person-home <absolute-home>] [--tool <granola|jira|slack> --limit <1..5>]";
 }
 
 function parseCli(argv) {
@@ -138,7 +139,7 @@ function parseCli(argv) {
     ...(withPersonHome ? { person_home: absolutePath(argv[personHomeOffset + 1], "person home") } : {}),
   };
   if (action === "status") return Object.freeze(base);
-  if (argv[5] !== "--tool" || argv[7] !== "--limit" || !["granola", "jira"].includes(argv[6]) || !/^[1-5]$/.test(argv[8])) fail(usage());
+  if (argv[5] !== "--tool" || argv[7] !== "--limit" || !["granola", "jira", "slack"].includes(argv[6]) || !/^[1-5]$/.test(argv[8])) fail(usage());
   return Object.freeze({ ...base, tool: argv[6], limit: Number(argv[8]) });
 }
 

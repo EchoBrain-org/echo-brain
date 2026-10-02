@@ -120,15 +120,19 @@ The local rehearsal runner reserves isolated state and Person paths, preflights
 before bootstrap, and serves its disposable profile on loopback only. It has a
 private control socket for authenticated bounded capture and one manual legacy
 processing cycle. Granola's retained owner-scoped capture is separate from the
-legacy meeting cursor owner; the current local and staging runners keep Jira
-request-only and have no Slack source. Jira's factory now defaults to
+legacy meeting cursor owner; the local and V1 staging runners keep Jira
+request-only and have no Slack source. Jira's factory defaults to
 request-only but can accept an explicit retained-pointer Authority binding; the
 shared SQLite admission fence still selects and rechecks custody independently
-of the provider read grant. Slack has a provider-only pointer adapter with no
-Authority composition, registered scopes or activation. The approved follow-up
-is pointer plus retained message snapshot capture, with edits and deletes policy
-defined before activation. This is local source proof, not provider
-qualification or a production composition.
+of the provider read grant. The versioned staging V2 selection binds retained
+Jira pointers and one fixed public Slack channel's pointers to the current
+initial owner. Its optional provider-owned Slack capability adds channel read
+scopes to the same app while preserving the connection state used by approval
+cards. It proves the retained V1 predecessor before reusing the existing Jira
+sidecar. The host wrapper owns the journaled profile transition. Message
+snapshots remain deferred, with edits and deletes policy required before that
+addition. This is a source implementation claim, not provider qualification or
+a production composition; downstream retrieval and Ask remain unchanged.
 
 Focused source proof is in the [Jira intake test](../../services/organization-authority/test/jira-context-source-intake-v1.test.ts),
 [Slack source test](../../providers/slack/server/test/context/slack-context-source-v1.test.ts)

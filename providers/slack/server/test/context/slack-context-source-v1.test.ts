@@ -17,7 +17,7 @@ const identity = { kind: 'source' as const, adapter_id: 'slack-context-capture',
 const message = (extra: Record<string, unknown> = {}) => ({ type: 'message', ts, user: 'UAUTHOR123', text: 'Private text must not enter pointer captures.', ...extra });
 const pointer = (stamp = ts) => `${origin}/archives/${channel}/p${stamp.replace('.', '')}`;
 
-function fixture(options: { message?: unknown; page?: unknown; auth?: unknown; channel?: unknown; permalink?: unknown; now?: () => Date; current?: () => void | Promise<void>; onRead?: (input: SlackContextRequestV1) => void } = {}) {
+function fixture(options: { message?: unknown; page?: unknown; auth?: unknown; channel?: unknown; permalink?: unknown; public_channel_only?: true; now?: () => Date; current?: () => void | Promise<void>; onRead?: (input: SlackContextRequestV1) => void } = {}) {
   const request = vi.fn(async (input: SlackContextRequestV1): Promise<unknown> => {
     options.onRead?.(input);
     if (input.method === 'auth.test') return options.auth ?? { ok: true, team_id: team, user_id: bot, url: `${origin}/` };
@@ -31,6 +31,7 @@ function fixture(options: { message?: unknown; page?: unknown; auth?: unknown; c
   const source = createSlackContextSourceV1({
     transport, read_grant_fence: { requireCurrent }, team_id: team, channel_id: channel,
     expected_bot_user_id: bot, identity, representation: 'pointer',
+    ...(options.public_channel_only === undefined ? {} : { public_channel_only: options.public_channel_only }),
     now: options.now ?? (() => new Date('2026-10-03T00:00:00.000Z')),
   });
   return { source, transport, request, requireCurrent };
@@ -115,6 +116,16 @@ describe('Slack context source V1', () => {
       await expect(f.source.pull({ limit: 1 })).rejects.toMatchObject({ code: 'unauthorized' });
       expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ method: 'conversations.history' }));
     }
+  });
+
+  it('requires positive public-channel evidence when the selected capability is public only', async () => {
+    for (const isPrivate of [true, undefined, null, 'false']) {
+      const f = fixture({ public_channel_only: true, channel: { id: channel, is_member: true, is_private: isPrivate } });
+      await expect(f.source.pull({ limit: 1 })).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ method: 'conversations.history' }));
+    }
+    const f = fixture({ public_channel_only: true, channel: { id: channel, is_member: true, is_private: false } });
+    expect((await f.source.pull({ limit: 1 })).sources).toHaveLength(1);
   });
 
   it('does not release fetched context after grant revocation or cancellation', async () => {

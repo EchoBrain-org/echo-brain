@@ -11,7 +11,8 @@ import type { NangoSlackConnectionV1 } from "../../../src/organization-control-p
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../../../src/organization-control-plane/application/slack-app-credentials-v1.js";
 import { buildOrganizationToolConnectionContractV2 } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
-import type { OrganizationSecretStore, VerifiedSlackConnection } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, type SlackPublicChannelContextCapabilityV1, type OrganizationSecretStore, type VerifiedSlackConnection } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { slackConnectionVerificationEvidenceSha256V1 } from "../../../src/organization-control-plane/application/slack-connection-verification-evidence-v1.js";
 import { readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { activateNangoSlackConnectionV1, rebindNangoSlackConnectionV1, SlackConnectionConflictError, SlackConnectionRefusedErrorV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 
@@ -88,6 +89,13 @@ function authTest(nango: NangoSlackConnectionV1, overrides: Partial<VerifiedSlac
   };
 }
 
+function canonicalAuthTest(nango: NangoSlackConnectionV1, overrides: Partial<VerifiedSlackConnection> = {}) {
+  return { verifyConnection: vi.fn(async (): Promise<VerifiedSlackConnection> => {
+    const verified = await authTest(nango, overrides).verifyConnection();
+    return { ...verified, verification_evidence_sha256: overrides.verification_evidence_sha256 ?? slackConnectionVerificationEvidenceSha256V1(verified) };
+  }) };
+}
+
 function activate(
   state: TestState,
   input: {
@@ -95,6 +103,7 @@ function activate(
     readonly nango: NangoSlackConnectionV1;
     readonly verifier?: ReturnType<typeof authTest>;
     readonly connection_id?: string;
+    readonly public_channel_context?: SlackPublicChannelContextCapabilityV1;
   },
 ) {
   return activateNangoSlackConnectionV1({
@@ -104,6 +113,7 @@ function activate(
     verifier: input.verifier ?? authTest(input.nango),
     credential: input.credential,
     nango: input.nango,
+    public_channel_context: input.public_channel_context,
     now: () => NOW,
     new_connection_id: () => input.connection_id ?? "con_nango_1",
   });
@@ -120,6 +130,7 @@ function rebind(
     readonly verifier?: ReturnType<typeof authTest>;
     readonly assert_lost?: () => Promise<void>;
     readonly assert_owner?: () => void;
+    readonly public_channel_context?: SlackPublicChannelContextCapabilityV1;
   },
 ) {
   return rebindNangoSlackConnectionV1({
@@ -129,6 +140,7 @@ function rebind(
     verifier: input.verifier ?? authTest(input.nango, { verification_evidence_sha256: canonicalSha256({ verified: "nango-conn-1" }), ...input.verified }),
     credential: input.credential,
     nango: input.nango,
+    public_channel_context: input.public_channel_context,
     rebind: input.rebind,
     assert_lost: input.assert_lost ?? (async () => undefined),
     assert_owner: input.assert_owner ?? (() => undefined),
@@ -219,6 +231,86 @@ afterEach(() => {
 });
 
 describe("Nango Slack connection activation v1", () => {
+  it("preserves original approval state on an explicitly verified public-channel upgrade and later lost-connection rebind", async () => {
+    const state = setup();
+    const initial = nangoInstall();
+    const created = await activate(state, { credential: pendingBundle(state), nango: initial, verifier: canonicalAuthTest(initial) });
+    const active = readActiveSlackConnectionV1(state.database)!;
+    const credential = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const expanded = nangoInstall({ granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 });
+    const upgraded = await activate(state, { credential, nango: expanded, verifier: canonicalAuthTest(expanded),
+      public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 });
+    expect(upgraded).toEqual({ kind: "reconnected", connection: active.connection, state: active.state });
+    expect(readActiveSlackConnectionV1(state.database)).toEqual(active);
+    const replacement = { ...expanded, connection_id: "nango-conn-2" };
+    const rebound = await rebind(state, { credential, nango: replacement, verifier: canonicalAuthTest(replacement),
+      rebind: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" },
+      public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 });
+    expect(rebound).toEqual(upgraded);
+    expect(readActiveSlackConnectionV1(state.database)).toEqual(active);
+    expect(findSlackAppCredentialsByReferenceSha256V1(state.secrets, active.state.credential_reference_sha256).credentials.nango_connection_id).toBe("nango-conn-2");
+  });
+
+  it("keeps baseline reconnect compatible with a six-scope token after rollback, while baseline rebind remains exact", async () => {
+    const state = setup();
+    const initial = nangoInstall();
+    const created = await activate(state, { credential: pendingBundle(state), nango: initial, verifier: canonicalAuthTest(initial) });
+    const active = readActiveSlackConnectionV1(state.database)!;
+    const credential = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const expanded = nangoInstall({ granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 });
+    expect(await activate(state, { credential, nango: expanded, verifier: canonicalAuthTest(expanded) }))
+      .toEqual({ kind: "reconnected", connection: active.connection, state: active.state });
+    await expectRefused(rebind(state, { credential, nango: { ...expanded, connection_id: "nango-conn-2" }, verifier: canonicalAuthTest(expanded),
+      rebind: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" } }), "workspace_mismatch");
+    expect(readActiveSlackConnectionV1(state.database)).toEqual(active);
+  });
+
+  it("refuses widened, incomplete, duplicated or unordered scope evidence from either provider", async () => {
+    const state = setup();
+    const initial = nangoInstall();
+    const created = await activate(state, { credential: pendingBundle(state), nango: initial, verifier: canonicalAuthTest(initial) });
+    const active = readActiveSlackConnectionV1(state.database)!;
+    const credential = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+    const expanded = nangoInstall({ granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 });
+    for (const scopes of [
+      [...SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, "groups:history"].sort(),
+      SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1.filter((scope) => scope !== "channels:read"),
+      [...SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, "channels:history"].sort(),
+      [...SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1].reverse(),
+    ]) {
+      await expectRefused(activate(state, { credential, nango: { ...expanded, granted_scopes: scopes }, verifier: canonicalAuthTest(expanded),
+        public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 }), "permissions_missing");
+      await expectRefused(activate(state, { credential, nango: expanded, verifier: canonicalAuthTest(expanded, { granted_scopes: scopes }),
+        public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 }), "permissions_missing");
+    }
+    expect(readActiveSlackConnectionV1(state.database)).toEqual(active);
+  });
+
+  it("refuses forged live evidence, projected historical evidence, or changed identities without changing the active state", async () => {
+    for (const historicalForgery of [false, true]) {
+      const state = setup();
+      const initial = nangoInstall();
+      const created = await activate(state, { credential: pendingBundle(state), nango: initial,
+        verifier: historicalForgery ? authTest(initial) : canonicalAuthTest(initial) });
+      const active = readActiveSlackConnectionV1(state.database)!;
+      const credential = findSlackAppCredentialsByReferenceSha256V1(state.secrets, created.state.credential_reference_sha256);
+      const expanded = nangoInstall({ granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 });
+      const cases: Partial<VerifiedSlackConnection>[] = historicalForgery ? [{}] : [
+        { verification_evidence_sha256: canonicalSha256({ forged: true }) }, { bot_id: "BOTHER" }, { team_id: "TOTHER" },
+        { enterprise_id: "EOTHER" }, { app_id: "AOTHER" }, { bot_user_id: "UOTHER" },
+      ];
+      for (const changed of cases) {
+        await expectRefused(activate(state, { credential, nango: expanded, verifier: canonicalAuthTest(expanded, changed),
+          public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 }), "workspace_mismatch");
+        await expectRefused(rebind(state, { credential, nango: { ...expanded, connection_id: "nango-conn-2" }, verifier: canonicalAuthTest(expanded, changed),
+          rebind: { state_sha256: active.state_sha256, nango_connection_id: "nango-conn-1" },
+          public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 }), "workspace_mismatch");
+      }
+      expect(readActiveSlackConnectionV1(state.database)).toEqual(active);
+      expect(findSlackAppCredentialsByReferenceSha256V1(state.secrets, active.state.credential_reference_sha256)).toEqual(credential);
+    }
+  });
+
   it("creates the first connection, stores the Nango connection id in the bundle, and keeps every secret out of SQLite", async () => {
     const state = setup();
     const pending = pendingBundle(state);

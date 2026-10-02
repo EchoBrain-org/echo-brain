@@ -92,6 +92,30 @@ message about a different app.
   and survives a rebind; that is safe only because the proof requires the
   same bot.
 
+### Proposed optional public-channel capability extension
+
+The [staging V2 capture design](../product/2026-10-01-connector-context-integration-v1.md#optional-slack-public-channel-read-capability)
+adds an explicit provider-owned setup capability for the baseline bot scopes
+plus exactly `channels:read` and `channels:history`. It preserves the frozen
+baseline connection contract and state used by existing cards and person
+links. This is a source implementation proposal; it does not change this ADR's
+acceptance or provider-qualification status.
+
+The ordinary exact-proof rule above remains the default. With this capability
+selected, reconnect and rebind may instead project an independently verified
+live six-scope proof to the historical baseline. The helper must first
+reconstruct the canonical live `auth.test` and `bots.info` proof and require
+equality with the provider evidence. It then projects only the scope list and
+requires equality with the stored baseline proof. Workspace, enterprise, app,
+bot and bot user must still match. Missing scopes, unknown extra scopes and an
+unverified evidence digest cannot use this exception. Rebind still proves the
+old Nango ID absent and applies the existing owner and local state fences.
+
+Channel intake must separately prove the read capability; the historical
+connection contract only proves the approval capability. A cached baseline
+token may therefore continue to serve approval delivery while channel capture
+waits for a token with the read scopes. Capture must fail closed in that case.
+
 Consequences:
 
 - **Misconfiguration looks like loss.** A wrong Nango environment key or
