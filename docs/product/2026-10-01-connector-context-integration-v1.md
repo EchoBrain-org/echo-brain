@@ -95,7 +95,7 @@ and the remaining live qualification boundary.
 
 ## Disposable local rehearsal profile
 
-The selected target is a disposable local Authority with test accounts. The
+The disposable local option uses a separate Authority with test accounts. The
 [local rehearsal runner](../../services/organization-authority/README.md#disposable-local-connector-preparation)
 creates isolated configuration, state and Person paths. It first prepares and
 preflights an empty root, then builds, bootstraps, serves only on
@@ -148,9 +148,61 @@ capture is never retained. There is no scheduler or automatic convergence.
 Manual source polling does not block the existing derived approval,
 presentation, or search-reconciliation wakes after a manual cycle.
 
+## Staging connector rehearsal V1
+
+The selected live-test target is the existing staging Authority. A separate,
+versioned opt-in profile reuses its HTTPS origin, Google sign-in and owner
+session. The local runner retains its isolated-state and origin guards.
+The profile is embedded in the existing nonsecret onboarding input, installed
+privately by the host wrapper, and selected only on the exact staging origin.
+Its closed configuration fixes the Jira cloud, integration and project, plus
+the `initial-owner-granola-retained-jira-request-only-v1` capture policy.
+
+This is an explicit staging qualification selection. It does not accept
+ADR-0026 or enable the ordinary Jira release gate. The selecting composition
+mounts provider-owned Jira connection commands and one authenticated rehearsal
+endpoint through a neutral HTTP runtime port. It does not select the ticket
+reader or the additional Ask route. Existing Slack setup and approval delivery,
+the synthetic release canary, periodic processing and telemetry keep their
+ordinary paths.
+
+The owner Mac runs `authority:staging-connector-rehearsal` with the expected
+release ID and the exact nonsecret profile. The client verifies the staging
+session and uses the existing bounded Person transport; no bearer credential
+enters command arguments, host control, output or a test receipt. The server
+compares the expected release and profile digest and authenticates the exact
+initial owner. Each capture pulls 1–5 items under the runtime's exclusive work
+lane, propagates cancellation, and releases only validated counts and hashes.
+The current-owner and source/grant checks apply around provider reads and
+durable admission. Concurrent capture requests are refused rather than queued.
+
+Granola uses the same admitted source object as ordinary meeting processing.
+Its separate owner-scoped capture policy permits retained observations; this
+test never moves the legacy meeting cursor. Ordinary polling remains the cursor
+owner, so an observation may legitimately contain zero items. Jira capture
+remains request-only and leaves no durable ticket content. Neither source
+adds graph projection, retrieval, Evidence Desk or Ask behavior.
+
+Jira consent attempts and connection references live in a private rehearsal
+sidecar outside the canonical Authority databases. A marker binds that sidecar
+to the Authority lineage, initial owner and profile digest. Same-profile process
+restarts can resume consent; a different binding fails closed. The sidecar is
+not an additional canonical database or a recovered Person grant. Host recovery
+must follow the explicit cleanup/refusal rules in the
+[deployment guide](../../deploy/organization-authority/README.md).
+Remote Nango connections require explicit disconnect/revocation when retiring
+the rehearsal; a local reset alone cannot prove remote cleanup.
+
+The [service guide](../../services/organization-authority/README.md#staging-connector-rehearsal)
+owns the commands. Source tests are not live qualification: the server image,
+matching Person client and reviewed host tooling must first be deployed through
+the existing operator lane. Every receipt remains `qualified: false`; successful
+captures are evidence for those observations, not blanket provider acceptance.
+
 ## Boundaries before activation
 
-Neither profile is registered in the production composition root or a scheduler.
+The general production profile registers neither shared-capture source in a scheduler.
+The explicit staging profile mounts only the bounded observation operation.
 The existing meeting approval path remains the production path; a later startup
 profile must select a single owner for each source cursor, rather than polling
 the same source through both paths. Jira remains production-disabled. Slack bot

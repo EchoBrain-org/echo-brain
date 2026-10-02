@@ -13,6 +13,8 @@ import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "@echo-brain/provider-ope
 import { OPENROUTER_DECISION_PROCESSOR_MODEL_V1, OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 } from './jira-person-live-runtime-v1.js';
+import { readStagingConnectorRehearsalSelectionV1 } from './staging-connector-rehearsal-selection-v1.js';
+import { openStagingConnectorRehearsalServiceV1 } from './staging-connector-rehearsal-runtime-v1.js';
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
@@ -203,6 +205,12 @@ export async function runOrganizationAuthorityServiceCli(
             authority_url: manifest.authority_url,
             meetings_directory: requestedSyntheticMeetingsDirectory,
           });
+    const connectorRehearsal = readStagingConnectorRehearsalSelectionV1({
+      state_directory: stateDirectory, authority_url: manifest.authority_url, environment: process.env,
+    });
+    if (connectorRehearsal !== undefined && (jiraRequested || stagingSyntheticMeetingsDirectory !== undefined)) {
+      throw new Error('Staging connector rehearsal cannot select another Jira or synthetic source profile');
+    }
     stagingJourneyTelemetry =
       manifest.authority_url ===
       STAGING_AUTHORITY_ORIGIN_V1
@@ -237,7 +245,10 @@ export async function runOrganizationAuthorityServiceCli(
             extraction_provider: OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1,
             extraction_model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
           } as const;
-    const runtime = await openOrganizationAuthorityService({
+    const openService: typeof openOrganizationAuthorityService = connectorRehearsal === undefined
+      ? openOrganizationAuthorityService
+      : (config, dependencies) => openStagingConnectorRehearsalServiceV1(config, connectorRehearsal, dependencies);
+    const runtime = await openService({
       ...(stagingJourneyTelemetry?.enabled ? { core_runtime_observation: stagingJourneyTelemetry.core_runtime } : {}),
       state_directory: stateDirectory,
       host,

@@ -43,6 +43,8 @@ services:
       # Fresh staging rehearsals can admit the four fixture notes through the
       # normal runtime. The service rejects this setting outside staging.
       ECHO_STAGING_SYNTHETIC_MEETINGS_DIR: "${ECHO_STAGING_SYNTHETIC_MEETINGS_DIR:-}"
+      # The host wrapper writes this only for the staging-only connector rehearsal.
+      ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:-}"
     restart: unless-stopped
     stop_grace_period: 45s
     volumes:

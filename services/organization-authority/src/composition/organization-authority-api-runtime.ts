@@ -78,6 +78,11 @@ export interface OrganizationAuthorityApiRuntimeConfig {
 }
 
 export interface OrganizationAuthorityApiRuntimeDependencies {
+  /** Selected HTTP capabilities independent of ticket retrieval or Ask. The selecting root owns their lifecycle. */
+  readonly person_http_runtime_factory?: (authentication: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>) => {
+    readonly applications: readonly ProviderHttpApplicationV1[];
+    close(): void;
+  };
   /** Absent by default. The selecting root owns provider construction and release approval. */
   readonly ticket_live_runtime_factory?: PersonTicketLiveRuntimeFactoryV1;
   /** Server-only agentic Ask experiment: open the whole readable scope first when it is small. */
@@ -164,6 +169,7 @@ export async function startOrganizationAuthorityApiRuntime(
     | OpenedPersonExternalIdentityRuntimeV1
     | undefined;
   let ticketLive: OpenedPersonTicketLiveRuntimeV1 | undefined;
+  let personHttp: ReturnType<NonNullable<OrganizationAuthorityApiRuntimeDependencies['person_http_runtime_factory']>> | undefined;
   try {
     recordDatabase = openOrganizationRecordDatabase(
       join(config.state_directory, "record-log.sqlite"),
@@ -193,6 +199,7 @@ export async function startOrganizationAuthorityApiRuntime(
     );
     sessions.expireOidcLoginAttempts({ limit: 1000 });
     ticketLive = dependencies.ticket_live_runtime_factory?.(sessions);
+    personHttp = dependencies.person_http_runtime_factory?.(sessions);
     externalIdentity = dependencies.external_identity_runtime_bundle?.open({
       state_directory: config.state_directory,
       authority_id: metadata.authority_id,
@@ -286,7 +293,10 @@ export async function startOrganizationAuthorityApiRuntime(
         audit: readAudit,
       }),
       person_record_search: recordSearch,
-      ...(ticketLive === undefined ? {} : { person_tool_connections: [ticketLive.connection_http] }),
+      person_tool_connections: [
+        ...(ticketLive === undefined ? [] : [ticketLive.connection_http]),
+        ...(personHttp?.applications ?? []),
+      ],
       person_meeting_transcript: createPersonMeetingTranscriptReadRouteV1({ originals }),
       person_source_evidence: createPersonSourceEvidenceRouteV1({ originals }),
       // Outside the answer-model gate: listing and opening never call a model.
@@ -390,6 +400,7 @@ export async function startOrganizationAuthorityApiRuntime(
         stopAcceptingRequests();
         await Promise.all([serverClosed, documentWorker?.close()]);
         ticketLive?.close();
+        personHttp?.close();
         externalIdentity?.close();
         recordDatabase?.close();
         database.close();
@@ -398,6 +409,7 @@ export async function startOrganizationAuthorityApiRuntime(
   } catch (error) {
     await documentWorker?.close();
     ticketLive?.close();
+    personHttp?.close();
     externalIdentity?.close();
     recordDatabase?.close();
     database.close();

@@ -40,6 +40,8 @@ const RELEASE_BOUND_ENVIRONMENT_FIELDS = Object.freeze([
   "ECHO_CLEAN_RUNTIME_PROFILE_SHA256",
   "ECHO_CLEAN_RUNTIME_PROFILE_VERSION",
 ]);
+const STAGING_CONNECTOR_REHEARSAL_ENVIRONMENT_FIELD =
+  "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE";
 const SQLITE_HOT_STATE_SUFFIX = /-(?:journal|wal|shm)$/;
 
 function canonicalJson(value) {
@@ -291,6 +293,26 @@ function inspectPrivateDirectory(path, expectedOwner) {
   return entries;
 }
 
+/**
+ * A backup copy has no safe way to prove that an external Jira grant remains
+ * current. Offline recovery therefore never qualifies a connector rehearsal
+ * sidecar for reuse; the operator revokes it and prepares a fresh rehearsal.
+ */
+function refuseStagingConnectorRehearsalRecovery(cleanData, privateDirectory) {
+  for (const path of [
+    join(privateDirectory, "staging-connector-rehearsal.json"),
+    join(cleanData, "staging-connector-rehearsal-v1"),
+  ]) {
+    try {
+      lstatSync(path);
+      fail();
+    } catch (error) {
+      if (error instanceof Error && error.message === "offline recovery verification refused") throw error;
+      if (error?.code !== "ENOENT") fail();
+    }
+  }
+}
+
 function requirePython3() {
   const result = spawnSync("python3", ["--version"], {
     encoding: "utf8",
@@ -339,7 +361,7 @@ function verifyEnvironmentSnapshot(python3, path, release) {
     "text = path.read_text(encoding='utf-8')",
     "if not text or text.endswith('\\n') or '\\r' in text: raise SystemExit(1)",
     "lines = text.split('\\n')",
-    "if len(lines) != len(fields): raise SystemExit(1)",
+    "if len(lines) not in (len(fields), len(fields) + 1): raise SystemExit(1)",
     "actual = {}",
     "for field, line in zip(fields, lines):",
     "    if line.count('=') != 1:",
@@ -349,6 +371,8 @@ function verifyEnvironmentSnapshot(python3, path, release) {
     "        raise SystemExit(1)",
     "    actual[name] = value",
     "if set(actual) != set(fields): raise SystemExit(1)",
+    `connector_field = ${JSON.stringify(STAGING_CONNECTOR_REHEARSAL_ENVIRONMENT_FIELD)}`,
+    "if len(lines) == len(fields) + 1 and lines[-1] != connector_field + '=': raise SystemExit(1)",
     "for name in release_bound_fields:",
     "    if actual[name] != expected[name]: raise SystemExit(1)",
     "host = actual['ECHO_CLEAN_AUTHORITY_HOST']",
@@ -533,6 +557,7 @@ export async function verifyAuthorityRecovery({
     privateDirectory,
     expectedPrivateOwner,
   );
+  refuseStagingConnectorRehearsalRecovery(cleanData, privateDirectory);
 
   let lineage;
   try {

@@ -93,6 +93,56 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 | `granola-credential`       | Organization Granola credential.                                                                                                    |
 | `llm-credential`           | Retained LLM provider credential.                                                                                                   |
 
+### Optional staging connector rehearsal
+
+The ordinary manifest omits `staging_connector_rehearsal`. To enable the
+staging-only Granola/Jira rehearsal, add this closed, nonsecret object to
+`onboarding.clean-v1.json`:
+
+```json
+{
+  "staging_connector_rehearsal": {
+    "schema_version": 1,
+    "kind": "echo-staging-connector-rehearsal-profile-v1",
+    "capture_policy": "initial-owner-granola-retained-jira-request-only-v1",
+    "jira": {
+      "cloud_id": "a8c0e112-6f72-4a0e-9c12-b7d8439f0abc",
+      "integration_key": "jira",
+      "project": "ECHO"
+    }
+  }
+}
+```
+
+It is accepted only for `authority-staging.echobrain.org`, and cannot be used
+with the four synthetic-meeting input. The installed wrapper canonicalizes the
+object into `clean-data/private/staging-connector-rehearsal.json`, mode `0600`,
+and writes its digest to setup while binding the fixed file path in the
+release-bound environment snapshots. The
+ordinary eight-file preparation carries the profile inside the existing
+nonsecret manifest. The four-synthetic-meeting provider-reuse transfer rejects
+an enabled connector profile; it cannot be used as an alternate connector
+input lane.
+
+The profile contains no Nango secret. The Authority continues to read the
+existing `nango-secret-key`; the profile's Jira integration key is an ordinary
+Nango integration identifier. Granola keeps its existing organization-owned
+credential. Jira remains request-only under this profile, and its person
+connection sidecar is owned by the Authority runtime beside its retained state
+directory.
+
+The runtime creates and validates its own
+`clean-data/staging-connector-rehearsal-v1/binding.json`. It binds the
+Authority lineage, initial owner, and canonical profile digest. Recovery allows
+only the exact retained sidecar with that binding; a missing, unsafe, or
+mismatched sidecar fails closed during ordinary same-volume host reconstruction.
+The offline whole-volume backup verifier refuses any enabled connector profile
+or sidecar, so a backup restore always requires provider revocation and a fresh
+rehearsal. Do not delete or edit that directory to make a startup pass. The
+human host operator must first disconnect or revoke the affected Jira connection
+at the provider, then use the candidate release's documented recovery procedure
+to prepare a fresh profile.
+
 Check that directory before spending an AWS session on it:
 
 ```

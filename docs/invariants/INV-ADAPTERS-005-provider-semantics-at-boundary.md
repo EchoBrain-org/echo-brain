@@ -47,6 +47,16 @@ by a separate owner-scoped policy and does not move the legacy meeting cursor;
 its Jira observation is request-only. It has no automatic scheduler or
 production Jira enablement.
 
+The explicit staging connector rehearsal is a separate versioned selecting
+composition. It mounts the same intake factories and provider-owned connection
+commands through a neutral HTTP runtime capability; the shared API does not
+parse provider state. It preserves ordinary processing and its cursor ownership,
+requires the current initial owner and exact release/profile binding, and keeps
+the normal Jira release gate and ticket Ask selection closed. Its private Jira
+sidecar is rehearsal state with an explicit recovery boundary, not an extension
+of canonical Authority storage. The staging selection and receipts are specified
+in the linked integration design.
+
 This invariant is about external-capability providers. The current local
 platform still deliberately selects SQLite, file-backed keys, Node crypto and
 clock implementations, and the OIDC protocol in Authority composition. An

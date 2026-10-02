@@ -1828,6 +1828,9 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         "\nECHO_CLEAN_NANGO_INTEGRATION=slack\n",
       );
+      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+        "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=",
+      );
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).not.toContain("SLACK");
       expect(readFileSync(calls, "utf8")).not.toContain("pull");
       expect(readFileSync(join(deploy, "clean-data/private/granola-owner-email"), "utf8")).toBe("founder@example.com");
@@ -1998,6 +2001,44 @@ describe("clean-v1 Organization Authority deployment profile", () => {
       expect(changed.stderr).toContain("staging meeting conflicts");
       expect(readFileSync(join(deploy, "clean-data/meetings", firstMeeting), "utf8"))
         .toBe(admittedCopy);
+
+      // The same eight-file input carries a closed staging-only profile without
+      // putting its Nango configuration in the runtime profile or command line.
+      expect(execFileSync("bash", [
+        join(deploy, "onboard-clean-v1.sh"), "replace-rehearsal", "--confirm-no-live-users",
+      ], commandEnvironment).toString()).toContain("rehearsal_replaced=true");
+      const stagingProfile = {
+        schema_version: 1,
+        kind: "echo-staging-connector-rehearsal-profile-v1",
+        capture_policy: "initial-owner-granola-retained-jira-request-only-v1",
+        jira: {
+          cloud_id: "A8C0E112-6F72-4A0E-9C12-B7D8439F0ABC",
+          integration_key: "Jira_Staging",
+          project: "ECHO_CORE",
+        },
+      };
+      const enabledManifest = {
+        ...JSON.parse(readFileSync(manifest, "utf8")),
+        staging_connector_rehearsal: stagingProfile,
+      };
+      writeFileSync(manifest, `${JSON.stringify(enabledManifest)}\n`, { mode: 0o600 });
+      expect(execFileSync("bash", prepareArguments, commandEnvironment).toString())
+        .toContain("prepared=true");
+      const persistedProfile = join(deploy, "clean-data/private/staging-connector-rehearsal.json");
+      expect(readFileSync(persistedProfile, "utf8")).toBe(`${canonicalJson(stagingProfile)}\n`);
+      expect(statSync(persistedProfile).mode & 0o777).toBe(0o600);
+      const enabledEnvironment = readFileSync(join(deploy, ".env.clean-v1"), "utf8");
+      expect(enabledEnvironment.match(/^ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/gm)).toHaveLength(1);
+      expect(enabledEnvironment).toContain(
+        "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/echo-clean/private/staging-connector-rehearsal.json",
+      );
+      expect(readFileSync(join(deploy, "clean-data/private/onboard-clean-v1.conf"), "utf8"))
+        .toContain(`staging_connector_rehearsal_profile_sha256=sha256:${createHash("sha256").update(canonicalJson(stagingProfile), "utf8").digest("hex")}`);
+      writeFileSync(manifest, `${JSON.stringify({ ...enabledManifest, authority_host: "authority.example.com" })}\n`, { mode: 0o600 });
+      expect(JSON.parse(doctorResult()).code).toBe("input_manifest_invalid");
+      writeFileSync(manifest, `${JSON.stringify(enabledManifest)}\n`, { mode: 0o600 });
+      expect(JSON.parse(syntheticDoctor().stdout).code).toBe("input_manifest_invalid");
+
       rmSync(join(deploy, "clean-data"), { recursive: true });
       symlinkSync(inputDir, join(deploy, "clean-data"), "dir");
       expect(() =>

@@ -278,6 +278,26 @@ describe("authority offline recovery verifier", () => {
     );
   });
 
+  it("refuses a connector rehearsal profile or sidecar in an offline backup restore", async () => {
+    const cleanData = await writeFixture();
+    const environment = join(
+      cleanData,
+      "release",
+      "runtime-environments",
+      "clean-v1-20260825-001.env",
+    );
+    writeFileSync(
+      environment,
+      `${readFileSync(environment, "utf8")}\nECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/echo-clean/private/staging-connector-rehearsal.json`,
+      { mode: 0o600 },
+    );
+    expect((await run(cleanData)).status).toBe(1);
+
+    const second = await writeFixture();
+    mkdirSync(join(second, "staging-connector-rehearsal-v1"), { mode: 0o700 });
+    expect((await run(second)).status).toBe(1);
+  });
+
   it("refuses a state SQLite symlink before lineage or SQLite inspection", async () => {
     const cleanData = await writeFixture();
     const database = join(cleanData, "state", "authority.sqlite");

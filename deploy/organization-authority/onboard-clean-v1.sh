@@ -134,6 +134,8 @@ INPUT_OIDC_SECRET_NAME='oidc-client-secret'
 INPUT_NANGO_SECRET_KEY_NAME='nango-secret-key'
 INPUT_GRANOLA_CREDENTIAL_NAME='granola-credential'
 INPUT_LLM_CREDENTIAL_NAME='llm-credential'
+STAGING_CONNECTOR_REHEARSAL_PROFILE_NAME='staging-connector-rehearsal.json'
+STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH="$PRIVATE_DIR/$STAGING_CONNECTOR_REHEARSAL_PROFILE_NAME"
 
 input_dir=''
 input_release=''
@@ -150,6 +152,11 @@ input_owner_email=''
 input_authority_host=''
 input_aws_region=''
 input_nango_integration=''
+input_staging_connector_rehearsal_enabled=false
+input_staging_connector_rehearsal_cloud_id=''
+input_staging_connector_rehearsal_integration=''
+input_staging_connector_rehearsal_project=''
+input_staging_connector_rehearsal_sha256=disabled
 input_staging_synthetic_meetings_dir=''
 STAGING_MEETING_FILES=(
   01-revenue-signal-calibration.json
@@ -222,6 +229,18 @@ try:
     value = json.load(open(sys.argv[1], encoding='utf-8'))
     compose = value['files']['compose.clean-v1.yaml']
     assert 'ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1: "${ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1:-false}"' in compose
+except Exception:
+    raise SystemExit(1)
+PY
+}
+
+runtime_profile_supports_staging_connector_rehearsal() {
+  python3 - "$1" <<'PY'
+import json, sys
+try:
+    value = json.load(open(sys.argv[1], encoding='utf-8'))
+    compose = value['files']['compose.clean-v1.yaml']
+    assert 'ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:-}"' in compose
 except Exception:
     raise SystemExit(1)
 PY
@@ -435,20 +454,9 @@ PY
 
 read_input_manifest() {
   local manifest="$input_dir/$INPUT_MANIFEST_NAME"
-  local value count=0
-  while IFS= read -r value; do
-    case "$count" in
-      0) input_runtime_user="$value" ;;
-      1) input_organization_name="$value" ;;
-      2) input_owner_display_name="$value" ;;
-      3) input_owner_email="$value" ;;
-      4) input_authority_host="$value" ;;
-      5) input_aws_region="$value" ;;
-      6) input_nango_integration="$value" ;;
-      *) return 1 ;;
-    esac
-    count=$((count + 1))
-  done < <(python3 - "$manifest" <<'PY'
+  local value count=0 extracted
+  extracted="$(python3 - "$manifest" <<'PY'
+import hashlib
 import json
 import re
 import sys
@@ -461,17 +469,11 @@ except Exception:
     raise SystemExit(1)
 
 expected = {
-    "kind",
-    "schema_version",
-    "runtime_user",
-    "organization_name",
-    "owner_display_name",
-    "owner_email",
-    "authority_host",
-    "aws_region",
+    "kind", "schema_version", "runtime_user", "organization_name",
+    "owner_display_name", "owner_email", "authority_host", "aws_region",
     "nango_integration_key",
 }
-if not isinstance(value, dict) or set(value) != expected:
+if not isinstance(value, dict) or set(value) - {'staging_connector_rehearsal'} != expected:
     raise SystemExit(1)
 if value["kind"] != "echo-clean-v1-onboarding-input-v1" or value["schema_version"] != 1:
     raise SystemExit(1)
@@ -491,20 +493,12 @@ owner_email = text("owner_email", 254)
 authority_host = text("authority_host", 253)
 aws_region = text("aws_region", 32)
 integration = text("nango_integration_key", 64)
-
 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", runtime_user):
     raise SystemExit(1)
 if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", owner_email):
     raise SystemExit(1)
 labels = authority_host.split(".")
-if (
-    len(authority_host) > 253
-    or len(labels) < 2
-    or any(
-        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
-        for label in labels
-    )
-):
+if len(authority_host) > 253 or len(labels) < 2 or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels):
     raise SystemExit(1)
 if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", integration):
     raise SystemExit(1)
@@ -513,9 +507,102 @@ if not re.fullmatch(r"[a-z]{2}(?:-[a-z0-9]+)+-[1-9][0-9]*", aws_region):
 
 for item in (runtime_user, organization_name, owner_display_name, owner_email, authority_host, aws_region, integration):
     print(item)
+profile = value.get('staging_connector_rehearsal')
+if profile is None:
+    print('false')
+    print('disabled')
+    print('disabled')
+    print('disabled')
+    print('disabled')
+else:
+    expected_profile = {'schema_version', 'kind', 'capture_policy', 'jira'}
+    if authority_host != 'authority-staging.echobrain.org' or not isinstance(profile, dict) or set(profile) != expected_profile:
+        raise SystemExit(1)
+    if profile.get('schema_version') != 1 or profile.get('kind') != 'echo-staging-connector-rehearsal-profile-v1' or profile.get('capture_policy') != 'initial-owner-granola-retained-jira-request-only-v1':
+        raise SystemExit(1)
+    jira = profile.get('jira')
+    if not isinstance(jira, dict) or set(jira) != {'cloud_id', 'integration_key', 'project'}:
+        raise SystemExit(1)
+    cloud_id = jira.get('cloud_id')
+    jira_integration = jira.get('integration_key')
+    project = jira.get('project')
+    if not isinstance(cloud_id, str) or not re.fullmatch(r'[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}', cloud_id):
+        raise SystemExit(1)
+    if not isinstance(jira_integration, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', jira_integration):
+        raise SystemExit(1)
+    if not isinstance(project, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{1,31}', project):
+        raise SystemExit(1)
+    canonical = json.dumps(profile, sort_keys=True, separators=(',', ':'))
+    print('true')
+    print(cloud_id)
+    print(jira_integration)
+    print(project)
+    print('sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest())
 PY
-)
-  [[ "$count" -eq 7 ]]
+)" || return 1
+  while IFS= read -r value; do
+    case "$count" in
+      0) input_runtime_user="$value" ;;
+      1) input_organization_name="$value" ;;
+      2) input_owner_display_name="$value" ;;
+      3) input_owner_email="$value" ;;
+      4) input_authority_host="$value" ;;
+      5) input_aws_region="$value" ;;
+      6) input_nango_integration="$value" ;;
+      7) input_staging_connector_rehearsal_enabled="$value" ;;
+      8) input_staging_connector_rehearsal_cloud_id="$value" ;;
+      9) input_staging_connector_rehearsal_integration="$value" ;;
+      10) input_staging_connector_rehearsal_project="$value" ;;
+      11) input_staging_connector_rehearsal_sha256="$value" ;;
+      *) return 1 ;;
+    esac
+    count=$((count + 1))
+  done <<< "$extracted"
+  [[ "$count" -eq 12 ]]
+}
+
+validate_staging_connector_rehearsal_selection() {
+  if [[ "$input_staging_connector_rehearsal_enabled" == false ]]; then
+    [[ "$input_staging_connector_rehearsal_cloud_id" == disabled && "$input_staging_connector_rehearsal_integration" == disabled && "$input_staging_connector_rehearsal_project" == disabled && "$input_staging_connector_rehearsal_sha256" == disabled ]] || return 1
+    return 0
+  fi
+  [[ "$input_staging_connector_rehearsal_enabled" == true && "$input_authority_host" == authority-staging.echobrain.org && -z "$input_staging_synthetic_meetings_dir" ]] || return 1
+  [[ "$input_staging_connector_rehearsal_cloud_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ && "$input_staging_connector_rehearsal_integration" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$ && "$input_staging_connector_rehearsal_project" =~ ^[A-Z][A-Z0-9_]{1,31}$ && "$input_staging_connector_rehearsal_sha256" =~ ^sha256:[a-f0-9]{64}$ ]]
+}
+
+materialize_staging_connector_rehearsal_profile() {
+  [[ "$input_staging_connector_rehearsal_enabled" == true ]] || return 0
+  python3 - "$input_dir/$INPUT_MANIFEST_NAME" "$STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH" "$input_staging_connector_rehearsal_sha256" <<'PY'
+import hashlib, json, os, pathlib, stat, sys, tempfile
+
+source, target = map(pathlib.Path, sys.argv[1:3])
+expected_digest = sys.argv[3]
+try:
+    profile = json.loads(source.read_text(encoding='utf-8'))['staging_connector_rehearsal']
+    canonical = json.dumps(profile, sort_keys=True, separators=(',', ':'))
+    payload = canonical + '\n'
+    if 'sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest() != expected_digest:
+        raise ValueError('digest')
+    if target.exists():
+        state = target.lstat()
+        if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode):
+            raise ValueError('target')
+    descriptor, temporary = tempfile.mkstemp(prefix='.staging-connector-rehearsal.', dir=target.parent)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, target)
+        directory = os.open(target.parent, os.O_RDONLY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+except Exception:
+    raise SystemExit(1)
+PY
 }
 
 validate_input_oidc_callback() {
@@ -708,12 +795,13 @@ doctor() {
   if [[ ! -d "$input_dir" || -L "$input_dir" || "$input_dir" != /* ]]; then doctor_json false input_dir_invalid 'Create an absolute private input directory with mode 0700.'; return; fi
   if [[ "$(portable_stat_uid "$input_dir")" != "$(id -u)" || "$(portable_stat_mode "$input_dir")" != 700 ]]; then doctor_json false input_dir_permissions_invalid 'Make the input directory current-executor-owned with mode 0700.'; return; fi
   if ! check_input_dir; then doctor_json false input_files_invalid 'Use exactly the documented current-executor-owned regular files with mode 0600.'; return; fi
-  if ! read_input_manifest; then doctor_json false input_manifest_invalid 'Use the exact manifest schema and safe ordinary values from the committed example.'; return; fi
+  if ! read_input_manifest || ! validate_staging_connector_rehearsal_selection; then doctor_json false input_manifest_invalid 'Use the exact manifest schema and safe ordinary values from the committed example.'; return; fi
   if ! check_staging_meeting_input; then doctor_json false staging_meetings_invalid 'Use the staging hostname and exactly four private regular meeting files, with no evaluator or extra files.'; return; fi
   if ! runtime_identity_is_valid "$input_runtime_user"; then doctor_json false runtime_user_invalid 'Create a non-root runtime user and run as root or that runtime user.'; return; fi
   if ! runtime_executor_can_prepare "$input_runtime_user"; then doctor_json false runtime_executor_invalid 'Run prepare as root or as the selected runtime user.'; return; fi
   if ! python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null 2>&1; then doctor_json false release_invalid 'Replace release.json with a canonical clean-v1 release record.'; return; fi
   if ! validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" >/dev/null 2>&1; then doctor_json false runtime_profile_invalid 'Replace runtime-profile.json with the exact canonical profile named by release.json.'; return; fi
+  if [[ "$input_staging_connector_rehearsal_enabled" == true ]] && ! runtime_profile_supports_staging_connector_rehearsal "$input_runtime_profile" >/dev/null 2>&1; then doctor_json false runtime_profile_connector_rehearsal_unsupported 'Use the accepted runtime profile that declares the staging connector rehearsal input.'; return; fi
   if ! validate_input_oidc_callback >/dev/null 2>&1; then doctor_json false oidc_callback_invalid 'Set oidc-config.json redirect_uri to the exact Authority callback URL.'; return; fi
   if ! validate_input_nango_secret_key >/dev/null 2>&1; then doctor_json false nango_secret_key_invalid 'Write the Nango secret key as 32 to 4096 visible ASCII characters with no trailing newline.'; return; fi
   if ! safe_directory_target "$DATA_DIR"; then doctor_json false clean_data_path_invalid 'Remove or repair the unsafe clean-data path before preparing.'; return; fi
@@ -732,7 +820,7 @@ stage_rehearsal_inputs() {
   input_dir="$6"
   input_staging_synthetic_meetings_dir="$8"
   require_host_prerequisites
-  check_rehearsal_nonsecret_input_dir && read_input_manifest && check_rehearsal_meeting_input && \
+  check_rehearsal_nonsecret_input_dir && read_input_manifest && validate_staging_connector_rehearsal_selection && check_rehearsal_meeting_input && \
     python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null && \
     validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && \
     runtime_profile_supports_content_telemetry "$input_runtime_profile" || \
@@ -971,6 +1059,54 @@ for filename, contents in profile["files"].items():
 PY
 }
 
+staging_connector_rehearsal_matches_prepared_tuple() {
+  python3 - "$ENV_FILE" "$SETUP_FILE" "$STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH" "$DATA_DIR/staging-connector-rehearsal-v1" "$ACTIVE_RUNTIME_PROFILE_FILE" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import sys
+
+environment, setup, profile_path, sidecar, runtime_profile = map(pathlib.Path, sys.argv[1:])
+expected_path = '/echo-clean/private/staging-connector-rehearsal.json'
+
+def rows(path, key):
+    return [line[len(key) + 1:] for line in path.read_text(encoding='utf-8').splitlines()
+            if line.startswith(key + '=')]
+
+profile_rows = rows(environment, 'ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE')
+if len(profile_rows) > 1:
+    raise SystemExit(1)
+setup_digests = rows(setup, 'staging_connector_rehearsal_profile_sha256')
+if profile_rows in ([], ['']):
+    if setup_digests or profile_path.exists() or profile_path.is_symlink() or sidecar.exists() or sidecar.is_symlink():
+        raise SystemExit(1)
+    raise SystemExit(0)
+selected = profile_rows[0]
+if selected != expected_path or len(setup_digests) != 1:
+    raise SystemExit(1)
+state = profile_path.lstat()
+if (not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode)
+        or stat.S_IMODE(state.st_mode) != 0o600):
+    raise SystemExit(1)
+payload = profile_path.read_text(encoding='utf-8')
+if not payload.endswith('\n') or payload.count('\n') != 1:
+    raise SystemExit(1)
+profile = json.loads(payload)
+canonical = json.dumps(profile, sort_keys=True, separators=(',', ':'))
+if payload != canonical + '\n':
+    raise SystemExit(1)
+digest = 'sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+if setup_digests != [digest]:
+    raise SystemExit(1)
+runtime = json.loads(runtime_profile.read_text(encoding='utf-8'))
+compose = runtime['files']['compose.clean-v1.yaml']
+if 'ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:-}"' not in compose:
+    raise SystemExit(1)
+PY
+}
+
 runtime_profile_matches_prepared_tuple() {
   local profile environment expected_digest expected_release
   profile="$(accepted_runtime_profile_path)" || return 1
@@ -986,7 +1122,7 @@ runtime_profile_matches_prepared_tuple() {
   expected_release="$(release_field release-id)" || return 1
   [[ "$(environment_value "$ENV_FILE" ECHO_CLEAN_RUNTIME_PROFILE_SHA256)" == "$expected_digest" ]] || return 1
   [[ "$(environment_value "$ENV_FILE" ECHO_CLEAN_RELEASE_ID)" == "$expected_release" ]] || return 1
-  runtime_profile_files_match_deployment
+  runtime_profile_files_match_deployment && staging_connector_rehearsal_matches_prepared_tuple
 }
 
 require_prepared() {
@@ -1235,7 +1371,7 @@ prepare() {
   # Doctor runs the complete preflight. Read the same fixed sources again in
   # this process before persisting them, so prepare never accepts a different
   # shape than the one it just checked.
-  check_input_dir && read_input_manifest && check_staging_meeting_input && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && validate_input_oidc_callback && validate_input_nango_secret_key || \
+  check_input_dir && read_input_manifest && validate_staging_connector_rehearsal_selection && check_staging_meeting_input && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && { [[ "$input_staging_connector_rehearsal_enabled" != true ]] || runtime_profile_supports_staging_connector_rehearsal "$input_runtime_profile"; } && validate_input_oidc_callback && validate_input_nango_secret_key || \
     fail 'input directory changed after doctor; rerun prepare'
   require_host_prerequisites
   select_runtime_identity "$input_runtime_user"
@@ -1267,7 +1403,7 @@ prepare() {
   own_for_runtime "$RUNTIME_PROFILES_DIR"
   own_for_runtime "$RUNTIME_ENVIRONMENTS_DIR"
   copy_exact_private "$input_release" "$RELEASE_FILE" 'release record' host
-  local image uid gid authority_url setup env release_id runtime_profile_sha256 runtime_profile_version runtime_profile_path runtime_environment_path
+  local image uid gid authority_url setup env release_id runtime_profile_sha256 runtime_profile_version runtime_profile_path runtime_environment_path connector_rehearsal_profile_file
   image="$(release_field authority-image)"
   release_id="$(release_field release-id)"
   runtime_profile_sha256="$(runtime_profile_digest "$input_runtime_profile")"
@@ -1277,6 +1413,10 @@ prepare() {
   uid="$RUNTIME_UID"
   gid="$RUNTIME_GID"
   authority_url="https://$input_authority_host"
+  connector_rehearsal_profile_file=''
+  if [[ "$input_staging_connector_rehearsal_enabled" == true ]]; then
+    connector_rehearsal_profile_file=/echo-clean/private/staging-connector-rehearsal.json
+  fi
   setup="runtime_user=$input_runtime_user
 organization_name=$input_organization_name
 owner_display_name=$input_owner_display_name
@@ -1304,7 +1444,11 @@ ECHO_CLEAN_RUNTIME_PROFILE_VERSION=$runtime_profile_version
 ECHO_CLEAN_AWS_REGION=$input_aws_region
 ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/$input_authority_host
 ECHO_CLEAN_NANGO_INTEGRATION=$input_nango_integration
-ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
+ECHO_CLEAN_OWNER_EMAIL=$input_owner_email
+ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=$connector_rehearsal_profile_file"
+  if [[ "$input_staging_connector_rehearsal_enabled" == true ]]; then
+    setup+=$'\n'"staging_connector_rehearsal_profile_sha256=$input_staging_connector_rehearsal_sha256"
+  fi
   if [[ "$PREPARE_CONTENT_TELEMETRY_OVERRIDE" == true || "$PREPARE_CONTENT_TELEMETRY_OVERRIDE" == false ]]; then
     runtime_profile_supports_content_telemetry "$input_runtime_profile" || \
       fail 'runtime profile does not support the preserved staging content telemetry setting'
@@ -1322,6 +1466,8 @@ ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
   copy_exact_private "$input_oidc_config" "$PRIVATE_DIR/oidc-config.json" 'OIDC configuration'
   copy_exact_private "$input_oidc_secret" "$PRIVATE_DIR/oidc-client-secret" 'OIDC client secret'
   copy_exact_private "$input_nango_secret_key" "$PRIVATE_DIR/nango-secret-key" 'Nango secret key'
+  materialize_staging_connector_rehearsal_profile || fail 'could not persist the staging connector rehearsal profile'
+  [[ "$input_staging_connector_rehearsal_enabled" != true ]] || own_for_runtime "$STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH"
   copy_exact_private "$input_granola_credential" "$PRIVATE_DIR/granola-credential-source" 'Granola credential'
   copy_exact_private "$input_llm_credential" "$PRIVATE_DIR/llm-credential-source" 'LLM credential'
   write_exact_private "$PRIVATE_DIR/granola-owner-email" "$input_owner_email" 'Granola owner email'
@@ -1383,7 +1529,7 @@ capture_rehearsal_provider_inputs() {
     install -m 0600 "$source" "$destination/$name" || return 1
   done
   input_dir="$destination"
-  check_input_dir && read_input_manifest && validate_input_oidc_callback && validate_input_nango_secret_key && \
+  check_input_dir && read_input_manifest && validate_staging_connector_rehearsal_selection && validate_input_oidc_callback && validate_input_nango_secret_key && \
     check_staging_meeting_input && validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" || return 1
 }
 
@@ -1505,7 +1651,7 @@ replace_rehearsal() {
     require_safe_rehearsal_stage "$reuse_stage" || fail 'rehearsal input stage is missing or unsafe'
     input_dir="$reuse_stage/nonsecret"
     input_staging_synthetic_meetings_dir="$reuse_stage/meetings"
-    check_rehearsal_nonsecret_input_dir && read_input_manifest && check_rehearsal_meeting_input && \
+    check_rehearsal_nonsecret_input_dir && read_input_manifest && validate_staging_connector_rehearsal_selection && check_rehearsal_meeting_input && \
       python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null && \
       validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && \
       runtime_profile_supports_content_telemetry "$input_runtime_profile" || \
@@ -1634,7 +1780,7 @@ prepare_rehearsal() {
   stage_material_matches_marker "$stage" || fail 'staged rehearsal inputs no longer match the transfer receipt'
   input_dir="$stage/input"
   input_staging_synthetic_meetings_dir="$stage/meetings"
-  check_input_dir && read_input_manifest && check_rehearsal_meeting_input && \
+  check_input_dir && read_input_manifest && validate_staging_connector_rehearsal_selection && check_rehearsal_meeting_input && \
     python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null && \
     validate_runtime_profile_tuple "$input_release" "$input_runtime_profile" && \
     runtime_profile_supports_content_telemetry "$input_runtime_profile" || \

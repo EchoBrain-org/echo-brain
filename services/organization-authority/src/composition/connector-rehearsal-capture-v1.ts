@@ -89,9 +89,9 @@ function combinedSignal(shutdown: AbortSignal, caller?: AbortSignal): AbortSigna
 }
 
 /**
- * Local-only capture composition. It deliberately has no listener, scheduler,
+ * Explicit rehearsal capture composition. It deliberately has no listener, scheduler,
  * provider construction or credential input. The root passes live provider
- * objects only after it has started the isolated Authority runtime.
+ * objects only after it has started the selected local or staging Authority runtime.
  */
 export function openConnectorRehearsalCaptureV1(
   options: OpenConnectorRehearsalCaptureInputV1,
@@ -164,7 +164,7 @@ export function openConnectorRehearsalCaptureV1(
     };
     const authority: ContextIntakeAuthorityV1 = {
       select: () => ({
-        // This is a deliberately separate local qualification policy. A
+        // This is a deliberately separate rehearsal qualification policy. A
         // Granola credential or Jira grant never selects retained custody.
         disposition: 'retained',
         scope: {
