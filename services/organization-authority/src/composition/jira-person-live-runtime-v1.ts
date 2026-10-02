@@ -1,3 +1,5 @@
+import { createJiraPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-jira/jira-person-connection-http-application-v1';
+import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { JiraConnectionStoreV1 } from '@echo-brain/provider-jira/jira-connection-store-v1';
 import { createJiraNangoV1, type JiraNangoV1 } from '@echo-brain/provider-jira/jira-nango-v1';
@@ -23,6 +25,7 @@ export interface JiraPersonLiveRuntimeSeamsV1 {
 }
 export interface OpenedJiraPersonLiveRuntimeV1 {
   readonly application: JiraPersonConnectionV1;
+  readonly connection_http: ProviderHttpApplicationV1;
   close(): void;
 }
 
@@ -64,6 +67,6 @@ export function openJiraPersonLiveRuntimeV1(options: {
         });
       },
     });
-    return Object.freeze({ application, close() { if (owned) database.close(); } });
+    return Object.freeze({ application, connection_http: createJiraPersonConnectionHttpApplicationV1(application), close() { if (owned) database.close(); } });
   } catch (error) { if (owned) database.close(); throw error; }
 }

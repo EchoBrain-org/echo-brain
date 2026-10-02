@@ -286,7 +286,7 @@ export async function startOrganizationAuthorityApiRuntime(
         audit: readAudit,
       }),
       person_record_search: recordSearch,
-      ...(ticketLive === undefined ? {} : { person_jira_connection: ticketLive.application }),
+      ...(ticketLive === undefined ? {} : { person_tool_connections: [ticketLive.connection_http] }),
       person_meeting_transcript: createPersonMeetingTranscriptReadRouteV1({ originals }),
       person_source_evidence: createPersonSourceEvidenceRouteV1({ originals }),
       // Outside the answer-model gate: listing and opening never call a model.

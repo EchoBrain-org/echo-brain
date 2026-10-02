@@ -105,3 +105,11 @@ Ask to what the caller added or approved, and every citation that carries a
 `ref` opens with `person open`. `--project` and `--mine` are exclusive, and
 the request is validated before any session or network use
 ([`person-list-cli.test.ts`](../../tests/person-client/person-list-cli.test.ts)).
+
+The shared `person tools <verb> --tool <id>` dispatcher selects client-only
+provider fragments at composition. Slack and the proposed Jira flow use the same
+connect/status/cancel/disconnect vocabulary. Jira opens consent and waits, while
+`--no-wait` exposes an attempt ID for later status/cancel commands. Consent URLs
+and Nango locators are not printed. Its routes remain unavailable without the
+optional Jira runtime; shipping the command fragment does not enable production
+Jira or capture tickets. See [the Jira flow](../../providers/jira/README.md).

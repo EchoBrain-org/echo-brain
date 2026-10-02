@@ -147,16 +147,22 @@ kept separate from behavior changes.
 All commands reuse the authenticated ECHO Person session. There is no actor,
 organization, grant or site selector in model arguments or connection commands.
 
-1. `echo-brain person jira connect --open-browser` calls
-   `POST /v1/person/jira/connect` with `{schema_version:1}`. ECHO records an
-   expiring attempt before Nango creates the limited Jira Connect session. The
-   command returns only its attempt ID and private, short-lived consent link.
-2. Complete browser consent, then `echo-brain person jira complete --attempt <id>`.
-   `POST /v1/person/jira/complete` discovers the new connection by server tags;
-   an optional `--connection <locator>` is still verified, never trusted as a
-   grant. Nango integration, organization, Person, tenure and ownership tags
-   must match. Accessible resources, configured cloud ID, standard site URL,
-   read scopes and active human `/myself` account must pass independently.
+1. `echo-brain person tools connect --tool jira` calls
+   `POST /v1/person/tools/jira/connect` with `{schema_version:1}`. ECHO records
+   an expiring attempt before Nango creates the limited Jira Connect session.
+   The command opens the private consent page without printing its URL, then
+   polls for up to 30 minutes. `--no-wait` returns the attempt ID after opening
+   the browser.
+2. Complete browser consent. Authenticated `POST /v1/person/tools/jira/status`
+   with `{schema_version:1,attempt}` discovers the connection by server tags
+   and completes the grant. Nango integration, organization, Person, tenure and
+   ownership tags must match. Accessible resources, configured cloud ID, standard
+   site URL, read scopes and active human `/myself` account must pass independently.
+   `echo-brain person tools status --tool jira --attempt-id <id>` resumes this
+   check; `person tools cancel --tool jira --attempt-id <id>` cancels locally
+   before best-effort remote cleanup. Status is a connection workflow operation
+   that may finish authorization, not a read of ticket content. There is no
+   client-selected Nango locator or separate completion command.
 3. `echo-brain person ask --tickets --question 'What is blocking launch?'` uses
    `POST /v4/person/ask`, the existing schema-3 request and strict V5 response.
    The server creates a new Jira reader and audited source for this request.
@@ -170,8 +176,8 @@ organization, grant or site selector in model arguments or connection commands.
 4. V5 citations open the adapter-verified Jira permalink directly. The desktop
    validates and displays V5 tickets, with a safe direct-link opener. Its
    default Ask and `person ask` without `--tickets` retain strict V4 behavior.
-5. `echo-brain person jira disconnect` calls
-   `POST /v1/person/jira/disconnect`. Local revocation is committed before
+5. `echo-brain person tools disconnect --tool jira` calls
+   `POST /v1/person/tools/jira/disconnect`. Local revocation is committed before
    remote deletion; a failed deletion cannot restore read access. Missing
    remote connections are an idempotent disconnect success.
 
@@ -189,8 +195,17 @@ Sources: [Connect sessions](https://nango.dev/docs/reference/backend/http-api/co
 [refresh behavior](https://nango.dev/docs/reference/backend/http-api/connections/get),
 [refresh implementation](https://github.com/NangoHQ/nango/blob/master/packages/shared/lib/services/connections/credentials/refresh.ts).
 
-The provider-owned SQLite file stores compact binding/attempt data only. It keeps
-no credential, consent URL, ticket body or provider cursor. Release audit rows keep
+The client-only `providers/jira/client` workspace owns the wire contracts and
+shared tool-command fragment. It uses the existing authenticated Person host;
+Nango, SQLite and Authority dependencies stay in the server provider. The selecting
+Authority composition mounts provider-owned connection routes through the generic
+HTTP application port. No Jira command or route dispatcher remains in shared core.
+
+The provider-owned SQLite file stores compact binding/attempt data only. It retains only the latest attempt per Person tenure, including terminal status,
+so polling and cancellation survive an Authority restart. It keeps no credential,
+consent URL, ticket body or provider cursor. Cancellation and expiry prevent a
+late consent from creating an ECHO grant; remote connections created after cleanup
+can still require operator cleanup. This slice adds no remote orphan sweeper. Release audit rows keep
 neutral coordinates, digests, grant/session/tenure and request commitments; no
 body, label, permalink, Nango reference or cursor is retained there.
 

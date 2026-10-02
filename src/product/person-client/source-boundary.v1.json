@@ -20,6 +20,7 @@
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-api",
     "@echo-brain/organization-protocol",
+    "@echo-brain/provider-jira-client",
     "@echo-brain/provider-slack-client"
   ],
   "allowed_external_packages": [],
@@ -90,8 +91,7 @@
       "name": "person-client-http-speaks-public-contracts",
       "from": "src/product/person-client/authority-client.ts",
       "allowed_imports": [
-        "src/product/person-client/document-file.ts",
-        "src/product/person-client/jira-connection-v1.ts"
+        "src/product/person-client/document-file.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -208,6 +208,7 @@
         "src/product/person-client/client-update-cli.ts"
       ],
       "allowed_workspace_packages": [
+        "@echo-brain/provider-jira-client",
         "@echo-brain/provider-slack-client"
       ],
       "allowed_external_packages": [],
@@ -345,14 +346,6 @@
       "allowed_node_builtins": [
         "path"
       ]
-    },
-    {
-      "name": "person-client-jira-command-response-validation",
-      "from": "src/product/person-client/jira-connection-v1.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
     }
   ]
 }

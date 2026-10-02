@@ -15,11 +15,11 @@ async function help(argv: readonly string[]): Promise<string> {
 }
 
 describe("Person client help", () => {
-  it('documents Jira connection commands and the explicit ticket-capable Ask version', async () => {
-    await expect(help(['jira', '--help'])).resolves.toContain('<connect|complete|disconnect>');
-    await expect(help(['jira', 'connect', '--help'])).resolves.toContain('short-lived consent link');
-    await expect(help(['jira', 'complete', '--help'])).resolves.toContain('--attempt <attempt-id> [--connection <opaque-connection-locator>]');
-    await expect(help(['jira', 'disconnect', '--help'])).resolves.toContain('Revokes your Jira read grant immediately');
+  it('documents Jira through shared tool commands and the explicit ticket-capable Ask version', async () => {
+    await expect(help(['tools', 'connect', '--help'])).resolves.toContain('--tool jira [--no-wait]');
+    await expect(help(['tools', 'status', '--help'])).resolves.toContain('--tool jira --attempt-id <value>');
+    await expect(help(['tools', 'cancel', '--help'])).resolves.toContain('--tool jira --attempt-id <value>');
+    await expect(help(['tools', 'disconnect', '--help'])).resolves.toContain('--tool jira');
     await expect(help(['ask', '--help'])).resolves.toContain('--tickets');
   });
   it("documents the supported Person commands without constructing a session", async () => {
@@ -131,6 +131,7 @@ describe("Person client help", () => {
       ["projects", "list"], ["projects", "read"], ["projects", "feed"], ["projects", "feed-v2"], ["projects", "search"], ["projects", "read-context"], ["projects", "read-context-v2"],
       ["updates", "submit"], ["updates", "status"], ["updates", "read"], ["updates", "read-v3"],
       ["slack-connect-cancel"], ["slack-link"], ["slack-connect-begin"], ["slack-connect-status"], ["slack-disconnect"],
+      ["jira"], ["jira", "connect"], ["jira", "complete"], ["jira", "disconnect"],
       ["tools", "bogus"],
     ];
     for (const argv of retired.flatMap(command => [command, [...command, "--help"]])) {

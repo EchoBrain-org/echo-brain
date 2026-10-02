@@ -28,6 +28,10 @@
     "./jira-context-source-v1": {
       "types": "./dist/jira-context-source-v1.d.ts",
       "import": "./dist/jira-context-source-v1.js"
+    },
+    "./jira-person-connection-http-application-v1": {
+      "types": "./dist/jira-person-connection-http-application-v1.d.ts",
+      "import": "./dist/jira-person-connection-http-application-v1.js"
     }
   },
   "files": [
@@ -45,7 +49,8 @@
     "@echo-brain/organization-api": "0.0.0-dev.0",
     "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
     "@echo-brain/organization-processing": "0.0.0-dev.0",
-    "better-sqlite3": "12.10.0"
+    "better-sqlite3": "12.10.0",
+    "@echo-brain/provider-jira-client": "0.0.0-dev.0"
   },
   "engines": {
     "node": "22.22.1",

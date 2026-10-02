@@ -13,6 +13,7 @@
     { "path": "../../../packages/federation-protocol" },
     { "path": "../../../packages/organization-protocol" },
     { "path": "../../../packages/organization-api" },
-    { "path": "../../../providers/slack/client" }
+    { "path": "../../../providers/slack/client" },
+    { "path": "../../../providers/jira/client" }
   ]
 }

@@ -106,20 +106,17 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(begun.status).toBe(201);
     const page = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=synthetic`)).text();
     owner = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
-    expect((await post('/v1/person/jira/connect', { schema_version: 1 }, 'wrong-person-token')).status).toBe(401);
-    const connected = await post('/v1/person/jira/connect', { schema_version: 1 }); expect(connected.status).toBe(200);
+    expect((await post('/v1/person/tools/jira/connect', { schema_version: 1 }, 'wrong-person-token')).status).toBe(401);
+    const connected = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(connected.status).toBe(201);
     expect(jiraTags).toMatchObject({ organization_id: initialized.organization_id, echo_membership: initialized.owner_membership_id });
     const invited = await post('/v1/person/employees', { name: 'Fixture Employee', email: 'employee@example.test' }); expect(invited.status).toBe(201);
     loginEmail = 'employee@example.test';
     const employeeBegin = await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant: invited.body.login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } }); expect(employeeBegin.status).toBe(201);
     const employeePage = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=employee`)).text();
     const employee = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(employeePage)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
-    expect((await post('/v1/person/jira/complete', { schema_version: 1, attempt: connected.body.attempt }, employee)).status).toBe(401);
-    finishJiraConsent(); // The synthetic Person finishes this attempt's fresh Nango browser consent.
-    resourceCloud = '00000000-0000-4000-8000-000000000008';
-    expect((await post('/v1/person/jira/complete', { schema_version: 1, attempt: connected.body.attempt })).status).toBe(401);
-    resourceCloud = CLOUD;
-    expect(await post('/v1/person/jira/complete', { schema_version: 1, attempt: connected.body.attempt })).toMatchObject({ status: 200, body: { connected: true } });
+    expect((await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt }, employee)).status).toBe(401);
+    finishJiraConsent(); // Browser consent is reconciled only by the server-bound attempt.
+    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete', failure_reason: null } });
     const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should the ticket ship?' }); expect(response.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
@@ -135,7 +132,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(verifySlack).toHaveBeenCalledWith('xoxb-synthetic-slack', undefined);
     const originalReference = pendingJiraReference;
     const refreshedOldConnection = { ...jiraConnections.get(originalReference)!, updated_at: '2099-10-01T00:00:00.000Z' };
-    const reconnect = await post('/v1/person/jira/connect', { schema_version: 1 }); expect(reconnect.status).toBe(200);
+    const reconnect = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(reconnect.status).toBe(201);
     expect(nango.disconnect).toHaveBeenCalledWith(originalReference, expect.any(AbortSignal));
     expect(vi.mocked(nango.disconnect).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(nango.connect).mock.invocationCallOrder[1]!);
     expect(jiraConnections.has(originalReference)).toBe(false);
@@ -143,15 +140,16 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(jiraTags.echo_attempt).toBe(reconnect.body.attempt);
     // Even stale Nango metadata with an ordinary refresh timestamp cannot complete a new consent attempt.
     jiraConnections.set(originalReference, refreshedOldConnection);
-    expect((await post('/v1/person/jira/complete', { schema_version: 1, attempt: reconnect.body.attempt })).status).toBe(401);
-    expect((await post('/v1/person/jira/complete', { schema_version: 1, attempt: reconnect.body.attempt, connection: originalReference })).status).toBe(401);
+    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: reconnect.body.attempt })).toMatchObject({ status: 200, body: { status: 'pending', failure_reason: null } });
     jiraConnections.delete(originalReference);
     finishJiraConsent();
     jiraAccount = 'another-jira-account';
-    expect((await post('/v1/person/jira/complete', { schema_version: 1, attempt: reconnect.body.attempt })).status).toBe(401);
+    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: reconnect.body.attempt })).toMatchObject({ status: 200, body: { status: 'failed', failure_reason: 'account_mismatch' } });
     jiraAccount = 'fixture-jira-account';
-    expect((await post('/v1/person/jira/complete', { schema_version: 1, attempt: reconnect.body.attempt })).status).toBe(200);
-    expect(await post('/v1/person/jira/disconnect', { schema_version: 1 })).toMatchObject({ status: 200, body: { connected: false } });
+    const recovery = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(recovery.status).toBe(201);
+    finishJiraConsent();
+    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: recovery.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete', failure_reason: null } });
+    expect(await post('/v1/person/tools/jira/disconnect', { schema_version: 1 })).toMatchObject({ status: 200, body: { schema_version: 1, connected: false } });
     expect(nango.disconnect).toHaveBeenCalledWith(pendingJiraReference, expect.any(AbortSignal));
   } finally { await runtime.close(); audit.close(); }
 });

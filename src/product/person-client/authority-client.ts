@@ -54,7 +54,6 @@ import {
 } from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_TOOLS_PATH_V4, validateOrganizationPersonToolsV4, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
-import { validatePersonJiraConnectV1, validatePersonJiraCompletionV1, validatePersonJiraStateV1, type PersonJiraConnectV1, type PersonJiraConnectionStateV1 } from './jira-connection-v1.js';
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
 import {
@@ -1333,25 +1332,6 @@ export class PersonAuthorityClient {
     return response;
   }
 
-  /** The Authority binds this attempt to the authenticated session person. */
-  jiraConnect(accessToken: string, signal?: AbortSignal): Promise<PersonJiraConnectV1> {
-    return this.json({ path: '/v1/person/jira/connect', body: { schema_version: 1 },
-      validate_request: () => ({ schema_version: 1 }), validate_response: validatePersonJiraConnectV1,
-      access_token: accessToken, expected_status: 200, signal });
-  }
-
-  jiraComplete(accessToken: string, attempt: string, connection?: string, signal?: AbortSignal): Promise<PersonJiraConnectionStateV1> {
-    return this.json({ path: '/v1/person/jira/complete', body: { schema_version: 1, attempt, ...(connection === undefined ? {} : { connection }) },
-      validate_request: validatePersonJiraCompletionV1, validate_response: value => validatePersonJiraStateV1(value, true),
-      access_token: accessToken, expected_status: 200, signal });
-  }
-
-  jiraDisconnect(accessToken: string, signal?: AbortSignal): Promise<PersonJiraConnectionStateV1> {
-    return this.json({ path: '/v1/person/jira/disconnect', body: { schema_version: 1 },
-      validate_request: () => ({ schema_version: 1 }), validate_response: value => validatePersonJiraStateV1(value, false),
-      access_token: accessToken, expected_status: 200, signal });
-  }
-
   async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
     const request = validatePersonEvidenceSearchRequestV1(value);
     const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
@@ -1441,7 +1421,7 @@ export class PersonAuthorityClient {
   }
 
   /** A tool receives bounded methods tied to this Authority, without the bearer credential. */
-  toolTransport(accessToken: string): PersonToolTransportV1 {
+  toolTransport(accessToken: string, signal?: AbortSignal): PersonToolTransportV1 {
     const assertPath = (path: string): void => {
       if (!path.startsWith('/') || path.startsWith('//') || new URL(path, this.origin).origin !== this.origin.origin) {
         throw new Error('Person tool request must remain on its Authority');
@@ -1459,13 +1439,13 @@ export class PersonAuthorityClient {
         assertBounds(input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.timeout_ms);
         return this.json({ path: input.path, body: input.body, validate_request: input.validate_request,
           validate_response: input.validate_response, maximum_response_bytes: input.maximum_response_bytes,
-          timeout_ms: input.timeout_ms, access_token: accessToken });
+          timeout_ms: input.timeout_ms, access_token: accessToken, signal });
       },
       getJson: async <T>(input: import('@echo-brain/organization-api').PersonToolGetRequestV1<T>): Promise<T> => {
         assertPath(input.path);
         assertBounds(input.maximum_response_bytes);
         return this.getJson({ path: input.path, validate_response: input.validate_response,
-          maximum_response_bytes: input.maximum_response_bytes, access_token: accessToken });
+          maximum_response_bytes: input.maximum_response_bytes, access_token: accessToken, signal });
       },
     });
   }

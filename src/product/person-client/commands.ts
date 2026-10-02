@@ -20,7 +20,6 @@ import {
   readPersonOnboardingInvitation,
 } from "./onboarding-invitation.js";
 import { readPackagedPersonClientBuildIdentity } from "./package-identity.js";
-import { validatePersonJiraCompletionV1 } from './jira-connection-v1.js';
 
 const MAXIMUM_INPUT_BYTES = 64 * 1024;
 
@@ -47,8 +46,6 @@ export interface PersonClientCliDependencies {
 }
 
 const OPTIONS = {
-  attempt: { type: "string" },
-  connection: { type: "string" },
   tickets: { type: "boolean" },
   "document-id": { type: "string" },
   audience: { type: "string" },
@@ -135,9 +132,6 @@ const RULES: Readonly<
     accepts: ["question", "project", "mine", "tickets"],
     requires: ["question"],
   },
-  'jira-connect': { accepts: ['open-browser'] },
-  'jira-complete': { accepts: ['attempt', 'connection'], requires: ['attempt'] },
-  'jira-disconnect': { accepts: [] },
   list: { accepts: ["project", "mine", "cursor"] },
   open: { accepts: ["ref", "cursor"], requires: ["ref"] },
   "evidence-search": { accepts: ["query", "project", "kind", "limit"], requires: [] },
@@ -189,7 +183,6 @@ Commands:
   list        List the newest notes, documents and approved meetings you can read.
   open        Read one item by its ref from list or an ask citation.
   ask         Ask a question over context you may read.
-  jira        Connect or disconnect your personal Jira account.
   evidence    Search or open released Ask evidence.
   transcript  Read an explicitly approved meeting transcript page.
   records     List records or search the current generation.
@@ -226,22 +219,6 @@ Removes the local session. A revoked session is also removed locally.
 Ask one question using at most 240 Unicode code points, 1–32 distinct normalized terms and at most 64 UTF-8 bytes per term. Use NFC text on one line without edge whitespace. Without a scope flag, ECHO retrieves across context you may read. With --project, only context associated with that project. With --mine, only what you added: your notes, your uploads and meetings you approved; Slack and shared transcripts are not read. Answers include typed citations; each opens with person open --ref when it carries a ref.
 
 --tickets selects the ticket-capable Ask response. A connected Jira account contributes only in global scope; project mappings are unsupported and mine excludes Jira. Ticket citations open their permalink directly in Jira.
-`,
-  jira: `usage: echo-brain person jira <connect|complete|disconnect> [options]
-
-Connect your signed-in ECHO account to Jira, complete the verified connection, or revoke it. No command accepts another person, organization or site.
-`,
-  'jira-connect': `usage: echo-brain person jira connect [--open-browser]
-
-Starts a connection attempt bound to your current ECHO account and returns a short-lived consent link and attempt ID. Complete authorization in the browser, then run jira complete with this attempt. The consent link is private and must not be saved or shared.
-`,
-  'jira-complete': `usage: echo-brain person jira complete --attempt <attempt-id> [--connection <opaque-connection-locator>]
-
-Completes your pending attempt after the Authority finds its authorized connection and verifies ownership, Jira account and site. An optional locator is never sufficient to select another person's connection. Use person ask --tickets for a ticket-capable global answer.
-`,
-  'jira-disconnect': `usage: echo-brain person jira disconnect
-
-Revokes your Jira read grant immediately, including active requests. A later connection requires fresh authorization.
 `,
   list: `usage: echo-brain person list [--project <project-id> | --mine] [--cursor <next_cursor>]
 
@@ -473,7 +450,7 @@ function registerToolProviders(list: readonly PersonToolProviderV1[]) {
 
 /** Returns supported human CLI help without constructing a client or session. */
 function personClientCliHelp(argv: readonly string[], providers: readonly PersonToolProviderV1[]): string | undefined {
-  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents' || argv[0] === 'evidence' || argv[0] === 'jira') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
+  if (argv.length === 3 && (argv[0] === 'updates' || argv[0] === 'projects' || argv[0] === 'documents' || argv[0] === 'evidence') && argv[2] === '--help') return HELP[`${argv[0]}-${argv[1]}`];
   if (argv.length === 3 && argv[0] === 'tools' && argv[2] === '--help') return toolVerbHelp(argv[1], providers);
   if (argv.length === 1 && argv[0] === "--help") return HELP.person;
   if (argv.length === 2 && argv[1] === "--help") return HELP[argv[0] ?? ""];
@@ -819,13 +796,12 @@ export async function runPersonClientCli(
       : undefined;
   const documentAction = argv[0] === 'documents' ? `documents-${argv[1] ?? ''}` : undefined;
   const evidenceAction = argv[0] === 'evidence' ? `evidence-${argv[1] ?? ''}` : undefined;
-  const jiraAction = argv[0] === 'jira' ? `jira-${argv[1] ?? ''}` : undefined;
   const updateAction = argv[0] === 'updates' && ['search', 'submit-v3', 'status-v3', 'search-v3'].includes(argv[1] ?? '') ? `updates-${argv[1]}` : undefined;
   const projectAction = argv[0] === 'projects' ? `projects-${argv[1] ?? ''}` : undefined;
   // `tools` alone lists tools; `tools <verb>` is a tool verb, refused unless it is one of the five.
   const toolAction = argv[0] === 'tools' && argv[1] !== undefined && !argv[1].startsWith('-') ? `tools-${argv[1]}` : undefined;
   const verbName = toolAction === undefined ? undefined : toolVerb(argv[1]);
-  const action = documentAction ?? evidenceAction ?? jiraAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction ?? (argv[0] ?? "");
+  const action = documentAction ?? evidenceAction ?? projectAction ?? updateAction ?? employeeAction ?? toolAction ?? (argv[0] ?? "");
   const rule = RULES[action] ?? (verbName === undefined ? undefined : { accepts: ['tool', ...Object.keys(toolOptions)], requires: ['tool'] });
   if (rule === undefined) {
     print(stderr, { ok: false, error: usage() });
@@ -837,7 +813,7 @@ export async function runPersonClientCli(
   let openRequest: PersonOpenRequestV1 | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
   try {
-    const args = [...argv.slice(employeeAction === undefined && updateAction === undefined && projectAction === undefined && documentAction === undefined && evidenceAction === undefined && jiraAction === undefined && toolAction === undefined ? 1 : 2)];
+    const args = [...argv.slice(employeeAction === undefined && updateAction === undefined && projectAction === undefined && documentAction === undefined && evidenceAction === undefined && toolAction === undefined ? 1 : 2)];
     // Accept a negative integer as a limit value so the existing bounds explain
     // it. Other dash-prefixed values retain parseArgs' strict option behavior.
     if (action === "records") {
@@ -921,8 +897,6 @@ export async function runPersonClientCli(
     if ((action === "ask" || action === "list") && values.project !== undefined && values.mine === true) {
       throw new Error(`--project and --mine cannot be combined with \`echo-brain person ${action}\``);
     }
-    if (action === 'jira-complete') validatePersonJiraCompletionV1({ schema_version: 1,
-      attempt: requiredText(values, 'attempt'), ...(values.connection === undefined ? {} : { connection: requiredText(values, 'connection') }) });
     // List and open requests are complete and validated before any network or session use.
     if (action === "list") {
       listRequest = validatePersonListRequestV1({
@@ -978,11 +952,17 @@ export async function runPersonClientCli(
 
   try {
     if (toolVerbDefinition !== undefined) {
-      await toolVerbDefinition.run({ host: client, values, print: (value) => print(stdout, value),
+      await toolVerbDefinition.run({
+        host: { withToolSession: operation => client.withToolSession(operation, dependencies.abort_signal) },
+        values, print: (value) => print(stdout, value),
         read_interactive_line: async () => await readInteractiveLine(),
         read_secret_line: async (prompt) => await (dependencies.read_input?.(prompt) ?? readSecretLine(prompt)),
         open_browser: dependencies.open_authorization_url ?? openAuthorizationUrl,
-        sleep: dependencies.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))) });
+        sleep: async ms => {
+          dependencies.abort_signal?.throwIfAborted();
+          await (dependencies.sleep ?? ((delay: number) => new Promise<void>(resolve => setTimeout(resolve, delay))))(ms);
+          dependencies.abort_signal?.throwIfAborted();
+        } });
       return 0;
     }
     switch (action) {
@@ -1181,21 +1161,6 @@ export async function runPersonClientCli(
             dependencies.abort_signal,
           ),
         });
-        break;
-      case 'jira-connect': {
-        const result = await client.jiraConnect(dependencies.abort_signal);
-        if (values['open-browser'] === true) {
-          const opened = await (dependencies.open_authorization_url ?? openAuthorizationUrl)(result.connect_link);
-          if (!opened) throw new Error('The consent browser could not be opened. Rerun jira connect without --open-browser.');
-        }
-        print(stdout, { ok: true, result });
-        break;
-      }
-      case 'jira-complete':
-        print(stdout, { ok: true, result: await client.jiraComplete(requiredText(values, 'attempt'), values.connection === undefined ? undefined : requiredText(values, 'connection'), dependencies.abort_signal) });
-        break;
-      case 'jira-disconnect':
-        print(stdout, { ok: true, result: await client.jiraDisconnect(dependencies.abort_signal) });
         break;
       case "list":
         print(stdout, { ok: true, result: await client.list(listRequest!, dependencies.abort_signal) });

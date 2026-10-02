@@ -1,4 +1,4 @@
-/** Exact routes owned by one selected identity or approval application. */
+/** Exact routes owned by one selected provider application. */
 export interface ProviderHttpRouteV1 {
   readonly route_id: string;
   readonly method: "POST" | "GET";
@@ -16,6 +16,8 @@ export interface ProviderHttpRequestV1 {
   readonly content_type: string | undefined;
   readonly headers: Readonly<Record<string, string | undefined>>;
   readonly query?: URLSearchParams;
+  /** Aborted if the HTTP client disconnects before its response is released. */
+  readonly signal?: AbortSignal;
 }
 
 /**

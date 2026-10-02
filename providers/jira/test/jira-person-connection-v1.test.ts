@@ -1,4 +1,7 @@
 import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -11,7 +14,8 @@ const cloud = '00000000-0000-4000-8000-000000000007';
 const site = 'https://echo-fixture.atlassian.net';
 const person = { organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'person-fixture', membership_id: 'mem_00000000-0000-4000-8000-000000000001' };
 function fixture() {
-  const database = new Database(':memory:'); const store = new JiraConnectionStoreV1(database);
+  let now = Date.UTC(2026, 9, 1, 0, 0, 0);
+  const database = new Database(':memory:'); const store = new JiraConnectionStoreV1(database, () => now);
   let active = true; let account = 'synthetic-account'; let resourceCloud = cloud; let resourceSite = site; let scopes = ['read:jira-work', 'read:jira-user'];
   let pendingTags: Readonly<Record<string, string>> = {}; let refresh = 0; let connectionIndex = 0; let denied = false; let hook: ((url: string, init: RequestInit) => Promise<void> | void) | undefined;
   const connections = new Map<string, { readonly tags: Readonly<Record<string, string>>; readonly updated_at?: string }>();
@@ -52,10 +56,24 @@ function fixture() {
   async function connected() { const begun = await service.connect({ access_token: token }); finishAuthorization(); await service.complete({ access_token: token, attempt: begun.attempt }); return begun; }
   return { database, store, service, nango, transport, authenticate, audit, token, connected, finishAuthorization,
     seedConnection: (reference: string, tags: Readonly<Record<string, string>>, updated_at?: string) => { connections.set(reference, { tags, updated_at }); },
-    setActive: (value: boolean) => { active = value; }, setAccount: (value: string) => { account = value; }, setCloud: (value: string) => { resourceCloud = value; }, setSite: (value: string) => { resourceSite = value; }, setScopes: (value: string[]) => { scopes = value; }, setDenied: () => { denied = true; }, setHook: (value: typeof hook) => { hook = value; } };
+    setActive: (value: boolean) => { active = value; }, setNow: (value: number) => { now = value; }, setAccount: (value: string) => { account = value; }, setCloud: (value: string) => { resourceCloud = value; }, setSite: (value: string) => { resourceSite = value; }, setScopes: (value: string[]) => { scopes = value; }, setDenied: () => { denied = true; }, setHook: (value: typeof hook) => { hook = value; } };
 }
 
 describe('Nango-backed personal Jira connection', () => {
+  it('persists a terminal cancellation across a file-backed store restart and rejects late completion', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-jira-attempt-'));
+    const path = join(directory, 'connections.sqlite');
+    try {
+      const first = new Database(path); const started = new JiraConnectionStoreV1(first, () => Date.UTC(2026, 9, 1));
+      const attempt = started.begin(person); started.cancel(person, attempt.attempt); first.close();
+      const second = new Database(path); const reopened = new JiraConnectionStoreV1(second, () => Date.UTC(2026, 9, 1));
+      expect(reopened.status(person, attempt.attempt)).toMatchObject({ status: 'cancelled', failure_reason: null });
+      expect(reopened.current(person)).toBeUndefined();
+      expect(() => reopened.pending(person, attempt.attempt)).toThrow(expect.objectContaining({ code: 'stale_access_state' }));
+      second.close();
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
   it('binds consent to the authenticated tenure, verifies Jira, persists only compact custody and keeps refresh outside grant identity', async () => {
     const f = fixture(); try {
       await f.connected(); const before = f.store.current(person)!;
@@ -67,8 +85,84 @@ describe('Nango-backed personal Jira connection', () => {
       expect(f.transport.mock.calls.every(([, init]) => init!.redirect === 'error' && new Headers(init!.headers).get('authorization')?.startsWith('Bearer synthetic-access-'))).toBe(true);
       const stored = JSON.stringify(f.database.prepare('SELECT * FROM jira_person_binding_v1').all());
       for (const excluded of ['synthetic-access-', 'Synthetic Friday', 'Synthetic launch', 'refresh_token', 'connect.nango.dev']) expect(stored).not.toContain(excluded);
-      expect(f.database.prepare('SELECT * FROM jira_person_attempt_v1').all()).toEqual([]);
+      expect(f.database.prepare('SELECT body_json FROM jira_person_attempt_v1').all()).toEqual([expect.objectContaining({
+        body_json: expect.stringContaining('\"status\":\"complete\"'),
+      })]);
       expect(f.audit.record).toHaveBeenCalledTimes(1);
+    } finally { f.database.close(); }
+  });
+
+  it('reports pending consent, completes it only after exact tagged consent, and retains terminal polling state', async () => {
+    const f = fixture(); try {
+      const begun = await f.service.connect({ access_token: f.token });
+      await expect(f.service.status({ access_token: f.token, attempt: begun.attempt })).resolves.toMatchObject({ status: 'pending', failure_reason: null });
+      expect(f.transport).not.toHaveBeenCalled();
+      f.finishAuthorization();
+      await expect(f.service.status({ access_token: f.token, attempt: begun.attempt })).resolves.toMatchObject({ status: 'complete', failure_reason: null });
+      const calls = vi.mocked(f.nango.find).mock.calls.length;
+      await expect(f.service.status({ access_token: f.token, attempt: begun.attempt })).resolves.toMatchObject({ status: 'complete' });
+      expect(vi.mocked(f.nango.find)).toHaveBeenCalledTimes(calls);
+    } finally { f.database.close(); }
+  });
+
+  it('persists expiry and failed provider verification as terminal browser-poll states', async () => {
+    const f = fixture(); try {
+      const expired = await f.service.connect({ access_token: f.token });
+      f.setNow(Date.parse(expired.expires_at));
+      await expect(f.service.status({ access_token: f.token, attempt: expired.attempt })).resolves.toMatchObject({ status: 'expired', failure_reason: null });
+      f.setNow(Date.UTC(2026, 9, 1, 1, 0, 0));
+      const rejected = await f.service.connect({ access_token: f.token }); f.finishAuthorization(); f.setScopes(['read:jira-user']);
+      await expect(f.service.status({ access_token: f.token, attempt: rejected.attempt })).resolves.toMatchObject({ status: 'failed', failure_reason: 'provider_rejected' });
+      await expect(f.service.status({ access_token: f.token, attempt: rejected.attempt })).resolves.toMatchObject({ status: 'failed', failure_reason: 'provider_rejected' });
+    } finally { f.database.close(); }
+  });
+
+  it('cancels locally before cleanup and never binds consent that completes late or during verification', async () => {
+    const f = fixture(); try {
+      const late = await f.service.connect({ access_token: f.token });
+      await expect(f.service.cancel({ access_token: f.token, attempt: late.attempt })).resolves.toMatchObject({ status: 'cancelled' });
+      f.finishAuthorization();
+      await expect(f.service.status({ access_token: f.token, attempt: late.attempt })).resolves.toMatchObject({ status: 'cancelled' });
+      expect(f.store.current(person)).toBeUndefined();
+      const during = await f.service.connect({ access_token: f.token }); f.finishAuthorization();
+      f.setHook(async url => { if (url.endsWith('/accessible-resources')) await f.service.cancel({ access_token: f.token, attempt: during.attempt }); });
+      await expect(f.service.status({ access_token: f.token, attempt: during.attempt })).resolves.toMatchObject({ status: 'cancelled' });
+      expect(f.store.current(person)).toBeUndefined();
+    } finally { f.database.close(); }
+  });
+
+  it('returns the durable state when expiry or another status settles during Nango work', async () => {
+    const f = fixture(); try {
+      const expired = await f.service.connect({ access_token: f.token });
+      vi.mocked(f.nango.find).mockImplementationOnce(async () => { f.setNow(Date.parse(expired.expires_at)); return undefined; });
+      await expect(f.service.status({ access_token: f.token, attempt: expired.attempt })).resolves.toMatchObject({ status: 'expired' });
+      f.setNow(Date.UTC(2026, 9, 1, 2, 0, 0));
+      const begun = await f.service.connect({ access_token: f.token }); f.finishAuthorization();
+      vi.mocked(f.nango.find).mockImplementationOnce(async () => {
+        await f.service.status({ access_token: f.token, attempt: begun.attempt });
+        return undefined;
+      });
+      await expect(f.service.status({ access_token: f.token, attempt: begun.attempt })).resolves.toMatchObject({ status: 'complete' });
+    } finally { f.database.close(); }
+  });
+
+  it('keeps cancellation durable but refuses a terminal response after membership drifts during cleanup', async () => {
+    const f = fixture(); try {
+      const begun = await f.service.connect({ access_token: f.token });
+      vi.mocked(f.nango.find).mockImplementationOnce(async () => { f.setActive(false); return undefined; });
+      await expect(f.service.cancel({ access_token: f.token, attempt: begun.attempt })).rejects.toMatchObject({ code: 'unauthorized' });
+      f.setActive(true);
+      await expect(f.service.status({ access_token: f.token, attempt: begun.attempt })).resolves.toMatchObject({ status: 'cancelled' });
+    } finally { f.database.close(); }
+  });
+
+  it('does not reveal or change an attempt after the current membership is revoked', async () => {
+    const f = fixture(); try {
+      const begun = await f.service.connect({ access_token: f.token });
+      f.setActive(false);
+      await expect(f.service.status({ access_token: f.token, attempt: begun.attempt })).rejects.toMatchObject({ code: 'unauthorized' });
+      await expect(f.service.cancel({ access_token: f.token, attempt: begun.attempt })).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(f.nango.find).not.toHaveBeenCalled();
     } finally { f.database.close(); }
   });
 

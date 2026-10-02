@@ -1,4 +1,5 @@
 import { SlackPersonClient } from '@echo-brain/provider-slack-client/person/slack-person-client';
+import { createJiraPersonToolProviderV1 } from '@echo-brain/provider-jira-client/person/jira-tool-provider';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import * as packageIdentity from "../../src/product/person-client/package-identity.js";
 import { Buffer } from "node:buffer";
@@ -170,123 +171,115 @@ async function runCli(
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('person-bound Jira client commands', () => {
+describe('shared Jira tool commands', () => {
   const attempt = '00000000-0000-4000-8000-000000000021';
-  const ticket = { kind: 'ticket', label: 'ECHO-7 · Release Jira', visibility: 'only_me', citation: {
-    kind: 'ticket', tool_id: 'jira', external_scope_id: '00000000-0000-4000-8000-000000000019', ticket_id: '10007',
-    permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: `sha256:${'a'.repeat(64)}`,
-  } };
-  function ticketAnswer(scope: unknown = { kind: 'global' }) {
-    return { ...v4Answer({ scope, citations: [ticket] }), schema_version: 5, kind: 'echo-clean-person-answer-v5',
-      parts: [{ question: 'Which ticket?', status: 'answered', statements: [{ text: 'ECHO-7 covers Jira.', citation_indexes: [0], private: true }] }] };
-  }
+  const expiresAt = '2026-08-18T00:12:00.000Z';
+  const providers = [createJiraPersonToolProviderV1()];
+  const status = (state: 'pending' | 'complete' | 'cancelled' | 'expired' | 'failed', failure_reason: null | 'provider_rejected' | 'provider_unavailable' | 'account_mismatch' = null) => ({
+    schema_version: 1, attempt, expires_at: expiresAt, status: state, failure_reason,
+  });
 
-  it('uses authenticated commands and keeps the connection locator and consent link out of stored sessions', async () => {
+  it('uses the shared tool routes and never writes a consent URL or locator to session or stdout', async () => {
     await withHome(async home => {
       await installFixtureSession(home);
       const store = new PersonSessionStore(home);
       const stored = canonicalJson(store.read());
+      const opened: string[] = [];
       const fetchImpl: typeof fetch = async (input, init) => {
         expect(init?.method).toBe('POST');
         expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
         const path = new URL(String(input)).pathname;
-        if (path === '/v1/person/jira/connect') {
+        if (path === '/v1/person/tools/jira/connect') {
           expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1 });
-          return json({ schema_version: 1, attempt, connect_link: 'https://connect.nango.dev/?session_token=synthetic-consent' });
+          return json({ schema_version: 1, attempt, connect_link: 'https://connect.nango.dev/?session_token=synthetic-consent', expires_at: expiresAt });
         }
-        if (path === '/v1/person/jira/complete') {
-          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt, connection: 'opaque-synthetic-connection' });
-          return json({ schema_version: 1, connected: true });
+        if (path === '/v1/person/tools/jira/status') {
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt });
+          return json(status('complete'));
         }
-        expect(path).toBe('/v1/person/jira/disconnect');
+        if (path === '/v1/person/tools/jira/cancel') {
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt });
+          return json(status('cancelled'));
+        }
+        expect(path).toBe('/v1/person/tools/jira/disconnect');
         expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1 });
         return json({ schema_version: 1, connected: false });
       };
-      const dependencies = { home_directory: home, now: () => NOW, fetch: fetchImpl };
-      const begun = await runCli(['jira', 'connect'], dependencies);
-      expect(begun.code).toBe(0);
-      expect(JSON.parse(begun.stdout)).toEqual({ ok: true, result: {
-        schema_version: 1, attempt, connect_link: 'https://connect.nango.dev/?session_token=synthetic-consent',
-      } });
-      expect((await runCli(['jira', 'complete', '--attempt', attempt, '--connection', 'opaque-synthetic-connection'], dependencies)).code).toBe(0);
-      expect(JSON.parse((await runCli(['jira', 'disconnect'], dependencies)).stdout)).toEqual({ ok: true, result: { schema_version: 1, connected: false } });
+      const dependencies = {
+        home_directory: home, now: () => NOW, fetch: fetchImpl, tool_providers: providers,
+        open_authorization_url: async (url: string) => { opened.push(url); return true; },
+      };
+      const begun = await runCli(['tools', 'connect', '--tool', 'jira', '--no-wait'], dependencies);
+      expect(begun.code, begun.stderr).toBe(0);
+      expect(opened).toEqual(['https://connect.nango.dev/?session_token=synthetic-consent']);
+      expect(JSON.parse(begun.stdout)).toEqual({ ok: true, phase: 'waiting', attempt, expires_at: expiresAt });
+      expect(begun.stdout).not.toContain('synthetic-consent');
+      expect(JSON.parse((await runCli(['tools', 'status', '--tool', 'jira', '--attempt-id', attempt], dependencies)).stdout)).toEqual({ ok: true, result: status('complete') });
+      expect(JSON.parse((await runCli(['tools', 'cancel', '--tool', 'jira', '--attempt-id', attempt], dependencies)).stdout)).toEqual({ ok: true, result: status('cancelled') });
+      expect(JSON.parse((await runCli(['tools', 'disconnect', '--tool', 'jira'], dependencies)).stdout)).toEqual({ ok: true, result: { schema_version: 1, connected: false } });
       expect(canonicalJson(store.read())).toBe(stored);
     });
   });
 
-  it('refuses person selectors and malformed locators before opening a session or making a request', async () => {
+  it('polls server-bound status after browser consent and reports a fixed account mismatch failure', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const statuses = [status('pending'), status('failed', 'account_mismatch')];
+      const result = await runCli(['tools', 'connect', '--tool', 'jira'], {
+        home_directory: home, now: () => NOW, tool_providers: providers,
+        open_authorization_url: async () => true, sleep: async () => undefined,
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === '/v1/person/tools/jira/connect') {
+            expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1 });
+            return json({ schema_version: 1, attempt, connect_link: 'https://connect.nango.dev/fixture', expires_at: expiresAt });
+          }
+          expect(path).toBe('/v1/person/tools/jira/status');
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt });
+          return json(statuses.shift()!);
+        },
+      });
+      expect(result.code).toBe(1);
+      expect(JSON.parse(result.stderr)).toEqual({
+        ok: false, action: 'tools-connect', reason: 'account_mismatch',
+        error: 'That Jira account does not match your previously connected Jira account. Try again with that account.',
+      });
+    });
+  });
+
+  it('rejects retired Jira commands and bad shared-tool inputs before a request', async () => {
     const fetchImpl = vi.fn();
-    const otherPerson = await runCli(['jira', 'connect', '--membership-id', ORGANIZATION_IDS.membership], { fetch: fetchImpl });
-    expect(otherPerson.code).toBe(2);
-    const invalid = await runCli(['jira', 'complete', '--attempt', attempt, '--connection', 'bad\nlocator'], { fetch: fetchImpl });
-    expect(invalid.code).toBe(2);
+    expect((await runCli(['jira', 'connect'], { fetch: fetchImpl, tool_providers: providers })).code).toBe(2);
+    expect((await runCli(['tools', 'connect', '--tool', 'jira', '--membership-id', ORGANIZATION_IDS.membership], { fetch: fetchImpl, tool_providers: providers })).code).toBe(2);
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const invalid = await runCli(['tools', 'status', '--tool', 'jira', '--attempt-id', 'bad\nlocator'], {
+        home_directory: home, now: () => NOW, fetch: fetchImpl, tool_providers: providers,
+      });
+      expect(invalid.code).toBe(1);
+    });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('completes a browser authorization using only the server-bound attempt', async () => {
-    await withHome(async home => {
-      await installFixtureSession(home);
-      const result = await runCli(['jira', 'complete', '--attempt', attempt], {
-        home_directory: home, now: () => NOW,
-        fetch: async (input, init) => {
-          expect(new URL(String(input)).pathname).toBe('/v1/person/jira/complete');
-          expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
-          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt });
-          return json({ schema_version: 1, connected: true });
-        },
-      });
-      expect(result.code).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ ok: true, result: { schema_version: 1, connected: true } });
-    });
-  });
-
-  it('selects V5 only with --tickets and rejects ticket responses on the strict V4 route', async () => {
-    await withHome(async home => {
-      await installFixtureSession(home);
-      const fetchImpl: typeof fetch = async (input, init) => {
-        expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'Which ticket?' });
-        const path = new URL(String(input)).pathname;
-        if (path === '/v4/person/ask') return json(ticketAnswer());
-        expect(path).toBe('/v3/person/ask');
-        return json({ ...ticketAnswer(), schema_version: 4, kind: 'echo-clean-person-answer-v4' });
-      };
-      const dependencies = { home_directory: home, now: () => NOW, fetch: fetchImpl };
-      const ticketResult = await runCli(['ask', '--question', 'Which ticket?', '--tickets'], dependencies);
-      expect(ticketResult.code).toBe(0);
-      expect(JSON.parse(ticketResult.stdout).result.citations[0]).toEqual(ticket);
-      const legacyResult = await runCli(['ask', '--question', 'Which ticket?'], dependencies);
-      expect(legacyResult.code).toBe(1);
-      expect(legacyResult.stdout).toBe('');
-      expect(legacyResult.stderr).toContain('invalid_response');
-    });
-  });
-
-  it('rejects a different ticket Ask scope and unsafe ticket links', async () => {
-    await withHome(async home => {
-      await installFixtureSession(home);
-      const wrongScope = fixtureClient(home, async () => json(ticketAnswer({ kind: 'mine' })));
-      await expect(wrongScope.askWithTickets('Which ticket?')).rejects.toMatchObject({ code: 'invalid_response' });
-      const unsafe = fixtureClient(home, async () => json({ ...ticketAnswer(), citations: [{ ...ticket, citation: { ...ticket.citation, permalink: 'https://user:password@example.atlassian.net/browse/ECHO-7' } }] }));
-      await expect(unsafe.askWithTickets('Which ticket?')).rejects.toMatchObject({ code: 'invalid_response' });
-    });
-  });
-
-  it('passes connection cancellation through to the authenticated transport', async () => {
+  it('passes a client disconnect through the shared tool transport', async () => {
     await withHome(async home => {
       await installFixtureSession(home);
       const abort = new AbortController();
       let ready!: () => void;
       const started = new Promise<void>(resolve => { ready = resolve; });
-      const client = fixtureClient(home, async (_input, init) => {
-        expect(init?.signal).toBeDefined();
-        ready();
-        await new Promise<void>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), { once: true }));
-        throw new Error('unreachable');
+      const result = runCli(['tools', 'connect', '--tool', 'jira', '--no-wait'], {
+        home_directory: home, now: () => NOW, tool_providers: providers, abort_signal: abort.signal,
+        open_authorization_url: async () => true,
+        fetch: async (_input, init) => {
+          expect(init?.signal).toBeDefined();
+          ready();
+          await new Promise<void>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), { once: true }));
+          throw new Error('unreachable');
+        },
       });
-      const pending = client.jiraConnect(abort.signal);
       await started;
       abort.abort();
-      await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
+      expect((await result).code).toBe(1);
     });
   });
 });

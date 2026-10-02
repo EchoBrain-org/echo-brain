@@ -78,6 +78,21 @@ credential write. This is a fresh remote observation, not an atomic transaction
 with Nango. [ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md)
 retains its proposed status.
 
+## Shared Jira connection flow
+
+`echo-brain person tools connect --tool jira` now follows the shared browser and
+wait pattern. The Jira client fragment supports status/cancel by attempt ID and
+disconnect; the separate `person jira` command family and shared-server Jira
+routes are removed. Provider-owned status discovers consent and verifies the
+current Person, configured site and account before committing a grant. Durable
+attempt status survives restart, and local cancellation wins over in-flight
+completion. The client prints no consent URL or Nango connection locator.
+
+This is connection plumbing with synthetic-provider proof. It adds no content
+pull command, source registration, scheduler, retention grant or Jira production
+enablement. See [the Jira provider](../../providers/jira/README.md) for commands
+and the remaining live qualification boundary.
+
 ## Boundaries before activation
 
 Neither profile is registered in the production composition root or a scheduler.

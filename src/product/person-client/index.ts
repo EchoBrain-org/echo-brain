@@ -17,7 +17,6 @@ export {
   type PersonRecordSearchItemV1,
   type PersonRecordSearchV2,
 } from "./authority-client.js";
-export { type PersonJiraConnectV1, type PersonJiraConnectionStateV1 } from './jira-connection-v1.js';
 export {
   EmployeeMutationError,
   PersonClient,

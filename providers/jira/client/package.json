@@ -1,0 +1,39 @@
+{
+  "name": "@echo-brain/provider-jira-client",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./organization-api/jira-person-connection-v1": {
+      "types": "./dist/organization-api/jira-person-connection-v1.d.ts",
+      "import": "./dist/organization-api/jira-person-connection-v1.js"
+    },
+    "./person/jira-tool-provider": {
+      "types": "./dist/person/jira-tool-provider.d.ts",
+      "import": "./dist/person/jira-tool-provider.js"
+    },
+    "./person/jira-person-client": {
+      "types": "./dist/person/jira-person-client.d.ts",
+      "import": "./dist/person/jira-person-client.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

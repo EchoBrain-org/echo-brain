@@ -23,7 +23,8 @@
     "providers/slack/server",
     "providers/slack/client",
     "providers/granola",
-    "providers/jira"
+    "providers/jira",
+    "providers/jira/client"
   ],
   "license": "MIT",
   "type": "module",

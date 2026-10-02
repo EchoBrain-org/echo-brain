@@ -14,6 +14,22 @@ registration or new Ask wiring. Shared capture types live in
 retention fence. Granola reuses its configured adapter; the Jira profile is
 request-only. Slack onboarding does not provide a content reader.
 
+## Shared connection commands
+
+The Person CLI dispatches `person tools <verb> --tool <id>` through
+`PersonToolProviderV1`. Each provider owns its options, public wire schemas and
+client fragment, with only the authenticated `PersonToolHostV1` transport supplied
+by the product. Slack and Jira use this seam. Jira's client-only workspace keeps
+its server dependencies out of the installed Person client.
+
+Provider-owned HTTP applications mount through the Authority's generic
+`person_tool_connections` collection. Route collision checks and body/response
+bounds remain host-owned; provider authentication, attempt state and grant
+verification remain adapter-owned. Client disconnect propagates an abort signal.
+Jira's POST status reconciles browser consent and may commit the grant. This
+connection step does not pull context or authorize retention. Jira remains
+production-disabled pending its proposed ADR and live qualification.
+
 ## Personal access
 
 [`PersonConnectorAccessV1`](../../packages/organization-api/src/person-connector-access-v1.ts)

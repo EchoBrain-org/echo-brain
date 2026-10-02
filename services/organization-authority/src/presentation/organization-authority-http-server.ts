@@ -78,11 +78,6 @@ import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttp
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
 import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-application.js";
 import {
-  PERSON_JIRA_CONNECT_PATH_V1, PERSON_JIRA_COMPLETE_PATH_V1, PERSON_JIRA_DISCONNECT_PATH_V1,
-  validateJiraPersonConnectionCommandV1, validateJiraPersonConnectionCompletionV1,
-  type JiraPersonConnectionHttpApplicationV1,
-} from './jira-person-connection-http-application-v1.js';
-import {
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
   validatePersonListRequestV1,
@@ -116,9 +111,6 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V3}`,
   `POST ${PERSON_ANSWER_PATH_V4}`,
-  `POST ${PERSON_JIRA_CONNECT_PATH_V1}`,
-  `POST ${PERSON_JIRA_COMPLETE_PATH_V1}`,
-  `POST ${PERSON_JIRA_DISCONNECT_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
@@ -160,9 +152,10 @@ export interface OrganizationAuthorityHttpServerOptions {
    * Optional until the active Organization Authority runtime has a configured answer model.
    */
   readonly person_answer_v3?: PersonAnswerV3HttpApplication;
-  /** Optional ticket-capable Ask and authenticated Jira commands, selected together. */
+  /** Optional ticket-capable Ask, selected with its provider runtime. */
   readonly person_answer_v4?: PersonAnswerV4HttpApplication;
-  readonly person_jira_connection?: JiraPersonConnectionHttpApplicationV1;
+  /** Provider-owned account connection routes, selected by the composition root. */
+  readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
   readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
   /** Explicit transcript release uses the same originals gate but no Ask model. */
@@ -182,7 +175,7 @@ function providerIngressRoutes(
   options: OrganizationAuthorityHttpServerOptions,
 ): ReadonlyMap<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }> {
   const mounted = new Map<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }>();
-  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link, options.person_tools, options.person_tools_v4]) {
+  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link, options.person_tools, options.person_tools_v4, ...(options.person_tool_connections ?? [])]) {
     if (application === undefined) continue;
     const routeIds = new Set<string>();
     for (const route of application.routes) {
@@ -737,9 +730,6 @@ export function createOrganizationAuthorityHttpServer(
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input))],
-    [PERSON_JIRA_CONNECT_PATH_V1, personCancellablePost(options.person_jira_connection, validateJiraPersonConnectionCommandV1, (application, input) => application.connect(input))],
-    [PERSON_JIRA_COMPLETE_PATH_V1, personCancellablePost(options.person_jira_connection, validateJiraPersonConnectionCompletionV1, (application, input) => application.complete({ access_token: input.access_token, ...input.request, ...(input.signal === undefined ? {} : { signal: input.signal }) }))],
-    [PERSON_JIRA_DISCONNECT_PATH_V1, personCancellablePost(options.person_jira_connection, validateJiraPersonConnectionCommandV1, (application, input) => application.disconnect(input))],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
@@ -770,18 +760,23 @@ export function createOrganizationAuthorityHttpServer(
         if (Buffer.byteLength(url.search, "utf8") > MAXIMUM_PROVIDER_QUERY_BYTES)
           throw new AuthorityOperationError("invalid_request", "request query is too large");
         const headers = singletonHeaders(request.headers);
-        const result = await ingress.accept({
-          route_id: ingress.route.route_id,
-          method: ingress.route.method,
-          path: ingress.route.path,
-          raw_body: await rawBody(request),
-          content_type: headers["content-type"],
-          headers,
-          ...(ingress.route.accepts_query === true
-            ? { query: new URLSearchParams(url.search) }
-            : {}),
-        });
-        providerResponse(response, result);
+        const disconnect = disconnectSignal(request, response);
+        try {
+          const result = await ingress.accept({
+            route_id: ingress.route.route_id,
+            method: ingress.route.method,
+            path: ingress.route.path,
+            raw_body: await rawBody(request),
+            content_type: headers["content-type"],
+            headers,
+            signal: disconnect.signal,
+            ...(ingress.route.accepts_query === true
+              ? { query: new URLSearchParams(url.search) }
+              : {}),
+          });
+          disconnect.signal.throwIfAborted();
+          providerResponse(response, result);
+        } finally { disconnect.dispose(); }
         return;
       }
       if (

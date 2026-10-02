@@ -36,7 +36,14 @@ Data Center, Basic/API-token auth, service accounts, syncs and actions are exclu
 Use Nango Connect sessions with server-supplied organization/person/membership and
 an unpredictable attempt tag. Authenticated completion verifies the connection's
 integration and tags through Nango, then independently verifies accessible resources,
-site URL and `/myself`. Client-provided connection IDs are locators, never grants.
+site URL and `/myself`. Public commands never accept a Nango connection locator.
+The shared `person tools connect/status/cancel/disconnect --tool jira` dispatcher
+selects a client-only Jira command fragment. Connect opens the private consent
+page and polls authenticated status; status discovers the tagged connection and
+finishes authorization. Provider-owned `/v1/person/tools/jira/*` routes mount via
+the generic HTTP application port. Browser failure and polling timeout trigger
+best-effort cancellation without printing the consent URL. Cancellation commits
+locally before remote cleanup, so late consent cannot revive that attempt.
 Reconnect revokes the prior grant, deletes the prior Nango connection and creates
 a fresh Connect session with a new server-owned attempt tag. Completion pins the
 previously verified Jira account and requires the new tag. This replacement flow
@@ -55,7 +62,11 @@ proxy is supported by Nango, but its remote response buffering, redirect policy 
 cancellation are not qualified as equivalent to this port. No Nango actions/syncs
 or SDK dependency is necessary.
 
-Persist a compact provider-owned SQLite binding plus expiring connection attempts.
+Persist a compact provider-owned SQLite binding plus the latest connection attempt
+per Person tenure. Its expiry and terminal state survive restart; replaced attempts
+cannot be reused. Remote consent completed after cancellation cleanup may still
+leave an orphaned Nango connection; an orphan sweeper is outside this proposal's
+implemented connection slice.
 Bind to the exact ECHO membership tenure, verified Jira account/site, opaque Nango
 reference, active/revoked state and immutable grant commitment. Current session and
 membership authorization is rechecked before and after reads and audit commit.

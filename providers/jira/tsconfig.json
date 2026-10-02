@@ -28,6 +28,9 @@
     },
     {
       "path": "../../packages/organization-processing"
+    },
+    {
+      "path": "./client"
     }
   ]
 }

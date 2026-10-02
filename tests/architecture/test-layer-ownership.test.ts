@@ -73,7 +73,8 @@ const rules: readonly TestLayerRule[] = [
       path === 'workspace:@echo-brain/federation-protocol' ||
       path === 'workspace:@echo-brain/organization-api' ||
       path === 'workspace:@echo-brain/organization-protocol' ||
-      path === 'workspace:@echo-brain/provider-slack-client',
+      path === 'workspace:@echo-brain/provider-slack-client' ||
+      path === 'workspace:@echo-brain/provider-jira-client',
   },
 ];
 
