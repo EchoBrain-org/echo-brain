@@ -5,6 +5,18 @@ import type { ApprovalWorkflowStateV1 } from "../admitted-meeting-processing/app
 import type { ProviderHttpApplicationV1 } from "@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1";
 import type { MeetingApprovalJourneyTelemetryPortV1 } from "../admitted-meeting-processing/meeting-approval-journey-telemetry-port-v1.js";
 
+/**
+ * The outcome of one bounded provider terminal-card reconciliation turn.
+ * `rendered` means the provider update and its durable rendered marker both
+ * completed. `uncertain` deliberately asks the lifecycle to wait for a later
+ * normal wake rather than immediately retrying a provider call whose outcome
+ * is unknown.
+ */
+export type ApprovalPresentationReconciliationResultV1 =
+  | "rendered"
+  | "idle"
+  | "uncertain";
+
 /** The approval-only phases used by the shared admitted-processing lifecycle. */
 export interface ApprovalWorkflowProcessingV1 {
   recoverV4Appends(signal: AbortSignal): Promise<void>;
@@ -15,7 +27,9 @@ export interface ApprovalWorkflowProcessingV1 {
    * its durable decision and record work completed. It must never be needed
    * to make an approval terminal or readable fact durable.
    */
-  reconcileApprovalPresentations?(signal: AbortSignal): Promise<void>;
+  reconcileApprovalPresentations?(
+    signal: AbortSignal,
+  ): Promise<ApprovalPresentationReconciliationResultV1 | void>;
 }
 
 /** Generic Authority resources made available to the selected approval surface. */

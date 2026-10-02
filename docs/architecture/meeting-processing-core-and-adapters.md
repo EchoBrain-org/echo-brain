@@ -169,11 +169,14 @@ tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
 Finalized private approvals have two ordered responsibilities. The durable
 worker materializes the terminal and, for an approval, its V4 receipt before
-Authority startup can serve. Card redraw is provider presentation only: a
-later periodic pass tries one unrendered terminal card, records `rendered` only
-after Slack confirms the replacement update, and rotates after an uncertain
-result. This keeps a Nango outage out of the startup gate while preserving a
-bounded, cancellable retry path for every card.
+Authority startup can serve. Card redraw is provider presentation only: approval
+publication requests it immediately after the durable work, independently of
+search. Each writer turn tries one unrendered terminal card and records
+`rendered` only after Slack confirms the replacement update. Confirmed progress
+schedules another turn so a burst drains without waiting for source polling.
+An uncertain result or failure waits for a new approval wake or periodic pass;
+the cursor rotates so one unavailable card cannot starve the rest. This keeps a
+Nango outage out of the startup gate and retains bounded, cancellable attempts.
 
 ## Current composition
 

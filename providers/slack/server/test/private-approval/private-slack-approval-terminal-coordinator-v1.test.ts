@@ -235,7 +235,12 @@ describe("private Slack approval terminal coordinator v1", () => {
     });
     await coordinator.appendFinalizedApprovalsToV4(new AbortController().signal);
     await coordinator.recoverV4Appends(new AbortController().signal);
-    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
+    await expect(
+      coordinator.reconcileApprovalPresentations(new AbortController().signal),
+    ).resolves.toBe("rendered");
+    await expect(
+      coordinator.reconcileApprovalPresentations(new AbortController().signal),
+    ).resolves.toBe("idle");
     expect(v2Appends).toBe(1);
     expect(harness.records[0]?.resolution).toEqual(value.resolution);
     expect(renders).toEqual([expect.objectContaining({ outcome: "approved", policy_label: "Projects" })]);
@@ -612,8 +617,14 @@ describe("private Slack approval terminal coordinator v1", () => {
     expect(appendCalls).toBe(0);
     expect(harness.records[0]?.v4_receipt).toBeUndefined();
     expect(renderCalls).toBe(0);
-    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
-    await coordinator.reconcileApprovalPresentations(new AbortController().signal);
+    await expect(
+      coordinator.reconcileApprovalPresentations(new AbortController().signal),
+    ).resolves.toBe("uncertain");
+    // An uncertain provider response must not claim durable rendered progress.
+    expect(harness.marks).toEqual([]);
+    await expect(
+      coordinator.reconcileApprovalPresentations(new AbortController().signal),
+    ).resolves.toBe("rendered");
     expect(renderCalls).toBe(2);
     expect(harness.marks).toEqual([APPROVAL_ID]);
     expect(journey.events).toEqual(
@@ -622,6 +633,37 @@ describe("private Slack approval terminal coordinator v1", () => {
         expect.objectContaining({ kind: "skip", stage: "meeting_search_publication" }),
       ]),
     );
+  });
+
+  it("does not report rendered progress when the durable card marker is absent", async () => {
+    const value = terminal("rejected");
+    const harness = authorityHarness(value);
+    let markerCalls = 0;
+    const coordinator = new PrivateSlackApprovalTerminalCoordinatorV1({
+      control_plane: {
+        listQueued: () => [],
+        listDenied: () => [],
+        listTerminals: () => [value],
+        finalize: async () => value,
+        recordDenied: () => undefined,
+      },
+      authority: {
+        ...harness.authority,
+        markTerminalCardRendered: () => {
+          markerCalls += 1;
+          return undefined;
+        },
+      },
+      record_writer: { appendApproved: async () => { throw new Error("reject must never append"); } },
+      poster: { renderTerminal: async () => ({ kind: "done" as const }) },
+    });
+
+    await coordinator.appendFinalizedApprovalsToV4(new AbortController().signal);
+    await expect(
+      coordinator.reconcileApprovalPresentations(new AbortController().signal),
+    ).resolves.toBe("uncertain");
+    expect(markerCalls).toBe(1);
+    expect(harness.marks).toEqual([]);
   });
 
   it("completes recovery while no bot token can be obtained and renders the card once one can", async () => {

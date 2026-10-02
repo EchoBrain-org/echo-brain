@@ -1218,19 +1218,17 @@ describe("Organization Authority runtime private approval lane", () => {
       expect(control.prepare("SELECT COUNT(*) AS n FROM organization_private_approval_signed_action_receipts_v2").get()).toEqual({ n: 4 + burst });
       await vi.advanceTimersByTimeAsync(1);
       expect(count()).toBe(3 + burst);
-      // Terminal evidence is durable before the provider presentation queue.
-      // The optional redraw runs once per later worker pass so neither a Slack
-      // outage nor this still-blocked enrichment can delay these receipts.
-      expect(fixture.poster.terminal).toHaveLength(0);
+      // A verified action wakes the terminal-card renderer as soon as its
+      // durable approval phases release the worker gate. The bounded renderer
+      // yields between cards, so allow its immediate callbacks to drain, but
+      // do not advance to the next 1 s periodic source-processing tick. This
+      // must remain independent of the deliberately blocked search model.
+      await vi.advanceTimersByTimeAsync(25);
+      expect(fixture.poster.terminal).toHaveLength(4 + burst);
       expect(control.prepare("SELECT COUNT(*) AS n FROM organization_private_approval_terminal_evidence_v2").get()).toEqual({ n: 4 + burst });
       expect(modelCalls).toBe(1);
       expect(authority.prepare("SELECT record_head_position FROM authority_readable_search_active_generation").get()).toEqual({ record_head_position: 0 });
       expect(journeys.filter((event) => event.stage === "meeting_search_publication" && event.event === "succeeded")).toEqual([]);
-      for (let expected = 1; expected <= 4 + burst; expected += 1) {
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(fixture.poster.terminal).toHaveLength(expected);
-      }
-      expect(modelCalls).toBe(1);
       release();
       await vi.advanceTimersByTimeAsync(2);
       const expectedModelCalls = burst === 0 ? 1 : 2;

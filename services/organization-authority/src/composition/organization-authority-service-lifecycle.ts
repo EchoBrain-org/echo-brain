@@ -1,5 +1,6 @@
 import { annotateCoreRuntimeV1, observeCoreRuntimeRootV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { ReadableSearchReconciliationTask } from "./readable-search-reconciliation-task.js";
+import type { ApprovalPresentationReconciliationResultV1 } from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import type { AddressInfo } from "node:net";
 import {
@@ -37,10 +38,11 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   /** Appends finalized actions to V4; rejected actions produce no readable fact. */
   appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void>;
   /**
-   * Optional bounded provider presentation reconciliation. It is called only
-   * by a periodic cycle after durable approval work, never at startup.
+   * Optional bounded provider presentation reconciliation after durable approval
+   * work, never at startup. Confirmed progress schedules another bounded turn;
+   * an idle queue or uncertain outcome waits for a new wake.
    */
-  reconcileApprovalPresentations?(signal: AbortSignal): Promise<void>;
+  reconcileApprovalPresentations?(signal: AbortSignal): Promise<ApprovalPresentationReconciliationResultV1 | void>;
   /**
    * Reconciles the immutable permission-aware search generation with the V4
    * record head after the complete append phase. Implementations may no-op
@@ -91,7 +93,8 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
   /**
    * Asks the worker to publish queued approval actions now instead of at the
    * next periodic cycle. It runs only the approval phases (finalize, append,
-   * then requests search) through the same writer gate as the periodic cycle.
+   * then requests search and card presentation) through the same writer gate
+   * as the periodic cycle.
    * Requests made while one is still waiting for
    * the gate coalesce into that one run; a request made while a publication is
    * already executing schedules exactly one follow-up run. It never throws and
@@ -223,7 +226,10 @@ export async function startOrganizationAuthorityServiceLifecycle(
     );
     let closing = false;
     let presentationPending = false;
+    let presentationActive = false;
+    let presentationImmediate: ReturnType<typeof setImmediate> | undefined;
     let presentationTail: Promise<void> = Promise.resolve();
+    let completePresentation: (() => void) | undefined;
     let requestApprovalPresentation!: () => void;
     const runProcessingCycle = async (signal: AbortSignal): Promise<void> => {
       lifecycle.startCycle();
@@ -252,18 +258,47 @@ export async function startOrganizationAuthorityServiceLifecycle(
       },
       onError: dependencies.on_worker_error,
     });
+    const finishPresentation = (): void => {
+      completePresentation?.();
+      completePresentation = undefined;
+    };
+    const schedulePresentation = (): void => {
+      if (closing || !presentationPending || presentationActive || presentationImmediate !== undefined) return;
+      // Yield between cards so a healthy burst cannot monopolize the writer
+      // gate or event loop. Each turn still attempts at most one pending card.
+      presentationImmediate = setImmediate(() => {
+        presentationImmediate = undefined;
+        presentationActive = true;
+        void worker
+          .runExclusive(async (signal) => {
+            // Coalesce wakes while queued, but preserve one that arrives
+            // after this attempt starts, including if the provider fails.
+            presentationPending = false;
+            return dependencies.processing.reconcileApprovalPresentations!(signal);
+          })
+          .then((result) => {
+            if (result === "rendered") presentationPending = true;
+          })
+          .catch((failure: unknown) => {
+            // Durable approval and search already have their own wake. A
+            // failed/uncertain redraw never generates its own retry.
+            if (!closing) reportError(failure);
+          })
+          .finally(() => {
+            presentationActive = false;
+            if (closing) presentationPending = false;
+            if (presentationPending) schedulePresentation();
+            else finishPresentation();
+          });
+      });
+    };
     requestApprovalPresentation = (): void => {
-      if (closing || presentationPending || dependencies.processing.reconcileApprovalPresentations === undefined) return;
+      if (closing || dependencies.processing.reconcileApprovalPresentations === undefined) return;
       presentationPending = true;
-      presentationTail = worker
-        .runExclusive((signal) => dependencies.processing.reconcileApprovalPresentations!(signal))
-        .catch((failure: unknown) => {
-          // The terminal and record phases already committed. Report a
-          // provider-presentation defect without suppressing this cycle's
-          // search wake or turning a retryable redraw into a worker failure.
-          if (!closing) reportError(failure);
-        })
-        .finally(() => { presentationPending = false; });
+      if (completePresentation === undefined) {
+        presentationTail = new Promise((resolve) => { completePresentation = resolve; });
+      }
+      schedulePresentation();
     };
     const shutdown = new AbortController();
     let publicationPending = false;
@@ -294,7 +329,12 @@ export async function startOrganizationAuthorityServiceLifecycle(
               lifecycle,
             );
           })
-          .then(() => { if (!closing) search.request(); })
+          .then(() => {
+            if (!closing) {
+              search.request();
+              requestApprovalPresentation();
+            }
+          })
           .catch((failure: unknown) => {
             // `publicationPending` was already cleared when the run started;
             // the only pre-start failure is the closed worker's aborted signal.
@@ -374,6 +414,12 @@ export async function startOrganizationAuthorityServiceLifecycle(
         if (closed !== undefined) return closed;
         closing = true;
         shutdown.abort();
+        presentationPending = false;
+        if (presentationImmediate !== undefined) {
+          clearImmediate(presentationImmediate);
+          presentationImmediate = undefined;
+        }
+        if (!presentationActive) finishPresentation();
         if (publicationImmediate !== undefined) {
           clearImmediate(publicationImmediate);
           publicationImmediate = undefined;
