@@ -9,8 +9,8 @@ component_ids:
   - CMP-PROCESSING-ADAPTERS
   - CMP-PERSON-CLIENT
 created_at: 2026-09-30
-reviewed_at: 2026-10-01
-reviewed_ref: e3b6bdfc9f4e06d3695b4c0058664d1edd0b6c77
+reviewed_at: 2026-10-02
+reviewed_ref: 1d7e72bd75babcfbc8025b4a089a8517aef80d7b
 status: accepted
 supersedes: []
 superseded_by: []

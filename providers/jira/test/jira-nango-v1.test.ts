@@ -28,13 +28,22 @@ describe('Jira Nango HTTP authentication adapter', () => {
     for (const [, init] of f.fetch.mock.calls) expect(init).toMatchObject({ redirect: 'error', headers: expect.objectContaining({ Authorization: 'Bearer synthetic-nango-key' }) });
   });
   it('finds a single server-tagged connection without collecting credentials or trusting a client locator', async () => {
-    const f = fixture(); f.fetch.mockResolvedValueOnce(json({ connections: [connection] }));
+    const f = fixture(); const taggedConnections = [connection]; const requests: URL[] = []; const served: (typeof connection)[][] = [];
+    f.fetch.mockImplementation(async url => {
+      const request = new URL(String(url)); requests.push(request);
+      const limit = Number(request.searchParams.get('limit')); const page = Number(request.searchParams.get('page'));
+      const tagsMatch = Object.entries(tags).every(([key, value]) => request.searchParams.get(`tags[${key}]`) === value);
+      const connections = tagsMatch ? taggedConnections.slice(page * limit, (page + 1) * limit) : []; served.push(connections);
+      return json({ connections });
+    });
     expect(await f.nango.find(tags)).toBe('reference-fixture');
-    const url = new URL(String(f.fetch.mock.calls[0]![0]));
+    expect(requests).toHaveLength(1); expect(served).toEqual([[connection]]);
+    const url = requests[0]!;
     expect(url.searchParams.get('tags[echo_attempt]')).toBe(tags.echo_attempt);
     expect(url.searchParams.get('limit')).toBe('2');
-    f.fetch.mockResolvedValueOnce(json({ connections: [] })); expect(await f.nango.find(tags)).toBeUndefined();
-    f.fetch.mockResolvedValueOnce(json({ connections: [connection, connection] })); await expect(f.nango.find(tags)).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(url.searchParams.get('page')).toBe('0');
+    taggedConnections.length = 0; expect(await f.nango.find(tags)).toBeUndefined();
+    taggedConnections.push(connection, connection); await expect(f.nango.find(tags)).rejects.toMatchObject({ code: 'unauthorized' });
   });
   it.each([{ connection_id: 'another-reference' }, { provider_config_key: 'another-integration' }, { provider: 'jira-data-center' }, { credentials: { type: 'BASIC', password: 'synthetic-private' } }, { tags: { ...tags, echo_attempt: undefined } }])('fails closed for mismatched or malformed connection data', async change => {
     const f = fixture(); f.fetch.mockResolvedValueOnce(json({ ...connection, ...change }));
