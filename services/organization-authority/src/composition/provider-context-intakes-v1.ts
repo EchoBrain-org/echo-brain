@@ -28,12 +28,15 @@ export function createGranolaContextIntakeV1(input: AuthorityBinding & {
   });
 }
 
-/** Personal Jira reads have no retention authorization in this integration profile. */
+/** Jira defaults to request-only; retained captures require an explicit pointer-only Authority binding. */
 export function createJiraContextIntakeV1(input: AuthorityBinding &
   Pick<JiraContextSourceOptionsV1, 'transport' | 'read_grant_fence' | 'project' | 'representation' | 'now'> & {
     readonly source_instance_id: string;
+    readonly retention?: ContextSourceIntakeOptionsV1['retention'];
   }): ContextSourceIntakeV1 {
   if (input.transport.binding.organization_id !== input.organization_id) throw new Error('Jira context source differs from its configured organization');
+  const retention: ContextSourceIntakeOptionsV1['retention'] = input.retention ?? { disposition: 'request_only' };
+  if (retention.disposition === 'retained' && input.representation !== 'pointer') throw new Error('Jira retained context requires pointer representation');
   const identity = Object.freeze({ kind: 'source' as const, adapter_id: 'jira-context-capture', instance_id: input.source_instance_id, version: '1.0.0' });
   const source = createJiraContextSourceV1({
     transport: input.transport, read_grant_fence: input.read_grant_fence, project: input.project,
@@ -41,6 +44,6 @@ export function createJiraContextIntakeV1(input: AuthorityBinding &
   });
   return createContextSourceIntakeV1({
     source, identity, organization_id: input.organization_id, authority: input.authority,
-    require_read_current: input.require_read_current, retention: { disposition: 'request_only' },
+    require_read_current: input.require_read_current, retention,
   });
 }

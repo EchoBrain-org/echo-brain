@@ -5,6 +5,14 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./context/slack-context-source-v1": {
+      "types": "./dist/context/slack-context-source-v1.d.ts",
+      "import": "./dist/context/slack-context-source-v1.js"
+    },
+    "./context/slack-context-transport-v1": {
+      "types": "./dist/context/slack-context-transport-v1.d.ts",
+      "import": "./dist/context/slack-context-transport-v1.js"
+    },
     "./organization-protocol/private-slack-block-approval-record-input-v1": {
       "types": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.d.ts",
       "import": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.js"

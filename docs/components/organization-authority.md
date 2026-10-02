@@ -70,14 +70,14 @@ closure, the set its image copies from the build stage. Its hosting account and
 operator are selected under
 [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md):
 
-| Workspace                    | Owns                                                                         |
-| ---------------------------- | ---------------------------------------------------------------------------- |
-| `organization-authority`     | Organization identity, access, HTTP boundary, and composition                |
-| `organization-authority-kernel` | Authority SQL baselines, persistence adapters, and state lineage          |
-| `organization-processing`    | Provider-neutral meeting processing and admitted-meeting workflow            |
-| `organization-control-plane` | Verified provider connection, Person identity links, and private approval persistence |
-| `organization-record`        | Append-only approved record and deterministic append-side projections        |
-| `organization-retrieval`     | Rebuildable permission-aware retrieval generations                           |
+| Workspace                       | Owns                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| `organization-authority`        | Organization identity, access, HTTP boundary, and composition                         |
+| `organization-authority-kernel` | Authority SQL baselines, persistence adapters, and state lineage                      |
+| `organization-processing`       | Provider-neutral meeting processing and admitted-meeting workflow                     |
+| `organization-control-plane`    | Verified provider connection, Person identity links, and private approval persistence |
+| `organization-record`           | Append-only approved record and deterministic append-side projections                 |
+| `organization-retrieval`        | Rebuildable permission-aware retrieval generations                                    |
 
 The rest of the closure is the shared `federation-protocol`,
 `organization-protocol` and `organization-api` contracts plus the composed
@@ -120,8 +120,19 @@ The local rehearsal runner reserves isolated state and Person paths, preflights
 before bootstrap, and serves its disposable profile on loopback only. It has a
 private control socket for authenticated bounded capture and one manual legacy
 processing cycle. Granola's retained owner-scoped capture is separate from the
-legacy meeting cursor owner; Jira capture is request-only. This is local
-rehearsal, not provider qualification or a production composition.
+legacy meeting cursor owner; the current local and staging runners keep Jira
+request-only and have no Slack source. Jira's factory now defaults to
+request-only but can accept an explicit retained-pointer Authority binding; the
+shared SQLite admission fence still selects and rechecks custody independently
+of the provider read grant. Slack has a provider-only pointer adapter with no
+Authority composition, registered scopes or activation. The approved follow-up
+is pointer plus retained message snapshot capture, with edits and deletes policy
+defined before activation. This is local source proof, not provider
+qualification or a production composition.
+
+Focused source proof is in the [Jira intake test](../../services/organization-authority/test/jira-context-source-intake-v1.test.ts),
+[Slack source test](../../providers/slack/server/test/context/slack-context-source-v1.test.ts)
+and [Slack transport test](../../providers/slack/server/test/context/slack-context-transport-v1.test.ts).
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)
