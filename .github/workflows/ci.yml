@@ -321,6 +321,12 @@ jobs:
           export ECHO_CLEAN_AUTHORITY_HOST=localhost
           export ECHO_CLEAN_AWS_REGION=us-west-2
           export ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/localhost
+          # The Authority holds Slack through Nango. CI starts it with a random,
+          # never-used private key; no Nango call happens before Slack setup.
+          export ECHO_CLEAN_NANGO_INTEGRATION=slack
+          export ECHO_LOCAL_NANGO_SECRET_KEY_FILE="$RUNNER_TEMP/echo-authority-ci-nango-secret-key"
+          export ECHO_LOCAL_NANGO_INTEGRATION="$ECHO_CLEAN_NANGO_INTEGRATION"
+          (umask 077 && node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))' > "$ECHO_LOCAL_NANGO_SECRET_KEY_FILE")
           cleanup() {
             if [[ "${#authority_local_args[@]}" -ne 0 ]]; then
               npm run authority:local -- down "${authority_local_args[@]}" \

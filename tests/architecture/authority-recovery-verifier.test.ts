@@ -208,7 +208,7 @@ function runtimeEnvironment(
     `ECHO_CLEAN_RUNTIME_PROFILE_VERSION=${release.runtime_profile.profile_version}`,
     "ECHO_CLEAN_AWS_REGION=us-west-2",
     `ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/${host}`,
-    "ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=C012345678",
+    "ECHO_CLEAN_NANGO_INTEGRATION=slack",
     "ECHO_CLEAN_OWNER_EMAIL=founder@example.test",
   ].join("\n");
 }
@@ -276,6 +276,26 @@ describe("authority offline recovery verifier", () => {
     expect(result.stderr).toBe(
       "authority offline recovery verification failed\n",
     );
+  });
+
+  it("refuses a connector rehearsal profile or sidecar in an offline backup restore", async () => {
+    const cleanData = await writeFixture();
+    const environment = join(
+      cleanData,
+      "release",
+      "runtime-environments",
+      "clean-v1-20260825-001.env",
+    );
+    writeFileSync(
+      environment,
+      `${readFileSync(environment, "utf8")}\nECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/echo-clean/private/staging-connector-rehearsal.json`,
+      { mode: 0o600 },
+    );
+    expect((await run(cleanData)).status).toBe(1);
+
+    const second = await writeFixture();
+    mkdirSync(join(second, "staging-connector-rehearsal-v1"), { mode: 0o700 });
+    expect((await run(second)).status).toBe(1);
   });
 
   it("refuses a state SQLite symlink before lineage or SQLite inspection", async () => {
@@ -370,6 +390,9 @@ describe("authority offline recovery verifier", () => {
       ),
       valid.replace("ECHO_CLEAN_AWS_REGION=us-west-2\n", ""),
       `${valid}\nECHO_CLEAN_EXTRA=value`,
+      // A snapshot from before in-app Slack setup names a channel, not Nango.
+      valid.replace("ECHO_CLEAN_NANGO_INTEGRATION=slack", "ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=C012345678"),
+      valid.replace("ECHO_CLEAN_NANGO_INTEGRATION=slack", "ECHO_CLEAN_NANGO_INTEGRATION=Slack Prod"),
     ];
 
     for (const value of variants) {

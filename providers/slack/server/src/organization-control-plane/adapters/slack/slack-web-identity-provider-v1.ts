@@ -1,6 +1,6 @@
 import type { ReadableStreamReadResult } from "node:stream/web";
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
-import type { ObservedSlackIdentityLinkChallenge, ObserveSlackIdentityLinkChallengeInput, PostedSlackIdentityLinkChallenge, PostSlackIdentityLinkChallengeInput, SlackIntegrationProvider, VerifiedSlackChannel, VerifiedSlackConnection, VerifiedSlackHuman } from "../../application/slack-integration-contracts.js";
+import type { ObservedSlackIdentityLinkChallenge, ObserveSlackIdentityLinkChallengeInput, PostedSlackIdentityLinkChallenge, PostSlackIdentityLinkChallengeInput, SlackIntegrationProvider, VerifiedSlackConnection, VerifiedSlackHuman } from "../../application/slack-integration-contracts.js";
 
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -17,7 +17,6 @@ export type SlackIdentityProviderV1 = Pick<
   | "openIdentityLinkDirectMessage"
   | "verifyConnection"
   | "verifyHuman"
-  | "verifyChannel"
   | "postIdentityLinkChallenge"
   | "observeIdentityLinkChallenge"
 >;
@@ -27,10 +26,17 @@ export class SlackIdentityProviderErrorV1 extends Error {
     message: string,
     readonly code:
       "unauthorized" | "unavailable" | "invalid_response" | "not_observed",
+    /** Slack itself rejected the bot token (HTTP 401 or an auth error). */
+    readonly token_rejected = false,
   ) {
     super(message);
     this.name = "SlackIdentityProviderErrorV1";
   }
+}
+
+/** Only Slack's rejection of the token; identity mismatches are not one. */
+export function isSlackIdentityTokenRejectedV1(error: unknown): boolean {
+  return error instanceof SlackIdentityProviderErrorV1 && error.token_rejected;
 }
 
 interface SlackResponse {
@@ -346,6 +352,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
       throw new SlackIdentityProviderErrorV1(
         "Slack integration verification failed",
         response.status === 401 ? "unauthorized" : "unavailable",
+        response.status === 401,
       );
     }
     const bytes = await readBoundedResponseBytes(response);
@@ -384,6 +391,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
           : notObserved
             ? "not_observed"
             : "unavailable",
+        unauthorized,
       );
     }
     const scopesHeader = response.headers.get("x-oauth-scopes");
@@ -499,78 +507,6 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
       );
     }
     return connection;
-  }
-
-  async verifyChannel(
-    token: string,
-    channelId: string,
-    expectedTeamId: string,
-    signal?: AbortSignal,
-  ): Promise<VerifiedSlackChannel> {
-    requiredId(channelId, "channel_id", "C");
-    requiredId(expectedTeamId, "expected team_id", "T");
-    const response = await this.call(
-      token,
-      "conversations.info",
-      { channel: channelId },
-      signal,
-    );
-    const channel = record(
-      response.value.channel,
-      "conversations.info channel",
-    );
-    const observedChannelId = requiredId(channel.id, "channel.id", "C");
-    const contextTeamId = requiredId(
-      channel.context_team_id,
-      "channel.context_team_id",
-      "T",
-    );
-    if (
-      observedChannelId !== channelId ||
-      contextTeamId !== expectedTeamId ||
-      channel.is_channel !== true ||
-      channel.is_private !== false ||
-      channel.is_im === true ||
-      channel.is_mpim === true ||
-      channel.is_ext_shared !== false ||
-      channel.is_pending_ext_shared !== false
-    ) {
-      throw new SlackIdentityProviderErrorV1(
-        "Slack channel is not an eligible public organization channel",
-        "invalid_response",
-      );
-    }
-    if (
-      channel.is_archived !== false ||
-      channel.is_member !== true ||
-      channel.is_frozen === true ||
-      channel.is_read_only === true ||
-      channel.is_thread_only === true
-    ) {
-      throw new SlackIdentityProviderErrorV1(
-        "Slack bot is not an active member of the selected channel",
-        "not_observed",
-      );
-    }
-    return Object.freeze({
-      channel_id: observedChannelId,
-      team_id: contextTeamId,
-      is_public_organization_channel: true,
-      is_active: true,
-      bot_membership_verified: true,
-      bot_access_verified: true,
-      verification_evidence_sha256: canonicalSha256({
-        method: "slack_conversations_info",
-        channel_id: observedChannelId,
-        context_team_id: contextTeamId,
-        is_channel: true,
-        is_private: false,
-        is_archived: false,
-        is_member: true,
-        is_ext_shared: false,
-        is_pending_ext_shared: false,
-      }),
-    });
   }
 
   async verifyHuman(

@@ -1,4 +1,4 @@
-import { openOrganizationAuthorityService } from "./organization-authority-composition-root.js";
+import { openOrganizationAuthorityService, type OrganizationAuthorityServiceConfig } from "./organization-authority-composition-root.js";
 import {
   type OpenedOrganizationAuthorityRuntime,
   type OrganizationAuthorityRuntimeConfig,
@@ -20,9 +20,7 @@ export interface SyntheticDemoOrganizationAuthorityServiceConfigV1
   readonly meetings_directory: string;
   readonly owner_email: string;
   readonly openrouter_credential_file: string;
-  readonly slack_signing_secret_file: string;
-  readonly slack_connection_id: string;
-  readonly slack_identity_link_channel_id: string;
+  readonly slack_nango: OrganizationAuthorityServiceConfig["slack_nango"];
 }
 
 /**
@@ -38,9 +36,7 @@ export async function openSyntheticDemoOrganizationAuthorityServiceV1(
     meetings_directory,
     owner_email,
     openrouter_credential_file,
-    slack_signing_secret_file,
-    slack_connection_id,
-    slack_identity_link_channel_id,
+    slack_nango,
     ...runtimeConfig
   } = config;
   return openOrganizationAuthorityService(
@@ -49,9 +45,7 @@ export async function openSyntheticDemoOrganizationAuthorityServiceV1(
       staging_synthetic_meetings_directory: meetings_directory,
       staging_synthetic_owner_email: owner_email,
       openrouter_credential_file,
-      slack_signing_secret_file,
-      slack_connection_id,
-      slack_identity_link_channel_id,
+      slack_nango,
     },
     dependencies,
   );

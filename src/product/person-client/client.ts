@@ -29,6 +29,7 @@ import {
   unknownDocumentMutation,
   type EmployeeRosterV1,
   type PersonAnswer,
+  type PersonAnswerV5,
   type PersonEvidenceDeskV1,
   type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
@@ -660,6 +661,13 @@ export class PersonClient {
     return this.withReadSession((authority, token) => authority.askV3(token, question, scope, signal));
   }
 
+  /** Explicit opt-in to the versioned ticket-capable response. */
+  async askWithTickets(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV5> {
+    validatePersonQueryText(question);
+    if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+    return this.withReadSession((authority, token) => authority.askV4(token, question, scope, signal));
+  }
+
   /** Each evidence invocation creates a new authenticated, scope-bound desk request. */
   async evidenceSearch(value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
     return this.withReadSession((authority, token) => authority.evidenceSearch(token, value, signal));
@@ -692,14 +700,17 @@ export class PersonClient {
     return this.withReadSession((authority, token) => authority.readMeetingTranscript(token, request));
   }
 
-  async withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>): Promise<T> {
+  async withToolSession<T>(operation: (session: PersonToolSessionV1) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
     const stored = await this.accessSession();
+    signal?.throwIfAborted();
     const result = await operation(Object.freeze({
       identity: Object.freeze({ organization_id: stored.session.organization_id, membership_id: stored.session.membership_id }),
-      transport: this.authority(stored.authority_origin).toolTransport(stored.session.access_token),
+      transport: this.authority(stored.authority_origin).toolTransport(stored.session.access_token, signal),
       request_id: (prefix: string) => this.requestId(prefix),
       random_bytes: (size: number) => this.randomBytes(size),
     }));
+    signal?.throwIfAborted();
     this.assertCurrentSession(stored);
     return result;
   }

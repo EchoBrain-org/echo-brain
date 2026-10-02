@@ -33,7 +33,12 @@ import {
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   openOrganizationControlDatabase,
 } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
-import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2 } from "../../../providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
+import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionStateV2, validateOrganizationToolConnectionStateV2 } from "../../../providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
+import { activateNangoSlackConnectionV1 } from "@echo-brain/provider-slack-server/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1";
+import { serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-app-credentials-v1";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
+import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-connection-health-v1";
+import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeContentV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -100,15 +105,8 @@ const SLACK_BOT_USER = "U012LIVEBOT";
 const SLACK_OWNER = "U012FOUNDER";
 const SLACK_DM_CHANNEL = "D012LIVETEST";
 const SLACK_SIGNING_SECRET = "test-slack-signing-secret-000000000";
-const PRIVATE_SLACK_SCOPES = [
-  "channels:history",
-  "channels:read",
-  "chat:write",
-  "im:history",
-  "im:write",
-  "reactions:read",
-  "users:read",
-] as const;
+/** Never read: the test poster replaces Slack, so Nango is never called. */
+const SLACK_NANGO = Object.freeze({ secret_key: "nango-secret-key-not-used-000000", integration_key: "slack" });
 const OIDC = {
   issuer: "https://issuer.example",
   client_id: "founder-client",
@@ -236,15 +234,15 @@ async function completeFounderReonboarding(input: {
   }
 }
 
-/** Seed only the connection and verified owner identity needed for a private DM. */
-function seedPrivateSlackConnection(input: {
+/** Seed the owner's Nango install of the ECHO app and the owner's verified Slack identity. */
+async function seedPrivateSlackConnection(input: {
   readonly state_directory: string;
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
   readonly principal_id: string;
   readonly membership_id: string;
-}): void {
+}): Promise<void> {
   const control = openOrganizationControlDatabase(
     join(input.state_directory, "integrations.sqlite"),
     { fileMustExist: true },
@@ -255,54 +253,18 @@ function seedPrivateSlackConnection(input: {
       organization_id: input.organization_id,
       state_lineage_id: input.state_lineage_id,
     };
-    const connection = buildOrganizationToolConnectionContractV2({
-      ...coordinates,
-      connection_id: "con_live_test",
-      provider_issuer: "https://slack.com",
-      provider_tenant_kind: "workspace",
-      provider_tenant_id: SLACK_WORKSPACE,
-      provider_enterprise_id: null,
-      tool_kind: "slack",
-      provider_app_id: SLACK_APP,
-      provider_bot_id: SLACK_BOT,
-      provider_bot_user_id: SLACK_BOT_USER,
-      required_provider_scopes: PRIVATE_SLACK_SCOPES,
-      public_connection_configuration_sha256: canonicalSha256({ kind: "test" }),
+    const secrets = new FileOrganizationSecretStore(join(input.state_directory, "secrets"));
+    const credentials: SlackAppCredentialsV1 = { kind: "echo-slack-app-credentials-v1", app_id: SLACK_APP, client_id: "1234.5678",
+      client_secret: "test-slack-client-secret", signing_secret: SLACK_SIGNING_SECRET, nango_connection_id: null };
+    await activateNangoSlackConnectionV1({
+      database: control, secrets, ...coordinates,
+      verifier: { verifyConnection: async () => ({ team_id: SLACK_WORKSPACE, enterprise_id: null, bot_user_id: SLACK_BOT_USER, bot_id: SLACK_BOT,
+        app_id: SLACK_APP, granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, verification_evidence_sha256: canonicalSha256({ kind: "verification" }) }) },
+      credential: { reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials },
+      nango: { connection_id: "nango-live-test", tags: {}, team_id: SLACK_WORKSPACE,
+        app_id: SLACK_APP, bot_user_id: SLACK_BOT_USER, granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: "xoxb-test-bot-token", updated_at: NOW },
+      now: () => NOW, new_connection_id: () => "con_live_test",
     });
-    const connectionSha = canonicalSha256(connection);
-    const state = buildOrganizationToolConnectionStateV2({
-      connection_id: connection.connection_id,
-      connection_contract_sha256: connectionSha,
-      connection_status: "active",
-      credential_reference_sha256: canonicalSha256({ kind: "test-token" }),
-      observed_granted_scopes: PRIVATE_SLACK_SCOPES,
-      verification_event_id: "verify_live_test",
-      verification_evidence_sha256: canonicalSha256({ kind: "verification" }),
-      verification_revision: 1,
-      verified_at: NOW,
-    });
-    const stateSha = canonicalSha256(state);
-    control
-      .prepare(
-        "INSERT INTO organization_tool_connection_contracts VALUES (?, ?, ?, ?)",
-      )
-      .run(
-        connection.connection_id,
-        canonicalJson(connection),
-        connectionSha,
-        NOW,
-      );
-    control
-      .prepare(
-        "INSERT INTO organization_tool_connection_current_state VALUES (?, ?, ?, ?, 'active', ?)",
-      )
-      .run(
-        connection.connection_id,
-        connectionSha,
-        canonicalJson(state),
-        stateSha,
-        NOW,
-      );
     const link = buildExternalHumanIdentityLinkContractV2({
       ...coordinates,
       external_identity_link_id: "clm_live_test",
@@ -549,11 +511,6 @@ async function admittedFixture(input: {
     "llm.key",
     "llm-private-credential-material-000000",
   );
-  const slack_signing_secret_file = privateFile(
-    parent,
-    "slack-signing-secret",
-    SLACK_SIGNING_SECRET,
-  );
   const admitted = await admitGranolaMeetingSource({
     state_directory: initialized.state_directory,
     source_instance_id: "founder-granola",
@@ -577,7 +534,7 @@ async function admittedFixture(input: {
     now: () => NOW,
   });
   if (input.seed_private_slack_connection ?? false) {
-    seedPrivateSlackConnection({
+    await seedPrivateSlackConnection({
       state_directory: initialized.state_directory,
       authority_id: initialized.authority_id,
       organization_id: initialized.organization_id,
@@ -602,10 +559,7 @@ async function admittedFixture(input: {
     oidc: OIDC,
     client_authentication: { method: "none" },
     pkce_key_file,
-    slack_signing_secret_file,
-    slack_connection_id: "con_live_test",
-    // Identity-link onboarding still uses this field. Delivery never does.
-    slack_identity_link_channel_id: "C0123456789",
+    slack_nango: SLACK_NANGO,
     granola_credential_file,
     granola_owner_email_file,
     openrouter_credential_file: openrouterCredentialFile,
@@ -672,7 +626,8 @@ async function approvalSeamFixture(provider: "slack" | "fixture", interruptions:
   const alternate = () => persistedApprovalWorkflowFixtureV1({ path, actor: { principal_id: fixture.initialized.owner_principal_id, membership_id: fixture.initialized.owner_membership_id }, ...interruptions });
   const open = async () => {
     const selected = provider === "slack" ? createPrivateSlackApprovalWorkflowBundleV1({ state_directory: fixture.initialized.state_directory,
-      signing_secret_file: fixture.config.slack_signing_secret_file, connection_id: fixture.config.slack_connection_id, poster: fixture.poster }) : alternate().bundle;
+      bot_token_source: { botToken: async () => { throw new Error("the test poster replaces Slack"); } },
+      connection_health: new SlackConnectionHealthV1(), poster: fixture.poster }) : alternate().bundle;
     const approval_workflow_bundle: ApprovalWorkflowBundleV1 = {
       async assert_existing_presentations_owned(context) { contexts.push(context); await selected.assert_existing_presentations_owned(context); },
       async load(context) { contexts.push(context); return selected.load(context); },
@@ -1040,9 +995,7 @@ describe("Organization Authority runtime private approval lane", () => {
       pkce_key_file: credentials.pkce_sealing_key_reference.slice(
         "file:".length,
       ),
-      slack_signing_secret_file: join(parent, "not-read-slack-signing-secret"),
-      slack_connection_id: "con_not_read",
-      slack_identity_link_channel_id: "C0123456789",
+      slack_nango: SLACK_NANGO,
       granola_credential_file: join(parent, "not-read-granola"),
       granola_owner_email_file: join(parent, "not-read-owner"),
       openrouter_credential_file: join(parent, "not-read-openrouter"),
@@ -1265,11 +1218,19 @@ describe("Organization Authority runtime private approval lane", () => {
       expect(control.prepare("SELECT COUNT(*) AS n FROM organization_private_approval_signed_action_receipts_v2").get()).toEqual({ n: 4 + burst });
       await vi.advanceTimersByTimeAsync(1);
       expect(count()).toBe(3 + burst);
-      expect(fixture.poster.terminal).toHaveLength(4 + burst);
+      // Terminal evidence is durable before the provider presentation queue.
+      // The optional redraw runs once per later worker pass so neither a Slack
+      // outage nor this still-blocked enrichment can delay these receipts.
+      expect(fixture.poster.terminal).toHaveLength(0);
       expect(control.prepare("SELECT COUNT(*) AS n FROM organization_private_approval_terminal_evidence_v2").get()).toEqual({ n: 4 + burst });
       expect(modelCalls).toBe(1);
       expect(authority.prepare("SELECT record_head_position FROM authority_readable_search_active_generation").get()).toEqual({ record_head_position: 0 });
       expect(journeys.filter((event) => event.stage === "meeting_search_publication" && event.event === "succeeded")).toEqual([]);
+      for (let expected = 1; expected <= 4 + burst; expected += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(fixture.poster.terminal).toHaveLength(expected);
+      }
+      expect(modelCalls).toBe(1);
       release();
       await vi.advanceTimersByTimeAsync(2);
       const expectedModelCalls = burst === 0 ? 1 : 2;
@@ -1702,21 +1663,15 @@ describe("Organization Authority runtime private approval lane", () => {
       if (fixture.errors[0] !== undefined) throw fixture.errors[0];
       await fixture.runtime.close();
 
-      const current = control
+      const current = validateOrganizationToolConnectionStateV2(JSON.parse((control
         .prepare(
-          `SELECT connection_contract_sha256
+          `SELECT state_json
              FROM organization_tool_connection_current_state
             WHERE connection_id = ?`,
         )
-        .get("con_live_test") as {
-        readonly connection_contract_sha256: `sha256:${string}`;
-      };
+        .get("con_live_test") as { readonly state_json: string }).state_json));
       const replacementState = buildOrganizationToolConnectionStateV2({
-        connection_id: "con_live_test",
-        connection_contract_sha256: current.connection_contract_sha256,
-        connection_status: "active",
-        credential_reference_sha256: canonicalSha256({ kind: "rotated-test-token" }),
-        observed_granted_scopes: PRIVATE_SLACK_SCOPES,
+        ...current,
         verification_event_id: "verify_live_test_rotated",
         verification_evidence_sha256: canonicalSha256({ kind: "rotated-verification" }),
         verification_revision: 2,

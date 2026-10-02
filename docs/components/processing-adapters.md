@@ -16,6 +16,8 @@ decision_ids:
   - ADR-0006
   - ADR-0007
   - ADR-0022
+  - ADR-0025
+  - ADR-0027
 invariant_ids:
   - INV-ADAPTERS-001
   - INV-ADAPTERS-002
@@ -57,12 +59,33 @@ are defined by [INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semant
 An adapter owns provider transport and canonicalization. It must not redefine
 core evidence, identity, authorization, or approval semantics.
 
+The current meeting composition has one organization-owned Granola
+export/admission bridge. Its credential and owner binding are selected by the
+Authority and stay out of Person clients; admitted revisions then use the
+provider-neutral meeting-source and approval contracts.
+
+The Granola HTTP client bounds each streamed JSON body before parsing and the
+total assembled transcript across pages. Oversized inline transcripts use the
+paged fallback; bounds reject excess without truncation. These transport bounds
+are separate from representation-specific capture limits. Jira's server-only
+capture handoff derives its transport and current-grant fences from an
+authenticated Person connection. Both changes have synthetic-provider source
+proof; see the [capture integration scope](../product/2026-10-01-connector-context-integration-v1.md)
+for the remaining live profile and qualification work.
+
 ## Trust boundary
 
 Provider acknowledgements, stored provider objects, provider identities, and
 local durable state are distinct evidence. Any adapter that causes an external
 effect requires explicit retry, crash, concurrency, and reconciliation
 semantics.
+
+For the private Slack approval surface, Authority completes terminal and V4
+materialization before startup readiness. Terminal-card redraw is a separate,
+bounded periodic presentation reconciliation: one pending card per pass,
+fairly rotated after uncertain outcomes, with the worker cancellation signal
+passed to Slack. A card becomes rendered only after the provider confirms its
+replacement update.
 
 ## Current references
 

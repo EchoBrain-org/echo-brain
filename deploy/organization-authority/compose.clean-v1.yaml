@@ -21,8 +21,10 @@ services:
       - "39479"
       - --client-secret-file
       - /echo-clean/private/oidc-client-secret
-      - --slack-signing-secret-file
-      - /echo-clean/private/slack-signing-secret
+      - --nango-secret-key-file
+      - /echo-clean/private/nango-secret-key
+      - --nango-integration
+      - "${ECHO_CLEAN_NANGO_INTEGRATION:?set ECHO_CLEAN_NANGO_INTEGRATION to the Nango Slack integration key}"
     user: "${ECHO_CLEAN_AUTHORITY_UID:-1000}:${ECHO_CLEAN_AUTHORITY_GID:-1000}"
     labels:
       io.echo-brain.release-id: "${ECHO_CLEAN_RELEASE_ID:?set ECHO_CLEAN_RELEASE_ID to the accepted release ID}"
@@ -41,6 +43,8 @@ services:
       # Fresh staging rehearsals can admit the four fixture notes through the
       # normal runtime. The service rejects this setting outside staging.
       ECHO_STAGING_SYNTHETIC_MEETINGS_DIR: "${ECHO_STAGING_SYNTHETIC_MEETINGS_DIR:-}"
+      # The host wrapper writes this only for the staging-only connector rehearsal.
+      ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: "${ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE:-}"
     restart: unless-stopped
     stop_grace_period: 45s
     volumes:

@@ -98,8 +98,143 @@ echo-organization-authority-state-bootstrap \
 
 Normally use the initial-owner setup below instead: it creates this same clean
 state with a durable setup plan, generated internal IDs, Person credentials,
-Slack connection, and initial-owner invitation. Do not run reset into a directory
-that already contains state.
+and initial-owner invitation; Slack is connected afterward, in the app. Do not
+run reset into a directory that already contains state.
+
+## Disposable local connector preparation
+
+Use the [operator router](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
+for actor and secret-handling rules. The local connector preparation command
+creates a new private rehearsal directory with a nonsecret configuration
+template, isolated Person directory, private input directory and receipts
+directory. It reserves an absent Authority state path for later bootstrap.
+It never reads installed Person sessions or copies staging inputs.
+
+```sh
+npm run authority:connector-rehearsal -- prepare --directory /absolute/new-rehearsal
+npm run authority:connector-rehearsal -- preflight --directory /absolute/new-rehearsal
+```
+
+Fill the generated configuration with the rehearsal Authority's public HTTPS
+origin, test owner, OIDC configuration path, Nango integration keys, and Jira
+site/project. Private provider input paths are separate from their values.
+Preflight checks configuration shape and private-file ownership/modes; it
+prints missing field names, never credential contents. A configuration-ready
+result does not prove provider credentials or permissions work.
+
+The public HTTPS origin is this test Authority's URL. A local tunnel or proxy
+must forward it to the Authority's loopback listener. Register its
+`/v2/session/oidc/callback` in the test OIDC application. Slack's generated app
+also points identity and interactive-card callbacks at this origin. The
+existing staging Authority URL reaches staging, not the isolated local state.
+
+Preparation and preflight are the only pre-bootstrap actions. They do not
+create a tunnel, bootstrap state, start a listener, connect a provider, or
+qualify anything. `preflight` is an overall profile check: its
+`configuration_ready` result means every later private input is present, not
+that bootstrap must wait for every provider input. Bootstrap needs the public
+origin, organization/owner and OIDC configuration. Use this disposable local
+sequence once those bootstrap inputs are ready:
+
+```sh
+npm run build
+npm run authority:connector-rehearsal -- bootstrap --directory /absolute/new-rehearsal
+
+# Terminal 1: loopback-only service. It reports 127.0.0.1:39489 when ready.
+npm run authority:connector-rehearsal -- serve --directory /absolute/new-rehearsal
+
+# Terminal 2: only the rehearsal's isolated Person home is used.
+npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- \
+  login --invitation /absolute/new-rehearsal/state/onboarding/founder-person-invitation.json
+npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- tools setup --tool slack
+npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- tools connect --tool slack
+npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- tools connect --tool jira
+```
+
+The human completes OIDC and provider browser consent. The authority URL still
+needs a dedicated public HTTPS test origin and matching test-OIDC callback even
+though the local service listener is loopback-only. Do not use the installed
+Person home, staging origin, or production credentials.
+
+The first `serve` additionally needs the Nango secret and Jira cloud
+configuration. Jira can connect and make a request-only capture before Granola
+credential installation/finalization; the configured Jira project is required
+when the capture runs. Granola and OpenRouter files become necessary for the
+stopped `credentials-install` and `finalize` phase below. Run `preflight` again
+when all of those later inputs are in place to verify the complete profile.
+
+Stop `serve` before installing credentials and finalizing, then start it again:
+
+```sh
+npm run authority:connector-rehearsal -- credentials-install --directory /absolute/new-rehearsal
+npm run authority:connector-rehearsal -- finalize --directory /absolute/new-rehearsal
+npm run authority:connector-rehearsal -- serve --directory /absolute/new-rehearsal
+
+# In another terminal, as the authenticated initial owner:
+npm run authority:connector-rehearsal -- capture --directory /absolute/new-rehearsal --tool granola --limit 1
+npm run authority:connector-rehearsal -- capture --directory /absolute/new-rehearsal --tool jira --limit 1
+npm run authority:connector-rehearsal -- cycle-once --directory /absolute/new-rehearsal
+```
+
+`capture` and `cycle-once` obtain the access token from the isolated Person
+session and send it only over the runner's private `control.sock` Unix socket;
+it is never printed or placed in command arguments. Granola capture is an
+owner-scoped, retained qualification observation under the shared context
+foundation. It does not advance the meeting cursor. `cycle-once` is the
+separate legacy meeting-and-approval processor and remains its cursor owner.
+Jira capture is request-only and disappears after its receipt. No command
+creates an automatic convergence loop or qualifies a provider. Jira remains
+disabled in the normal service CLI. See the
+[integration scope](../../docs/product/2026-10-01-connector-context-integration-v1.md).
+
+Manual scheduling means source polling occurs only through the explicit capture
+or `cycle-once` commands. It does not suppress existing derived approval,
+presentation, or search-reconciliation wakes after a manual cycle.
+
+## Staging connector rehearsal
+
+This opt-in profile reuses the staging Authority's HTTPS endpoint and Google
+sign-in. First deploy the matching server, host tooling and Person client through
+the [operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
+The [host guide](../../deploy/organization-authority/README.md) owns preparing
+the nonsecret `staging_connector_rehearsal` onboarding field and its private
+profile file. A checkout build alone does not enable a running Authority.
+
+Save an exact copy of that profile object as a local nonsecret JSON file. Use
+the release-matched Person client to sign in and run the ordinary shared
+connection commands: `person tools setup --tool slack`,
+`person tools connect --tool slack`, and `person tools connect --tool jira`.
+The staging profile admits Jira connection commands only for its initial owner.
+Granola continues to use the host's direct organization credential.
+
+After `npm run build`, the owner Mac can run:
+
+```sh
+npm run authority:staging-connector-rehearsal -- status \
+  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json
+npm run authority:staging-connector-rehearsal -- capture \
+  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
+  --tool granola --limit 1
+npm run authority:staging-connector-rehearsal -- capture \
+  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
+  --tool jira --limit 1
+```
+
+The runner uses the installed Person session in the current user's home. An
+explicit `--person-home` can select another local home, but its session must
+still name the staging Authority and an active initial owner. The release ID
+and profile digest must match the running server. No token is accepted on the
+command line or printed. A failed capture is not retried automatically: a lost
+response may follow an already-committed Granola observation.
+
+Receipts contain hashes and counts, never source contents, cursors, provider
+account IDs or credentials. A zero-item receipt is not a successful content
+capture. Granola observations are retained under the separate owner policy;
+Jira observations are request-only. Ordinary Granola polling owns the cursor
+and continues running. Slack approval tests use the existing synthetic release
+canary and human approval, with separate evidence. No Slack-message capture or
+Jira Ask is enabled by this profile. See the
+[scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal-v1).
 
 ## Initial-owner setup internals
 
@@ -110,11 +245,11 @@ development and custom deployments; they are not the staging runbook.
 
 Bootstrap and finalization are stopped-state operations. The path is:
 
-1. Bootstrap the clean lineage, initialize Person credentials, verify the Slack
-   bot and temporary public initial-owner identity-link channel, and issue the
-   initial-owner invitation. That channel never receives an approval card.
-2. Start the Organization Authority service, complete the initial owner's browser OIDC sign-in, and link the
-   signed-in person to Slack.
+1. Bootstrap the clean lineage, initialize Person credentials, and issue the
+   initial-owner invitation. Bootstrap takes no Slack input.
+2. Start the Organization Authority service, complete the initial owner's
+   browser OIDC sign-in, set up the organization's Slack connection in the
+   app, and connect the signed-in person's own Slack.
 3. Stop the Organization Authority service, install the three provider credentials, then finalize.
 4. Restart the Organization Authority service and complete the post-admission canary.
 
@@ -126,12 +261,8 @@ canonical lowercase.
 
 ### 1. Bootstrap while stopped
 
-Pass the Slack bot token through standard input. The token file contains the
-token with at most one trailing newline; it is never recorded in the setup
-manifest or command output. `--slack-approval-channel-id` is a transitional
-legacy name: it supplies only the temporary public channel used to complete the
-initial owner's Slack identity-link challenge. It is not an approval destination or
-approval-readiness gate.
+Bootstrap takes no Slack input. Slack is connected afterward, in the app
+(see [Slack setup, in the app](#slack-setup-in-the-app) below).
 
 ```sh
 echo-organization-authority-setup bootstrap \
@@ -140,29 +271,27 @@ echo-organization-authority-setup bootstrap \
   --owner-display-name 'Initial Owner' \
   --owner-email owner@example.com \
   --authority-url https://authority.example.com \
-  --oidc-config /absolute/private/oidc-config.json \
-  --slack-approval-channel-id C0123456789 \
-  < /absolute/private/slack-bot-token
+  --oidc-config /absolute/private/oidc-config.json
 ```
 
 `--artifact-revision <revision>` is optional and defaults to `clean-founder-v1`.
 The private, non-secret setup plan is
 `/absolute/clean-state/onboarding/clean-founder-v1.json`; do not edit or move
-it. If the command stops or its response is lost, resume from that plan without
-repeating the organization, owner, OIDC, origin, channel, or revision inputs:
+it. If the command stops or its response is lost, resume from that plan
+without repeating the organization, owner, OIDC, origin, or revision inputs:
 
 ```sh
 echo-organization-authority-setup resume \
-  --state-dir /absolute/clean-state \
-  < /absolute/private/slack-bot-token
+  --state-dir /absolute/clean-state
 ```
 
-When Slack is already connected, `resume` does not read standard input, so the
-redirection may be omitted. If Slack was not yet connected, it still requires
-the token on standard input and performs the same verification. If the setup
-plan is missing, restore that exact plan or start with a new clean state
-directory; do not try to recreate it around existing state. Use this safe
-status view at any time:
+`resume` reads no standard input. A manifest from before this change is
+refused: "organization setup manifest predates in-app Slack setup; install
+this release's host tooling, then run replace-rehearsal" (the
+[deployment runbook](../../deploy/organization-authority/README.md#replace-unreleased-rehearsal-state)
+gives the order). If the setup plan is missing, restore that exact plan or
+start with a new clean state directory; do not try to recreate it around
+existing state. Use this safe status view at any time:
 
 ```sh
 echo-organization-authority-setup status \
@@ -172,54 +301,38 @@ echo-organization-authority-setup status \
 It reports the next step and durable readiness facts, but not credentials,
 grants, bearer values, generated internal IDs, or note content.
 
-### Slack re-onboarding checklist for private approval V1
+### Slack setup, in the app
 
-Use one Slack app for the connection token and interactive signing secret.
-Before bootstrap, update that app's scopes, then reinstall it to the staging
-workspace:
+Slack setup has no host-side steps left. An owner creates and installs the
+organization's Slack connection with the Person CLI's tools verbs (the ECHO
+desktop app's Connected tools page shows status only for now), through Nango
+([ADR-0025](../../docs/decisions/ADR-0025-nango-holds-slack-connection-credentials.md)):
+there is no Slack app scope to grant by hand, no separate signing-secret file,
+and no Interactivity Request URL to save — the app recipe sets all of that,
+including the four required bot scopes (`chat:write`, `im:history`,
+`im:write`, `users:read`) and the `openid` and `profile` user scopes that
+only the person's browser sign-in requests. The `im:*` scopes are required for
+the meeting-owner DM lane.
 
-1. Grant the exact required bot scopes:
-   `channels:history`, `channels:read`, `chat:write`, `im:history`,
-   `im:write`, `reactions:read`, and `users:read`. The `im:*` scopes are
-   required for the meeting-owner DM lane.
-2. Reinstall the app after the scope change, then use the new bot token from
-   that same installation.
-3. Put the signing secret from that same Slack app in a separate current-user
-   `0600` regular file containing one value with no trailing newline. Do not
-   reuse a signing secret from another Slack app.
-4. Use a wholly fresh Authority V10 staging lineage with the
-   [current storage baselines](#state-and-baselines). Use the supported rehearsal
-   reset before preparing state from an earlier release.
+Re-onboarding a staging lineage uses the same in-app setup and connect as a
+first connection; it does not reuse a Slack app's scopes or token by hand. Use
+a wholly fresh Authority V10 staging lineage with the
+[current storage baselines](#state-and-baselines); use the supported
+rehearsal reset before preparing state from an earlier release.
 
-Complete bootstrap, the initial-owner identity link, credential installation, and
-finalization first, then start the active runtime. Only after that runtime is
-healthy, enable **Interactivity & Shortcuts** and save this Request URL before
-running the release-bound synthetic staging canary:
-
-```text
-https://<staging-authority-host>/v2/integrations/slack/interactions
-```
-
-The callback deliberately returns `503` before finalization, so do not try to
-validate or save that URL against a pre-finalize runtime. Event Subscriptions,
-Socket Mode, and a Slack OAuth redirect are not required for this V1.
-
-The temporary public identity-link channel is still required only until the
-linking transport is moved to a private surface. It receives the initial owner's
-challenge thread, never shared approval cards.
-
-### 2. Start Person service, sign in, and link Slack
+### 2. Start Person service, sign in, set up and connect Slack
 
 Before finalization, the compatibility-named `clean-live` command exposes the Person surface with an inert
-processing worker. The manifest supplies the Authority URL, OIDC configuration,
-PKCE key, and Slack channel, so they are not repeated here.
+processing worker. The manifest supplies the Authority URL and OIDC
+configuration, so they are not repeated here.
 
 ```sh
 echo-organization-authority-serve serve \
   --state-dir /absolute/clean-state \
   --host 127.0.0.1 \
   --port 39479 \
-  --slack-signing-secret-file /absolute/private/slack-signing-secret
+  --nango-secret-key-file /absolute/private/nango-secret-key \
+  --nango-integration slack
 ```
 
 For `client_secret_basic` or `client_secret_post`, append
@@ -233,14 +346,25 @@ bootstrap:
 ```sh
 echo-brain person login \
   --invitation /absolute/clean-state/onboarding/founder-person-invitation.json
-echo-brain person slack-link
+pbpaste | echo-brain person tools setup --tool slack
+echo-brain person tools connect --tool slack
 ```
 
 `person login` opens the OIDC authorization URL and receives the one-use
 session at a local loopback handoff; do not paste callback data. `person
-slack-link` prints a challenge code to reply with in its Slack thread, then
-waits for an empty Enter acknowledgement. The Slack link is required for the
-initial owner to finalize; it is not required for a read-only employee.
+tools setup --tool slack` reads a Slack app configuration token from standard
+input — piped in, as above, or pasted at its hidden prompt — creates and
+installs the organization's private Slack app through Nango, and waits for
+the owner to finish in the browser. Add `--reconnect` to resume an unfinished
+install, or reconnect after Slack was uninstalled, after Nango lost the connection, or
+after an install landed in another workspace, without a new setup token. `person
+tools connect --tool slack` then opens the
+owner's own Slack sign-in and waits the same way; on a machine without a
+browser, use `person tools connect --tool slack --method dm-code --slack-user U…`,
+which prints a challenge code to reply with in its Slack thread, then waits
+for an empty Enter acknowledgement. Both the organization's Slack connection
+and the owner's own link are required for the initial owner to finalize;
+neither is required for a read-only employee.
 
 The Person session surface also supports refresh and logout. The packaged
 client owns those details:
@@ -256,6 +380,8 @@ echo-brain person logout
 Stop the Organization Authority service. Each source file must contain exactly its value, without
 trailing whitespace. The Granola owner-email file must contain the same
 canonical lowercase email given to bootstrap and proved by OIDC.
+This installs the single organization-owned Granola export/admission bridge;
+it does not create a Person Granola connection or accept a per-person key.
 
 ```sh
 echo-organization-authority-setup credentials-install \

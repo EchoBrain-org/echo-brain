@@ -1,13 +1,13 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type ExternalHumanIdentityLinkContractV2, type PersonMembershipType } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
-import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { canonicalJson, canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
 import { SLACK_DM_APPROVAL_REQUIRED_SCOPES, resolveCurrentSlackDmApprovalReviewerTargetV1, type CurrentSlackDmApprovalReviewerV1, type SlackDmApprovalReviewerTargetCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
+import { slackNangoAppPublicConfigurationSha256V1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 
 const CONNECTION_ID = "con_00000000-0000-4000-8000-000000000001";
-const APPROVAL_CHANNEL_ID = "C_APPROVAL";
 const COORDINATES = Object.freeze({
   authority_id: "oau_00000000-0000-4000-8000-000000000001",
   organization_id: "org_00000000-0000-4000-8000-000000000001",
@@ -27,20 +27,10 @@ function currentReviewerState(): SlackDmApprovalReviewerTargetCoordinatesV1 {
   });
 }
 
-function slackConnectionConfigurationSha256() {
-  return canonicalSha256({
-    approval_adapter_id: "slack-reactions",
-    approval_channel_id: APPROVAL_CHANNEL_ID,
-    approve_reaction: "white_check_mark",
-    kind: "echo-clean-slack-connection-public-configuration-v1",
-    reject_reaction: "x",
-  });
-}
-
 function scopes(without?: string): readonly string[] {
   return Object.freeze(
     [...new Set([
-      ...SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
+      ...SLACK_PRIVATE_APP_BOT_SCOPES_V1,
       ...SLACK_DM_APPROVAL_REQUIRED_SCOPES,
     ])]
       .filter((scope) => scope !== without)
@@ -142,9 +132,9 @@ function seed(
     provider_app_id: "A01",
     provider_bot_id: "B01",
     provider_bot_user_id: "U_BOT",
-    required_provider_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
+    required_provider_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1,
     public_connection_configuration_sha256:
-      slackConnectionConfigurationSha256(),
+      slackNangoAppPublicConfigurationSha256V1(),
   });
   const connectionSha = canonicalSha256(connection);
   const connectionState = buildOrganizationToolConnectionStateV2({
@@ -296,9 +286,9 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
       provider_app_id: "A01",
       provider_bot_id: "B01",
       provider_bot_user_id: "U_BOT",
-      required_provider_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
+      required_provider_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1,
       public_connection_configuration_sha256:
-        slackConnectionConfigurationSha256(),
+        slackNangoAppPublicConfigurationSha256V1(),
     });
     const foreignConnectionSha = canonicalSha256(foreignConnection);
     const foreignState = buildOrganizationToolConnectionStateV2({

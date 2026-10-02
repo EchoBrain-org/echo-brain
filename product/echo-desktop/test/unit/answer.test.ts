@@ -13,6 +13,12 @@ const record = (digit: string): AnswerSource => ({
 const slack = (ts: string): AnswerSource => ({ kind: 'slack', label: '#launch · Maya', permalink: `https://acme.slack.com/archives/C01ABCDEF/p${ts}` });
 
 describe('an answer cites sources, not passages', () => {
+  it('groups repeated ticket citations by link while keeping Slack sources distinct', () => {
+    const ticket: AnswerSource = { kind: 'ticket', label: 'ECHO-7', permalink: 'https://example.test/tickets/7' };
+    expect(sourceGroups([ticket, slack('1758873600000100'), { ...ticket, label: 'ECHO-7 updated title' }])).toEqual([
+      { kind: 'ticket', indexes: [0, 2] }, { kind: 'slack', indexes: [1] },
+    ]);
+  });
   it('groups the passages of one document, the items of one meeting record, and keeps each Slack message apart, in first-cited order', () => {
     const sources = [original('a', '4'), original('b', '5', 'SCOUT-Software-Review-v0.1.md'), original('a', '6'), record('7'), record('7'),
       slack('1758873600000100'), slack('1758873600000200'), original('b', '8', 'SCOUT-Software-Review-v0.1.md')];

@@ -87,6 +87,8 @@ export interface OrganizationAuthorityRuntimeConfig {
   readonly record_input_codecs: RecordInputCodecRegistryV4;
   readonly record_policy_fact_projectors: RecordPolicyFactProjectorRegistryV1;
   readonly worker_interval_ms?: number;
+  /** Explicit local scheduling selection; deployed profiles retain periodic work. */
+  readonly scheduling?: "periodic" | "manual";
   /** Observational only: a failed cycle is retried by the serialized worker. */
   readonly on_worker_error?: (error: Error) => void;
   /** Observational only: bounded, content-free worker lifecycle events. */
@@ -226,6 +228,10 @@ class OrganizationAuthorityProcessingCoordinator
     return this.approvals.appendFinalizedApprovalsToV4(signal);
   }
 
+  reconcileApprovalPresentations(signal: AbortSignal): Promise<void> {
+    return this.approvals.reconcileApprovalPresentations?.(signal) ?? Promise.resolve();
+  }
+
   async reconcileReadableSearchGeneration(signal: AbortSignal): ReturnType<OrganizationAuthorityProcessingCycleV1["reconcileReadableSearchGeneration"]> {
     let attempts: readonly MeetingApprovalJourneyStageAttemptV1[] = [];
     try {
@@ -315,7 +321,7 @@ export async function openOrganizationAuthorityRuntime(
   if (!sourceIsAdmitted) {
     authority.close();
     const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api, worker_interval_ms: config.worker_interval_ms },
+      { api, worker_interval_ms: config.worker_interval_ms, ...(config.scheduling === undefined ? {} : { scheduling: config.scheduling }) },
       {
         processing: new IdleOrganizationAuthorityProcessing(),
         api: baseApiDependencies,
@@ -329,7 +335,7 @@ export async function openOrganizationAuthorityRuntime(
   if (dependencies.active_processing !== undefined) {
     authority.close();
     const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api, worker_interval_ms: config.worker_interval_ms },
+      { api, worker_interval_ms: config.worker_interval_ms, ...(config.scheduling === undefined ? {} : { scheduling: config.scheduling }) },
       {
         processing: dependencies.active_processing,
         api: baseApiDependencies,
@@ -463,7 +469,7 @@ export async function openOrganizationAuthorityRuntime(
       related_atom_projector: relatedAtomProjector,
     });
     const runtime = await startOrganizationAuthorityServiceLifecycle(
-      { api, worker_interval_ms: config.worker_interval_ms },
+      { api, worker_interval_ms: config.worker_interval_ms, ...(config.scheduling === undefined ? {} : { scheduling: config.scheduling }) },
       {
         processing: new OrganizationAuthorityProcessingCoordinator(
           sourceCycle,
@@ -500,6 +506,7 @@ export async function openOrganizationAuthorityRuntime(
       address: runtime.address,
       processing: "active",
       runExclusive: (operation) => runtime.runExclusive(operation),
+      runProcessingCycleOnce: (signal) => runtime.runProcessingCycleOnce(signal),
       drain: (signal) => runtime.drain(signal),
       requestApprovalPublication,
       ...(config.run_staging_synthetic_private_dm_canary === undefined

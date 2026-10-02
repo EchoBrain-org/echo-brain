@@ -56,7 +56,8 @@ export interface PrivateSlackDmApprovalStagerV1Options {
   readonly authority_database: Database.Database;
   readonly control_plane_database: Database.Database;
   readonly coordinates: SlackDmApprovalReviewerTargetCoordinatesV1;
-  readonly connection_id: string;
+  /** A resolver is read per card, so a newly installed connection is used without a restart. */
+  readonly connection_id: string | (() => string);
   readonly assignments: SqlitePrivateSlackApprovalAssignmentStateV1;
   readonly control_plane: {
     stage(input: StagePrivateApprovalPendingV1): StagedPrivateApprovalPendingV1;
@@ -565,7 +566,9 @@ export class PrivateSlackDmApprovalStagerV1 implements ApprovalWorkflowStagerV1 
       authority_database: this.options.authority_database,
       control_plane_database: this.options.control_plane_database,
       coordinates: this.options.coordinates,
-      connection_id: this.options.connection_id,
+      connection_id: typeof this.options.connection_id === "string"
+        ? this.options.connection_id
+        : this.options.connection_id(),
     } as const;
     let target: PrivateSlackApprovalReviewerTargetV1 | undefined;
     let pendingV2: PendingPrivateApprovalV2 | undefined;

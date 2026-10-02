@@ -13,7 +13,8 @@
     "providers/granola/src/source/record-owner-observation.ts",
     "providers/granola/src/granola-meeting-source-admission.ts",
     "providers/granola/src/source/meeting-source-adapter.ts",
-    "providers/granola/src/granola-admitted-meeting-source-cursor-policy-v1.ts"
+    "providers/granola/src/granola-admitted-meeting-source-cursor-policy-v1.ts",
+    "providers/granola/src/context/granola-context-source-v1.ts"
   ],
   "owned_source_paths": [
     "providers/granola/src/**"
@@ -57,6 +58,11 @@
         "name": "Granola meeting source bundle",
         "path": "providers/granola/src/granola-meeting-source-bundle-v1.ts",
         "export": "createGranolaMeetingSourceBundleV1"
+      },
+      {
+        "name": "Granola context capture source",
+        "path": "providers/granola/src/context/granola-context-source-v1.ts",
+        "export": "createGranolaContextSourceV1"
       }
     ],
     "compatibility_entrypoints": [],

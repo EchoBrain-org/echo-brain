@@ -1257,6 +1257,19 @@ describe("Organization Authority API runtime", () => {
       });
       expect((await fetch(`${origin}/v3/person/tools`)).status).toBe(401);
 
+      const noToolsV4 = await fetch(`${origin}/v4/person/tools`, {
+        headers: { authorization: `Bearer ${session.access_token as string}` },
+      });
+      expect(noToolsV4.status).toBe(200);
+      expect(await json(noToolsV4)).toEqual({
+        schema_version: 4,
+        kind: "echo-organization-person-tools",
+        organization_id: initialized.organization_id,
+        membership_id: initialized.owner_membership_id,
+        tools: [],
+      });
+      expect((await fetch(`${origin}/v4/person/tools`)).status).toBe(401);
+
       // Exercise the actual composed project application against fresh V7 storage.
       const projectHeaders = { authorization: `Bearer ${session.access_token as string}`, "content-type": "application/json" };
       const post = async (path: string, body: unknown, status = 200) => {

@@ -11,7 +11,6 @@ export {
   validateOrganizationToolConnectionStateV2,
 } from "./application/organization-tool-connection-contracts-v2.js";
 export { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
-export { SqliteSlackBotTokenReaderV1 } from "./persistence/sqlite-slack-bot-token-reader-v1.js";
 export {
   PRIVATE_APPROVAL_AUTHORIZATION_ALLOW_KIND,
   PRIVATE_APPROVAL_COMMENT_MAX_UTF16_CODE_UNITS,

@@ -11,6 +11,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-09-27
 reviewed_ref: 83c8eb63aed78ba760678294ecf7fef863743e06
 decision_ids:
+  - ADR-0026
   - ADR-0012
   - ADR-0001
   - ADR-0002
@@ -33,6 +34,8 @@ decision_ids:
   - ADR-0022
   - ADR-0023
   - ADR-0024
+  - ADR-0025
+  - ADR-0027
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -108,6 +111,17 @@ organization secret, and persistence port; moving those dependencies inward
 would weaken the Authority boundary.
 
 ## Current references
+
+An opt-in [connector capture composition](../product/2026-10-01-connector-context-integration-v1.md)
+binds provider-neutral capture envelopes to explicit Authority disposition,
+organization, read authorization and atomic retention checks. It is not installed
+in the production root and grants no retrieval or release authority.
+The local rehearsal runner reserves isolated state and Person paths, preflights
+before bootstrap, and serves its disposable profile on loopback only. It has a
+private control socket for authenticated bounded capture and one manual legacy
+processing cycle. Granola's retained owner-scoped capture is separate from the
+legacy meeting cursor owner; Jira capture is request-only. This is local
+rehearsal, not provider qualification or a production composition.
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)

@@ -12,6 +12,8 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  type Stats,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -50,6 +52,25 @@ function assertPrivateDirectory(path: string): void {
       'organization integration secret directory must be a current-user 0700 canonical directory',
     );
   }
+}
+
+function assertPrivateSecretFile(path: string): Stats {
+  const state = lstatSync(path);
+  const currentUid = process.getuid?.();
+  if (
+    state.isSymbolicLink() ||
+    !state.isFile() ||
+    state.size <= 0 ||
+    state.size > MAXIMUM_SECRET_BYTES ||
+    realpathSync(path) !== path ||
+    (currentUid !== undefined && state.uid !== currentUid) ||
+    (state.mode & 0o777) !== 0o600
+  ) {
+    throw new Error(
+      'organization integration secret must be a bounded current-user 0600 canonical file',
+    );
+  }
+  return state;
 }
 
 function normalizeSecret(value: string): string {
@@ -153,21 +174,7 @@ export class FileOrganizationSecretStore implements OrganizationSecretStore {
 
   read(reference: OrganizationSecretReference): string {
     const path = this.path(reference);
-    const state = lstatSync(path);
-    const currentUid = process.getuid?.();
-    if (
-      state.isSymbolicLink() ||
-      !state.isFile() ||
-      state.size <= 0 ||
-      state.size > MAXIMUM_SECRET_BYTES ||
-      realpathSync(path) !== path ||
-      (currentUid !== undefined && state.uid !== currentUid) ||
-      (state.mode & 0o777) !== 0o600
-    ) {
-      throw new Error(
-        'organization integration secret must be a bounded current-user 0600 canonical file',
-      );
-    }
+    const state = assertPrivateSecretFile(path);
     const noFollow = fsConstants.O_NOFOLLOW ?? 0;
     const descriptor = openSync(path, fsConstants.O_RDONLY | noFollow);
     try {
@@ -181,6 +188,71 @@ export class FileOrganizationSecretStore implements OrganizationSecretStore {
     } finally {
       closeSync(descriptor);
     }
+  }
+
+  /**
+   * Writes a same-directory temporary file, syncs it and renames it over the
+   * existing secret, so a reader sees the old bytes or the new ones. The
+   * temporary name never matches a handle: `listReferences` skips it, and the
+   * next replace of the same handle removes one that a crash left behind.
+   * Every reader in this process is synchronous, so none runs between the
+   * check and the rename. A failure after the rename keeps the new bytes.
+   */
+  replace(reference: OrganizationSecretReference, secret: string): void {
+    const normalized = normalizeSecret(secret);
+    const path = this.path(reference);
+    assertPrivateSecretFile(path);
+    const temporary = `${path}.replace`;
+    try {
+      unlinkSync(temporary);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+    const descriptor = openSync(
+      temporary,
+      fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_WRONLY |
+        noFollow,
+      0o600,
+    );
+    const failures: unknown[] = [];
+    try {
+      writeFileSync(descriptor, normalized, 'utf8');
+      fsyncSync(descriptor);
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      try {
+        closeSync(descriptor);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 0) {
+      try {
+        renameSync(temporary, path);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      try {
+        unlinkSync(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) throw failures[0];
+      throw new AggregateError(
+        failures,
+        'organization integration secret could not be replaced',
+      );
+    }
+    // fsync(file) persisted the bytes; fsync(directory) persists the rename.
+    fsyncDirectory(this.directory);
   }
 
   listReferences(): readonly OrganizationSecretReference[] {

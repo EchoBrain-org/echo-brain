@@ -8,7 +8,8 @@ import {
   personRefKindV1,
   validatePersonListResponseV1,
   validatePersonOpenResponseV1,
-  type OrganizationPersonToolV3,
+  organizationPersonToolV3FromV4,
+  type OrganizationPersonToolV4,
   type PersonAnswerScopeV3,
   type PersonListProjectV1,
   type PersonListRequestV1,
@@ -72,7 +73,7 @@ export interface CreatePersonListRouteV1Options {
   readonly organization_id: string;
   readonly sessions: { authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization };
   /** The caller's connected tools; only each tool id and status leave. */
-  readonly tools: (access_token: string) => Promise<readonly OrganizationPersonToolV3[]>;
+  readonly tools: (access_token: string) => Promise<readonly OrganizationPersonToolV4[]>;
   readonly directory: PersonListDirectoryPortV1;
   readonly originals: PersonOriginalItemsPortV1;
   readonly meetings: PersonMeetingItemsPortV1;
@@ -219,7 +220,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
         case "global": {
           const me = options.directory.me(actor);
           if (me === undefined) denied();
-          const tools = await options.tools(access_token);
+          const tools = (await options.tools(access_token)).map(organizationPersonToolV3FromV4);
           header = {
             me: { display_name: boundedTextV1(me.display_name, PERSON_LIST_TEXT_MAX_BYTES_V1) ?? invalidOutput(), membership_type: actor.membership_type },
             connected: tools.map((tool) => ({ tool: tool.tool_id, status: tool.personal_status })),

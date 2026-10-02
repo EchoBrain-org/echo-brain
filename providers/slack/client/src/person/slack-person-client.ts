@@ -54,4 +54,24 @@ export class SlackPersonClient {
       validateOrganizationPersonSlackBrowserLinkAttemptRequest({ attempt_id: attemptId }),
     ));
   }
+
+  setupSlackApp(configurationToken: string) {
+    return this.host.withToolSession(async (session) => new SlackPersonAuthorityClient(session.transport).setupSlackApp(
+      { request_id: session.request_id('oss'), configuration_token: configurationToken },
+    ));
+  }
+
+  beginSlackInstall() {
+    return this.host.withToolSession(async (session) => new SlackPersonAuthorityClient(session.transport).beginSlackInstall(
+      { request_id: session.request_id('osi') },
+    ));
+  }
+
+  slackInstallStatus(attemptId: string) {
+    return this.host.withToolSession(async (session) => new SlackPersonAuthorityClient(session.transport).slackInstallStatus({ attempt_id: attemptId }));
+  }
+
+  cancelSlackInstall(attemptId: string) {
+    return this.host.withToolSession(async (session) => new SlackPersonAuthorityClient(session.transport).cancelSlackInstall({ attempt_id: attemptId }));
+  }
 }

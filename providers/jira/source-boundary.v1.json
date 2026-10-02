@@ -1,0 +1,81 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-jira",
+  "workspace": true,
+  "boundary_root": "providers/jira",
+  "source_root": "providers/jira/src",
+  "package_json": "providers/jira/package.json",
+  "entry_points": [
+    "providers/jira/src/jira-person-live-evidence-reader-v1.ts",
+    "providers/jira/src/jira-cloud-transport-v1.ts",
+    "providers/jira/src/jira-person-connection-v1.ts",
+    "providers/jira/src/jira-connection-store-v1.ts",
+    "providers/jira/src/jira-nango-v1.ts",
+    "providers/jira/src/jira-context-source-v1.ts",
+    "providers/jira/src/jira-person-connection-http-application-v1.ts"
+  ],
+  "owned_source_paths": [
+    "providers/jira/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/jira/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-api",
+    "@echo-brain/organization-authority-kernel",
+    "@echo-brain/organization-processing",
+    "@echo-brain/provider-jira-client"
+  ],
+  "allowed_external_packages": [
+    "better-sqlite3"
+  ],
+  "allowed_node_builtins": [
+    "crypto"
+  ],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "provider-jira-implementation",
+      "from": "providers/jira/src/**",
+      "allowed_imports": [
+        "providers/jira/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/organization-processing",
+        "@echo-brain/provider-jira-client"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "crypto"
+      ]
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Jira person live evidence reader",
+        "path": "providers/jira/src/jira-person-live-evidence-reader-v1.ts",
+        "export": "createJiraPersonLiveEvidenceReaderV1"
+      },
+      {
+        "name": "Jira context source",
+        "path": "providers/jira/src/jira-context-source-v1.ts",
+        "export": "createJiraContextSourceV1"
+      },
+      {
+        "name": "Jira person connection HTTP application",
+        "path": "providers/jira/src/jira-person-connection-http-application-v1.ts",
+        "export": "createJiraPersonConnectionHttpApplicationV1"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

@@ -1,0 +1,267 @@
+import { createHash } from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
+import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import type { JiraCloudRequestV1, JiraCloudTransportV1 } from '../src/jira-cloud-transport-v1.js';
+import { createJiraPersonLiveEvidenceReaderV1 } from '../src/jira-person-live-evidence-reader-v1.js';
+
+const cloudid = '00000000-0000-4000-8000-000000000007';
+const origin = 'https://echo-fixture.atlassian.net';
+const prefix = `/ex/jira/${cloudid}/rest/api/3`;
+const binding: PersonConnectorReadBindingV1 = Object.freeze({ organization_id: 'org_00000000-0000-4000-8000-000000000001',
+  principal_id: 'person-fixture', membership_id: 'mem_00000000-0000-4000-8000-000000000001', tool_id: 'jira',
+  external_scope_id: cloudid, external_subject_id: 'synthetic-account', read_grant_sha256: canonicalSha256({ synthetic_grant: 1 }) });
+const digest = (text: string) => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
+const project = () => ({ id: '10000', key: 'ECHO', self: `${origin}/rest/api/3/project/10000`, name: 'Fixture' });
+const ticket = (id = '10001', summary = 'Ship connector') => ({ id, key: `ECHO-${Number(id) - 10000}`, self: `${origin}/rest/api/3/issue/${id}`,
+  fields: { summary, project: project(), description: { type: 'doc', version: 1, content: [
+    { type: 'paragraph', content: [{ type: 'text', text: 'Launch Friday', marks: [{ type: 'strong' }] }] },
+    { type: 'paragraph', content: [{ type: 'mention', attrs: { text: '@Alex', id: 'never-return-this-id' } }] },
+  ] }, created: '2026-09-30T12:34:56.000+0000', status: { name: 'In progress' }, assignee: { displayName: 'Alex', emailAddress: 'never-return@example.test' }, duedate: '2026-10-02',
+    comment: { comments: [{ body: 'never-return-comment' }] }, attachment: [{ content: 'https://never-fetch.example.test' }] } });
+const page = (ids = ['10001'], token?: string) => ({ isLast: token === undefined, issues: ids.map(id => ({ id })), ...(token === undefined ? {} : { nextPageToken: token }) });
+
+function fixture() {
+  const f = {
+    resources: [{ id: cloudid, url: origin, scopes: ['read:jira-work', 'read:jira-user'] }] as unknown,
+    myself: { accountId: binding.external_subject_id, active: true, accountType: 'atlassian', emailAddress: 'irrelevant@example.test' } as unknown,
+    project: project() as unknown,
+    tickets: new Map<string, unknown>([['10001', ticket()], ['10002', ticket('10002', 'Review security')]]),
+    pages: [page()] as unknown[],
+    hook: undefined as ((input: JiraCloudRequestV1) => void) | undefined,
+    denied: new Map<string, 'unauthorized' | 'not_found'>(),
+  };
+  const request = vi.fn(async (input: JiraCloudRequestV1): Promise<unknown> => {
+    f.hook?.(input);
+    if (input.path === '/oauth/token/accessible-resources') return f.resources;
+    if (input.path === `${prefix}/myself`) return f.myself;
+    if (input.path.startsWith(`${prefix}/project/`)) return f.project;
+    if (input.path === `${prefix}/search/jql`) return f.pages.shift() ?? page([]);
+    if (input.path.startsWith(`${prefix}/issue/`)) {
+      const id = input.path.slice(`${prefix}/issue/`.length);
+      const denied = f.denied.get(id);
+      if (denied !== undefined) throw new AuthorityOperationError(denied, 'private provider response');
+      return f.tickets.get(id);
+    }
+    throw new Error('Unexpected synthetic endpoint');
+  });
+  const transport: JiraCloudTransportV1 = { binding: { ...binding }, request };
+  const authorization = { requireCurrent: vi.fn(async () => {}) };
+  const releases: PersonLiveEvidenceReleaseV1<PersonTicketCitationV1>[] = [];
+  const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1<PersonTicketCitationV1>) => { releases.push(release); return canonicalSha256(release); }) };
+  async function make() {
+    const reader = await createJiraPersonLiveEvidenceReaderV1({ binding, transport });
+    const source = createAuditedPersonLiveEvidenceSourceV1({ actor: binding,
+      access: { tool_id: 'jira', identity_status: 'linked', external_scope_id: cloudid, external_subject_id: binding.external_subject_id,
+        read_status: 'connected', read_capabilities: ['live_evidence'] }, read_grant_sha256: binding.read_grant_sha256, reader, authorization, audit });
+    return { reader, source };
+  }
+  return { ...f, state: f, request, transport, authorization, releases, audit, make };
+}
+
+describe('person-bound Jira live reader through the shared audited wrapper', () => {
+  it('releases normalized exact-read evidence, digests the bounded bytes and opens only issued handles', async () => {
+    const f = fixture(); const { source } = await f.make();
+    await expect(source.open({ item: '10001' })).rejects.toMatchObject({ code: 'not_found' });
+    const result = await source.search({ query: 'launch' });
+    const item = result.items[0]!;
+    expect(item).toMatchObject({ kind: 'ticket', label: 'ECHO-1: Ship connector', text: 'ECHO-1: Ship connector\n\nLaunch Friday\n@Alex',
+      visibility: 'only_me', attributes: { status: 'In progress', owner: 'Alex', due_at: '2026-10-02' }, occurred_at: '2026-09-30',
+      citation: { ticket_id: '10001', external_scope_id: cloudid, permalink: `${origin}/browse/ECHO-1`, text_sha256: digest(item.text!) } });
+    expect(item).not.toHaveProperty('handle');
+    expect(f.audit.record).toHaveBeenCalledTimes(1);
+    expect(f.authorization.requireCurrent).toHaveBeenCalledTimes(3);
+    const auditText = JSON.stringify(f.releases);
+    for (const hidden of ['Ship connector', 'Launch Friday', 'launch', 'jira_item_', 'never-return', 'emailAddress']) expect(auditText).not.toContain(hidden);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description' } }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 5 }) }));
+    await source.open({ item: item.id });
+    expect(f.audit.record).toHaveBeenCalledTimes(2);
+    const second = await f.make();
+    await expect(second.source.open({ item: item.id })).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('refuses another trusted actor, tenant, subject or grant before transport is called', async () => {
+    for (const drift of [{ principal_id: 'someone-else' }, { membership_id: 'another-tenure' }, { external_scope_id: '00000000-0000-4000-8000-000000000008' },
+      { external_subject_id: 'another-subject' }, { read_grant_sha256: canonicalSha256({ replacement: true }) }, { tool_id: 'slack' }]) {
+      const f = fixture();
+      await expect(createJiraPersonLiveEvidenceReaderV1({ binding: { ...binding, ...drift }, transport: f.transport })).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(f.request).not.toHaveBeenCalled();
+    }
+  });
+
+  it('verifies cloudid, exact read scopes and current active human account; email is never proof', async () => {
+    const badResources = [[], [{ id: 'another-site', url: origin, scopes: ['read:jira-work', 'read:jira-user'] }],
+      [{ id: cloudid, url: origin, scopes: ['read:jira-user'] }], [{ id: cloudid, url: origin, scopes: ['read:jira-work'] }],
+      [{ id: cloudid, url: origin, scopes: ['read:jira-work', 'read:jira-user'] }, { id: cloudid, url: origin, scopes: ['read:jira-work', 'read:jira-user'] }]];
+    for (const resources of badResources) {
+      const f = fixture(); f.state.resources = resources;
+      await expect(f.make()).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(f.audit.record).not.toHaveBeenCalled();
+    }
+    for (const drift of [{ accountId: 'another-subject' }, { active: false }, { accountType: 'app' }, { accountType: 'customer' }, { accountId: 'unknown' }]) {
+      const f = fixture(); f.state.myself = { ...(f.state.myself as object), ...drift };
+      await expect(f.make()).rejects.toMatchObject({ code: 'unauthorized' });
+    }
+    const f = fixture(); f.state.resources = [{ id: cloudid, url: 'https://confluence-fixture.atlassian.net', scopes: ['read:confluence-content.all'] }, ...(f.state.resources as object[])];
+    const { source } = await f.make();
+    expect((await source.search({ query: 'ship' })).items).toHaveLength(1);
+  });
+
+  it('refuses non-Cloud/unsafe site URLs, tenant drift and subject changes during a read', async () => {
+    for (const url of ['http://echo-fixture.atlassian.net', 'https://evil.example.test', `${origin}:444`, `${origin}/nested`, `${origin}?token=synthetic`, 'https://person@echo-fixture.atlassian.net', 'https://echo-fixture.atlassian.net.evil.test']) {
+      const f = fixture(); f.state.resources = [{ id: cloudid, url, scopes: ['read:jira-work', 'read:jira-user'] }];
+      await expect(f.make()).rejects.toMatchObject({ code: 'invalid_output' });
+    }
+    for (const type of ['subject', 'origin', 'transport']) {
+      const f = fixture(); const { source } = await f.make();
+      f.state.hook = input => {
+        if (!input.path.includes('/issue/')) return;
+        if (type === 'subject') f.state.myself = { accountId: 'other-person', active: true, accountType: 'atlassian' };
+        if (type === 'origin') f.state.resources = [{ id: cloudid, url: 'https://other-fixture.atlassian.net', scopes: ['read:jira-work', 'read:jira-user'] }];
+        if (type === 'transport') Object.assign(f.transport.binding, { principal_id: 'another-person' });
+      };
+      await expect(source.search({ query: 'ship' })).rejects.toMatchObject({ code: type === 'subject' ? 'unauthorized' : 'stale_access_state' });
+      expect(f.audit.record).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses denied exact reads and malformed issue payloads before any audit', async () => {
+    for (const code of ['unauthorized', 'not_found'] as const) {
+      const f = fixture(); const { source } = await f.make(); f.state.denied.set('10001', code);
+      await expect(source.search({ query: 'ship' })).rejects.toMatchObject({ code, message: 'Live evidence operation could not be completed' });
+      expect(f.audit.record).not.toHaveBeenCalled();
+    }
+    const good = ticket();
+    const malformed = [null, { ...good, id: '10002' }, { ...good, self: 'https://other-fixture.atlassian.net/rest/api/3/issue/10001' },
+      { ...good, self: `${origin}/rest/api/3/issue/10002` }, { ...good, key: 'WRONG-1' },
+      ...[{ summary: {} }, { summary: 'private\u0000text' }, { status: null }, { created: '2026-02-30T12:00:00Z' }, { duedate: '2026-02-30' },
+        { description: 'not-v3-ADF' }, { description: { type: 'doc', version: 1, content: [{ type: 'unknown' }] } },
+        { description: { type: 'doc', version: 1, content: [{ type: 'text', text: '\u0000bad' }] } },
+        { project: { ...project(), self: `${origin}/rest/api/3/project/99999` } }].map(fields => ({ ...good, fields: { ...good.fields, ...fields } }))];
+    for (const bad of malformed) {
+      const f = fixture(); const { source } = await f.make(); f.state.tickets.set('10001', bad);
+      await expect(source.search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+      expect(f.audit.record).not.toHaveBeenCalled();
+    }
+    const getter = vi.fn(() => 'private');
+    const f = fixture(); const { source } = await f.make(); f.state.tickets.set('10001', Object.defineProperty(ticket(), 'fields', { enumerable: true, get: getter }));
+    await expect(source.search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  it('bounds NFC text by UTF-8 bytes before hashing, with aggregate releases accepted by the wrapper', async () => {
+    const f = fixture();
+    f.state.pages = [page(Array.from({ length: 5 }, (_, i) => String(10001 + i)))];
+    for (let i = 0; i < 5; i++) f.state.tickets.set(String(10001 + i), { ...ticket(String(10001 + i), 'Cafe\u0301'), fields: { ...ticket().fields, summary: 'Cafe\u0301', description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: '\t😀'.repeat(3000) }] }] } } });
+    const { source } = await f.make(); const result = await source.search({ query: 'launch', limit: 50 });
+    expect(result.truncated).toBe(true); expect(result.items).toHaveLength(5);
+    for (const item of result.items) {
+      expect(Buffer.byteLength(item.text!, 'utf8')).toBeLessThanOrEqual(3072);
+      expect(item.text).toBe(item.text!.normalize('NFC'));
+      expect(item.text).not.toMatch(/[\uD800-\uDBFF]$/);
+      expect(item.citation.text_sha256).toBe(digest(item.text!));
+    }
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(65536);
+  });
+
+  it('makes JQL a literal search phrase and keeps connection/grant selectors outside method arguments', async () => {
+    const f = fixture(); const { source, reader } = await f.make();
+    await source.search({ query: 'hello" OR project = SECRET' });
+    const request = f.request.mock.calls.find(([r]) => r.path.endsWith('/search/jql'))![0];
+    expect(request.body!.jql).toBe('text ~ "\\"hello\\\\\\" OR project = SECRET\\"" ORDER BY created DESC, id DESC');
+    expect(Object.isFrozen(reader.binding)).toBe(true);
+    f.state.pages = [page()];
+    await reader.search({ query: 'ECHO-1', limit: 1, ...{ person: 'another-person', cloudid: 'another-site', connectionId: 'another-connection' } });
+    expect(f.request.mock.calls.filter(([r]) => r.path.endsWith('/search/jql')).at(-1)![0].body!.jql).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
+    expect(f.request.mock.calls.every(([r]) => !r.path.includes('another'))).toBe(true);
+  });
+
+  it('lists metadata with opaque request-bound pagination and validates the project and date selection', async () => {
+    const f = fixture(); f.state.pages = [page(['10001'], 'private-provider-token'), page(['10002'])];
+    const { source, reader } = await f.make();
+    const first = await source.list({ container: 'ECHO', since: '2026-09-01', until: '2026-10-01', limit: 1 });
+    expect(first.items[0]).not.toHaveProperty('text');
+    expect(first.items[0]!.citation.text_sha256).toBe(digest(''));
+    expect(first.next_cursor).not.toContain('private-provider-token');
+    expect(JSON.stringify(f.releases)).not.toContain('private-provider-token');
+    for (const input of [{ container: 'ECHO', cursor: first.next_cursor }, { container: 'OTHER', since: '2026-09-01', until: '2026-10-01', cursor: first.next_cursor }]) await expect(source.list(input)).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(reader.list({ container: 'ECHO', limit: 1, cursor: 'private-provider-token' })).rejects.toMatchObject({ code: 'invalid_request' });
+    const other = await f.make();
+    await expect(other.source.list({ container: 'ECHO', since: '2026-09-01', until: '2026-10-01', cursor: first.next_cursor })).rejects.toMatchObject({ code: 'invalid_request' });
+    const second = await source.list({ container: 'ECHO', since: '2026-09-01', until: '2026-10-01', cursor: first.next_cursor, limit: 1 });
+    expect(second.items[0]!.citation.ticket_id).toBe('10002'); expect(second.next_cursor).toBeUndefined();
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ body: { jql: 'project = 10000 ORDER BY created DESC, id DESC', maxResults: 1, fields: ['id'], nextPageToken: 'private-provider-token' } }));
+    await source.open({ item: first.items[0]!.id });
+    expect(f.releases.at(-1)!.operation).toBe('open');
+  });
+
+  it('filters UTC dates inclusively and audits empty pages while advancing pagination', async () => {
+    const f = fixture(); f.state.pages = [page(['10001'], 'page-2'), page(['10002'])];
+    f.state.tickets.set('10002', { ...ticket('10002'), fields: { ...ticket().fields, created: '2026-09-30T23:30:00.000-0700' } });
+    const { source } = await f.make();
+    const first = await source.list({ since: '2026-10-01', until: '2026-10-01', limit: 1 });
+    expect(first.items).toEqual([]); expect(first.next_cursor).toBeDefined();
+    const second = await source.list({ since: '2026-10-01', until: '2026-10-01', limit: 1, cursor: first.next_cursor });
+    expect(second.items[0]!.occurred_at).toBe('2026-10-01');
+    expect(f.releases[0]!.citations).toEqual([]); expect(f.releases).toHaveLength(2);
+  });
+
+  it('refuses malformed search pages, repeated cursors/IDs and project mismatches', async () => {
+    for (const malformed of [{ issues: [{ id: '10001' }] }, { isLast: false, issues: [] }, { isLast: true, issues: [], nextPageToken: 'bad' },
+      page(['10001', '10001']), { isLast: true, issues: Array(1) }, page(['bad-id'])]) {
+      const f = fixture(); const { source } = await f.make(); f.state.pages = [malformed];
+      await expect(source.search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' }); expect(f.audit.record).not.toHaveBeenCalled();
+    }
+    for (const next of [page(['10002'], 'loop'), page(['10001'])]) {
+      const f = fixture(); f.state.pages = [page(['10001'], 'loop'), next]; const { source } = await f.make();
+      const first = await source.list({ container: 'ECHO', limit: 1 });
+      await expect(source.list({ container: 'ECHO', limit: 1, cursor: first.next_cursor })).rejects.toMatchObject({ code: 'invalid_output' });
+      expect(f.audit.record).toHaveBeenCalledTimes(1);
+    }
+    const f = fixture(); const { source } = await f.make(); f.state.project = { id: '99999', key: 'ECHO', self: `${origin}/rest/api/3/project/99999` };
+    await expect(source.list({ container: 'ECHO' })).rejects.toMatchObject({ code: 'invalid_output' }); expect(f.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('revalidates every inventory and earlier text citation; changed visibility stops reuse', async () => {
+    const f = fixture(); f.state.pages = [page(['10001', '10002']), page(['10001'])];
+    const { source, reader } = await f.make();
+    const inventory = await source.list({ container: 'ECHO' });
+    const original = await source.open({ item: inventory.items[0]!.id });
+    f.state.tickets.set('10001', ticket('10001', 'Edited after first read'));
+    const edited = await source.search({ query: 'edited' });
+    expect(original.items[0]!.citation.text_sha256).not.toBe(edited.items[0]!.citation.text_sha256);
+    f.request.mockClear(); await source.revalidate({});
+    expect(f.request.mock.calls.filter(([r]) => r.path.includes('/issue/')).map(([r]) => r.path)).toEqual([`${prefix}/issue/10001`, `${prefix}/issue/10002`]);
+    await expect(reader.revalidate({ citations: [{ ...inventory.items[0]!.citation, permalink: `${origin}/browse/ECHO-999` }] })).rejects.toMatchObject({ code: 'unauthorized' });
+    f.state.denied.set('10002', 'not_found');
+    await expect(source.revalidate({})).rejects.toMatchObject({ code: 'not_found' });
+    f.state.denied.clear(); f.state.myself = { accountId: 'changed', active: true, accountType: 'atlassian' };
+    await expect(source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it('fails closed on audit failure, ECHO grant changes and cancellation with no evidence release', async () => {
+    for (const failure of ['audit', 'grant', 'abort']) {
+      const f = fixture(); const { source } = await f.make(); const controller = new AbortController();
+      if (failure === 'audit') f.audit.record.mockRejectedValueOnce(new Error('private raw ticket and synthetic bearer'));
+      if (failure === 'grant') f.authorization.requireCurrent.mockRejectedValueOnce(new AuthorityOperationError('stale_access_state', 'private grant'));
+      if (failure === 'abort') f.state.hook = input => { expect(input.signal).toBe(controller.signal); if (input.path.includes('/issue/')) controller.abort(); };
+      await expect(source.search({ query: 'ship', signal: controller.signal })).rejects.toMatchObject(failure === 'abort' ? { name: 'AbortError' } : { code: failure === 'audit' ? 'unavailable' : 'stale_access_state', message: 'Live evidence operation could not be completed' });
+      if (failure !== 'audit') expect(f.audit.record).not.toHaveBeenCalled();
+    }
+    const f = fixture(); const controller = new AbortController(); controller.abort();
+    await expect(createJiraPersonLiveEvidenceReaderV1({ binding, transport: f.transport, signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(f.request).not.toHaveBeenCalled();
+  });
+
+  it('bounds caller input and refuses URL/JQL containers before transport', async () => {
+    const f = fixture(); const { reader } = await f.make(); f.request.mockClear();
+    for (const input of [{ container: 'ECHO OR project = SECRET', limit: 1 }, { container: `${origin}/browse/ECHO-1`, limit: 1 },
+      { since: '2026-02-30', limit: 1 }, { since: '2026-10-01', until: '2026-09-01', limit: 1 }, { limit: 51 }, { limit: 0 }]) await expect(reader.list(input)).rejects.toMatchObject({ code: 'invalid_request' });
+    for (const query of ['', 'x'.repeat(1025), 'bad\nquery']) await expect(reader.search({ query, limit: 1 })).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(f.request).not.toHaveBeenCalled();
+  });
+});

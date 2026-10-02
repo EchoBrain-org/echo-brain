@@ -37,6 +37,11 @@ export interface OrganizationAuthorityProcessingCycleV1 {
   /** Appends finalized actions to V4; rejected actions produce no readable fact. */
   appendFinalizedApprovalsToV4(signal: AbortSignal): Promise<void>;
   /**
+   * Optional bounded provider presentation reconciliation. It is called only
+   * by a periodic cycle after durable approval work, never at startup.
+   */
+  reconcileApprovalPresentations?(signal: AbortSignal): Promise<void>;
+  /**
    * Reconciles the immutable permission-aware search generation with the V4
    * record head after the complete append phase. Implementations may no-op
    * while the processing service is waiting for its activation prerequisites.
@@ -53,6 +58,8 @@ export interface OrganizationAuthorityProcessingCycleV1 {
 export interface OrganizationAuthorityServiceLifecycleConfig {
   readonly api: OrganizationAuthorityApiRuntimeConfig;
   readonly worker_interval_ms?: number;
+  /** Opt-in local control: preserve startup recovery but do not poll automatically. */
+  readonly scheduling?: "periodic" | "manual";
 }
 
 export interface OrganizationAuthorityServiceLifecycleDependencies {
@@ -76,6 +83,8 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
   /** Excludes both writer and search work for bounded operator mutations. */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  /** Runs one bounded source-processing cycle through the lifecycle writer gate. */
+  runProcessingCycleOnce(signal: AbortSignal): Promise<void>;
   /** Waits for queued writer/search work; callers must supply a bounded signal.
    * This is a readiness barrier, not operator exclusion or a retry trigger. */
   drain(signal: AbortSignal): Promise<void>;
@@ -212,27 +221,50 @@ export async function startOrganizationAuthorityServiceLifecycle(
       }, dependencies.core_runtime_observation),
       reportError,
     );
+    let closing = false;
+    let presentationPending = false;
+    let presentationTail: Promise<void> = Promise.resolve();
+    let requestApprovalPresentation!: () => void;
+    const runProcessingCycle = async (signal: AbortSignal): Promise<void> => {
+      lifecycle.startCycle();
+      try {
+        await runOrganizationAuthorityProcessingCycleV1(
+          dependencies.processing,
+          signal,
+          lifecycle,
+        );
+        lifecycle.succeedCycle();
+      } catch (error) {
+        lifecycle.failCycle(error, signal.aborted);
+        throw error;
+      }
+    };
     const worker = new SerializedMeetingProcessingWorker({
       ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
-      runCycle: async (signal) => {
-        lifecycle.startCycle();
-        try {
-          await runOrganizationAuthorityProcessingCycleV1(
-            dependencies.processing,
-            signal,
-            lifecycle,
-          );
-          lifecycle.succeedCycle();
-        } catch (error) {
-          lifecycle.failCycle(error, signal.aborted);
-          throw error;
-        }
+      ...(config.scheduling === undefined ? {} : { scheduling: config.scheduling }),
+      runCycle: runProcessingCycle,
+      onCycleComplete: () => {
+        // Search is durable-derived work and must be requested even when the
+        // later, provider-only terminal-card redraw fails.
+        search.request();
+        requestApprovalPresentation();
       },
-      onCycleComplete: () => search.request(),
       onError: dependencies.on_worker_error,
     });
-    let closing = false;
+    requestApprovalPresentation = (): void => {
+      if (closing || presentationPending || dependencies.processing.reconcileApprovalPresentations === undefined) return;
+      presentationPending = true;
+      presentationTail = worker
+        .runExclusive((signal) => dependencies.processing.reconcileApprovalPresentations!(signal))
+        .catch((failure: unknown) => {
+          // The terminal and record phases already committed. Report a
+          // provider-presentation defect without suppressing this cycle's
+          // search wake or turning a retryable redraw into a worker failure.
+          if (!closing) reportError(failure);
+        })
+        .finally(() => { presentationPending = false; });
+    };
     const shutdown = new AbortController();
     let publicationPending = false;
     let publicationImmediate: ReturnType<typeof setImmediate> | undefined;
@@ -288,6 +320,25 @@ export async function startOrganizationAuthorityServiceLifecycle(
           if (!closing) search.request();
         }
       },
+      runProcessingCycleOnce: async (signal) => {
+        signal.throwIfAborted();
+        try {
+          await worker.runExclusive(async (workerSignal) => {
+            const combined = AbortSignal.any([signal, workerSignal]);
+            combined.throwIfAborted();
+            await runProcessingCycle(combined);
+            combined.throwIfAborted();
+          });
+        } finally {
+          // A manual profile has no later periodic tick. Wake the derived
+          // work even after a cycle error because an earlier durable phase may
+          // have committed before the failure was observed.
+          if (!closing) {
+            search.request();
+            requestApprovalPresentation();
+          }
+        }
+      },
       drain: async (deadline) => {
         const signal = AbortSignal.any([deadline, shutdown.signal]);
         signal.throwIfAborted();
@@ -301,15 +352,20 @@ export async function startOrganizationAuthorityServiceLifecycle(
         try {
           await Promise.race([cancelled, (async () => {
             let observedPublication: Promise<void>;
+            let observedPresentation: Promise<void>;
             do {
               observedPublication = publicationTail;
-              await observedPublication;
+              observedPresentation = presentationTail;
+              await Promise.all([observedPublication, observedPresentation]);
               signal.throwIfAborted();
               await worker.runExclusive(async () => undefined);
               signal.throwIfAborted();
               await search.drain();
               signal.throwIfAborted();
-            } while (publicationTail !== observedPublication);
+            } while (
+              publicationTail !== observedPublication ||
+              presentationTail !== observedPresentation
+            );
           })()]);
         } finally { signal.removeEventListener("abort", abort); }
       },

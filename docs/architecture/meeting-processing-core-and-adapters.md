@@ -118,9 +118,9 @@ the record facts appropriate for the selected product policy; it does not
 inspect an approval-surface payload.
 
 Approval and any future delivery remain separate capabilities. They may share
-a provider connection, but a generic Slack delivery channel must differ from
-the active Slack approval channel, preserving main's human-action/side-effect
-boundary.
+a provider connection, but a generic Slack delivery surface must differ from
+the active private Slack approval surface, preserving main's human-action/
+side-effect boundary.
 
 ## Cross-capability invariants
 
@@ -167,10 +167,19 @@ The Slack approval adapter owns its narrow Web API transport and its own
 authorization, idempotency, and receipt semantics. Slack actors are
 tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
+Finalized private approvals have two ordered responsibilities. The durable
+worker materializes the terminal and, for an approval, its V4 receipt before
+Authority startup can serve. Card redraw is provider presentation only: a
+later periodic pass tries one unrendered terminal card, records `rendered` only
+after Slack confirms the replacement update, and rotates after an uncertain
+result. This keeps a Nango outage out of the startup gate while preserving a
+bounded, cancellable retry path for every card.
+
 ## Current composition
 
-The Organization Authority composition root concretely selects Granola as the
-meeting source, OpenRouter with the pinned Claude Sonnet processing version as the
+The Organization Authority composition root concretely selects one
+organization-owned Granola export/admission bridge as the meeting source,
+OpenRouter with the pinned Claude Sonnet processing version as the
 decision processor, Slack for private approval cards, interactions, and
 identity, and Authority SQLite state. It separately
 composes the bounded Person `ask` path above Layer 3 with a pinned OpenRouter

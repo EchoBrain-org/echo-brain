@@ -414,6 +414,128 @@ describe("Granola meeting-source admission", () => {
     }
   });
 
+  it.each(["missing", "ambiguous"] as const)("requires exactly one active owner before provider observation (%s)", async (boundary) => {
+    const input = fixture();
+    await bootstrapFounder(input);
+    const database = openAuthorityDatabase(
+      join(input.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      if (boundary === "missing") {
+        database.prepare(
+          `UPDATE authority_memberships
+              SET status = 'revoked', revoked_at = ?, revocation_reason = 'fixture-owner-revoked'
+            WHERE membership_id = ?`,
+        ).run(new Date().toISOString(), input.initialized.owner_membership_id);
+      } else {
+        database.prepare(
+          `INSERT INTO authority_principals
+             (principal_id, organization_id, display_name, provisioned_at)
+           VALUES ('prn_second_owner', ?, 'Second fixture owner', ?)`,
+        ).run(input.initialized.organization_id, ADMITTED_AT);
+        database.prepare(
+          `INSERT INTO authority_memberships
+             (membership_id, organization_id, principal_id, membership_type, status, provisioned_at)
+           VALUES ('mem_second_owner', ?, 'prn_second_owner', 'owner', 'active', ?)`,
+        ).run(input.initialized.organization_id, ADMITTED_AT);
+      }
+
+      await expect(admitGranolaMeetingSource({
+        ...input,
+        now: () => {
+          throw new Error("invalid owner custody must not sample a cutoff");
+        },
+      })).rejects.toThrow("exactly one active organization owner");
+      expect(input.record_owner_calls()).toBe(0);
+      expect(database.prepare(
+        "SELECT count(*) AS count FROM authority_live_source_admission_v2",
+      ).get()).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("rechecks the active owner after awaited metadata observation before committing a cutoff", async () => {
+    const input = fixture();
+    await bootstrapFounder(input);
+    const database = openAuthorityDatabase(
+      join(input.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    let ownerObservations = 0;
+    let cutoffCalls = 0;
+    try {
+      await expect(admitGranolaMeetingSource({
+        ...input,
+        create_granola_record_owner_client: () => ({
+          async listNotes(params) {
+            // Yield while admission is awaiting the metadata-only provider call.
+            await Promise.resolve();
+            ownerObservations += 1;
+            database.prepare(
+              `UPDATE authority_memberships
+                  SET status = 'revoked', revoked_at = ?, revocation_reason = 'fixture-owner-revoked'
+                WHERE membership_id = ?`,
+            ).run(new Date().toISOString(), input.initialized.owner_membership_id);
+            return RECORD_OWNER_CLIENT.listNotes(params);
+          },
+        }),
+        now: () => {
+          cutoffCalls += 1;
+          return ADMITTED_AT;
+        },
+      })).rejects.toThrow("exactly one active organization owner");
+      expect(ownerObservations).toBe(1);
+      expect(cutoffCalls).toBe(0);
+      expect(database.prepare(
+        "SELECT count(*) AS count FROM authority_live_source_admission_v2",
+      ).get()).toEqual({ count: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("preserves a competing immutable admission committed during metadata observation", async () => {
+    const input = fixture();
+    await bootstrapFounder(input);
+    let cutoffCalls = 0;
+    await expect(admitGranolaMeetingSource({
+      ...input,
+      create_granola_record_owner_client: () => ({
+        async listNotes(params) {
+          const winning = await admitGranolaMeetingSource({
+            ...input,
+            source_instance_id: "competing-granola",
+            create_granola_record_owner_client: () => RECORD_OWNER_CLIENT,
+            now: () => ADMITTED_AT,
+          });
+          expect(winning.outcome).toBe("admitted");
+          return RECORD_OWNER_CLIENT.listNotes(params);
+        },
+      }),
+      now: () => {
+        cutoffCalls += 1;
+        return "2026-08-22T01:03:03.004Z";
+      },
+    })).rejects.toThrow("semantic input conflicts");
+    expect(cutoffCalls).toBe(0);
+    const database = new Database(
+      join(input.state_directory, "authority.sqlite"),
+      { readonly: true, fileMustExist: true },
+    );
+    try {
+      expect(database.prepare(
+        "SELECT source_adapter_instance_id, cutoff_at FROM authority_live_source_admission_v2",
+      ).all()).toEqual([{
+        source_adapter_instance_id: "competing-granola",
+        cutoff_at: ADMITTED_AT,
+      }]);
+    } finally {
+      database.close();
+    }
+  });
+
   it("does not hold the Authority write transaction across the provider preflight", async () => {
     const input = fixture();
     await bootstrapFounder(input);

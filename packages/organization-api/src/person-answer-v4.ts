@@ -1,4 +1,6 @@
-import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
+import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
+import type { PersonAnswerCitationV5, PersonAnswerEvidenceCitationV5, PersonAnswerResponseV5, PersonEvidenceKindV2, PersonEvidenceDeskItemV2, PersonEvidenceDeskResponseV2 } from './person-answer-v5.js';
+import { canonicalJsonBytes, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonDocumentIdV1 } from './person-documents-v1.js';
 import { validatePersonQueryText } from './person-query.js';
 import { validateProjectIdV1, type ProjectIdV1 } from './project-context-v1.js';
@@ -196,9 +198,17 @@ function slackCitation(input: Record<string, unknown>): PersonSlackMessageCitati
   });
 }
 
-function evidenceCitation(value: unknown): PersonAnswerEvidenceCitationV4 {
+function evidenceCitation(value: unknown, tickets = false): PersonAnswerEvidenceCitationV5 {
   const input = object(value, 'Ask citation');
+  if (tickets && input.kind === 'ticket') return validatePersonTicketCitationV1(input);
   return input.kind === 'slack_message' ? slackCitation(input) : citation(input);
+}
+
+/** Reuses the existing closed Slack citation validator at the live-source boundary. */
+export function validatePersonSlackMessageCitationV1(value: unknown): PersonSlackMessageCitationV1 {
+  const input = object(value, 'Slack citation');
+  if (input.kind !== 'slack_message') fail('Slack citation kind is invalid');
+  return slackCitation(input);
 }
 
 function citation(value: unknown): PersonAnswerCitationV3 {
@@ -230,14 +240,16 @@ function citation(value: unknown): PersonAnswerCitationV3 {
   fail('Ask citation kind is invalid');
 }
 
-function citationKey(value: PersonAnswerEvidenceCitationV4): string {
+function citationKey(value: PersonAnswerEvidenceCitationV5): string {
+  if (value.kind === 'ticket') return `ticket:${value.tool_id}:${value.external_scope_id}:${value.ticket_id}`;
   if (value.kind === 'slack_message') return `slack_message:${value.team_id}:${value.channel_id}:${value.message_ts}`;
   return value.kind === 'approved_record'
     ? `approved_record:${value.atom_id}`
     : `source_revision:${value.source_id}:${value.revision_id}:${value.representation_sha256}:${value.anchor_sha256}`;
 }
 
-function evidenceKind(value: unknown, label: string): asserts value is PersonEvidenceKindV1 {
+function evidenceKind(value: unknown, label: string, tickets = false): asserts value is PersonEvidenceKindV2 {
+  if (tickets && value === 'ticket') return;
   if (!['decision', 'action', 'rationale', 'note', 'document_passage', 'slack_message'].includes(value as string)) fail(`${label} is invalid`);
 }
 
@@ -245,7 +257,7 @@ function visibility(value: unknown, label: string): asserts value is PersonEvide
   if (!['only_me', 'team', 'project', 'projects', 'approver_only'].includes(value as string)) fail(`${label} is invalid`);
 }
 
-function statement(value: unknown, citations: readonly PersonAnswerCitationV4[], label: string, fallback = false): PersonAnswerStatementV4 {
+function statement(value: unknown, citations: readonly PersonAnswerCitationV5[], label: string, fallback = false): PersonAnswerStatementV4 {
   const input = object(value, label);
   assertExactKeys(input, ['text', 'citation_indexes', 'private'], label);
   if (fallback) evidenceText(input.text, `${label} text`, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
@@ -262,7 +274,7 @@ function statement(value: unknown, citations: readonly PersonAnswerCitationV4[],
 }
 
 /** A citation's ref names the item it cites: its record, its document, or its note or shared transcript. */
-function citationRefConsistent(cited: PersonAnswerEvidenceCitationV4, ref: PersonOpenRefV1): boolean {
+function citationRefConsistent(cited: PersonAnswerEvidenceCitationV5, ref: PersonOpenRefV1): boolean {
   if (cited.kind === 'approved_record') return ref === `meeting:${cited.record_sha256}`;
   if (cited.kind === 'source_revision') {
     return cited.document_id === undefined
@@ -272,20 +284,21 @@ function citationRefConsistent(cited: PersonAnswerEvidenceCitationV4, ref: Perso
   return false;
 }
 
-function answerCitation(value: unknown): PersonAnswerCitationV4 {
+function answerCitation(value: unknown, tickets = false): PersonAnswerCitationV5 {
   const input = object(value, 'Ask response citation');
   assertExactKeys(input, ['citation', 'kind', 'label', 'visibility', ...(Object.hasOwn(input, 'ref') ? ['ref'] : [])], 'Ask response citation');
-  evidenceKind(input.kind, 'Ask response citation kind');
+  evidenceKind(input.kind, 'Ask response citation kind', tickets);
   text(input.label, 'Ask response citation label', PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
   visibility(input.visibility, 'Ask response citation visibility');
-  const cited = evidenceCitation(input.citation);
+  const cited = evidenceCitation(input.citation, tickets);
+  if ((cited.kind === 'ticket') !== (input.kind === 'ticket')) fail('Ticket citation kind is inconsistent');
   if ((cited.kind === 'slack_message') !== (input.kind === 'slack_message')) fail('Ask response citation kind is inconsistent');
   const ref = Object.hasOwn(input, 'ref') ? validatePersonOpenRefV1(input.ref, 'Ask response citation ref') : undefined;
   if (ref !== undefined && !citationRefConsistent(cited, ref)) fail('Ask response citation ref is inconsistent');
   return Object.freeze({ citation: cited, kind: input.kind, label: input.label as string, visibility: input.visibility, ...(ref === undefined ? {} : { ref }) });
 }
 
-function part(value: unknown, citations: readonly PersonAnswerCitationV4[]): PersonAnswerPartV4 {
+function part(value: unknown, citations: readonly PersonAnswerCitationV5[]): PersonAnswerPartV4 {
   const input = object(value, 'Ask response part');
   assertExactKeys(input, ['question', 'status', 'statements', ...(Object.hasOwn(input, 'gap') ? ['gap'] : []), ...(Object.hasOwn(input, 'records') ? ['records'] : [])], 'Ask response part');
   text(input.question, 'Ask response part question', 1024);
@@ -301,12 +314,12 @@ function part(value: unknown, citations: readonly PersonAnswerCitationV4[]): Per
   });
 }
 
-function deskItem(value: unknown): PersonEvidenceDeskItemV1 {
+function deskItem(value: unknown, tickets = false): PersonEvidenceDeskItemV2 {
   const input = object(value, 'Evidence desk item');
   assertExactKeys(input, ['id', 'citation', 'kind', 'label', 'visibility', 'receipt_sha256', ...(Object.hasOwn(input, 'text') ? ['text'] : []), ...(Object.hasOwn(input, 'attributes') ? ['attributes'] : []), ...(Object.hasOwn(input, 'occurred_at') ? ['occurred_at'] : [])], 'Evidence desk item');
   if (Object.hasOwn(input, 'occurred_at') && (typeof input.occurred_at !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.occurred_at))) fail('Evidence desk item occurred_at is invalid');
   text(input.id, 'Evidence desk item id', 512);
-  evidenceKind(input.kind, 'Evidence desk item kind');
+  evidenceKind(input.kind, 'Evidence desk item kind', tickets);
   text(input.label, 'Evidence desk item label', PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
   visibility(input.visibility, 'Evidence desk item visibility');
   assertDigest(input.receipt_sha256, 'Evidence desk item receipt_sha256');
@@ -321,8 +334,10 @@ function deskItem(value: unknown): PersonEvidenceDeskItemV1 {
     if (Object.hasOwn(raw, 'status')) text(raw.status, 'Evidence desk item status', 128);
     attributes = Object.freeze({ ...(Object.hasOwn(raw, 'owner') ? { owner: raw.owner as string } : {}), ...(Object.hasOwn(raw, 'due_at') ? { due_at: raw.due_at as string } : {}), ...(Object.hasOwn(raw, 'status') ? { status: raw.status as string } : {}) });
   }
-  const cited = evidenceCitation(input.citation);
+  const cited = evidenceCitation(input.citation, tickets);
+  if ((cited.kind === 'ticket') !== (input.kind === 'ticket')) fail('Ticket citation kind is inconsistent');
   if ((cited.kind === 'slack_message') !== (input.kind === 'slack_message')) fail('Evidence desk item kind is inconsistent');
+  if (cited.kind === 'ticket' && cited.text_sha256 !== sha256Digest(typeof input.text === 'string' ? input.text : '')) fail('Ticket evidence text digest is inconsistent');
   return Object.freeze({ id: input.id as string, citation: cited, kind: input.kind, ...(Object.hasOwn(input, 'text') ? { text: input.text as string } : {}), label: input.label as string, visibility: input.visibility, ...(attributes === undefined ? {} : { attributes }), ...(Object.hasOwn(input, 'occurred_at') ? { occurred_at: input.occurred_at as string } : {}), receipt_sha256: input.receipt_sha256 as `sha256:${string}` });
 }
 
@@ -339,17 +354,19 @@ export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerReque
   return boundedRequest({ schema_version: 3 as const, question: validatePersonQueryText(input.question), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'mine') ? { mine: true as const } : {}) }, 'Ask request');
 }
 
-export function validatePersonAnswerResponseV4(value: unknown): PersonAnswerResponseV4 {
+export function validatePersonAnswerResponseV4(value: unknown): PersonAnswerResponseV4 { return answerResponse(value, 4) as PersonAnswerResponseV4; }
+export function validatePersonAnswerResponseV5(value: unknown): PersonAnswerResponseV5 { return answerResponse(value, 5) as PersonAnswerResponseV5; }
+function answerResponse(value: unknown, version: 4 | 5) {
   const input = object(value, 'Ask response');
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'assumption') ? ['assumption'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : [])], 'Ask response');
-  if (input.schema_version !== 4 || input.kind !== 'echo-clean-person-answer-v4' || !['answered', 'partial', 'not_found', 'off_scope'].includes(input.outcome as string) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || input.parts.length < 1 || input.parts.length > 5) fail('Ask response is invalid');
+  if (input.schema_version !== version || input.kind !== `echo-clean-person-answer-v${version}` || !['answered', 'partial', 'not_found', 'off_scope'].includes(input.outcome as string) || !Array.isArray(input.citations) || input.citations.length > 40 || !Array.isArray(input.parts) || input.parts.length < 1 || input.parts.length > 5) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'assumption')) text(input.assumption, 'Ask response assumption', 2 * 1024, true);
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', 2 * 1024, true);
-  const citations = input.citations.map(answerCitation);
+  const citations = input.citations.map(item => answerCitation(item, version === 5));
   const citationKeys = new Set<string>();
   for (const item of citations) { const key = citationKey(item.citation); if (citationKeys.has(key)) fail('Ask response contains duplicate citations'); citationKeys.add(key); }
-  const result: PersonAnswerResponseV4 = {
-    schema_version: 4, kind: 'echo-clean-person-answer-v4', scope: scope(input.scope), outcome: input.outcome as PersonAnswerResponseV4['outcome'], citations: Object.freeze(citations),
+  const result = {
+    schema_version: version, kind: `echo-clean-person-answer-v${version}`, scope: scope(input.scope), outcome: input.outcome as PersonAnswerResponseV4['outcome'], citations: Object.freeze(citations),
     ...(Object.hasOwn(input, 'direct') ? { direct: statement(input.direct, citations, 'Ask response direct') } : {}),
     parts: Object.freeze(input.parts.map((item) => part(item, citations))),
     ...(Object.hasOwn(input, 'assumption') ? { assumption: input.assumption as string } : {}), ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}),
@@ -372,7 +389,7 @@ export function validatePersonEvidenceSearchRequestV1(value: unknown): PersonEvi
   assertExactKeys(input, ['schema_version', ...(Object.hasOwn(input, 'query') ? ['query'] : []), ...(Object.hasOwn(input, 'kinds') ? ['kinds'] : []), ...(Object.hasOwn(input, 'limit') ? ['limit'] : []), ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])], 'Evidence search request');
   if (input.schema_version !== 1) fail('Evidence search request schema_version is unsupported');
   if (Object.hasOwn(input, 'kinds') && (!Array.isArray(input.kinds) || input.kinds.length === 0 || input.kinds.length > 6)) fail('Evidence search request kinds is invalid');
-  const kinds = Object.hasOwn(input, 'kinds') ? (input.kinds as unknown[]).map((kind) => { evidenceKind(kind, 'Evidence search request kind'); return kind; }) : undefined;
+  const kinds = Object.hasOwn(input, 'kinds') ? (input.kinds as unknown[]).map((kind) => { evidenceKind(kind, 'Evidence search request kind'); return kind as PersonEvidenceKindV1; }) : undefined;
   if (kinds !== undefined && new Set(kinds).size !== kinds.length) fail('Evidence search request kinds contains duplicates');
   const maximumLimit = Object.hasOwn(input, 'query') ? 10 : 50;
   if (Object.hasOwn(input, 'limit') && (!Number.isSafeInteger(input.limit) || (input.limit as number) < 1 || (input.limit as number) > maximumLimit)) fail('Evidence search request limit is invalid');
@@ -386,15 +403,17 @@ export function validatePersonEvidenceOpenRequestV1(value: unknown): PersonEvide
   return boundedRequest({ schema_version: 1 as const, citation: citation(input.citation), ...(Object.hasOwn(input, 'neighbours') ? { neighbours: input.neighbours as 0 | 1 | 2 } : {}), ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Evidence open request project_id') } : {}) }, 'Evidence open request');
 }
 
-export function validatePersonEvidenceDeskResponseV1(value: unknown): PersonEvidenceDeskResponseV1 {
+export function validatePersonEvidenceDeskResponseV1(value: unknown): PersonEvidenceDeskResponseV1 { return deskResponse(value, 1) as PersonEvidenceDeskResponseV1; }
+export function validatePersonEvidenceDeskResponseV2(value: unknown): PersonEvidenceDeskResponseV2 { return deskResponse(value, 2) as PersonEvidenceDeskResponseV2; }
+function deskResponse(value: unknown, version: 1 | 2) {
   const input = object(value, 'Evidence desk response');
   assertExactKeys(input, ['schema_version', 'kind', 'scope', 'items', 'truncated', ...(Object.hasOwn(input, 'notice') ? ['notice'] : [])], 'Evidence desk response');
-  if (input.schema_version !== 1 || input.kind !== 'echo-person-evidence-desk-v1' || !Array.isArray(input.items) || input.items.length > 50 || typeof input.truncated !== 'boolean') fail('Evidence desk response is invalid');
+  if (input.schema_version !== version || input.kind !== `echo-person-evidence-desk-v${version}` || !Array.isArray(input.items) || input.items.length > 50 || typeof input.truncated !== 'boolean') fail('Evidence desk response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Evidence desk response notice', 2 * 1024, true);
-  const items = input.items.map(deskItem);
+  const items = input.items.map(item => deskItem(item, version === 2));
   const ids = new Set<string>(); const coordinates = new Set<string>();
   for (const item of items) { if (ids.has(item.id)) fail('Evidence desk response contains duplicate item IDs'); ids.add(item.id); const key = citationKey(item.citation); if (coordinates.has(key)) fail('Evidence desk response contains duplicate citations'); coordinates.add(key); }
-  const result: PersonEvidenceDeskResponseV1 = { schema_version: 1, kind: 'echo-person-evidence-desk-v1', scope: scope(input.scope), items: Object.freeze(items), truncated: input.truncated, ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}) };
+  const result = { schema_version: version, kind: `echo-person-evidence-desk-v${version}`, scope: scope(input.scope), items: Object.freeze(items), truncated: input.truncated, ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}) };
   if (canonicalJsonBytes(result).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) fail('Evidence desk response exceeds JSON byte bound');
   return Object.freeze(result);
 }

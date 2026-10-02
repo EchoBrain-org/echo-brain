@@ -20,6 +20,8 @@ COPY providers/synthetic-demo/package.json ./providers/synthetic-demo/package.js
 COPY providers/slack/server/package.json ./providers/slack/server/package.json
 COPY providers/slack/client/package.json ./providers/slack/client/package.json
 COPY providers/granola/package.json ./providers/granola/package.json
+COPY providers/jira/package.json ./providers/jira/package.json
+COPY providers/jira/client/package.json ./providers/jira/client/package.json
 # Keep dependency installation independent of application source.  BuildKit can
 # reuse this layer when a source-only change is rebuilt in CI.
 RUN npm ci
@@ -73,6 +75,10 @@ COPY --from=build /app/packages/organization-retrieval/baselines/readable-search
 COPY --from=build /app/packages/organization-retrieval/baselines/readable-search-lexical-baseline-v2.sql ./packages/organization-retrieval/baselines/readable-search-lexical-baseline-v2.sql
 COPY --from=build /app/providers/granola/package.json ./providers/granola/package.json
 COPY --from=build /app/providers/granola/dist ./providers/granola/dist
+COPY --from=build /app/providers/jira/package.json ./providers/jira/package.json
+COPY --from=build /app/providers/jira/dist ./providers/jira/dist
+COPY --from=build /app/providers/jira/client/package.json ./providers/jira/client/package.json
+COPY --from=build /app/providers/jira/client/dist ./providers/jira/client/dist
 COPY --from=build /app/providers/openrouter/package.json ./providers/openrouter/package.json
 COPY --from=build /app/providers/openrouter/dist ./providers/openrouter/dist
 COPY --from=build /app/providers/openrouter/assets ./providers/openrouter/assets

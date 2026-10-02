@@ -46,6 +46,9 @@ separately.
 | [ADR-0022](ADR-0022-agentic-ask-only.md) | Agentic Ask is the only Ask | accepted |
 | [ADR-0023](ADR-0023-reader-scoped-upload-releases.md) | Reader-scoped upload audiences and uploader-only request IDs | accepted |
 | [ADR-0024](ADR-0024-person-list-open-and-mine-scope.md) | Person list, open by ref, and the mine scope | accepted |
+| [ADR-0025](ADR-0025-nango-holds-slack-connection-credentials.md) | Nango holds Slack connection credentials | accepted |
+| [ADR-0026](ADR-0026-jira-person-live-evidence-nango.md) | Person-bound Jira live evidence with Nango custody | proposed |
+| [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md) | Rebind a lost Nango Slack connection under the same credential handle | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

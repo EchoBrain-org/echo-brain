@@ -67,7 +67,8 @@ node services/organization-authority/dist/synthetic-demo-main.js serve \
   --meetings-dir /absolute/path/to/personalized-meetings \
   --host 127.0.0.1 \
   --port 8787 \
-  --slack-signing-secret-file /absolute/path/to/slack-signing-secret
+  --nango-secret-key-file /absolute/path/to/nango-secret-key \
+  --nango-integration slack
 ```
 
 If that state's OIDC manifest uses client-secret authentication, also pass

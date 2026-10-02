@@ -67,6 +67,8 @@ The shared implementation packages are `packages/organization-processing` and
 | `providers/ollama` | Ollama transport and processor factory |
 | `providers/openrouter` | OpenRouter processing, generation and model vocabulary |
 | `providers/granola` | Granola source, custody, admission and setup proofs |
+| `providers/jira` | Isolated person-bound Jira live reader; [authentication and support boundary](../../providers/jira/README.md) |
+| `providers/jira/client` | Jira connection wire contracts and shared Person tool commands; no server dependencies |
 | `providers/synthetic-demo` | Fixed synthetic source and its evaluation/setup proofs |
 | `providers/slack/client` | Client contracts and Person commands |
 | `providers/slack/server` | Server identity, approval, historical codec/projector, connection/setup and assets |

@@ -202,11 +202,12 @@ export interface RecordRef {
   readonly policy_id: RecordPolicy;
 }
 
-/** What an answer is based on: an approved record, an original, or a live Slack message. */
+/** What an answer is based on: an approved record, an original, or live evidence. */
 export type AnswerSource =
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef }
   | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef }
-  | { readonly kind: 'slack'; readonly label: string; readonly permalink: string };
+  | { readonly kind: 'slack'; readonly label: string; readonly permalink: string }
+  | { readonly kind: 'ticket'; readonly label: string; readonly permalink: string };
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
 export interface AnswerStatement {
@@ -422,6 +423,8 @@ export interface HostMethods {
 export interface MainMethods {
   /** Opens one cited Slack message in the system browser; only Slack message permalinks are allowed. */
   'source.openSlack': { params: { permalink: string }; result: null };
+  /** Opens a validated ticket display link; the provider owns tenant validation. */
+  'source.openTicket': { params: { permalink: string }; result: null };
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
   /** Add files…, in New project: up to 20 documents at once. */
   'dialog.openDocuments': { params: Record<string, never>; result: ChosenFiles };
@@ -458,7 +461,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'employees.reissue', 'employees.revoke',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'source.openSlack', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
+  'source.openSlack', 'source.openTicket', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
   'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show',
 ];
 /** Host methods that change what the Authority stores. */
@@ -519,6 +522,16 @@ export function slackPermalink(raw: unknown): string | null {
   return typeof raw === 'string' && raw.length <= 512 &&
     /^https:\/\/[a-z0-9-]+(\.enterprise)?\.slack\.com\/archives\/[CDG][A-Z0-9]{2,30}\/p\d{15,17}(\?[A-Za-z0-9_=&.%-]{0,200})?$/.test(raw)
     ? raw : null;
+}
+
+/** A ticket display link has no embedded authorization or redirect parameters. */
+export function ticketPermalink(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw.length > 2048 || /[\s\\\p{Cc}]/u.test(raw)) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' && url.hostname !== '' && url.username === '' && url.password === '' &&
+      url.search === '' && url.hash === '' && url.href === raw ? raw : null;
+  } catch { return null; }
 }
 
 /** Parameters larger than this are refused at the broker. */

@@ -7,7 +7,11 @@ ECHO processes organization meeting data on the organization Authority. A
 person's machine owns only its private Authority origin and rotating Person
 session credentials. The Authority owns OIDC verification, principals,
 memberships, organization authorization, meeting-source and provider
-credentials, processing state, and revocation.
+credentials, processing state, and revocation. Nango holds the organization's
+Slack bot token and its OAuth install copy of the Slack app client secret;
+the Authority retains its own private client-secret copy for person-link
+sign-in and the signing secret for inbound-interaction verification
+([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
 
 ## Durable identity
 
@@ -52,18 +56,32 @@ local authority even if the remote revocation outcome is unknown. Every Person
 read and integration-link request rechecks the current session, membership, and
 revocation state on the Authority.
 
-Organization-tool onboarding remains an Authority administrator operation. An
-owner supplies the organization Slack bot credential and a public channel
-for verifying bot access. The Authority verifies the workspace, app, bot,
-scopes, and channel before storing the secret in its private credential store.
-SQLite receives only an opaque secret handle and verified public identity. The
-legacy field name `slack_approval_channel_id` is transitional naming debt: that
-channel is never an approval destination or readiness gate.
+Organization-tool onboarding is an owner operation done from the owner's own
+ECHO client, not an Authority administrator operation on the host. An owner
+runs `echo-brain person tools setup --tool slack` and pastes one Slack app
+configuration token at its hidden prompt; the desktop app's Connected tools
+page shows status only for now. ECHO creates a private Slack app for that
+organization and installs it through Nango, which runs the OAuth exchange
+and holds the resulting bot token. The Authority verifies the workspace, app,
+bot, and scopes before activating the
+connection and storing the Nango connection ID, the app's client ID and
+secret, and the signing secret in its private credential store
+([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
+SQLite receives only that credential reference and verified public identity;
+it holds no bot token.
 
-After that organization tool is active, a signed-in Person can run the
-`echo-brain person slack-link` challenge. The Authority posts the challenge,
-observes the exact Slack human replying in the exact thread, and creates or
-reuses that membership's external identity link.
+Granola is one organization-owned meeting export and admission bridge. Its
+credential and canonical owner-email binding stay on the Authority; people do
+not connect Granola from the Person client or supply individual Granola keys.
+It emits revisions through the existing meeting-source admission and approval
+path before any meeting becomes readable context.
+
+After that organization tool is active, a signed-in Person runs
+`echo-brain person tools connect --tool slack`, which opens Slack's sign-in
+page in the browser, or, on a machine without a browser,
+`echo-brain person tools connect --tool slack --method dm-code --slack-user U…`,
+the earlier DM-code challenge. Either way the Authority verifies the exact
+Slack human and creates or reuses that membership's external identity link.
 The Person flow creates no shared-channel/reaction adapter binding or
 approve/reject grant. Private meeting-owner approvals are instead delivered as
 signed Block Kit DMs. The visibility selector defaults to **Only me**

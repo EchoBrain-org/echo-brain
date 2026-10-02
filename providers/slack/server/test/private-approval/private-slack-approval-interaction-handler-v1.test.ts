@@ -674,6 +674,26 @@ describe("private Slack interactions application V1", () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
+  it("reads a signing secret getter on every request and fails closed without one", async () => {
+    let secret = SECRET;
+    const signingSecret = vi.fn(() => secret);
+    const application = createPrivateSlackApprovalInteractionHandlerV1({
+      signing_secret: signingSecret,
+      persistence: { enqueue: vi.fn() },
+      now_unix_seconds: () => NOW,
+    });
+    const selector = raw({ action_id: POLICY_ID });
+    await expect(application.accept(request(selector))).resolves.toBe("accepted");
+    secret = "rotated-signing-secret";
+    await expect(application.accept(request(selector))).rejects.toMatchObject({ code: "unauthorized" });
+    await expect(application.accept(request(selector, "rotated-signing-secret"))).resolves.toBe("accepted");
+    signingSecret.mockImplementationOnce(() => { throw new Error(`bundle unreadable ${SECRET}`); });
+    const failure = await application.accept(request(selector)).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "unavailable" });
+    expect(String(failure)).not.toContain(SECRET);
+    expect(signingSecret).toHaveBeenCalledTimes(4);
+  });
+
   it("uses the narrow card default for untouched radio state and accepts media-type parameters", async () => {
     const enqueue = vi.fn(() => ({
       disposition: "resolution" as const,

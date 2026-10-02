@@ -20,6 +20,7 @@
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-api",
     "@echo-brain/organization-protocol",
+    "@echo-brain/provider-jira-client",
     "@echo-brain/provider-slack-client"
   ],
   "allowed_external_packages": [],
@@ -207,6 +208,7 @@
         "src/product/person-client/client-update-cli.ts"
       ],
       "allowed_workspace_packages": [
+        "@echo-brain/provider-jira-client",
         "@echo-brain/provider-slack-client"
       ],
       "allowed_external_packages": [],

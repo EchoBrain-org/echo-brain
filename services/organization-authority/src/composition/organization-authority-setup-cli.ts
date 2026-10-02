@@ -1,11 +1,12 @@
 /**
- * V1 stopped-state bootstrap for the shipped Granola/OpenRouter/Slack profile.
- * Its manifest, commands and finalization intentionally require Slack. This is
- * not a swappable setup port: another profile needs a versioned bootstrap design.
- * Provider verification and persisted provider facts stay in provider helpers.
+ * Stopped-state bootstrap for the shipped Granola/OpenRouter/Slack profile.
+ * Finalization intentionally requires Slack, which an owner sets up in the
+ * ECHO app while the Authority runs. This is not a swappable setup port:
+ * another profile needs a versioned bootstrap design. Provider verification
+ * and persisted provider facts stay in provider helpers.
  */
 import { captureCommand } from '@echo-brain/organization-authority-kernel/composition/capture-stopped-state-command';
-import { connectInitialOwnerSlackV1, plannedSlackConnectionIsActiveV1, readInitialOwnerSlackSetupStatusV1, type SafeSlackVerification, type ConnectedSlack } from '@echo-brain/provider-slack-server/setup/initial-owner-slack-setup-v1';
+import { plannedSlackConnectionIsActiveV1, readInitialOwnerSlackSetupStatusV1 } from '@echo-brain/provider-slack-server/setup/initial-owner-slack-setup-v1';
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -85,14 +86,11 @@ const STAGING_SYNTHETIC_CANARY_HOST = "authority-staging.echobrain.org";
 const CLEAN_V1_RELEASE_ID = /^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/;
 
 const USAGE = `usage:
-  echo-organization-authority-setup bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> --slack-approval-channel-id <id> [--artifact-revision <revision>] < slack-bot-token
-  echo-organization-authority-setup resume --state-dir <absolute-path> < slack-bot-token
+  echo-organization-authority-setup bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> [--artifact-revision <revision>]
+  echo-organization-authority-setup resume --state-dir <absolute-path>
   echo-organization-authority-setup credentials-install --state-dir <absolute-path> --granola-credential-file <absolute-private-path> --granola-owner-email-file <absolute-private-path> --llm-credential-file <absolute-private-path>
   echo-organization-authority-setup finalize --state-dir <absolute-path> [--staging-synthetic-meetings-dir <absolute-path>]
-  echo-organization-authority-setup status --state-dir <absolute-path>
-
-The legacy --slack-approval-channel-id flag names the temporary public initial-owner
-identity-link channel only. Private approval cards are never sent to it.`;
+  echo-organization-authority-setup status --state-dir <absolute-path>`;
 
 // The remaining `clean-founder` filenames, command paths, instance IDs, wire
 // kinds, status fields, and next-step literals are frozen V1 compatibility
@@ -101,27 +99,17 @@ identity-link channel only. Private approval cards are never sent to it.`;
 interface CliIo {
   readonly stdout: (value: string) => void;
   readonly stderr: (value: string) => void;
-  readonly read_stdin: () => Promise<string>;
 }
 
 const PROCESS_IO: CliIo = {
   stdout: (value) => process.stdout.write(value),
   stderr: (value) => process.stderr.write(value),
-  read_stdin: async () => {
-    process.stdin.setEncoding("utf8");
-    let result = "";
-    for await (const chunk of process.stdin) result += chunk;
-    return result;
-  },
 };
 
-export interface OrganizationAuthoritySetupSeedV1 extends AuthorityStateSeedV1 {
-  readonly slack_connection_id: string;
-}
-
-export interface OrganizationAuthoritySetupManifestV1 {
-  readonly schema_version: 1;
-  readonly kind: "echo-clean-founder-onboarding-manifest-v1";
+/** Slack is set up in the ECHO app, so the manifest names no Slack connection or channel. */
+export interface OrganizationAuthoritySetupManifestV2 {
+  readonly schema_version: 2;
+  readonly kind: "echo-clean-founder-onboarding-manifest-v2";
   readonly state_directory: string;
   readonly created_at: string;
   readonly artifact_revision: string;
@@ -129,13 +117,6 @@ export interface OrganizationAuthoritySetupManifestV1 {
   readonly oidc_config_path: string;
   readonly pkce_key_file: string;
   readonly invitation_path: string;
-  /**
-   * Transitional field name. This public channel exists only for the current
-   * initial-owner Person-to-Slack identity-link challenge. It is never an approval
-   * destination, approval binding, or approval-readiness gate.
-   */
-  readonly slack_approval_channel_id: string;
-  readonly slack_connection_id: string;
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -144,7 +125,7 @@ export interface OrganizationAuthoritySetupManifestV1 {
   readonly granola_credential_file: string;
   readonly granola_owner_email_file: string;
   readonly llm_credential_file: string;
-  readonly setup_seed: OrganizationAuthoritySetupSeedV1;
+  readonly setup_seed: AuthorityStateSeedV1;
   readonly owner_email: string;
   readonly organization_name: string;
   readonly owner_display_name: string;
@@ -157,8 +138,6 @@ interface BootstrapInput {
   readonly owner_email: string;
   readonly authority_url: string;
   readonly oidc_config_path: string;
-  /** Transitional identity-link-only channel argument; see manifest field. */
-  readonly slack_approval_channel_id: string;
   readonly artifact_revision: string;
 }
 
@@ -187,13 +166,6 @@ export interface OrganizationAuthoritySetupCliDependencies {
   readonly now: () => string;
   readonly initialize_state: typeof bootstrapOrganizationAuthorityState;
   readonly initialize_credentials: (stateDirectory: string) => Promise<void>;
-  readonly connect_slack: (input: {
-    readonly state_directory: string;
-    /** Legacy adapter name for the temporary initial-owner identity-link channel. */
-    readonly approval_channel_id: string;
-    readonly connection_id?: string;
-    readonly read_stdin: () => Promise<string>;
-  }) => Promise<ConnectedSlack>;
   readonly issue_invitation: (input: {
     readonly state_directory: string;
     readonly oidc_config_path: string;
@@ -216,15 +188,15 @@ export interface OrganizationAuthoritySetupCliDependencies {
   }) => Promise<void>;
   /** Test seam only; production derives these facts from durable state. */
   readonly read_initial_owner_setup_status?: (
-    manifest: OrganizationAuthoritySetupManifestV1,
+    manifest: OrganizationAuthoritySetupManifestV2,
   ) => InitialOwnerSetupStatus;
   /** Test seam only; production derives this from immutable state. */
   readonly read_setup_canary_evidence?: (
-    manifest: OrganizationAuthoritySetupManifestV1,
+    manifest: OrganizationAuthoritySetupManifestV2,
   ) => SetupCanaryEvidence;
   /** Test seam only; production derives these facts from durable state. */
   readonly read_setup_stage?: (
-    manifest: OrganizationAuthoritySetupManifestV1,
+    manifest: OrganizationAuthoritySetupManifestV2,
   ) => OrganizationAuthoritySetupStage;
 }
 
@@ -244,7 +216,6 @@ const DEFAULT_DEPENDENCIES: OrganizationAuthoritySetupCliDependencies = {
       ),
     );
   },
-  connect_slack: connectInitialOwnerSlackV1,
   issue_invitation: async (input) => {
     await captureCommand((stdout) =>
       runOrganizationAuthorityPersonAdministrationCli(
@@ -335,7 +306,6 @@ function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
     "--owner-email",
     "--authority-url",
     "--oidc-config",
-    "--slack-approval-channel-id",
     "--artifact-revision",
   ]);
   const required = (key: string): string => {
@@ -354,7 +324,6 @@ function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
     owner_email: ownerEmail,
     authority_url: required("--authority-url"),
     oidc_config_path: absolutePath(required("--oidc-config"), "OIDC config"),
-    slack_approval_channel_id: required("--slack-approval-channel-id"),
     artifact_revision:
       values.get("--artifact-revision") ?? DEFAULT_ARTIFACT_REVISION,
   });
@@ -434,7 +403,7 @@ function siblingSetupPlanPath(stateDirectory: string): string {
 
 function writeCanonicalPrivateFile(
   path: string,
-  value: OrganizationAuthoritySetupManifestV1,
+  value: OrganizationAuthoritySetupManifestV2,
 ): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temporaryPath = `${path}.installing-${randomUUID()}`;
@@ -468,13 +437,16 @@ function writeCanonicalPrivateFile(
   }
 }
 
-function assertSetupSeed(seed: OrganizationAuthoritySetupSeedV1): void {
+function assertSetupSeed(seed: AuthorityStateSeedV1): void {
   try {
+    if (Object.keys(seed).sort().join(",") !==
+      "authority_id,control_plane_id,organization_id,owner_membership_id,owner_principal_id,state_lineage_id") {
+      throw new Error("unexpected setup seed fields");
+    }
     assertFederationId(seed.authority_id, "oau", "setup authority_id");
     assertFederationId(seed.organization_id, "org", "setup organization_id");
     assertFederationId(seed.owner_principal_id, "prn", "setup owner_principal_id");
     assertFederationId(seed.owner_membership_id, "mem", "setup owner_membership_id");
-    assertFederationId(seed.slack_connection_id, "con", "setup slack_connection_id");
   } catch {
     throw new Error("organization setup seed is invalid");
   }
@@ -487,11 +459,15 @@ function assertSetupSeed(seed: OrganizationAuthoritySetupSeedV1): void {
   }
 }
 
-function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV1 {
+function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV2 {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("organization setup manifest is invalid");
   }
   const record = value as Record<string, unknown>;
+  if (record.kind === "echo-clean-founder-onboarding-manifest-v1") {
+    // Its Slack connection was set up before the ECHO app could; staging moves to a fresh lineage.
+    throw new Error("organization setup manifest predates in-app Slack setup; install this release's host tooling, then run replace-rehearsal");
+  }
   const keys = [
     "artifact_revision",
     "authority_id",
@@ -508,8 +484,6 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV1 
     "owner_principal_id",
     "pkce_key_file",
     "schema_version",
-    "slack_approval_channel_id",
-    "slack_connection_id",
     "state_directory",
     "state_lineage_id",
   ];
@@ -522,8 +496,8 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV1 
   ];
   const actualKeys = Object.keys(record).sort().join(",");
   if (
-    record.schema_version !== 1 ||
-    record.kind !== "echo-clean-founder-onboarding-manifest-v1" ||
+    record.schema_version !== 2 ||
+    record.kind !== "echo-clean-founder-onboarding-manifest-v2" ||
     actualKeys !== currentKeys.sort().join(",") ||
     keys
       .filter((key) => key !== "schema_version")
@@ -531,7 +505,7 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV1 
   ) {
     throw new Error("organization setup manifest is invalid");
   }
-  const manifest = record as unknown as OrganizationAuthoritySetupManifestV1;
+  const manifest = record as unknown as OrganizationAuthoritySetupManifestV2;
   if (
     !isCanonicalPersonEmail(manifest.owner_email) ||
     typeof manifest.organization_name !== "string" ||
@@ -555,7 +529,7 @@ function validateManifest(value: unknown): OrganizationAuthoritySetupManifestV1 
   return Object.freeze(manifest);
 }
 
-function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV1 {
+function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV2 {
   const metadata = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
@@ -583,7 +557,7 @@ function readPrivateManifest(path: string): OrganizationAuthoritySetupManifestV1
 
 export function readOrganizationAuthoritySetupManifest(
   stateDirectory: string,
-): OrganizationAuthoritySetupManifestV1 {
+): OrganizationAuthoritySetupManifestV2 {
   const canonicalStateDirectory = absolutePath(
     stateDirectory,
     "state directory",
@@ -600,20 +574,19 @@ export function readOrganizationAuthoritySetupManifest(
 function setupManifest(
   input: BootstrapInput,
   createdAt: string,
-): OrganizationAuthoritySetupManifestV1 {
+): OrganizationAuthoritySetupManifestV2 {
   const credentialsDirectory = join(input.state_directory, "credentials");
-  const seed: OrganizationAuthoritySetupSeedV1 = Object.freeze({
+  const seed: AuthorityStateSeedV1 = Object.freeze({
     authority_id: federationId("oau"),
     organization_id: federationId("org"),
     state_lineage_id: `lineage-${randomUUID()}`,
     owner_principal_id: federationId("prn"),
     owner_membership_id: federationId("mem"),
     control_plane_id: `ocp_${randomUUID()}`,
-    slack_connection_id: federationId("con"),
   });
   return Object.freeze({
-    schema_version: 1,
-    kind: "echo-clean-founder-onboarding-manifest-v1",
+    schema_version: 2,
+    kind: "echo-clean-founder-onboarding-manifest-v2",
     state_directory: input.state_directory,
     created_at: createdAt,
     artifact_revision: input.artifact_revision,
@@ -621,8 +594,6 @@ function setupManifest(
     oidc_config_path: input.oidc_config_path,
     pkce_key_file: join(credentialsDirectory, "person-session-pkce-sealing-key"),
     invitation_path: join(input.state_directory, MANIFEST_DIRECTORY, INVITATION_FILENAME),
-    slack_approval_channel_id: input.slack_approval_channel_id,
-    slack_connection_id: seed.slack_connection_id,
     authority_id: seed.authority_id,
     organization_id: seed.organization_id,
     state_lineage_id: seed.state_lineage_id,
@@ -639,7 +610,7 @@ function setupManifest(
 }
 
 function setupInputMatches(
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
   input: BootstrapInput,
 ): boolean {
   return (
@@ -648,13 +619,12 @@ function setupInputMatches(
     manifest.owner_email === input.owner_email &&
     manifest.authority_url === input.authority_url &&
     manifest.oidc_config_path === input.oidc_config_path &&
-    manifest.slack_approval_channel_id === input.slack_approval_channel_id &&
     manifest.artifact_revision === input.artifact_revision
   );
 }
 
 function loadSetupManifest(stateDirectory: string): |{
-  readonly manifest: OrganizationAuthoritySetupManifestV1;
+  readonly manifest: OrganizationAuthoritySetupManifestV2;
   readonly location: "sibling" | "state";
 } | undefined {
   const sibling = siblingSetupPlanPath(stateDirectory);
@@ -681,7 +651,7 @@ function loadSetupManifest(stateDirectory: string): |{
   });
 }
 
-function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1): void {
+function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV2): void {
   const verified = verifyAuthorityStateLineage(manifest.state_directory);
   if (
     verified.root.authority_id !== manifest.setup_seed.authority_id ||
@@ -694,7 +664,7 @@ function verifySetupGenesis(manifest: OrganizationAuthoritySetupManifestV1): voi
   }
 }
 
-function publishSetupPlan(manifest: OrganizationAuthoritySetupManifestV1): void {
+function publishSetupPlan(manifest: OrganizationAuthoritySetupManifestV2): void {
   const source = siblingSetupPlanPath(manifest.state_directory);
   const destination = manifestPath(manifest.state_directory);
   if (existsSync(destination)) return;
@@ -792,7 +762,7 @@ function sha256Secret(value: string): `sha256:${string}` {
 }
 
 function usableInitialOwnerInvitation(
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
 ): boolean {
   try {
     const path = manifest.invitation_path;
@@ -885,18 +855,18 @@ function discardUnusableInvitation(path: string): void {
 }
 
 function plannedSlackIsActive(
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
 ): boolean {
   try {
     verifySetupGenesis(manifest);
-    return plannedSlackConnectionIsActiveV1(manifest.state_directory, manifest.slack_connection_id);
+    return plannedSlackConnectionIsActiveV1(manifest.state_directory);
   } catch {
     return false;
   }
 }
 
 function durableSetupStage(
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
 ): OrganizationAuthoritySetupStage {
   return Object.freeze({
     credentials_ready: validPkceKeyPresent(manifest.pkce_key_file),
@@ -913,7 +883,6 @@ interface InitialOwnerSetupStatus {
   /** New generic fields retain the legacy Granola status vocabulary. */
   readonly source_admission_present?: boolean;
   readonly source_mode?: "granola" | "staging_synthetic";
-  readonly slack_verification?: SafeSlackVerification;
   readonly granola_admission_proof?: {
     readonly owner_observation_assurance: "provider_record_owner_observed";
     readonly owner_observed_at: string;
@@ -975,6 +944,7 @@ interface CurrentGenerationPointer {
 type OrganizationAuthoritySetupNextStep =
   | "resume_bootstrap"
   | "complete_founder_browser_login"
+  | "connect_slack_in_app"
   | "complete_founder_slack_link"
   | "install_provider_credentials"
   | "run_finalize"
@@ -993,12 +963,12 @@ function nextOrganizationAuthoritySetupStep(input: {
     !input.genesis_published ||
     input.setup_plan_location === "sibling" ||
     !input.credentials_ready ||
-    !input.slack_connected ||
     (!input.full.founder_oidc_bound && !input.founder_invitation_valid)
   ) {
     return "resume_bootstrap";
   }
   if (!input.full.founder_oidc_bound) return "complete_founder_browser_login";
+  if (!input.slack_connected) return "connect_slack_in_app";
   if (!input.full.founder_slack_link_active) return "complete_founder_slack_link";
   if (!input.full.granola_credentials_valid) return "install_provider_credentials";
   if (!sourceAdmissionPresent(input.full)) return "run_finalize";
@@ -1013,8 +983,10 @@ function organizationAuthoritySetupInstruction(
       "Run echo-organization-authority-setup resume --state-dir <absolute-path>.",
     complete_founder_browser_login:
       "Start the Authority and complete the initial-owner browser login.",
+    connect_slack_in_app:
+      "An owner runs person tools setup --tool slack and pastes a Slack app configuration token.",
     complete_founder_slack_link:
-      "Complete the initial-owner Slack identity link in the Authority.",
+      "The owner runs person tools connect --tool slack to link their own Slack.",
     install_provider_credentials:
       "Run the credentials-install command with the three private source files.",
     run_finalize: "Run the finalize command.",
@@ -1025,7 +997,7 @@ function organizationAuthoritySetupInstruction(
 }
 
 function readInitialOwnerSetupStatus(
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
   dependencies?: OrganizationAuthoritySetupCliDependencies,
 ): InitialOwnerSetupStatus {
   return (dependencies?.read_initial_owner_setup_status?.(manifest) ??
@@ -1188,7 +1160,7 @@ function pointerMatchesHead(
 
 function ownerReadAfter(
   authority: Database.Database,
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
   mode: "layer1" | "layer2",
   after: string,
 ): boolean {
@@ -1226,7 +1198,7 @@ function ownerReadAfter(
  * progress.
  */
 function stagingSyntheticCanaryObserved(
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
   authority: Database.Database,
   record: Database.Database,
 ): boolean {
@@ -1314,7 +1286,7 @@ function stagingSyntheticCanaryObserved(
  * between makes the terminal claim fail closed until the owner reruns status.
  */
 function setupCanaryEvidence(
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
 ): SetupCanaryEvidence {
   let authority: Database.Database | undefined;
   let record: Database.Database | undefined;
@@ -1416,7 +1388,7 @@ function setupCanaryEvidence(
 }
 
 function readSetupCanaryEvidence(
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
   dependencies?: OrganizationAuthoritySetupCliDependencies,
 ): SetupCanaryEvidence {
   return (dependencies?.read_setup_canary_evidence?.(manifest) ??
@@ -1424,7 +1396,7 @@ function readSetupCanaryEvidence(
 }
 
 function initialOwnerSetupStatus(
-  manifest: OrganizationAuthoritySetupManifestV1,
+  manifest: OrganizationAuthoritySetupManifestV2,
 ): InitialOwnerSetupStatus {
   const empty: InitialOwnerSetupStatus = {
     founder_oidc_bound: false,
@@ -1492,9 +1464,8 @@ function initialOwnerSetupStatus(
       granolaCredentialsValid = true;
     } catch {}
     const slackStatus = readInitialOwnerSlackSetupStatusV1({
-      state_directory: manifest.state_directory, connection_id: manifest.slack_connection_id,
+      state_directory: manifest.state_directory,
       principal_id: manifest.owner_principal_id, membership_id: manifest.owner_membership_id,
-      identity_link_channel_id: manifest.slack_approval_channel_id,
     });
       return Object.freeze({
         founder_oidc_bound: initialOwnerOidcBound,
@@ -1505,7 +1476,6 @@ function initialOwnerSetupStatus(
         ...(admittedSourceMode === undefined
           ? {}
           : { source_mode: admittedSourceMode }),
-        ...(slackStatus.verification === undefined ? {} : { slack_verification: slackStatus.verification }),
         ...(granolaAdmissionProof === undefined
           ? {}
           : { granola_admission_proof: granolaAdmissionProof }),
@@ -1520,8 +1490,9 @@ async function bootstrap(
   io: CliIo,
   dependencies: OrganizationAuthoritySetupCliDependencies,
 ): Promise<void> {
-  // This must happen before a durable setup plan, genesis, or Slack call. The
-  // same current OIDC parser and callback rule power the Person CLI.
+  // This must happen before a durable setup plan or genesis. The same current
+  // OIDC parser and callback rule power the Person CLI. Bootstrap never touches
+  // Slack: an owner sets it up in the ECHO app once the Authority runs.
   const oidc = readPersonOidcConfiguration(input.oidc_config_path);
   assertPersonAuthorityCallback(input.authority_url, oidc.configuration);
   let setup = loadSetupManifest(input.state_directory);
@@ -1565,19 +1536,7 @@ async function bootstrap(
   if (!stage().credentials_ready) {
     await dependencies.initialize_credentials(input.state_directory);
   }
-  let slack: ConnectedSlack = { connection_id: manifest.slack_connection_id };
-  if (!stage().slack_connected) {
-    slack = await dependencies.connect_slack({
-      state_directory: input.state_directory,
-      approval_channel_id: input.slack_approval_channel_id,
-      connection_id: manifest.slack_connection_id,
-      read_stdin: io.read_stdin,
-    });
-  }
   const invitationPath = manifest.invitation_path;
-  if (slack.connection_id !== manifest.slack_connection_id) {
-    throw new Error("Slack connection did not retain the setup ID");
-  }
   const full = readInitialOwnerSetupStatus(manifest, dependencies);
   const initialOwnerAlreadyBound = full.founder_oidc_bound;
   const invitationIsUsable = () =>
@@ -1627,12 +1586,6 @@ async function bootstrap(
     `${canonicalJson({
       ok: true,
       ...(!initialOwnerAlreadyBound ? { invitation_path: invitationPath } : {}),
-      ...((completedFull.slack_verification ?? slack.verification) === undefined
-        ? {}
-        : {
-            slack_verification:
-              completedFull.slack_verification ?? slack.verification,
-          }),
       ...(completedFull.granola_admission_proof === undefined
         ? {}
         : { granola_admission_proof: completedFull.granola_admission_proof }),
@@ -1693,7 +1646,6 @@ async function resume(
       owner_email: manifest.owner_email,
       authority_url: manifest.authority_url,
       oidc_config_path: manifest.oidc_config_path,
-      slack_approval_channel_id: manifest.slack_approval_channel_id,
       artifact_revision: manifest.artifact_revision,
     }),
     io,
@@ -1760,8 +1712,10 @@ async function finalize(
   // command. Prove genesis before a dependency can admit anything.
   verifySetupGenesis(manifest);
   const full = readInitialOwnerSetupStatus(manifest, dependencies);
+  const stage = dependencies.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
   const missing = [
     !full.founder_oidc_bound && "initial-owner OIDC binding",
+    !stage.slack_connected && "organization Slack connection",
     !full.founder_slack_link_active && "initial-owner Slack identity link",
     !full.granola_credentials_valid && "provider credentials",
   ].filter((value): value is string => typeof value === "string");

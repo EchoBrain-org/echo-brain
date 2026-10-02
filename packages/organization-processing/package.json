@@ -9,6 +9,14 @@
       "types": "./dist/core/contracts/source.d.ts",
       "import": "./dist/core/contracts/source.js"
     },
+    "./core/contracts/context-capture-v1": {
+      "types": "./dist/core/contracts/context-capture-v1.d.ts",
+      "import": "./dist/core/contracts/context-capture-v1.js"
+    },
+    "./core/contracts/context-structured-payload-v1": {
+      "types": "./dist/core/contracts/context-structured-payload-v1.d.ts",
+      "import": "./dist/core/contracts/context-structured-payload-v1.js"
+    },
     "./core/ports/source": {
       "types": "./dist/core/ports/source.d.ts",
       "import": "./dist/core/ports/source.js"

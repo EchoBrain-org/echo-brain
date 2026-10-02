@@ -1,4 +1,5 @@
 import { SlackPersonClient } from '@echo-brain/provider-slack-client/person/slack-person-client';
+import { createJiraPersonToolProviderV1 } from '@echo-brain/provider-jira-client/person/jira-tool-provider';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import * as packageIdentity from "../../src/product/person-client/package-identity.js";
 import { Buffer } from "node:buffer";
@@ -169,6 +170,119 @@ async function runCli(
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe('shared Jira tool commands', () => {
+  const attempt = '00000000-0000-4000-8000-000000000021';
+  const expiresAt = '2026-08-18T00:12:00.000Z';
+  const providers = [createJiraPersonToolProviderV1()];
+  const status = (state: 'pending' | 'complete' | 'cancelled' | 'expired' | 'failed', failure_reason: null | 'provider_rejected' | 'provider_unavailable' | 'account_mismatch' = null) => ({
+    schema_version: 1, attempt, expires_at: expiresAt, status: state, failure_reason,
+  });
+
+  it('uses the shared tool routes and never writes a consent URL or locator to session or stdout', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const store = new PersonSessionStore(home);
+      const stored = canonicalJson(store.read());
+      const opened: string[] = [];
+      const fetchImpl: typeof fetch = async (input, init) => {
+        expect(init?.method).toBe('POST');
+        expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/person/tools/jira/connect') {
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1 });
+          return json({ schema_version: 1, attempt, connect_link: 'https://connect.nango.dev/?session_token=synthetic-consent', expires_at: expiresAt });
+        }
+        if (path === '/v1/person/tools/jira/status') {
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt });
+          return json(status('complete'));
+        }
+        if (path === '/v1/person/tools/jira/cancel') {
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt });
+          return json(status('cancelled'));
+        }
+        expect(path).toBe('/v1/person/tools/jira/disconnect');
+        expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1 });
+        return json({ schema_version: 1, connected: false });
+      };
+      const dependencies = {
+        home_directory: home, now: () => NOW, fetch: fetchImpl, tool_providers: providers,
+        open_authorization_url: async (url: string) => { opened.push(url); return true; },
+      };
+      const begun = await runCli(['tools', 'connect', '--tool', 'jira', '--no-wait'], dependencies);
+      expect(begun.code, begun.stderr).toBe(0);
+      expect(opened).toEqual(['https://connect.nango.dev/?session_token=synthetic-consent']);
+      expect(JSON.parse(begun.stdout)).toEqual({ ok: true, phase: 'waiting', attempt, expires_at: expiresAt });
+      expect(begun.stdout).not.toContain('synthetic-consent');
+      expect(JSON.parse((await runCli(['tools', 'status', '--tool', 'jira', '--attempt-id', attempt], dependencies)).stdout)).toEqual({ ok: true, result: status('complete') });
+      expect(JSON.parse((await runCli(['tools', 'cancel', '--tool', 'jira', '--attempt-id', attempt], dependencies)).stdout)).toEqual({ ok: true, result: status('cancelled') });
+      expect(JSON.parse((await runCli(['tools', 'disconnect', '--tool', 'jira'], dependencies)).stdout)).toEqual({ ok: true, result: { schema_version: 1, connected: false } });
+      expect(canonicalJson(store.read())).toBe(stored);
+    });
+  });
+
+  it('polls server-bound status after browser consent and reports a fixed account mismatch failure', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const statuses = [status('pending'), status('failed', 'account_mismatch')];
+      const result = await runCli(['tools', 'connect', '--tool', 'jira'], {
+        home_directory: home, now: () => NOW, tool_providers: providers,
+        open_authorization_url: async () => true, sleep: async () => undefined,
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === '/v1/person/tools/jira/connect') {
+            expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1 });
+            return json({ schema_version: 1, attempt, connect_link: 'https://connect.nango.dev/fixture', expires_at: expiresAt });
+          }
+          expect(path).toBe('/v1/person/tools/jira/status');
+          expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 1, attempt });
+          return json(statuses.shift()!);
+        },
+      });
+      expect(result.code).toBe(1);
+      expect(JSON.parse(result.stderr)).toEqual({
+        ok: false, action: 'tools-connect', reason: 'account_mismatch',
+        error: 'That Jira account does not match your previously connected Jira account. Try again with that account.',
+      });
+    });
+  });
+
+  it('rejects retired Jira commands and bad shared-tool inputs before a request', async () => {
+    const fetchImpl = vi.fn();
+    expect((await runCli(['jira', 'connect'], { fetch: fetchImpl, tool_providers: providers })).code).toBe(2);
+    expect((await runCli(['tools', 'connect', '--tool', 'jira', '--membership-id', ORGANIZATION_IDS.membership], { fetch: fetchImpl, tool_providers: providers })).code).toBe(2);
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const invalid = await runCli(['tools', 'status', '--tool', 'jira', '--attempt-id', 'bad\nlocator'], {
+        home_directory: home, now: () => NOW, fetch: fetchImpl, tool_providers: providers,
+      });
+      expect(invalid.code).toBe(1);
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('passes a client disconnect through the shared tool transport', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const abort = new AbortController();
+      let ready!: () => void;
+      const started = new Promise<void>(resolve => { ready = resolve; });
+      const result = runCli(['tools', 'connect', '--tool', 'jira', '--no-wait'], {
+        home_directory: home, now: () => NOW, tool_providers: providers, abort_signal: abort.signal,
+        open_authorization_url: async () => true,
+        fetch: async (_input, init) => {
+          expect(init?.signal).toBeDefined();
+          ready();
+          await new Promise<void>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), { once: true }));
+          throw new Error('unreachable');
+        },
+      });
+      await started;
+      abort.abort();
+      expect((await result).code).toBe(1);
+    });
+  });
+});
 
 describe("Person client", () => {
   it.each([false, true])("distinguishes same-version client builds in status (signed in: %s)", async (signedIn) => {
@@ -1043,17 +1157,17 @@ describe("Person client", () => {
         calls.push(path);
         if (path === "/v1/person/records") return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records: [] });
         if (path === "/v3/person/ask") return json(v4Answer());
-        expect(path).toBe("/v3/person/tools");
+        expect(path).toBe("/v4/person/tools");
         if (tools === "failure") return new Response("provider raw body", { status: 503 });
-        return json({ schema_version: 3, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });
+        return json({ schema_version: 4, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools });
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
       expect((await client.tools()).tools).toEqual([]);
       expect(await client.records(1)).toMatchObject({ records: [] });
       const firstAnswer = await client.ask("What is approved?");
       expect(firstAnswer).toMatchObject({ kind: 'echo-clean-person-answer-v4', outcome: 'not_found' });
-      tools = [{ tool_id: "calendar", display_name: "Calendar", availability: "enabled", personal_status: "linked", external_scope_id: "calendar-workspace", external_subject_id: "calendar-user" }];
-      expect((await client.tools()).tools[0]?.personal_status).toBe("linked");
+      tools = [{ tool_id: "calendar", display_name: "Calendar", availability: "enabled", personal_status: "linked", external_scope_id: "calendar-workspace", external_subject_id: "calendar-user", organization_setup: "connected" }];
+      expect((await client.tools()).tools[0]).toMatchObject({ personal_status: "linked", organization_setup: "connected" });
       expect(await client.records(1)).toMatchObject({ records: [] });
       const secondAnswer = await client.ask("What is approved?");
       expect(secondAnswer).toMatchObject({ kind: 'echo-clean-person-answer-v4', outcome: 'not_found' });
@@ -1069,124 +1183,245 @@ describe("Person client", () => {
       const client: PersonClient = fixtureClient(home, async input => {
         if (new URL(String(input)).pathname === "/v1/authority-descriptor") return json({ authority_descriptor: descriptor });
         await client.installSession("https://authority.example", { ...ROTATED_SESSION, membership_id: fixtureId("mem", 2), principal_id: fixtureId("prn", 2), session_family_id: fixtureId("psf", 2) });
-        return json({ schema_version: 3, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools: [] });
+        return json({ schema_version: 4, kind: "echo-organization-person-tools", organization_id: SESSION.organization_id, membership_id: SESSION.membership_id, tools: [] });
       });
       await client.installSession("https://authority.example", ROTATED_SESSION);
       await expect(client.tools()).rejects.toThrow("current account");
     });
   });
 
-  it("opens a bounded Slack browser connection without printing authorization state", async () => {
-    await withHome(async (home) => {
-      const attempt = fixtureId("sbl", 7);
-      const authorizationUrl = "https://slack.com/openid/connect/authorize?client_id=client&state=private-state";
-      await installFixtureSession(home);
-      let opened = "";
-      const { code: status, stdout } = await runCli(["slack-connect-begin"], {
-        home_directory: home,
-        now: () => NOW,
-        random_uuid: () => "00000000-0000-4000-8000-000000000007",
-        open_authorization_url: (url) => { opened = url; return true; },
-        fetch: async (input, init) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v2/person/external-identities/slack/browser/begin") {
-            expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
-            expect(JSON.parse(String(init?.body))).toEqual({ request_id: "psb_00000000-0000-4000-8000-000000000007" });
-            return json({
-              schema_version: 1,
-              kind: "echo-person-slack-browser-link-v1",
-              attempt_id: attempt,
-              authorization_url: authorizationUrl,
-              expires_at: "2026-08-18T00:17:00.000Z",
-            }, 201);
-          }
-          throw new Error(`unexpected request ${path}`);
-        },
-      });
-      expect(status).toBe(0);
-      expect(opened).toBe(authorizationUrl);
-      expect(JSON.parse(stdout)).toEqual({
-        ok: true,
-        phase: "waiting-for-slack",
-        attempt_id: attempt,
-        expires_at: "2026-08-18T00:17:00.000Z",
-      });
-      expect(stdout).not.toContain(authorizationUrl);
-      expect(stdout).not.toContain("private-state");
-    });
-  });
+  describe("person tools verbs for Slack", () => {
+    const SETUP_TOKEN = "xoxe.xoxp-1-private-setup-token";
+    const CONNECT_LINK = "https://connect.nango.dev/?session_token=private-session";
+    const INSTALL = fixtureId("ssi", 1);
+    const SIGN_IN = fixtureId("sbl", 7);
+    const AUTHORIZATION_URL = "https://slack.com/openid/connect/authorize?client_id=client&state=private-state";
+    const installStatus = (status: string, fields: Record<string, unknown> = {}) => ({ schema_version: 1,
+      kind: "echo-organization-slack-install-status-v1", attempt_id: INSTALL, status, failure_reason: null, result: null, ...fields });
+    const signInStatus = (status: string, failure_reason: string | null = null) => ({ schema_version: 1,
+      kind: "echo-person-slack-browser-link-status-v1", attempt_id: SIGN_IN, status, failure_reason });
+    const lines = (text: string) => text.trim().split("\n").map(line => JSON.parse(line) as unknown);
 
-  it("cancels its own Slack browser attempt when the browser cannot open", async () => {
-    await withHome(async (home) => {
-      const attempt = fixtureId("sbl", 10);
-      const authorizationUrl = "https://slack.com/openid/connect/authorize?client_id=client&state=private-state";
-      await installFixtureSession(home);
+    /** One person's Authority for Slack: status replies are served in order, the last one repeating. */
+    async function runTools(home: string, argv: readonly string[], input: {
+      readonly statuses?: unknown[];
+      readonly connect_link?: string;
+      readonly authorization_url?: string;
+      readonly opens?: boolean;
+      readonly read_input?: () => string;
+      /** The Authority refuses a non-owner on its setup routes with only this code. */
+      readonly employee?: boolean;
+    } = {}) {
+      const statuses = [...input.statuses ?? []];
+      const prompts: (string | undefined)[] = [];
       const paths: string[] = [];
-      const { code: status, stdout, stderr } = await runCli(["slack-connect-begin"], {
+      const bodies: unknown[] = [];
+      const sleeps: number[] = [];
+      const opened: string[] = [];
+      const result = await runCli(argv, {
         home_directory: home,
         now: () => NOW,
-        open_authorization_url: () => false,
-        fetch: async (input, init) => {
-          const path = new URL(String(input)).pathname;
+        random_uuid: () => "00000000-0000-4000-8000-000000000021",
+        read_input: (prompt) => { prompts.push(prompt); return (input.read_input ?? (() => `${SETUP_TOKEN}\n`))(); },
+        open_authorization_url: (url) => { opened.push(url); return input.opens ?? true; },
+        sleep: async (ms) => { sleeps.push(ms); },
+        fetch: async (request, init) => {
+          const path = new URL(String(request)).pathname;
+          expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${ROTATED_SESSION.access_token}`);
           paths.push(path);
-          if (path === "/v2/person/external-identities/slack/browser/begin") return json({
-            schema_version: 1,
-            kind: "echo-person-slack-browser-link-v1",
-            attempt_id: attempt,
-            authorization_url: authorizationUrl,
-            expires_at: "2026-08-18T00:17:00.000Z",
-          }, 201);
-          expect(path).toBe("/v2/person/external-identities/slack/browser/cancel");
-          expect(JSON.parse(String(init?.body))).toEqual({ attempt_id: attempt });
-          return json({
-            schema_version: 1,
-            kind: "echo-person-slack-browser-link-status-v1",
-            attempt_id: attempt,
-            status: "cancelled",
-            failure_reason: null,
-          });
+          bodies.push(JSON.parse(String(init?.body)));
+          if (input.employee === true && path.startsWith("/v2/organization/tools/slack/")) {
+            return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
+          }
+          switch (path) {
+          case "/v2/organization/tools/slack/setup":
+            return json({ schema_version: 1, kind: "echo-organization-slack-setup-v1", app_id: "A0APP1", organization_setup: "app_created" }, 201);
+          case "/v2/organization/tools/slack/install/begin":
+            return json({ schema_version: 1, kind: "echo-organization-slack-install-v1", attempt_id: INSTALL,
+              connect_link: input.connect_link ?? CONNECT_LINK, expires_at: "2026-08-18T00:12:00.000Z" }, 201);
+          case "/v2/person/external-identities/slack/browser/begin":
+            return json({ schema_version: 1, kind: "echo-person-slack-browser-link-v1", attempt_id: SIGN_IN,
+              authorization_url: input.authorization_url ?? AUTHORIZATION_URL, expires_at: "2026-08-18T00:07:00.000Z" }, 201);
+          case "/v2/organization/tools/slack/install/status":
+          case "/v2/person/external-identities/slack/browser/status":
+            return json(statuses.length > 1 ? statuses.shift() : statuses[0]);
+          case "/v2/organization/tools/slack/install/cancel":
+            return json(installStatus("cancelled"));
+          case "/v2/person/external-identities/slack/browser/cancel":
+            return json(signInStatus("cancelled"));
+          default:
+            throw new Error(`unexpected request ${path}`);
+          }
         },
       });
-      expect(status).toBe(1);
-      expect(stdout).toBe("");
-      expect(paths).toEqual(["/v2/person/external-identities/slack/browser/begin", "/v2/person/external-identities/slack/browser/cancel"]);
-      expect(JSON.parse(stderr)).toMatchObject({ ok: false, error: "Slack authorization browser could not be opened" });
-      expect(stderr).not.toContain("private-state");
-    });
-  });
+      return { ...result, prompts, paths, bodies, sleeps, opened };
+    }
 
-  it("refuses untrusted or malformed Slack browser authorization URLs before opening them", async () => {
-    await withHome(async (home) => {
-      await installFixtureSession(home);
-      for (const authorization_url of [
-        "https://evil.example/openid/connect/authorize",
-        "https://slack.com:444/openid/connect/authorize",
-        "https://slack.com/oauth/v2/authorize",
-      ]) {
-        let opened = false;
-        let stderr = "";
-        const status = await runPersonClientCli(["slack-connect-begin"], {
-          stdout: { write: () => true },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
-          home_directory: home,
-          now: () => NOW,
-          open_authorization_url: () => { opened = true; return true; },
-          fetch: async (input) => {
-            const path = new URL(String(input)).pathname;
-            if (path === "/v2/person/external-identities/slack/browser/begin") return json({
-              schema_version: 1,
-              kind: "echo-person-slack-browser-link-v1",
-              attempt_id: fixtureId("sbl", 8),
-              authorization_url,
-              expires_at: "2026-08-18T00:17:00.123Z",
-            }, 201);
-            throw new Error(`unexpected request ${path}`);
-          },
+    it("sets up Slack from a token on standard input, opens the connect link and reports connected", async () => {
+      await withHome(async (home) => {
+        await installFixtureSession(home);
+        const connected = installStatus("complete", { result: { kind: "created", workspace_id: "T0TEAM" } });
+        const run = await runTools(home, ["tools", "setup", "--tool", "slack"], { statuses: [installStatus("pending"), connected] });
+        expect(run.code, run.stderr).toBe(0);
+        expect(run.paths).toEqual(["/v2/organization/tools/slack/setup", "/v2/organization/tools/slack/install/begin",
+          "/v2/organization/tools/slack/install/status", "/v2/organization/tools/slack/install/status"]);
+        expect(run.bodies.slice(0, 3)).toEqual([
+          { request_id: "oss_00000000-0000-4000-8000-000000000021", configuration_token: SETUP_TOKEN },
+          { request_id: "osi_00000000-0000-4000-8000-000000000021" },
+          { attempt_id: INSTALL },
+        ]);
+        expect(run.opened).toEqual([CONNECT_LINK]);
+        expect(run.prompts).toEqual(["Paste the Slack app configuration token (input hidden). Generate one at https://api.slack.com/apps → Your App Configuration Tokens."]);
+        expect(run.sleeps).toEqual([2000, 2000]);
+        expect(lines(run.stdout)).toEqual([
+          { ok: true, phase: "app-ready", app_id: "A0APP1", organization_setup: "app_created" },
+          { ok: true, phase: "waiting", attempt_id: INSTALL, expires_at: "2026-08-18T00:12:00.000Z" },
+          { ok: true, phase: "connected", result: connected },
+        ]);
+        for (const output of [run.stdout, run.stderr]) {
+          expect(output).not.toContain(SETUP_TOKEN);
+          expect(output).not.toContain("private-session");
+        }
+        // No option carries a token: an unknown option is refused without echoing its value.
+        const flagged = await runTools(home, ["tools", "setup", "--tool", "slack", "--configuration-token", SETUP_TOKEN]);
+        expect(flagged.code).toBe(2);
+        expect(flagged.paths).toEqual([]);
+        expect(flagged.stderr).not.toContain(SETUP_TOKEN);
+        // An employee is told why, under the Authority's own code.
+        const employee = await runTools(home, ["tools", "setup", "--tool", "slack"], { employee: true });
+        expect(employee.code).toBe(1);
+        expect(JSON.parse(employee.stderr)).toEqual({ ok: false, action: "tools-setup",
+          error: "Only an organization owner can set up Slack.", reason: "unauthorized" });
+      });
+    });
+
+    it("reconnects without a token, reports a refused install, and --no-wait stops at the attempt", async () => {
+      await withHome(async (home) => {
+        await installFixtureSession(home);
+        const noToken = () => { throw new Error("reconnect must not read a token"); };
+        const refused = await runTools(home, ["tools", "setup", "--tool", "slack", "--reconnect"], {
+          read_input: noToken, statuses: [installStatus("failed", { failure_reason: "workspace_mismatch" })],
         });
-        expect(status).toBe(1);
-        expect(opened).toBe(false);
-        expect(stderr).toContain("Slack browser authorization URL is invalid");
-      }
+        expect(refused.code).toBe(1);
+        expect(refused.paths).toEqual(["/v2/organization/tools/slack/install/begin", "/v2/organization/tools/slack/install/status"]);
+        expect(JSON.parse(refused.stderr)).toEqual({ ok: false, action: "tools-setup",
+          error: "The install did not match this organization's Slack app and workspace. Run setup again with --reconnect and choose the organization's workspace.",
+          reason: "workspace_mismatch" });
+
+        const started = await runTools(home, ["tools", "setup", "--tool", "slack", "--reconnect", "--no-wait"], { read_input: noToken });
+        expect(started.code, started.stderr).toBe(0);
+        expect(started.paths).toEqual(["/v2/organization/tools/slack/install/begin"]);
+        expect(lines(started.stdout)).toEqual([{ ok: true, phase: "waiting", attempt_id: INSTALL, expires_at: "2026-08-18T00:12:00.000Z" }]);
+      });
+    });
+
+    it("gives up on setup after ten minutes and cancels its attempt", async () => {
+      await withHome(async (home) => {
+        await installFixtureSession(home);
+        const run = await runTools(home, ["tools", "setup", "--tool", "slack", "--reconnect"], { statuses: [installStatus("pending")] });
+        expect(run.code).toBe(1);
+        expect(run.sleeps.reduce((total, ms) => total + ms, 0)).toBe(600_000);
+        expect(run.paths.filter(path => path.endsWith("/install/status"))).toHaveLength(300);
+        expect(run.paths.at(-1)).toBe("/v2/organization/tools/slack/install/cancel");
+        expect(JSON.parse(run.stderr)).toEqual({ ok: false, action: "tools-setup", error: "That took too long. Try again.", reason: "timed_out" });
+      });
+    });
+
+    it("cancels setup when the connect page cannot open, and never opens a link with credentials or a fragment", async () => {
+      await withHome(async (home) => {
+        await installFixtureSession(home);
+        const closed = await runTools(home, ["tools", "setup", "--tool", "slack", "--reconnect"], { opens: false });
+        expect(closed.code).toBe(1);
+        expect(closed.paths).toEqual(["/v2/organization/tools/slack/install/begin", "/v2/organization/tools/slack/install/cancel"]);
+        expect(JSON.parse(closed.stderr)).toMatchObject({ ok: false, error: "Slack connect page could not be opened" });
+        for (const connect_link of ["https://user:secret@connect.nango.dev/", "https://connect.nango.dev/#private-session", "http://connect.nango.dev/"]) {
+          const run = await runTools(home, ["tools", "setup", "--tool", "slack", "--reconnect"], { connect_link });
+          expect(run.code, connect_link).toBe(1);
+          expect(run.opened).toEqual([]);
+          expect(run.stderr).not.toContain("secret");
+          expect(run.stderr).not.toContain("private-session");
+        }
+      });
+    });
+
+    it("connects a person through Slack sign-in and waits without printing authorization state", async () => {
+      await withHome(async (home) => {
+        await installFixtureSession(home);
+        const run = await runTools(home, ["tools", "connect", "--tool", "slack"], { statuses: [signInStatus("pending"), signInStatus("complete")] });
+        expect(run.code, run.stderr).toBe(0);
+        expect(run.opened).toEqual([AUTHORIZATION_URL]);
+        expect(run.bodies[0]).toEqual({ request_id: "psb_00000000-0000-4000-8000-000000000021" });
+        expect(lines(run.stdout)).toEqual([
+          { ok: true, phase: "waiting", attempt_id: SIGN_IN, expires_at: "2026-08-18T00:07:00.000Z" },
+          { ok: true, phase: "connected", result: signInStatus("complete") },
+        ]);
+        expect(run.stdout).not.toContain("private-state");
+
+        const conflict = await runTools(home, ["tools", "connect", "--tool", "slack"], { statuses: [signInStatus("failed", "identity_conflict")] });
+        expect(JSON.parse(conflict.stderr)).toEqual({ ok: false, action: "tools-connect",
+          error: "This Slack account is connected to another ECHO person.", reason: "identity_conflict" });
+      });
+    });
+
+    it("cancels a Slack sign-in that cannot open and refuses untrusted authorization URLs before opening them", async () => {
+      await withHome(async (home) => {
+        await installFixtureSession(home);
+        const closed = await runTools(home, ["tools", "connect", "--tool", "slack"], { opens: false });
+        expect(closed.code).toBe(1);
+        expect(closed.stdout).toBe("");
+        expect(closed.paths).toEqual(["/v2/person/external-identities/slack/browser/begin", "/v2/person/external-identities/slack/browser/cancel"]);
+        expect(JSON.parse(closed.stderr)).toMatchObject({ ok: false, error: "Slack authorization browser could not be opened" });
+        expect(closed.stderr).not.toContain("private-state");
+        for (const authorization_url of ["https://evil.example/openid/connect/authorize", "https://slack.com:444/openid/connect/authorize", "https://slack.com/oauth/v2/authorize"]) {
+          const run = await runTools(home, ["tools", "connect", "--tool", "slack"], { authorization_url });
+          expect(run.code).toBe(1);
+          expect(run.opened).toEqual([]);
+          expect(run.stderr).toContain("Slack browser authorization URL is invalid");
+        }
+      });
+    });
+
+    it("routes status and cancel by attempt prefix", async () => {
+      await withHome(async (home) => {
+        await installFixtureSession(home);
+        const cases = [
+          ["status", INSTALL, "/v2/organization/tools/slack/install/status", installStatus("pending")],
+          ["status", SIGN_IN, "/v2/person/external-identities/slack/browser/status", signInStatus("pending")],
+          ["cancel", INSTALL, "/v2/organization/tools/slack/install/cancel", installStatus("cancelled")],
+          ["cancel", SIGN_IN, "/v2/person/external-identities/slack/browser/cancel", signInStatus("cancelled")],
+        ] as const;
+        for (const [verb, attempt, path, result] of cases) {
+          const run = await runTools(home, ["tools", verb, "--tool", "slack", "--attempt-id", attempt], { statuses: [result] });
+          expect(run.code, run.stderr).toBe(0);
+          expect(run.paths).toEqual([path]);
+          expect(run.bodies).toEqual([{ attempt_id: attempt }]);
+          expect(JSON.parse(run.stdout)).toEqual({ ok: true, result });
+        }
+        const other = await runTools(home, ["tools", "status", "--tool", "slack", "--attempt-id", fixtureId("psb", 1)]);
+        expect(other.code).toBe(1);
+        expect(other.paths).toEqual([]);
+      });
+    });
+
+    it("refuses an unknown tool or verb and misplaced options as usage errors before any request", async () => {
+      await withHome(async (home) => {
+        await installFixtureSession(home);
+        for (const argv of [["tools", "setup", "--tool", "mail"], ["tools", "bogus", "--tool", "slack"], ["tools", "bogus"]]) {
+          const run = await runTools(home, argv);
+          expect(run.code, argv.join(" ")).toBe(2);
+          expect(JSON.parse(run.stderr)).toEqual({ ok: false, error: "usage: echo-brain person <command> [options]" });
+        }
+        for (const [argv, message] of [
+          [["tools", "setup"], "requires --tool"],
+          [["tools", "status", "--tool", "slack"], "requires --attempt-id"],
+          [["tools", "disconnect", "--tool", "slack", "--reconnect"], "--reconnect is not valid"],
+        ] as const) {
+          const run = await runTools(home, argv);
+          expect(run.code, argv.join(" ")).toBe(2);
+          expect(JSON.parse(run.stderr).error).toContain(message);
+          expect(run.paths).toEqual([]);
+        }
+      });
     });
   });
 
@@ -1217,7 +1452,7 @@ describe("Person client", () => {
     await withHome(async (home) => {
       await installFixtureSession(home);
       let requests = 0;
-      const { code: status, stdout } = await runCli(["slack-disconnect"], {
+      const { code: status, stdout } = await runCli(["tools", "disconnect", "--tool", "slack"], {
         home_directory: home,
         now: () => NOW,
         fetch: async (input, init) => {
@@ -1244,13 +1479,13 @@ describe("Person client", () => {
       });
 
       let stderr = "";
-      const invalid = await runPersonClientCli(["slack-disconnect", "--slack-user", "U123"], {
+      const invalid = await runPersonClientCli(["tools", "disconnect", "--tool", "slack", "--slack-user", "U123"], {
         stdout: { write: () => true },
         stderr: { write: (value) => ((stderr += String(value)), true) },
         home_directory: home,
       });
       expect(invalid).toBe(2);
-      expect(stderr).toContain("Unknown option '--slack-user'");
+      expect(stderr).toContain("--slack-user is not valid");
       expect(requests).toBe(1);
     });
   });
@@ -2441,18 +2676,19 @@ describe("Person client", () => {
     });
   });
 
-  it("links Slack in one command without asking for opaque challenge handles", async () => {
+  it("links Slack by DM code without asking for opaque challenge handles", async () => {
     await withHome(async (home) => {
       const challengeCode = "A".repeat(43);
       const challengeAttemptId = fixtureId("cat", 7);
       const challengeMessageTs = "1755518400.000001";
       await installFixtureSession(home);
-      const { code: linked, stdout, stderr } = await runCli(["slack-link", "--slack-user", "U123PERSON"], {
+      const { code: linked, stdout, stderr } = await runCli(["tools", "connect", "--tool", "slack", "--method", "dm-code", "--slack-user", "U123PERSON"], {
         home_directory: home,
         now: () => NOW,
         random_bytes: () => Buffer.from(challengeCode, "base64url"),
         random_uuid: () => "00000000-0000-4000-8000-000000000008",
-        read_input: () => "\n",
+        // The Enter acknowledgement is an ordinary visible read, never the hidden token reader.
+        read_input: (secretPrompt) => { expect(secretPrompt).toBeUndefined(); return "\n"; },
         fetch: async (input, init) => {
           const path = new URL(String(input)).pathname;
           if (path === "/v2/integration-links/slack/challenges")

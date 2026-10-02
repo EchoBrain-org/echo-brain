@@ -27,7 +27,6 @@ usage:
   switch-synthetic-demo-v1.sh start-setup
   switch-synthetic-demo-v1.sh setup-status
   switch-synthetic-demo-v1.sh start-demo
-  switch-synthetic-demo-v1.sh preview-slack --image <immutable-ecr-digest> --source-sha <40-hex> --replay <absolute-json> --replay-sha <sha256:hex> (--meeting-id <id>|--all)
   switch-synthetic-demo-v1.sh restore-clean
   switch-synthetic-demo-v1.sh status
 EOF
@@ -86,7 +85,7 @@ clean_is_stopped() {
 }
 
 demo_is_stopped() {
-  [[ -z "$(compose_demo --profile setup --profile demo --profile preview ps --status running -q)" ]]
+  [[ -z "$(compose_demo --profile setup --profile demo ps --status running -q)" ]]
 }
 
 demo_source_sha() {
@@ -96,16 +95,6 @@ demo_source_sha() {
   source_sha="$(sed -n 's/^ECHO_DEMO_SOURCE_SHA=//p' "$DEMO_ENV")"
   [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'demo runtime environment source SHA is invalid'
   printf '%s' "$source_sha"
-}
-
-replay_sha256() {
-  local path="$1"
-  python3 - "$path" <<'PY'
-import hashlib
-import sys
-with open(sys.argv[1], "rb") as handle:
-    print("sha256:" + hashlib.file_digest(handle, "sha256").hexdigest())
-PY
 }
 
 demo_interlock_held() {
@@ -177,7 +166,7 @@ restore_clean_runtime() {
     acquire_demo_interlock
   fi
   if [[ -f "$DEMO_ENV" && ! -L "$DEMO_ENV" ]]; then
-    compose_demo --profile setup --profile demo --profile preview down --remove-orphans >/dev/null || \
+    compose_demo --profile setup --profile demo down --remove-orphans >/dev/null || \
       fail 'demo teardown failed; accepted clean runtime was not started'
     demo_is_stopped || fail 'demo containers are still running; accepted clean runtime was not started'
   fi
@@ -217,7 +206,7 @@ disarm_restore() {
 prepare() {
   [[ "${1:-}" == '--image' && -n "${2:-}" && "${3:-}" == '--source-sha' && -n "${4:-}" && $# -eq 4 ]] || usage
   local image="$2" source_sha="$4" runtime_user runtime_uid runtime_gid
-  local authority_host owner_email temporary_env image_label image_platform
+  local authority_host owner_email nango_integration temporary_env image_label image_platform
 
   [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'source SHA must be exactly 40 lowercase hex characters'
   [[ "$image" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/echo/organization-authority@sha256:[0-9a-f]{64}$ ]] || \
@@ -235,6 +224,8 @@ prepare() {
   [[ "$runtime_uid" != 0 && "$runtime_gid" != 0 ]] || fail 'demo runtime identity must be non-root'
   authority_host="$(clean_value authority_host)"
   owner_email="$(clean_value owner_email)"
+  nango_integration="$(clean_value nango_integration_key)"
+  require_regular_file "$CLEAN_PRIVATE/nango-secret-key" 'Nango secret key source'
 
   docker pull "$image" >/dev/null
   image_label="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
@@ -272,6 +263,7 @@ prepare() {
     printf 'ECHO_DEMO_CLEAN_ROOT=%s\n' "$CLEAN_ROOT"
     printf 'ECHO_DEMO_BUNDLE_ROOT=%s\n' "$BUNDLE_ROOT"
     printf 'ECHO_DEMO_AUTHORITY_HOST=%s\n' "$authority_host"
+    printf 'ECHO_DEMO_NANGO_INTEGRATION=%s\n' "$nango_integration"
   } >"$temporary_env"
   chmod 0600 "$temporary_env"
   mv "$temporary_env" "$DEMO_ENV"
@@ -284,13 +276,11 @@ bootstrap() {
   [[ $# -eq 0 ]] || usage
   accepted_status
   require_regular_file "$DEMO_ENV" 'demo runtime environment'
-  local organization_name owner_display_name owner_email authority_host channel
+  local organization_name owner_display_name owner_email authority_host
   organization_name="$(clean_value organization_name)"
   owner_display_name="$(clean_value owner_display_name)"
   owner_email="$(clean_value owner_email)"
   authority_host="$(clean_value authority_host)"
-  channel="$(clean_value slack_approval_channel_id)"
-  require_regular_file "$CLEAN_PRIVATE/slack-bot-token" 'Slack bot token source'
 
   compose_demo --profile setup run --rm --no-deps --entrypoint node setup-authority \
     services/organization-authority/dist/clean-founder-main.js bootstrap \
@@ -300,10 +290,8 @@ bootstrap() {
     --owner-email "$owner_email" \
     --authority-url "https://$authority_host" \
     --oidc-config /echo-source-private/oidc-config.json \
-    --slack-approval-channel-id "$channel" \
-    --artifact-revision "$(sed -n 's/^ECHO_DEMO_SOURCE_SHA=//p' "$DEMO_ENV")" \
-    <"$CLEAN_PRIVATE/slack-bot-token"
-  printf 'bootstrapped=true\nnext_action=Run start-setup, then complete the owner OIDC login and Slack link.\n'
+    --artifact-revision "$(sed -n 's/^ECHO_DEMO_SOURCE_SHA=//p' "$DEMO_ENV")"
+  printf 'bootstrapped=true\nnext_action=Run start-setup, then complete the owner OIDC login, Slack setup in the ECHO app, and the owner Slack connect.\n'
 }
 
 start_setup() {
@@ -319,7 +307,7 @@ start_setup() {
   disarm_restore
   printf 'setup_runtime_ready=true\n'
   printf 'invitation_path=%s\n' "$DEMO_DATA_ROOT/state/onboarding/founder-person-invitation.json"
-  printf 'next_action=Securely transfer the new invitation, complete owner login and Slack link, then run setup-status.\n'
+  printf 'next_action=Securely transfer the new invitation, complete owner login, set up Slack in the ECHO app, connect the owner Slack, then run setup-status.\n'
 }
 
 setup_status() {
@@ -403,56 +391,6 @@ raise SystemExit(0 if required else 1)
   fail 'synthetic demo did not report active processing'
 }
 
-preview_slack() {
-  [[ "${1:-}" == '--image' && -n "${2:-}" && "${3:-}" == '--source-sha' && -n "${4:-}" && \
-    "${5:-}" == '--replay' && -n "${6:-}" && "${7:-}" == '--replay-sha' && -n "${8:-}" ]] || usage
-  local image="$2" source_sha="$4" replay="$6" replay_sha="$8" mode="${9:-}" meeting_id="${10:-}"
-  [[ "$image" =~ ^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/echo/organization-authority@sha256:[0-9a-f]{64}$ ]] || \
-    fail 'image must be the immutable organization-authority ECR digest'
-  [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || fail 'source SHA must be exactly 40 lowercase hex characters'
-  [[ "$replay_sha" =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'replay SHA must be sha256 plus 64 lowercase hex characters'
-  [[ -f "$replay" && ! -L "$replay" && "$replay" = /* ]] || fail 'replay must be an absolute regular file'
-  if [[ "$mode" == '--meeting-id' && -n "$meeting_id" && $# -eq 10 ]]; then
-    :
-  elif [[ "$mode" == '--all' && $# -eq 9 ]]; then
-    :
-  else
-    usage
-  fi
-  require_regular_file "$DEMO_ENV" 'demo runtime environment'
-  [[ "$replay_sha" == "$(replay_sha256 "$replay")" ]] || fail 'replay SHA does not match the replay file'
-  [[ ! -e "$CLEAN_OPERATION_LOCK" ]] || fail 'another Authority operation is active'
-  accepted_status
-  accepted_public_descriptor || fail 'accepted clean runtime is not healthy'
-  demo_is_stopped || fail 'Slack preview requires all demo containers to be stopped'
-  local image_label image_platform
-  docker pull "$image" >/dev/null
-  image_label="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
-  image_platform="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")"
-  [[ "$image_label" == "$source_sha" ]] || fail 'image revision label does not match the source SHA'
-  [[ "$image_platform" == 'linux/arm64' ]] || fail 'demo image is not linux/arm64'
-  local preview_output
-  if ! preview_output="$(ECHO_DEMO_PREVIEW_IMAGE="$image" ECHO_DEMO_PREVIEW_SOURCE_SHA="$source_sha" ECHO_DEMO_REPLAY_PATH="$replay" compose_demo --profile preview run --rm --no-deps slack-card-preview \
-    --state-dir /echo-demo/state --replay /echo-demo/replay.json --replay-sha "$replay_sha" \
-    "$mode" ${meeting_id:+"$meeting_id"} 2>/dev/null)"; then
-    fail 'Slack preview did not complete'
-  fi
-  python3 -c '
-import json, sys
-value = json.load(sys.stdin)
-if (set(value) != {"kind", "posted_card_count", "replay_sha256", "card_batch_sha256"} or
-    value.get("kind") != "echo-synthetic-demo-slack-card-preview-v1" or
-    not isinstance(value.get("posted_card_count"), int) or value["posted_card_count"] < 1 or
-    any(not isinstance(value.get(key), str) or len(value[key]) != 71 or not value[key].startswith("sha256:")
-        for key in ("replay_sha256", "card_batch_sha256"))):
-    raise SystemExit(1)
-' <<<"$preview_output" || fail 'Slack preview returned an unsafe receipt'
-  accepted_status
-  accepted_public_descriptor || fail 'accepted clean runtime changed during Slack preview'
-  demo_is_stopped || fail 'Slack preview left a demo container running'
-  printf '%s\n' "$preview_output"
-}
-
 restore_clean() {
   [[ $# -eq 0 ]] || usage
   arm_restore
@@ -464,7 +402,7 @@ restore_clean() {
 status() {
   [[ $# -eq 0 ]] || usage
   if [[ -f "$DEMO_ENV" && ! -L "$DEMO_ENV" ]]; then
-    compose_demo --profile setup --profile demo --profile preview ps --all
+    compose_demo --profile setup --profile demo ps --all
   else
     printf 'demo_prepared=false\n'
   fi
@@ -490,7 +428,6 @@ case "$command" in
   start-setup) start_setup "$@" ;;
   setup-status) setup_status "$@" ;;
   start-demo) start_demo "$@" ;;
-  preview-slack) preview_slack "$@" ;;
   restore-clean) restore_clean "$@" ;;
   status) status "$@" ;;
   *) usage ;;

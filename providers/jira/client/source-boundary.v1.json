@@ -1,0 +1,52 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-jira-client",
+  "workspace": true,
+  "boundary_root": "providers/jira/client",
+  "source_root": "providers/jira/client/src",
+  "package_json": "providers/jira/client/package.json",
+  "entry_points": [
+    "providers/jira/client/src/organization-api/jira-person-connection-v1.ts",
+    "providers/jira/client/src/person/jira-person-client.ts",
+    "providers/jira/client/src/person/jira-tool-provider.ts"
+  ],
+  "owned_source_paths": ["providers/jira/client/src/**"],
+  "allowed_internal_paths": ["providers/jira/client/src/**"],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-api"
+  ],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": [],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "provider-jira-client-implementation",
+      "from": "providers/jira/client/src/**",
+      "allowed_imports": ["providers/jira/client/src/**"],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Person Jira connection contract",
+        "path": "providers/jira/client/src/organization-api/jira-person-connection-v1.ts",
+        "export": "validatePersonJiraConnectV1"
+      },
+      {
+        "name": "Person Jira tool provider",
+        "path": "providers/jira/client/src/person/jira-tool-provider.ts",
+        "export": "createJiraPersonToolProviderV1"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

@@ -7,7 +7,7 @@ import type {
   ProjectChange, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   Visibility, WriteStatus,
 } from '../shared/protocol.js';
-import { slackPermalink } from '../shared/protocol.js';
+import { slackPermalink, ticketPermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
 
@@ -356,7 +356,7 @@ export function isRecordRef(value: unknown): value is RecordRef {
 }
 
 /**
- * An Agentic Ask answer (V4, the only Ask since ADR-0022): its statements,
+ * A versioned Agentic Ask answer: its statements,
  * each with the exact sources that support it, in the answer's order. An
  * approved record is kept by its digest and policy, an original by its
  * revision and anchor, a live Slack message by its permalink; a source
@@ -364,8 +364,9 @@ export function isRecordRef(value: unknown): value is RecordRef {
  */
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const value = object(unwrap(raw));
-  if (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4') throw new ViewError();
-  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`));
+  const tickets = value.schema_version === 5 && value.kind === 'echo-clean-person-answer-v5';
+  if (!tickets && (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4')) throw new ViewError();
+  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`, tickets));
   const direct = value.direct === undefined ? undefined : v4Statement(value.direct, sources.length);
   const parts = list(value.parts).map(part => v4Part(part, sources.length));
   if (parts.length === 0) throw new ViewError();
@@ -382,7 +383,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
     ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }) };
 }
 
-function v4Source(raw: unknown, fallback: string): AnswerSource {
+function v4Source(raw: unknown, fallback: string, tickets: boolean): AnswerSource {
   const item = object(raw);
   const citation = object(item.citation);
   const label = text(item.label);
@@ -396,6 +397,11 @@ function v4Source(raw: unknown, fallback: string): AnswerSource {
     const permalink = slackPermalink(citation.permalink);
     if (permalink === null) throw new ViewError();
     return { kind: 'slack', label: label || fallback, permalink };
+  }
+  if (tickets && item.kind === 'ticket' && citation.kind === 'ticket') {
+    const permalink = ticketPermalink(citation.permalink);
+    if (permalink === null) throw new ViewError();
+    return { kind: 'ticket', label: label || fallback, permalink };
   }
   throw new ViewError();
 }
@@ -665,7 +671,7 @@ export function evidenceView(raw: unknown): SourceEvidence {
 /** Connected tools: each name and state. External workspace and account ids stay behind. */
 export function toolsView(raw: unknown, membershipId: string): ConnectedTools {
   const value = object(unwrap(raw));
-  if (value.schema_version !== 3 || value.kind !== 'echo-organization-person-tools' || value.membership_id !== membershipId) {
+  if (value.schema_version !== 4 || value.kind !== 'echo-organization-person-tools' || value.membership_id !== membershipId) {
     throw new ViewError();
   }
   const tools = list(value.tools);

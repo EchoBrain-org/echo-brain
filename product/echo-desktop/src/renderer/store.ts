@@ -2306,7 +2306,7 @@ export function chooseSource(group: number, focus: string | null = null): void {
   if (!sources || !source) return;
   set({ sources: { ...sources, open: group, focus, evidence: null } });
   if (source.kind === 'original') { void readEvidence(sources.gen, group); return; }
-  if (source.kind === 'slack') return;
+  if (source.kind === 'slack' || source.kind === 'ticket') return;
   const read = sources.records[source.record.record_sha256];
   if (!read || (!read.loading && 'failure' in read)) void readRecord(sources.gen, source.record, false);
 }
@@ -2315,6 +2315,12 @@ export function chooseSource(group: number, focus: string | null = null): void {
 export async function openSlackSource(index: number): Promise<boolean> {
   const source = answerSources()[index];
   return !state.concealed && source?.kind === 'slack' && (await rpc('source.openSlack', { permalink: source.permalink })).ok;
+}
+
+/** Tickets open in the provider, which checks the person's access at that time. */
+export async function openTicketSource(index: number): Promise<boolean> {
+  const source = answerSources()[index];
+  return !state.concealed && source?.kind === 'ticket' && (await rpc('source.openTicket', { permalink: source.permalink })).ok;
 }
 
 /** × on the pane: it closes, and forgets the passages it read. */

@@ -4,6 +4,7 @@ import { validatePersonUpdateRequestId } from '@echo-brain/organization-api';
 import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/organization-api";
 import {
   PERSON_ANSWER_PATH_V3,
+  PERSON_ANSWER_PATH_V4,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
@@ -20,6 +21,7 @@ import {
   validatePersonOpenResponseV1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV4,
+  validatePersonAnswerResponseV5,
   validatePersonCapabilitiesV1,
   validatePersonEvidenceSearchRequestV1,
   validatePersonEvidenceOpenRequestV1,
@@ -30,6 +32,7 @@ import {
   validatePersonMeetingTranscriptV1,
   type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
   type PersonAnswerResponseV4 as OrganizationPersonAnswerV4,
+  type PersonAnswerResponseV5 as OrganizationPersonAnswerV5,
   type PersonCapabilitiesV1,
   type PersonEvidenceSearchRequestV1,
   type PersonEvidenceOpenRequestV1,
@@ -49,7 +52,7 @@ import {
   validateProjectContextSearchResultV2,
   validateProjectPageRequestV2, validateProjectListV2, validateProjectSummaryV2, type ProjectPageRequestV2,
 } from '@echo-brain/organization-api';
-import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type PersonToolTransportV1 } from '@echo-brain/organization-api';
+import { ORGANIZATION_API_PERSON_TOOLS_PATH_V4, validateOrganizationPersonToolsV4, type PersonToolTransportV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { PERSON_DOCUMENTS_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, validatePersonDocumentIdV1, validatePersonDocumentUploadMetadataV1, validatePersonDocumentUploadMetadataV2, validatePersonDocumentUploadResultV1, validatePersonDocumentUploadResultV2, validatePersonDocumentStatusV2, validatePersonDocumentMetadataV2, validatePersonDocumentSearchV2, validatePersonDocumentSearchResultV2, type PersonDocumentSearchV2, type PersonDocumentUploadResultV1, type PersonDocumentUploadResultV2 } from '@echo-brain/organization-api';
 import type { DocumentSnapshot } from './document-file.js';
@@ -142,6 +145,8 @@ export interface PersonRecordSearchItemV1 {
 export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
 /** The Agentic Ask response, selected only after the authenticated capability probe. */
 export type PersonAnswerV4 = OrganizationPersonAnswerV4;
+/** Explicit ticket-capable Ask; the ordinary Ask response remains strict V4. */
+export type PersonAnswerV5 = OrganizationPersonAnswerV5;
 export type PersonAnswer = PersonAnswerV4;
 export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
 export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
@@ -1314,6 +1319,19 @@ export class PersonAuthorityClient {
     return response;
   }
 
+  async askV4(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV5> {
+    const request = validatePersonAnswerRequestV3({ schema_version: 3, question,
+      ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}) });
+    const response = await this.json({ path: PERSON_ANSWER_PATH_V4, body: request,
+      validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV5,
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
+    const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
+    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
+    }
+    return response;
+  }
+
   async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
     const request = validatePersonEvidenceSearchRequestV1(value);
     const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
@@ -1403,7 +1421,7 @@ export class PersonAuthorityClient {
   }
 
   /** A tool receives bounded methods tied to this Authority, without the bearer credential. */
-  toolTransport(accessToken: string): PersonToolTransportV1 {
+  toolTransport(accessToken: string, signal?: AbortSignal): PersonToolTransportV1 {
     const assertPath = (path: string): void => {
       if (!path.startsWith('/') || path.startsWith('//') || new URL(path, this.origin).origin !== this.origin.origin) {
         throw new Error('Person tool request must remain on its Authority');
@@ -1421,20 +1439,20 @@ export class PersonAuthorityClient {
         assertBounds(input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.timeout_ms);
         return this.json({ path: input.path, body: input.body, validate_request: input.validate_request,
           validate_response: input.validate_response, maximum_response_bytes: input.maximum_response_bytes,
-          timeout_ms: input.timeout_ms, access_token: accessToken });
+          timeout_ms: input.timeout_ms, access_token: accessToken, signal });
       },
       getJson: async <T>(input: import('@echo-brain/organization-api').PersonToolGetRequestV1<T>): Promise<T> => {
         assertPath(input.path);
         assertBounds(input.maximum_response_bytes);
         return this.getJson({ path: input.path, validate_response: input.validate_response,
-          maximum_response_bytes: input.maximum_response_bytes, access_token: accessToken });
+          maximum_response_bytes: input.maximum_response_bytes, access_token: accessToken, signal });
       },
     });
   }
 
   tools(accessToken: string) {
-    return this.getJson({ path: ORGANIZATION_API_PERSON_TOOLS_PATH_V3, access_token: accessToken,
-      validate_response: validateOrganizationPersonToolsV3, maximum_response_bytes: 32768 });
+    return this.getJson({ path: ORGANIZATION_API_PERSON_TOOLS_PATH_V4, access_token: accessToken,
+      validate_response: validateOrganizationPersonToolsV4, maximum_response_bytes: 32768 });
   }
 
   employees(accessToken: string): Promise<EmployeeRosterV1> {

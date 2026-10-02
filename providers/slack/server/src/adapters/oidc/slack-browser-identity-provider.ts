@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import * as oidc from "openid-client";
+import { SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 } from "../../organization-control-plane/application/slack-integration-contracts.js";
 
 export interface SlackBrowserIdentityProvider {
   authorizationUrl(input: {
@@ -52,7 +53,7 @@ export function createSlackBrowserIdentityProvider(options: {
     authorizationUrl(input) {
       return oidc.buildAuthorizationUrl(config, {
         redirect_uri: redirect.href,
-        scope: "openid profile",
+        scope: SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1.join(" "),
         response_type: "code",
         response_mode: "query",
         team: input.workspace_id,

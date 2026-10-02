@@ -61,6 +61,7 @@ import {
 } from "./person-employee-http-application.js";
 import {
   PERSON_ANSWER_PATH_V3,
+  PERSON_ANSWER_PATH_V4,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
@@ -75,6 +76,7 @@ import {
 } from "@echo-brain/organization-api";
 import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
+import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-application.js";
 import {
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
@@ -108,6 +110,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `GET ${PERSON_RECORDS_PATH_V1}`,
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V3}`,
+  `POST ${PERSON_ANSWER_PATH_V4}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
@@ -137,6 +140,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Optional: no connected external identity provider is required for login. */
   readonly person_external_identity_link?: ProviderHttpApplicationV1;
   readonly person_tools?: ProviderHttpApplicationV1;
+  readonly person_tools_v4?: ProviderHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
   readonly person_record_read?: PersonRecordReadHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Organization Authority runtime wires it. */
@@ -148,6 +152,10 @@ export interface OrganizationAuthorityHttpServerOptions {
    * Optional until the active Organization Authority runtime has a configured answer model.
    */
   readonly person_answer_v3?: PersonAnswerV3HttpApplication;
+  /** Optional ticket-capable Ask, selected with its provider runtime. */
+  readonly person_answer_v4?: PersonAnswerV4HttpApplication;
+  /** Provider-owned account connection routes, selected by the composition root. */
+  readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
   readonly person_source_evidence?: PersonSourceEvidenceHttpApplicationV1;
   /** Explicit transcript release uses the same originals gate but no Ask model. */
@@ -167,7 +175,7 @@ function providerIngressRoutes(
   options: OrganizationAuthorityHttpServerOptions,
 ): ReadonlyMap<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }> {
   const mounted = new Map<string, { readonly route: ProviderHttpRouteV1; readonly accept: ProviderHttpApplicationV1["accept"] }>();
-  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link, options.person_tools]) {
+  for (const application of [options.private_approval_interaction_ingress, options.person_external_identity_link, options.person_tools, options.person_tools_v4, ...(options.person_tool_connections ?? [])]) {
     if (application === undefined) continue;
     const routeIds = new Set<string>();
     for (const route of application.routes) {
@@ -721,6 +729,7 @@ export function createOrganizationAuthorityHttpServer(
     options.person_documents, options.document_upload_staging!, options.is_closing === undefined ? {} : { isClosing: options.is_closing },
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
+    [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input))],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
@@ -751,18 +760,23 @@ export function createOrganizationAuthorityHttpServer(
         if (Buffer.byteLength(url.search, "utf8") > MAXIMUM_PROVIDER_QUERY_BYTES)
           throw new AuthorityOperationError("invalid_request", "request query is too large");
         const headers = singletonHeaders(request.headers);
-        const result = await ingress.accept({
-          route_id: ingress.route.route_id,
-          method: ingress.route.method,
-          path: ingress.route.path,
-          raw_body: await rawBody(request),
-          content_type: headers["content-type"],
-          headers,
-          ...(ingress.route.accepts_query === true
-            ? { query: new URLSearchParams(url.search) }
-            : {}),
-        });
-        providerResponse(response, result);
+        const disconnect = disconnectSignal(request, response);
+        try {
+          const result = await ingress.accept({
+            route_id: ingress.route.route_id,
+            method: ingress.route.method,
+            path: ingress.route.path,
+            raw_body: await rawBody(request),
+            content_type: headers["content-type"],
+            headers,
+            signal: disconnect.signal,
+            ...(ingress.route.accepts_query === true
+              ? { query: new URLSearchParams(url.search) }
+              : {}),
+          });
+          disconnect.signal.throwIfAborted();
+          providerResponse(response, result);
+        } finally { disconnect.dispose(); }
         return;
       }
       if (

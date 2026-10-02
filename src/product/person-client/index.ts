@@ -5,6 +5,7 @@ export {
   type PersonAnswerCitationV3,
   type PersonAnswer,
   type PersonAnswerV4,
+  type PersonAnswerV5,
   type PersonEvidenceDeskV1,
   type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,

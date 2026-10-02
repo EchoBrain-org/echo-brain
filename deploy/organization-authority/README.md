@@ -84,15 +84,64 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 
 | File                       | Purpose                                                                                                                             |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `onboarding.clean-v1.json` | Ordinary organization configuration, including the observability stack Region. Start from the committed example.                    |
+| `onboarding.clean-v1.json` | Ordinary organization configuration, including the observability stack Region and the Nango Slack integration key (`nango_integration_key`). Start from the committed example.                    |
 | `release.json`             | Canonical clean-v1 release record.                                                                                                  |
 | `runtime-profile.json`     | Exact canonical runtime profile referenced by the release record. It contains the reviewed Compose and Caddy bytes, never a secret. |
 | `oidc-config.json`         | OIDC configuration, including the exact callback above.                                                                             |
 | `oidc-client-secret`       | OIDC client secret.                                                                                                                 |
-| `slack-bot-token`          | Slack bot token.                                                                                                                    |
-| `slack-signing-secret`     | Slack app signing secret used only to verify inbound interactive approval requests.                                                 |
+| `nango-secret-key`         | Nango environment secret key. The Authority uses it to create Slack connect sessions and fetch the bot token; an owner sets Slack up afterward with `person tools setup --tool slack`. |
 | `granola-credential`       | Organization Granola credential.                                                                                                    |
 | `llm-credential`           | Retained LLM provider credential.                                                                                                   |
+
+### Optional staging connector rehearsal
+
+The ordinary manifest omits `staging_connector_rehearsal`. To enable the
+staging-only Granola/Jira rehearsal, add this closed, nonsecret object to
+`onboarding.clean-v1.json`:
+
+```json
+{
+  "staging_connector_rehearsal": {
+    "schema_version": 1,
+    "kind": "echo-staging-connector-rehearsal-profile-v1",
+    "capture_policy": "initial-owner-granola-retained-jira-request-only-v1",
+    "jira": {
+      "cloud_id": "a8c0e112-6f72-4a0e-9c12-b7d8439f0abc",
+      "integration_key": "jira",
+      "project": "ECHO"
+    }
+  }
+}
+```
+
+It is accepted only for `authority-staging.echobrain.org`, and cannot be used
+with the four synthetic-meeting input. The installed wrapper canonicalizes the
+object into `clean-data/private/staging-connector-rehearsal.json`, mode `0600`,
+and writes its digest to setup while binding the fixed file path in the
+release-bound environment snapshots. The
+ordinary eight-file preparation carries the profile inside the existing
+nonsecret manifest. The four-synthetic-meeting provider-reuse transfer rejects
+an enabled connector profile; it cannot be used as an alternate connector
+input lane.
+
+The profile contains no Nango secret. The Authority continues to read the
+existing `nango-secret-key`; the profile's Jira integration key is an ordinary
+Nango integration identifier. Granola keeps its existing organization-owned
+credential. Jira remains request-only under this profile, and its person
+connection sidecar is owned by the Authority runtime beside its retained state
+directory.
+
+The runtime creates and validates its own
+`clean-data/staging-connector-rehearsal-v1/binding.json`. It binds the
+Authority lineage, initial owner, and canonical profile digest. Recovery allows
+only the exact retained sidecar with that binding; a missing, unsafe, or
+mismatched sidecar fails closed during ordinary same-volume host reconstruction.
+The offline whole-volume backup verifier refuses any enabled connector profile
+or sidecar, so a backup restore always requires provider revocation and a fresh
+rehearsal. Do not delete or edit that directory to make a startup pass. The
+human host operator must first disconnect or revoke the affected Jira connection
+at the provider, then use the candidate release's documented recovery procedure
+to prepare a fresh profile.
 
 Check that directory before spending an AWS session on it:
 
@@ -123,7 +172,7 @@ files in the checksum-bound courier archive and records the selected source in
 the private receipt, so `execute` does not depend on the controller still
 existing. `preflight` reports the fixture directory separately and applies the
 aggregate size limit to both directories. Leave this property out for ordinary
-onboarding; the established nine-file archive and host invocation are unchanged.
+onboarding; the established eight-file archive and host invocation are unchanged.
 Before planning this selected source, install matching reviewed host tooling
 through the [current-host staging release lane](../../deploy/release/README.md#automated-current-host-staging-lane).
 An older installed wrapper does not accept the selected-source flag; its failed
@@ -134,55 +183,52 @@ The secrets are never placed in command arguments or normal wrapper output.
 `prepare` installs byte-exact fixed server copies with mode `0600` under its
 mode-`0700` private data directory.
 
-### Slack re-onboarding for private approval V1
+### Slack setup, in the app
 
-Before `doctor` and `prepare`, update the same Slack app's scopes and reinstall
-it in the staging workspace. Do not enable or save an Interactivity Request URL
-at this stage. Its bot token must be from that reinstalled app and have
-`channels:history`, `channels:read`, `chat:write`, `im:history`, `im:write`,
-`reactions:read`, and `users:read`. `im:write` and `im:history` enable the
-private meeting-owner DM lane. Stage the signing secret for this exact same
-Slack app as `slack-signing-secret`: one no-newline value in a current-user
-`0600` regular non-symlink file. Do not put any secret in this README command
-or a shell argument.
+Nothing Slack-specific needs to happen in the Slack admin console or on the
+host before `doctor` and `prepare`. ECHO creates the private "ECHO" Slack app
+itself, from its own manifest recipe, through Slack's Manifest API; the
+Interactivity Request URL, the OAuth redirect URLs, and the four required bot
+scopes (`chat:write`, `im:history`, `im:write`, `users:read`) are part of that
+recipe, so nobody sets them by hand
+([ADR-0025](../../docs/decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
+`im:write` and `im:history` enable the private meeting-owner DM lane. The
+recipe also declares the user scopes `openid` and `profile`, which only the
+person's browser sign-in requests; the install requests only the bot scopes,
+so the Nango Slack integration must not add a user scope.
 
-`slack_approval_channel_id` in the onboarding JSON is a transitional legacy
-field. It names only the public initial-owner identity-link channel used during
-onboarding. It never receives approval cards and no shared approval binding is
-created from it. Run the re-onboarding only with a wholly fresh provider-
-neutral V4 staging lineage; do not reuse an older V3 or shared-channel rehearsal
-state directory, database, or approval binding.
+Stage `nango-secret-key` in the input directory instead: Nango's environment
+secret key, one no-newline value of 32 to 4096 visible ASCII characters in a
+current-user `0600` regular non-symlink file. `doctor` and `prepare` reject a
+key outside that shape with `nango_secret_key_invalid`, without printing the
+key. Do not put any secret in this README command or a shell argument. Use
+`nango_integration_key` (the Nango
+Slack integration key, matching `^[a-z0-9][a-z0-9_-]{0,63}$`) as the only
+Slack integration setting in the onboarding JSON. Run the re-onboarding only
+with a wholly fresh provider-neutral V4 staging lineage; do not reuse an older
+V3 or shared-channel rehearsal state directory, database, or approval binding.
 
-### Optional Slack browser identity connection
+An owner sets Slack up from their own machine with
+`"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack`,
+pasting a Slack app configuration token at its hidden prompt; the ECHO desktop
+app's Connected tools page shows status only for now. Add `--reconnect` to
+resume an unfinished install, or reconnect after Slack was uninstalled, after
+Nango lost the connection, or after an install landed in another workspace,
+without a new setup token.
 
-The compatibility DM challenge remains available by default. To enable the
-browser connection, first add this Redirect URL in the Slack app's **OAuth &
-Permissions** settings and save it:
+### Slack sign-in for the person link
 
-```text
-https://<staging-authority-host>/v2/person/external-identities/slack/browser/callback
-```
-
-Create a JSON file owned by the Session Manager user with mode `0600`:
-
-```json
-{ "client_id": "…", "client_secret": "…" }
-```
-
-On the staging host, install it through the reviewed wrapper:
-
-```sh
-sudo ./onboard-clean-v1.sh configure-slack-browser \
-  --input /absolute/private/slack-browser-oidc.json
-```
-
-The wrapper validates and copies only those two fields to its fixed private
-path, then recreates the Authority using the same accepted image and runtime
-profile. It restores the prior configuration if that restart fails. The secret
-is never written to SQLite, a release record, the onboarding courier, logs, or
-the command line. Without this file, browser connection is unavailable and the
-existing Slack DM challenge remains usable. A `replace-rehearsal` starts with
-fresh private state, so configure browser connection again after it is prepared.
+"Sign in with Slack" for the person link is automatic once the organization's
+Slack connection is active: it is built from that connection's own app client
+ID and secret, and the recipe declares its `openid` and `profile` user scopes,
+so there is nothing to configure separately. An app created before the recipe
+declared those scopes lacks them: an owner reruns
+`person tools setup --tool slack` without `--reconnect`, pastes a new
+configuration token so ECHO updates the app to the current recipe, and then
+finishes the reinstall it opens. `--reconnect` skips the token and does not
+update the app. The compatibility DM-code challenge
+(`person tools connect --tool slack --method dm-code --slack-user U…`) remains
+available as the fallback for a machine without a browser.
 
 After that setup, the ordinary release updater only replaces artifacts within
 the current lineage: Authority V10, private-approval control-plane V3,
@@ -193,15 +239,11 @@ and prepare again with the exact new release for disposable unreleased rehearsal
 state that does not match these baselines. The [release procedure](../release/README.md)
 retains separately named historical migrations.
 
-Complete the bootstrap, initial-owner identity link, credential installation, and
-finalization, then start the active runtime. `resume` stops at this point and
-prints the exact URL. Only once that runtime is healthy, enable
-**Interactivity & Shortcuts**, save this Request URL, then run the supported
-release-bound synthetic staging canary and rerun `resume`:
-
-```text
-https://<staging-authority-host>/v2/integrations/slack/interactions
-```
+Complete the bootstrap, owner Slack setup and connect, credential installation,
+and finalization. `resume` now continues straight through finalize to the
+active runtime, with no separate Interactivity URL to save by hand — the
+recipe sets it. Run the supported release-bound synthetic staging canary and
+rerun `resume`:
 
 ```sh
 ./onboard-clean-v1.sh resume
@@ -215,15 +257,16 @@ path is staging-only. A non-staging deployment still needs durable progress from
 its admitted live source before it can become terminal green.
 
 The endpoint intentionally returns `503` before finalization. Do not attempt to
-validate it against a pre-finalize runtime. Event Subscriptions, Socket Mode,
-and a Slack OAuth redirect are not required for this V1.
+validate it against a pre-finalize runtime. No Socket Mode, Event
+Subscriptions, token rotation, or Enterprise Grid deployment are used in this
+V1.
 
 ```sh
 cd deploy/organization-authority
 install -d -m 0700 /absolute/private/echo-onboarding
 cp onboarding.clean-v1.example.json /absolute/private/echo-onboarding/onboarding.clean-v1.json
 # Add the canonical release and runtime profile, plus the provider files listed
-# above, including slack-signing-secret. Do not place any secret in this command.
+# above, including nango-secret-key. Do not place any secret in this command.
 chmod 600 /absolute/private/echo-onboarding/*
 chmod 700 /absolute/private/echo-onboarding
 ./onboard-clean-v1.sh doctor --input-dir /absolute/private/echo-onboarding
@@ -268,6 +311,29 @@ Run `prepare` again with the new exact release record. Never use this command
 after the first user release; subsequent baseline-preserving updates use
 the release procedure below.
 
+A host prepared before Slack moved to Nango uses this same command, not the
+[provider-reuse path](#reuse-provider-credentials-for-a-fresh-staging-rehearsal)
+below: provider reuse needs a host already prepared with the Nango key and
+integration. Keep this order:
+
+1. While the old rehearsal is still in place, install the target release's
+   reviewed host tooling through the
+   [current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
+   (`inspect-install`, then `install`, each with `--previous-tooling-source`). The
+   transfer runs the installed wrapper's `doctor` and `prepare`, and an older
+   wrapper still requires the retired `slack-*` input files. The lane checks
+   the host's accepted release record and environment, which
+   `replace-rehearsal` archives, so it refuses to install afterward.
+2. Run `replace-rehearsal --confirm-no-live-users` without
+   `--reuse-provider-inputs`.
+3. Transfer the full eight-file onboarding input directory (including
+   `nango-secret-key`); the transfer runs `doctor` and `prepare` on the host.
+   Then continue with `resume`.
+
+A rehearsal stage receipt staged before the move is refused as invalid;
+re-stage it under a new operation ID, and delete any leftover captured
+`slack-*` files by hand.
+
 ### Fresh four-meeting staging rehearsal
 
 Use the normal clean Authority for a fresh staging rehearsal with the four
@@ -294,7 +360,7 @@ node ../../demo/staging/prepare-fixtures.mjs \
 
 # Add `stagingSyntheticMeetingsDir` to the private onboarding-transfer
 # controller. Its bounded courier delivers this exact directory together with
-# the ordinary nine input files and invokes doctor and prepare with it.
+# the ordinary eight input files and invokes doctor and prepare with it.
 ```
 
 The four required filenames are
@@ -330,7 +396,11 @@ release.
 Use this path when the current staging Authority is complete and healthy but
 the original Mac onboarding input directory is unavailable. Provider credentials
 stay on the host. The organization, memberships, sessions, signing identity and
-knowledge base are still recreated by the ordinary fresh onboarding flow.
+knowledge base are still recreated by the ordinary fresh onboarding flow. This
+path requires a host already running on Nango, prepared with the Nango secret
+key and integration key; it does not move a pre-Nango host to Nango (see
+[Replace unreleased rehearsal state](#replace-unreleased-rehearsal-state)
+above).
 
 Roll back any staged candidate, then install the reviewed host tooling through
 the current-host release lane. Verify the accepted Authority is complete and
@@ -374,8 +444,8 @@ commands in Session Manager, using the operation ID from the receipt:
 
 Before stopping the old Authority, replacement validates the staged inputs,
 the current accepted release and completed healthy runtime, and the same
-staging host, owner, runtime user, Region and Slack identity-link channel.
-It copies only the six provider input files into a private host directory
+staging host, owner, runtime user, Region and Nango integration key.
+It copies only the five provider input files into a private host directory
 outside `clean-data`. The Granola and model-provider source files are used;
 old installed credentials, databases and signing keys are not carried into the
 new organization. Normal onboarding verifies the providers again.
@@ -547,9 +617,9 @@ descriptor that exactly matches the local Authority. Its result contains
 only the release ID and boolean activation/health outcomes. If the replacement
 cannot start healthily, the previous two credentials are restored and the old
 runtime is started again. Durable records, staged candidates, and Slack
-approval state are not rewritten. OIDC client-secret and Slack-token rotation
-have separate identity/link semantics and are intentionally outside this
-operation.
+approval state are not rewritten. OIDC client-secret rotation and reconnecting
+the organization's Slack connection have separate identity/link semantics and
+are intentionally outside this operation.
 
 ### Recover an interrupted operation lock
 

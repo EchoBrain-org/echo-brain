@@ -1,12 +1,12 @@
-import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, validateOrganizationPersonToolsV3, type OrganizationPersonToolV3 } from '@echo-brain/organization-api';
+import { ORGANIZATION_API_PERSON_TOOLS_PATH_V3, organizationPersonToolV3FromV4, validateOrganizationPersonToolsV3, type OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
-/** Authenticated aggregation has no provider identity, wire parser or connection store. */
+/** Authenticated aggregation has no provider identity, wire parser or connection store. V4 tools in, the owner-only organization_setup status stripped for this older contract. */
 export function createPersonToolsHttpApplicationV3(input: {
   authenticate(token: string): PersonAccessAuthorization;
-  tools(token: string): Promise<readonly OrganizationPersonToolV3[]>;
+  tools(token: string): Promise<readonly OrganizationPersonToolV4[]>;
 }): ProviderHttpApplicationV1 {
   return Object.freeze({
     routes: Object.freeze([{ route_id: 'person-tools-v3', method: 'GET' as const, path: ORGANIZATION_API_PERSON_TOOLS_PATH_V3 }]),
@@ -15,7 +15,7 @@ export function createPersonToolsHttpApplicationV3(input: {
       if (!header?.startsWith('Bearer ')) throw new AuthorityOperationError('unauthorized', 'person authentication failed');
       const token = header.slice(7);
       const before = input.authenticate(token);
-      const tools = await input.tools(token);
+      const tools = (await input.tools(token)).map(organizationPersonToolV3FromV4);
       const after = input.authenticate(token);
       if (before.organization_id !== after.organization_id || before.membership_id !== after.membership_id ||
           before.principal_id !== after.principal_id || before.identity_binding_id !== after.identity_binding_id || before.membership_type !== after.membership_type ||

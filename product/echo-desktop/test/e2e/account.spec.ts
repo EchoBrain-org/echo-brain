@@ -185,7 +185,7 @@ test('Connected tools… shows what your organization has enabled and whether yo
   ]);
   // The external workspace and account ids never reach the page.
   expect(await page.content()).not.toMatch(/T0123ABCD|U0123ABCD/);
-  expect(run.calls().filter(call => call.path === '/v3/person/tools')).toHaveLength(1);
+  expect(run.calls().filter(call => call.path === '/v4/person/tools')).toHaveLength(1);
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('tools')).toHaveCount(0);
 });

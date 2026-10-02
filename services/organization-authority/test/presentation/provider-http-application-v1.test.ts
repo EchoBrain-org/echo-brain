@@ -212,6 +212,7 @@ describe("provider identity and approval HTTP transport V1", () => {
         raw_body: expect.any(Uint8Array),
         content_type: "text/plain",
         headers: expect.objectContaining({ "x-example-signature": "proof" }),
+        signal: expect.any(AbortSignal),
       });
       expect(Buffer.from(accept.mock.calls[0]![0].raw_body).toString("utf8")).toBe(
         "exact-body",

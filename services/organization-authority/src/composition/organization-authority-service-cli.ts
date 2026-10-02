@@ -1,7 +1,6 @@
 import { OPENROUTER_TELEMETRY_VOCABULARY_V1 } from "@echo-brain/provider-openrouter/openrouter-telemetry-vocabulary-v1";
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
-import { readSlackBrowserOauthConfiguration } from '@echo-brain/provider-slack-server/setup/slack-browser-oauth-configuration-v1';
+import { readPrivateAuthorityCredential, readPrivateAuthorityOidcClientSecret } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
 import { readOrganizationAuthoritySetupManifest } from "./organization-authority-setup-cli.js";
 import { openOrganizationAuthorityService } from "./organization-authority-composition-root.js";
 import { readPersonOidcConfiguration } from "./organization-authority-person-administration-cli.js";
@@ -13,12 +12,16 @@ import { createAskJourneyTelemetryFactoryV1 } from "./ask-journey-telemetry-v1.j
 import { OPENROUTER_ANSWER_COMPOSITION_MODEL_V1 } from "@echo-brain/provider-openrouter/openrouter-answer-composition-generation-bundle-v1";
 import { OPENROUTER_DECISION_PROCESSOR_MODEL_V1, OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-config-v1";
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
+import { JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 } from './jira-person-live-runtime-v1.js';
+import { readStagingConnectorRehearsalSelectionV1 } from './staging-connector-rehearsal-selection-v1.js';
+import { openStagingConnectorRehearsalServiceV1 } from './staging-connector-rehearsal-runtime-v1.js';
 
 const USAGE =
   "usage: echo-organization-authority-serve serve " +
   "--state-dir <absolute-path> --host <127.0.0.1|::1> --port <1-65535> " +
-  "--slack-signing-secret-file <absolute-path> " +
+  "--nango-secret-key-file <absolute-path> --nango-integration <key> [--nango-base-url <https-origin>] " +
   "[--client-secret-file <absolute-path>] [--worker-interval-ms <positive-integer>] " +
+  "[--jira-cloud-id <cloud-id> --jira-nango-integration <key>] " +
   "[--staging-synthetic-meetings-dir <absolute-path>]";
 const STAGING_CANARY_USAGE =
   "usage: echo-organization-authority-serve staging-private-dm-canary " +
@@ -57,7 +60,11 @@ function flags(
     "--host",
     "--port",
     "--client-secret-file",
-    "--slack-signing-secret-file",
+    "--nango-secret-key-file",
+    "--nango-integration",
+    "--nango-base-url",
+    "--jira-cloud-id",
+    "--jira-nango-integration",
     "--worker-interval-ms",
     "--staging-synthetic-meetings-dir",
   ]);
@@ -80,7 +87,8 @@ function flags(
     "--state-dir",
     "--host",
     "--port",
-    "--slack-signing-secret-file",
+    "--nango-secret-key-file",
+    "--nango-integration",
   ]) {
     if (parsed[required] === undefined) throw new Error(USAGE);
   }
@@ -121,12 +129,11 @@ function stagingCanaryReleaseId(argv: readonly string[]): string {
 }
 
 /**
- * Starts from the private, non-secret V1 onboarding manifest. It deliberately does
- * not repeat the Authority URL, OIDC configuration, PKCE key, or Slack
- * channel at the command line. Before the legacy compatibility command
- * legacy `clean-founder finalize` command, the same
- * command serves Person onboarding with an inert worker; after a restart it
- * opens the admitted source-processing chain.
+ * Starts from the private, non-secret onboarding manifest. It deliberately does
+ * not repeat the Authority URL, OIDC configuration or PKCE key at the command
+ * line. Before the setup `finalize` command, the same command serves Person
+ * onboarding and the owner's in-app Slack setup with an inert worker; after a
+ * restart it opens the admitted source-processing chain.
  */
 export async function runOrganizationAuthorityServiceCli(
   argv: readonly string[],
@@ -159,10 +166,16 @@ export async function runOrganizationAuthorityServiceCli(
         "organization authority service OIDC client-secret flags do not match config",
       );
     }
-    const slackBrowserOauth = readSlackBrowserOauthConfiguration({
-      state_directory: stateDirectory,
-      authority_url: manifest.authority_url,
-    });
+    const jiraRequested = [parsed['--jira-cloud-id'], parsed['--jira-nango-integration']].some(value => value !== undefined);
+    if (jiraRequested && (!JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 || parsed['--jira-cloud-id'] === undefined || parsed['--jira-nango-integration'] === undefined || (parsed['--nango-base-url'] !== undefined && parsed['--nango-base-url'] !== 'https://api.nango.dev'))) {
+      throw new Error('Jira live selection requires accepted ADR-0026, one configured cloud site and Nango Cloud');
+    }
+    // Read once into memory; the startup-failure event below never carries it.
+    const slackNango = {
+      ...(parsed["--nango-base-url"] === undefined ? {} : { base_url: parsed["--nango-base-url"] }),
+      secret_key: readPrivateAuthorityCredential(`file:${required(parsed, "--nango-secret-key-file")}`),
+      integration_key: required(parsed, "--nango-integration"),
+    };
     const host = required(parsed, "--host");
     if (host !== "127.0.0.1" && host !== "::1") throw new Error(USAGE);
     // Agentic Ask is the only Ask (ADR-0022). ECHO_AGENTIC_ASK_V1 is still
@@ -192,6 +205,12 @@ export async function runOrganizationAuthorityServiceCli(
             authority_url: manifest.authority_url,
             meetings_directory: requestedSyntheticMeetingsDirectory,
           });
+    const connectorRehearsal = readStagingConnectorRehearsalSelectionV1({
+      state_directory: stateDirectory, authority_url: manifest.authority_url, environment: process.env,
+    });
+    if (connectorRehearsal !== undefined && (jiraRequested || stagingSyntheticMeetingsDirectory !== undefined)) {
+      throw new Error('Staging connector rehearsal cannot select another Jira or synthetic source profile');
+    }
     stagingJourneyTelemetry =
       manifest.authority_url ===
       STAGING_AUTHORITY_ORIGIN_V1
@@ -226,7 +245,10 @@ export async function runOrganizationAuthorityServiceCli(
             extraction_provider: OPENROUTER_DECISION_PROCESSOR_PROVIDER_V1,
             extraction_model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
           } as const;
-    const runtime = await openOrganizationAuthorityService({
+    const openService: typeof openOrganizationAuthorityService = connectorRehearsal === undefined
+      ? openOrganizationAuthorityService
+      : (config, dependencies) => openStagingConnectorRehearsalServiceV1(config, connectorRehearsal, dependencies);
+    const runtime = await openService({
       ...(stagingJourneyTelemetry?.enabled ? { core_runtime_observation: stagingJourneyTelemetry.core_runtime } : {}),
       state_directory: stateDirectory,
       host,
@@ -249,19 +271,16 @@ export async function runOrganizationAuthorityServiceCli(
       ...(agenticAskSmallScopeShortcut
         ? { agentic_ask_v1_small_scope_shortcut: true }
         : {}),
-      slack_signing_secret_file: required(
-        parsed,
-        "--slack-signing-secret-file",
-      ),
-      slack_connection_id: manifest.slack_connection_id,
-      // The V1 manifest keeps its compatibility-bound legacy field name.
-      slack_identity_link_channel_id: manifest.slack_approval_channel_id,
-      ...(slackBrowserOauth === undefined
-        ? {}
-        : { slack_browser_oauth: slackBrowserOauth }),
+      slack_nango: slackNango,
+      ...(jiraRequested ? { jira_person_live: {
+        enabled: true as const,
+        cloud_id: parsed['--jira-cloud-id']!,
+        integration_id: parsed['--jira-nango-integration']!,
+        nango_authorization: () => slackNango.secret_key,
+      } } : {}),
       granola_credential_file: manifest.granola_credential_file,
       granola_owner_email_file: manifest.granola_owner_email_file,
-      // The V1 manifest retains its serialized compatibility field.
+      // The manifest retains its serialized compatibility field.
       openrouter_credential_file: manifest.llm_credential_file,
       ...(stagingSyntheticMeetingsDirectory === undefined
         ? {}

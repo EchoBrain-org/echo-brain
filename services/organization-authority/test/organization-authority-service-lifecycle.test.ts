@@ -284,6 +284,66 @@ describe("Organization Authority service lifecycle", () => {
     vi.useRealTimers();
   });
 
+  it("keeps manual scheduling idle until an explicit cycle, then wakes search and presentation", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const setup = {
+      ...processing(events),
+      reconcileApprovalPresentations: async () => { events.push("presentation"); },
+    } satisfies OrganizationAuthorityProcessingCycleV1;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 10, scheduling: "manual" },
+      { processing: setup, start_api_runtime: async () => apiRuntime(events) },
+    );
+    try {
+      expect(events).toEqual(["recover", "reconcile"]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(events).toEqual(["recover", "reconcile"]);
+
+      await runtime.runProcessingCycleOnce(new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(1);
+      await runtime.drain(new AbortController().signal);
+
+      expect(events).toContain("stage");
+      expect(events).toContain("finalize");
+      expect(events).toContain("append");
+      expect(events.filter((event) => event === "reconcile")).toHaveLength(2);
+      expect(events).toContain("presentation");
+    } finally {
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("wakes manual derived work after a failed cycle with durable earlier phases", async () => {
+    const events: string[] = [];
+    let reconciliations = 0;
+    let presentations = 0;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, scheduling: "manual" },
+      {
+        processing: {
+          ...processing(events, async () => { throw new Error("append interrupted"); }),
+          reconcileReadableSearchGeneration: async () => {
+            reconciliations += 1;
+          },
+          reconcileApprovalPresentations: async () => { presentations += 1; },
+        },
+        start_api_runtime: async () => apiRuntime(events),
+      },
+    );
+    try {
+      await expect(
+        runtime.runProcessingCycleOnce(new AbortController().signal),
+      ).rejects.toThrow("append interrupted");
+      await runtime.drain(new AbortController().signal);
+      expect(reconciliations).toBe(2); // startup validation plus the failed manual cycle wake
+      expect(presentations).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("retries after an interrupted V4 append with recovery before another source poll", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
@@ -352,6 +412,87 @@ describe("Organization Authority service lifecycle", () => {
       "append:one",
       "append:two",
     ]);
+  });
+
+  it("defers optional approval presentation until after startup and durable periodic phases", async () => {
+    const events: string[] = [];
+    const setup = {
+      ...processing(events),
+      reconcileApprovalPresentations: async () => { events.push("presentation"); },
+    } satisfies OrganizationAuthorityProcessingCycleV1;
+
+    await runOrganizationAuthorityProcessingCycleV1(
+      setup,
+      new AbortController().signal,
+    );
+    expect(events).toEqual(["recover", "stage", "finalize", "append"]);
+
+    events.length = 0;
+    await runOrganizationAuthorityApprovalPublicationV1(
+      setup,
+      new AbortController().signal,
+    );
+    expect(events).toEqual(["finalize", "append"]);
+
+    events.length = 0;
+    let beforeApiStart: string[] = [];
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 10_000 },
+      {
+        processing: setup,
+        start_api_runtime: async () => {
+          beforeApiStart = [...events];
+          return apiRuntime(events);
+        },
+      },
+    );
+    try {
+      expect(beforeApiStart).toEqual(["recover", "reconcile"]);
+      await runtime.drain(AbortSignal.timeout(1_000));
+      expect(events).toContain("presentation");
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("reports a presentation failure without skipping search or the next cycle", async () => {
+    vi.useFakeTimers();
+    const errors: Error[] = [];
+    const telemetry: MeetingProcessingWorkerTelemetryEventV1[] = [];
+    let searchCalls = 0;
+    let presentationCalls = 0;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 100 },
+      {
+        processing: {
+          ...processing([]),
+          reconcileReadableSearchGeneration: async () => { searchCalls += 1; },
+          reconcileApprovalPresentations: async () => {
+            presentationCalls += 1;
+            if (presentationCalls === 1) throw new Error("terminal card unavailable");
+          },
+        },
+        start_api_runtime: async () => apiRuntime([]),
+        on_worker_error: (error) => errors.push(error),
+        on_worker_telemetry: (event) => telemetry.push(event),
+      },
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(presentationCalls).toBe(1);
+      expect(errors.map((error) => error.message)).toEqual(["terminal card unavailable"]);
+      // One startup reconciliation and one completion-bound search wake.
+      expect(searchCalls).toBeGreaterThanOrEqual(2);
+      expect(telemetry).toContainEqual(
+        expect.objectContaining({ kind: "echo-clean-live-worker-cycle-v1", event: "succeeded" }),
+      );
+
+      await vi.advanceTimersByTimeAsync(101);
+      expect(presentationCalls).toBe(2);
+      expect(searchCalls).toBeGreaterThanOrEqual(3);
+    } finally {
+      await runtime.close();
+    }
   });
 
   it("rejects startup, clears the handle, and never starts the API when prewarm fails", async () => {

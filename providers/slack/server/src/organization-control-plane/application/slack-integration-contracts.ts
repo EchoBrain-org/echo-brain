@@ -4,16 +4,26 @@ export {
   type OrganizationSecretReference,
   type OrganizationSecretStore,
 } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
-export const SLACK_DEFAULT_APPROVE_REACTION = "white_check_mark";
-export const SLACK_DEFAULT_REJECT_REACTION = "x";
-export const SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES = Object.freeze([
-  "channels:history",
-  "channels:read",
+
+/**
+ * The exact bot scopes ECHO's private per-organization Slack app requests,
+ * and the only scope set an organization connection contract accepts.
+ */
+export const SLACK_PRIVATE_APP_BOT_SCOPES_V1 = Object.freeze([
   "chat:write",
   "im:history",
   "im:write",
-  "reactions:read",
   "users:read",
+] as const);
+
+/**
+ * The user scopes the same app declares for the person's browser sign-in
+ * (Sign in with Slack). Sign-in only: the bot install never requests them and
+ * no organization connection contract records them.
+ */
+export const SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 = Object.freeze([
+  "openid",
+  "profile",
 ] as const);
 
 export interface VerifiedSlackConnection {
@@ -29,20 +39,6 @@ export interface VerifiedSlackConnection {
 export interface VerifiedSlackHuman {
   team_id: string;
   user_id: string;
-  verification_evidence_sha256: `sha256:${string}`;
-}
-
-export interface VerifiedSlackChannel {
-  team_id: string;
-  channel_id: string;
-  /** The exact selected channel was verified as a public organization channel. */
-  is_public_organization_channel?: boolean;
-  /** The selected channel was not archived, frozen, read-only, or thread-only. */
-  is_active?: boolean;
-  /** The bot was observed as a member of that exact selected channel. */
-  bot_membership_verified?: boolean;
-  /** Slack accepted the bot's channel inspection with the supplied token. */
-  bot_access_verified?: boolean;
   verification_evidence_sha256: `sha256:${string}`;
 }
 
@@ -94,12 +90,6 @@ export interface SlackIntegrationProvider {
     userId: string,
     signal?: AbortSignal,
   ): Promise<VerifiedSlackHuman>;
-  verifyChannel(
-    token: string,
-    channelId: string,
-    expectedTeamId: string,
-    signal?: AbortSignal,
-  ): Promise<VerifiedSlackChannel>;
   postIdentityLinkChallenge(
     token: string,
     input: PostSlackIdentityLinkChallengeInput,
@@ -112,6 +102,7 @@ export interface SlackIntegrationProvider {
   ): Promise<ObservedSlackIdentityLinkChallenge>;
 }
 
+/** The organization's own ECHO app installed through Nango; identity proofs use private DMs only. */
 export interface ActiveSlackOrganizationTool {
   connection_attempt_id: string;
   connection_id: string;
@@ -120,9 +111,6 @@ export interface ActiveSlackOrganizationTool {
   bot_user_id: string;
   bot_id: string;
   app_id: string | null;
-  channel_id: string;
-  approve_reaction: string;
-  reject_reaction: string;
   granted_scopes: readonly string[];
   secret: OrganizationSecretReference;
 }

@@ -18,11 +18,12 @@ const authorization: PersonAccessAuthorization = {
   hard_reauthentication_at: "2026-09-11T00:00:00.000Z", person_state_sha256: canonicalSha256("person"),
   session_state_sha256: canonicalSha256("session"), checked_at: NOW,
 };
-const tool = Object.freeze({ connection_attempt_id: "verify_1", connection_id: "con_00000000-0000-4000-8000-000000000001",
-  team_id: "T123", enterprise_id: null, bot_user_id: "Ubot", bot_id: "B123", app_id: "A123", channel_id: "C123",
-  approve_reaction: "white_check_mark", reject_reaction: "x", granted_scopes: [], secret: { secret_backend_id: "authority-file-v1" as const, secret_handle_id: "con_00000000-0000-4000-8000-000000000001" } });
+const tool = Object.freeze({ connection_attempt_id: "nango_1", connection_id: "con_00000000-0000-4000-8000-000000000001",
+  team_id: "T123", enterprise_id: null, bot_user_id: "Ubot", bot_id: "B123", app_id: "A123",
+  granted_scopes: [], secret: { secret_backend_id: "authority-file-v1" as const, secret_handle_id: "con_00000000-0000-4000-8000-000000000001" } });
 
-function setup(input: { now?: () => string; authorization?: () => PersonAccessAuthorization; proof?: { user_id: string; team_id: string } } = {}) {
+function setup(input: { now?: () => string; authorization?: () => PersonAccessAuthorization; proof?: { user_id: string; team_id: string };
+  browser_provider?: (active: ActiveSlackOrganizationTool) => SlackBrowserIdentityProvider } = {}) {
   const commit = vi.fn();
   const activeSlackOrganizationTool = vi.fn<() => ActiveSlackOrganizationTool | null>(() => tool);
   const repository = { activeSlackOrganizationTool, completeBrowserSlackIdentityLink: commit };
@@ -36,7 +37,7 @@ function setup(input: { now?: () => string; authorization?: () => PersonAccessAu
     authority_id: "oau_00000000-0000-4000-8000-000000000001", organization_id: authorization.organization_id,
     authentication: { authenticateAccess: vi.fn(input.authorization ?? (() => authorization)) },
     repository,
-    browser_provider: provider, now: input.now ?? (() => NOW),
+    browser_provider: input.browser_provider ?? (() => provider), now: input.now ?? (() => NOW),
   });
   return { workflow, provider, authorizationUrl, verifyCallback, commit, repository };
 }
@@ -112,6 +113,27 @@ describe("Slack browser identity link workflow", () => {
     expect(replacement.attempt_id).not.toBe(first.attempt_id);
     expect(authorizationUrl).toHaveBeenCalledTimes(2);
     await expect(workflow.status({ attempt_id: first.attempt_id }, "bearer")).resolves.toMatchObject({ status: "cancelled" });
+  });
+
+  it("builds each attempt's provider for the tool active at begin and verifies its callback with it", async () => {
+    let state = "";
+    const ownApp: SlackBrowserIdentityProvider = {
+      authorizationUrl: vi.fn((input) => { state = input.state; return "https://slack.com/openid/connect/authorize?client_id=own-app"; }),
+      verifyCallback: vi.fn(async () => ({ user_id: "U123", team_id: "T123", verification_evidence_sha256: canonicalSha256("own-app proof") })),
+    };
+    const providerFor = vi.fn((_active: ActiveSlackOrganizationTool) => ownApp);
+    const { workflow: dynamic, repository } = setup({ browser_provider: providerFor });
+    const nangoTool = { ...tool, connection_id: "con_00000000-0000-4000-8000-000000000002" };
+    repository.activeSlackOrganizationTool.mockReturnValue(nangoTool);
+    const begun = await dynamic.begin({ request_id: "psb_00000000-0000-4000-8000-000000000001" }, "bearer");
+    expect(begun.authorization_url).toBe("https://slack.com/openid/connect/authorize?client_id=own-app");
+    expect(providerFor).toHaveBeenCalledWith(nangoTool);
+    await dynamic.callback(new URLSearchParams({ state, code: "code" }));
+    expect(ownApp.verifyCallback).toHaveBeenCalledOnce();
+    await expect(dynamic.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "complete" });
+    providerFor.mockImplementationOnce(() => { throw new Error("no browser client for this connection"); });
+    await expect(dynamic.begin({ request_id: "psb_00000000-0000-4000-8000-000000000002" }, "bearer"))
+      .rejects.toMatchObject({ code: "unavailable", message: "Slack connection is temporarily unavailable" });
   });
 
   it("allows retry after local URL construction fails without retaining a partial attempt", async () => {
