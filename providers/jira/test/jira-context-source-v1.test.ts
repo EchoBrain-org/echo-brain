@@ -29,8 +29,9 @@ function issue(input: { updated?: string; status?: string; labels?: readonly str
   };
 }
 
-function fixture(options: { current?: () => void | Promise<void>; issue?: ReturnType<typeof issue>; page?: unknown; representation?: 'pointer' | 'excerpt'; now?: () => Date } = {}) {
+function fixture(options: { current?: () => void | Promise<void>; issue?: ReturnType<typeof issue>; projectSelf?: string; page?: unknown; representation?: 'pointer' | 'excerpt'; now?: () => Date } = {}) {
   const raw = options.issue ?? issue();
+  if (options.projectSelf !== undefined) raw.fields.project.self = options.projectSelf;
   const request = vi.fn(async (input: JiraCloudRequestV1): Promise<unknown> => {
     if (input.path === '/oauth/token/accessible-resources') return [{ id: cloudid, url: origin, scopes: ['read:jira-work', 'read:jira-user'] }];
     if (input.path === `${prefix}/myself`) return { accountId: 'account-context', active: true, accountType: 'atlassian' };
@@ -85,6 +86,18 @@ describe('Jira context source V1', () => {
     expect(source.content.representation.passages[0]!.end).toBe(source.content.representation.passages[0]!.text.length);
     expect(source.content.payload).not.toHaveProperty('due_at');
     expect(source.content.payload).not.toHaveProperty('owner');
+  });
+
+  it('accepts the exact cloud API project self URL', async () => {
+    const source = fixture({ projectSelf: `https://api.atlassian.com/ex/jira/${cloudid}/rest/api/3/project/10000` }).source;
+    await expect(source.pull({ limit: 1 })).resolves.toMatchObject({ sources: [expect.anything()] });
+  });
+
+  it.each([
+    ['another cloud', 'https://api.atlassian.com/ex/jira/22222222-2222-2222-2222-222222222222/rest/api/3/project/10000'],
+    ['another project coordinate', `https://api.atlassian.com/ex/jira/${cloudid}/rest/api/3/project/99999`],
+  ])('rejects a project self URL for %s', async (_description, projectSelf) => {
+    await expect(fixture({ projectSelf }).source.pull({ limit: 1 })).rejects.toMatchObject({ code: 'invalid_output' });
   });
 
   it('keeps the source identity on a replay while changed provider state receives a new immutable revision', async () => {
