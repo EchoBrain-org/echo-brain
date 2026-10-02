@@ -1,6 +1,6 @@
 import type { ContextCaptureContentV1 } from '@echo-brain/organization-processing/core';
 import { parseJiraIssueV1 } from './jira-payload-v1.js';
-import { JIRA_ID, jiraArray, jiraBoundText, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
+import { JIRA_ID, jiraArray, jiraBoundText, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 export interface ParsedJiraContextIssueV1 {
   readonly id: string;
@@ -10,7 +10,9 @@ export interface ParsedJiraContextIssueV1 {
 }
 
 function canonicalProviderTimestamp(value: unknown): string {
-  const raw = jiraString(value, 64, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/);
+  const raw = jiraString(value, 64, /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/);
+  // Date parsing otherwise normalizes impossible provider days into a new revision.
+  jiraDay(raw.slice(0, 10));
   const timestamp = new Date(raw);
   if (!Number.isFinite(timestamp.getTime())) jiraFailure('invalid_output');
   return timestamp.toISOString();

@@ -102,6 +102,35 @@ describe('Jira context source V1', () => {
     expect(changed.sources[0]!.revision.content_sha256).not.toBe(initial.sources[0]!.revision.content_sha256);
   });
 
+  it.each([
+    '2026-02-30T03:04:05Z',
+    '2026-02-29T03:04:05.000-0700',
+    '2100-02-29T03:04:05.000+05:30',
+    '2026-04-31T03:04:05.000Z',
+    '2026-01-00T03:04:05Z',
+    '2026-13-01T03:04:05Z',
+    '2026-10-02T24:00:00Z',
+    '2026-10-02T03:60:00Z',
+    '2026-10-02T03:04:60Z',
+  ])('rejects an impossible provider update timestamp before returning a capture: %s', async (updated) => {
+    await expect(fixture({ issue: issue({ updated }) }).source.pull({ limit: 1 }))
+      .rejects.toMatchObject({ code: 'invalid_output' });
+  });
+
+  it.each([
+    ['2000-02-29T03:04:05Z', '2000-02-29T03:04:05.000Z'],
+    ['2024-02-29T03:04:05.1Z', '2024-02-29T03:04:05.100Z'],
+    ['2026-10-02T03:04:05.12+0000', '2026-10-02T03:04:05.120Z'],
+    ['2026-10-02T03:04:05.123+00:00', '2026-10-02T03:04:05.123Z'],
+    ['2026-03-01T00:04:05+0530', '2026-02-28T18:34:05.000Z'],
+    ['2026-03-01T00:04:05+05:30', '2026-02-28T18:34:05.000Z'],
+    ['2026-02-28T23:04:05-0700', '2026-03-01T06:04:05.000Z'],
+    ['2026-02-28T23:04:05-07:00', '2026-03-01T06:04:05.000Z'],
+  ])('preserves a valid provider update timestamp in canonical provenance: %s', async (updated, expected) => {
+    const result = await fixture({ issue: issue({ updated }) }).source.pull({ limit: 1 });
+    expect(result.sources[0]!.content.provenance.source_updated_at).toBe(expected);
+  });
+
   it('does not return fetched source bytes when the bound person grant is revoked during the pull', async () => {
     let calls = 0;
     const f = fixture({ current: () => {
