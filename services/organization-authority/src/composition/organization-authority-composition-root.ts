@@ -20,7 +20,8 @@ import { createPrivateSlackApprovalWorkflowBundleV1 } from "@echo-brain/provider
 import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 import { HttpNangoConnectionClientV1, type NangoConnectionClientV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1";
 import { SlackWebAppManifestProviderV1, type SlackAppManifestProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
-import type { SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
+import { SlackWebIdentityProviderV1, type SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
+import type { SlackPublicChannelContextCapabilityV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts";
 import { createSlackBotTokenSourceV1, type SlackBotTokenSourceV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-bot-token-source-v1";
 import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-connection-health-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
@@ -31,6 +32,10 @@ import type { PrivateSlackApprovalCardPosterV1 } from "@echo-brain/provider-slac
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveConfigurationV1, type JiraPersonLiveRuntimeSeamsV1 } from './jira-person-live-runtime-v1.js';
 import type { PersonTicketLiveRuntimeFactoryV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
+import type { OrganizationAuthorityApiRuntimeDependencies } from './organization-authority-api-runtime.js';
+import type { SlackContextCaptureRuntimePortsV1 } from './slack-context-capture-runtime-v1.js';
+
+type PersonHttpRuntimeFactory = NonNullable<OrganizationAuthorityApiRuntimeDependencies['person_http_runtime_factory']>;
 
 export interface OrganizationAuthorityServiceConfig
   extends Omit<
@@ -50,6 +55,8 @@ export interface OrganizationAuthorityServiceConfig
   readonly openrouter_credential_file: string;
   /** Jira remains absent unless this explicit selection is supplied after release approval. */
   readonly jira_person_live?: JiraPersonLiveConfigurationV1;
+  /** Opt-in V2 profile capability; absent in the approval-only profile. */
+  readonly slack_public_channel_context?: SlackPublicChannelContextCapabilityV1;
   /** Nango holds the organization's Slack connection. The key stays in process memory only. */
   readonly slack_nango: {
     /** An https origin; defaults to Nango Cloud. */
@@ -80,6 +87,10 @@ export interface OrganizationAuthorityServiceDependencies
   extends Omit<OrganizationAuthorityRuntimeDependencies, "processing_adapter_overrides"> {
   readonly processing_adapter_overrides?: OrganizationAuthorityServiceAdapterOverrides;
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
+  /** Selected bootstrap receives the exact Slack ports shared with approvals and setup. */
+  readonly person_http_runtime_factory_with_slack?: (
+    sessions: Parameters<PersonHttpRuntimeFactory>[0], slack: SlackContextCaptureRuntimePortsV1,
+  ) => ReturnType<PersonHttpRuntimeFactory>;
   /** Test seams for Nango's and Slack's HTTP APIs. */
   readonly slack?: {
     readonly nango?: NangoConnectionClientV1;
@@ -94,13 +105,14 @@ export interface OrganizationAuthorityServiceDependencies
  * a token Slack rejects in one is marked for the other, and an install clears it.
  */
 function composeSlackV1(
-  config: Pick<OrganizationAuthorityServiceConfig, "state_directory" | "authority_url" | "slack_nango">,
+  config: Pick<OrganizationAuthorityServiceConfig, "state_directory" | "authority_url" | "slack_nango" | "slack_public_channel_context">,
   seams: OrganizationAuthorityServiceDependencies["slack"] = {},
 ) {
   const base_url = config.slack_nango.base_url ?? "https://api.nango.dev";
   const callback_url = new URL("/oauth/callback", base_url).href;
   const nango = seams.nango ?? new HttpNangoConnectionClientV1({ ...config.slack_nango, base_url, callback_url });
   const connection_health = new SlackConnectionHealthV1();
+  const provider = seams.provider ?? new SlackWebIdentityProviderV1();
   // The secret store is opened on first use, after the runtime has verified its state directory.
   let tokens: SlackBotTokenSourceV1 | undefined;
   const bot_token_source: SlackBotTokenSourceV1 = {
@@ -109,16 +121,17 @@ function composeSlackV1(
     })).botToken(connection, options),
   };
   const external_identity = createSlackPersonExternalIdentityRuntimeBundleV1({
-    ...(seams.provider === undefined ? {} : { provider: seams.provider }),
+    provider,
     bot_token_source,
     connection_health,
     organization_setup: {
       authority_url: config.authority_url,
       nango: { client: nango, callback_url },
       manifest_provider: seams.manifest_provider ?? new SlackWebAppManifestProviderV1(),
+      ...(config.slack_public_channel_context === undefined ? {} : { public_channel_context: config.slack_public_channel_context }),
     },
   });
-  return { bot_token_source, connection_health, external_identity };
+  return { bot_token_source, connection_health, provider, external_identity };
 }
 
 /**
@@ -138,10 +151,14 @@ export async function openOrganizationAuthorityService(
     openrouter_credential_file,
     slack_nango,
     jira_person_live,
+    slack_public_channel_context,
     on_private_approval_slack_rejection,
     ...sharedConfig
   } = config;
-  const slack = composeSlackV1({ ...sharedConfig, slack_nango }, dependencies.slack);
+  if (dependencies.person_http_runtime_factory_with_slack !== undefined && dependencies.api?.person_http_runtime_factory !== undefined) {
+    throw new Error('Only one Person HTTP runtime factory may be selected');
+  }
+  const slack = composeSlackV1({ ...sharedConfig, slack_nango, ...(slack_public_channel_context === undefined ? {} : { slack_public_channel_context }) }, dependencies.slack);
   let meetingSourceBundle;
   if (staging_synthetic_meetings_directory === undefined) {
     if (
@@ -180,6 +197,9 @@ export async function openOrganizationAuthorityService(
         };
   const apiDependencies = {
     ...dependencies.api,
+    ...(dependencies.person_http_runtime_factory_with_slack === undefined ? {} : {
+      person_http_runtime_factory: ((sessions) => dependencies.person_http_runtime_factory_with_slack!(sessions, slack)) satisfies PersonHttpRuntimeFactory,
+    }),
     ...(jira_person_live === undefined ? {} : { ticket_live_runtime_factory: ((sessions) => openJiraPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, configuration: jira_person_live, ...(dependencies.jira_person_live_seams === undefined ? {} : { seams: dependencies.jira_person_live_seams }) })) satisfies PersonTicketLiveRuntimeFactoryV1 }),
     record_approver: composeRecordApproverProjectorsV1([
       projectPrivateSlackBlockApprovalApproverV1,

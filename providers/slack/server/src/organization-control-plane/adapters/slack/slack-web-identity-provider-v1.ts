@@ -1,6 +1,7 @@
 import type { ReadableStreamReadResult } from "node:stream/web";
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
 import type { ObservedSlackIdentityLinkChallenge, ObserveSlackIdentityLinkChallengeInput, PostedSlackIdentityLinkChallenge, PostSlackIdentityLinkChallengeInput, SlackIntegrationProvider, VerifiedSlackConnection, VerifiedSlackHuman } from "../../application/slack-integration-contracts.js";
+import { slackConnectionVerificationEvidenceSha256V1 } from "../../application/slack-connection-verification-evidence-v1.js";
 
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -468,14 +469,12 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
       bot_id: botId,
       app_id: appId,
       granted_scopes: authTest.scopes,
-      verification_evidence_sha256: canonicalSha256({
-        method: "slack_auth_test_bots_info",
+      verification_evidence_sha256: slackConnectionVerificationEvidenceSha256V1({
         team_id: teamId,
         enterprise_id: enterpriseId,
         bot_user_id: botUserId,
         bot_id: botId,
         app_id: appId,
-        bot_deleted: false,
         granted_scopes: authTest.scopes,
       }),
     });

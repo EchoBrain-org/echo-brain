@@ -313,6 +313,7 @@ exec /usr/bin/install "$@"
   const run = (
     command:
       | "activate-provider-credentials"
+      | "configure-connector-rehearsal"
       | "replace-rehearsal"
       | "stage-rehearsal-inputs"
       | "prepare-rehearsal"
@@ -406,6 +407,61 @@ function configureReusableProviderInputs(
       "owner_email=founder@example.com\nauthority_host=authority-staging.echobrain.org\naws_region=us-west-2\nnango_integration_key=slack\n",
     { mode: 0o600 },
   );
+}
+
+function configureV1ConnectorRehearsal(
+  fixture: ReturnType<typeof preparedStatusFixture>,
+) {
+  const profile = {
+    schema_version: 1,
+    kind: "echo-staging-connector-rehearsal-profile-v1",
+    capture_policy: "initial-owner-granola-retained-jira-request-only-v1",
+    jira: {
+      cloud_id: "a8c0e112-6f72-4a0e-9c12-b7d8439f0abc",
+      integration_key: "jira",
+      project: "ECHO",
+    },
+  };
+  const profileBytes = `${canonicalJson(profile)}\n`;
+  const digest = `sha256:${createHash("sha256").update(canonicalJson(profile), "utf8").digest("hex")}`;
+  const v1Path = join(fixture.privateDir, "staging-connector-rehearsal.json");
+  writeFileSync(v1Path, profileBytes, { mode: 0o600 });
+  chmodSync(v1Path, 0o600);
+  const sidecar = join(fixture.deploy, "clean-data/staging-connector-rehearsal-v1");
+  mkdirSync(sidecar, { recursive: true, mode: 0o700 });
+  writeFileSync(join(sidecar, "v1-sidecar-sentinel"), "must-not-change", { mode: 0o600 });
+  for (const path of [
+    join(fixture.deploy, ".env.clean-v1"),
+    join(fixture.releaseDir, "runtime-environments", `${fixture.releaseId}.env`),
+  ]) {
+    writeFileSync(path, `${readFileSync(path, "utf8")}ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/echo-clean/private/staging-connector-rehearsal.json\n`, { mode: 0o600 });
+  }
+  const setup = join(fixture.privateDir, "onboard-clean-v1.conf");
+  writeFileSync(setup, `${readFileSync(setup, "utf8")}staging_connector_rehearsal_profile_sha256=${digest}\n`, { mode: 0o600 });
+  return { digest, profileBytes, sidecar, v1Path };
+}
+
+function connectorRebindArguments(predecessor: string, project = "KAN") {
+  const profile = {
+    schema_version: 2,
+    kind: "echo-staging-connector-rehearsal-profile-v2",
+    capture_policy: "initial-owner-granola-retained-jira-pointer-slack-pointer-v2",
+    predecessor_profile_sha256: predecessor,
+    jira: {
+      cloud_id: "a8c0e112-6f72-4a0e-9c12-b7d8439f0abc",
+      integration_key: "jira",
+      project,
+    },
+    slack: { channel_id: "C0123456789" },
+  };
+  const canonical = canonicalJson(profile);
+  const digest = `sha256:${createHash("sha256").update(canonical, "utf8").digest("hex")}`;
+  return {
+    profile,
+    canonical,
+    digest,
+    args: ["--profile-base64", Buffer.from(`${canonical}\n`, "utf8").toString("base64"), "--profile-sha256", digest],
+  } as const;
 }
 
 function stageRehearsalInputs(
@@ -1426,6 +1482,131 @@ describe("clean-v1 Organization Authority deployment profile", () => {
         "durable-work-must-survive",
       );
     }
+  });
+
+  it("rebinds the staged connector selector to the canonical V2 retained-pointer profile", () => {
+    const fixture = preparedStatusFixture();
+    const v1 = configureV1ConnectorRehearsal(fixture);
+    const target = connectorRebindArguments(v1.digest);
+    const result = fixture.run("configure-connector-rehearsal", {}, target.args);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("connector_rehearsal_rebound=true");
+    expect(result.stdout).toContain(`profile_sha256=${target.digest}`);
+    expect(result.stdout).not.toContain(target.args[1]!);
+    const environment = readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8");
+    expect(environment).toContain(
+      "ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE=/echo-clean/private/staging-connector-rehearsal-v2.json",
+    );
+    expect(readFileSync(join(fixture.releaseDir, "runtime-environments", `${fixture.releaseId}.env`), "utf8"))
+      .toBe(environment);
+    expect(readFileSync(join(fixture.privateDir, "onboard-clean-v1.conf"), "utf8"))
+      .toContain(`staging_connector_rehearsal_profile_sha256=${target.digest}`);
+    const v2Path = join(fixture.privateDir, "staging-connector-rehearsal-v2.json");
+    expect(readFileSync(v2Path, "utf8")).toBe(`${target.canonical}\n`);
+    expect(statSync(v2Path).mode & 0o777).toBe(0o600);
+    expect(readFileSync(v1.v1Path, "utf8")).toBe(v1.profileBytes);
+    expect(readFileSync(join(v1.sidecar, "v1-sidecar-sentinel"), "utf8")).toBe("must-not-change");
+    expect(existsSync(join(fixture.deploy, ".connector-rehearsal-rebind-v2"))).toBe(false);
+    expect(fixture.run("status").status).toBe(0);
+  });
+
+  it("rejects a noncanonical or mismatched V2 rebind profile before stopping the runtime", () => {
+    const fixture = preparedStatusFixture();
+    const v1 = configureV1ConnectorRehearsal(fixture);
+    const target = connectorRebindArguments(v1.digest);
+    const before = readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8");
+    const malformed = fixture.run("configure-connector-rehearsal", {}, [
+      "--profile-base64", "not base64", "--profile-sha256", target.digest,
+    ]);
+    expect(malformed.status).toBe(1);
+    expect(malformed.stderr).toContain("bounded canonical standard base64");
+    const mismatch = fixture.run("configure-connector-rehearsal", {}, [
+      target.args[0]!, target.args[1]!, target.args[2]!, `sha256:${"0".repeat(64)}`,
+    ]);
+    expect(mismatch.status).toBe(1);
+    expect(mismatch.stderr).toContain("strict canonical V2 JSON");
+    const cloudChanged = {
+      ...target.profile,
+      jira: { ...target.profile.jira, cloud_id: "b8c0e112-6f72-4a0e-9c12-b7d8439f0abc" },
+    };
+    const cloudCanonical = canonicalJson(cloudChanged);
+    const cloudChangedResult = fixture.run("configure-connector-rehearsal", {}, [
+      "--profile-base64", Buffer.from(`${cloudCanonical}\n`, "utf8").toString("base64"),
+      "--profile-sha256", `sha256:${createHash("sha256").update(cloudCanonical, "utf8").digest("hex")}`,
+    ]);
+    expect(cloudChangedResult.status).toBe(1);
+    expect(cloudChangedResult.stderr).toContain("strict canonical V2 JSON");
+    expect(readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8")).toBe(before);
+    expect(existsSync(join(fixture.privateDir, "staging-connector-rehearsal-v2.json"))).toBe(false);
+    expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
+  });
+
+  it("restores the V1 selector when V2 startup fails", () => {
+    const fixture = preparedStatusFixture();
+    const v1 = configureV1ConnectorRehearsal(fixture);
+    const target = connectorRebindArguments(v1.digest);
+    const beforeEnvironment = readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8");
+    const beforeSetup = readFileSync(join(fixture.privateDir, "onboard-clean-v1.conf"), "utf8");
+    const failed = fixture.run("configure-connector-rehearsal", { ECHO_FAKE_FAIL_FIRST_UP: "true" }, target.args);
+
+    expect(failed.status).toBe(1);
+    expect(failed.stderr).toContain("V1 selector was restored and verified");
+    expect(readFileSync(join(fixture.deploy, ".env.clean-v1"), "utf8")).toBe(beforeEnvironment);
+    expect(readFileSync(join(fixture.privateDir, "onboard-clean-v1.conf"), "utf8")).toBe(beforeSetup);
+    expect(existsSync(join(fixture.privateDir, "staging-connector-rehearsal-v2.json"))).toBe(false);
+    expect(existsSync(join(fixture.deploy, ".connector-rehearsal-rebind-v2"))).toBe(false);
+    const calls = readFileSync(fixture.calls, "utf8");
+    expect(calls.match(/ down\n/g)).toHaveLength(2);
+    expect(calls.match(/ up -d --no-build --wait --wait-timeout 90\n/g)).toHaveLength(2);
+  });
+
+  it("refuses ordinary actions during an interrupted rebind and recovers only with the same profile", () => {
+    const fixture = preparedStatusFixture();
+    const v1 = configureV1ConnectorRehearsal(fixture);
+    const target = connectorRebindArguments(v1.digest);
+    const journal = join(fixture.deploy, ".connector-rehearsal-rebind-v2");
+    mkdirSync(journal, { mode: 0o700 });
+    for (const [source, name] of [
+      [join(fixture.deploy, ".env.clean-v1"), "environment.previous"],
+      [join(fixture.releaseDir, "runtime-environments", `${fixture.releaseId}.env`), "accepted-environment.previous"],
+      [join(fixture.privateDir, "onboard-clean-v1.conf"), "setup.previous"],
+    ] as const) {
+      copyFileSync(source, join(journal, name));
+      chmodSync(join(journal, name), 0o600);
+    }
+    writeFileSync(join(journal, "journal.json"), `${canonicalJson({
+      schema_version: 1,
+      kind: "echo-staging-connector-rebind-v2",
+      previous_profile_sha256: v1.digest,
+      target_profile_sha256: target.digest,
+      release_id: fixture.releaseId,
+      runtime_profile_sha256: `sha256:${fixture.profile.digest}`,
+      environment_previous_sha256: `sha256:${createHash("sha256").update(readFileSync(join(journal, "environment.previous"))).digest("hex")}`,
+      accepted_environment_previous_sha256: `sha256:${createHash("sha256").update(readFileSync(join(journal, "accepted-environment.previous"))).digest("hex")}`,
+      setup_previous_sha256: `sha256:${createHash("sha256").update(readFileSync(join(journal, "setup.previous"))).digest("hex")}`,
+    })}\n`, { mode: 0o600 });
+    const blocked = fixture.run("status");
+    expect(blocked.status).toBe(1);
+    expect(blocked.stderr).toContain("rebind is interrupted");
+    const blockedPrepare = fixture.run("prepare-rehearsal");
+    expect(blockedPrepare.status).toBe(1);
+    expect(blockedPrepare.stderr).toContain("rebind is interrupted");
+    writeFileSync(join(fixture.releaseDir, "runtime-profile.active"), "profile-drift");
+    const callsBeforeDriftedRecovery = existsSync(fixture.calls)
+      ? readFileSync(fixture.calls, "utf8") : "";
+    const driftedRecovery = fixture.run("configure-connector-rehearsal", {}, target.args);
+    expect(driftedRecovery.status).toBe(1);
+    expect(driftedRecovery.stderr).toContain("journal does not bind the current accepted release");
+    const callsAfterDriftedRecovery = existsSync(fixture.calls)
+      ? readFileSync(fixture.calls, "utf8") : "";
+    expect(callsAfterDriftedRecovery.slice(callsBeforeDriftedRecovery.length)).not.toMatch(/ down\n/);
+    writeFileSync(join(fixture.releaseDir, "runtime-profile.active"), fixture.profile.bytes);
+    const recovered = fixture.run("configure-connector-rehearsal", {}, target.args);
+    expect(recovered.status, recovered.stderr).toBe(0);
+    expect(existsSync(journal)).toBe(false);
+    expect(readFileSync(join(fixture.privateDir, "staging-connector-rehearsal-v2.json"), "utf8"))
+      .toBe(`${target.canonical}\n`);
   });
 
   it("restores and verifies both previous provider credentials when replacement startup fails", () => {

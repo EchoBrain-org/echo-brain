@@ -6,8 +6,8 @@ export {
 } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 
 /**
- * The exact bot scopes ECHO's private per-organization Slack app requests,
- * and the only scope set an organization connection contract accepts.
+ * The baseline approval scopes committed by the immutable organization
+ * connection. Optional read capabilities do not change that contract.
  */
 export const SLACK_PRIVATE_APP_BOT_SCOPES_V1 = Object.freeze([
   "chat:write",
@@ -15,6 +15,34 @@ export const SLACK_PRIVATE_APP_BOT_SCOPES_V1 = Object.freeze([
   "im:write",
   "users:read",
 ] as const);
+
+export interface SlackPublicChannelContextCapabilityV1 {
+  readonly schema_version: 1;
+  readonly kind: "echo-slack-public-channel-context-capability-v1";
+}
+
+/** Explicit Authority configuration; neither an identity link nor a provider grant enables intake. */
+export const SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1: SlackPublicChannelContextCapabilityV1 = Object.freeze({
+  schema_version: 1,
+  kind: "echo-slack-public-channel-context-capability-v1",
+});
+
+export const SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 = Object.freeze([
+  "channels:history", "channels:read", ...SLACK_PRIVATE_APP_BOT_SCOPES_V1,
+] as const);
+
+/** Closed versioned extension. Approval-only installations keep their original four scopes. */
+export function slackPrivateAppBotScopesV1(capability?: SlackPublicChannelContextCapabilityV1): readonly string[] {
+  if (capability === undefined) return SLACK_PRIVATE_APP_BOT_SCOPES_V1;
+  if (capability === null || typeof capability !== "object" || Array.isArray(capability) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(capability)) ||
+      Reflect.ownKeys(capability).length !== 2 ||
+      Object.values(Object.getOwnPropertyDescriptors(capability)).some((field) => !("value" in field) || !field.enumerable) ||
+      capability.schema_version !== 1 || capability.kind !== SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1.kind) {
+    throw new Error("Slack public-channel context capability is invalid");
+  }
+  return SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1;
+}
 
 /**
  * The user scopes the same app declares for the person's browser sign-in

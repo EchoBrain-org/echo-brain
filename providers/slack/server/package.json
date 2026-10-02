@@ -5,6 +5,10 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./organization-control-plane/application/slack-public-channel-context-capability-v1": {
+      "types": "./dist/organization-control-plane/application/slack-public-channel-context-capability-v1.d.ts",
+      "import": "./dist/organization-control-plane/application/slack-public-channel-context-capability-v1.js"
+    },
     "./context/slack-context-source-v1": {
       "types": "./dist/context/slack-context-source-v1.d.ts",
       "import": "./dist/context/slack-context-source-v1.js"
@@ -97,6 +101,10 @@
     "./setup/initial-owner-slack-setup-v1": {
       "types": "./dist/setup/initial-owner-slack-setup-v1.d.ts",
       "import": "./dist/setup/initial-owner-slack-setup-v1.js"
+    },
+    "./context/slack-context-current-identity-v1": {
+      "types": "./dist/context/slack-context-current-identity-v1.d.ts",
+      "import": "./dist/context/slack-context-current-identity-v1.js"
     }
   },
   "files": [

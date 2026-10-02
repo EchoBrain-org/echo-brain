@@ -57,6 +57,17 @@ sidecar is rehearsal state with an explicit recovery boundary, not an extension
 of canonical Authority storage. The staging selection and receipts are specified
 in the linked integration design.
 
+The explicit V2 staging selection adds the Slack provider's fixed-public-channel
+pointer source and selects retained Jira pointers through the same neutral
+intake. Authority owns the initial-owner custody policy and synchronous
+admission fences; provider credentials and opaque author references do not
+grant retention or identity. Slack channel parsing and optional read-scope
+proof remain provider-owned. V2 preserves the V1 profile and connection
+sidecar, proves their predecessor binding before reuse, and changes the capture
+wire only through a new version. It does not widen ordinary production or V1
+rehearsal behavior, canonical connection contracts, signed bytes or SQL
+baselines.
+
 This invariant is about external-capability providers. The current local
 platform still deliberately selects SQLite, file-backed keys, Node crypto and
 clock implementations, and the OIDC protocol in Authority composition. An
