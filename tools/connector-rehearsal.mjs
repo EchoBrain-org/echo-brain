@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * Creates and checks the local-only filesystem boundary for a future connector
- * rehearsal. It never starts an Authority, opens a network connection, or reads
- * a credential file. The OIDC configuration is the sole input read by preflight
- * because its non-secret shape determines whether a client-secret file is needed.
+ * Prepares and checks the local-only filesystem boundary for connector rehearsal.
+ * `prepare` and `preflight` never start an Authority, open a network connection,
+ * or read credential files. Lifecycle actions dispatch through the compiled,
+ * isolated Authority runtime; only OIDC's non-secret configuration metadata is
+ * read here to determine whether a client-secret file is needed.
  */
 import {
   chmodSync,
@@ -293,6 +294,13 @@ function assertRehearsalRoot(root) {
   return paths;
 }
 
+function assertExecutionRoot(root) {
+  const paths = rootPaths(root);
+  assertDirectory(paths.root, "rehearsal root");
+  for (const path of [paths.person, paths.private, paths.receipts]) assertDirectory(path, "rehearsal directory");
+  return paths;
+}
+
 function inputFileReady(path) {
   try { assertPrivateRegularFile(path, "private input"); return true; } catch { return false; }
 }
@@ -359,21 +367,99 @@ export function preflight(directory) {
   });
 }
 
+/**
+ * The lifecycle runner receives only this marker-bound root and its nonsecret
+ * configuration references. It owns the post-bootstrap state/lineage fence,
+ * so this deliberately permits a state directory after bootstrap.
+ */
+export function readExecutionConfiguration(directory) {
+  const root = assertNoSymlinkPath(directory, "rehearsal directory");
+  const paths = assertExecutionRoot(root);
+  const configuration = readConfiguration(root);
+  return Object.freeze({
+    directory: root,
+    paths,
+    configuration: Object.freeze(configuration),
+  });
+}
+
 function usage() {
-  return "usage: node tools/connector-rehearsal.mjs <prepare|preflight> --directory <new-or-prepared-absolute-path>";
+  return "usage: node tools/connector-rehearsal.mjs <prepare|preflight|bootstrap|credentials-install|finalize|serve|capture|cycle-once|person> --directory <absolute-path> [--tool <granola|jira> --limit <1..5>|-- <person arguments>]";
 }
 
 function parseCli(argv) {
-  if (argv.length !== 3 || !["prepare", "preflight"].includes(argv[0]) || argv[1] !== "--directory") fail(usage());
-  return Object.freeze({ command: argv[0], directory: canonicalAbsolutePath(argv[2], "rehearsal directory") });
+  const action = argv[0];
+  if (action === "prepare" || action === "preflight" ||
+      action === "bootstrap" || action === "credentials-install" || action === "finalize" ||
+      action === "serve" || action === "cycle-once") {
+    if (argv.length !== 3 || argv[1] !== "--directory") fail(usage());
+    return Object.freeze({ action, directory: canonicalAbsolutePath(argv[2], "rehearsal directory") });
+  }
+  if (action === "capture") {
+    if (argv.length !== 7 || argv[1] !== "--directory" || argv[3] !== "--tool" || argv[5] !== "--limit" ||
+        !["granola", "jira"].includes(argv[4]) || !/^[1-5]$/.test(argv[6])) fail(usage());
+    return Object.freeze({
+      action,
+      directory: canonicalAbsolutePath(argv[2], "rehearsal directory"),
+      argv: Object.freeze(["--tool", argv[4], "--limit", argv[6]]),
+    });
+  }
+  if (action === "person") {
+    if (argv.length < 5 || argv[1] !== "--directory" || argv[3] !== "--") fail(usage());
+    return Object.freeze({
+      action,
+      directory: canonicalAbsolutePath(argv[2], "rehearsal directory"),
+      argv: Object.freeze(argv.slice(4)),
+    });
+  }
+  fail(usage());
 }
 
-export function main(argv = process.argv.slice(2)) {
+async function runAuthorityLifecycle(input) {
+  const execution = readExecutionConfiguration(input.directory);
+  const runtime = await import("../services/organization-authority/dist/composition/connector-rehearsal-runtime-v1.js");
+  let accessToken;
+  if (input.action === "capture" || input.action === "cycle-once") {
+    const { PersonSessionStore } = await import("../src/product/person-client/dist/session-store.js");
+    const stored = new PersonSessionStore(execution.paths.person).read();
+    if (stored.authority_origin !== execution.configuration.authority_url) {
+      fail("rehearsal Person session does not match authority_url");
+    }
+    const accessExpiresAt = Date.parse(stored.session.access_expires_at);
+    if (!Number.isFinite(accessExpiresAt) || accessExpiresAt <= Date.now()) {
+      fail("rehearsal Person session access is expired; run an authenticated Person command through this rehearsal and retry");
+    }
+    accessToken = stored.session.access_token;
+  }
+  return runtime.runConnectorRehearsalV1({
+    action: input.action,
+    directory: execution.directory,
+    configuration: execution.configuration,
+    ...(input.argv === undefined ? {} : { argv: input.argv }),
+    ...(accessToken === undefined ? {} : { access_token: accessToken }),
+  });
+}
+
+async function runPersonCommand(input) {
+  const execution = readExecutionConfiguration(input.directory);
+  const person = await import("../src/product/person-client/dist/composition.js");
+  return person.runPersonClientCli(input.argv, { home_directory: execution.paths.person });
+}
+
+export async function main(argv = process.argv.slice(2)) {
   const input = parseCli(argv);
-  const result = input.command === "prepare" ? prepare(input.directory) : preflight(input.directory);
-  process.stdout.write(`${JSON.stringify(result)}\n`);
+  if (input.action === "prepare" || input.action === "preflight") {
+    const result = input.action === "prepare" ? prepare(input.directory) : preflight(input.directory);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return 0;
+  }
+  if (input.action === "person") return runPersonCommand(input);
+  return runAuthorityLifecycle(input);
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
-  try { main(); } catch (error) { process.stderr.write(`${error instanceof RehearsalValidationError ? error.message : "connector rehearsal failed"}\n`); process.exitCode = 1; }
+  void main().then(
+    exitCode => { process.exitCode = exitCode; },
+    error => { process.stderr.write(`${error instanceof RehearsalValidationError ? error.message : "connector rehearsal failed"}\n`); process.exitCode = 1; },
+  );
 }

@@ -58,6 +58,8 @@ export interface OrganizationAuthorityProcessingCycleV1 {
 export interface OrganizationAuthorityServiceLifecycleConfig {
   readonly api: OrganizationAuthorityApiRuntimeConfig;
   readonly worker_interval_ms?: number;
+  /** Opt-in local control: preserve startup recovery but do not poll automatically. */
+  readonly scheduling?: "periodic" | "manual";
 }
 
 export interface OrganizationAuthorityServiceLifecycleDependencies {
@@ -81,6 +83,8 @@ export interface RunningOrganizationAuthorityServiceLifecycle {
   readonly address: AddressInfo;
   /** Excludes both writer and search work for bounded operator mutations. */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T>;
+  /** Runs one bounded source-processing cycle through the lifecycle writer gate. */
+  runProcessingCycleOnce(signal: AbortSignal): Promise<void>;
   /** Waits for queued writer/search work; callers must supply a bounded signal.
    * This is a readiness barrier, not operator exclusion or a retry trigger. */
   drain(signal: AbortSignal): Promise<void>;
@@ -221,23 +225,25 @@ export async function startOrganizationAuthorityServiceLifecycle(
     let presentationPending = false;
     let presentationTail: Promise<void> = Promise.resolve();
     let requestApprovalPresentation!: () => void;
+    const runProcessingCycle = async (signal: AbortSignal): Promise<void> => {
+      lifecycle.startCycle();
+      try {
+        await runOrganizationAuthorityProcessingCycleV1(
+          dependencies.processing,
+          signal,
+          lifecycle,
+        );
+        lifecycle.succeedCycle();
+      } catch (error) {
+        lifecycle.failCycle(error, signal.aborted);
+        throw error;
+      }
+    };
     const worker = new SerializedMeetingProcessingWorker({
       ...(dependencies.core_runtime_observation === undefined ? {} : { observation: dependencies.core_runtime_observation }),
       intervalMs: config.worker_interval_ms,
-      runCycle: async (signal) => {
-        lifecycle.startCycle();
-        try {
-          await runOrganizationAuthorityProcessingCycleV1(
-            dependencies.processing,
-            signal,
-            lifecycle,
-          );
-          lifecycle.succeedCycle();
-        } catch (error) {
-          lifecycle.failCycle(error, signal.aborted);
-          throw error;
-        }
-      },
+      ...(config.scheduling === undefined ? {} : { scheduling: config.scheduling }),
+      runCycle: runProcessingCycle,
       onCycleComplete: () => {
         // Search is durable-derived work and must be requested even when the
         // later, provider-only terminal-card redraw fails.
@@ -312,6 +318,25 @@ export async function startOrganizationAuthorityServiceLifecycle(
         } finally {
           search.resume();
           if (!closing) search.request();
+        }
+      },
+      runProcessingCycleOnce: async (signal) => {
+        signal.throwIfAborted();
+        try {
+          await worker.runExclusive(async (workerSignal) => {
+            const combined = AbortSignal.any([signal, workerSignal]);
+            combined.throwIfAborted();
+            await runProcessingCycle(combined);
+            combined.throwIfAborted();
+          });
+        } finally {
+          // A manual profile has no later periodic tick. Wake the derived
+          // work even after a cycle error because an earlier durable phase may
+          // have committed before the failure was observed.
+          if (!closing) {
+            search.request();
+            requestApprovalPresentation();
+          }
         }
       },
       drain: async (deadline) => {

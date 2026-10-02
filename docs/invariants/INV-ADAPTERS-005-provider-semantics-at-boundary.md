@@ -41,6 +41,11 @@ versioned source capture capability. It selects Granola/Jira adapters into the
 provider-neutral intake; all classification, API parsing and cursor grammar stay
 in providers. Authority fixes organization and disposition independently of
 returned data. This module does not register a production source or scheduler.
+The disposable local rehearsal profile may select these already-declared
+adapters only through that module. Its retained Granola observation is governed
+by a separate owner-scoped policy and does not move the legacy meeting cursor;
+its Jira observation is request-only. It has no automatic scheduler or
+production Jira enablement.
 
 This invariant is about external-capability providers. The current local
 platform still deliberately selects SQLite, file-backed keys, Node crypto and

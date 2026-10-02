@@ -116,10 +116,12 @@ An opt-in [connector capture composition](../product/2026-10-01-connector-contex
 binds provider-neutral capture envelopes to explicit Authority disposition,
 organization, read authorization and atomic retention checks. It is not installed
 in the production root and grants no retrieval or release authority.
-The local rehearsal preparation tool reserves isolated state and Person paths;
-its preflight checks configuration only. A bounded capture receipt operation
-and Jira's authenticated connection handoff have source proofs, while the live
-execution profile and provider qualification remain pending.
+The local rehearsal runner reserves isolated state and Person paths, preflights
+before bootstrap, and serves its disposable profile on loopback only. It has a
+private control socket for authenticated bounded capture and one manual legacy
+processing cycle. Granola's retained owner-scoped capture is separate from the
+legacy meeting cursor owner; Jira capture is request-only. This is local
+rehearsal, not provider qualification or a production composition.
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)

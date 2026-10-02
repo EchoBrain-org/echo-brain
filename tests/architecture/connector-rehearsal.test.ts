@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { afterEach, describe, it } from 'vitest';
-import { prepare, preflight } from '../../tools/connector-rehearsal.mjs';
+import { main, prepare, preflight, readExecutionConfiguration } from '../../tools/connector-rehearsal.mjs';
 
 const directories: string[] = [];
 
@@ -151,5 +151,28 @@ describe('connector rehearsal preparation', () => {
     const local = prepared();
     ready(local, 'https://localhost');
     assert.throws(() => preflight(local), /not a permitted rehearsal origin/);
+  });
+
+  it('keeps lifecycle actions inside the marker-bound root with fixed, nonsecret arguments', async () => {
+    const root = prepared();
+    ready(root);
+    const execution = readExecutionConfiguration(root);
+    assert.equal(execution.directory, root);
+    assert.equal(execution.paths.person, join(root, 'person'));
+    assert.equal(execution.configuration.nango.secret_key_file, join(root, 'private', 'nango-secret-key'));
+
+    await assert.rejects(
+      main(['capture', '--directory', root, '--tool', 'slack', '--limit', '1']),
+      /usage:/,
+    );
+    await assert.rejects(
+      main(['capture', '--directory', root, '--tool', 'jira', '--limit', '6']),
+      /usage:/,
+    );
+    await assert.rejects(
+      main(['serve', '--directory', root, '--port', '39489']),
+      /usage:/,
+    );
+    await assert.rejects(main(['person', '--directory', root, '--']), /usage:/);
   });
 });

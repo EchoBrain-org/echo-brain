@@ -284,6 +284,66 @@ describe("Organization Authority service lifecycle", () => {
     vi.useRealTimers();
   });
 
+  it("keeps manual scheduling idle until an explicit cycle, then wakes search and presentation", async () => {
+    vi.useFakeTimers();
+    const events: string[] = [];
+    const setup = {
+      ...processing(events),
+      reconcileApprovalPresentations: async () => { events.push("presentation"); },
+    } satisfies OrganizationAuthorityProcessingCycleV1;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, worker_interval_ms: 10, scheduling: "manual" },
+      { processing: setup, start_api_runtime: async () => apiRuntime(events) },
+    );
+    try {
+      expect(events).toEqual(["recover", "reconcile"]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(events).toEqual(["recover", "reconcile"]);
+
+      await runtime.runProcessingCycleOnce(new AbortController().signal);
+      await vi.advanceTimersByTimeAsync(1);
+      await runtime.drain(new AbortController().signal);
+
+      expect(events).toContain("stage");
+      expect(events).toContain("finalize");
+      expect(events).toContain("append");
+      expect(events.filter((event) => event === "reconcile")).toHaveLength(2);
+      expect(events).toContain("presentation");
+    } finally {
+      await runtime.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("wakes manual derived work after a failed cycle with durable earlier phases", async () => {
+    const events: string[] = [];
+    let reconciliations = 0;
+    let presentations = 0;
+    const runtime = await startOrganizationAuthorityServiceLifecycle(
+      { api: apiConfig, scheduling: "manual" },
+      {
+        processing: {
+          ...processing(events, async () => { throw new Error("append interrupted"); }),
+          reconcileReadableSearchGeneration: async () => {
+            reconciliations += 1;
+          },
+          reconcileApprovalPresentations: async () => { presentations += 1; },
+        },
+        start_api_runtime: async () => apiRuntime(events),
+      },
+    );
+    try {
+      await expect(
+        runtime.runProcessingCycleOnce(new AbortController().signal),
+      ).rejects.toThrow("append interrupted");
+      await runtime.drain(new AbortController().signal);
+      expect(reconciliations).toBe(2); // startup validation plus the failed manual cycle wake
+      expect(presentations).toBe(1);
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("retries after an interrupted V4 append with recovery before another source poll", async () => {
     vi.useFakeTimers();
     const events: string[] = [];

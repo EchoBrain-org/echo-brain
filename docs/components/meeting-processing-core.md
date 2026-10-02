@@ -45,7 +45,8 @@ persistence.
 ## Data and dependency boundary
 
 The core operates on bounded domain values. It reaches sources, decision
-processors, and source-admission storage only through ports. Concrete
+processors, context-capture intake, and source-admission storage only through
+ports. Concrete
 provider and infrastructure code depends inward on the core; the core must not
 depend outward on them. Provider selection belongs in explicit composition
 bundles for source, processor, answer composition, approval/interaction, and

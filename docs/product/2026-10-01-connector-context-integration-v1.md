@@ -93,16 +93,29 @@ pull command, source registration, scheduler, retention grant or Jira production
 enablement. See [the Jira provider](../../providers/jira/README.md) for commands
 and the remaining live qualification boundary.
 
-## First live-round preparation
+## Disposable local rehearsal profile
 
 The selected target is a disposable local Authority with test accounts. The
-[preparation command](../../services/organization-authority/README.md#disposable-local-connector-preparation)
-creates isolated configuration and checks the required private input paths.
-It does not reuse the installed client's staging session. Public HTTPS and
-OIDC callbacks, provider credentials and human consent remain prerequisites.
-There is no live execution profile or authenticated capture command yet.
+[local rehearsal runner](../../services/organization-authority/README.md#disposable-local-connector-preparation)
+creates isolated configuration, state and Person paths. It first prepares and
+preflights an empty root, then builds, bootstraps, serves only on
+`127.0.0.1:39489`, and uses the isolated `person -- ...` client for invitation
+login and provider consent. Credentials install and finalization run only while
+that listener is stopped. A second serve owns one private Unix control socket
+for authenticated `capture` and `cycle-once` requests.
 
-Two source-tested building blocks narrow that remaining integration:
+The runner does not create the public HTTPS endpoint: a dedicated test origin
+and matching OIDC callback, human provider credentials, browser login and human
+approval remain required. Bootstrap needs only its public-origin, owner and
+OIDC inputs. The first serve additionally needs Nango and Jira cloud inputs;
+Jira may connect and capture before Granola finalization, while its configured
+project is needed at capture. Granola/OpenRouter inputs belong to the later
+stopped credential-install/finalize phase. It never reuses a staging session or
+origin. Its receipts contain hashes and counts rather than provider content,
+cursors or credentials. This profile is local-only and `qualified: false`.
+
+Two source-tested building blocks support this local profile; real-provider
+qualification remains the outstanding live proof:
 
 - Jira's server-only `captureConnection` derives a transport and current-grant
   fences from the authenticated Person's stored connection. It accepts no
@@ -124,6 +137,16 @@ transcripts are limited to 16 MiB. These are provider transport limits, separate
 from the selected context snapshot's 128 KiB limit. Oversized data is rejected,
 never silently truncated. Focused source tests cover cancellation and fallback;
 real provider qualification is still pending.
+
+Granola capture is a retained, initial-owner-scoped qualification observation
+under the shared capture foundation. It reads the current admitted cursor but
+does not advance it. The legacy processing cycle remains the single owner of
+meeting intake, approval publication and that cursor; `cycle-once` invokes one
+such cycle only when the manually scheduled service is active. Jira remains
+request-only: its current Person grant is checked around the request and its
+capture is never retained. There is no scheduler or automatic convergence.
+Manual source polling does not block the existing derived approval,
+presentation, or search-reconciliation wakes after a manual cycle.
 
 ## Boundaries before activation
 
@@ -149,4 +172,4 @@ authority ports; they do not synthesize permission from a working credential.
 Graph projection, enrichment/learning, Evidence Desk, retrieval, Ask, release
 audits and response schemas are unchanged. Request-only Jira captures disappear
 with the request; they do not yet enrich a durable graph or feed Ask through
-this capture path.
+this capture path. The normal production Jira gate is unchanged.

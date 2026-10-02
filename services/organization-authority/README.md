@@ -128,14 +128,68 @@ must forward it to the Authority's loopback listener. Register its
 also points identity and interactive-card callbacks at this origin. The
 existing staging Authority URL reaches staging, not the isolated local state.
 
-This command currently supports preparation and preflight only. It does not
-create a tunnel, bootstrap state, start a live profile or request OAuth consent.
-`authority:local` remains the synthetic harness. Jira remains disabled in the
-normal service CLI; an explicit local execution profile and authenticated
-capture entrypoint still need wiring before a three-provider live round can
-run. The bounded capture operation and connection bridge are source-tested
-building blocks, not live qualification. See the
+Preparation and preflight are the only pre-bootstrap actions. They do not
+create a tunnel, bootstrap state, start a listener, connect a provider, or
+qualify anything. `preflight` is an overall profile check: its
+`configuration_ready` result means every later private input is present, not
+that bootstrap must wait for every provider input. Bootstrap needs the public
+origin, organization/owner and OIDC configuration. Use this disposable local
+sequence once those bootstrap inputs are ready:
+
+```sh
+npm run build
+npm run authority:connector-rehearsal -- bootstrap --directory /absolute/new-rehearsal
+
+# Terminal 1: loopback-only service. It reports 127.0.0.1:39489 when ready.
+npm run authority:connector-rehearsal -- serve --directory /absolute/new-rehearsal
+
+# Terminal 2: only the rehearsal's isolated Person home is used.
+npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- \
+  login --invitation /absolute/new-rehearsal/state/onboarding/founder-person-invitation.json
+npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- tools setup --tool slack
+npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- tools connect --tool slack
+npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- tools connect --tool jira
+```
+
+The human completes OIDC and provider browser consent. The authority URL still
+needs a dedicated public HTTPS test origin and matching test-OIDC callback even
+though the local service listener is loopback-only. Do not use the installed
+Person home, staging origin, or production credentials.
+
+The first `serve` additionally needs the Nango secret and Jira cloud
+configuration. Jira can connect and make a request-only capture before Granola
+credential installation/finalization; the configured Jira project is required
+when the capture runs. Granola and OpenRouter files become necessary for the
+stopped `credentials-install` and `finalize` phase below. Run `preflight` again
+when all of those later inputs are in place to verify the complete profile.
+
+Stop `serve` before installing credentials and finalizing, then start it again:
+
+```sh
+npm run authority:connector-rehearsal -- credentials-install --directory /absolute/new-rehearsal
+npm run authority:connector-rehearsal -- finalize --directory /absolute/new-rehearsal
+npm run authority:connector-rehearsal -- serve --directory /absolute/new-rehearsal
+
+# In another terminal, as the authenticated initial owner:
+npm run authority:connector-rehearsal -- capture --directory /absolute/new-rehearsal --tool granola --limit 1
+npm run authority:connector-rehearsal -- capture --directory /absolute/new-rehearsal --tool jira --limit 1
+npm run authority:connector-rehearsal -- cycle-once --directory /absolute/new-rehearsal
+```
+
+`capture` and `cycle-once` obtain the access token from the isolated Person
+session and send it only over the runner's private `control.sock` Unix socket;
+it is never printed or placed in command arguments. Granola capture is an
+owner-scoped, retained qualification observation under the shared context
+foundation. It does not advance the meeting cursor. `cycle-once` is the
+separate legacy meeting-and-approval processor and remains its cursor owner.
+Jira capture is request-only and disappears after its receipt. No command
+creates an automatic convergence loop or qualifies a provider. Jira remains
+disabled in the normal service CLI. See the
 [integration scope](../../docs/product/2026-10-01-connector-context-integration-v1.md).
+
+Manual scheduling means source polling occurs only through the explicit capture
+or `cycle-once` commands. It does not suppress existing derived approval,
+presentation, or search-reconciliation wakes after a manual cycle.
 
 ## Initial-owner setup internals
 
