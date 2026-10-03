@@ -5,15 +5,12 @@ synthetic fixture proof on 2026-10-01, then narrowed this milestone to ingestion
 and capture. Production activation and acceptance of this proposal remain
 separate decisions. This proposal does not amend accepted ADRs, including
 [ADR-0010](../decisions/ADR-0010-disposable-related-atom-projection-v1.md).
-The [worktree brief](2026-10-01-shared-context-intake-foundation-worktree.md)
-defines the same ingestion-only scope. `feat/context-foundation-v1` is based on main
-`8578b58ab708caa4bda7b59e707c7870c00a73c4`; it uses existing main interfaces
-and has no dependency on PR 250.
+It was implemented for source testing in #251 (`1d7e72b`).
 
 The subsequent [connector integration](2026-10-01-connector-context-integration-v1.md)
-composes that foundation with the connector branch. It moves provider-neutral
-capture types, validation and the semantic envelope builder into
-`organization-processing/core` and adds opt-in Granola/Jira intake profiles.
+composes that foundation with the connector implementation. It moves
+provider-neutral capture types, validation and the semantic envelope builder
+into `organization-processing/core` and adds opt-in Granola/Jira intake profiles.
 Authority policy and custody remain service-owned. The original foundation scope
 below describes the independent slice; the integration document owns the added
 provider mappings and their activation limits.
@@ -248,9 +245,3 @@ lifecycle scheduling and additional representations remain open decisions.
 Automatic learning, personalization, full task management, model-generated
 relationships and cross-tool identity inference are deferred. New capture
 semantics require a new version rather than silent contract widening.
-
-Provider, Nango, onboarding, route, Person, deployment and current composition
-files remain outside this scope. The foundation consumes existing main interfaces
-without changing them; no PR 250 integration or ownership transfer is required.
-Only the foundation modules, fixtures and proposed documents are part of this
-foundation change. Nothing here merges, deploys or activates a provider.

@@ -8,8 +8,8 @@ component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-22
-reviewed_at: 2026-08-23
-reviewed_ref: fe78f2c7e11cffaa4b00ec699dfe71f97edfa986
+reviewed_at: 2026-10-02
+reviewed_ref: 30f8e999dadca97a2a653e5fec12a1ad4107deac
 decision_ids:
   - ADR-0006
   - ADR-0007
@@ -17,6 +17,8 @@ decision_ids:
   - ADR-0015
   - ADR-0017
   - ADR-0019
+  - ADR-0022
+  - ADR-0023
   - ADR-0024
 normative: MUST
 enforcement_status: partial
@@ -71,21 +73,22 @@ and the exact content policy, binds Layer 2 to an exact generation and record
 head, rechecks the caller at the release fence, commits the minimized response
 digest, and only then returns the audited bytes. Missing, stale, mismatched, or
 non-Person authority MUST release no content. Search construction MUST NOT be
-triggered by a query. For the V1 and V2 routes, Layer 4 is limited to one plan, one Layer 3 batch,
-and at most one answer call; it receives no lower-layer handles and may pass citations
-only after checking that they are a subset of the batch release. Planner or
-answer-model failure, malformed model output, or an invalid citation MUST stop
-the request without releasing an answer.
+triggered by a query. Layer 4 receives no lower-layer handles and may pass
+citations only after checking that they are a subset of what Layer 3 released
+in that request.
 
-ADR-0019 permits the V3 route to make bounded desk calls and at most twelve
-model calls, including repairs, in one request. The desk pins the record
+ADR-0019, as updated by ADR-0022, permits the V3 route to make bounded desk
+calls and at most 24 model calls, including retries and repairs, in one
+request. The desk pins the record
 snapshot or fixes an explicitly original-only mode when the index starts
 behind. Every desk release is audited before bytes leave Layer 3. Revalidate
 all released items and metadata, including the upcoming model input, before
 each model call and final response. Malformed output permits one repair within
 the hard budget and then a deterministic cited-evidence fallback. Unknown or
 out-of-part citations never establish support. Authorization, audit, snapshot
-and cancellation failures release no answer. V1 and V2 remain unchanged.
+and cancellation failures release no answer. The ADR-0026 ticket path
+(`POST /v4/person/ask`) is outside this enforcement scope until ADR-0026 is
+accepted.
 
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
 Both original and approved-record citations bind the exact released evidence.

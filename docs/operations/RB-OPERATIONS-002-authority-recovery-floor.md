@@ -84,6 +84,10 @@ Prerequisites:
   key's account, manager, enabled, and AWS Backup usability facts described in
   step 1;
 - the running Authority's accepted release and deployment directory are known;
+- the source commit used to stage the verifier has that accepted release's
+  runtime-environment snapshot schema. Since ADR-0025 the verifier requires
+  `ECHO_CLEAN_NANGO_INTEGRATION` and refuses a snapshot that names
+  `ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID`;
 - the Authority operation lock is absent, or its documented recovery has
   completed before the qualifying point is made;
 - a maintenance window is available for the quiesced stop and qualifying point;
@@ -708,9 +712,13 @@ five environment fields bound to the accepted release. The remaining snapshot
 fields are checked for the relationships and input formats enforced by
 `onboard-clean-v1.sh`; they cannot be independently bound to the release record
 because that record intentionally does not contain organization contact or host
-configuration. It also checks primary SQLite integrity, published retrieval
-SQLite integrity, state lineage, retrieval-generation structure, and
-private-entry type/permission metadata. Before importing lineage code or
+configuration. It refuses a recovery point with a selected staging connector
+rehearsal: a non-empty `ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE`,
+`private/staging-connector-rehearsal.json`, or `staging-connector-rehearsal-v1/`
+under `clean-data/`. Such a restore is unsupported; see the
+[operator lane](PB-OPERATIONS-001-authority-operator-lane.md). It also checks
+primary SQLite integrity, published retrieval SQLite integrity, state lineage,
+retrieval-generation structure, and private-entry type/permission metadata. Before importing lineage code or
 opening any SQLite database, it refuses every symlink or special filesystem node
 under `state/`, including a retrieval database path, and any SQLite hot-state
 sidecar (`-journal`, `-wal`, or `-shm`). The CLI independently attests the

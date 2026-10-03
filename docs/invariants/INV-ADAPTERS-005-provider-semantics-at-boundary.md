@@ -7,8 +7,8 @@ component_ids:
   - CMP-PROCESSING-ADAPTERS
   - CMP-MEETING-PROCESSING-CORE
 created_at: 2026-08-29
-reviewed_at: 2026-09-07
-reviewed_ref: 52652d26dab3d753333ce489f866e1e7d0d1f4aa
+reviewed_at: 2026-10-02
+reviewed_ref: 30f8e999dadca97a2a653e5fec12a1ad4107deac
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Complete production module ownership, inward workspace edges, explicit bootstrap modules, and shared deployment source assemblies
@@ -28,45 +28,27 @@ canonical durable contracts, approval policy, retrieval, answer composition,
 and approved-record policy projection consume only canonical contracts,
 immutable adapter commitments, and opaque provider references.
 
-The allowed selecting composition bundles are explicit: meeting source,
-decision processor, Layer 4 generation, approval/interaction surface, and
-Person external identity. Those bundles may select Granola, OpenRouter, Slack,
-or a future external-capability provider. The shared runtime must receive only
-their ports, identity/configuration commitments, generic presentation
+The allowed selecting modules are exactly the
+`adapter_architecture.bootstrap_entrypoints` declared in
+`product/source-boundary.v1.json`. They may select Granola, OpenRouter, Slack,
+Jira, or a future external-capability provider. The shared runtime must receive
+only their ports, identity/configuration commitments, generic presentation
 references, and approved-record policy projectors.
 
-The opt-in [context capture integration](../product/2026-10-01-connector-context-integration-v1.md)
-adds a declared selecting module, `provider-context-intakes-v1.ts`, for the
-versioned source capture capability. It selects Granola/Jira adapters into the
-provider-neutral intake; all classification, API parsing and cursor grammar stay
-in providers. Authority fixes organization and disposition independently of
-returned data. This module does not register a production source or scheduler.
-The disposable local rehearsal profile may select these already-declared
-adapters only through that module. Its retained Granola observation is governed
-by a separate owner-scoped policy and does not move the legacy meeting cursor;
-its Jira observation is request-only. It has no automatic scheduler or
-production Jira enablement.
-
-The explicit staging connector rehearsal is a separate versioned selecting
-composition. It mounts the same intake factories and provider-owned connection
-commands through a neutral HTTP runtime capability; the shared API does not
-parse provider state. It preserves ordinary processing and its cursor ownership,
-requires the current initial owner and exact release/profile binding, and keeps
-the normal Jira release gate and ticket Ask selection closed. Its private Jira
-sidecar is rehearsal state with an explicit recovery boundary, not an extension
-of canonical Authority storage. The staging selection and receipts are specified
-in the linked integration design.
-
-The explicit V2 staging selection adds the Slack provider's fixed-public-channel
-pointer source and selects retained Jira pointers through the same neutral
-intake. Authority owns the initial-owner custody policy and synchronous
-admission fences; provider credentials and opaque author references do not
-grant retention or identity. Slack channel parsing and optional read-scope
-proof remain provider-owned. V2 preserves the V1 profile and connection
-sidecar, proves their predecessor binding before reuse, and changes the capture
-wire only through a new version. It does not widen ordinary production or V1
-rehearsal behavior, canonical connection contracts, signed bytes or SQL
-baselines.
+The gated Jira live runtime (`jira-person-live-runtime-v1.ts`) and the opt-in
+[context capture integration](../product/2026-10-01-connector-context-integration-v1.md)
+add the selecting modules `provider-context-intakes-v1.ts`,
+`connector-rehearsal-capture-v1.ts`, `connector-rehearsal-runtime-v1.ts` (local
+rehearsal), `slack-context-capture-runtime-v1.ts`, and the staging connector
+rehearsal runtime. Classification, API parsing and cursor grammar stay in
+providers; Authority fixes organization, disposition and custody policy
+independently of returned data, and provider credentials or opaque author
+references grant no retention or identity. These modules register no
+production source or scheduler, preserve ordinary processing and its cursor
+ownership, keep the production Jira release gate and the staging Jira Ask
+selection closed, and keep rehearsal sidecars out of canonical Authority
+storage. They do not widen ordinary production behavior, canonical connection
+contracts, signed bytes or SQL baselines.
 
 This invariant is about external-capability providers. The current local
 platform still deliberately selects SQLite, file-backed keys, Node crypto and
@@ -176,14 +158,16 @@ generation or data flow. Shared-contract review, meaningful substitution tests
 and provider qualification remain necessary.
 
 The V1 setup and service CLIs deliberately select the fixed
-Granola/OpenRouter/Slack product profile. Setup status, planning and finalization
-require Slack and are not provider-swappable. Provider neutrality covers the
-shared runtime and contracts, not this stopped-state bootstrap workflow. A
-non-Slack setup profile needs an explicit versioned bootstrap design and its own
+Granola/OpenRouter/Slack product profile. The service CLI also parses the Jira
+live selection (`--jira-cloud-id`, `--jira-nango-integration`) and refuses it
+while `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1` is false. Setup status, planning
+and finalization require Slack and are not provider-swappable. Provider
+neutrality covers the shared runtime and contracts, not this stopped-state
+bootstrap workflow. A non-Slack setup profile needs an explicit versioned bootstrap design and its own
 qualification; changing only the runtime bundle is insufficient. Historical
 persisted vocabulary remains supported; the Nango Slack profile retires the old
 host-side Slack credential flags and uses `person tools setup --tool slack`.
-provider verification and wire/state interpretation are delegated to their
+Provider verification and wire/state interpretation are delegated to their
 provider folders. Adding a provider can require a new versioned domain capability,
 but cannot silently widen an existing canonical contract. V2 Person compatibility
 and historical Slack V4 codecs remain explicit provider-owned selections, with

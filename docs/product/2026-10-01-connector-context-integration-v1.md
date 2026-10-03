@@ -1,8 +1,8 @@
 # Connector and context capture integration V1
 
 **Status: implementation for source testing; production activation is deferred.**
-This combines the connector implementation at `577c065` and the context
-foundation at `08eb41d`. It implements the ingestion-only direction in the
+This combines the connector implementation and the context foundation, merged
+in #251 (`1d7e72b`). It implements the ingestion-only direction in the
 [foundation design](2026-10-01-context-intake-foundation-v1-design.md).
 It does not accept the proposed design or ADRs by implication.
 
@@ -342,3 +342,107 @@ audits and Ask response schemas are unchanged. Request-only Jira captures in
 V1 disappear with the request. V2 retained pointers provide durable shared
 context but do not yet enrich a graph or feed Ask through this capture path.
 The normal production Jira gate is unchanged.
+
+## Granola provider research, verified 2026-10-01
+
+The Granola connector research used public provider documentation and Nango's
+published source. No account connection, credential, authenticated API request
+or live rehearsal was used.
+
+| Mechanism | Documented capability and limit | ECHO disposition |
+| --- | --- | --- |
+| Workspace API key | Admin-managed, workspace-owned key on Business and Enterprise; does not expire or depend on the creating admin's continued membership. Reads public workspace notes and notes in spaces explicitly granted Granola API access. Unshared private notes and folders remain inaccessible. | Retain the organization-owned REST path permitted by ADR-0001. |
+| Personal API key | Business and Enterprise members can create keys with personal and/or public note scopes, subject to Enterprise controls. Personal scope includes owned notes and notes/folders shared with that person. | Centrally collecting these keys remains prohibited. Provider availability does not change custody policy. |
+| Granola MCP | Individual browser OAuth with dynamic client registration, or Enterprise-Managed Authorization through a compatible IdP/client. No API-key or service-account MCP access. Access is limited to the user's active Granola workspace and plan/admin controls. | Future personal-authorization research only. MCP OAuth is separate from REST API-key authentication. |
+| Historical CSV export | Includes titles, summaries, transcripts and basic details for owned, summarized, non-deleted notes in selected workspaces, including full history. Basic/Business default enabled; Enterprise default disabled. Emailed download requires the requesting account, expires after 24 hours and can be regenerated once per 24 hours. | Confirms an export capability exists; ECHO does not implement CSV generation, download or ingestion. |
+
+Sources: [Granola API access and workspace keys](https://docs.granola.ai/help-center/sharing/integrations/granola-api),
+[Granola API overview](https://docs.granola.ai/introduction),
+[Granola MCP authorization and workspace behavior](https://docs.granola.ai/help-center/sharing/integrations/mcp),
+and [historical export](https://docs.granola.ai/help-center/sharing/exporting-notes).
+
+The documented REST export surface is `https://public-api.granola.ai/v1` with
+Bearer authentication:
+
+- [List Notes](https://docs.granola.ai/api-reference/list-notes) returns note
+  metadata (`id`, owner, creation/update times) and `hasMore` with an opaque
+  `cursor`. Filters include `created_before`, `created_after`, `updated_after`
+  and `folder_id`. `page_size` defaults to 10 and ranges from 1 to 30.
+- [Get Note](https://docs.granola.ai/api-reference/get-note) returns the note,
+  summary, attendees, calendar event and folder membership. `include=transcript`
+  requests an inline transcript. `private_notes_*` are null for workspace keys;
+  the adapter does not use these fields as evidence or permission facts.
+- A large inline transcript returns HTTP `413` with
+  `TRANSCRIPT_TOO_LARGE`. [Get Transcript](https://docs.granola.ai/api-reference/get-transcript)
+  returns transcript pages with `hasMore` and an opaque `cursor`; `page_size`
+  defaults to 50 and ranges from 1 to 100. Segment speaker metadata can vary
+  between desktop and mobile. It must not be mistaken for participant identity.
+- The [API overview](https://docs.granola.ai/introduction) says only notes with
+  generated summaries and transcripts are returned; unfinished or never
+  summarized notes are excluded from listing and return 404 on detail reads.
+  It documents a 25-request burst and 5 requests/second sustained limit.
+
+These endpoints publish update timestamps, not an immutable revision history
+or a multi-request snapshot guarantee. The provider adapter owns revision
+identity and must reject inconsistent observations; ECHO admission enforces
+immutable content for an admitted revision. The public
+[documentation index](https://docs.granola.ai/llms.txt) does not document a REST
+account/key-introspection endpoint. Listing a configured `owner.email` proves
+only that an accessible note reports that owner, not organization key custody,
+external subject identity, or a tenant identifier.
+
+For future MCP research, `get_account_info` is documented to return the
+connected email and active workspace. The documentation does not define its
+complete response schema or promise immutable subject/workspace identifiers.
+MCP follows workspace changes made in the Granola app, so a future connection
+must validate and fence workspace drift rather than treating a connection ID
+as permanent tenant proof. See [MCP tools and troubleshooting](https://docs.granola.ai/help-center/sharing/integrations/mcp).
+
+[Granola webhooks](https://docs.granola.ai/webhooks) are now documented for
+Business and Enterprise. They do not require replacing the retained pull
+adapter or adding a webhook ingress lane.
+
+### Granola Nango decision
+
+Current Nango support exists in two distinct built-in providers:
+
+- [Granola REST](https://nango.dev/docs/api-integrations/granola) connects API
+  keys, injects the Bearer header and proxies REST requests. Published actions
+  include `list-notes`, `get-note`, `get-transcript` and `list-folders`; syncs
+  include `notes` and `folders`. The notes sync retains metadata, summaries,
+  attendees and folder/space membership, **not transcripts**.
+- [Granola MCP](https://nango.dev/docs/api-integrations/granola-mcp) uses OAuth
+  with dynamic client registration and proxies MCP tool calls. Nango's
+  [provider configuration](https://github.com/NangoHQ/nango/blob/master/packages/providers/providers.yaml)
+  includes authorization, token and registration endpoints, `offline_access`
+  and refresh-token handling. This is not OAuth access to the REST API.
+- The [notes sync](https://github.com/NangoHQ/integration-templates/blob/main/integrations/granola/syncs/notes.ts)
+  configures cursor pagination, update checkpoints and request retries.
+  [Get Transcript](https://github.com/NangoHQ/integration-templates/blob/main/integrations/granola/actions/get-transcript.ts)
+  returns one page;
+  [Get Note](https://github.com/NangoHQ/integration-templates/blob/main/integrations/granola/actions/get-note.ts)
+  reports the 413 case instead of automatically assembling a large transcript.
+  Complete transcript export and provider-specific failure/revision checks
+  still need explicit orchestration.
+- [Nango's webhook guide](https://nango.dev/docs/api-integrations/granola/webhooks)
+  documents Granola signature verification and connection routing with a
+  per-connection secret and `nangoConnectionId`. Webhook events do not carry
+  meeting content; a subsequent authorized fetch is required.
+
+Nango can supply connection/authentication infrastructure, transport, reusable
+functions and sync scheduling. Its REST connection verification is
+`GET /v1/notes?page_size=1`; that proves API reachability, not who owns the key
+or which ECHO person/tenant is authorized. Granola-specific parsing, complete
+exports, source/revision identity, cursor safety, cutoff checks, owner proof
+and permission semantics remain provider responsibilities. ECHO retains
+custody/audience binding, durable admission and final approval.
+
+**Decision:** retain direct REST export using the admitted organization-owned
+credential and existing meeting approval pipeline. No Nango dependency,
+personal-key collection or MCP connection is introduced. Both Nango transports
+are technically available research options for a future connection design;
+neither establishes compatible custody or personal authorization by itself. A
+future per-person export connection needs a custody decision compatible with
+or explicitly updating ADR-0001, verified Granola subject/workspace mapping to
+the exact ECHO person and current membership, and the shared `source_export`
+capability, separate from `live_evidence`.

@@ -1,22 +1,21 @@
 # Tool onboarding v1: Slack set up and connected from the ECHO app (2026-09-30)
 
-Status: **revision 3, Nango and smaller** (2026-09-30).
+Status: **historical** (revision 3, 2026-09-30). Phase 1 shipped in #251
+(`1d7e72b`), with the reconnect fix in #258 (`9bce5c1`). Phase 2, the desktop
+setup and connect experience, is not built. The phase-0 spike in section 7 was
+never recorded (ADR-0027, Spike-sensitive). The staging connector rehearsal can
+also request `channels:read` and `channels:history` beyond the four scopes in
+section 5.1 (ADR-0027 proposed extension).
 
-Revision 3 reverses three revision-2 choices. The founder approved this after a
-review found that replacing a connection breaks Authority restarts for any
-organization with decided approval cards.
-- **No legacy coexistence.** The branch switches to Nango-only on a fresh setup.
-  The host-onboarding cleanup is back in scope.
-- **No different-app or different-workspace replacement in v1.** Only the first
-  connect and a same-connection reconnect remain.
-- **No hand-entered app-credentials fallback.**
-
-Revision 2: the founder chose Nango as the connection foundation. The product design is unchanged: sections 1, 2 and 4,
-apart from the CLI and browser-step wording noted in 4. The technical design in
-sections 3 and 5-11 is rewritten. Revision 1's custom OAuth install routes,
-local bot-token lifecycle and immediate host-onboarding removal are superseded;
-see commit `8cd60cf`. Where this doc and an accepted ADR disagree, the ADR wins
-until an ADR records this change.
+Current records, which win where this doc disagrees:
+- [ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md):
+  custody, options, migration and evidence;
+- [ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md) (proposed):
+  rebind and the optional public-channel scopes;
+- [organization control plane](../architecture/organization-control-plane.md):
+  Slack connection onboarding gate and Person Slack identity link;
+- [shared connector contracts](../architecture/connector-contracts.md): the
+  `person tools` seam and personal access model.
 
 ## 1. Why
 
