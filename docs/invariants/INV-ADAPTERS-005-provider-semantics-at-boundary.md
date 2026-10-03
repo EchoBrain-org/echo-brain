@@ -38,13 +38,12 @@ references, and approved-record policy projectors.
 The gated Jira live runtime (`jira-person-live-runtime-v1.ts`) and the opt-in
 [context capture integration](../product/2026-10-01-connector-context-integration-v1.md)
 add the selecting modules `provider-context-intakes-v1.ts`,
-`connector-rehearsal-capture-v1.ts`, `connector-rehearsal-runtime-v1.ts` (local
-rehearsal), `slack-context-capture-runtime-v1.ts`, and the staging connector
-rehearsal runtime. Classification, API parsing and cursor grammar stay in
-providers; Authority fixes organization, disposition and custody policy
-independently of returned data, and provider credentials or opaque author
-references grant no retention or identity. These modules register no
-production source or scheduler, preserve ordinary processing and its cursor
+`connector-rehearsal-capture-v1.ts`, `slack-context-capture-runtime-v1.ts`, and
+the staging connector rehearsal runtime. Classification, API parsing and cursor
+grammar stay in providers; Authority fixes organization, disposition and
+custody policy independently of returned data, and provider credentials or
+opaque author references grant no retention or identity. These modules register
+no production source or scheduler, preserve ordinary processing and its cursor
 ownership, keep the production Jira release gate and the staging Jira Ask
 selection closed, and keep rehearsal sidecars out of canonical Authority
 storage. They do not widen ordinary production behavior, canonical connection

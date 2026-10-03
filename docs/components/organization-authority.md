@@ -124,8 +124,8 @@ An opt-in [connector capture composition](../product/2026-10-01-connector-contex
 binds provider-neutral capture envelopes to explicit Authority disposition,
 organization, read authorization and atomic retention checks. It is not installed
 in the production root and grants no retrieval or release authority; only the
-local rehearsal runner and the staging connector rehearsal compose it, and only
-the staging rehearsal retains Jira and Slack pointers.
+staging connector rehearsal composes it, and it retains Jira and Slack
+pointers.
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)

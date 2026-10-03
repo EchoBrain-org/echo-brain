@@ -96,29 +96,10 @@ pull command, source registration, scheduler, retention grant or Jira production
 enablement. See [the Jira provider](../../providers/jira/README.md) for commands
 and the remaining live qualification boundary.
 
-## Disposable local rehearsal profile
+## Capture building blocks
 
-The disposable local option uses a separate Authority with test accounts. The
-[local rehearsal runner](../../services/organization-authority/README.md#disposable-local-connector-preparation)
-creates isolated configuration, state and Person paths. It first prepares and
-preflights an empty root, then builds, bootstraps, serves only on
-`127.0.0.1:39489`, and uses the isolated `person -- ...` client for invitation
-login and provider consent. Credentials install and finalization run only while
-that listener is stopped. A second serve owns one private Unix control socket
-for authenticated `capture` and `cycle-once` requests.
-
-The runner does not create the public HTTPS endpoint: a dedicated test origin
-and matching OIDC callback, human provider credentials, browser login and human
-approval remain required. Bootstrap needs only its public-origin, owner and
-OIDC inputs. The first serve additionally needs Nango and Jira cloud inputs;
-Jira may connect and capture before Granola finalization, while its configured
-project is needed at capture. Granola/OpenRouter inputs belong to the later
-stopped credential-install/finalize phase. It never reuses a staging session or
-origin. Its receipts contain hashes and counts rather than provider content,
-cursors or credentials. This profile is local-only and `qualified: false`.
-
-Two source-tested building blocks support this local profile; real-provider
-qualification remains the outstanding live proof:
+Two source-tested building blocks support the staging rehearsal below;
+real-provider qualification remains the outstanding live proof:
 
 - Jira's server-only `captureConnection` derives a transport and current-grant
   fences from the authenticated Person's stored connection. It accepts no
@@ -145,22 +126,17 @@ real provider qualification is still pending.
 Granola capture is a retained, initial-owner-scoped qualification observation
 under the shared capture foundation. It reads the current admitted cursor but
 does not advance it. The legacy processing cycle remains the single owner of
-meeting intake, approval publication and that cursor; `cycle-once` invokes one
-such cycle only when the manually scheduled service is active. Jira remains
-request-only: its current Person grant is checked around the request and its
-capture is never retained. There is no scheduler or automatic convergence.
-Manual source polling does not block the existing derived approval,
-presentation, or search-reconciliation wakes after a manual cycle.
+meeting intake, approval publication and that cursor. There is no scheduler or
+automatic convergence.
 
 ## Staging connector rehearsal
 
 The selected live-test target is the existing staging Authority. One versioned
 opt-in profile reuses its HTTPS origin, Google sign-in and owner session. The
-local runner retains its isolated-state and origin guards. The profile is
-embedded in the existing nonsecret onboarding input, installed privately by the
-host wrapper at a fixed path, and selected only on the exact staging origin. It
-is fixed for the life of a rehearsal; another Jira project or Slack channel
-needs a fresh rehearsal.
+profile is embedded in the existing nonsecret onboarding input, installed
+privately by the host wrapper at a fixed path, and selected only on the exact
+staging origin. It is fixed for the life of a rehearsal; another Jira project or
+Slack channel needs a fresh rehearsal.
 
 The closed, nonsecret profile has `schema_version: 2`, kind
 `echo-staging-connector-rehearsal-profile-v2`, capture policy
@@ -292,7 +268,6 @@ selection takes pointer intake now. No current Slack adapter retains message tex
 grant selects retention. The snapshot round
 must also define the policy for provider message edits and deletes, including
 which revisions remain retained and when retained snapshots are removed. The
-local runner remains Jira request-only and has no Slack source. The explicit
 staging selection retains Jira and Slack pointers.
 
 Graph projection, enrichment/learning, Evidence Desk, retrieval, Ask, release

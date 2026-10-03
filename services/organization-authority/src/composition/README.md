@@ -15,11 +15,9 @@ Provider-neutral runtime components must not import a provider implementation.
   protocol and selection modules (`staging-connector-rehearsal-*`) sit at the
   top of this directory, not in `staging/`.
 - `connector-rehearsal-capture-v1.ts` is the owner-bound manual capture used
-  by that root and by the disposable local profile
-  (`connector-rehearsal-runtime-v1.ts`, `connector-rehearsal-control-v1.ts`).
-  `context-source-intake-v1.ts`, `provider-context-intakes-v1.ts` and
-  `slack-context-capture-runtime-v1.ts` adapt the Granola, Jira and Slack
-  sources to context intake.
+  by that root. `context-source-intake-v1.ts`,
+  `provider-context-intakes-v1.ts` and `slack-context-capture-runtime-v1.ts`
+  adapt the Granola, Jira and Slack sources to context intake.
 - `organization-authority-runtime.ts` composes the provider-neutral runtime.
   `organization-authority-service-lifecycle.ts` owns startup, the serialized
   worker, shutdown order and the operator-work gate.
