@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -42,12 +42,18 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
   const seams = providerSeams();
   const originalFetch = globalThis.fetch;
   const slackReads: string[] = [];
+  let slackEmpty = false;
+  let granolaVisible = false;
+  let modelCalls = 0;
+  let modelRequests = 0;
+  const slackText = 'Slack body must not be retained.';
+  const slackTimestamp = `${Math.floor(Date.now() / 1000) - 60}.123456`;
   const granolaTimestamp = new Date(Date.now() + 60_000).toISOString();
   const granolaNote = { id: 'fixture-note', object: 'note', title: 'Staging retained capture', created_at: granolaTimestamp, updated_at: granolaTimestamp, summary_markdown: '## Decision\nRetain this synthetic meeting.', owner: { name: 'Founder', email: 'founder@example.test' }, attendees: [{ id: 'owner', email: 'founder@example.test' }], calendar_event: { start: { dateTime: granolaTimestamp } }, web_url: 'https://app.granola.ai/notes/fixture-note', transcript: [{ text: 'This is the retained synthetic transcript.', speaker: 'Founder' }] };
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
     if (url.origin === 'https://public-api.granola.ai') {
-      if (url.pathname === '/v1/notes') return Response.json({ notes: [{ id: granolaNote.id, created_at: granolaNote.created_at, updated_at: granolaNote.updated_at, owner: granolaNote.owner }], hasMore: false, cursor: null });
+      if (url.pathname === '/v1/notes') return Response.json({ notes: granolaVisible ? [{ id: granolaNote.id, created_at: granolaNote.created_at, updated_at: granolaNote.updated_at, owner: granolaNote.owner }] : [], hasMore: false, cursor: null });
       if (url.pathname === `/v1/notes/${granolaNote.id}`) return Response.json(granolaNote);
       throw new Error(`unexpected Granola endpoint ${url.pathname}`);
     }
@@ -56,12 +62,19 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer xoxb-synthetic-slack');
       if (url.pathname === '/api/auth.test') return Response.json({ ok: true, team_id: 'TFIXTURE', user_id: 'UBOTFIXTURE', url: 'https://fixture.slack.com/' });
       expect(url.searchParams.get('channel')).toBe('C01234567');
-      if (url.pathname === '/api/conversations.info') return Response.json({ ok: true, channel: { id: 'C01234567', is_member: true, is_private: false, context_team_id: 'TFIXTURE' } });
-      if (url.pathname === '/api/conversations.history') return Response.json({ ok: true, messages: [{ type: 'message', ts: '1790966400.123456', user: 'UFOUNDER', text: 'Slack body must not be retained.' }], has_more: false });
-      if (url.pathname === '/api/chat.getPermalink') return Response.json({ ok: true, channel: 'C01234567', permalink: 'https://fixture.slack.com/archives/C01234567/p1790966400123456' });
+      if (url.pathname === '/api/conversations.info') return Response.json({ ok: true, channel: { id: 'C01234567', name: 'echo-test', is_member: true, is_private: false, context_team_id: 'TFIXTURE' } });
+      if (url.pathname === '/api/conversations.history') {
+        expect(url.searchParams.get('limit')).toBe('1');
+        return Response.json({ ok: true, messages: slackEmpty ? [] : [{ type: 'message', ts: slackTimestamp, user: 'UFOUNDER', text: slackText }], has_more: false });
+      }
+      if (url.pathname === '/api/chat.getPermalink') return Response.json({ ok: true, channel: 'C01234567', permalink: `https://fixture.slack.com/archives/C01234567/p${slackTimestamp.replace('.', '')}` });
       throw new Error(`unexpected Slack endpoint ${url.pathname}`);
     }
     if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') return originalFetch(input, init);
+    if (url.hostname === 'openrouter.ai') {
+      modelRequests += 1;
+      if (url.pathname.endsWith('/chat/completions')) modelCalls += 1;
+    }
     throw new Error(`unexpected remote endpoint ${url.origin}`);
   });
   const selected = selection();
@@ -81,8 +94,12 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
   const capture = (tool: 'granola' | 'jira' | 'slack') => post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool, limit: 1 });
+  const verifyRead = (tool: 'jira' | 'slack') => post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool });
   try {
     owner = await signInOwner(`http://127.0.0.1:${runtime.address.port}`, seams, manifest.invitation_path);
+    const beforeUnconnected = seams.jiraFetch.mock.calls.length;
+    expect(await verifyRead('jira')).toMatchObject({ status: 200, body: { action: 'verify-read', qualified: false, result: { status: 'refused', phase: 'connection', reason: 'connection_absent' } } });
+    expect(seams.jiraFetch).toHaveBeenCalledTimes(beforeUnconnected);
     const connect = await post('/v1/person/tools/jira/connect', { schema_version: 1 });
     expect(connect.status).toBe(201);
     seams.finishJira();
@@ -95,13 +112,52 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
     expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 }, '')).status).toBe(401);
     await connectSlackAndLinkOwner(post, seams, SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1);
   } finally { await runtime.close(); }
+  granolaVisible = true;
   const finalizeErrors: string[] = []; const finalized = await runOrganizationAuthoritySetupCli(['finalize', '--state-dir', stateDirectory], { stdout: () => {}, stderr: value => finalizeErrors.push(value) }); expect(finalized, finalizeErrors.join('')).toBe(0);
+  granolaVisible = false;
   runtime = await open();
   try {
     expect(runtime.processing).toBe('active');
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: jiraAttempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
     const beforeCapture = new Database(join(manifest.state_directory, 'authority.sqlite'), { readonly: true });
     const cursorBefore = (beforeCapture.prepare('SELECT cursor AS source_cursor FROM authority_live_source_progress_v2 WHERE singleton=1').get() as { source_cursor: string }).source_cursor; beforeCapture.close();
+    const custodyCounts = () => {
+      const database = new Database(join(manifest.state_directory, 'authority.sqlite'), { readonly: true });
+      try { return ['authority_sources_v1', 'authority_source_revisions_v1', 'authority_source_contents_v1', 'authority_source_representations_v1']
+        .map(table => database.prepare(`SELECT count(*) AS count FROM ${table}`).get()); }
+      finally { database.close(); }
+    };
+    const custodyBefore = custodyCounts();
+    const readStart = slackReads.length;
+    const jiraStart = seams.jiraFetch.mock.calls.length;
+    const modelRequestsBefore = modelRequests;
+    for (const [tool, text] of [['slack', slackText], ['jira', 'ECHO-1: Ship on Friday\n\nThe ticket body stays with Jira.']] as const) {
+      const proof = await verifyRead(tool);
+      expect(proof).toMatchObject({ status: 200, body: { action: 'verify-read', tool, qualified: false, result: {
+        status: 'verified', source_coordinate_sha256: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}`, text_bytes: Buffer.byteLength(text),
+      } } });
+      expect(JSON.stringify(proof.body)).not.toContain(text);
+    }
+    expect(slackReads.slice(readStart).filter(path => path === '/api/conversations.history')).toHaveLength(3);
+    const jiraReads = seams.jiraFetch.mock.calls.slice(jiraStart);
+    expect(jiraReads).toHaveLength(25);
+    expect(jiraReads.filter(([input]) => String(input).includes('/issue/10001'))).toHaveLength(3);
+    const searches = jiraReads.filter(([input]) => String(input).includes('/search/jql'));
+    expect(searches).toHaveLength(1);
+    expect(JSON.parse(String(searches[0]![1]?.body))).toMatchObject({ jql: 'project = 10000 ORDER BY created DESC, id DESC', maxResults: 1 });
+    expect(custodyCounts()).toEqual(custodyBefore);
+    expect(modelCalls).toBe(0);
+    expect(modelRequests).toBe(modelRequestsBefore);
+    slackEmpty = true;
+    expect(await verifyRead('slack')).toMatchObject({ status: 200, body: { result: { status: 'refused', phase: 'inventory', reason: 'empty' } } });
+    slackEmpty = false;
+    const readsBeforeMismatch = slackReads.length;
+    for (const mismatch of [{ release_id: 'clean-v1-other-release' }, { profile_sha256: canonicalSha256('other') }]) {
+      expect((await post('/v1/staging/connector-rehearsal', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'slack', ...mismatch })).status).toBe(503);
+    }
+    expect(slackReads).toHaveLength(readsBeforeMismatch);
+    granolaVisible = true;
     expect(await capture('granola')).toMatchObject({ status: 200, body: { kind: 'echo-staging-connector-rehearsal-receipt-v2', qualified: false, tool: 'granola', receipt: { counts: { captured: 1, admitted: 1, request_only: 0 } } } });
     expect(await capture('granola')).toMatchObject({ status: 200, body: { receipt: { counts: { captured: 1, admitted: 0, duplicate: 1 } } } });
     expect(await capture('jira')).toMatchObject({ status: 200, body: { tool: 'jira', receipt: { counts: { admitted: 1, duplicate: 0, request_only: 0 } } } });
@@ -121,6 +177,7 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
     const control = new Database(join(manifest.state_directory, 'integrations.sqlite'));
     try { control.prepare("UPDATE organization_external_human_link_current SET current_status='revoked'").run(); } finally { control.close(); }
     const readsBeforeRevoked = slackReads.length;
+    expect(await verifyRead('slack')).toMatchObject({ status: 200, body: { result: { status: 'refused' } } });
     expect((await capture('slack')).status).toBe(503);
     expect(slackReads).toHaveLength(readsBeforeRevoked);
   } finally { await runtime.close(); }

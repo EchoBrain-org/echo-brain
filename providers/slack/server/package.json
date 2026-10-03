@@ -5,6 +5,10 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./organization-control-plane/persistence/sqlite-slack-active-connection-v1": {
+      "types": "./dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.d.ts",
+      "import": "./dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js"
+    },
     "./context/slack-channel-live-evidence-reader-v1": {
       "types": "./dist/context/slack-channel-live-evidence-reader-v1.d.ts",
       "import": "./dist/context/slack-channel-live-evidence-reader-v1.js"

@@ -8,6 +8,10 @@ const state = vi.hoisted(() => ({
   captures: 0,
   jira: 0,
   demoteDuringCapture: false,
+  reads: [] as string[],
+  readMode: 'normal' as 'normal' | 'revoke' | 'demote' | 'stall',
+  grantRevoked: false,
+  ownerRevoked: false,
 }));
 
 vi.mock('@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage', () => ({
@@ -47,14 +51,42 @@ vi.mock('../src/composition/jira-person-live-runtime-v1.js', () => ({
     close() {},
   }),
 }));
-vi.mock('../src/composition/slack-context-capture-runtime-v1.js', () => ({
-  openSlackContextCaptureRuntimeV1: () => ({ async create_source() { throw new Error('not linked'); }, close() {} }),
-}));
+vi.mock('../src/composition/slack-context-capture-runtime-v1.js', async () => {
+  const { createHash } = await import('node:crypto');
+  const { AuthorityOperationError } = await import('@echo-brain/organization-authority-kernel/domain/errors');
+  class SlackContextCapturePreparationErrorV1 extends Error {}
+  const text = 'Request-only synthetic Slack text';
+  const citation = { kind: 'slack_message', team_id: 'TFIXTURE', channel_id: 'C01234567', message_ts: '1790966400.123456',
+    permalink: 'https://fixture.slack.com/archives/C01234567/p1790966400123456', text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}` };
+  const item = { citation, handle: 'exact-one', label: 'fixture message', visibility: 'team' };
+  return { SlackContextCapturePreparationErrorV1, openSlackContextCaptureRuntimeV1: () => ({
+    async create_source() { throw new Error('not linked'); },
+    async create_reader() {
+      return { require_current() { if (state.grantRevoked) throw new AuthorityOperationError('stale_access_state', 'private grant details'); }, reader: {
+        validateCitation: () => ({ citation, tool_id: 'slack', external_scope_id: 'TFIXTURE', coordinates: { object_id: citation.message_ts, container_id: citation.channel_id } }),
+        async list(input: { limit: number; signal: AbortSignal }) {
+          state.reads.push('list'); expect(input.limit).toBe(1); expect(input.signal).toBeInstanceOf(AbortSignal);
+          if (state.readMode === 'stall') return new Promise(() => {});
+          return { items: [item], truncated: false };
+        },
+        async open(input: { handle: string; limit: number }) {
+          state.reads.push('open'); expect(input.handle).toBe('exact-one'); expect(input.limit).toBe(1);
+          return { items: [{ ...item, text }], truncated: false };
+        },
+        async revalidate() {
+          state.reads.push('revalidate');
+          if (state.readMode === 'revoke') state.grantRevoked = true;
+          if (state.readMode === 'demote') state.ownerRevoked = true;
+        },
+      } };
+    }, close() {},
+  }) };
+});
 vi.mock('../src/composition/organization-authority-composition-root.js', () => ({
   async openOrganizationAuthorityService(_config: unknown, dependencies: { person_http_runtime_factory_with_slack: (sessions: unknown, slack: unknown) => { applications: typeof state.apps } }) {
     state.apps = dependencies.person_http_runtime_factory_with_slack({
       authenticateAccess({ access_token }: { access_token: string }) {
-        return access_token === 'owner' && !(state.demoteDuringCapture && state.captures > 0)
+        return access_token === 'owner' && !state.ownerRevoked && !(state.demoteDuringCapture && state.captures > 0)
           ? { organization_id: 'org_fixture', principal_id: 'prn_fixture', membership_id: 'mem_fixture', membership_type: 'owner', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' }
           : { organization_id: 'org_fixture', principal_id: 'prn_other', membership_id: 'mem_other', membership_type: 'member', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' };
       },
@@ -67,7 +99,9 @@ import { openStagingConnectorRehearsalService } from '../src/composition/staging
 import { STAGING_CONNECTOR_REHEARSAL_PATH_V1, STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 
 const roots: string[] = [];
-afterEach(() => { state.apps = []; state.captures = 0; state.jira = 0; state.demoteDuringCapture = false; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.captures = 0; state.jira = 0; state.demoteDuringCapture = false;
+  state.reads = []; state.readMode = 'normal'; state.grantRevoked = false; state.ownerRevoked = false;
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 function selection() {
   return { release_id: 'clean-v1-connector-test', authority_host: 'authority-staging.echobrain.org', profile: {
@@ -88,6 +122,55 @@ function config(directory: string) {
 function request(route_id: string, token: string, body: unknown) {
   return { route_id, method: 'POST' as const, path: route_id === 'staging-connector-rehearsal' ? STAGING_CONNECTOR_REHEARSAL_PATH_V1 : '/v1/person/tools/jira/connect', headers: { authorization: `Bearer ${token}` }, content_type: 'application/json', raw_body: new TextEncoder().encode(JSON.stringify(body)) };
 }
+
+async function readFixture() {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-read-')); roots.push(root);
+  const directory = join(root, 'state'); mkdirSync(directory);
+  const selected = selection(); const opened = await openStagingConnectorRehearsalService(config(directory), selected);
+  const application = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
+  const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
+  const input = request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'slack' });
+  return { opened, application, input };
+}
+
+it.each(['revoke', 'demote'] as const)('withholds read success when %s happens during the final provider fence', async mode => {
+  const fixture = await readFixture(); state.readMode = mode;
+  try {
+    const result = await fixture.application.accept(fixture.input);
+    expect(result).toMatchObject({ status: 200, body: { qualified: false, result: { status: 'refused', phase: 'final_fence' } } });
+    expect(state.reads).toEqual(['list', 'open', 'revalidate']);
+    expect(state.captures).toBe(0);
+    expect(JSON.stringify(result)).not.toContain('Request-only synthetic Slack text');
+    expect(JSON.stringify(result)).not.toContain('private grant details');
+  } finally { await fixture.opened.close(); }
+});
+
+it('bounds an uncooperative provider by the combined deadline and honors caller cancellation', async () => {
+  for (const reason of ['deadline_exceeded', 'cancelled'] as const) {
+    const deadline = new AbortController(); const caller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(milliseconds => {
+      expect(milliseconds).toBe(15_000); return deadline.signal;
+    });
+    const fixture = await readFixture(); state.readMode = 'stall'; state.reads = [];
+    try {
+      const pending = fixture.application.accept({ ...fixture.input, signal: caller.signal });
+      await vi.waitFor(() => expect(state.reads).toEqual(['list']));
+      (reason === 'deadline_exceeded' ? deadline : caller).abort();
+      await expect(pending).resolves.toMatchObject({ status: 200, body: { result: { status: 'refused', phase: 'inventory', reason } } });
+      expect(state.reads).toEqual(['list']); expect(state.captures).toBe(0);
+    } finally { await fixture.opened.close(); timeout.mockRestore(); }
+  }
+});
+
+it('returns a finite refusal for an already-aborted read without starting provider work', async () => {
+  const fixture = await readFixture();
+  try {
+    await expect(fixture.application.accept({ ...fixture.input, signal: AbortSignal.abort() }))
+      .resolves.toMatchObject({ status: 200, body: { result: { status: 'refused', phase: 'local_authorization', reason: 'cancelled' } } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(state.reads).toEqual([]); expect(state.captures).toBe(0);
+  } finally { await fixture.opened.close(); }
+});
 
 it('refuses a Slack live-evidence factory under the capture-only V2 profile before opening state', async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);

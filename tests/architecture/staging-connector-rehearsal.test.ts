@@ -112,6 +112,43 @@ function response(profileValue: ReturnType<typeof profile>, action: 'status' | '
 }
 
 describe('staging connector rehearsal wrapper', () => {
+  it('requests one fixed-scope read and validates content-free success or refusal without retrying', async () => {
+    const directory = root(); const home = join(directory, 'person-home');
+    const profilePath = join(directory, 'profile.json'); const configured = profile(profilePath);
+    install(home);
+    const accepted = { schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2',
+      release_id: 'clean-v1-fixture-release', profile_sha256: canonicalSha256(configured), action: 'verify-read', qualified: false,
+      tool: 'slack', result: { status: 'verified', source_coordinate_sha256: canonicalSha256('coordinate'), text_sha256: canonicalSha256('text'), text_bytes: 42 } };
+    const input = { action: 'verify-read' as const, release_id: accepted.release_id, profile_path: profilePath, person_home: home, tool: 'slack' as const };
+    for (const remote of [accepted, { ...accepted, result: { status: 'refused', phase: 'inventory', reason: 'empty' } }]) {
+      let reads = 0;
+      assert.deepEqual(await runStagingConnectorRehearsal(input, { fetch: async (target, init) => {
+        if (url(target).pathname === '/v1/authority-descriptor') return Response.json(descriptor());
+        reads += 1;
+        assert.deepEqual(JSON.parse(String(init?.body)), { schema_version: 2, release_id: accepted.release_id,
+          profile_sha256: accepted.profile_sha256, action: 'verify-read', tool: 'slack' });
+        return Response.json(remote);
+      } }), remote);
+      assert.equal(reads, 1);
+    }
+    for (const remote of [
+      { ...accepted, release_id: 'clean-v1-other-release' },
+      { ...accepted, profile_sha256: canonicalSha256('other') },
+      { ...accepted, tool: 'jira' },
+      { ...accepted, result: { ...accepted.result, text: 'private provider body' } },
+      undefined,
+    ]) {
+      let reads = 0;
+      await assert.rejects(runStagingConnectorRehearsal(input, { fetch: async target => {
+        if (url(target).pathname === '/v1/authority-descriptor') return Response.json(descriptor());
+        reads += 1;
+        if (remote === undefined) throw new Error('private lost-response details');
+        return Response.json(remote);
+      } }), error => error instanceof Error && error.message === 'Staging connector rehearsal failed');
+      assert.equal(reads, 1);
+    }
+  });
+
   it('captures retained Jira and Slack pointer receipts and refuses a retired V1 profile before any request', async () => {
     const directory = root();
     const home = join(directory, 'person-home');
