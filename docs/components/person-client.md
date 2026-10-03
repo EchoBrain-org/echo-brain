@@ -50,9 +50,12 @@ and sends Authority HTTP requests. It has no daemon, local processing core,
 provider adapter, product database, installation key, access lease, or
 background update runner. The opt-in foreground
 [client updater](../features/client-updates-v1.md) owns bounded release discovery
-and platform installation before Person command dispatch. Other machine-installed surfaces may wrap this client
-without becoming part of its responsibility; the Electron desktop app in
-`product/echo-desktop` is one, and runs this client in process.
+and availability notices before Person command dispatch. Only an explicit
+`echo-brain update` installs an available release; an ordinary Person command
+runs once with the installed client. Other machine-installed surfaces may wrap
+this client without becoming part of its responsibility; the Electron desktop
+app in `product/echo-desktop` is one, and runs this client in process without
+the CLI's automatic update check hook.
 
 ## Data authority
 
