@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +23,7 @@ Check online without installing:
 Show saved local update status without checking online:
   echo-brain update --status
 
-Check and install an update when an automatic check is due:
+Check online without installing when an automatic check is due:
   echo-brain update --if-due
 
 Configure updates from an absolute trusted configuration file:
@@ -78,7 +77,7 @@ function savedStatusDetails(result: ClientUpdateResult, automatic: boolean): str
     'Installed release: ' + safeRelease(result.installed_release) + '.',
     'Latest known release: ' + safeRelease(result.available_release) + '.',
     'Last checked: ' + safeTimestamp(result.checked_at) + '.',
-    'Automatic checks: ' + (automatic ? 'enabled' : 'disabled') + '.',
+    'Automatic availability checks: ' + (automatic ? 'enabled' : 'disabled') + '.',
   ].join('\n');
 }
 function updateProblem(code: string): string {
@@ -115,7 +114,7 @@ export function renderClientUpdateResult(result: ClientUpdateResult, presentatio
   if (presentation.mode === 'status') {
     if (result.status === 'not_configured') return updateProblem(result.status) + '\n';
     if (result.status === 'not_checked') {
-      return 'No saved update check yet.\nInstalled release: ' + installed + '.\nAutomatic checks: ' +
+      return 'No saved update check yet.\nInstalled release: ' + installed + '.\nAutomatic availability checks: ' +
         (presentation.automatic ? 'enabled' : 'disabled') + '.\nRun echo-brain update --check to check online.\n';
     }
     let message = 'Saved update status (no online check).\n' + savedStatusDetails(result, presentation.automatic);
@@ -132,8 +131,8 @@ export function renderClientUpdateResult(result: ClientUpdateResult, presentatio
     return 'Update available. Installed release: ' + installed + '.\nAvailable release: ' + available +
       '.\nRun echo-brain update to install it.\n';
   }
-  if (result.status === 'not_due') return 'Automatic update check is not due yet.\n' + savedStatusDetails(result, presentation.automatic) + '\n';
-  if (result.status === 'automatic_disabled') return 'Automatic update checks are disabled. Installed release: ' + installed + '.\n';
+  if (result.status === 'not_due') return 'Automatic availability check is not due yet.\n' + savedStatusDetails(result, presentation.automatic) + '\n';
+  if (result.status === 'automatic_disabled') return 'Automatic availability checks are disabled. Installed release: ' + installed + '.\n';
   if (result.status === 'not_configured') return updateProblem(result.status) + '\n';
   return updateProblem(result.status) + '\n';
 }
@@ -144,7 +143,7 @@ export function installedUpdateRoot(moduleUrl = import.meta.url): string | undef
   if (process.platform === 'darwin') {
     if (!process.env.HOME || dirname(dirname(releaseRoot)) !== join(process.env.HOME, 'Library/Application Support/ECHO/cli')) return undefined;
     // The old Mac kit owns a matched desktop app/CLI pair. Only the separate
-    // CLI kit may enroll for independent automatic activation.
+    // CLI kit may enroll for independent update checks and manual installation.
     const manifest = JSON.parse(readUpdateFile(join(releaseRoot, 'kit-manifest.v1.json'), UPDATE_METADATA_LIMIT).toString('utf8'));
     if (manifest.schema_version !== 3 || manifest.kind !== 'echo-person-cli-kit-v1' ||
         manifest.runtime?.platform !== 'darwin' || manifest.runtime?.architecture !== 'arm64') return undefined;
@@ -168,7 +167,7 @@ export async function runClientUpdateCli(argv: readonly string[]): Promise<numbe
       if (!process.stdout.isTTY || args.json) {
         process.stdout.write(jsonOutput({ kind: 'echo-client-update-result-v1', status: 'configured' }));
       } else {
-        process.stdout.write('Update checks configured. Automatic checks: ' + (config?.automatic ? 'enabled' : 'disabled') + '.\n');
+        process.stdout.write('Update checks configured. Automatic availability checks: ' + (config?.automatic ? 'enabled' : 'disabled') + '.\n');
       }
       return 0;
     }
@@ -191,8 +190,8 @@ export async function runClientUpdateCli(argv: readonly string[]): Promise<numbe
   }
 }
 
-/** Runs before Person command dispatch, so no submitted operation is replayed. */
-export async function updateBeforePersonCommand(argv: readonly string[]): Promise<number | undefined> {
+/** Announces availability before the caller dispatches its Person command once. */
+export async function updateBeforePersonCommand(_argv: readonly string[]): Promise<undefined> {
   if (process.env.ECHO_CLIENT_UPDATE_DISPATCH === '1') return undefined;
   try {
     const root = installedUpdateRoot();
@@ -200,15 +199,15 @@ export async function updateBeforePersonCommand(argv: readonly string[]): Promis
     const config = readClientUpdateConfig(root);
     if (!config?.automatic) return undefined;
     const result = await runClientUpdate('automatic', { root, platform: detectUpdatePlatform(config.installation) });
-    if (result.status === 'updated') {
-      process.stderr.write(`ECHO updated to ${result.installed_release}.\n`);
-      const child = spawnSync(join(root, 'bin', 'echo-brain'), ['person', ...argv], {
-        stdio: 'inherit', env: { ...process.env, ECHO_CLIENT_UPDATE_DISPATCH: '1' },
-      });
-      return child.status ?? 1;
+    if (result.status === 'available') {
+      const available = safeRelease(result.available_release);
+      if (available !== 'unknown' && available !== result.installed_release) {
+        process.stderr.write(`ECHO update available: ${available}. Run echo-brain update to install it.\n`);
+      }
+      return undefined;
     }
     if (!['current', 'not_due', 'automatic_disabled', 'update_busy'].includes(result.status)) {
-      process.stderr.write(`ECHO update: ${result.status}; continuing with ${result.installed_release}.\n`);
+      process.stderr.write(`ECHO update: ${result.status}; continuing with ${safeRelease(result.installed_release)}.\n`);
     }
   } catch {
     process.stderr.write('ECHO update check failed; continuing with the installed client.\n');

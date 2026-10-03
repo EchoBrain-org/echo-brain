@@ -284,7 +284,11 @@ remain outside this CLI update channel.
 These commands show readable messages in a terminal. Scripts can request the
 existing structured result with `update --check --json` or `update --status --json`;
 piped output also remains JSON. `--status` shows saved state, while `--check`
-contacts the feed without installing an update.
+contacts the feed without installing an update. With `automatic: true`, normal
+Person commands check when due and report available releases on stderr while
+continuing with the installed client. `--if-due` also only checks. Run
+`echo-brain update` explicitly to download and install an available release;
+`automatic: false` continues to disable automatic checks and notices.
 
 When the installed client already matches the first published release,
 `current` proves feed retrieval, signature verification and release matching.
@@ -301,25 +305,30 @@ the reviewed bootstrap; Linux normally uses
 existing Person sessions. Enrollment/bootstrap changes have their own review
 boundary; do not reconfigure a client merely to bypass a failed update.
 
+To prove that notification leaves the installed client unchanged, release A
+must already contain check-only automatic behavior. Older clients retain their
+installed update behavior until upgraded; publishing this release does not
+change that code. For those seats, deliberately install the new client and
+record the rollout limitation rather than claiming the new behavior was already
+in force.
+
 On each platform:
 
 1. Before publication, record the actual wrapper and release A's `person status`
    build identity; preserve that baseline for the post-publication test.
-   `person status` can itself trigger automatic activation, so do not use it
-   after publication to establish the old-client baseline. After publication,
-   run `update --check --json`, which reports installed/available releases
-   without activation. Require the expected signed successor from the pinned
-   feed and target. `update --status` alone is cached evidence.
-2. After `--check` reports `available`, start a normal Person command from release
-   A with automatic updating enabled. The `available` result permits immediate
-   activation without waiting for the hourly interval; `person status` may be
-   this first command. Retain the
-   update notice and resulting build identity to verify activation and
-   re-execution on release B. An
-   explicit `update` can exercise manual recovery, but record which path passed
-   rather than claiming automatic delivery from a manual/offline installation.
-3. Check `person status` from that same wrapper. Match its source SHA to the
-   canonical release, and retain the verified installer/update artifact evidence.
+   After publication, run `update --check --json`, which reports installed and
+   available releases without activation. Require the expected signed successor
+   from the pinned feed and target. `update --status` alone is cached evidence.
+2. After `--check` reports `available`, run `person status` from release A with
+   automatic checks enabled. Retain the availability notice from stderr and
+   verify that the wrapper and command build identity still identify A. A
+   cached available release still produces the notice without another feed
+   request inside the hourly interval. The command runs once with A; it does
+   not download, install, or re-execute on B.
+3. Run `echo-brain update` explicitly through that same installed wrapper.
+   Retain its installation result, then check `person status` from that wrapper.
+   Match its source SHA to the canonical release, and retain the verified
+   installer/update artifact evidence.
    The displayed product version alone may be identical between releases.
    The managed wrapper normally points directly into a versioned release;
    that is supported. A custom wrapper outside the managed launcher path may
@@ -337,4 +346,5 @@ desktop evidence with the coordinated release handoff. Until both client paths
 pass, report "client published; verification incomplete." State the seats
 tested and those outstanding rather than claiming fleet-wide completion.
 Local packaging/updater tests and an already-current client do not prove a live
-A-to-B update. Desktop distribution remains outside this CLI channel.
+A-to-B update or fleet-wide rollout of the new update policy. Desktop
+distribution remains outside this CLI channel.

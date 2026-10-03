@@ -136,12 +136,15 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
   if (mode === 'status') return result(state?.result ?? 'not_checked', state);
   if (mode === 'automatic' && !config.automatic) return result('automatic_disabled', state);
   const now = (dependencies.now ?? Date.now)();
-  if (mode === 'automatic' && state && state.result !== 'available' && state.checked_at <= now && now - state.checked_at < UPDATE_INTERVAL_MS) return result('not_due', state);
+  if (mode === 'automatic' && state && state.checked_at <= now && now - state.checked_at < UPDATE_INTERVAL_MS) {
+    const available = state.result === 'available' && state.available_release !== null && state.available_release !== current;
+    return result(available ? 'available' : 'not_due', state);
+  }
   // OS detection is independent of adapter availability. Containers are updated
   // by their deployment lane; desktop activation belongs to Electron packaging.
   const installer = platformKey(platform) === 'linux/x64/glibc/cli-kit' ? installLinuxClientUpdate
     : platformKey(platform) === 'darwin/arm64/native/cli-kit' ? installMacosClientUpdate : undefined;
-  if (!installer && mode !== 'check') return result('adapter_unavailable', state);
+  if (!installer && mode === 'apply') return result('adapter_unavailable', state);
   const lock = join(directory, '.lock');
   try { mkdirSync(lock, { mode: 0o700 }); } catch { return result('update_busy', state); }
   let temporary: string | undefined;
@@ -166,7 +169,9 @@ export async function runClientUpdate(mode: 'apply' | 'check' | 'status' | 'auto
       writeUpdateJson(join(directory, 'state.json'), state);
       return result('current', state);
     }
-    if (mode === 'check') return result('available', state);
+    // Automatic checks announce availability. Only an explicit apply may
+    // download an artifact or change the installed client.
+    if (mode !== 'apply') return result('available', state);
     const expectedWrapper = updateDigest(readUpdateFile(join(root, 'bin', 'echo-brain'), 16 * 1024));
     temporary = mkdtempSync(join(directory, '.download-'));
     const archive = join(temporary, 'client.zip');

@@ -4,11 +4,18 @@ Status: CLI updater and dedicated S3 first-publication tooling implemented.
 Hosting, publication, enrollment and live activation have separate operator
 evidence; code and offline tests alone do not establish their completion.
 
-An installed Person client can discover an approved release, download its exact
-platform kit, and activate it while keeping the existing Person session. A
-configured automatic check runs before a Person command starts, at most once
-per hour after a completed attempt. It never resubmits an in-flight command.
-An idle machine updates when its next command starts.
+An installed Person client checks for an approved release and tells the user
+when one is available. With automatic checks enabled, it checks before a Person
+command starts, at most once per hour after a completed attempt. A cached
+available release can still produce a notice between checks. The requested
+command runs once in the same process with the installed client. Automatic
+checks never download or activate a platform kit; only an explicit
+`echo-brain update` does that, while keeping the existing Person session.
+
+This behavior applies once the client version containing it is installed.
+Older clients keep their existing update behavior until upgraded. Publishing
+a feed or deploying an Authority does not change their installed code or push
+this policy to every seat.
 
 When this document calls an update "latest", it means the applicable entry in
 the client's current valid signed feed for its pinned channel and target. It
@@ -41,7 +48,9 @@ another wrapper.
 
 The contract supports desktop and container targets, but activation returns
 `adapter_unavailable`. Desktop app updates belong to the separate Electron
-packaging work; immutable containers use their deployment mechanism. The public command is identical for all implemented adapters:
+packaging work; the Electron app does not run this CLI's automatic check hook.
+Immutable containers use their deployment mechanism. The public command is
+identical for all implemented adapters:
 
 ```sh
 echo-brain update --status
@@ -58,19 +67,21 @@ including in a terminal. `echo-brain update --help` explains each command.
 
 `--status` reads saved local installation/update metadata without contacting the
 feed. Its last result and last-check time describe the saved observation, not a
-fresh availability check. `--check` verifies the feed
-without installing. The default applies the approved update. `--if-due` performs
-the same bounded automatic check used before Person commands. Automatic
-diagnostics go to stderr, preserving the requested command's stdout contract.
-After successful activation the stable wrapper executes the original command
-once, before any Person request has been sent. Download or validation failure
-keeps the working installation and records a bounded error code locally.
+fresh availability check. `--check` verifies the feed without installing.
+`echo-brain update` downloads and applies the approved update. `--if-due`
+performs the same bounded, check-only operation used before Person commands;
+an available release does not bypass the hourly interval. Automatic notices
+and diagnostics go to stderr, preserving the requested command's stdout
+contract, and tell the user to run `echo-brain update` to install an available
+release. The command continues with the installed client without re-execution.
+Download or validation failure keeps the working installation and records a
+bounded error code locally.
 
 ## Trusted bootstrap
 
-New Linux kits enroll updates during the normal `Start-ECHO.sh` installation.
-The release operator supplies the reviewed public configuration while building
-the kit; the user runs no additional update command:
+New Linux kits enroll update checks during the normal `Start-ECHO.sh`
+installation. The release operator supplies the reviewed public configuration
+while building the kit; the user runs no additional update command:
 
 ```sh
 npm run kit:person-onboarding -- \
@@ -83,16 +94,20 @@ npm run kit:person-onboarding -- \
 ```
 
 The configuration must have `automatic: true` and `installation: "cli-kit"`.
-It is embedded in the authenticated canonical kit manifest, so changing it
-changes the kit checksum. It contains only a public key and public HTTPS feed
-location, never signing material. Reinstall and signed update installation
-preserve existing configuration, including a user's `automatic: false` choice,
-and preserve the highest verified sequence in updater state.
+`automatic` enables checks and availability notices, never installation.
+The configuration is embedded in the authenticated canonical kit manifest,
+so changing it changes the kit checksum. It contains only a public key and
+public HTTPS feed location, never signing material. Reinstall and signed update
+installation preserve existing configuration, including a user's
+`automatic: false` choice to disable automatic checks and notices, and preserve the highest verified
+sequence in updater state. Explicit `--check` and `update` remain available
+when automatic checks are disabled.
 
 For an existing Linux installation, deliver one trusted kit built with
 `--update-config` and run its `Start-ECHO.sh --install-only`. This one-time bridge
-installation preserves the Person session and enrolls updates. The next normal
-Person command checks the approved feed without another setup command or login.
+installation preserves the Person session and enrolls update checks. The next
+normal Person command checks the approved feed without another setup command
+or login.
 
 Older kits cannot self-bootstrap: their installer bytes contain no trusted
 publisher or feed. They remain usable and, if updater-capable, report
@@ -150,7 +165,10 @@ directory, separate from Person sessions and upload retry material. A trusted
 reconfiguration may toggle `automatic` without resetting the freshness
 checkpoint. Changing the publisher, feed, channel, installation type or sequence
 floor requires a separately reviewed bootstrap; feed contents cannot change
-those settings. The Mac CLI and legacy Linux recovery remain opt-in. Configured Linux kits add no daemon or scheduler; checks run only before Person commands.
+those settings. The Mac CLI and legacy Linux recovery remain opt-in.
+Configured Linux kits add no daemon or scheduler; automatic checks run only
+before Person commands. The existing configuration schema and freshness
+checkpoint need no migration for check-only automatic behavior.
 
 ## Preparing an approved feed
 
@@ -260,8 +278,13 @@ locks speculatively. Recover to a retained release through the reviewed installe
 and recheck its build and authenticated reads. A network or metadata error
 alone does not trigger rollback or alter the session.
 
-Acceptance: publish B; a supported seat on A starts its next job, updates without
-file copying or a new login, and reads Stout's MRD/PRD. Offline tests cover
-platform selection, signature/freshness failures, bounded downloads,
-concurrent starts, installation races and session preservation. Offline proof
-does not establish that this live acceptance test has occurred.
+Acceptance: publish B; a supported seat on A reports B during a normal Person
+command while its wrapper and command build identity remain A. Then an explicit
+`echo-brain update` installs B without file copying or a new login, and the seat
+reads Stout's MRD/PRD. A must already implement check-only automatic behavior
+to prove that policy; an older client's existing behavior is separate rollout
+evidence. Offline tests cover checks without artifact downloads or activation,
+cached notices, explicit installation, platform selection, signature/freshness
+failures, bounded downloads, concurrent starts, installation races and session
+preservation. Offline proof does not establish that this live acceptance test
+has occurred.

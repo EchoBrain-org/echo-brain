@@ -28,6 +28,8 @@ describe('client update CLI presentation', () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     expect(await runClientUpdateCli(['--help'])).toBe(0);
     expect(stdout).toHaveBeenCalledWith(expect.stringContaining('echo-brain update --check'));
+    expect(stdout).toHaveBeenCalledWith(expect.stringContaining('Check online without installing when an automatic check is due:'));
+    expect(stdout).not.toHaveBeenCalledWith(expect.stringContaining('Check and install an update'));
     expect(await runClientUpdateCli(['--json', '--json'])).toBe(2);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Use --json for machine-readable output.'));
   });
@@ -35,6 +37,7 @@ describe('client update CLI presentation', () => {
   it('keeps a strict mode grammar and rejects duplicate JSON flags before work starts', () => {
     expect(parseClientUpdateCliArguments([])).toEqual({ mode: 'apply', json: false });
     expect(parseClientUpdateCliArguments(['--check', '--json'])).toEqual({ mode: 'check', json: true });
+    expect(parseClientUpdateCliArguments(['--if-due'])).toEqual({ mode: 'automatic', json: false });
     expect(parseClientUpdateCliArguments(['configure', '--file', '/tmp/trusted.json', '--json'])).toEqual({ mode: 'configure', json: true, file: '/tmp/trusted.json' });
     expect(parseClientUpdateCliArguments(['--json', '--json'])).toBeUndefined();
     expect(parseClientUpdateCliArguments(['--check', '--status'])).toBeUndefined();
@@ -51,10 +54,19 @@ describe('client update CLI presentation', () => {
     const text = renderClientUpdateResult(result('available', { available_release: 'clean-v1-release-b' }), { tty: true, json: false, mode: 'status', automatic: false });
     expect(text).toContain('Saved update status (no online check).');
     expect(text).toContain('Latest known release: clean-v1-release-b.');
-    expect(text).toContain('Automatic checks: disabled.');
+    expect(text).toContain('Automatic availability checks: disabled.');
     const savedSuccess = renderClientUpdateResult(result('updated'), { tty: true, json: false, mode: 'status', automatic: true });
     expect(savedSuccess).toContain('Last saved update result: updated successfully.');
     expect(savedSuccess).not.toContain('failed');
+  });
+
+  it('explains automatic checks as availability checks and keeps installation explicit', () => {
+    const presentation = { tty: true, json: false, mode: 'automatic' as const, automatic: true };
+    const text = renderClientUpdateResult(result('available', { available_release: 'clean-v1-release-b' }), presentation);
+    expect(text).toContain('Available release: clean-v1-release-b.');
+    expect(text).toContain('Run echo-brain update to install it.');
+    expect(renderClientUpdateResult(result('not_due'), presentation)).toContain('Automatic availability check is not due yet.');
+    expect(renderClientUpdateResult(result('automatic_disabled'), presentation)).toContain('Automatic availability checks are disabled.');
   });
 
   it('gives safe guidance for uncertain installation and does not render unsafe local strings', () => {

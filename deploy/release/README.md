@@ -161,7 +161,9 @@ digest; do not silently substitute it under the prior approval.
    **not** inspect the host's accepted release. Promotion-before-publication is
    an operator requirement, not a cross-service guard implemented by the CLI.
 3. On representative native Mac and Linux seats still running release A, verify
-   the real A-to-B update through the configured signed feed, then run the
+   the availability notice while the Person command remains on A, then run
+   `echo-brain update` explicitly to install B through the configured signed
+   feed. Complete the
    [client acceptance checks](../client-updates/README.md#verify-mac-and-linux-client-activation).
    Preserve existing sessions and use the account's actual permissions. A
    Linux employee's check must use that employee's account and readable
@@ -176,7 +178,9 @@ Keep one private handoff record linking the release authorization, server action
 receipts and fresh status, prepared manifest and publication receipt, both
 platform activation/read proofs, and desktop evidence when applicable. Record
 remaining seats explicitly. Publication makes the release available; automatic
-CLI checks run on later commands and do not instantly upgrade the fleet.
+CLI checks notify on later commands, and installation requires an explicit
+`echo-brain update`. Older clients retain their existing update behavior until
+the new client is installed; publication does not push this policy to the fleet.
 
 ### Resume a partial release
 
@@ -950,12 +954,14 @@ record and exact Person-client tarball**. The Authority image is shared too;
 the employee's CPU architecture does not select a different server. The kits
 differ in their bundled Node runtime and installer. Linux uses a strict v2
 manifest binding its runtime, release, client, kit build identity, and validated
-public automatic-update bootstrap. The bootstrap must target `cli-kit` and set
-`automatic` to true. Normal setup installs it privately without another user
-command; reinstall and signed updates preserve existing trust, checkpoints, and
-the automatic-disabled choice. Existing Linux seats run this configured kit's
-`Start-ECHO.sh --install-only` once to bridge into automatic updates while
-keeping their session. Legacy Linux kits without the field still install but
+public bootstrap for update checks. The bootstrap must target `cli-kit` and set
+`automatic` to true to enable checks and availability notices. Normal setup
+installs it privately without another user command; reinstall and signed updates
+preserve existing trust, checkpoints, and the choice to disable automatic
+checks. Existing Linux seats run this configured kit's
+`Start-ECHO.sh --install-only` once to enroll automatic checks while keeping
+their session. Available releases install only with an explicit
+`echo-brain update`. Legacy Linux kits without the field still install but
 cannot enroll themselves. The macOS kit uses `--installation cli-kit`, a schema-3 manifest with the same
 bindings, and its own CLI root.
 

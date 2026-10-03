@@ -104,11 +104,21 @@ describe('signed cross-platform client updates', () => {
     expect(() => verifyUpdateEnvelope(f.envelope({ ...f.manifest, artifacts: [{ ...f.manifest.artifacts[0], url: 'https://another.example.test/b.zip' }] }), f.config, NOW)).toThrow('wrong_artifact_origin');
   });
 
+  it('automatically checks for a release without downloading or activating it', async () => {
+    const f = fixture();
+    const initial = readFileSync(join(f.root, 'bin', 'echo-brain'));
+    const result = await runClientUpdate('automatic', f.dependencies);
+    expect(result).toMatchObject({ status: 'available', installed_release: 'clean-v1-release-a', available_release: f.manifest.release_id, checked_at: NOW });
+    expect(f.fetcher.mock.calls.map(args => args[0])).toEqual([f.config.feed_url]);
+    expect(f.install).not.toHaveBeenCalled();
+    expect(readFileSync(join(f.root, 'bin', 'echo-brain'))).toEqual(initial);
+  });
+
   it('downloads B, verifies bytes before installation, activates once, and preserves session bytes', async () => {
     const f = fixture();
     const session = join(f.directory, 'session-sentinel');
     writeFileSync(session, 'synthetic untouched session', { mode: 0o600 });
-    const result = await runClientUpdate('automatic', f.dependencies);
+    const result = await runClientUpdate('apply', f.dependencies);
     expect(result.status).toBe('updated');
     expect(result.installed_release).toBe(f.manifest.release_id);
     expect(f.install).toHaveBeenCalledOnce();
@@ -127,18 +137,43 @@ describe('signed cross-platform client updates', () => {
     const macArtifact = { ...mac, url: 'https://updates.example.test/staging/artifacts/mac.zip', bytes: macBytes.length, sha256: updateDigest(macBytes) };
     f.manifest.artifacts.push(macArtifact);
     const fetcher = vi.fn(async (url: string | URL | Request) => new Response(new Uint8Array(String(url) === f.config.feed_url ? f.envelope() : macBytes)));
-    const updated = await runClientUpdate('automatic', { ...f.dependencies, platform: mac, fetch: fetcher as typeof fetch });
+    const updated = await runClientUpdate('apply', { ...f.dependencies, platform: mac, fetch: fetcher as typeof fetch });
     expect(updated.status).toBe('updated');
     expect(updated.platform).toBe('darwin/arm64/native/cli-kit');
     expect(fetcher.mock.calls.map(args => args[0])).toEqual([f.config.feed_url, macArtifact.url]);
     expect(f.install).toHaveBeenCalledOnce();
   });
 
-  it('allows discovery without applying, then applies on the next automatic invocation', async () => {
+  it('keeps availability cached until the next automatic check and requires an explicit apply', async () => {
     const f = fixture();
     expect((await runClientUpdate('check', f.dependencies)).status).toBe('available');
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS - 1 })).toMatchObject({ status: 'available', available_release: f.manifest.release_id, checked_at: NOW });
+    expect(f.fetcher).toHaveBeenCalledOnce();
+    expect(await runClientUpdate('automatic', { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS })).toMatchObject({ status: 'available', available_release: f.manifest.release_id, checked_at: NOW + UPDATE_INTERVAL_MS });
+    expect(f.fetcher.mock.calls.map(args => args[0])).toEqual([f.config.feed_url, f.config.feed_url]);
     expect(f.install).not.toHaveBeenCalled();
-    expect((await runClientUpdate('automatic', f.dependencies)).status).toBe('updated');
+    expect((await runClientUpdate('apply', { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS })).status).toBe('updated');
+    expect(f.install).toHaveBeenCalledOnce();
+  });
+
+  it('stops announcing a cached release that was installed separately', async () => {
+    const f = fixture();
+    await runClientUpdate('check', f.dependencies);
+    f.activate(f.manifest.release_id);
+    expect(await runClientUpdate('automatic', f.dependencies)).toMatchObject({ status: 'not_due', installed_release: f.manifest.release_id });
+    expect(f.fetcher).toHaveBeenCalledOnce();
+    expect(f.install).not.toHaveBeenCalled();
+  });
+
+  it('does not announce stale availability after a failed automatic check', async () => {
+    const f = fixture();
+    await runClientUpdate('check', f.dependencies);
+    f.fetcher.mockImplementation(async () => new Response('{}'));
+    const dependencies = { ...f.dependencies, now: () => NOW + UPDATE_INTERVAL_MS };
+    expect((await runClientUpdate('automatic', dependencies)).status).toBe('invalid_metadata');
+    expect((await runClientUpdate('automatic', dependencies)).status).toBe('not_due');
+    expect(f.fetcher).toHaveBeenCalledTimes(2);
+    expect(f.install).not.toHaveBeenCalled();
   });
 
   it.each(['corrupt', 'truncated', 'oversized', 'redirected', 'encoded', 'network'])('keeps A on %s download failure and never invokes the installer', async (failure) => {
@@ -153,8 +188,7 @@ describe('signed cross-platform client updates', () => {
       if (failure === 'truncated') return new Response(new Uint8Array(f.archive.subarray(1)), { headers: { 'content-length': String(f.archive.length) } });
       return new Response(new Uint8Array(f.archive.length).fill(33));
     });
-    const result = await runClientUpdate('automatic', { ...f.dependencies, fetch: fetcher as typeof fetch });
-    expect(result.status).not.toBe('updated');
+    await expect(runClientUpdate('apply', { ...f.dependencies, fetch: fetcher as typeof fetch })).rejects.toBeInstanceOf(ClientUpdateError);
     expect(f.install).not.toHaveBeenCalled();
     expect(readFileSync(join(f.root, 'bin', 'echo-brain'))).toEqual(initial);
     expect((await runClientUpdate('automatic', { ...f.dependencies, fetch: fetcher as typeof fetch })).status).toBe('not_due');
@@ -175,7 +209,7 @@ describe('signed cross-platform client updates', () => {
     await expect(runClientUpdate('apply', f.dependencies)).rejects.toThrow('stale_metadata');
   });
 
-  it('supports disabling automatic updates without resetting publisher trust or the checkpoint', async () => {
+  it('supports disabling automatic checks without resetting trust or preventing manual updates', async () => {
     const f = fixture();
     await runClientUpdate('check', f.dependencies);
     const before = JSON.parse(readFileSync(join(f.root, 'updater/state.json'), 'utf8')).checkpoint;
@@ -183,12 +217,14 @@ describe('signed cross-platform client updates', () => {
     expect((await runClientUpdate('automatic', f.dependencies)).status).toBe('automatic_disabled');
     expect(JSON.parse(readFileSync(join(f.root, 'updater/state.json'), 'utf8')).checkpoint).toEqual(before);
     expect(() => configureClientUpdates(f.root, { ...f.config, minimum_sequence: 1 })).toThrow('already_configured');
+    expect(f.fetcher).toHaveBeenCalledOnce();
+    expect((await runClientUpdate('apply', f.dependencies)).status).toBe('updated');
+    expect(f.install).toHaveBeenCalledOnce();
   });
 
   it('retains recovery evidence and the lock after an uncertain installer outcome', async () => {
     const f = fixture();
-    const result = await runClientUpdate('automatic', { ...f.dependencies, install: () => { throw new ClientUpdateError('installation_outcome_unknown'); } });
-    expect(result.status).toBe('installation_outcome_unknown');
+    await expect(runClientUpdate('apply', { ...f.dependencies, install: () => { throw new ClientUpdateError('installation_outcome_unknown'); } })).rejects.toThrow('installation_outcome_unknown');
     expect(existsSync(join(f.root, 'updater/.lock'))).toBe(true);
     expect((await runClientUpdate('apply', f.dependencies)).status).toBe('update_busy');
   });
@@ -206,5 +242,16 @@ describe('signed cross-platform client updates', () => {
     configureClientUpdates(other.root, config);
     expect((await runClientUpdate('apply', { ...other.dependencies, platform: { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'electron' } })).status).toBe('adapter_unavailable');
     expect(other.fetcher).not.toHaveBeenCalled();
+  });
+
+  it('checks availability automatically even when the installation has no activation adapter', async () => {
+    const f = fixture();
+    const platform: UpdatePlatform = { platform: 'darwin', architecture: 'arm64', libc: null, installation: 'electron' };
+    rmSync(join(f.root, 'updater/config.json'));
+    configureClientUpdates(f.root, { ...f.config, installation: platform.installation });
+    f.manifest.artifacts.push({ ...f.manifest.artifacts[0], ...platform });
+    expect(await runClientUpdate('automatic', { ...f.dependencies, platform })).toMatchObject({ status: 'available', available_release: f.manifest.release_id });
+    expect(f.fetcher.mock.calls.map(args => args[0])).toEqual([f.config.feed_url]);
+    expect(f.install).not.toHaveBeenCalled();
   });
 });
