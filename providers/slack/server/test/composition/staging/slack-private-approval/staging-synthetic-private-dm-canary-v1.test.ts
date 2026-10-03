@@ -19,6 +19,7 @@ import type {
   ApprovalWorkflowStagerV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import { SqliteAuthorityMeetingProcessingStateV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1";
+import { openExtractionAttemptStoreV1 } from "@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1";
 import { openMeetingApprovalJourneyStateV1 } from "../../../../../../../services/organization-authority/src/composition/meeting-approval-journey-state-v1.js";
 import { openMeetingApprovalJourneyTelemetryV1 } from "../../../../../../../services/organization-authority/src/composition/meeting-approval-journey-telemetry-v1.js";
 import { SqliteSourceAdmissionStoreV1 } from "../../../../../../../services/organization-authority/src/adapters/persistence/sqlite/source-admission-v1.js";
@@ -285,7 +286,7 @@ describe("staging synthetic private-DM canary", () => {
     expect(value.prepare("SELECT count(*) FROM authority_source_contents_v1").pluck().get()).toBe(1);
   });
 
-  it("reuses V2 custody after extraction fails and the later observation changes", async () => {
+  it("retains canary custody and holds extraction after a restart and changed observation", async () => {
     const value = database();
     const state = new SqliteAuthorityMeetingProcessingStateV1(
       value,
@@ -295,6 +296,11 @@ describe("staging synthetic private-DM canary", () => {
     );
     const processor = new FailsAfterCustodyOnceProcessor(value);
     const stager = new RecordingStager(state);
+    const attemptRoot = mkdtempSync(join(tmpdir(), "echo-canary-extraction-"));
+    telemetryRoots.push(attemptRoot);
+    const attemptPath = join(attemptRoot, "extraction-attempts.sqlite");
+    const binding = { authority_id: "oau_test", organization_id: "org_test", state_lineage_id: "lin_test" };
+    const firstAttempts = openExtractionAttemptStoreV1(attemptPath, binding);
     const initial = {
       authority_url: "https://authority-staging.echobrain.org",
       canary: canaryInput,
@@ -304,22 +310,35 @@ describe("staging synthetic private-DM canary", () => {
       stager,
     } as const;
 
-    await expect(runStagingSyntheticPrivateDmCanaryV1(initial)).rejects
-      .toThrow("synthetic extraction interruption after custody");
+    try {
+      await expect(runStagingSyntheticPrivateDmCanaryV1({ ...initial, extraction_attempts: firstAttempts })).rejects
+        .toThrow("synthetic extraction interruption after custody");
+      expect(firstAttempts.listLatest()).toMatchObject([{ outcome: "failed", attempt: 1, failure_code: "unknown" }]);
+    } finally {
+      firstAttempts.close();
+    }
     expect(value.prepare("SELECT count(*) FROM authority_sources_v1").pluck().get()).toBe(1);
     expect(value.prepare("SELECT count(*) FROM authority_source_revisions_v1").pluck().get()).toBe(1);
     expect(value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2").pluck().get()).toBe(0);
 
-    await expect(runStagingSyntheticPrivateDmCanaryV1({
-      ...initial,
-      canary: { ...canaryInput, observed_at: "2026-08-30T12:01:00.000Z" },
-    })).resolves.toMatchObject({ kind: "staged", reused_frozen_extraction: false });
-    expect(processor.attempts).toBe(2);
-    expect(stager.inputs).toHaveLength(1);
+    const restartedAttempts = openExtractionAttemptStoreV1(attemptPath, binding);
+    try {
+      await expect(runStagingSyntheticPrivateDmCanaryV1({
+        ...initial,
+        extraction_attempts: restartedAttempts,
+        canary: { ...canaryInput, observed_at: "2026-08-30T12:01:00.000Z" },
+      })).rejects.toMatchObject({ code: "permanently_rejected", message: "extraction_on_hold", retryable: false });
+      expect(restartedAttempts.listLatest()).toMatchObject([{ outcome: "failed", attempt: 1, failure_code: "unknown" }]);
+    } finally {
+      restartedAttempts.close();
+    }
+    expect(processor.attempts).toBe(1);
+    expect(stager.inputs).toHaveLength(0);
     expect(value.prepare("SELECT count(*) FROM authority_sources_v1").pluck().get()).toBe(1);
     expect(value.prepare("SELECT count(*) FROM authority_source_revisions_v1").pluck().get()).toBe(1);
     expect(value.prepare("SELECT count(*) FROM authority_source_contents_v1").pluck().get()).toBe(1);
-    expect(value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2").pluck().get()).toBe(1);
+    expect(value.prepare("SELECT count(*) FROM authority_live_source_candidates_v2").pluck().get()).toBe(0);
+    expect(value.prepare("SELECT cursor FROM authority_live_source_progress_v2").pluck().get()).toBe(createGranolaPostCutoffCursor(NOW));
   });
 
   it("recovers an existing V1 canary without rewriting it as V2", async () => {

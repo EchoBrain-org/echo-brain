@@ -114,6 +114,7 @@ function preparedStatusFixture() {
   const installWaitMarker = join(root, "credential-install-waiting");
   const installReleaseMarker = join(root, "credential-install-release");
   const finalizedMarker = join(root, "finalized");
+  const extractionStoppedMarker = join(root, "extraction-stopped");
   const image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const source = "c".repeat(40);
   const releaseId = "clean-v1-status-test";
@@ -200,9 +201,25 @@ if [[ "$1" == compose && "$2" == version ]]; then exit 0; fi
 if [[ "$1" == compose ]]; then
   case " $* " in
     *" up -d --no-build --wait --wait-timeout 90 "*)
+      rm -f ${JSON.stringify(extractionStoppedMarker)}
       if [[ "$ECHO_FAKE_FAIL_FIRST_UP" == true && ! -f ${JSON.stringify(failedUpMarker)} ]]; then
         touch ${JSON.stringify(failedUpMarker)}
         exit 1
+      fi
+      exit 0
+      ;;
+    *" stop -t 30 authority "*)
+      [[ "$ECHO_FAKE_FAIL_EXTRACTION_STOP" != true ]] || exit 1
+      touch ${JSON.stringify(extractionStoppedMarker)}
+      exit 0
+      ;;
+    *"services/organization-authority/dist/clean-extraction-attempts-main.js "*)
+      if [[ "$ECHO_FAKE_FAIL_EXTRACTION_GRANT" == true ]]; then exit 1; fi
+      if [[ " $* " == *" retry "* ]]; then
+        [[ -f ${JSON.stringify(extractionStoppedMarker)} ]] || exit 1
+        printf '%s\\n' '{"kind":"echo-extraction-attempt-recovery-v1","schema_version":1,"action":"retry","outcome":"authorized"}'
+      else
+        printf '%s\\n' '{"kind":"echo-extraction-attempt-recovery-v1","schema_version":1,"action":"status","attempts":[]}'
       fi
       exit 0
       ;;
@@ -230,6 +247,7 @@ if [[ "$1" == compose ]]; then
       fi
       exit 0
       ;;
+    *" ps -aq authority "*) printf '%s\\n' fake-authority; exit 0 ;;
     *" ps -q authority "*) printf '%s\\n' fake-authority; exit 0 ;;
     *" ps -q proxy "*) printf '%s\\n' fake-proxy; exit 0 ;;
   esac
@@ -245,7 +263,10 @@ if [[ "$1" == inspect ]]; then
   if [[ "$*" == *ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1* ]]; then printf '%s\\n' "$ECHO_FAKE_CONTENT_TELEMETRY"; exit 0; fi
   if [[ "$*" == *io.echo-brain.release-id* ]]; then printf '%s\\n' "$ECHO_FAKE_RELEASE_ID"; exit 0; fi
   if [[ "$*" == *io.echo-brain.runtime-profile-sha256* ]]; then printf '%s\\n' "$ECHO_FAKE_RUNTIME_PROFILE_SHA256"; exit 0; fi
-  if [[ "$*" == *.State.Running* ]]; then printf '%s\\n' "$ECHO_FAKE_RUNNING"; exit 0; fi
+  if [[ "$*" == *.State.Running* ]]; then
+    if [[ -f ${JSON.stringify(extractionStoppedMarker)} ]]; then printf '%s\\n' false; else printf '%s\\n' "$ECHO_FAKE_RUNNING"; fi
+    exit 0
+  fi
   if [[ "$*" == *.State.Health* ]]; then printf '%s\\n' "$ECHO_FAKE_HEALTH"; exit 0; fi
   if [[ "$*" == *.Image* ]]; then printf '%s\\n' sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; exit 0; fi
 fi
@@ -300,6 +321,8 @@ exec /usr/bin/install "$@"
     ECHO_FAKE_RELEASE_ID: releaseId,
     ECHO_FAKE_RUNTIME_PROFILE_SHA256: profile.digest,
     ECHO_FAKE_RUNNING: "true",
+    ECHO_FAKE_FAIL_EXTRACTION_STOP: "false",
+    ECHO_FAKE_FAIL_EXTRACTION_GRANT: "false",
     ECHO_FAKE_HEALTH: "healthy",
     ECHO_FAKE_SETUP_STATUS: '{"next_step":"complete"}',
     ECHO_FAKE_SETUP_STATUS_AFTER_FINALIZE: "",
@@ -313,6 +336,8 @@ exec /usr/bin/install "$@"
   const run = (
     command:
       | "activate-provider-credentials"
+      | "extraction-attempts"
+      | "retry-extraction"
       | "replace-rehearsal"
       | "stage-rehearsal-inputs"
       | "prepare-rehearsal"
@@ -430,6 +455,53 @@ afterEach(() => {
 });
 
 describe("clean-v1 Organization Authority deployment profile", () => {
+  const extractionRetryArguments = ["--admission-sha256", `sha256:${"a".repeat(64)}`,
+    "--review-lineage-id", `rli_${"b".repeat(64)}`, "--review-input-sha256", `sha256:${"c".repeat(64)}`,
+    "--expected-attempt", "1", "--expected-outcome", "failed", "--confirm-new-model-call"];
+
+  it("recovery lists metadata without stopping and stops before one explicit extraction retry", () => {
+    const fixture = preparedStatusFixture();
+    expect(fixture.run("extraction-attempts").status).toBe(0);
+    expect(readFileSync(fixture.calls, "utf8")).not.toContain(" stop ");
+    const retry = fixture.run("retry-extraction", {}, extractionRetryArguments);
+    expect(retry.stderr).toBe("");
+    expect(retry.status).toBe(0);
+    const calls = readFileSync(fixture.calls, "utf8");
+    const stop = calls.indexOf("stop -t 30 authority");
+    const grant = calls.indexOf("clean-extraction-attempts-main.js retry");
+    const restart = calls.indexOf("up -d --no-build --wait --wait-timeout 90");
+    expect(stop).toBeGreaterThan(-1);
+    expect(grant).toBeGreaterThan(stop);
+    expect(restart).toBeGreaterThan(grant);
+    expect(existsSync(join(fixture.deploy, ".staging-release-guard"))).toBe(false);
+  });
+
+  it("recovery leaves the runtime stopped when authorization is refused and never grants after a failed stop", () => {
+    for (const fault of ["ECHO_FAKE_FAIL_EXTRACTION_STOP", "ECHO_FAKE_FAIL_EXTRACTION_GRANT"]) {
+      const fixture = preparedStatusFixture();
+      const result = fixture.run("retry-extraction", { [fault]: "true" }, extractionRetryArguments);
+      expect(result.status).toBe(1);
+      const calls = readFileSync(fixture.calls, "utf8");
+      expect(calls).not.toContain("up -d");
+      if (fault.endsWith("STOP")) expect(calls).not.toContain("clean-extraction-attempts-main.js retry");
+      expect(existsSync(join(fixture.deploy, ".staging-release-guard"))).toBe(false);
+    }
+  });
+
+  it("recovery refuses drift, staged releases, and concurrent operations before stopping", () => {
+    for (const fault of ["drift", "candidate", "guard", "confirmation"]) {
+      const fixture = preparedStatusFixture();
+      if (fault === "drift") writeFileSync(join(fixture.deploy, ".env.clean-v1"), "drift\n");
+      if (fault === "candidate") copyFileSync(join(fixture.releaseDir, "current.clean-v1.json"), join(fixture.releaseDir, "candidate.clean-v1.json"));
+      if (fault === "guard") mkdirSync(join(fixture.deploy, ".staging-release-guard"), { mode: 0o700 });
+      const result = fixture.run("retry-extraction", {}, fault === "confirmation" ? extractionRetryArguments.slice(0, -1) : extractionRetryArguments);
+      expect(result.status).not.toBe(0);
+      const calls = existsSync(fixture.calls) ? readFileSync(fixture.calls, "utf8") : "";
+      expect(calls).not.toContain(" stop ");
+      expect(calls).not.toContain("clean-extraction-attempts-main.js retry");
+    }
+  });
+
   it("keeps server onboarding in one resumable wrapper with fixed private inputs", () => {
     const wrapper = resolve(REPO, DEPLOYMENT, "onboard-clean-v1.sh");
     const source = readFileSync(wrapper, "utf8");
