@@ -108,6 +108,19 @@ export class SqliteCaptureFoundationV1 {
       return snapshotCaptureDataV1(this.source(heads[0]!));
     });
   }
+  /**
+   * The number of capture annotations retained for one installed adapter. Custody rows
+   * cannot be updated or deleted, so this only falls if authority.sqlite was rolled back.
+   * Future erasure must keep bookmark proofs valid and block re-admission of erased items.
+   */
+  captureCount(input: { readonly organization_id: string; readonly adapter_id: string; readonly instance_id: string }): number {
+    assertPlainContextObjectV1(input, ['organization_id', 'adapter_id', 'instance_id'], 'Capture count request');
+    assertCaptureTextV1(input.organization_id, 'Organization'); assertCaptureTextV1(input.adapter_id, 'Adapter'); assertCaptureTextV1(input.instance_id, 'Adapter instance');
+    return (this.database.prepare(`SELECT count(*) AS n FROM authority_source_representations_v1 a
+      JOIN authority_sources_v1 s ON s.organization_id=a.organization_id AND s.source_id=a.source_id
+      WHERE a.organization_id=? AND s.adapter_id=? AND s.instance_id=? AND a.processor_version=?`)
+      .get(input.organization_id, input.adapter_id, input.instance_id, CAPTURE_ANNOTATION_PROCESSOR_V1) as { n: number }).n;
+  }
   snapshot(input: { readonly organization_id: string; readonly project_id: string; readonly selections: readonly CaptureSnapshotSelectionV1[] }): CaptureDeriveSnapshotV1 {
     assertPlainContextObjectV1(input, ['organization_id', 'project_id', 'selections'], 'Capture snapshot request');
     assertCaptureTextV1(input.organization_id, 'Organization'); assertCaptureTextV1(input.project_id, 'Project');

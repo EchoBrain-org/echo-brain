@@ -13,6 +13,8 @@ type CaptureRetryRefV1 = CaptureRevisionRefV1 & { readonly reason: 'needs_review
 /** Layer 1 custody, implemented by the SQLite capture foundation. */
 export interface CaptureSourceStoreV2 {
   head(input: { readonly organization_id: string; readonly source_id: string }): ContextCaptureEnvelopeV2 | undefined;
+  /** Retained capture records for one installed adapter. It never falls unless custody was rolled back. */
+  captureCount(input: { readonly organization_id: string; readonly adapter_id: string; readonly instance_id: string }): number;
   admit(input: {
     readonly identity: SourceAdapterIdentityV1; readonly source: ContextCaptureEnvelopeV2;
     readonly classification: CaptureClassificationV1; readonly bindings?: CaptureBindingsV1;
@@ -22,11 +24,19 @@ export interface CaptureSourceStoreV2 {
 }
 /**
  * Per-source bookmark. It is not atomic with custody: a crash after admission replays
- * the batch, and unchanged items return `duplicate`.
+ * the batch, and unchanged items return `duplicate`. `retained` is the adapter instance's
+ * capture count when the bookmark advanced; custody with fewer records is behind it.
  */
+export interface CaptureBookmarkV1 {
+  readonly cursor: string;
+  readonly retained: number;
+  readonly adapter_id: string;
+  readonly instance_id: string;
+}
 export interface CaptureCursorStoreV1 {
-  read(source_id: string): string | undefined;
-  write(input: { readonly source_id: string; readonly cursor: string; readonly updated_at: string }): void;
+  read(source_id: string): CaptureBookmarkV1 | undefined;
+  write(input: CaptureBookmarkV1 & { readonly source_id: string; readonly updated_at: string }): void;
+  clear(source_id: string): void;
 }
 /** Counts only. No content leaves a run. */
 export interface CaptureSourceRunResultV1 {
@@ -97,8 +107,19 @@ export function createCaptureSourceRunnerV1<TDeps>(options: CaptureSourceRunnerO
       if (canonicalSourceContentV1(provider.source.identity) !== identity) throw new Error('Capture provider differs from its configured adapter');
     };
     checkIdentity();
-    // 2. Bookmark, read grant, pull.
-    const cursor = cursors.read(sourceId);
+    const store = openStore({ containers: config.containers, authority: createCaptureSourceAuthorityV1(config, checkers) });
+    const custody = { organization_id: config.scope.organization_id, adapter_id: config.adapter.adapter_id, instance_id: config.adapter.instance_id };
+    // 2. Bookmark, read grant, pull. A bookmark must prove itself against custody. If it came
+    // from another adapter instance, or fewer captures are retained than when it advanced
+    // (custody was rolled back or replaced behind it), forget it before pulling, so an
+    // interrupted replay cannot revive it. Replay from the start only finds duplicates.
+    const bookmark = cursors.read(sourceId);
+    let cursor = bookmark?.cursor;
+    if (bookmark !== undefined && (bookmark.adapter_id !== custody.adapter_id || bookmark.instance_id !== custody.instance_id ||
+        store.captureCount(custody) < bookmark.retained)) {
+      cursors.clear(sourceId);
+      cursor = undefined;
+    }
     const request = captureSourcePullRequestV2({ limit, ...(cursor === undefined ? {} : { cursor }) });
     await provider.require_read_current(context);
     context?.signal.throwIfAborted(); checkIdentity();
@@ -110,7 +131,6 @@ export function createCaptureSourceRunnerV1<TDeps>(options: CaptureSourceRunnerO
     context?.signal.throwIfAborted(); checkIdentity();
 
     // Synchronous from here: no other work in this process interleaves with admission.
-    const store = openStore({ containers: config.containers, authority: createCaptureSourceAuthorityV1(config, checkers) });
     const producer = { id: config.classifier.id, version: config.classifier.version, config_sha256: captureSourceConfigSha256V1(config) };
     // 4a. Build and classify the whole batch before storing any of it. Items are unique
     // within a batch, so each predecessor is the retained head.
@@ -140,8 +160,12 @@ export function createCaptureSourceRunnerV1<TDeps>(options: CaptureSourceRunnerO
       else if (result.admission === 'admitted') admitted += 1;
       else duplicate += 1;
     }
-    // 6. The whole batch is admitted. An absent next cursor keeps the stored bookmark.
-    if (batch.next_cursor !== undefined) cursors.write({ source_id: sourceId, cursor: batch.next_cursor, updated_at: now() });
+    // 6. The whole batch is admitted. An absent next cursor keeps the stored bookmark. The count
+    // covers every capture retained so far, including any admitted by runs that never advanced it.
+    if (batch.next_cursor !== undefined) {
+      cursors.write({ source_id: sourceId, cursor: batch.next_cursor, retained: store.captureCount(custody),
+        adapter_id: custody.adapter_id, instance_id: custody.instance_id, updated_at: now() });
+    }
     return Object.freeze({ admitted, duplicate, skipped });
   }
 

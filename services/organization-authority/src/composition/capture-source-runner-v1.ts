@@ -26,7 +26,7 @@ export function openCaptureSourceRunnerV1<TDeps>(options: Omit<CaptureSourceRunn
   try {
     bookmarks = openAuthorityDatabase(join(stateDirectory, CAPTURE_CURSORS_DATABASE_V1));
     // Validates every configuration before the organization check reads it.
-    const runner = createCaptureSourceRunnerV1({ ...runnerOptions, cursors: new SqliteCaptureCursorStoreV1(bookmarks),
+    const runner = createCaptureSourceRunnerV1({ ...runnerOptions, cursors: new SqliteCaptureCursorStoreV1(bookmarks, { state_lineage_id: lineage.state_lineage_id }),
       open_store: ({ containers, authority: fence }) => new SqliteCaptureFoundationV1(authority, fence, containers) });
     if (runnerOptions.configs.some(config => config.scope.organization_id !== lineage.organization_id)) {
       throw new Error('Capture source configuration belongs to another organization');

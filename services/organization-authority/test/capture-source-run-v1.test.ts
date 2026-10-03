@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,6 +8,7 @@ import {
   type CaptureLocalClassifierV1, type CaptureSnapshotSelectionV1, type CaptureSourceConfigV1, type ContextCaptureEnvelopeV2,
 } from '@echo-brain/organization-processing/core';
 import { SqliteCaptureFoundationV1 } from '../src/adapters/persistence/sqlite/capture-foundation-v1.js';
+import { SqliteSourceAdmissionStoreV1 } from '../src/adapters/persistence/sqlite/source-admission-v1.js';
 import { createCaptureSourceAuthorityV1, type CaptureSourceAuthorityCheckersV1 } from '../src/application/capture-source-authority-v1.js';
 import { CAPTURE_CURSORS_DATABASE_V1, openCaptureSourceRunnerV1 } from '../src/composition/capture-source-runner-v1.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
@@ -19,11 +20,18 @@ import {
 let root: string;
 let directory: string;
 let organization: string;
+let lineage: string;
 let owner: { readonly principal_id: string; readonly membership_id: string };
 let fake: FakeCaptureProviderV2;
 const opened: { close(): void }[] = [];
 
 function config(changes: Partial<CaptureSourceConfigV1> = {}): CaptureSourceConfigV1 { return fakeCaptureSourceConfig(changes, organization); }
+const OTHER_INSTANCE = { ...FAKE_IDENTITY, instance_id: 'fake-workspace-b' };
+/** The same connected source, moved to another installed adapter instance. */
+function otherInstanceConfig(): CaptureSourceConfigV1 {
+  const base = config(); const adapter = { adapter_id: OTHER_INSTANCE.adapter_id, instance_id: OTHER_INSTANCE.instance_id };
+  return { ...base, adapter: OTHER_INSTANCE, containers: { ...base.containers, mappings: base.containers.mappings.map(mapping => ({ ...mapping, adapter })) } };
+}
 
 function open(options: { config?: CaptureSourceConfigV1; checkers?: CaptureSourceAuthorityCheckersV1; classifiers?: readonly CaptureLocalClassifierV1[]; providers?: Record<string, FakeCaptureProviderV2['factory']> } = {}) {
   const runner = openCaptureSourceRunnerV1({
@@ -41,9 +49,11 @@ function inspect<T>(file: string, read: (database: Database.Database) => T): T {
 function count(table: string): number {
   return inspect('authority.sqlite', database => (database.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n);
 }
-function bookmark(): string | undefined {
-  return inspect(CAPTURE_CURSORS_DATABASE_V1, database => (database.prepare('SELECT cursor FROM capture_cursors_v1 WHERE source_id=?').get(FAKE_SOURCE_ID) as { cursor: string } | undefined)?.cursor);
+function bookmarkRow(): { cursor: string; retained: number; state_lineage_id: string } | undefined {
+  return inspect(CAPTURE_CURSORS_DATABASE_V1, database => database.prepare('SELECT cursor, retained, state_lineage_id FROM capture_cursors_v1 WHERE source_id=?').get(FAKE_SOURCE_ID) as
+    { cursor: string; retained: number; state_lineage_id: string } | undefined);
 }
+function bookmark(): string | undefined { return bookmarkRow()?.cursor; }
 function withStore<T>(use: (store: SqliteCaptureFoundationV1, database: Database.Database) => T, policy = config(), checkers: CaptureSourceAuthorityCheckersV1 = {}): T {
   return inspect('authority.sqlite', database => {
     database.pragma('foreign_keys = ON');
@@ -67,7 +77,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'echo-capture-run-')); chmodSync(root, 0o700);
   const initialized = bootstrapOrganizationAuthorityState({ state_directory: join(root, 'state'), organization_display_name: 'Fixture',
     owner_display_name: 'Owner', created_at: FAKE_TIMES.first, creating_artifact_revision: 'capture-core-fixture' });
-  directory = initialized.state_directory; organization = initialized.organization_id;
+  directory = initialized.state_directory; organization = initialized.organization_id; lineage = initialized.state_lineage_id;
   owner = { principal_id: initialized.owner_principal_id, membership_id: initialized.owner_membership_id };
   inspect('authority.sqlite', database => { addProject(database, FAKE_PROJECTS.alpha); addProject(database, FAKE_PROJECTS.beta); });
   fake = createFakeCaptureProviderV2();
@@ -78,7 +88,8 @@ describe('vendor-free capture runtime', () => {
   it('admits five kinds across two containers, then a rerun is all duplicates', async () => {
     const runner = open();
     expect(await runner.runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 5, duplicate: 0, skipped: 0 });
-    expect(fake.requests).toEqual([{ limit: 50 }]); expect(bookmark()).toBe(FAKE_CURSORS.first);
+    expect(fake.requests).toEqual([{ limit: 50 }]);
+    expect(bookmarkRow()).toEqual({ cursor: FAKE_CURSORS.first, retained: 5, state_lineage_id: lineage });
     const kinds = inspect('authority.sqlite', database => (database.prepare('SELECT content_json FROM authority_source_contents_v1').all() as { content_json: string }[])
       .map(row => JSON.parse(row.content_json).payload.kind).sort());
     expect(kinds).toEqual(['document', 'meeting', 'message', 'note', 'ticket']);
@@ -154,6 +165,100 @@ describe('vendor-free capture runtime', () => {
     expect(await open().runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 0, duplicate: 5, skipped: 0 });
     expect(fake.requests.map(request => request.cursor)).toEqual([undefined, undefined]);
     expect(count('authority_source_revisions_v1')).toBe(5); expect(bookmark()).toBe(FAKE_CURSORS.first);
+  });
+
+  it('pulls from the start when authority.sqlite is rolled back behind the bookmark, even if the batch ended with an unchanged item', async () => {
+    const ticket = { external_id: 'ticket-1', captured_at: FAKE_TIMES.first, content: FAKE_CONTENT.ticket() };
+    const message = { external_id: 'message-1', captured_at: FAKE_TIMES.second, content: FAKE_CONTENT.message() };
+    // Run 1 stores the ticket. Run 2 stores a new message, then sees the ticket unchanged as its last item.
+    fake.respond = request => request.cursor === undefined ? { items: [ticket], next_cursor: FAKE_CURSORS.first } : { items: [message, ticket], next_cursor: FAKE_CURSORS.second };
+    const first = open();
+    expect(await first.runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 1, duplicate: 0, skipped: 0 });
+    first.close();
+    copyFileSync(join(directory, 'authority.sqlite'), join(root, 'authority-after-run-1.sqlite'));
+    const second = open();
+    expect(await second.runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 1, duplicate: 1, skipped: 0 });
+    second.close();
+    expect(bookmarkRow()).toMatchObject({ cursor: FAKE_CURSORS.second, retained: 2 });
+    // Only authority.sqlite goes back. The surviving bookmark is ahead of custody, so the next run starts over.
+    copyFileSync(join(root, 'authority-after-run-1.sqlite'), join(directory, 'authority.sqlite'));
+    expect(head('message-1')).toBeUndefined();
+    const restored = open();
+    expect(await restored.runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 0, duplicate: 1, skipped: 0 });
+    expect(fake.requests.at(-1)).toEqual({ limit: 50 });
+    expect(await restored.runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 1, duplicate: 1, skipped: 0 });
+    expect(head('message-1')).toBeDefined(); expect(bookmarkRow()).toMatchObject({ cursor: FAKE_CURSORS.second, retained: 2 });
+  });
+
+  it('forgets an unproven bookmark before pulling, so an interrupted replay cannot revive it', async () => {
+    const first = open();
+    await first.runCaptureSourceOnce(FAKE_SOURCE_ID);
+    first.close();
+    copyFileSync(join(directory, 'authority.sqlite'), join(root, 'authority-after-run-1.sqlite'));
+    const second = open();
+    expect(await second.runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 2, duplicate: 1, skipped: 0 });
+    second.close();
+    // The count covers all custody (5 + 2), not just this batch of 3.
+    expect(bookmarkRow()).toMatchObject({ cursor: FAKE_CURSORS.second, retained: 7 });
+    copyFileSync(join(root, 'authority-after-run-1.sqlite'), join(directory, 'authority.sqlite'));
+    // The detecting run uses changed rules, re-annotating replayed duplicates (count 5 -> 7), then stops at review.
+    const reviewMeetings: CaptureLocalClassifierV1 = { id: 'review-meetings', version: '1',
+      rules: [content => content.payload.kind === 'meeting' ? { decision: 'unresolved', reason: 'needs_review' } : undefined] };
+    const interrupted = open({ config: config({ classifier: { id: 'review-meetings', version: '1' } }), classifiers: [reviewMeetings] });
+    expect(await interrupted.runCaptureSourceOnce(FAKE_SOURCE_ID)).toMatchObject({ duplicate: 2, stopped_at: { reason: 'needs_review' } });
+    expect(fake.requests.at(-1)).toEqual({ limit: 50 }); expect(bookmarkRow()).toBeUndefined();
+    // The count is back to 7, yet the old bookmark is gone: the next runs replay and recover.
+    const recovered = open();
+    await recovered.runCaptureSourceOnce(FAKE_SOURCE_ID);
+    expect(fake.requests.at(-1)).toEqual({ limit: 50 });
+    expect(await recovered.runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 2, duplicate: 1, skipped: 0 });
+    const ticket = head('ticket-1')!;
+    expect(ticket.content.lifecycle === 'present' && ticket.content.payload.kind === 'ticket' && ticket.content.payload.status).toBe('done');
+    expect(head('note-1')!.content.lifecycle).toBe('deleted');
+  });
+
+  it('counts only this adapter instance\'s capture annotations, including re-annotations', async () => {
+    await open().runCaptureSourceOnce(FAKE_SOURCE_ID);
+    const custody = { organization_id: organization, adapter_id: FAKE_IDENTITY.adapter_id, instance_id: FAKE_IDENTITY.instance_id };
+    const count = (instance_id = FAKE_IDENTITY.instance_id) => withStore(store => store.captureCount({ ...custody, instance_id }));
+    expect(count()).toBe(5);
+    // Another processor's representation is not a capture record.
+    const ticket = head('ticket-1')!;
+    inspect('authority.sqlite', database => new SqliteSourceAdmissionStoreV1(database).recordRepresentation({ organization_id: organization,
+      source_id: ticket.item.source_id, revision_id: ticket.revision.revision_id, processor_version: 'extractor-1', content: { text: 'derived' } }));
+    expect(count()).toBe(5);
+    // Another adapter instance keeps its own count.
+    const other = otherInstanceConfig();
+    const note = buildContextCaptureEnvelopeV2({ identity: OTHER_INSTANCE, external_id: 'note-1', captured_at: FAKE_TIMES.first, content: FAKE_CONTENT.note() });
+    const classification = classifyCaptureV1({ source: note, producer: { id: 'rules', version: '1', config_sha256: captureSourceConfigSha256V1(other) }, rules: [] });
+    withStore(store => store.admit({ identity: OTHER_INSTANCE, source: note, classification,
+      bindings: { scope: other.scope, project_id: FAKE_PROJECTS.beta, container_ref: FAKE_CONTAINERS.beta, people: [] } }), other);
+    expect(count()).toBe(5); expect(count(OTHER_INSTANCE.instance_id)).toBe(1);
+    // A changed configuration re-annotates unchanged items; each annotation counts.
+    fake.respond = () => ({ items: fakeInitialItems(FAKE_TIMES.second) });
+    const alternate: CaptureLocalClassifierV1 = { id: 'alternate', version: '1', rules: [] };
+    expect(await open({ config: config({ classifier: { id: 'alternate', version: '1' } }), classifiers: [alternate] }).runCaptureSourceOnce(FAKE_SOURCE_ID))
+      .toEqual({ admitted: 0, duplicate: 5, skipped: 0 });
+    expect(count()).toBe(10); expect(count('fake-workspace-c')).toBe(0);
+  });
+
+  it('forgets a bookmark written for another adapter instance of the same source', async () => {
+    await open().runCaptureSourceOnce(FAKE_SOURCE_ID);
+    expect(bookmark()).toBe(FAKE_CURSORS.first);
+    fake.identity = OTHER_INSTANCE;
+    expect(await open({ config: otherInstanceConfig() }).runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 5, duplicate: 0, skipped: 0 });
+    expect(fake.requests.map(request => request.cursor)).toEqual([undefined, undefined]);
+    expect(inspect(CAPTURE_CURSORS_DATABASE_V1, database => database.prepare('SELECT instance_id, retained FROM capture_cursors_v1').get()))
+      .toEqual({ instance_id: OTHER_INSTANCE.instance_id, retained: 5 });
+  });
+
+  it('treats a bookmark written under another state lineage as absent', async () => {
+    const runner = open();
+    await runner.runCaptureSourceOnce(FAKE_SOURCE_ID);
+    inspect(CAPTURE_CURSORS_DATABASE_V1, database => database.prepare("UPDATE capture_cursors_v1 SET state_lineage_id='lineage-other'").run());
+    expect(await runner.runCaptureSourceOnce(FAKE_SOURCE_ID)).toEqual({ admitted: 0, duplicate: 5, skipped: 0 });
+    expect(fake.requests.map(request => request.cursor)).toEqual([undefined, undefined]);
+    expect(bookmarkRow()).toEqual({ cursor: FAKE_CURSORS.first, retained: 5, state_lineage_id: lineage });
   });
 
   it('hands admitted captures to an exact derive snapshot through the same configured policy, across an adapter upgrade', async () => {
