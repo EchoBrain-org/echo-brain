@@ -15,3 +15,6 @@ export * from "./contracts/context-capture-v2.js";
 export * from "./contracts/context-derivation-v1.js";
 export * from "./contracts/capture-source-ref-v1.js";
 export * from "./contracts/capture-container-scope-v1.js";
+export * from "./contracts/capture-source-config-v1.js";
+export * from "./contracts/capture-source-v2.js";
+export * from "./processing/capture-classification-v1.js";

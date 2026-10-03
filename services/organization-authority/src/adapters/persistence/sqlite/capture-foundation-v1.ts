@@ -10,11 +10,13 @@ import {
 import { requireCurrentCaptureAuthorityV1, snapshotCaptureDataV1, type CaptureFoundationAuthorityV1 } from '../../../application/capture-foundation-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from './source-admission-v1.js';
 
-interface CaptureRow {
+interface SourceRow {
   readonly source_id: string; readonly adapter_id: string; readonly instance_id: string; readonly external_id: string;
-  readonly custody_ref: string; readonly access_policy_ref: string; readonly analysis_policy: 'on_request';
   readonly revision_id: string; readonly adapter_version: string; readonly captured_at: string; readonly content_sha256: string;
   readonly revision_sha256: string; readonly manifest_json: string; readonly content_json: string;
+}
+interface CaptureRow extends SourceRow {
+  readonly custody_ref: string; readonly access_policy_ref: string; readonly analysis_policy: 'on_request';
   readonly annotation_json: string; readonly annotation_sha256: string; readonly processor_version: string;
 }
 /** Internal Layer 1 custody and exact Layer 2 input. No public reads or provider I/O. */
@@ -78,6 +80,34 @@ export class SqliteCaptureFoundationV1 {
       return { admission, selection: { ...captureRevisionRefV1(source), annotation_representation_id: annotationId } };
     });
   }
+  /**
+   * The latest retained revision of one source item: the one no retained revision names
+   * as its predecessor. The fork guard leaves at most one. Returned only to build the next
+   * envelope; this is internal capture input, never a Person read.
+   */
+  head(input: { readonly organization_id: string; readonly source_id: string }): ContextCaptureEnvelopeV2 | undefined {
+    assertPlainContextObjectV1(input, ['organization_id', 'source_id'], 'Capture head request');
+    assertCaptureTextV1(input.organization_id, 'Organization');
+    if (typeof input.source_id !== 'string' || !/^source:[a-f0-9]{64}$/.test(input.source_id)) throw new Error('Capture head source is invalid');
+    return this.atomic(() => {
+      const heads = this.database.prepare(`SELECT s.source_id,s.adapter_id,s.instance_id,s.external_id,
+        r.revision_id,r.adapter_version,r.captured_at,r.content_sha256,r.revision_sha256,r.manifest_json,c.content_json
+        FROM authority_sources_v1 s JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id
+        JOIN authority_source_contents_v1 c ON c.organization_id=r.organization_id AND c.source_id=r.source_id AND c.revision_id=r.revision_id
+        WHERE s.organization_id=? AND s.source_id=? AND NOT EXISTS (
+          SELECT 1 FROM authority_source_revisions_v1 n WHERE n.organization_id=r.organization_id AND n.source_id=r.source_id
+            AND json_extract(n.manifest_json, '$.previous_revision_id')=r.revision_id)
+        LIMIT 2`).all(input.organization_id, input.source_id) as SourceRow[];
+      if (heads.length > 1) throw new Error('Retained capture lineage has more than one head');
+      if (heads.length === 0) {
+        if (this.database.prepare('SELECT 1 FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=?').get(input.organization_id, input.source_id) !== undefined) {
+          throw new Error('Retained capture lineage has no head');
+        }
+        return undefined;
+      }
+      return snapshotCaptureDataV1(this.source(heads[0]!));
+    });
+  }
   snapshot(input: { readonly organization_id: string; readonly project_id: string; readonly selections: readonly CaptureSnapshotSelectionV1[] }): CaptureDeriveSnapshotV1 {
     assertPlainContextObjectV1(input, ['organization_id', 'project_id', 'selections'], 'Capture snapshot request');
     assertCaptureTextV1(input.organization_id, 'Organization'); assertCaptureTextV1(input.project_id, 'Project');
@@ -115,19 +145,27 @@ export class SqliteCaptureFoundationV1 {
       JOIN authority_source_representations_v1 a ON a.organization_id=r.organization_id AND a.source_id=r.source_id AND a.revision_id=r.revision_id
       WHERE s.organization_id=? AND s.source_id=? AND r.revision_id=? AND a.representation_id=?`).get(organizationId, selection.source_id, selection.revision_id, selection.annotation_representation_id) as CaptureRow | undefined;
     if (!row) throw new Error('Exact capture or annotation is not retained');
-    if (Buffer.byteLength(row.content_json) > 256 * 1024 || Buffer.byteLength(row.annotation_json) > CAPTURE_FOUNDATION_LIMITS_V1.annotation_bytes || Buffer.byteLength(row.manifest_json) > 16 * 1024) throw new Error('Retained capture exceeds its bound');
+    if (Buffer.byteLength(row.annotation_json) > CAPTURE_FOUNDATION_LIMITS_V1.annotation_bytes) throw new Error('Retained capture exceeds its bound');
+    const source = this.source(row);
+    const annotation = JSON.parse(row.annotation_json) as CaptureAnnotationV1;
+    assertCaptureAnnotationV1(annotation, source);
+    const scope = { organization_id: organizationId, custody_ref: row.custody_ref, access_policy_ref: row.access_policy_ref, analysis_policy: row.analysis_policy };
+    if (row.content_sha256 !== selection.content_sha256 ||
+        canonicalSourceContentV1(annotation.scope) !== canonicalSourceContentV1(scope) || row.processor_version !== CAPTURE_ANNOTATION_PROCESSOR_V1 ||
+        canonicalSourceContentV1(annotation) !== row.annotation_json || sourceContentSha256V1(annotation) !== row.annotation_sha256 || captureAnnotationIdV1(selection, annotation) !== selection.annotation_representation_id) throw new Error('Retained capture integrity failed');
+    return { source, annotation, annotation_representation_id: selection.annotation_representation_id };
+  }
+  /** Rebuilds one retained envelope and verifies it against every stored commitment. */
+  private source(row: SourceRow): ContextCaptureEnvelopeV2 {
+    if (Buffer.byteLength(row.content_json) > 256 * 1024 || Buffer.byteLength(row.manifest_json) > 16 * 1024) throw new Error('Retained capture exceeds its bound');
     const source: ContextCaptureEnvelopeV2 = {
       item: { schema_version: 1, source_id: row.source_id, adapter: { kind: 'source', adapter_id: row.adapter_id, instance_id: row.instance_id, version: row.adapter_version }, external_id: row.external_id },
       revision: JSON.parse(row.manifest_json) as ContextCaptureEnvelopeV2['revision'], content: JSON.parse(row.content_json) as ContextCaptureEnvelopeV2['content'],
     };
-    const annotation = JSON.parse(row.annotation_json) as CaptureAnnotationV1;
-    assertContextCaptureEnvelopeV2(source, source.item.adapter); assertCaptureAnnotationV1(annotation, source);
+    assertContextCaptureEnvelopeV2(source, source.item.adapter);
     const { captured_at: _captured, ...immutableRevision } = source.revision;
-    const scope = { organization_id: organizationId, custody_ref: row.custody_ref, access_policy_ref: row.access_policy_ref, analysis_policy: row.analysis_policy };
-    if (source.revision.revision_id !== row.revision_id || source.revision.captured_at !== row.captured_at || source.revision.content_sha256 !== row.content_sha256 || row.content_sha256 !== selection.content_sha256 ||
-        sourceContentSha256V1(immutableRevision) !== row.revision_sha256 || canonicalSourceContentV1(source.content) !== row.content_json || canonicalSourceContentV1(source.revision) !== row.manifest_json ||
-        canonicalSourceContentV1(annotation.scope) !== canonicalSourceContentV1(scope) || row.processor_version !== CAPTURE_ANNOTATION_PROCESSOR_V1 ||
-        canonicalSourceContentV1(annotation) !== row.annotation_json || sourceContentSha256V1(annotation) !== row.annotation_sha256 || captureAnnotationIdV1(selection, annotation) !== selection.annotation_representation_id) throw new Error('Retained capture integrity failed');
-    return { source, annotation, annotation_representation_id: selection.annotation_representation_id };
+    if (source.revision.revision_id !== row.revision_id || source.revision.captured_at !== row.captured_at || source.revision.content_sha256 !== row.content_sha256 ||
+        sourceContentSha256V1(immutableRevision) !== row.revision_sha256 || canonicalSourceContentV1(source.content) !== row.content_json || canonicalSourceContentV1(source.revision) !== row.manifest_json) throw new Error('Retained capture integrity failed');
+    return source;
   }
 }
