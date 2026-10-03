@@ -279,7 +279,7 @@ fi
 mv "$pending_wrapper" "$wrapper" || fail 'the ECHO command could not be activated'
 wrapper_activated=1
 if [[ -n "$update_lock" ]]; then rmdir "$update_lock"; update_lock=''; fi
-# The first Person command can now perform an automatic update of its own.
+# The first Person command can now check for an update and report availability.
 rmdir "$install_lock"
 install_lock=''
 

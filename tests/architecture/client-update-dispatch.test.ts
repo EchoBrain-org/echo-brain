@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -148,7 +148,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-it.skipIf(!nativeTarget)('updates a packaged CLI before exactly one Person command dispatch over signed HTTPS', async () => {
+it.skipIf(!nativeTarget)('announces a signed update without changing Person dispatch until a manual update', async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'echo-client-update-dispatch-'));
   roots.push(root);
   const home = join(root, 'home');
@@ -176,7 +176,11 @@ it.skipIf(!nativeTarget)('updates a packaged CLI before exactly one Person comma
   const tls = issueLocalCertificate(root);
   let artifact: Buffer = Buffer.alloc(0);
   let envelope = Buffer.alloc(0);
+  let feedRequests = 0;
+  let artifactRequests = 0;
   const server = createServer({ key: readFileSync(tls.key), cert: readFileSync(tls.certificate) }, (request, response) => {
+    if (request.url === '/feed.json') feedRequests += 1;
+    if (request.url === '/artifact.zip') artifactRequests += 1;
     const payload = request.url === '/feed.json' ? envelope : request.url === '/artifact.zip' ? artifact : undefined;
     if (!payload) { response.writeHead(404); response.end(); return; }
     response.writeHead(200, { 'Content-Length': String(payload.length), 'Content-Type': 'application/octet-stream' });
@@ -213,7 +217,8 @@ it.skipIf(!nativeTarget)('updates a packaged CLI before exactly one Person comma
       artifacts: [{ ...platform, url: `https://localhost:${address.port}/artifact.zip`, sha256: sha256(artifact), bytes: artifact.length }],
     };
     const payload = Buffer.from(JSON.stringify(manifest));
-    envelope = Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') }));
+    const signedEnvelope = Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') }));
+    envelope = signedEnvelope;
     const config = join(root, 'trusted-config.json');
     writeFileSync(config, JSON.stringify(bootstrap));
     const updateEnvironment = { ...environment, NODE_EXTRA_CA_CERTS: tls.certificate };
@@ -225,10 +230,49 @@ it.skipIf(!nativeTarget)('updates a packaged CLI before exactly one Person comma
     expect(output).toHaveLength(1);
     const status = JSON.parse(output[0]);
     expect(status).toMatchObject({ kind: 'echo-person-client-status-v1', signed_in: false,
-      client_build: { source_sha: clientB.sourceSha, source_kind: clientB.sourceKind } });
-    expect(dispatched.stderr).toContain(`ECHO updated to ${releaseB}.`);
+      client_build: { source_sha: clientA.sourceSha, source_kind: clientA.sourceKind } });
+    expect(dispatched.stderr).toContain(releaseB);
+    expect(dispatched.stderr).toContain('Run echo-brain update to install it.');
+    expect(feedRequests).toBe(1);
+    expect(artifactRequests).toBe(0);
+    expect(readFileSync(cli, 'utf8')).toContain(`/releases/${releaseA}/`);
+    expect(existsSync(join(cliRoot, 'releases', releaseB))).toBe(false);
     const updateStatus = JSON.parse(run(cli, ['update', '--status', '--json'], updateEnvironment).stdout);
-    expect(updateStatus).toMatchObject({ status: 'updated', installed_release: releaseB });
+    expect(updateStatus).toMatchObject({ status: 'available', installed_release: releaseA, available_release: releaseB });
+
+    // A recent verified release stays visible without another feed request.
+    const cached = await runAsync(cli, ['person', 'status'], updateEnvironment);
+    expect(JSON.parse(cached.stdout)).toMatchObject({ client_build: { source_sha: clientA.sourceSha } });
+    expect(cached.stderr).toContain(releaseB);
+    expect(cached.stderr).toContain('Run echo-brain update to install it.');
+    const due = JSON.parse((await runAsync(cli, ['update', '--if-due', '--json'], updateEnvironment)).stdout);
+    expect(due).toMatchObject({ installed_release: releaseA, available_release: releaseB });
+    expect(feedRequests).toBe(1);
+    expect(artifactRequests).toBe(0);
+
+    // A failed new verification must not revive the old availability notice.
+    const statePath = join(cliRoot, 'updater/state.json');
+    const savedState = JSON.parse(readFileSync(statePath, 'utf8'));
+    writeFileSync(statePath, JSON.stringify({ ...savedState, checked_at: now - 2 * 60 * 60 * 1000 }));
+    envelope = Buffer.from(JSON.stringify({ payload: payload.toString('base64'), signature: Buffer.alloc(64).toString('base64') }));
+    const failedCheck = await runAsync(cli, ['person', 'status'], updateEnvironment);
+    expect(JSON.parse(failedCheck.stdout)).toMatchObject({ client_build: { source_sha: clientA.sourceSha } });
+    expect(failedCheck.stderr).not.toContain('Run echo-brain update to install it.');
+    const cachedFailure = await runAsync(cli, ['person', 'status'], updateEnvironment);
+    expect(JSON.parse(cachedFailure.stdout)).toMatchObject({ client_build: { source_sha: clientA.sourceSha } });
+    expect(cachedFailure.stderr).not.toContain('Run echo-brain update to install it.');
+    expect(feedRequests).toBe(2);
+    expect(artifactRequests).toBe(0);
+
+    // Only the explicit update command downloads and activates release B.
+    envelope = signedEnvelope;
+    const applied = JSON.parse((await runAsync(cli, ['update', '--json'], updateEnvironment)).stdout);
+    expect(applied).toMatchObject({ status: 'updated', installed_release: releaseB });
+    expect(feedRequests).toBe(3);
+    expect(artifactRequests).toBe(1);
+    const afterUpdate = await runAsync(cli, ['person', 'status'], updateEnvironment);
+    expect(JSON.parse(afterUpdate.stdout)).toMatchObject({ client_build: { source_sha: clientB.sourceSha } });
+    expect(afterUpdate.stderr).not.toContain('Run echo-brain update to install it.');
     expect(readFileSync(sessionSentinel, 'utf8')).toBe('preserve synthetic session');
     expect(readFileSync(appSentinel, 'utf8')).toBe('preserve unrelated app');
     expect(readFileSync(cli, 'utf8')).toContain(`/releases/${releaseB}/`);
