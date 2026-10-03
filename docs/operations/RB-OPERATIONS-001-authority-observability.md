@@ -216,6 +216,16 @@ an empty source poll. For failures inside a started worker cycle,
 cycle. `cancelled` with `retryable: false` means shutdown stopped the in-flight
 work; startup failures are also non-retryable because no worker cycle exists.
 
+A later worker cycle does not authorize another model call for unchanged
+meeting input. The live runtime durably reserves one automatic extraction
+attempt before contacting the provider. Failed grounding, provider failures,
+and interrupted attempts remain on hold across polls and restarts. A cycle can
+still succeed while extraction is held because existing approvals, record
+publication, and reads continue. Use the content-free
+[extraction status and explicit retry procedure](../../deploy/organization-authority/README.md#inspect-and-retry-a-held-extraction)
+to inspect the hold; a successful HTTP response alone does not prove that its
+output passed grounding or became an approval candidate.
+
 Do not place or infer meeting/provider content, identifiers, credentials,
 prompts, raw errors, or stack traces from these fields. The legacy
 `echo-clean-live-worker-failed-v1` event remains only for the existing aggregate

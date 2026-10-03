@@ -33,7 +33,9 @@
     "better-sqlite3"
   ],
   "allowed_node_builtins": [
-    "crypto"
+    "crypto",
+    "fs",
+    "path"
   ],
   "runtime_assets": [],
   "layer_rules": [
@@ -92,6 +94,24 @@
       "allowed_external_packages": [],
       "allowed_node_builtins": [
         "crypto"
+      ]
+    },
+    {
+      "name": "organization-processing-persistence-adapters",
+      "from": "packages/organization-processing/src/adapters/persistence/**",
+      "allowed_imports": [
+        "packages/organization-processing/src/admitted-meeting-processing/extraction-attempt-store-v1.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-authority-kernel"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "path"
       ]
     }
   ],

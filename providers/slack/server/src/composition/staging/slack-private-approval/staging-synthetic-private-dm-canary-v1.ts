@@ -21,6 +21,7 @@ import {
   type MeetingProcessingCandidateSnapshotInputV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
 import type { AdmittedMeetingSourceCursorPolicyV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1";
+import type { ExtractionAttemptStoreV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/extraction-attempt-store-v1";
 import {
   createStagingSyntheticMeetingCanaryV1,
   createStagingSyntheticMeetingCanaryV2,
@@ -44,6 +45,8 @@ export interface RunStagingSyntheticPrivateDmCanaryV1Input {
   readonly source_ingestion: SourceAdmissionBindingV1<MeetingSourceContentV1>;
   readonly processor: DecisionProcessorAdapter;
   readonly stager: ApprovalWorkflowStagerV1;
+  /** The same durable automatic-spend guard used by normal meeting intake. */
+  readonly extraction_attempts?: ExtractionAttemptStoreV1;
   /** Optional staging-only observer. It never changes canary behavior. */
   readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
   readonly signal?: AbortSignal;
@@ -202,6 +205,7 @@ export async function runStagingSyntheticPrivateDmCanaryV1(
     state,
     stager: input.stager,
     source_cursor_policy: canaryCursorPolicy(cursor),
+    ...(input.extraction_attempts === undefined ? {} : { extraction_attempts: input.extraction_attempts }),
     ...(input.journey_telemetry === undefined ? {} : { journey_telemetry: input.journey_telemetry }),
   });
   const result = await cycle.runOnce(input.signal);

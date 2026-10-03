@@ -5,6 +5,10 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./admitted-meeting-processing/extraction-attempt-store-v1": {
+      "types": "./dist/admitted-meeting-processing/extraction-attempt-store-v1.d.ts",
+      "import": "./dist/admitted-meeting-processing/extraction-attempt-store-v1.js"
+    },
     "./core/contracts/source": {
       "types": "./dist/core/contracts/source.d.ts",
       "import": "./dist/core/contracts/source.js"
@@ -108,6 +112,10 @@
     "./admitted-meeting-processing/review-lineage-semantics": {
       "types": "./dist/admitted-meeting-processing/review-lineage-semantics.d.ts",
       "import": "./dist/admitted-meeting-processing/review-lineage-semantics.js"
+    },
+    "./adapters/persistence/sqlite-extraction-attempt-store-v1": {
+      "types": "./dist/adapters/persistence/sqlite-extraction-attempt-store-v1.d.ts",
+      "import": "./dist/adapters/persistence/sqlite-extraction-attempt-store-v1.js"
     }
   },
   "files": [

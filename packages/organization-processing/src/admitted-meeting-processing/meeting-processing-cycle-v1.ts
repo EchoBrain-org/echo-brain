@@ -1,4 +1,5 @@
 import { coreRuntimeIdentityV1, annotateCoreRuntimeV1, observeCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   AdapterError,
   assertCanonicalDecisionSet,
@@ -25,6 +26,7 @@ import type {
 } from "./meeting-approval-journey-telemetry-port-v1.js";
 import type { DecisionExtractionGenerationObservation } from "../core/contracts/decision.js";
 import type { AdmittedMeetingSourceCursorPolicyV1 } from "./admitted-meeting-source-cursor-policy-v1.js";
+import type { ExtractionAttemptStoreV1 } from "./extraction-attempt-store-v1.js";
 import {
   reviewInputSha256V1,
   reviewLineageIdV1,
@@ -261,6 +263,8 @@ export interface AdmittedMeetingProcessingCycleV1Options {
   readonly stager: ApprovalWorkflowStagerV1;
   /** Provider-owned cursor and source-metadata validation. */
   readonly source_cursor_policy: AdmittedMeetingSourceCursorPolicyV1;
+  /** Live composition supplies the durable, one-attempt automatic spend guard. */
+  readonly extraction_attempts?: ExtractionAttemptStoreV1;
   /** Optional, staging-owned journey detail. It must never affect processing. */
   readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
 }
@@ -637,11 +641,37 @@ export class AdmittedMeetingProcessingCycleV1 {
         return rebound;
       }
 
+      signal?.throwIfAborted();
+      // Provider revisions, observation times and moving cursors cannot grant
+      // another paid attempt for the same actual review input. Reserve only
+      // after source custody and both frozen-result reuse paths have run.
+      const extractionKey = {
+        admission_sha256: canonicalSha256({
+          schema_version: 1,
+          kind: "echo-meeting-extraction-admission-v1",
+          source: {
+            adapter_id: admission.source.adapter_id,
+            instance_id: admission.source.instance_id,
+            version: admission.source.version,
+            cutoff_at: admission.source.cutoff_at,
+          },
+          processor: { ...admission.processor },
+        }),
+        review_lineage_id: reviewLineageId,
+        review_input_sha256: reviewInputSha256,
+      };
+      const attempts = this.options.extraction_attempts;
+      const claim = attempts?.reserve(extractionKey);
+      if (claim?.status === "blocked") {
+        throw new AdapterError("permanently_rejected", "extraction_on_hold", false);
+      }
       const extractionAttempt = this.beginStage(journey, "meeting_extraction");
       const extractionStartedAt = Date.now();
       let observation: DecisionExtractionGenerationObservation | null = null;
+      let receivedOutput = false;
+      let extracted: DecisionSet;
       try {
-        const extracted = await this.options.processor.extract(
+        extracted = await this.options.processor.extract(
           meeting,
           {
             processor_version: this.options.processor.identity.version,
@@ -652,26 +682,43 @@ export class AdmittedMeetingProcessingCycleV1 {
           },
           signal === undefined ? undefined : { signal },
         );
+        receivedOutput = true;
         assertCanonicalDecisionSet(
           extracted,
           meeting,
           this.options.processor.identity,
         );
-        this.closeExtractionSuccess(
-          extractionAttempt,
-          observation,
-          extractionStartedAt,
-        );
-        return extracted;
       } catch (error) {
-        this.closeExtractionFailure(
-          extractionAttempt,
-          error,
-          observation,
-          extractionStartedAt,
-        );
+        try {
+          if (claim !== undefined) attempts!.complete({
+            key: extractionKey,
+            attempt: claim.attempt,
+            claim_id: claim.claim_id,
+            outcome: "failed",
+            failure_code: signal?.aborted === true ? "cancelled"
+              : receivedOutput ? "invalid_output"
+              : error instanceof AdapterError ? error.code : "unknown",
+          });
+        } finally {
+          this.closeExtractionFailure(
+            extractionAttempt,
+            error,
+            observation,
+            extractionStartedAt,
+          );
+        }
         throw error;
       }
+      // A failure after this point (including candidate persistence) must not
+      // make the successful provider call eligible for automatic repetition.
+      if (claim !== undefined) attempts!.complete({
+        key: extractionKey,
+        attempt: claim.attempt,
+        claim_id: claim.claim_id,
+        outcome: "succeeded",
+      });
+      this.closeExtractionSuccess(extractionAttempt, observation, extractionStartedAt);
+      return extracted;
     }, signal);
     return this.phase(
       "approval_staging",
