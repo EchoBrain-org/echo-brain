@@ -196,16 +196,19 @@ presentation, or search-reconciliation wakes after a manual cycle.
 This opt-in profile reuses the staging Authority's HTTPS endpoint and Google
 sign-in. First deploy the matching server, host tooling and Person client through
 the [operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
-The [host guide](../../deploy/organization-authority/README.md) owns preparing
-the nonsecret `staging_connector_rehearsal` onboarding field and its private
-profile file. A checkout build alone does not enable a running Authority.
+The [host guide](../../deploy/organization-authority/README.md#optional-staging-connector-rehearsal)
+owns preparing the nonsecret `staging_connector_rehearsal` onboarding field and
+its private profile file. A checkout build alone does not enable a running
+Authority.
 
 Save an exact copy of that profile object as a local nonsecret JSON file. Use
 the release-matched Person client to sign in and run the ordinary shared
 connection commands: `person tools setup --tool slack`,
 `person tools connect --tool slack`, and `person tools connect --tool jira`.
-The staging profile admits Jira connection commands only for its initial owner.
-Granola continues to use the host's direct organization credential.
+With this profile selected, Slack setup also asks for public-channel read
+permissions on the same app; human Slack consent is still required. The staging
+profile admits Jira connection commands only for its initial owner. Granola
+continues to use the host's direct organization credential.
 
 After `npm run build`, the owner Mac can run:
 
@@ -218,6 +221,9 @@ npm run authority:staging-connector-rehearsal -- capture \
 npm run authority:staging-connector-rehearsal -- capture \
   --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
   --tool jira --limit 1
+npm run authority:staging-connector-rehearsal -- capture \
+  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
+  --tool slack --limit 1
 ```
 
 The runner uses the installed Person session in the current user's home. That
@@ -228,35 +234,14 @@ response may follow an already-committed observation.
 
 Receipts contain hashes and counts, never source contents, cursors, provider
 account IDs or credentials. A zero-item receipt is not a successful content
-capture. Granola observations are retained under the separate owner policy;
-Jira observations in V1 are request-only. Ordinary Granola polling owns the cursor
-and continues running. Slack approval tests use the existing synthetic release
-canary and human approval, with separate evidence. No Slack-message capture or
-Jira Ask is enabled by this profile. See the
-[scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal-v1).
-
-The separately selected [V2 profile](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal-v2)
-retains Jira pointers and pointers from one public Slack channel. Follow the
-host guide's reviewed `configure-connector-rehearsal` transition after deploying
-an image that supports it. Keep the original V1 profile and connected Jira
-sidecar; V2 must prove their predecessor binding. Save the exact V2 object as
-the runner's local profile. The runner selects request and receipt version from
-that object, using the same endpoint and staging session.
-
-With V2 selected, run `person tools setup --tool slack` and complete human
-consent to add public-channel read permissions to the existing app. Existing
-approval cards and person links keep their connection state. Then the owner
-can capture using the commands above with the V2 profile, plus:
-
-```sh
-npm run authority:staging-connector-rehearsal -- capture \
-  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile-v2.json \
-  --tool slack --limit 1
-```
-
-V2 receipts report retained admission or duplicate for all three sources. Slack
-and Jira retain pointers and selected metadata only; Slack message snapshots
-remain a separate follow-up. No downstream retrieval or Ask behavior is enabled.
+capture. Receipts report retained admission or duplicate for all three sources.
+Granola observations are retained under the separate owner policy; Jira and
+Slack retain pointers and selected metadata only, and Slack message snapshots
+remain a separate follow-up. Ordinary Granola polling owns the cursor and
+continues running. Slack approval tests use the existing synthetic release
+canary and human approval, with separate evidence. No downstream retrieval, Jira
+Ask or other Ask behavior is enabled by this profile. See the
+[scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal).
 
 ## Initial-owner setup internals
 

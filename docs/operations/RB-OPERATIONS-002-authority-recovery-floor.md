@@ -716,7 +716,8 @@ configuration. It refuses a recovery point with a selected staging connector
 rehearsal: a non-empty `ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE`,
 `private/staging-connector-rehearsal.json`, or `staging-connector-rehearsal-v1/`
 under `clean-data/`. Such a restore is unsupported; see the
-[operator lane](PB-OPERATIONS-001-authority-operator-lane.md). It also checks
+[staging connector rehearsal](../../deploy/organization-authority/README.md#optional-staging-connector-rehearsal)
+recovery rules. It also checks
 primary SQLite integrity, published retrieval SQLite integrity, state lineage,
 retrieval-generation structure, and private-entry type/permission metadata. Before importing lineage code or
 opening any SQLite database, it refuses every symlink or special filesystem node
