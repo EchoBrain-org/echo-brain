@@ -177,7 +177,6 @@ function fakeNango() {
   const finishConnect = () => connections.set("nango-rehearsal", {
     connection_id: "nango-rehearsal", tags: tags!, team_id: "T12345678",
     app_id: "A12345678", bot_user_id: "U12345678", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: BOT_TOKEN,
-    updated_at: "2026-08-22T12:00:00.000Z",
   });
   return { client, finishConnect };
 }

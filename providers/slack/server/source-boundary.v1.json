@@ -70,8 +70,7 @@
     "fs",
     "crypto",
     "path",
-    "http",
-    "stream/web"
+    "http"
   ],
   "runtime_assets": [
     "providers/slack/server/assets/telemetry-vocabulary.v1.json"
@@ -101,8 +100,7 @@
         "fs",
         "crypto",
         "path",
-        "http",
-        "stream/web"
+        "http"
       ]
     }
   ],

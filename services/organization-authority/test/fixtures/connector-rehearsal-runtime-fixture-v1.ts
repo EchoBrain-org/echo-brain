@@ -89,7 +89,6 @@ export function providerSeams() {
   };
   let slackTags: Readonly<Record<string, string>> = {};
   let slackConnection: Awaited<ReturnType<NangoConnectionClientV1['getSlackConnection']>> | undefined;
-  let slackRevision = 0;
   const slackNango: NangoConnectionClientV1 = {
     createConnectSession: vi.fn(async input => {
       slackTags = input.tags;
@@ -108,7 +107,7 @@ export function providerSeams() {
   const finishSlack = (scopes: readonly string[] = SLACK_PRIVATE_APP_BOT_SCOPES_V1) => {
     slackConnection = {
       connection_id: 'fixture-slack-connection', tags: slackTags, team_id: 'TFIXTURE', app_id: 'AFIXTURE', bot_user_id: 'UBOTFIXTURE',
-      granted_scopes: scopes, bot_token: 'xoxb-synthetic-slack', updated_at: new Date(Date.now() + ++slackRevision).toISOString(),
+      granted_scopes: scopes, bot_token: 'xoxb-synthetic-slack',
     };
   };
   const provider: SlackIntegrationProvider = {

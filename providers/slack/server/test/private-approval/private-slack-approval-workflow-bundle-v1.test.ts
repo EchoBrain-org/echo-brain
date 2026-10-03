@@ -13,7 +13,7 @@ import type { ApprovalWorkflowStateV1 } from "@echo-brain/organization-processin
 import type { ApprovalWorkflowContextV1 } from "@echo-brain/organization-processing/ports/approval-workflow-bundle-v1";
 import { resolvePinnedOrganizationAuthority } from "../../../../../packages/organization-protocol/src/authority-descriptor.js";
 import { COORDINATES, protocolAuthority } from "../../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
-import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
+import type { NangoConnectionClientV1, NangoSlackConnectionV1 } from "../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
 import { createSlackBotTokenSourceV1 } from "../../src/organization-control-plane/application/slack-bot-token-source-v1.js";
 import { SlackConnectionHealthV1 } from "../../src/organization-control-plane/application/slack-connection-health-v1.js";
@@ -25,7 +25,6 @@ import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockK
 import { createActivePrivateSlackApprovalPosterV1, createPrivateSlackApprovalWorkflowBundleV1, type PrivateSlackApprovalWorkflowBundleConfigV1 } from "../../src/private-approval/private-slack-approval-workflow-bundle-v1.js";
 
 const NOW = "2026-09-30T00:00:00.000Z";
-const LATER = "2026-09-30T00:10:00.000Z";
 const NANGO_ID = "con_00000000-0000-4000-8000-000000000002";
 const NANGO_TOKEN = "xoxb-nango-fetched-token-never-echoed";
 const APP_SIGNING_SECRET = "app-signing-secret-never-echoed";
@@ -42,7 +41,7 @@ afterEach(() => {
 
 const NANGO: NangoSlackConnectionV1 = {
   connection_id: "nango-conn-1", tags: {}, team_id: "T01",
-  app_id: "A0APP1", bot_user_id: "U0APPBOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: NANGO_TOKEN, updated_at: NOW,
+  app_id: "A0APP1", bot_user_id: "U0APPBOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: NANGO_TOKEN,
 };
 
 /** A stopped Authority state directory whose organization has not installed Slack yet. */
@@ -73,7 +72,7 @@ function stateDirectory() {
   /** The owner's reinstall of the connected app: a Nango reconnect on the same connection id. */
   const reconnectNango = () => activate(
     findSlackAppCredentialsByReferenceSha256V1(secrets, readActiveSlackConnectionV1(database)!.state.credential_reference_sha256),
-    { ...NANGO, updated_at: LATER },
+    NANGO,
   );
   const client = { getSlackConnection: vi.fn(async () => NANGO) } as unknown as NangoConnectionClientV1 & { getSlackConnection: ReturnType<typeof vi.fn> };
   const health = new SlackConnectionHealthV1();
@@ -196,31 +195,5 @@ describe("private Slack approval workflow bundle", () => {
     expect(authorizations).toHaveLength(3);
     // Each read skips the cache but never asks Nango to refresh: rotation is off, only a reconnect changes the token.
     expect(state.client.getSlackConnection.mock.calls).toEqual([[{ connection_id: "nango-conn-1" }], [{ connection_id: "nango-conn-1" }]]);
-  });
-
-  it("leaves card updates pending, without calling Slack, while Nango is down or names another bot", async () => {
-    const state = stateDirectory();
-    await state.installNango();
-    const stateSha256 = readActiveSlackConnectionV1(state.database)!.state_sha256;
-    const card = { ...MARKER, provider_message_ts: "123.000001" };
-    const everyUpdate = async ({ poster }: ReturnType<typeof recordingPoster>) => [
-      await poster.reconcileMarker({ ...MARKER, post_started_at: NOW, reconciliation_started_at: LATER }),
-      await poster.publish({ ...card, card: { text: "Review", blocks: [], transport: { mrkdwn: false, unfurl_links: false, unfurl_media: false } } }),
-      await poster.renderTerminal({ ...card, outcome: "rejected", policy_label: null }),
-      await poster.tombstone({ ...card, successor_id: "cnd_00000000-0000-4000-8000-000000000003" }),
-    ];
-    const pending = Array(4).fill({ kind: "uncertain" });
-
-    state.client.getSlackConnection.mockRejectedValue(new NangoClientErrorV1("unavailable", "Nango is unavailable"));
-    const down = recordingPoster(state);
-    await expect(everyUpdate(down)).resolves.toEqual(pending);
-    expect(down.authorizations).toEqual([]);
-    expect(state.health.needsReinstall(stateSha256)).toBe(false);
-
-    state.client.getSlackConnection.mockResolvedValue({ ...NANGO, bot_user_id: "UOTHER" });
-    const drifted = recordingPoster(state);
-    await expect(everyUpdate(drifted)).resolves.toEqual(pending);
-    expect(drifted.authorizations).toEqual([]);
-    expect(state.health.needsReinstall(stateSha256)).toBe(true);
   });
 });

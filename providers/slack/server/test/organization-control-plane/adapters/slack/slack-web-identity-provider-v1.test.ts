@@ -243,6 +243,13 @@ describe("SlackWebIdentityProviderV1", () => {
     });
   });
   it.each([
+    ["not JSON", () => new Response("<html>ok</html>", { status: 200 })],
+    ["oversized", () => new Response(JSON.stringify(CONNECTION), { status: 200, headers: { "content-length": "99999999" } })],
+  ])("refuses a 200 response that is %s as invalid_response", async (_label, respond) => {
+    const provider = new SlackWebIdentityProviderV1({ fetch: vi.fn<typeof globalThis.fetch>(async () => respond()) });
+    await expect(provider.verifyConnection(TOKEN)).rejects.toMatchObject({ code: "invalid_response", token_rejected: false });
+  });
+  it.each([
     { id: "C123PUBLIC", is_im: false, user: "U123HUMAN" },
     { id: "D123PRIVATE", is_im: true, user: "UOTHER" },
     { id: "D123PRIVATE", is_im: true },

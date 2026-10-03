@@ -262,7 +262,7 @@ async function seedPrivateSlackConnection(input: {
         app_id: SLACK_APP, granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, verification_evidence_sha256: canonicalSha256({ kind: "verification" }) }) },
       credential: { reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials },
       nango: { connection_id: "nango-live-test", tags: {}, team_id: SLACK_WORKSPACE,
-        app_id: SLACK_APP, bot_user_id: SLACK_BOT_USER, granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: "xoxb-test-bot-token", updated_at: NOW },
+        app_id: SLACK_APP, bot_user_id: SLACK_BOT_USER, granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: "xoxb-test-bot-token" },
       now: () => NOW, new_connection_id: () => "con_live_test",
     });
     const link = buildExternalHumanIdentityLinkContractV2({

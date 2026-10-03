@@ -110,7 +110,7 @@ function composeSlackV1(
 ) {
   const base_url = config.slack_nango.base_url ?? "https://api.nango.dev";
   const callback_url = new URL("/oauth/callback", base_url).href;
-  const nango = seams.nango ?? new HttpNangoConnectionClientV1({ ...config.slack_nango, base_url, callback_url });
+  const nango = seams.nango ?? new HttpNangoConnectionClientV1({ ...config.slack_nango, base_url });
   const connection_health = new SlackConnectionHealthV1();
   const provider = seams.provider ?? new SlackWebIdentityProviderV1();
   // The secret store is opened on first use, after the runtime has verified its state directory.

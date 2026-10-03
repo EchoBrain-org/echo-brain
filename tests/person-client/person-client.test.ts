@@ -1,4 +1,4 @@
-import { SlackPersonClient } from '@echo-brain/provider-slack-client/person/slack-person-client';
+import { beginSlackIdentityLink, completeSlackIdentityLink, disconnectSlack, slackBrowserLinkStatus } from '@echo-brain/provider-slack-client/person/slack-person-client';
 import { createJiraPersonToolProviderV1 } from '@echo-brain/provider-jira-client/person/jira-tool-provider';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import * as packageIdentity from "../../src/product/person-client/package-identity.js";
@@ -1444,7 +1444,7 @@ describe("Person client", () => {
           });
         });
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(new SlackPersonClient(client).slackBrowserLinkStatus(fixtureId("sbl", 9))).rejects.toThrow("current account");
+      await expect(slackBrowserLinkStatus(client, fixtureId("sbl", 9))).rejects.toThrow("current account");
     });
   });
 
@@ -1510,7 +1510,7 @@ describe("Person client", () => {
           });
         });
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(new SlackPersonClient(client).disconnectSlack()).rejects.toThrow("malformed response");
+      await expect(disconnectSlack(client)).rejects.toThrow("malformed response");
     });
 
     await withHome(async (home) => {
@@ -1531,7 +1531,7 @@ describe("Person client", () => {
           });
         });
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      await expect(new SlackPersonClient(client).disconnectSlack()).rejects.toThrow("current account");
+      await expect(disconnectSlack(client)).rejects.toThrow("current account");
     });
   });
 
@@ -1596,9 +1596,9 @@ describe("Person client", () => {
       });
 
       await client.installSession("https://authority.example", ROTATED_SESSION);
-      const begun = await new SlackPersonClient(client).beginSlackIdentityLink("U123PERSON");
+      const begun = await beginSlackIdentityLink(client, "U123PERSON");
       expect(begun.challenge_code).toBe(challengeCode);
-      await new SlackPersonClient(client).completeSlackIdentityLink({
+      await completeSlackIdentityLink(client, {
         challenge_attempt_id: begun.challenge_attempt_id,
         challenge_message_ts: begun.challenge_message_ts,
         challenge_code: begun.challenge_code,
