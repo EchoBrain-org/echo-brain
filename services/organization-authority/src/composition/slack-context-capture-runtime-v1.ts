@@ -1,10 +1,14 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import type { PersonSlackMessageCitationV1 } from '@echo-brain/organization-api';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
-import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReaderV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { openOrganizationControlDatabase } from '@echo-brain/organization-control-plane/persistence/open-organization-control-database';
 import { SLACK_CONTEXT_CAPTURE_ADAPTER_ID, SLACK_CONTEXT_CAPTURE_ADAPTER_VERSION, createSlackContextSourceV1 } from '@echo-brain/provider-slack-server/context/slack-context-source-v1';
 import { createSlackContextTransportV1 } from '@echo-brain/provider-slack-server/context/slack-context-transport-v1';
+import { createSlackChannelLiveEvidenceReaderV1 } from '@echo-brain/provider-slack-server/context/slack-channel-live-evidence-reader-v1';
 import { readSlackContextCurrentIdentityV1 } from '@echo-brain/provider-slack-server/context/slack-context-current-identity-v1';
+import { readActiveSlackConnectionV1 } from '@echo-brain/provider-slack-server/organization-control-plane/persistence/sqlite-slack-active-connection-v1';
 import { isSlackIdentityTokenRejectedV1, type SlackIdentityProviderV1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1';
 import type { SlackBotTokenSourceV1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-bot-token-source-v1';
 import type { SlackConnectionHealthV1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-connection-health-v1';
@@ -36,8 +40,29 @@ export interface OpenSlackContextCaptureRuntimeInputV1 {
 
 function unavailable(): Error { return new Error('Slack context capture is not available'); }
 
-/** One manually requested, fixed public-channel capture. No schedules or message bodies. */
-export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptureRuntimeInputV1): ConnectorRehearsalSlackV1 & { close(): void } {
+/** Only absent local state gets a setup hint; provider refusals never infer missing consent. */
+export class SlackContextCapturePreparationErrorV1 extends Error {
+  constructor(readonly reason: 'not_connected' | 'not_linked') { super('Slack context capture is not available'); }
+}
+
+async function abortableToken(token: Promise<string>, signal: AbortSignal): Promise<string> {
+  let abort!: () => void;
+  try {
+    return await Promise.race([token, new Promise<never>((_resolve, reject) => {
+      abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+    })]);
+  } finally { signal.removeEventListener('abort', abort); }
+}
+
+/** Manually requested fixed-channel pointer capture or transient read. No schedules or retained bodies. */
+export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptureRuntimeInputV1): ConnectorRehearsalSlackV1 & {
+  create_reader(input: { readonly access_token: string; readonly signal: AbortSignal }): Promise<{
+    readonly reader: PersonLiveEvidenceReaderV1<PersonSlackMessageCitationV1>; require_current(): void;
+  }>;
+  close(): void;
+} {
   if (options.capability === undefined) throw unavailable();
   slackPrivateAppBotScopesV1(options.capability);
   const capability = Object.freeze({ ...options.capability });
@@ -59,15 +84,14 @@ export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptur
   let closed = false;
   const requireOwner = (access_token: string): void => {
     if (closed) throw unavailable();
-    if (!isActiveInitialOwnerV1(database, owner, authenticate({ access_token }))) throw unavailable();
+    if (!isActiveInitialOwnerV1(database, owner, authenticate({ access_token }))) throw new AuthorityOperationError('unauthorized', 'Slack context capture is not available');
   };
-  return Object.freeze({
-    async create_source(input: { readonly access_token: string; readonly signal: AbortSignal }) {
+  async function prepare(input: { readonly access_token: string; readonly signal: AbortSignal }) {
       const signal = AbortSignal.any([input.signal, AbortSignal.timeout(15_000)]);
       signal.throwIfAborted();
       requireOwner(input.access_token);
       const current = readSlackContextCurrentIdentityV1(control, coordinates);
-      if (current === undefined) throw unavailable();
+      if (current === undefined) throw new SlackContextCapturePreparationErrorV1(readActiveSlackConnectionV1(control, coordinates) === undefined ? 'not_connected' : 'not_linked');
       const healthGeneration = slack.connection_health.generation();
       const requireCurrent = () => {
         signal.throwIfAborted();
@@ -76,12 +100,14 @@ export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptur
         if (latest === undefined || latest.stored.contract_sha256 !== current.stored.contract_sha256 ||
             latest.stored.state_sha256 !== current.stored.state_sha256 || latest.identity_link_id !== current.identity_link_id ||
             latest.identity_link_sha256 !== current.identity_link_sha256 || latest.human_user_id !== current.human_user_id ||
-            slack.connection_health.generation() !== healthGeneration || slack.connection_health.needsReinstall(current.stored.state_sha256)) throw unavailable();
+            slack.connection_health.generation() !== healthGeneration || slack.connection_health.needsReinstall(current.stored.state_sha256)) throw new AuthorityOperationError('stale_access_state', 'Slack context capture is not available');
       };
       requireCurrent();
       // The optional scope upgrade deliberately keeps the old approval state hash.
       // Bypass that state's five-minute token cache for every explicit capture.
-      const token = await slack.bot_token_source.botToken(current.stored, { force_refresh: true });
+      // Nango's refresh has its own bounded HTTP timeout but no caller signal.
+      // Stop waiting on cancellation; the final fence prevents later Slack I/O.
+      const token = await abortableToken(slack.bot_token_source.botToken(current.stored, { force_refresh: true }), signal);
       requireCurrent();
       try {
         const verified = await slack.provider.verifyConnection(token, signal);
@@ -90,7 +116,7 @@ export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptur
       } catch (error) {
         if (isSlackIdentityTokenRejectedV1(error)) slack.connection_health.markNeedsReinstall(current.stored.state_sha256, healthGeneration);
         signal.throwIfAborted();
-        throw unavailable();
+        throw new AuthorityOperationError(isSlackIdentityTokenRejectedV1(error) || error instanceof AuthorityOperationError && error.code === 'unauthorized' ? 'unauthorized' : error instanceof AuthorityOperationError && error.code === 'stale_access_state' ? 'stale_access_state' : 'unavailable', 'Slack context capture is not available');
       }
       const binding: PersonConnectorReadBindingV1 = Object.freeze({
         organization_id: owner.organization_id, principal_id: owner.principal_id, membership_id: owner.membership_id,
@@ -108,13 +134,25 @@ export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptur
         try { requireCurrent(); } catch (error) { await response.body?.cancel(); throw error; }
         return response;
       } });
+      return Object.freeze({ transport, current, require_current: requireCurrent });
+  }
+  return Object.freeze({
+    async create_source(input: { readonly access_token: string; readonly signal: AbortSignal }) {
+      const { transport, current, require_current } = await prepare(input);
       const source = createSlackContextSourceV1({
         transport, team_id: current.stored.connection.provider_tenant_id, channel_id,
         expected_bot_user_id: current.stored.connection.provider_bot_user_id,
         identity: { kind: 'source', adapter_id: SLACK_CONTEXT_CAPTURE_ADAPTER_ID, instance_id: source_instance_id, version: SLACK_CONTEXT_CAPTURE_ADAPTER_VERSION },
         representation: 'pointer', public_channel_only: true,
       });
-      return Object.freeze({ source, source_instance_id, require_current: requireCurrent });
+      return Object.freeze({ source, source_instance_id, require_current });
+    },
+    async create_reader(input: { readonly access_token: string; readonly signal: AbortSignal }) {
+      const { transport, current, require_current } = await prepare(input);
+      const reader = createSlackChannelLiveEvidenceReaderV1({ transport,
+        team_id: current.stored.connection.provider_tenant_id, channel_id,
+        expected_bot_user_id: current.stored.connection.provider_bot_user_id });
+      return Object.freeze({ reader, require_current });
     },
     close() { if (!closed) { closed = true; control.close(); database.close(); } },
   });

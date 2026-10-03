@@ -111,7 +111,9 @@ configured project, including exact reads and final citation revalidation.
 
 These source tests do not activate new permissions on the current V2 staging
 profile. That profile still rejects generic live-reader injection and retains
-its pointer-only capture behavior. A live cross-source qualification must be
+its pointer-only capture behavior. The separately invoked `verify-read` diagnostic
+described below permits one transient, zero-model read, not a live Ask grant.
+A live cross-source qualification must be
 separately authorized for the exact release, owner, Jira project, Slack channel,
 request-only model release and spending bounds. It must require nonempty reads,
 cross-source search, and a cited answer through these same paths. The ordinary
@@ -203,8 +205,8 @@ This is an explicit staging qualification selection, not a production startup
 profile or downstream read capability. It does not accept ADR-0026 or enable the
 ordinary Jira release gate. The selecting composition mounts provider-owned Jira
 connection commands and one authenticated rehearsal endpoint through a neutral
-HTTP runtime port. It does not select the ticket reader or the additional Ask
-route. Existing Slack setup and approval delivery, the synthetic release canary,
+HTTP runtime port. It does not mount general ticket-evidence or additional Ask
+routes. Existing Slack setup and approval delivery, the synthetic release canary,
 periodic processing and telemetry keep their ordinary paths. Implementation and
 live qualification remain separate claims.
 
@@ -217,6 +219,20 @@ initial owner. Each capture pulls 1–5 items under the runtime's exclusive work
 lane, propagates cancellation, and releases only validated counts and hashes.
 The current-owner and source/grant checks apply around provider reads and
 durable admission. Concurrent capture requests are refused rather than queued.
+
+The separate `verify-read` action explicitly authorizes a bounded, request-local
+diagnostic under that same owner and fixed profile. It checks the local connection
+before provider work, lists one item, opens only its issued handle, and revalidates
+provider access and the current local grant before returning success. Its single
+15-second deadline, Jira 25-request cap and Slack reader's 48-request cap apply
+without pagination or retries. No body enters custody, an audit, a model or the
+receipt. The receipt contains only a source-coordinate hash, text hash and
+positive UTF-8 byte count up to 3 KiB, or an allowlisted refusal phase and reason.
+Jira's normalized issue text includes its key and summary, so this does not prove
+a nonempty description. Slack reads one nonempty message from the selected public
+channel's last seven days. Empty results refuse. This action preserves the V2
+profile/hash and pointer policy; it does not enable generic live-reader injection,
+search, Evidence Desk or Ask.
 
 Granola uses the same admitted source object as ordinary meeting processing.
 Its separate owner-scoped capture policy permits retained snapshots; this test
@@ -293,7 +309,8 @@ completed.
 ## Boundaries before activation
 
 The general production profile registers neither shared-capture source in a scheduler.
-The explicit staging profile mounts only the bounded observation operation.
+The explicit staging profile mounts bounded capture and explicitly requested
+zero-model read verification.
 The existing meeting approval path remains the production path; a later startup
 profile must select a single owner for each source cursor, rather than polling
 the same source through both paths. Jira remains production-disabled. Slack bot

@@ -1,4 +1,4 @@
-/** Closed staging-only protocol. It chooses durable pointers, never provider credentials or source content. */
+/** Closed staging-only protocol. Receipts never contain provider credentials or source text. */
 export const STAGING_CONNECTOR_REHEARSAL_PATH_V1 = '/v1/staging/connector-rehearsal';
 export const STAGING_CONNECTOR_REHEARSAL_POLICY_V2 = 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2';
 
@@ -23,7 +23,15 @@ interface BindingV2 {
 export type StagingConnectorRehearsalRequestV2 = BindingV2 & (
   | { readonly action: 'status' }
   | { readonly action: 'capture'; readonly tool: 'granola' | 'jira' | 'slack'; readonly limit: number }
+  | { readonly action: 'verify-read'; readonly tool: 'jira' | 'slack' }
 );
+export const STAGING_CONNECTOR_READ_PHASES_V1 = ['local_authorization', 'connection', 'provider_verification', 'inventory', 'open', 'final_fence'] as const;
+export const STAGING_CONNECTOR_READ_REASONS_V1 = ['connection_absent', 'identity_unlinked', 'unauthorized', 'stale_access_state', 'not_found', 'invalid_output', 'rate_limited', 'unavailable', 'cancelled', 'deadline_exceeded', 'empty', 'quota_exceeded'] as const;
+export type StagingConnectorReadPhaseV1 = typeof STAGING_CONNECTOR_READ_PHASES_V1[number];
+export type StagingConnectorReadReasonV1 = typeof STAGING_CONNECTOR_READ_REASONS_V1[number];
+export type StagingConnectorReadResultV1 =
+  | { readonly status: 'verified'; readonly source_coordinate_sha256: `sha256:${string}`; readonly text_sha256: `sha256:${string}`; readonly text_bytes: number }
+  | { readonly status: 'refused'; readonly phase: StagingConnectorReadPhaseV1; readonly reason: StagingConnectorReadReasonV1 };
 export interface StagingConnectorCaptureReceiptV2 {
   readonly schema_version: 1;
   readonly kind: 'echo-context-capture-rehearsal-receipt-v1';
@@ -44,6 +52,7 @@ export type StagingConnectorRehearsalResponseV2 = BindingV2 & {
 } & (
   | { readonly action: 'status'; readonly processing: 'active' | 'idle_until_finalize'; readonly granola_available: boolean }
   | { readonly action: 'capture'; readonly tool: 'granola' | 'jira' | 'slack'; readonly receipt: StagingConnectorCaptureReceiptV2 }
+  | { readonly action: 'verify-read'; readonly tool: 'jira' | 'slack'; readonly result: StagingConnectorReadResultV1 }
 );
 
 function invalid(): never { throw new Error('Staging connector rehearsal value is invalid'); }
@@ -95,6 +104,9 @@ export function validateStagingConnectorRehearsalRequestV2(value: unknown): Stag
     keys(request, ['schema_version', 'release_id', 'profile_sha256', 'action', 'tool', 'limit']);
     if (!['granola', 'jira', 'slack'].includes(request.tool as string) || !Number.isSafeInteger(request.limit) ||
         (request.limit as number) < 1 || (request.limit as number) > 5) invalid();
+  } else if (request.action === 'verify-read') {
+    keys(request, ['schema_version', 'release_id', 'profile_sha256', 'action', 'tool']);
+    if (!['jira', 'slack'].includes(request.tool as string)) invalid();
   } else invalid();
   return Object.freeze({ ...request }) as unknown as StagingConnectorRehearsalRequestV2;
 }
@@ -135,6 +147,22 @@ export function validateStagingConnectorRehearsalResponseV2(value: unknown): Sta
     if (!['active', 'idle_until_finalize'].includes(response.processing as string) || typeof response.granola_available !== 'boolean' ||
         (response.processing === 'idle_until_finalize' && response.granola_available)) invalid();
     return Object.freeze({ ...response }) as unknown as StagingConnectorRehearsalResponseV2;
+  }
+  if (response.action === 'verify-read') {
+    keys(response, [...common, 'tool', 'result']);
+    if (!['jira', 'slack'].includes(response.tool as string)) invalid();
+    const result = record(response.result);
+    if (result.status === 'verified') {
+      keys(result, ['status', 'source_coordinate_sha256', 'text_sha256', 'text_bytes']);
+      stringMatches(result.source_coordinate_sha256, DIGEST);
+      stringMatches(result.text_sha256, DIGEST);
+      if (!Number.isSafeInteger(result.text_bytes) || (result.text_bytes as number) < 1 || (result.text_bytes as number) > 3072) invalid();
+    } else if (result.status === 'refused') {
+      keys(result, ['status', 'phase', 'reason']);
+      if (!STAGING_CONNECTOR_READ_PHASES_V1.includes(result.phase as StagingConnectorReadPhaseV1) ||
+          !STAGING_CONNECTOR_READ_REASONS_V1.includes(result.reason as StagingConnectorReadReasonV1)) invalid();
+    } else invalid();
+    return Object.freeze({ ...response, result: Object.freeze({ ...result }) }) as unknown as StagingConnectorRehearsalResponseV2;
   }
   if (response.action !== 'capture' || !['granola', 'jira', 'slack'].includes(response.tool as string)) invalid();
   keys(response, [...common, 'tool', 'receipt']);

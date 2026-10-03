@@ -160,6 +160,14 @@ export function createJiraPersonConnectionV1(options: {
       if (stored !== undefined) await options.nango.disconnect(stored.reference, input.signal);
       requirePerson(); return Object.freeze({ schema_version: 1 as const, connected: false as const });
     },
+    /** Local-only preflight. Never starts consent, refreshes a token or changes the binding. */
+    captureStatus(input: { readonly access_token: string }): Readonly<{ connected: boolean }> {
+      const { person, requirePerson } = actor(input.access_token);
+      const stored = options.store.current(person);
+      if (stored !== undefined && stored.active) options.store.requireCurrent(stored.binding);
+      requirePerson();
+      return Object.freeze({ connected: stored?.active === true });
+    },
     async captureConnection(input: { readonly access_token: string; readonly signal?: AbortSignal }): Promise<JiraCurrentCaptureConnectionV1> {
       const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
       const stored = options.store.current(person);

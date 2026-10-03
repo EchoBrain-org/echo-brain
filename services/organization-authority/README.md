@@ -113,7 +113,7 @@ Authority.
 
 Save an exact copy of that profile object as a local nonsecret JSON file. Use
 the release-matched Person client to sign in and run the ordinary shared
-connection commands: `person tools setup --tool slack`,
+connection commands when a connection is absent: `person tools setup --tool slack`,
 `person tools connect --tool slack`, and `person tools connect --tool jira`.
 With this profile selected, Slack setup also asks for public-channel read
 permissions on the same app; human Slack consent is still required. The staging
@@ -134,6 +134,12 @@ npm run authority:staging-connector-rehearsal -- capture \
 npm run authority:staging-connector-rehearsal -- capture \
   --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
   --tool slack --limit 1
+npm run authority:staging-connector-rehearsal -- verify-read \
+  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
+  --tool jira
+npm run authority:staging-connector-rehearsal -- verify-read \
+  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
+  --tool slack
 ```
 
 The runner uses the installed Person session in the current user's home. That
@@ -142,9 +148,21 @@ release ID and profile digest must match the running server. No token is accepte
 command line or printed. A failed capture is not retried automatically: a lost
 response may follow an already-committed observation.
 
+`verify-read` is a separate, manually selected read proof: one inventory item,
+one exact open, and final provider and local authorization checks within 15
+seconds. It follows no cursor, retries nothing, calls no model, and retains no
+body. Slack selects from the fixed public channel's last seven days. Jira reads
+normalized issue text (key, summary and available description); it does not
+claim a nonempty description. A verified receipt contains only source-coordinate
+and text hashes plus a positive UTF-8 byte count, bounded to 3 KiB. Empty results
+refuse. Refused receipts contain a finite phase/reason and the runner exits 1.
+`connection_absent` means the local connection is absent; `unauthorized` or
+`stale_access_state` does not mean reconnect is required. Inspect the refusal
+before initiating a new consent flow, which can replace an existing connection.
+
 Receipts contain hashes and counts, never source contents, cursors, provider
 account IDs or credentials. A zero-item receipt is not a successful content
-capture. Receipts report retained admission or duplicate for all three sources.
+capture. Capture receipts report retained admission or duplicate for all three sources.
 Granola observations are retained under the separate owner policy; Jira and
 Slack retain pointers and selected metadata only, and Slack message snapshots
 remain a separate follow-up. Ordinary Granola polling owns the cursor and

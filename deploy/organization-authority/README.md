@@ -135,6 +135,12 @@ selected, the owner's `person tools setup --tool slack` also asks for
 `channels:read` and `channels:history` on the same app. Jira's person connection
 sidecar is owned by the Authority runtime beside its retained state directory.
 
+The same fixed profile also admits the owner's explicitly invoked `verify-read`
+diagnostic through the [runner](../../services/organization-authority/README.md#staging-connector-rehearsal).
+It verifies one request-local Jira issue text or Slack message read and emits
+only hashes and a byte count. It changes no capture custody, retains no body,
+calls no model and enables no Ask source. It needs no profile rewrite or reset.
+
 The runtime creates and validates its own
 `clean-data/staging-connector-rehearsal-v1/binding.json`. It binds the
 Authority lineage, initial owner, and canonical profile digest. Same-volume host

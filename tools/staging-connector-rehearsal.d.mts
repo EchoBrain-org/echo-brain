@@ -1,5 +1,5 @@
 export interface StagingConnectorRehearsalInput {
-  readonly action: 'status' | 'capture';
+  readonly action: 'status' | 'capture' | 'verify-read';
   readonly release_id: string;
   readonly profile_path: string;
   readonly person_home?: string;

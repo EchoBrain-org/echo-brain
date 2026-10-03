@@ -67,6 +67,25 @@ function fixture(project?: string) {
 }
 
 describe('Nango-backed personal Jira connection', () => {
+  it('reports only the current local binding without provider work, mutation or reconnect', async () => {
+    const f = fixture(); try {
+      expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: false });
+      expect(f.nango.connect).not.toHaveBeenCalled(); expect(f.transport).not.toHaveBeenCalled();
+      await f.connected(); const before = f.store.current(person);
+      vi.mocked(f.nango.connect).mockClear(); vi.mocked(f.nango.connection).mockClear();
+      vi.mocked(f.nango.find).mockClear(); vi.mocked(f.nango.disconnect).mockClear(); f.transport.mockClear();
+      expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: true });
+      expect(f.service.captureStatus({ access_token: 'synthetic-person-two' })).toEqual({ connected: false });
+      expect(f.store.current(person)).toEqual(before);
+      f.store.revoke(person);
+      expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: false });
+      f.setActive(false);
+      expect(() => f.service.captureStatus({ access_token: f.token })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+      for (const operation of Object.values(f.nango)) expect(operation).not.toHaveBeenCalled();
+      expect(f.transport).not.toHaveBeenCalled();
+    } finally { f.database.close(); }
+  });
+
   it('passes the trusted configured project into the authenticated source search', async () => {
     const f = fixture('ECHO'); try {
       await f.connected();

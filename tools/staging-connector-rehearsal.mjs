@@ -60,7 +60,7 @@ function assertOwnerSession(stored, descriptor) {
 function matchingResponse(response, request) {
   if (response.release_id !== request.release_id || response.profile_sha256 !== request.profile_sha256 ||
       response.action !== request.action ||
-      (request.action === "capture" && response.tool !== request.tool)) fail();
+      (request.action !== "status" && response.tool !== request.tool)) fail();
   if (request.action === "capture" && response.receipt.counts.captured > request.limit) fail();
   return response;
 }
@@ -83,12 +83,14 @@ async function dependencies() {
 export async function runStagingConnectorRehearsal(input, options = {}) {
   try {
     if (input === null || typeof input !== "object") fail();
-    if (input.action !== "status" && input.action !== "capture") fail();
+    if (!["status", "capture", "verify-read"].includes(input.action)) fail();
     const { contract, federation, client, store, authority } = await dependencies();
     const profile = contract.validateStagingConnectorRehearsalProfileV2(profileFile(input.profile_path));
     const binding = { schema_version: 2, release_id: input.release_id, profile_sha256: federation.canonicalSha256(profile) };
     const request = contract.validateStagingConnectorRehearsalRequestV2(
-      input.action === "status" ? { ...binding, action: "status" } : { ...binding, action: "capture", tool: input.tool, limit: input.limit },
+      input.action === "status" ? { ...binding, action: "status" } : input.action === "verify-read"
+        ? { ...binding, action: "verify-read", tool: input.tool }
+        : { ...binding, action: "capture", tool: input.tool, limit: input.limit },
     );
     const personHome = absolutePath(input.person_home ?? homedir(), "person home");
     const fetchImplementation = options.fetch ?? globalThis.fetch;
@@ -120,15 +122,19 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
 }
 
 function usage() {
-  return "usage: node tools/staging-connector-rehearsal.mjs <status|capture> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--tool <granola|jira|slack> --limit <1..5>]";
+  return "usage: node tools/staging-connector-rehearsal.mjs <status|capture|verify-read> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--tool <granola|jira|slack> [--limit <1..5>]]; verify-read accepts jira|slack with no limit";
 }
 
 function parseCli(argv) {
   const action = argv[0];
-  const expected = action === "status" ? 5 : action === "capture" ? 9 : 0;
+  const expected = action === "status" ? 5 : action === "capture" ? 9 : action === "verify-read" ? 7 : 0;
   if (argv.length !== expected || argv[1] !== "--release-id" || argv[3] !== "--profile") fail(usage());
   const base = { action, release_id: argv[2], profile_path: absolutePath(argv[4], "profile") };
   if (action === "status") return Object.freeze(base);
+  if (action === "verify-read") {
+    if (argv[5] !== "--tool" || !["jira", "slack"].includes(argv[6])) fail(usage());
+    return Object.freeze({ ...base, tool: argv[6] });
+  }
   if (argv[5] !== "--tool" || argv[7] !== "--limit" || !["granola", "jira", "slack"].includes(argv[6]) || !/^[1-5]$/.test(argv[8])) fail(usage());
   return Object.freeze({ ...base, tool: argv[6], limit: Number(argv[8]) });
 }
@@ -136,7 +142,7 @@ function parseCli(argv) {
 export async function main(argv = process.argv.slice(2)) {
   const receipt = await runStagingConnectorRehearsal(parseCli(argv));
   process.stdout.write(`${JSON.stringify(receipt)}\n`);
-  return 0;
+  return receipt.action === "verify-read" && receipt.result.status === "refused" ? 1 : 0;
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === new URL(import.meta.url).pathname) {

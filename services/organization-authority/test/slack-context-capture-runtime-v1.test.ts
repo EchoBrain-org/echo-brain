@@ -55,7 +55,7 @@ async function fixture() {
     if (method === 'auth.test') return reply({ ok: true, team_id: TEAM, user_id: botUser, bot_id: 'BTEST123', app_id: APP, url: 'https://fixture.slack.com/' });
     if (method === 'bots.info') return reply({ ok: true, bot: { id: 'BTEST123', user_id: botUser, app_id: APP, deleted: false } });
     expect(url.searchParams.get('channel')).toBe(CHANNEL);
-    if (method === 'conversations.info') return reply({ ok: true, channel: { id: CHANNEL, is_member: member, is_private: privateChannel, context_team_id: TEAM } });
+    if (method === 'conversations.info') return reply({ ok: true, channel: { id: CHANNEL, name: 'test-channel', is_member: member, is_private: privateChannel, context_team_id: TEAM } });
     if (method === 'conversations.history') return reply({ ok: true, messages: [{ type: 'message', ts: TS, user: HUMAN, text: 'Do not retain this body' }], has_more: false });
     if (method === 'chat.getPermalink') return reply({ ok: true, channel: CHANNEL, permalink: `https://fixture.slack.com/archives/${CHANNEL}/p${TS.replace('.', '')}` });
     throw new Error('Unexpected Slack method');
@@ -103,6 +103,71 @@ async function fixture() {
 }
 
 describe('Slack context capture runtime', () => {
+  it('opens and revalidates transient text through the same authorized fixed-channel preparation without retaining a source', async () => {
+    const f = await fixture();
+    try {
+      const prepared = await f.runtime.create_reader({ access_token: 'owner-token', signal: new AbortController().signal });
+      const listed = await prepared.reader.list({ limit: 1, since: '2026-10-01' });
+      expect(listed.items).toHaveLength(1);
+      expect(listed.items[0]!.text).toBeUndefined();
+      const opened = await prepared.reader.open({ handle: listed.items[0]!.handle, limit: 1 });
+      expect(opened.items[0]!.text).toBe('Do not retain this body');
+      await prepared.reader.revalidate({ citations: [opened.items[0]!.citation] });
+      prepared.require_current();
+      expect(f.nango.getSlackConnection).toHaveBeenCalledTimes(1);
+      expect(f.database.prepare('SELECT 1 FROM authority_sources_v1').all()).toHaveLength(0);
+      expect(readActiveSlackConnectionV1(f.control)).toEqual(f.active);
+      f.revokeLink();
+      expect(() => prepared.require_current()).toThrow();
+      const calls = f.fetch.mock.calls.length;
+      await expect(prepared.reader.open({ handle: listed.items[0]!.handle, limit: 1 })).rejects.toThrow();
+      expect(f.fetch).toHaveBeenCalledTimes(calls);
+    } finally { f.close(); }
+  });
+
+  it.each(['connection', 'link'] as const)('reports the absent local %s before resolving a token', async absent => {
+    const f = await fixture();
+    try {
+      if (absent === 'connection') f.control.prepare("UPDATE organization_tool_connection_current_state SET current_status='revoked'").run();
+      else f.revokeLink();
+      await expect(f.runtime.create_reader({ access_token: 'owner-token', signal: new AbortController().signal }))
+        .rejects.toMatchObject({ reason: absent === 'connection' ? 'not_connected' : 'not_linked', message: 'Slack context capture is not available' });
+      expect(f.nango.getSlackConnection).not.toHaveBeenCalled(); expect(f.fetch).not.toHaveBeenCalled();
+    } finally { f.close(); }
+  });
+
+  it('cancels during token resolution without starting a later Slack request', async () => {
+    const f = await fixture();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const original = vi.mocked(f.nango.getSlackConnection).getMockImplementation()!;
+    vi.mocked(f.nango.getSlackConnection).mockImplementationOnce(async input => { await held; return original(input); });
+    try {
+      const controller = new AbortController();
+      const pending = f.runtime.create_reader({ access_token: 'owner-token', signal: controller.signal });
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      release(); await held; await new Promise(resolve => setImmediate(resolve));
+      expect(f.fetch).not.toHaveBeenCalled();
+    } finally { release(); f.close(); }
+  });
+
+  it.each(['missing-scope', 'private-channel'] as const)('keeps the transient reader behind %s refusal', async failure => {
+    const f = await fixture();
+    try {
+      if (failure === 'missing-scope') {
+        f.setScopes(SLACK_PRIVATE_APP_BOT_SCOPES_V1);
+        await expect(f.runtime.create_reader({ access_token: 'owner-token', signal: new AbortController().signal })).rejects.toThrow();
+      } else {
+        f.setPrivate();
+        const prepared = await f.runtime.create_reader({ access_token: 'owner-token', signal: new AbortController().signal });
+        await expect(prepared.reader.list({ limit: 1 })).rejects.toMatchObject({ code: 'unauthorized' });
+      }
+      expect(f.fetch.mock.calls.every(([input]) => !String(input).includes('conversations.history'))).toBe(true);
+      expect(f.database.prepare('SELECT 1 FROM authority_sources_v1').all()).toHaveLength(0);
+    } finally { f.close(); }
+  });
+
   it('uses a fresh token and real Slack scope proof with the unchanged four-scope approval state, then retains only pointer metadata', async () => {
     const f = await fixture();
     try {

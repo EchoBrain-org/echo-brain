@@ -1,6 +1,7 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
+import type { PersonLiveEvidenceReaderV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import { verifyAuthorityStateLineage } from '@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
@@ -10,19 +11,25 @@ import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organizatio
 import { createGranolaMeetingSourceBundleV1 } from '@echo-brain/provider-granola/granola-meeting-source-bundle-v1';
 import { createOpenRouterDecisionProcessorBundleV1 } from '@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1';
 import { validateOrganizationAuthorityOrigin } from '@echo-brain/organization-api';
+import { createJiraPersonLiveEvidenceReaderV1 } from '@echo-brain/provider-jira/jira-person-live-evidence-reader-v1';
 import { SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
-import { openSlackContextCaptureRuntimeV1 } from './slack-context-capture-runtime-v1.js';
+import { openSlackContextCaptureRuntimeV1, SlackContextCapturePreparationErrorV1 } from './slack-context-capture-runtime-v1.js';
 import Database from 'better-sqlite3';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   STAGING_CONNECTOR_REHEARSAL_PATH_V1,
+  STAGING_CONNECTOR_READ_REASONS_V1,
   validateStagingConnectorRehearsalProfileV2,
   validateStagingConnectorRehearsalRequestV2,
   validateStagingConnectorRehearsalResponseV2,
   type StagingConnectorRehearsalProfileV2,
   type StagingConnectorRehearsalRequestV2,
   type StagingConnectorRehearsalResponseV2,
+  type StagingConnectorReadPhaseV1,
+  type StagingConnectorReadReasonV1,
+  type StagingConnectorReadResultV1,
 } from './staging-connector-rehearsal-protocol.js';
 import { isActiveInitialOwnerV1, openConnectorRehearsalCaptureV1, type OpenedConnectorRehearsalCaptureV1 } from './connector-rehearsal-capture-v1.js';
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveRuntimeSeamsV1, type OpenedJiraPersonLiveRuntimeV1 } from './jira-person-live-runtime-v1.js';
@@ -75,6 +82,18 @@ function invalid(): never {
 }
 function sidecarFailure(): never {
   throw new Error('Staging connector rehearsal sidecar is invalid');
+}
+/** Stop waiting even when an upstream operation fails to observe cancellation. */
+async function beforeAbort<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  let onAbort: (() => void) | undefined;
+  try {
+    signal.throwIfAborted();
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    return await Promise.race([operation(), cancelled]);
+  } finally { if (onAbort !== undefined) signal.removeEventListener('abort', onAbort); }
 }
 function entry(path: string): ReturnType<typeof lstatSync> | undefined {
   try { return lstatSync(path); } catch (error) {
@@ -243,6 +262,74 @@ export async function openStagingConnectorRehearsalService(
       return authorization;
     };
     let captureInFlight = false;
+    const verifyRead = async (tool: 'jira' | 'slack', access_token: string, callerSignal?: AbortSignal): Promise<StagingConnectorReadResultV1> => {
+      const deadline = AbortSignal.timeout(15_000);
+      const signal = AbortSignal.any([deadline, ...(callerSignal === undefined ? [] : [callerSignal])]);
+      let phase: StagingConnectorReadPhaseV1 = 'local_authorization';
+      const refuse = (reason: StagingConnectorReadReasonV1): StagingConnectorReadResultV1 => Object.freeze({ status: 'refused', phase, reason });
+      try {
+        return await beforeAbort(async () => {
+          signal.throwIfAborted();
+          const before = requireOwner(access_token);
+          phase = 'connection';
+          let reader: PersonLiveEvidenceReaderV1;
+          let requireCurrent: () => void;
+          if (tool === 'jira') {
+            if (jira === undefined) unavailable();
+            if (!jira.application.captureStatus({ access_token }).connected) return refuse('connection_absent');
+            const connection = await jira.application.captureConnection({ access_token, signal });
+            signal.throwIfAborted();
+            requireCurrent = connection.require_current;
+            let requests = 0;
+            const transport = { binding: connection.transport.binding, request: (input: Parameters<typeof connection.transport.request>[0]) => {
+              signal.throwIfAborted(); requireCurrent();
+              if (++requests > 25) throw new AuthorityOperationError('quota_exceeded', 'Read proof request budget exceeded');
+              return connection.transport.request({ ...input, signal });
+            } };
+            phase = 'provider_verification';
+            reader = await createJiraPersonLiveEvidenceReaderV1({ binding: transport.binding, transport, project: selected.profile.jira.project, signal });
+          } else {
+            if (slack === undefined) unavailable();
+            phase = 'provider_verification';
+            const connection = await slack.create_reader({ access_token, signal });
+            reader = connection.reader;
+            requireCurrent = connection.require_current;
+          }
+          signal.throwIfAborted(); requireCurrent();
+          phase = 'inventory';
+          const inventory = await reader.list({ limit: 1, signal });
+          signal.throwIfAborted(); requireCurrent();
+          if (inventory.items.length === 0) return refuse('empty');
+          if (inventory.items.length !== 1) return refuse('invalid_output');
+          const coordinates = reader.validateCitation(inventory.items[0]!.citation);
+          phase = 'open';
+          const opened = await reader.open({ handle: inventory.items[0]!.handle, limit: 1, signal });
+          signal.throwIfAborted(); requireCurrent();
+          if (opened.items.length !== 1) return refuse(opened.items.length === 0 ? 'empty' : 'invalid_output');
+          const item = opened.items[0]!;
+          if (item.text === undefined || item.text.trim() === '') return refuse('empty');
+          const text_bytes = Buffer.byteLength(item.text, 'utf8');
+          const text_sha256 = `sha256:${createHash('sha256').update(item.text, 'utf8').digest('hex')}` as const;
+          const current = reader.validateCitation(item.citation);
+          const address = ({ tool_id, external_scope_id, coordinates }: ReturnType<typeof reader.validateCitation>) => ({ tool_id, external_scope_id, coordinates });
+          if (text_bytes > 3072 || item.citation.text_sha256 !== text_sha256 || canonicalSha256(address(coordinates)) !== canonicalSha256(address(current))) return refuse('invalid_output');
+          phase = 'final_fence';
+          await reader.revalidate({ citations: [item.citation], signal });
+          signal.throwIfAborted(); requireCurrent();
+          const after = requireOwner(access_token);
+          if (before.access_credential_sha256 !== after.access_credential_sha256 || before.person_state_sha256 !== after.person_state_sha256 || before.session_state_sha256 !== after.session_state_sha256) return refuse('stale_access_state');
+          return Object.freeze({ status: 'verified', source_coordinate_sha256: canonicalSha256(address(current)), text_sha256, text_bytes });
+        }, signal);
+      } catch (error) {
+        if (signal.aborted) return refuse(deadline.aborted ? 'deadline_exceeded' : 'cancelled');
+        if (error instanceof SlackContextCapturePreparationErrorV1) {
+          phase = 'connection';
+          return refuse(error.reason === 'not_connected' ? 'connection_absent' : 'identity_unlinked');
+        }
+        return refuse(error instanceof AuthorityOperationError && STAGING_CONNECTOR_READ_REASONS_V1.includes(error.code as StagingConnectorReadReasonV1)
+          ? error.code as StagingConnectorReadReasonV1 : 'unavailable');
+      }
+    };
     const capturesApplication: ProviderHttpApplicationV1 = Object.freeze({
       routes: Object.freeze([{ route_id: 'staging-connector-rehearsal', method: 'POST' as const, path: STAGING_CONNECTOR_REHEARSAL_PATH_V1 }]),
       async accept(input: ProviderHttpRequestV1) {
@@ -254,6 +341,15 @@ export async function openStagingConnectorRehearsalService(
         if (request.action === 'status') {
           requireOwner(access_token);
           return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'status', processing: runtime?.processing ?? 'idle_until_finalize', granola_available: runtime?.processing === 'active' && granola !== undefined, qualified: false }) });
+        }
+        if (request.action === 'verify-read') {
+          requireOwner(access_token);
+          if (captureInFlight) unavailable();
+          captureInFlight = true;
+          try {
+            const result = await verifyRead(request.tool, access_token, input.signal);
+            return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'verify-read', tool: request.tool, result, qualified: false }) });
+          } finally { captureInFlight = false; }
         }
         if (captures === undefined || (request.tool === 'granola' && runtime.processing !== 'active')) unavailable();
         const before = requireOwner(access_token);
