@@ -1,7 +1,10 @@
 import {
-  assertCaptureHashV1, assertCaptureTextV1, assertContextCaptureEnvelopeV2, assertContextEvidenceSpanV1,
-  contextSourceActorRefsV2, type ContextCaptureEnvelopeV2, type ContextEvidenceSpanV1,
+  assertCaptureHashV1, assertCaptureTextV1, assertContextCaptureEnvelopeV2,
+  assertContextPayloadFieldV1, assertContextEvidenceSpanV1, contextSourceActorRefsV2,
+  type ContextCaptureEnvelopeV2, type ContextEvidenceSpanV1, type ContextPayloadFieldV1,
 } from './context-capture-v2.js';
+import { parseCaptureSourceRefV1 } from './capture-source-ref-v1.js';
+import { assertCaptureProjectIdV1 } from './capture-container-scope-v1.js';
 import { assertPlainContextObjectV1 } from './context-capture-v1.js';
 import { assertSourceAdmissionScopeV1, canonicalSourceContentV1, sourceContentSha256V1 } from '../processing/source-admission.js';
 import type { SourceAdmissionScopeV1 } from './source.js';
@@ -13,7 +16,8 @@ export interface CaptureProcessorV1 {
   readonly id: string; readonly version: string; readonly config_sha256: string;
 }
 export interface CaptureClassificationV1 {
-  readonly schema_version: 1; readonly input: CaptureRevisionRefV1; readonly producer: CaptureProcessorV1;
+  readonly schema_version: 1; /** Pure local rules only: no provider, network, or model call. */ readonly method: 'local_rules';
+  readonly input: CaptureRevisionRefV1; readonly producer: CaptureProcessorV1;
   readonly decision: 'retain' | 'skip' | 'unresolved';
   readonly reason: 'useful' | 'noise' | 'unsupported' | 'needs_review' | 'source_deleted';
 }
@@ -24,6 +28,7 @@ export interface CapturePersonBindingV1 {
 export interface CaptureBindingsV1 {
   readonly scope: SourceAdmissionScopeV1;
   readonly project_id: string;
+  readonly container_ref: string;
   readonly people: readonly CapturePersonBindingV1[];
 }
 export interface CaptureAnnotationV1 extends CaptureBindingsV1 {
@@ -43,7 +48,10 @@ export interface CaptureDeriveSnapshotV1 {
 export interface CaptureDerivedFactV1 {
   readonly pillar: 'person' | 'content' | 'action';
   readonly text: string;
-  readonly evidence: readonly { readonly source_id: string; readonly revision_id: string; readonly span: ContextEvidenceSpanV1 }[];
+  readonly evidence: readonly (
+    | { readonly source_id: string; readonly revision_id: string; readonly span: ContextEvidenceSpanV1 }
+    | { readonly source_id: string; readonly revision_id: string; readonly field: ContextPayloadFieldV1 }
+  )[];
 }
 /** A derivation is a claim with evidence, never an approval or a new source observation. */
 export interface CaptureDeriveOutputV1 {
@@ -67,35 +75,37 @@ export function assertCaptureRevisionRefV1(value: unknown): asserts value is Cap
   assertCaptureTextV1(ref.source_id, 'Source id'); assertCaptureTextV1(ref.revision_id, 'Revision id'); assertCaptureHashV1(ref.content_sha256);
 }
 export function assertCaptureClassificationV1(value: unknown, source: ContextCaptureEnvelopeV2): asserts value is CaptureClassificationV1 {
-  assertPlainContextObjectV1(value, ['schema_version', 'input', 'producer', 'decision', 'reason'], 'Capture classification');
+  assertPlainContextObjectV1(value, ['schema_version', 'method', 'input', 'producer', 'decision', 'reason'], 'Capture classification');
   const classification = value as CaptureClassificationV1;
   assertCaptureRevisionRefV1(classification.input); assertProcessor(classification.producer);
   const reasons = { retain: ['useful', 'source_deleted'], skip: ['noise', 'unsupported'], unresolved: ['needs_review'] };
-  if (classification.schema_version !== 1 || typeof classification.decision !== 'string' || !Object.hasOwn(reasons, classification.decision) ||
+  if (classification.schema_version !== 1 || classification.method !== 'local_rules' || typeof classification.decision !== 'string' || !Object.hasOwn(reasons, classification.decision) ||
       !reasons[classification.decision].includes(classification.reason) || canonicalSourceContentV1(classification.input) !== canonicalSourceContentV1(captureRevisionRefV1(source)) ||
       (classification.decision === 'retain' && (classification.reason === 'source_deleted') !== (source.content.lifecycle === 'deleted'))) throw new Error('Classification does not match capture');
 }
 export function assertCaptureBindingsV1(value: unknown, source: ContextCaptureEnvelopeV2): asserts value is CaptureBindingsV1 {
-  assertPlainContextObjectV1(value, ['scope', 'project_id', 'people'], 'Capture bindings');
+  assertPlainContextObjectV1(value, ['scope', 'project_id', 'container_ref', 'people'], 'Capture bindings');
   const bindings = value as CaptureBindingsV1;
   assertSourceAdmissionScopeV1(bindings.scope);
+  assertCaptureProjectIdV1(bindings.project_id);
+  if (parseCaptureSourceRefV1(bindings.container_ref).kind !== 'container' || bindings.container_ref !== source.content.provenance.container_ref) throw new Error('Capture binding differs from its observed container');
   // Foundation does not enable automatic analysis or mint project/directory entries.
-  if (bindings.scope.analysis_policy !== 'on_request' || typeof bindings.project_id !== 'string' || !/^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(bindings.project_id) ||
+  if (bindings.scope.analysis_policy !== 'on_request' ||
       !Array.isArray(bindings.people) || bindings.people.length > 64) throw new Error('Capture project bindings are invalid');
   const actors = contextSourceActorRefsV2(source.content); const seen = new Set<string>();
   for (const person of bindings.people) {
     assertPlainContextObjectV1(person, ['source_actor_ref', 'principal_id', 'membership_id', 'identity_link_ref'], 'Capture person binding');
     for (const value of [person.source_actor_ref, person.principal_id, person.membership_id, person.identity_link_ref]) assertCaptureTextV1(value, 'Person binding', 2048);
-    if (!actors.includes(person.source_actor_ref) || seen.has(person.source_actor_ref)) throw new Error('Person binding has an unknown or duplicate source actor');
+    if (parseCaptureSourceRefV1(person.source_actor_ref).kind !== 'actor' || !actors.includes(person.source_actor_ref) || seen.has(person.source_actor_ref)) throw new Error('Person binding has an unknown or duplicate source actor');
     seen.add(person.source_actor_ref);
   }
 }
 export function assertCaptureAnnotationV1(value: unknown, source: ContextCaptureEnvelopeV2): asserts value is CaptureAnnotationV1 {
-  assertPlainContextObjectV1(value, ['schema_version', 'kind', 'scope', 'project_id', 'people', 'classification'], 'Capture annotation');
+  assertPlainContextObjectV1(value, ['schema_version', 'kind', 'scope', 'project_id', 'container_ref', 'people', 'classification'], 'Capture annotation');
   if (Buffer.byteLength(canonicalSourceContentV1(value)) > CAPTURE_FOUNDATION_LIMITS_V1.annotation_bytes) throw new Error('Capture annotation exceeds its bound');
   const annotation = value as CaptureAnnotationV1;
   if (annotation.schema_version !== 1 || annotation.kind !== 'echo-capture-annotation-v1') throw new Error('Capture annotation version is unsupported');
-  assertCaptureBindingsV1({ scope: annotation.scope, project_id: annotation.project_id, people: annotation.people }, source);
+  assertCaptureBindingsV1({ scope: annotation.scope, project_id: annotation.project_id, container_ref: annotation.container_ref, people: annotation.people }, source);
   assertCaptureClassificationV1(annotation.classification, source);
   if (annotation.classification.decision !== 'retain') throw new Error('Only retained captures can have stored annotations');
 }
@@ -134,10 +144,21 @@ export function assertCaptureDeriveOutputV1(value: unknown, snapshot: CaptureDer
     assertPlainContextObjectV1(fact, ['pillar', 'text', 'evidence'], 'Derived fact'); assertCaptureTextV1(fact.text, 'Derived text', 4096);
     if (!['person', 'content', 'action'].includes(fact.pillar) || !Array.isArray(fact.evidence) || fact.evidence.length < 1 || fact.evidence.length > 32) throw new Error('Derived fact requires bounded evidence');
     for (const evidence of fact.evidence) {
-      assertPlainContextObjectV1(evidence, ['source_id', 'revision_id', 'span'], 'Derived evidence');
+      assertPlainContextObjectV1(evidence, ['source_id', 'revision_id', 'span', 'field'], 'Derived evidence');
       const content = snapshot.inputs.find(input => input.source.item.source_id === evidence.source_id && input.source.revision.revision_id === evidence.revision_id)?.source.content;
-      if (!content || content.lifecycle !== 'present' || content.representation.kind === 'pointer') throw new Error('Derived evidence is outside the selected snapshot');
-      assertContextEvidenceSpanV1(evidence.span, content.representation.passages);
+      if (!content || content.lifecycle !== 'present') throw new Error('Derived evidence is outside the selected snapshot');
+      const record = evidence as Record<string, unknown>;
+      const hasSpan = record.span !== undefined;
+      const hasField = record.field !== undefined;
+      if (hasSpan === hasField) throw new Error('Derived evidence must name one exact anchor');
+      if (hasSpan) {
+        assertPlainContextObjectV1(evidence, ['source_id', 'revision_id', 'span'], 'Derived span evidence');
+        if (content.representation.kind === 'pointer') throw new Error('Derived evidence is outside the selected snapshot');
+        assertContextEvidenceSpanV1(record.span, content.representation.passages);
+      } else {
+        assertPlainContextObjectV1(evidence, ['source_id', 'revision_id', 'field'], 'Derived payload evidence');
+        assertContextPayloadFieldV1(record.field, content);
+      }
     }
   }
   const { output_sha256: _hash, ...body } = output;

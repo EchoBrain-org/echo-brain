@@ -1,10 +1,10 @@
 import type Database from 'better-sqlite3';
 import {
-  assertCaptureAnnotationV1, assertCaptureBindingsV1, assertCaptureClassificationV1, assertCaptureDeriveSnapshotV1,
+  assertCaptureAnnotationV1, assertCaptureBindingsV1, assertCaptureContainerScopeV1, resolveCaptureContainerV1, assertCaptureClassificationV1, assertCaptureDeriveSnapshotV1,
   assertCaptureRevisionRefV1, assertCaptureTextV1, assertContextCaptureEnvelopeV2, assertPlainContextObjectV1,
   canonicalSourceContentV1, captureAnnotationIdV1, captureRevisionRefV1, captureSnapshotSha256V1,
   CAPTURE_ANNOTATION_PROCESSOR_V1, CAPTURE_FOUNDATION_LIMITS_V1, sourceContentSha256V1,
-  type CaptureAnnotationV1, type CaptureBindingsV1, type CaptureClassificationV1, type CaptureDeriveSnapshotV1,
+  type CaptureAnnotationV1, type CaptureBindingsV1, type CaptureContainerScopeV1, type CaptureClassificationV1, type CaptureDeriveSnapshotV1,
   type CaptureSnapshotSelectionV1, type ContextCaptureEnvelopeV2, type SourceAdapterIdentityV1,
 } from '@echo-brain/organization-processing/core';
 import { requireCurrentCaptureAuthorityV1, snapshotCaptureDataV1, type CaptureFoundationAuthorityV1 } from '../../../application/capture-foundation-v1.js';
@@ -20,7 +20,10 @@ interface CaptureRow {
 /** Internal Layer 1 custody and exact Layer 2 input. No public reads or provider I/O. */
 export class SqliteCaptureFoundationV1 {
   private readonly sources: SqliteSourceAdmissionStoreV1;
-  constructor(private readonly database: Database.Database, private readonly authority: CaptureFoundationAuthorityV1) {
+  private readonly containers: CaptureContainerScopeV1;
+  constructor(private readonly database: Database.Database, private readonly authority: CaptureFoundationAuthorityV1, containers: CaptureContainerScopeV1) {
+    assertCaptureContainerScopeV1(containers);
+    this.containers = snapshotCaptureDataV1(containers);
     this.sources = new SqliteSourceAdmissionStoreV1(database);
   }
   private atomic<T>(operation: () => T): T {
@@ -29,27 +32,46 @@ export class SqliteCaptureFoundationV1 {
   }
   private requireCurrent(operation: 'retain' | 'derive', source: ContextCaptureEnvelopeV2, bindings: CaptureBindingsV1): void {
     const { organization_id } = bindings.scope;
+    const mapping = resolveCaptureContainerV1(this.containers, source);
+    if (mapping.organization_id !== organization_id || mapping.project_id !== bindings.project_id || mapping.container_ref !== bindings.container_ref) throw new Error('Capture project or organization differs from its configured container mapping');
     if (!this.database.prepare("SELECT 1 FROM authority_projects_v1 WHERE organization_id=? AND project_id=? AND status='active'").get(organization_id, bindings.project_id)) throw new Error('Capture project is not active in this organization');
     for (const person of bindings.people) {
       if (!this.database.prepare("SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND status='active'").get(organization_id, person.principal_id, person.membership_id)) throw new Error('Capture Person membership is not active in this organization');
     }
-    requireCurrentCaptureAuthorityV1(this.authority, { operation, source, bindings: snapshotCaptureDataV1({ scope: bindings.scope, project_id: bindings.project_id, people: bindings.people }) });
+    requireCurrentCaptureAuthorityV1(this.authority, { operation, source, bindings: snapshotCaptureDataV1({ scope: bindings.scope, project_id: bindings.project_id, container_ref: bindings.container_ref, people: bindings.people }) });
   }
   admit(input: {
     readonly identity: SourceAdapterIdentityV1; readonly source: ContextCaptureEnvelopeV2;
     readonly classification: CaptureClassificationV1; readonly bindings?: CaptureBindingsV1;
-  }): { readonly admission: 'skipped' | 'unresolved' } | { readonly admission: 'admitted' | 'duplicate'; readonly selection: CaptureSnapshotSelectionV1 } {
+  }): { readonly admission: 'skipped' } |
+      { readonly admission: 'unresolved'; readonly cursor_may_advance: false; readonly retry: ReturnType<typeof captureRevisionRefV1> & { readonly reason: 'needs_review' } } |
+      { readonly admission: 'admitted' | 'duplicate'; readonly selection: CaptureSnapshotSelectionV1 } {
     assertPlainContextObjectV1(input, ['identity', 'source', 'classification', 'bindings'], 'Classified capture');
     assertContextCaptureEnvelopeV2(input.source, input.identity); assertCaptureClassificationV1(input.classification, input.source);
     // A rejected body never enters the source store or its representation FK chain.
-    if (input.classification.decision !== 'retain') return { admission: input.classification.decision === 'skip' ? 'skipped' : 'unresolved' };
+    if (input.classification.decision === 'skip') return { admission: 'skipped' };
+    // No durable queue/checkpoint exists yet. The caller must stop or retry, never advance past this item.
+    if (input.classification.decision === 'unresolved') return { admission: 'unresolved', cursor_may_advance: false,
+      retry: { ...captureRevisionRefV1(input.source), reason: 'needs_review' } };
     assertCaptureBindingsV1(input.bindings, input.source);
     const source = snapshotCaptureDataV1(input.source);
     const annotation: CaptureAnnotationV1 = snapshotCaptureDataV1({ schema_version: 1, kind: 'echo-capture-annotation-v1', ...input.bindings, classification: input.classification });
     assertCaptureAnnotationV1(annotation, source);
     return this.atomic(() => {
       this.requireCurrent('retain', source, annotation);
-      if (source.revision.previous_revision_id !== undefined && !this.database.prepare('SELECT 1 FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=? AND revision_id=?').get(annotation.scope.organization_id, source.item.source_id, source.revision.previous_revision_id)) throw new Error('Capture predecessor is not retained for this source');
+      if (source.revision.previous_revision_id !== undefined) {
+        const previous = this.database.prepare('SELECT content_sha256 FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=? AND revision_id=?').get(annotation.scope.organization_id, source.item.source_id, source.revision.previous_revision_id) as { content_sha256: string } | undefined;
+        if (!previous) throw new Error('Capture predecessor is not retained for this source');
+        if (previous.content_sha256 === source.revision.content_sha256) throw new Error('Unchanged capture must reuse its admitted revision');
+        const successor = this.database.prepare("SELECT 1 FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=? AND json_extract(manifest_json, '$.previous_revision_id')=? AND revision_id!=?").get(annotation.scope.organization_id, source.item.source_id, source.revision.previous_revision_id, source.revision.revision_id);
+        if (successor !== undefined) throw new Error('Capture predecessor already has a retained successor');
+      } else {
+        const otherRevision = this.database.prepare(`SELECT 1 FROM authority_source_revisions_v1
+          WHERE organization_id=? AND source_id=? AND NOT EXISTS (
+            SELECT 1 FROM authority_source_revisions_v1 WHERE organization_id=? AND source_id=? AND revision_id=?)`)
+          .get(annotation.scope.organization_id, source.item.source_id, annotation.scope.organization_id, source.item.source_id, source.revision.revision_id);
+        if (otherRevision !== undefined) throw new Error('Capture changed source requires a retained predecessor');
+      }
       const admission = this.sources.admit({ scope: annotation.scope, source });
       const annotationId = this.sources.recordRepresentation({ organization_id: annotation.scope.organization_id, source_id: source.item.source_id,
         revision_id: source.revision.revision_id, processor_version: CAPTURE_ANNOTATION_PROCESSOR_V1, content: annotation });

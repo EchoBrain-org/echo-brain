@@ -4,8 +4,12 @@ import {
 } from '@echo-brain/organization-processing/core';
 
 /**
+ * Callers must hold acquisition/inspection permission before local-rule classification.
+ * This later fence never retroactively authorizes model/network processing.
  * Trusted composition must check current custody/retention consent, allowed representation,
- * project association, each verified source-identity witness, and processing eligibility.
+ * current adapter/container-to-project association, each verified source-identity witness, and processing eligibility.
+ * For document originals, also verify accepted artifact custody for the exact descriptor.
+ * The configured container allowlist and artifact descriptor are not continuing permission.
  * This is internal processing authorization, never a Person read grant. Checks are synchronous
  * against the same Authority transaction; a historical annotation is not an authorization.
  */

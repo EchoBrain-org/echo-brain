@@ -197,7 +197,13 @@ export function assertContextCaptureEnvelopeV1(value: unknown, identity: SourceA
   text(provenance.origin_ref, 2048, 'Context origin');
   if (provenance.source_updated_at !== undefined) timestamp(provenance.source_updated_at, 'Context timestamp');
   assertContextStructuredPayloadV1(content.payload);
-  const representation = object(content.representation, ['kind', 'pointer', 'text', 'passages'], 'Context representation');
+  assertContextRepresentationV1(content.representation);
+}
+
+/** Shared retained-text rules; each envelope version owns its metadata and custody contract. */
+export function assertContextRepresentationV1(value: unknown): asserts value is ContextRepresentationV1 {
+  plainData(value);
+  const representation = object(value, ['kind', 'pointer', 'text', 'passages'], 'Context representation');
   if (representation.kind === 'pointer') {
     if (representation.text !== undefined || representation.passages !== undefined) throw new Error('A pointer cannot contain answer text');
     text(representation.pointer, 2048, 'Context pointer');

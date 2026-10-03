@@ -4,7 +4,7 @@ import {
   assertContextCaptureEnvelopeV2, captureAnnotationIdV1, captureRevisionRefV1, captureSnapshotSha256V1, sourceContentSha256V1,
   type CaptureAnnotationV1, type CaptureDeriveSnapshotV1, type ContextCaptureContentV2,
 } from '../../src/core/index.js';
-import { CAPTURE_IDENTITY, CAPTURE_SPAN, captureBindings, captureClassification, captureContent, captureSource } from '../../../../tests/support/context-capture-v2.js';
+import { CAPTURE_IDENTITY, CAPTURE_CONTAINER, CAPTURE_SPAN, captureBindings, captureClassification, captureContent, captureSource } from '../../../../tests/support/context-capture-v2.js';
 
 function snapshot(): CaptureDeriveSnapshotV1 {
   const source = captureSource();
@@ -39,8 +39,8 @@ describe('capture foundation contracts', () => {
   it('preserves speaker and reporter metadata without pretending it was quoted', () => {
     const content = captureContent(); if (content.lifecycle !== 'present') throw new Error('fixture');
     const actors = [
-      { source_actor_ref: 'provider:speaker', role: 'speaker' as const, attribution: { source_anchor: 'segments[0].speaker', passage_ids: ['p1'] } },
-      { source_actor_ref: 'provider:reporter', role: 'reporter' as const, attribution: { source_anchor: 'fields.reporter', passage_ids: [] } },
+      { source_actor_ref: 'fixture:workspace:actor:speaker', role: 'speaker' as const, attribution: { source_anchor: 'segments[0].speaker', passage_ids: ['p1'] } },
+      { source_actor_ref: 'fixture:workspace:actor:reporter', role: 'reporter' as const, attribution: { source_anchor: 'fields.reporter', passage_ids: [] } },
     ];
     expect(() => captureSource({ content: { ...content, actors, actions: [] } })).not.toThrow();
     for (const passage_ids of [[], ['missing'], ['p1', 'p1']]) {
@@ -50,11 +50,11 @@ describe('capture foundation contracts', () => {
   });
   it('accepts only body-free explicit tombstones with predecessor and observed source time', () => {
     const content: ContextCaptureContentV2 = { schema_version: 2, kind: 'echo-context-capture-v2', lifecycle: 'deleted', label: 'Deleted handoff',
-      provenance: { origin_ref: 'fixture://handoff', source_updated_at: '2026-10-03T01:00:00.000Z' }, deletion: 'explicit_upstream_tombstone' };
-    const prior = captureSource().revision.revision_id;
-    expect(() => captureSource({ content, previous_revision_id: prior })).not.toThrow();
+      provenance: { origin_ref: 'fixture://handoff', container_ref: CAPTURE_CONTAINER, source_updated_at: '2026-10-03T01:00:00.000Z' }, deletion: 'explicit_upstream_tombstone' };
+    const prior = captureSource();
+    expect(() => captureSource({ content, previous: prior })).not.toThrow();
     expect(() => captureSource({ content })).toThrow(/predecessor/);
-    expect(() => captureSource({ content: { ...content, actions: [] } as ContextCaptureContentV2, previous_revision_id: prior })).toThrow(/unknown field/);
+    expect(() => captureSource({ content: { ...content, actions: [] } as ContextCaptureContentV2, previous: prior })).toThrow(/unknown field/);
   });
   it('rejects forged immutable revision identities and executable provider objects', () => {
     const source = captureSource();
@@ -72,6 +72,9 @@ describe('capture foundation contracts', () => {
     expect(() => assertCaptureClassificationV1({ ...classification, decision: ['skip'], reason: 'noise' }, source)).toThrow();
     expect(() => assertCaptureClassificationV1({ ...classification, input: captureRevisionRefV1(captureSource({ external_id: 'other' })) }, source)).toThrow();
     expect(() => assertCaptureClassificationV1({ ...classification, reason: 'source_deleted' }, source)).toThrow();
+  });
+  it.each([undefined, 'inferred', 'model', 'network', ['local_rules']])('rejects preclassification outside pure local rules: %j', method => {
+    expect(() => assertCaptureClassificationV1({ ...captureClassification(), method }, captureSource())).toThrow();
   });
   it('validates exact evidence and output commitments without permitting approval fields', () => {
     const selected = snapshot(); assertCaptureDeriveSnapshotV1(selected);
