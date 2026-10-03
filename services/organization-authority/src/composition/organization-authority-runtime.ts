@@ -19,6 +19,8 @@ import { FileOrganizationAuthoritySigner } from "../adapters/security/file-organ
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
 import type { PersonSessionOidcConfiguration } from "@echo-brain/organization-authority-kernel/application/ports/person-session-dependencies";
 import { AdmittedMeetingProcessingCycleV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/meeting-processing-cycle-v1";
+import { openExtractionAttemptStoreV1 } from "@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1";
+import type { ExtractionAttemptStoreV1 } from "@echo-brain/organization-processing/admitted-meeting-processing/extraction-attempt-store-v1";
 import {
   readAdmittedMeetingProcessingCommitmentsV1,
 } from "@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-processing-commitments";
@@ -115,6 +117,7 @@ export interface OrganizationAuthorityRuntimeConfig {
       readonly state: SqliteAuthorityMeetingProcessingStateV1;
       readonly source_ingestion: SourceAdmissionBindingV1<MeetingSourceContentV1>;
       readonly processor: DecisionProcessorAdapter;
+      readonly extraction_attempts: ExtractionAttemptStoreV1;
       readonly stager: Awaited<ReturnType<ApprovalWorkflowBundleV1["load"]>>["stager"];
       readonly journey_telemetry?: MeetingApprovalJourneyTelemetryPortV1;
       readonly signal: AbortSignal;
@@ -349,6 +352,7 @@ export async function openOrganizationAuthorityRuntime(
     { fileMustExist: true },
   );
   let openedApprovals: ApprovalWorkflowComponentsV1 | undefined;
+  let extractionAttempts: ReturnType<typeof openExtractionAttemptStoreV1> | undefined;
   let meetingApprovalJourneyTelemetry:
     | MeetingApprovalJourneyTelemetryPortV1
     | undefined;
@@ -400,6 +404,10 @@ export async function openOrganizationAuthorityRuntime(
       organization_id: lineage.root.organization_id,
       state_lineage_id: lineage.root.state_lineage_id,
     });
+    extractionAttempts = openExtractionAttemptStoreV1(
+      join(config.state_directory, "extraction-attempts.sqlite"),
+      coordinates,
+    );
     const signer = FileOrganizationAuthoritySigner.openExisting({
       directory: join(config.state_directory, "keys"),
       authority_id: lineage.root.authority_id,
@@ -440,6 +448,7 @@ export async function openOrganizationAuthorityRuntime(
         },
       },
       processor,
+      extraction_attempts: extractionAttempts,
       state: sourceState,
       stager: approvals.stager,
       source_cursor_policy: config.meeting_source_bundle.source_cursor_policy,
@@ -534,6 +543,7 @@ export async function openOrganizationAuthorityRuntime(
                     },
                   },
                   processor,
+                  extraction_attempts: extractionAttempts!,
                   stager: approvals.stager,
                   ...(meetingApprovalJourneyTelemetry === undefined
                     ? {}
@@ -551,6 +561,7 @@ export async function openOrganizationAuthorityRuntime(
         } finally {
           try { openedApprovals?.close?.(); } finally {
             meetingApprovalJourneyTelemetry?.close();
+            extractionAttempts?.close();
             record.close();
             authority.close();
           }
@@ -560,6 +571,7 @@ export async function openOrganizationAuthorityRuntime(
   } catch (error) {
     try { openedApprovals?.close?.(); } finally {
       meetingApprovalJourneyTelemetry?.close();
+      extractionAttempts?.close();
       record.close();
       authority.close();
     }

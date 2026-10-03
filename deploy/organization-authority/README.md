@@ -578,6 +578,60 @@ checks above. An empty successful owner response does not pass. If that Mac is
 unavailable to the operator, the human runs the commands.
 Host-local `resume` and `status` still require the human host operator.
 
+### Inspect and retry a held extraction
+
+The live runtime reserves one automatic model extraction for each unchanged
+review input and source/processor admission. The reservation commits before the
+provider request. Grounding or schema rejection, insufficient credit, other
+provider failures, and interruption all hold that input across polls and
+restarts. Observation timestamps, moving source cursors, and provider revision
+changes alone do not grant another attempt. Frozen candidates continue to reuse
+their existing output.
+
+The hold preserves the source cursor. Pending approvals, publication, and
+Person reads continue, but later source items behind that cursor can wait until
+the held input is resolved. This is a per-input spend bound, not an account-wide
+budget; changed review content or processor configuration can require a new
+extraction.
+
+On the exact host, the human operator inspects bounded, content-free attempt
+status through the installed wrapper:
+
+```sh
+./onboard-clean-v1.sh extraction-attempts --limit 100
+```
+
+After resolving the failure, use the exact key, attempt number, and outcome
+from that status to authorize one additional model call:
+
+```sh
+./onboard-clean-v1.sh retry-extraction \
+  --admission-sha256 'sha256:<digest>' \
+  --review-lineage-id 'rli_<digest>' \
+  --review-input-sha256 'sha256:<digest>' \
+  --expected-attempt 1 \
+  --expected-outcome failed \
+  --confirm-new-model-call
+```
+
+Use `--expected-outcome pending --recover-pending` only to acknowledge an
+interrupted request whose billing outcome is unknown. A `succeeded` attempt
+without a frozen candidate can also require explicit recovery after a crash.
+The wrapper verifies the accepted runtime, excludes staged candidates, takes
+the operation lock, and stops the worker before granting a retry. The CLI
+refuses stale attempts, duplicate grants, lineage mismatch, and any input with
+a frozen candidate. A successful grant restarts the accepted runtime. A refusal
+or uncertain grant leaves it stopped: inspect status before resuming, and do
+not repeat the grant to recover a restart failure. Each grant permits exactly
+one reservation and preserves the previous history.
+
+The private `state/extraction-attempts.sqlite` file is durable spend history.
+Keep it with the retained Authority state and backups; never delete it to clear
+a hold. Its schema and Authority lineage are checked on open. It is a separate
+versioned sidecar and does not migrate the V10 databases or require onboarding
+to be repeated. Releases predating this guard do not enforce it; rolling back
+to those releases can resume repeated extraction calls.
+
 ### Private invitation export to the initial-owner Mac
 
 After `resume` prints `complete_founder_browser_login`, the invitation exists

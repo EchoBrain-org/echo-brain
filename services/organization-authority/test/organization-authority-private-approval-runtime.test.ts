@@ -92,6 +92,7 @@ import type {
   MeetingDocument,
   MeetingSourceAdapter,
 } from "@echo-brain/organization-processing/core";
+import { AdapterError } from "@echo-brain/organization-processing/core";
 import { createGranolaPostCutoffCursor } from "../../../providers/granola/src/source/meeting-source-adapter.js";
 import type { PrivateSlackApprovalCardPresentationV1, PrivateSlackApprovalPostOutcomeV1, PrivateSlackApprovalTerminalPresentationV1, PrivateSlackApprovalUpdateOutcomeV1 } from "@echo-brain/provider-slack-server/processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1";
 
@@ -962,6 +963,95 @@ afterEach(() => {
 });
 
 describe("Organization Authority runtime private approval lane", () => {
+  it("blocks a failed extraction across polls and restart while pending approvals and reads continue", async () => {
+    const fixture = await activeFixture();
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    let runtime: Awaited<ReturnType<typeof openOrganizationAuthorityService>> | undefined;
+    // Return the already-staged first meeting, then keep returning the same
+    // new input as a provider would while its source cursor has not advanced.
+    const repeatedSource = () => {
+      const source = fakeSource(fixture.source.identity, 2);
+      let retained: Awaited<ReturnType<MeetingSourceAdapter["pull"]>> | undefined;
+      let polls = 0;
+      return {
+        ...source,
+        async pull(...args: Parameters<MeetingSourceAdapter["pull"]>) {
+          polls += 1;
+          const batch = retained ?? await source.pull(...args);
+          if (batch.meetings[0]?.provenance.external_id === "note-live-test-1") retained = batch;
+          return batch;
+        },
+        pulls: () => polls,
+      };
+    };
+    const failedProcessor = () => ({
+      ...fakeProcessor(fixture.processorIdentity),
+      extract: vi.fn(async (): Promise<DecisionSet> => {
+        throw new AdapterError("temporarily_unavailable",
+          "LLM output contained invalid or unsupported signal grounding at stage: evidence_quote", true);
+      }),
+    });
+    const assertReadable = async (running: NonNullable<typeof runtime>) => {
+      const current = { ...fixture, runtime: running };
+      expect(searchAs({ fixture: current, authority, record }, "owner"))
+        .toContain(RESTRICTED_REVIEWER_PERSON_POLICY_ID);
+      const response = await fetch(`http://127.0.0.1:${running.address.port}/v1/person/records`, {
+        headers: { authorization: `Bearer ${fixture.owner_access_token}` },
+      });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { records: unknown[] }).records).toHaveLength(1);
+    };
+    try {
+      await waitFor(() => fixture.poster.published.length === 1, "pending private approval");
+      const card = fixture.poster.published[0]!;
+      await fixture.runtime.close();
+      const source = repeatedSource();
+      const processor = failedProcessor();
+      runtime = await openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, {
+        processing_adapter_overrides: { source, processor, private_approval_card_poster: fixture.poster },
+      });
+      await waitFor(() => source.pulls() >= 5, "repeated blocked source polls");
+      expect(processor.extract).toHaveBeenCalledTimes(1);
+      expect(existsSync(join(fixture.initialized.state_directory, "extraction-attempts.sqlite"))).toBe(true);
+      expect((await clickCard({ fixture: { ...fixture, runtime }, card, action: "approve",
+        policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID })).status).toBe(200);
+      await waitFor(() => (record.prepare("SELECT count(*) AS count FROM organization_record_log").get() as { count: number }).count === 1,
+        "pending approval publication while extraction is blocked");
+      await waitFor(() => (authority.prepare("SELECT record_head_position FROM authority_readable_search_active_generation WHERE singleton = 1").get() as { record_head_position: number } | undefined)?.record_head_position === 1,
+        "readable search publication while extraction is blocked");
+      await assertReadable(runtime);
+      expect(processor.extract).toHaveBeenCalledTimes(1);
+      await runtime.close();
+      runtime = undefined;
+
+      // Fresh adapters and a fresh runtime prove the block is persisted, not
+      // an in-memory flag retained by the source or processor test doubles.
+      const restartedSource = repeatedSource();
+      const restartedProcessor = failedProcessor();
+      runtime = await openOrganizationAuthorityService({ ...fixture.config, port: await availablePort() }, {
+        processing_adapter_overrides: { source: restartedSource, processor: restartedProcessor,
+          private_approval_card_poster: fixture.poster },
+      });
+      await waitFor(() => restartedSource.pulls() >= 5, "blocked source polls after restart");
+      expect(restartedProcessor.extract).not.toHaveBeenCalled();
+      expect(fixture.poster.published).toHaveLength(1);
+      await assertReadable(runtime);
+      expect(fixture.errors).toEqual([]);
+    } finally {
+      await runtime?.close();
+      await fixture.runtime.close();
+      record.close();
+      authority.close();
+    }
+  });
+
   it("rejects the legacy synthetic entrypoint outside the exact staging Authority", async () => {
     const fixture = await admittedFixture();
     await expect(

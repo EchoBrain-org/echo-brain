@@ -26,6 +26,7 @@ if [[ -f "$DEPLOY_DIR/release/clean-v1-runtime-profile.py" ]]; then
   RUNTIME_PROFILE_TOOL="$DEPLOY_DIR/release/clean-v1-runtime-profile.py"
 fi
 SETUP_COMMAND="services/organization-authority/dist/clean-founder-main.js"
+EXTRACTION_ATTEMPT_COMMAND="services/organization-authority/dist/clean-extraction-attempts-main.js"
 RUNTIME_UID=''
 RUNTIME_GID=''
 EXECUTOR_UID=''
@@ -122,6 +123,8 @@ usage:
   onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users [--reuse-provider-inputs <onboarding-id> [--content-telemetry <true|false>]]
   onboard-clean-v1.sh resume
   onboard-clean-v1.sh status
+  onboard-clean-v1.sh extraction-attempts [--limit <1..100>]
+  onboard-clean-v1.sh retry-extraction --admission-sha256 <sha256:digest> --review-lineage-id <rli_digest> --review-input-sha256 <sha256:digest> --expected-attempt <number> --expected-outcome <failed|succeeded|pending> --confirm-new-model-call [--recover-pending]
 EOF
   exit 2
 }
@@ -2175,6 +2178,84 @@ status() {
   print_status "$status_json"
 }
 
+require_extraction_recovery_lane() {
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  require_host_prerequisites
+  require_prepared
+  if staged_candidate_present; then
+    fail 'a candidate release is staged; finish promotion or rollback before extraction recovery'
+  fi
+  require_image_present
+}
+
+extraction_attempts() {
+  local limit=100
+  if [[ $# -ne 0 ]]; then
+    [[ $# -eq 2 && "$1" == --limit && "$2" =~ ^[1-9][0-9]{0,2}$ ]] || usage
+    limit="$2"
+    (( limit <= 100 )) || usage
+  fi
+  require_extraction_recovery_lane
+  compose_clean run --rm --no-deps --pull never --entrypoint node authority \
+    "$EXTRACTION_ATTEMPT_COMMAND" status --state-dir /echo-clean/state --limit "$limit"
+}
+
+retry_extraction() {
+  local admission='' lineage='' review_input='' expected_attempt='' expected_outcome=''
+  local confirmed=false recover_pending=false container running
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --admission-sha256) [[ $# -ge 2 && -z "$admission" ]] || usage; admission="$2"; shift 2 ;;
+      --review-lineage-id) [[ $# -ge 2 && -z "$lineage" ]] || usage; lineage="$2"; shift 2 ;;
+      --review-input-sha256) [[ $# -ge 2 && -z "$review_input" ]] || usage; review_input="$2"; shift 2 ;;
+      --expected-attempt) [[ $# -ge 2 && -z "$expected_attempt" ]] || usage; expected_attempt="$2"; shift 2 ;;
+      --expected-outcome) [[ $# -ge 2 && -z "$expected_outcome" ]] || usage; expected_outcome="$2"; shift 2 ;;
+      --confirm-new-model-call) [[ "$confirmed" == false ]] || usage; confirmed=true; shift ;;
+      --recover-pending) [[ "$recover_pending" == false ]] || usage; recover_pending=true; shift ;;
+      *) usage ;;
+    esac
+  done
+  [[ "$admission" =~ ^sha256:[a-f0-9]{64}$ && "$lineage" =~ ^rli_[a-f0-9]{64}$ && \
+     "$review_input" =~ ^sha256:[a-f0-9]{64}$ && "$expected_attempt" =~ ^[1-9][0-9]{0,9}$ && \
+     "$expected_outcome" =~ ^(failed|succeeded|pending)$ && "$confirmed" == true ]] || usage
+  (( expected_attempt <= 2147483647 )) || usage
+  if [[ "$expected_outcome" == pending ]]; then
+    [[ "$recover_pending" == true ]] || usage
+  else
+    [[ "$recover_pending" == false ]] || usage
+  fi
+  require_extraction_recovery_lane
+  container="$(compose_clean ps -aq authority)" || fail 'could not inspect Authority before extraction recovery'
+  if [[ -n "$container" ]]; then
+    running="$(docker inspect --format '{{.State.Running}}' "$container")" || fail 'could not inspect Authority running state'
+    [[ "$running" == true || "$running" == false ]] || fail 'Authority running state is unknown'
+    if [[ "$running" == true ]]; then
+      authority_uses_accepted_image && runtime_uses_accepted_runtime_profile || \
+        fail 'running Authority differs from the accepted image or runtime profile'
+    fi
+  fi
+  # A retry permission can supersede an interrupted provider call. Quiesce the
+  # only worker before touching its durable ledger; never restart on refusal.
+  compose_clean stop -t 30 authority || fail 'could not stop Authority before extraction retry; no retry was authorized'
+  container="$(compose_clean ps -aq authority)" || fail 'could not verify Authority stopped; no retry was authorized'
+  if [[ -n "$container" ]]; then
+    [[ "$(docker inspect --format '{{.State.Running}}' "$container")" == false ]] || \
+      fail 'Authority did not stop; no retry was authorized'
+  fi
+  set -- "$EXTRACTION_ATTEMPT_COMMAND" retry --state-dir /echo-clean/state \
+    --admission-sha256 "$admission" --review-lineage-id "$lineage" --review-input-sha256 "$review_input" \
+    --expected-attempt "$expected_attempt" --expected-outcome "$expected_outcome" --confirm-new-model-call
+  if [[ "$recover_pending" == true ]]; then set -- "$@" --recover-pending; fi
+  if ! compose_clean run --rm --no-deps --pull never --entrypoint node authority "$@"; then
+    fail 'extraction retry was refused or unconfirmed; Authority remains stopped; inspect extraction-attempts before resuming'
+  fi
+  start_runtime || fail 'one extraction retry was authorized but Authority restart failed; inspect extraction-attempts and use resume, never repeat the grant'
+}
+
 case "${1:-}" in
   doctor) shift; doctor "$@" ;;
   prepare) shift; prepare "$@" ;;
@@ -2184,5 +2265,7 @@ case "${1:-}" in
   replace-rehearsal) shift; replace_rehearsal "$@" ;;
   resume) [[ $# -eq 1 ]] || usage; resume ;;
   status) [[ $# -eq 1 ]] || usage; status ;;
+  extraction-attempts) shift; extraction_attempts "$@" ;;
+  retry-extraction) shift; retry_extraction "$@" ;;
   *) usage ;;
 esac

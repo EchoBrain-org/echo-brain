@@ -7,6 +7,7 @@
   "source_root": "services/organization-authority/src",
   "package_json": "services/organization-authority/package.json",
   "entry_points": [
+    "services/organization-authority/src/clean-extraction-attempts-main.ts",
     "services/organization-authority/src/clean-reset-main.ts",
     "services/organization-authority/src/clean-live-main.ts",
     "services/organization-authority/src/synthetic-demo-main.ts",
@@ -316,6 +317,16 @@
     ]
   },
   "layer_rules": [
+    {
+      "name": "authority-extraction-recovery-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/clean-extraction-attempts-main.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/composition/organization-authority-extraction-attempt-cli.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
     {
       "name": "authority-legacy-reset-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-reset-main.ts",
