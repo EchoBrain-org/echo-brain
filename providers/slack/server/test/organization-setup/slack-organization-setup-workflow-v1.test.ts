@@ -289,7 +289,7 @@ describe("Slack organization setup workflow v1", () => {
     const begun = await f.workflow.beginInstall(BEGIN_REQUEST, "owner");
     f.finishConnect();
     let release!: () => void;
-    f.manifest.updateApp.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    f.manifest.updateApp.mockImplementationOnce(() => new Promise<undefined>(resolve => { release = () => resolve(undefined); }));
     const adopting = f.workflow.setup(ADOPT_REQUEST, "owner");
     await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "pending" });
     await expect(f.workflow.beginInstall({ request_id: `osi_${uuid(2)}` }, "owner")).rejects.toMatchObject({ code: "conflict" });
