@@ -39,7 +39,6 @@ import {
   issuePersonOnboardingInvitation,
 } from "../src/composition/person-onboarding-service.js";
 import { startOrganizationAuthorityApiRuntime } from "../src/composition/organization-authority-api-runtime.js";
-import { createSlackPersonExternalIdentityRuntimeBundleV1 } from "@echo-brain/provider-slack-server/person-identity/slack-person-external-identity-runtime-bundle-v1";
 import type {
   PersonExternalIdentityRuntimeInputV1,
   OpenedPersonExternalIdentityRuntimeV1,
@@ -1099,7 +1098,6 @@ describe("Organization Authority API runtime", () => {
     };
     const apiDependencies = {
       oidc_provider: new MockOidcProvider(),
-      external_identity_runtime_bundle: createSlackPersonExternalIdentityRuntimeBundleV1({}),
     };
     let runtime = await startOrganizationAuthorityApiRuntime(apiConfig, apiDependencies);
     try {
@@ -1110,12 +1108,6 @@ describe("Organization Authority API runtime", () => {
         authority_id: initialized.authority_id,
         organization_id: initialized.organization_id,
       });
-      const noSlack = await fetch(
-        `${origin}/v2/integration-links/slack/challenges`,
-        { method: "POST", body: "{}" },
-      );
-      expect(noSlack.status).toBe(503);
-
       const unavailableBootstrap = await fetch(
         `${origin}/v2/session/oidc/begin`,
         {
@@ -1238,11 +1230,6 @@ describe("Organization Authority API runtime", () => {
       expect(expiredPage).not.toContain("access_token");
       expect(expiredPage).not.toContain("refresh_token");
       expect(expiredPage).not.toContain('name="session"');
-
-      const noTools = await fetch(`${origin}/v2/person/tools`, { headers: { authorization: `Bearer ${session.access_token as string}` } });
-      expect(noTools.status).toBe(200);
-      expect(await json(noTools)).toMatchObject({ tools: [], organization_id: initialized.organization_id });
-      expect((await fetch(`${origin}/v2/person/tools`)).status).toBe(401);
 
       const noToolsV3 = await fetch(`${origin}/v3/person/tools`, {
         headers: { authorization: `Bearer ${session.access_token as string}` },

@@ -117,7 +117,6 @@ export function providerSeams() {
         granted_scopes: slackConnection?.granted_scopes ?? SLACK_PRIVATE_APP_BOT_SCOPES_V1 };
       return { ...verified, verification_evidence_sha256: slackConnectionVerificationEvidenceSha256V1(verified) };
     }),
-    verifyHuman: vi.fn(async (_token: string, userId: string) => ({ team_id: 'TFIXTURE', user_id: userId, verification_evidence_sha256: canonicalSha256({ fixture: userId }) })),
     openIdentityLinkDirectMessage: vi.fn(async (_token: string, userId: string) => ({ team_id: 'TFIXTURE', channel_id: `D${userId.slice(1)}`, recipient_user_id: userId })),
     postIdentityLinkChallenge: vi.fn(async (_token: string, input: { channel_id: string }) => ({ team_id: 'TFIXTURE', channel_id: input.channel_id, challenge_message_ts: '1727700000.000001' })),
     observeIdentityLinkChallenge: vi.fn(async (_token: string, input: ObserveSlackIdentityLinkChallengeInput) => {

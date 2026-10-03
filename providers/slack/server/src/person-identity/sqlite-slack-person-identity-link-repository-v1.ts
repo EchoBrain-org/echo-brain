@@ -4,7 +4,6 @@ import {
   canonicalJson,
   canonicalSha256,
 } from "@echo-brain/federation-protocol";
-import { AUTHORITY_FILE_SECRET_BACKEND, type OrganizationSecretReference } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 import { type ActiveSlackOrganizationTool, type BeginPersonSlackIdentityLinkChallengeInput, type BegunSlackIdentityLinkChallenge, type CompletePersonSlackIdentityLinkChallengeInput, type CompletedPersonSlackIdentityLink, type PendingPersonSlackIdentityLinkChallenge, type PersonSlackIdentityLinkSession } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { buildExternalHumanIdentityLinkContractV2, validateExternalHumanIdentityLinkContractV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../organization-control-plane/application/organization-tool-connection-contracts-v2.js";
 import { type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
@@ -610,10 +609,10 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
   }
 
   async readSlackToken(
-    reference: OrganizationSecretReference,
+    tool: ActiveSlackOrganizationTool,
     options?: { readonly force_refresh?: boolean },
   ): Promise<string> {
-    const active = this.activeConnectionFor(reference);
+    const active = this.activeConnectionFor(tool);
     if (active === null) {
       throw new Error("active Slack credential is unavailable");
     }
@@ -623,26 +622,24 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
     );
   }
 
-  /** Reports only the connection the reference still names; otherwise nothing. */
-  reportSlackTokenRejected(reference: OrganizationSecretReference): void {
-    const active = this.activeConnectionFor(reference);
+  /** Reports only the connection the tool still names; otherwise nothing. */
+  reportSlackTokenRejected(tool: ActiveSlackOrganizationTool): void {
+    const active = this.activeConnectionFor(tool);
     if (active !== null) this.options.slack_token_access.onActiveSlackBotTokenRejected(active.stored);
   }
 
-  /** True only while the connection the reference still names is marked. */
-  slackTokenRejected(reference: OrganizationSecretReference): boolean {
-    const active = this.activeConnectionFor(reference);
+  /** True only while the connection the tool still names is marked. */
+  slackTokenRejected(tool: ActiveSlackOrganizationTool): boolean {
+    const active = this.activeConnectionFor(tool);
     return active !== null && this.options.slack_token_access.isActiveSlackBotTokenRejected(active.stored);
   }
 
-  /** The tool's secret reference is a pseudo-handle naming the active connection. */
+  /** The active connection, only while the tool still names it. */
   private activeConnectionFor(
-    reference: OrganizationSecretReference,
+    tool: ActiveSlackOrganizationTool,
   ): ActiveSlackConnection | null {
     const active = this.activeConnection();
-    return active === null ||
-      reference.secret_backend_id !== AUTHORITY_FILE_SECRET_BACKEND ||
-      reference.secret_handle_id !== active.connection.connection_id
+    return active === null || tool.connection_id !== active.connection.connection_id
       ? null
       : active;
   }
@@ -816,33 +813,20 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
   }
 
   private activeConnection(): ActiveSlackConnection | null {
-    const stored = readActiveSlackConnectionV1(this.options.database);
+    const stored = readActiveSlackConnectionV1(this.options.database, this.options);
     if (stored === undefined) return null;
     const { connection, state } = stored;
-    if (
-      connection.authority_id !== this.options.authority_id ||
-      connection.organization_id !== this.options.organization_id ||
-      connection.state_lineage_id !== this.options.state_lineage_id
-    ) {
-      throw new Error("stored Slack connection is inconsistent");
-    }
     return Object.freeze({
       connection,
       state,
       stored,
       tool: Object.freeze({
-        connection_attempt_id: state.verification_event_id,
         connection_id: connection.connection_id,
         team_id: connection.provider_tenant_id,
         enterprise_id: connection.provider_enterprise_id,
         bot_user_id: connection.provider_bot_user_id,
         bot_id: connection.provider_bot_id,
         app_id: connection.provider_app_id,
-        granted_scopes: state.observed_granted_scopes,
-        secret: Object.freeze({
-          secret_backend_id: AUTHORITY_FILE_SECRET_BACKEND,
-          secret_handle_id: connection.connection_id,
-        }),
       }),
     });
   }
@@ -872,11 +856,6 @@ export function createSqliteSlackPersonIdentityLinkWorkflowV1(
     organization_id: input.organization_id,
     authentication: input.authentication,
     repository,
-    secrets: {
-      read: (reference, options) => repository.readSlackToken(reference, options),
-      reportRejected: (reference) => repository.reportSlackTokenRejected(reference),
-      isRejected: (reference) => repository.slackTokenRejected(reference),
-    },
     slack: input.slack,
     authorization_fence: input.authorization_fence,
     invalidate_browser_attempts: input.invalidate_browser_attempts,

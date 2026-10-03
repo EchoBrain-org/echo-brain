@@ -13,14 +13,7 @@ const CHALLENGE_CODE = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 const MAXIMUM_CHALLENGE_LIFETIME_MS = 15 * 60 * 1_000;
 const MAXIMUM_CHALLENGE_THREAD_MESSAGES = 100;
 
-export type SlackIdentityProviderV1 = Pick<
-  SlackIntegrationProvider,
-  | "openIdentityLinkDirectMessage"
-  | "verifyConnection"
-  | "verifyHuman"
-  | "postIdentityLinkChallenge"
-  | "observeIdentityLinkChallenge"
->;
+export type SlackIdentityProviderV1 = SlackIntegrationProvider;
 
 export class SlackIdentityProviderErrorV1 extends Error {
   constructor(

@@ -39,7 +39,6 @@
     "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.ts",
     "providers/slack/server/src/private-approval/resolve-private-slack-approval-reviewer-target-v1.ts",
     "providers/slack/server/src/private-approval/sqlite-stable-private-approval-authority-fence-v1.ts",
-    "providers/slack/server/src/private-approval/resolve-current-private-slack-connection-v1.ts",
     "providers/slack/server/src/private-approval/private-slack-dm-approval-stager-v1.ts",
     "providers/slack/server/src/private-approval/private-slack-approval-interaction-handler-v1.ts",
     "providers/slack/server/src/private-approval/private-slack-approval-terminal-coordinator-v1.ts",

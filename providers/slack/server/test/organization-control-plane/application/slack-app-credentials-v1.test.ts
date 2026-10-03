@@ -87,16 +87,14 @@ describe("Slack app credentials V1 serialization", () => {
 });
 
 describe("findPendingSlackAppCredentialsV1", () => {
-  it("finds the single pending bundle and ignores plain legacy bot-token secrets", () => {
+  it("finds the single pending bundle", () => {
     const store = new FileOrganizationSecretStore(tempSecrets());
-    store.create("xoxb-plain-legacy-token");
     const reference = store.create(serializeSlackAppCredentialsV1(pending));
     expect(findPendingSlackAppCredentialsV1(store)?.reference).toEqual(reference);
   });
 
   it("returns undefined when no pending bundle exists", () => {
     const store = new FileOrganizationSecretStore(tempSecrets());
-    store.create("xoxb-plain-legacy-token");
     store.create(
       serializeSlackAppCredentialsV1({ ...pending, nango_connection_id: "conn_1234567890" }),
     );
@@ -112,12 +110,12 @@ describe("findPendingSlackAppCredentialsV1", () => {
     );
   });
 
-  it("fails loudly on a stored secret with the bundle kind but invalid fields, instead of skipping it", () => {
+  it.each([
+    ["a bundle with invalid fields", JSON.stringify({ ...pending, app_id: "not-an-app-id" })],
+    ["a secret that is not a bundle", "xoxb-plain-legacy-token"],
+  ])("fails loudly on %s instead of skipping it", (_name, secret) => {
     const store = new FileOrganizationSecretStore(tempSecrets());
-    // kind matches, so this is not a foreign secret to skip — but app_id does
-    // not match its shape, so parsing it must throw rather than be treated as
-    // absent.
-    store.create(JSON.stringify({ ...pending, app_id: "not-an-app-id" }));
+    store.create(secret);
     expect(() => findPendingSlackAppCredentialsV1(store)).toThrowError(
       /^Slack app credentials are invalid$/,
     );

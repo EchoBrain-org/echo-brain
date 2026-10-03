@@ -133,9 +133,6 @@ const fakeSlack: SlackIdentityProviderV1 = {
     return { team_id: "T12345678", enterprise_id: null, bot_user_id: "U12345678", bot_id: "B12345678", app_id: "A12345678",
       granted_scopes: [...SLACK_PRIVATE_APP_BOT_SCOPES_V1], verification_evidence_sha256: canonicalSha256("rehearsal-slack-connection") };
   },
-  verifyHuman: async () => {
-    throw new Error("Person Slack identity linking observes a thread instead");
-  },
   postIdentityLinkChallenge: async (_token, input) => ({
     team_id: "T12345678",
     channel_id: input.channel_id,

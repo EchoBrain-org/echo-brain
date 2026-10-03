@@ -10,12 +10,6 @@ export interface FrozenApprovalContractV2<T> {
   readonly sha256: ApprovalContractSha256;
 }
 
-/** Additional observed scopes required to open and reconcile a private DM. */
-export const SLACK_DM_APPROVAL_REQUIRED_SCOPES = Object.freeze([
-  "im:history",
-  "im:write",
-] as const);
-
 const SLACK_HUMAN_SUBJECT = /^[UW][A-Z0-9]{2,255}$/;
 
 export interface CurrentSlackDmApprovalReviewerV1 {
@@ -110,10 +104,7 @@ function stateIsPrivateDmEligible(
   connection: OrganizationToolConnectionContractV2,
   state: OrganizationToolConnectionStateV2,
 ): boolean {
-  return [
-    ...connection.required_provider_scopes,
-    ...SLACK_DM_APPROVAL_REQUIRED_SCOPES,
-  ].every((scope) => state.observed_granted_scopes.includes(scope));
+  return connection.required_provider_scopes.every((scope) => state.observed_granted_scopes.includes(scope));
 }
 
 function currentRowMatchesLink(

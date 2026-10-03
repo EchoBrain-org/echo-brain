@@ -105,36 +105,16 @@ export interface FoundSlackAppCredentialsV1 {
 
 /**
  * Scans every secret reference for the single pending Slack app setup
- * (bundle present, `nango_connection_id` still null). Secrets that are not a
- * Slack app credential bundle — unparseable JSON, or JSON whose `kind` does
- * not match — are silently skipped; they belong to other tools or other
- * secret kinds. A secret whose
- * `kind` DOES match but whose other fields are invalid is not skipped: it is
- * a corrupt bundle, not a foreign secret, so parsing it throws and that
- * throw propagates out of this scan — failing loudly rather than hiding the
- * corruption.
+ * (bundle present, `nango_connection_id` still null). Only Slack app
+ * credential bundles live in this store, so any secret that does not parse
+ * as one is a corrupt bundle: the scan throws rather than hiding it.
  */
 export function findPendingSlackAppCredentialsV1(
   store: SlackAppCredentialsLookupStore,
 ): FoundSlackAppCredentialsV1 | undefined {
   const pending: FoundSlackAppCredentialsV1[] = [];
   for (const reference of store.listReferences()) {
-    const raw = store.read(reference);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw) as unknown;
-    } catch {
-      continue;
-    }
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      Array.isArray(parsed) ||
-      (parsed as { kind?: unknown }).kind !== SLACK_APP_CREDENTIALS_KIND_V1
-    ) {
-      continue;
-    }
-    const credentials = parseSlackAppCredentialsV1(raw);
+    const credentials = parseSlackAppCredentialsV1(store.read(reference));
     if (credentials.nango_connection_id === null) {
       pending.push({ reference, credentials });
     }

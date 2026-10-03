@@ -33,7 +33,6 @@ export {
   type ResolvePrivateApprovalPolicyInputV1,
 } from "./application/slack/private-approval-policy-resolution-v1.js";
 export {
-  SLACK_DM_APPROVAL_REQUIRED_SCOPES,
   resolveCurrentSlackDmApprovalReviewerTargetV1,
   type CurrentSlackDmApprovalReviewerV1,
   type CurrentSlackDmApprovalReviewerTargetV1,

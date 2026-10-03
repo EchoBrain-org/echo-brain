@@ -1,11 +1,10 @@
 import { canonicalJson, canonicalSha256 } from "@echo-brain/federation-protocol";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
-import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2 } from "../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
-import { slackNangoAppPublicConfigurationSha256V1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
-import { applyOrganizationControlBaselineV3 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
-import { resolveActivePrivateSlackConnectionV1, type PrivateSlackConnectionCoordinatesV1 } from "../../src/private-approval/resolve-current-private-slack-connection-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2 } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
+import { readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type SlackConnectionCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
+import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 
 const COORDINATES = Object.freeze({
   authority_id: "oau_00000000-0000-4000-8000-000000000001",
@@ -17,7 +16,7 @@ const NOW = "2026-08-28T00:00:00.000Z";
 const databases: Database.Database[] = [];
 
 /** One stored Nango-kind connection, or none with `seed: false`. */
-function database(input: { readonly seed?: boolean; readonly coordinates?: PrivateSlackConnectionCoordinatesV1; readonly row_status?: "active" | "revoked" } = {}) {
+function database(input: { readonly seed?: boolean; readonly coordinates?: SlackConnectionCoordinatesV1; readonly row_status?: "active" | "revoked" } = {}) {
   const opened = new Database(":memory:");
   applyOrganizationControlBaselineV3(opened);
   databases.push(opened);
@@ -46,41 +45,41 @@ afterEach(() => {
   for (const opened of databases.splice(0)) opened.close();
 });
 
-describe("resolveActivePrivateSlackConnectionV1", () => {
-  it("resolves the organization's one active connection with its frozen provider commitments", () => {
-    const actual = resolveActivePrivateSlackConnectionV1(database(), COORDINATES);
+describe("readActiveSlackConnectionV1", () => {
+  it("reads the organization's one active connection with its frozen provider commitments", () => {
+    const actual = readActiveSlackConnectionV1(database(), COORDINATES)!;
 
-    expect(actual.current).toEqual({
+    expect(actual.connection).toMatchObject({
       connection_id: CONNECTION_ID,
-      connection_contract_sha256: actual.stored.contract_sha256,
-      connection_state_sha256: actual.stored.state_sha256,
       provider_app_id: "A01",
       provider_bot_id: "B01",
       provider_bot_user_id: "U01BOT",
       provider_tenant_id: "T01",
       provider_enterprise_id: "E01",
     });
-    expect(Object.isFrozen(actual.current)).toBe(true);
+    expect(actual.contract_sha256).toBe(canonicalSha256(actual.connection));
+    expect(actual.state_sha256).toBe(canonicalSha256(actual.state));
+    expect(Object.isFrozen(actual)).toBe(true);
   });
 
   it.each([
     ["no stored connection", { seed: false }],
     ["a revoked connection", { row_status: "revoked" as const }],
-  ])("fails closed with %s", (_name, input) => {
-    expect(() => resolveActivePrivateSlackConnectionV1(database(input), COORDINATES)).toThrow("has no active Slack connection");
+  ])("reads nothing with %s", (_name, input) => {
+    expect(readActiveSlackConnectionV1(database(input), COORDINATES)).toBeUndefined();
   });
 
   it.each([
     ["foreign lineage", { ...COORDINATES, state_lineage_id: "lineage-00000000-0000-4000-8000-000000000099" }],
     ["foreign authority", { ...COORDINATES, authority_id: "oau_00000000-0000-4000-8000-000000000099" }],
   ])("fails closed for a %s", (_name, coordinates) => {
-    expect(() => resolveActivePrivateSlackConnectionV1(database({ coordinates }), COORDINATES)).toThrow("is drifted");
+    expect(() => readActiveSlackConnectionV1(database({ coordinates }), COORDINATES)).toThrow("is drifted");
   });
 
   it("fails closed when the digest proof is altered", () => {
     const opened = database();
     opened.prepare("UPDATE organization_tool_connection_current_state SET state_sha256 = ?").run(canonicalSha256({ altered: true }));
 
-    expect(() => resolveActivePrivateSlackConnectionV1(opened, COORDINATES)).toThrow("digest chain is invalid");
+    expect(() => readActiveSlackConnectionV1(opened, COORDINATES)).toThrow("digest chain is invalid");
   });
 });

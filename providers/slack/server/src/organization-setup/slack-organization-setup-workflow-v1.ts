@@ -30,15 +30,11 @@ const ATTEMPT_LIFETIME_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 50;
 const IN_PROGRESS = "Slack setup is in progress";
 
-/** What the Authority composition passes for Slack; absent, no Slack route exists. */
+/** What the Authority composition passes for Slack setup. */
 export interface SlackOrganizationSetupOptionsV1 {
   readonly authority_url: string;
   readonly nango: { readonly client: NangoConnectionClientV1; readonly callback_url: string };
   readonly manifest_provider: SlackAppManifestProviderV1;
-  /** Defaults to the Slack identity provider's `auth.test` check. */
-  readonly verifier?: SlackConnectionVerifierV1;
-  /** Defaults to the runtime bundle's `connection_health`; the two must be one instance. */
-  readonly health?: SlackConnectionHealthV1;
   /** Optional provider permission extension selected only by an Authority intake profile. */
   readonly public_channel_context?: SlackPublicChannelContextCapabilityV1;
 }
@@ -81,9 +77,10 @@ function sameSession(left: PersonAccessAuthorization, right: PersonAccessAuthori
 }
 
 /**
- * Spike-sensitive (assumptions A3-A5, ruling P1); adjust here only. A first
- * install or a rebind is found by its attempt tag. A reconnect keeps its
- * connection id and completes only once that exact connection reports this
+ * Spike-sensitive: how Nango reports a finished connect is assumed, not
+ * observed, since ADR-0025's phase-0 spike is unrecorded; adjust here only.
+ * A first install or a rebind is found by its attempt tag. A reconnect keeps
+ * its connection id and completes only once that exact connection reports this
  * attempt's tag. Slack may return the same bot token on a reinstall, so the
  * token is no signal; Nango's top-level timestamp is not a completion signal.
  */
@@ -261,7 +258,7 @@ export class SlackOrganizationSetupWorkflowV1 {
       try {
         connection = await finishedNangoConnectionV1(this.options.nango.client, attempt);
       } catch (error) {
-        // Ruling P8: a Nango blip while looking is not an outcome; the attempt lives until it expires.
+        // A Nango blip while looking is not an outcome; the attempt lives until it expires.
         if (error instanceof NangoClientErrorV1 && error.code === "unavailable") return statusResponse(attempt);
         throw error;
       }
@@ -385,7 +382,7 @@ export class SlackOrganizationSetupWorkflowV1 {
     if (active !== undefined && this.publicChannelContext !== undefined) return active;
     const pending = findPendingSlackAppCredentialsV1(this.options.secrets);
     if (pending !== undefined && active !== undefined && pending.credentials.app_id === active.credentials.app_id) {
-      // Ruling P5: a stray pending copy of the connected app must not start a second connection for it.
+      // A stray pending copy of the connected app must not start a second connection for it.
       this.options.secrets.remove(pending.reference);
       return active;
     }

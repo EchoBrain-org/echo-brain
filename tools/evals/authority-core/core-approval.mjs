@@ -24,9 +24,7 @@ import {
   PrivateSlackApprovalTerminalCoordinatorV1,
 } from "../../../providers/slack/server/dist/private-approval/private-slack-approval-terminal-coordinator-v1.js";
 import {
-  resolveActivePrivateSlackConnectionV1,
-} from "../../../providers/slack/server/dist/private-approval/resolve-current-private-slack-connection-v1.js";
-import {
+  readActiveSlackConnectionV1,
   slackNangoAppPublicConfigurationSha256V1,
 } from "../../../providers/slack/server/dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import {
@@ -260,7 +258,7 @@ export async function createCoreApproval({ context, owner, employee, sessions } 
     owner: ownerActor,
     ...(employeeActor === undefined ? {} : { employee: employeeActor }),
   });
-  const connection = resolveActivePrivateSlackConnectionV1(context.control_plane_database, location).current;
+  const connection = readActiveSlackConnectionV1(context.control_plane_database, location).connection;
   const poster = new DeterministicCoreApprovalPoster();
   const assignments = new SqlitePrivateSlackApprovalAssignmentStateV1(context.authority_database);
   const control_plane = new SqliteSlackDmApprovalPersistenceV1({

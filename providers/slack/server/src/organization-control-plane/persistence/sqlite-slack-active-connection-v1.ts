@@ -26,13 +26,22 @@ function parseCanonical(json: string): unknown {
   return value;
 }
 
+/** The three immutable coordinates that bind a runtime to one lineage. */
+export interface SlackConnectionCoordinatesV1 {
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly state_lineage_id: string;
+}
+
 /**
  * Reads the one active connection after proving its digest chain. A
  * connection stored by the removed bot-token-and-channel setup commits to
- * another configuration: it is refused, never served.
+ * another configuration: it is refused, never served. With `coordinates`, a
+ * connection of another Authority, organization or lineage is refused too.
  */
 export function readActiveSlackConnectionV1(
   database: Database.Database,
+  coordinates?: SlackConnectionCoordinatesV1,
 ): StoredSlackConnectionV1 | undefined {
   const row = database
     .prepare(
@@ -72,6 +81,14 @@ export function readActiveSlackConnectionV1(
     state.connection_status !== "active"
   ) {
     throw new Error("stored Slack connection digest chain is invalid");
+  }
+  if (
+    coordinates !== undefined &&
+    (connection.authority_id !== coordinates.authority_id ||
+      connection.organization_id !== coordinates.organization_id ||
+      connection.state_lineage_id !== coordinates.state_lineage_id)
+  ) {
+    throw new Error("stored Slack connection is drifted");
   }
   return Object.freeze({
     connection,

@@ -18,9 +18,8 @@ const authorization: PersonAccessAuthorization = {
   hard_reauthentication_at: "2026-09-11T00:00:00.000Z", person_state_sha256: canonicalSha256("person"),
   session_state_sha256: canonicalSha256("session"), checked_at: NOW,
 };
-const tool = Object.freeze({ connection_attempt_id: "nango_1", connection_id: "con_00000000-0000-4000-8000-000000000001",
-  team_id: "T123", enterprise_id: null, bot_user_id: "Ubot", bot_id: "B123", app_id: "A123",
-  granted_scopes: [], secret: { secret_backend_id: "authority-file-v1" as const, secret_handle_id: "con_00000000-0000-4000-8000-000000000001" } });
+const tool = Object.freeze({ connection_id: "con_00000000-0000-4000-8000-000000000001",
+  team_id: "T123", enterprise_id: null, bot_user_id: "Ubot", bot_id: "B123", app_id: "A123" });
 
 function setup(input: { now?: () => string; authorization?: () => PersonAccessAuthorization; proof?: { user_id: string; team_id: string };
   browser_provider?: (active: ActiveSlackOrganizationTool) => SlackBrowserIdentityProvider } = {}) {

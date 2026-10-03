@@ -14,16 +14,15 @@ import type { ApprovalWorkflowContextV1 } from "@echo-brain/organization-process
 import { resolvePinnedOrganizationAuthority } from "../../../../../packages/organization-protocol/src/authority-descriptor.js";
 import { COORDINATES, protocolAuthority } from "../../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
 import { createSlackBotTokenSourceV1 } from "../../src/organization-control-plane/application/slack-bot-token-source-v1.js";
 import { SlackConnectionHealthV1 } from "../../src/organization-control-plane/application/slack-connection-health-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { activateNangoSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 import { ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID } from "../../src/organization-control-plane/slack-approval-integration-v1.js";
 import { PRIVATE_SLACK_APPROVAL_BLOCK_KIT_ACTIONS_V1, privateSlackApprovalBlockKitActionIdV1 } from "../../src/private-approval/private-slack-approval-block-kit-card-v1.js";
 import { createActivePrivateSlackApprovalPosterV1, createPrivateSlackApprovalWorkflowBundleV1, type PrivateSlackApprovalWorkflowBundleConfigV1 } from "../../src/private-approval/private-slack-approval-workflow-bundle-v1.js";
-import { resolveActivePrivateSlackConnectionV1 } from "../../src/private-approval/resolve-current-private-slack-connection-v1.js";
 
 const NOW = "2026-09-30T00:00:00.000Z";
 const LATER = "2026-09-30T00:10:00.000Z";
@@ -130,7 +129,7 @@ async function load(config: PrivateSlackApprovalWorkflowBundleConfigV1) {
 function recordingPoster(state: ReturnType<typeof stateDirectory>, response: unknown = { ok: true, channel: "D0OWNER", ts: "123.000001" }) {
   const authorizations: string[] = [];
   const poster = createActivePrivateSlackApprovalPosterV1({
-    connection: () => resolveActivePrivateSlackConnectionV1(state.database, COORDINATES).stored,
+    connection: () => readActiveSlackConnectionV1(state.database, COORDINATES)!,
     bot_token_source: state.bot_token_source, connection_health: state.health,
     client_options: { fetchImpl: async (_url: unknown, init?: RequestInit) => {
       authorizations.push(new Headers(init?.headers).get("authorization")!);
