@@ -69,7 +69,15 @@ describe('context capture contract', () => {
     expect(() => buildContextCaptureEnvelopeV1({
       identity, external_id: 'design-1', captured_at: '2026-10-01T00:00:01.000Z',
       content: { ...content(), payload: { schema_version: 1, kind: 'task', status: 'open' } } as unknown as ContextCaptureContentV1,
-    })).toThrow('kind is unsupported');
+    })).toThrow('Context structured payload');
+  });
+
+  it('keeps document payload and original-artifact custody outside the V1 contract', () => {
+    const base = envelope();
+    const document = { schema_version: 2, kind: 'document', media_type: 'text/plain' };
+    const original = { artifact_id: 'original', media_type: 'text/plain', sha256: 'a'.repeat(64), byte_length: 31 };
+    expect(() => assertContextCaptureEnvelopeV1(withContent(base, { ...base.content, payload: document }), identity)).toThrow('Context structured payload');
+    expect(() => assertContextCaptureEnvelopeV1({ ...base, revision: { ...base.revision, artifact_refs: [original] } }, identity)).toThrow('does not accept artifact');
   });
 
   it('rejects noncanonical identity, digest, provenance, anchors, bounds and closed fields', () => {
