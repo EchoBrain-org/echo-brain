@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { assertCaptureBindingsV1, type CaptureSnapshotSelectionV1, type ContextCaptureContentV2 } from '@echo-brain/organization-processing/core';
 import { SqliteCaptureFoundationV1 } from '../src/adapters/persistence/sqlite/capture-foundation-v1.js';
 import type { CaptureFoundationAuthorityV1 } from '../src/application/capture-foundation-v1.js';
-import { CAPTURE_IDENTITY, CAPTURE_PROJECT, CAPTURE_TIME, captureBindings, captureClassification, captureContent, captureSource } from '../../../packages/organization-processing/test/fixtures/context-capture-v2.js';
+import { CAPTURE_IDENTITY, CAPTURE_PROJECT, CAPTURE_TIME, captureBindings, captureClassification, captureContent, captureSource } from '../../../tests/support/context-capture-v2.js';
 import { MEMBER, OWNER, PROJECT_BETA, projectContextDatabase, revokeMembership } from './fixtures/project-context-sqlite.js';
 
 let database: Database.Database;

@@ -4,7 +4,7 @@ import {
   assertContextCaptureEnvelopeV2, captureAnnotationIdV1, captureRevisionRefV1, captureSnapshotSha256V1, sourceContentSha256V1,
   type CaptureAnnotationV1, type CaptureDeriveSnapshotV1, type ContextCaptureContentV2,
 } from '../../src/core/index.js';
-import { CAPTURE_IDENTITY, CAPTURE_SPAN, captureBindings, captureClassification, captureContent, captureSource } from '../fixtures/context-capture-v2.js';
+import { CAPTURE_IDENTITY, CAPTURE_SPAN, captureBindings, captureClassification, captureContent, captureSource } from '../../../../tests/support/context-capture-v2.js';
 
 function snapshot(): CaptureDeriveSnapshotV1 {
   const source = captureSource();

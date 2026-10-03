@@ -1,7 +1,7 @@
 import {
   buildContextCaptureEnvelopeV2, captureRevisionRefV1, sourceContentSha256V1,
   type CaptureBindingsV1, type CaptureClassificationV1, type ContextCaptureContentV2,
-} from '../../src/core/index.js';
+} from '@echo-brain/organization-processing/core';
 
 export const CAPTURE_IDENTITY = { kind: 'source', adapter_id: 'fixture', instance_id: 'fixture', version: '1' } as const;
 export const CAPTURE_PROJECT = 'prj_11111111-1111-4111-8111-111111111111';
