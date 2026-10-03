@@ -128,7 +128,9 @@ aws cloudformation describe-stacks \
 ```
 
 Expected evidence is a complete stack, one alert topic, one public check
-function, one Authority log group, and four alarms.
+function, one Authority log group, and six alarms: four that notify and the two
+attributed comparison alarms with actions disabled (see Runtime metric and
+alarm attribution).
 
 Open the Amazon SNS confirmation email and confirm it. Then verify that the
 subscription is `Confirmed` in the SNS console or `Confirmed` rather than
@@ -565,7 +567,7 @@ Desk spans carry `included_count` and, by source, `meeting_items`,
 `document_items` and `slack_items`; `transcript_items` is the shared-transcript
 subset of `document_items`. The evidence HTTP doors use the same desk spans.
 Model request and response content is captured per call under the content
-switch, except calls whose prompt carries Slack text.
+switch, except calls whose prompt carries live Slack or ticket text.
 
 #### Opt-in development content and transport completeness
 

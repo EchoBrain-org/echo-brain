@@ -5,14 +5,6 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./jira-person-live-evidence-reader-v1": {
-      "types": "./dist/jira-person-live-evidence-reader-v1.d.ts",
-      "import": "./dist/jira-person-live-evidence-reader-v1.js"
-    },
-    "./jira-cloud-transport-v1": {
-      "types": "./dist/jira-cloud-transport-v1.d.ts",
-      "import": "./dist/jira-cloud-transport-v1.js"
-    },
     "./jira-person-connection-v1": {
       "types": "./dist/jira-person-connection-v1.d.ts",
       "import": "./dist/jira-person-connection-v1.js"

@@ -6,12 +6,8 @@ import {
 } from "../../../shared/bounded-json-fetch-v1.js";
 import { SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1, slackPrivateAppBotScopesV1, type SlackPublicChannelContextCapabilityV1 } from "../../application/slack-integration-contracts.js";
 
-/** Owned by the application contracts; re-exported for this adapter's existing importers. */
-export { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../application/slack-integration-contracts.js";
-
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
-const DEFAULT_TIMEOUT_MS = 15_000;
-const MAXIMUM_TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = 15_000;
 
 function validateRecipeUrl(value: string, allowPath: boolean): URL {
   let url: URL;
@@ -162,22 +158,10 @@ function parseCreatedSlackApp(value: Record<string, unknown>): CreatedSlackAppV1
  */
 export class SlackWebAppManifestProviderV1 implements SlackAppManifestProviderV1 {
   private readonly fetchImpl: typeof fetch;
-  private readonly timeoutMs: number;
 
-  constructor(
-    options: {
-      readonly fetch?: typeof fetch;
-      readonly timeoutMs?: number;
-    } = {},
-  ) {
+  constructor(options: { readonly fetch?: typeof fetch } = {}) {
     this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    if (
-      typeof this.fetchImpl !== "function" ||
-      !Number.isSafeInteger(this.timeoutMs) ||
-      this.timeoutMs <= 0 ||
-      this.timeoutMs > MAXIMUM_TIMEOUT_MS
-    ) {
+    if (typeof this.fetchImpl !== "function") {
       throw new Error("Slack manifest transport configuration is invalid");
     }
   }
@@ -202,7 +186,7 @@ export class SlackWebAppManifestProviderV1 implements SlackAppManifestProviderV1
           body: new URLSearchParams(parameters),
         },
         fetch: this.fetchImpl,
-        timeoutMs: this.timeoutMs,
+        timeoutMs: TIMEOUT_MS,
         signal,
         maxBytes: MAXIMUM_RESPONSE_BYTES,
       });

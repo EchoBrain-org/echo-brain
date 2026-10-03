@@ -13,7 +13,8 @@ import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { SlackIdentityProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1";
 import type { NangoConnectionClientV1, NangoSlackConnectionV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, type SlackAppManifestProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
+import type { SlackAppManifestProviderV1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BegunPersonOidcLogin } from "../../services/organization-authority/src/application/person-identity-sessions.js";
 import { readPrivateAuthorityPersonSessionPkceKey } from "@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials";
@@ -133,9 +134,6 @@ const fakeSlack: SlackIdentityProviderV1 = {
     return { team_id: "T12345678", enterprise_id: null, bot_user_id: "U12345678", bot_id: "B12345678", app_id: "A12345678",
       granted_scopes: [...SLACK_PRIVATE_APP_BOT_SCOPES_V1], verification_evidence_sha256: canonicalSha256("rehearsal-slack-connection") };
   },
-  verifyHuman: async () => {
-    throw new Error("Person Slack identity linking observes a thread instead");
-  },
   postIdentityLinkChallenge: async (_token, input) => ({
     team_id: "T12345678",
     channel_id: input.channel_id,
@@ -180,7 +178,6 @@ function fakeNango() {
   const finishConnect = () => connections.set("nango-rehearsal", {
     connection_id: "nango-rehearsal", tags: tags!, team_id: "T12345678",
     app_id: "A12345678", bot_user_id: "U12345678", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: BOT_TOKEN,
-    updated_at: "2026-08-22T12:00:00.000Z",
   });
   return { client, finishConnect };
 }

@@ -11,18 +11,20 @@ import { createGranolaMeetingSourceBundleV1 } from '@echo-brain/provider-granola
 import { createOpenRouterDecisionProcessorBundleV1 } from '@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1';
 import { validateOrganizationAuthorityOrigin } from '@echo-brain/organization-api';
 import { SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
-import { openSlackContextCaptureRuntimeV1, type SlackContextCaptureRuntimePortsV1 } from './slack-context-capture-runtime-v1.js';
+import { openSlackContextCaptureRuntimeV1 } from './slack-context-capture-runtime-v1.js';
 import Database from 'better-sqlite3';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import {
   STAGING_CONNECTOR_REHEARSAL_PATH_V1,
-  validateStagingConnectorRehearsalProfileV1,
-  type StagingConnectorRehearsalProfileV1,
-} from './staging-connector-rehearsal-protocol-v1.js';
-import { stagingConnectorRehearsalProtocol, validateStagingConnectorRehearsalProfile, type StagingConnectorRehearsalProfile, type StagingConnectorRehearsalRequest, type StagingConnectorRehearsalResponse } from './staging-connector-rehearsal-protocol.js';
-import type { StagingConnectorRehearsalProfileV2 } from './staging-connector-rehearsal-protocol-v2.js';
-import { openConnectorRehearsalCaptureV1, type OpenedConnectorRehearsalCaptureV1 } from './connector-rehearsal-capture-v1.js';
+  validateStagingConnectorRehearsalProfileV2,
+  validateStagingConnectorRehearsalRequestV2,
+  validateStagingConnectorRehearsalResponseV2,
+  type StagingConnectorRehearsalProfileV2,
+  type StagingConnectorRehearsalRequestV2,
+  type StagingConnectorRehearsalResponseV2,
+} from './staging-connector-rehearsal-protocol.js';
+import { isActiveInitialOwnerV1, openConnectorRehearsalCaptureV1, type OpenedConnectorRehearsalCaptureV1 } from './connector-rehearsal-capture-v1.js';
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveRuntimeSeamsV1, type OpenedJiraPersonLiveRuntimeV1 } from './jira-person-live-runtime-v1.js';
 import {
   openOrganizationAuthorityService,
@@ -37,19 +39,12 @@ const SIDECAR_BINDING = 'binding.json';
 const SIDECAR_DATABASE = 'jira-person-connections.sqlite';
 const MAX_BINDING_BYTES = 8 * 1024;
 
-export interface StagingConnectorRehearsalSelectionV1 {
-  readonly profile: StagingConnectorRehearsalProfileV1;
+export interface StagingConnectorRehearsalSelection {
+  readonly profile: StagingConnectorRehearsalProfileV2;
   readonly release_id: string;
   /** Exact public host that the staging candidate is configured to serve. */
   readonly authority_host: string;
 }
-
-export interface StagingConnectorRehearsalSelectionV2 {
-  readonly profile: StagingConnectorRehearsalProfileV2;
-  readonly release_id: string;
-  readonly authority_host: string;
-}
-export type StagingConnectorRehearsalSelection = StagingConnectorRehearsalSelectionV1 | StagingConnectorRehearsalSelectionV2;
 
 export interface StagingConnectorRehearsalRuntimeDependenciesV1 extends OrganizationAuthorityServiceDependencies {
   /** Test seams only. The wrapper always owns the sidecar SQLite handle. */
@@ -158,59 +153,31 @@ function bearer(request: ProviderHttpRequestV1): string {
   if (value === undefined || !value.startsWith('Bearer ') || value.length === 7) unauthorized();
   return value.slice(7);
 }
-function requestBody(request: ProviderHttpRequestV1, protocol: ReturnType<typeof stagingConnectorRehearsalProtocol>): StagingConnectorRehearsalRequest {
+function requestBody(request: ProviderHttpRequestV1): StagingConnectorRehearsalRequestV2 {
   if (request.content_type === undefined || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.content_type)) invalid();
-  try { return protocol.validate_request(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.raw_body))); }
+  try { return validateStagingConnectorRehearsalRequestV2(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(request.raw_body))); }
   catch { invalid(); }
 }
-function response(value: unknown, protocol: ReturnType<typeof stagingConnectorRehearsalProtocol>): StagingConnectorRehearsalResponse {
-  try { return protocol.validate_response(value); }
+function response(value: unknown): StagingConnectorRehearsalResponseV2 {
+  try { return validateStagingConnectorRehearsalResponseV2(value); }
   catch { unavailable(); }
 }
-function requireSelection(config: OrganizationAuthorityServiceConfig, selection: StagingConnectorRehearsalSelection, dependencies: StagingConnectorRehearsalRuntimeDependenciesV1): { readonly profile: StagingConnectorRehearsalProfile; readonly profile_sha256: `sha256:${string}` } {
-  const profile = validateStagingConnectorRehearsalProfile(selection.profile);
-  const protocol = stagingConnectorRehearsalProtocol(profile);
+function requireSelection(config: OrganizationAuthorityServiceConfig, selection: StagingConnectorRehearsalSelection, dependencies: StagingConnectorRehearsalRuntimeDependenciesV1): { readonly profile: StagingConnectorRehearsalProfileV2; readonly profile_sha256: `sha256:${string}` } {
+  const profile = validateStagingConnectorRehearsalProfileV2(selection.profile);
   // Reuse the closed request validation for canonical release syntax.
-  protocol.validate_request({ schema_version: protocol.schema_version, release_id: selection.release_id, profile_sha256: canonicalSha256(profile), action: 'status' });
+  validateStagingConnectorRehearsalRequestV2({ schema_version: 2, release_id: selection.release_id, profile_sha256: canonicalSha256(profile), action: 'status' });
   validateOrganizationAuthorityOrigin(config.authority_url);
   const authority = new URL(config.authority_url);
   if (config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 || selection.authority_host !== authority.host ||
       selection.authority_host !== 'authority-staging.echobrain.org' || (config.slack_nango.base_url !== undefined && config.slack_nango.base_url !== 'https://api.nango.dev') ||
-      (config.scheduling !== undefined && config.scheduling !== 'periodic') || config.jira_person_live !== undefined ||
+      config.jira_person_live !== undefined ||
       config.staging_synthetic_meetings_directory !== undefined || config.staging_synthetic_owner_email !== undefined ||
-      dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.api?.person_http_runtime_factory !== undefined ||
-      dependencies.person_http_runtime_factory_with_slack !== undefined || config.slack_public_channel_context !== undefined) {
+      dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.person_http_runtime_factory_with_slack !== undefined ||
+      config.slack_public_channel_context !== undefined) {
     throw new Error('Staging connector rehearsal selection is invalid');
   }
   return Object.freeze({ profile, profile_sha256: canonicalSha256(profile) });
 }
-
-/** V2 never migrates V1 custody: it anchors the untouched V1 profile and marker first. */
-export function requireStagingConnectorV1PredecessorV2(input: {
-  readonly state_directory: string;
-  readonly profile: StagingConnectorRehearsalProfileV2;
-  readonly authority_id: string;
-  readonly state_lineage_id: string;
-  readonly organization_id: string;
-  readonly principal_id: string;
-  readonly membership_id: string;
-}): void {
-  const parent = dirname(input.state_directory);
-  assertNoSymlinkAncestor(input.state_directory);
-  assertNoSymlinkAncestor(join(parent, 'private'));
-  assertNoSymlinkAncestor(join(parent, SIDECAR_DIRECTORY));
-  const predecessor = validateStagingConnectorRehearsalProfileV1(privateJson(join(parent, 'private', 'staging-connector-rehearsal.json')));
-  if (canonicalSha256(predecessor) !== input.profile.predecessor_profile_sha256 || predecessor.jira.cloud_id !== input.profile.jira.cloud_id || predecessor.jira.integration_key !== input.profile.jira.integration_key) throw new Error('Staging connector rehearsal predecessor is invalid');
-  const marker = privateJson(join(parent, 'staging-connector-rehearsal-v1', 'binding.json'));
-  const expected = { schema_version: 1, kind: 'echo-staging-connector-rehearsal-sidecar-binding-v1', authority_id: input.authority_id,
-    organization_id: input.organization_id, state_lineage_id: input.state_lineage_id, principal_id: input.principal_id,
-    membership_id: input.membership_id, profile_sha256: input.profile.predecessor_profile_sha256 };
-  if (Object.keys(marker).sort().join(',') !== Object.keys(expected).sort().join(',') ||
-      Object.entries(expected).some(([key, value]) => marker[key] !== value)) throw new Error('Staging connector rehearsal predecessor is invalid');
-  const database = lstatSync(join(parent, 'staging-connector-rehearsal-v1', 'jira-person-connections.sqlite'));
-  if (!database.isFile() || database.isSymbolicLink() || database.uid !== process.getuid?.() || (database.mode & 0o777) !== 0o600 || database.nlink !== 1) throw new Error('Staging connector rehearsal sidecar is invalid');
-}
-
 
 /**
  * Staging-only, owner-bound capture surface. It composes existing provider
@@ -222,7 +189,6 @@ export async function openStagingConnectorRehearsalService(
   dependencies: StagingConnectorRehearsalRuntimeDependenciesV1 = {},
 ): Promise<OpenedOrganizationAuthorityRuntime> {
   const selected = requireSelection(config, selection, dependencies);
-  const protocol = stagingConnectorRehearsalProtocol(selected.profile);
   const manifest = readOrganizationAuthoritySetupManifest(config.state_directory);
   const lineage = verifyAuthorityStateLineage(config.state_directory).root;
   const owner: OwnerV1 = Object.freeze({
@@ -235,16 +201,13 @@ export async function openStagingConnectorRehearsalService(
   if (config.granola_credential_file === undefined || config.granola_owner_email_file === undefined) {
     throw new Error('Staging connector rehearsal requires the committed Granola source');
   }
-  if (selected.profile.schema_version === 2) {
-    requireStagingConnectorV1PredecessorV2({ state_directory: config.state_directory, profile: selected.profile, authority_id: lineage.authority_id, state_lineage_id: lineage.state_lineage_id, ...owner });
-  }
   const sidecar = openSidecar(config.state_directory, Object.freeze({
     schema_version: 1,
     kind: 'echo-staging-connector-rehearsal-sidecar-binding-v1',
     authority_id: lineage.authority_id,
     state_lineage_id: lineage.state_lineage_id,
     ...owner,
-    profile_sha256: selected.profile.schema_version === 2 ? selected.profile.predecessor_profile_sha256 : selected.profile_sha256,
+    profile_sha256: selected.profile_sha256,
   }));
   let runtime: OpenedOrganizationAuthorityRuntime | undefined;
   let captures: OpenedConnectorRehearsalCaptureV1 | undefined;
@@ -275,10 +238,7 @@ export async function openStagingConnectorRehearsalService(
       const application = authenticate;
       if (application === undefined) unavailable();
       const authorization = application({ access_token });
-      if (authorization.organization_id !== owner.organization_id || authorization.principal_id !== owner.principal_id ||
-          authorization.membership_id !== owner.membership_id || authorization.membership_type !== 'owner') unavailable();
-      const active = fenceDatabase!.prepare(`SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type='owner' AND status='active'`).get(owner.organization_id, owner.principal_id, owner.membership_id);
-      if (active === undefined) unavailable();
+      if (!isActiveInitialOwnerV1(fenceDatabase!, owner, authorization)) unavailable();
       return authorization;
     };
     let captureInFlight = false;
@@ -287,12 +247,12 @@ export async function openStagingConnectorRehearsalService(
       async accept(input: ProviderHttpRequestV1) {
         if (input.route_id !== 'staging-connector-rehearsal') invalid();
         const access_token = bearer(input);
-        const request = requestBody(input, protocol);
+        const request = requestBody(input);
         if (request.release_id !== selection.release_id || request.profile_sha256 !== selected.profile_sha256) unavailable();
         if (runtime === undefined) unavailable();
         if (request.action === 'status') {
           requireOwner(access_token);
-          return Object.freeze({ status: 200 as const, body: response({ schema_version: protocol.schema_version, kind: protocol.receipt_kind, release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'status', processing: runtime?.processing ?? 'idle_until_finalize', granola_available: runtime?.processing === 'active' && granola !== undefined, qualified: false }, protocol) });
+          return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'status', processing: runtime?.processing ?? 'idle_until_finalize', granola_available: runtime?.processing === 'active' && granola !== undefined, qualified: false }) });
         }
         if (captures === undefined || (request.tool === 'granola' && runtime.processing !== 'active')) unavailable();
         const before = requireOwner(access_token);
@@ -304,11 +264,11 @@ export async function openStagingConnectorRehearsalService(
           input.signal?.throwIfAborted();
           const after = requireOwner(access_token);
           if (before.access_credential_sha256 !== after.access_credential_sha256 || before.person_state_sha256 !== after.person_state_sha256 || before.session_state_sha256 !== after.session_state_sha256) unavailable();
-          return Object.freeze({ status: 200 as const, body: response({ schema_version: protocol.schema_version, kind: protocol.receipt_kind, release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'capture', tool: request.tool, receipt, qualified: false }, protocol) });
+          return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'capture', tool: request.tool, receipt, qualified: false }) });
         } catch (_error) { unavailable(); } finally { captureInFlight = false; }
       },
     });
-    const personFactory = (sessions: Parameters<NonNullable<NonNullable<OrganizationAuthorityServiceDependencies['api']>['person_http_runtime_factory']>>[0], slackPorts?: SlackContextCaptureRuntimePortsV1) => {
+    const personFactory: NonNullable<OrganizationAuthorityServiceDependencies['person_http_runtime_factory_with_slack']> = (sessions, slackPorts) => {
       authenticate = input => sessions.authenticateAccess(input);
       jira = openJiraPersonLiveRuntimeV1({
         state_directory: config.state_directory,
@@ -316,24 +276,21 @@ export async function openStagingConnectorRehearsalService(
         configuration: { enabled: true, cloud_id: selected.profile.jira.cloud_id, integration_id: selected.profile.jira.integration_key, nango_authorization: () => config.slack_nango.secret_key },
         seams: { ...dependencies.jira, database: sidecar.database },
       });
-      if (selected.profile.schema_version === 2) {
-        if (slackPorts === undefined) unavailable();
-        slack = openSlackContextCaptureRuntimeV1({
-          state_directory: config.state_directory, initial_owner: owner,
-          channel_id: selected.profile.slack.channel_id, source_instance_id: 'staging-slack-context-v2',
-          profile_sha256: selected.profile_sha256, capability: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1,
-          authenticate_access: { authenticateAccess: input => requireOwner(input.access_token) },
-          slack: slackPorts,
-        });
-      }
+      slack = openSlackContextCaptureRuntimeV1({
+        state_directory: config.state_directory, initial_owner: owner,
+        channel_id: selected.profile.slack.channel_id, source_instance_id: 'staging-slack-context-v2',
+        profile_sha256: selected.profile_sha256, capability: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1,
+        authenticate_access: sessions,
+        slack: slackPorts,
+      });
       captures = openConnectorRehearsalCaptureV1({
         state_directory: config.state_directory,
         initial_owner: owner,
-        authenticate_access: { authenticateAccess: input => requireOwner(input.access_token) },
+        authenticate_access: sessions,
         exclusive: { run_exclusive: operation => runtime === undefined ? Promise.reject(new Error('Staging connector rehearsal is starting')) : runtime.runExclusive(operation) },
         ...(granola === undefined ? {} : { granola }),
-        ...(slack === undefined ? {} : { slack }),
-        jira: { connection: jira.application, project: selected.profile.jira.project, source_instance_id: 'staging-jira-context-v1', ...(selected.profile.schema_version === 2 ? { representation: 'pointer' as const, retention: 'retained_pointer' as const } : {}) },
+        slack,
+        jira: { connection: jira.application, project: selected.profile.jira.project, source_instance_id: 'staging-jira-context-v1', representation: 'pointer', retention: 'retained_pointer' },
       });
       const ownerJira: ProviderHttpApplicationV1 = Object.freeze({
         routes: jira.connection_http.routes,
@@ -341,19 +298,12 @@ export async function openStagingConnectorRehearsalService(
       });
       return Object.freeze({ applications: Object.freeze([ownerJira, capturesApplication]), close() { captures?.close(); slack?.close(); jira?.close(); } });
     };
-    runtime = await openOrganizationAuthorityService({
-      ...config,
-      ...(selected.profile.schema_version === 2 ? { slack_public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 } : {}),
-    }, {
+    runtime = await openOrganizationAuthorityService({ ...config, slack_public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 }, {
       ...dependencies,
-      ...(selected.profile.schema_version === 2 ? { person_http_runtime_factory_with_slack: personFactory } : {}),
+      person_http_runtime_factory_with_slack: personFactory,
       processing_adapter_overrides: granola === undefined ? dependencies.processing_adapter_overrides : {
         ...dependencies.processing_adapter_overrides,
         source: granola.source,
-      },
-      api: {
-        ...dependencies.api,
-        ...(selected.profile.schema_version === 1 ? { person_http_runtime_factory: personFactory } : {}),
       },
     });
     let closing: Promise<void> | undefined;

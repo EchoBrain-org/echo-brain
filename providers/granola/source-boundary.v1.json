@@ -8,7 +8,6 @@
   "package_json": "providers/granola/package.json",
   "entry_points": [
     "providers/granola/src/granola-meeting-source-bundle-v1.ts",
-    "providers/granola/src/granola-private-credentials-v1.ts",
     "providers/granola/src/source/granola-api-client.ts",
     "providers/granola/src/source/record-owner-observation.ts",
     "providers/granola/src/granola-meeting-source-admission.ts",

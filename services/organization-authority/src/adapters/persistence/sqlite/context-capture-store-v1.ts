@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
-import { canonicalSourceContentV1, type AdapterOperationContext, type SourceAdapterIdentityV1, type SourceAdmissionScopeV1, type SourceAdmissionStoreV1, type SourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
+import { assertContextCaptureEnvelopeV1, canonicalSourceContentV1, type AdapterOperationContext, type SourceAdapterIdentityV1, type SourceAdmissionScopeV1, type SourceAdmissionStoreV1, type SourceEnvelopeV1 } from '@echo-brain/organization-processing/core';
 import {
-  assertContextCaptureEnvelopeV1, requireCurrentContextIntakePolicyV1, selectContextIntakePolicyV1, snapshotContextCaptureAdmissionV1,
+  requireCurrentContextIntakePolicyV1, selectContextIntakePolicyV1, snapshotContextCaptureAdmissionV1,
   type ContextIntakeAuthorityV1,
 } from '../../../application/context-intake-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from './source-admission-v1.js';

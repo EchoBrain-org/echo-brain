@@ -4,7 +4,7 @@ import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@ec
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
-import { jiraSiteOrigin, parseJiraIssueV1, parseJiraProject, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
+import { parseJiraIssueV1, parseJiraProject, verifyJiraConnectionV1, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 const INVENTORY_FIELDS = 'summary,project,created,status,assignee,duedate';
@@ -67,25 +67,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   async function verifyConnection(signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
     if (canonicalSha256(copyJiraBindingV1(transport.binding)) !== bindingDigest) jiraFailure('stale_access_state');
-    const resources = jiraArray(await transport.request({ path: '/oauth/token/accessible-resources', signal }), 256);
-    signal?.throwIfAborted();
-    const matches: Record<string, unknown>[] = [];
-    for (const raw of resources) {
-      const resource = jiraRecord(raw);
-      jiraString(resource.id, 256);
-      const scopes = jiraArray(resource.scopes, 256).map(scope => jiraString(scope, 128));
-      // A cloudid may also identify a Confluence resource. Never choose the first resource.
-      if (resource.id === cloudid && scopes.some(scope => scope.endsWith(':jira') || scope.includes(':jira-'))) matches.push(resource);
-    }
-    if (matches.length !== 1) jiraFailure('unauthorized');
-    const selected = matches[0]!;
-    const scopes = selected.scopes as readonly string[];
-    if (!['read:jira-work', 'read:jira-user'].every(scope => scopes.includes(scope))) jiraFailure('unauthorized');
-    const origin = jiraSiteOrigin(selected.url);
-    if (pinnedOrigin !== undefined && pinnedOrigin !== origin) jiraFailure('stale_access_state');
-    const myself = jiraRecord(await transport.request({ path: `${pathPrefix}/myself`, signal }));
-    signal?.throwIfAborted();
-    if (jiraString(myself.accountId) !== binding.external_subject_id || myself.active !== true || myself.accountType !== 'atlassian') jiraFailure('unauthorized');
+    const { origin } = await verifyJiraConnectionV1(transport, { signal, expected_origin: pinnedOrigin });
     pinnedOrigin = origin;
     return origin;
   }

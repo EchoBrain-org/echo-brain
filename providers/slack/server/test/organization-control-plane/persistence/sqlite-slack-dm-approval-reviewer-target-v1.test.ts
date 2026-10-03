@@ -1,9 +1,9 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type ExternalHumanIdentityLinkContractV2, type PersonMembershipType } from "../../../src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { canonicalJson, canonicalSha256 } from "../../../../../../packages/organization-control-plane/src/canonical/canonical-json.js";
-import { SLACK_DM_APPROVAL_REQUIRED_SCOPES, resolveCurrentSlackDmApprovalReviewerTargetV1, type CurrentSlackDmApprovalReviewerV1, type SlackDmApprovalReviewerTargetCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
+import { resolveCurrentSlackDmApprovalReviewerTargetV1, type CurrentSlackDmApprovalReviewerV1, type SlackDmApprovalReviewerTargetCoordinatesV1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-dm-approval-reviewer-target-v1.js";
 import { slackNangoAppPublicConfigurationSha256V1 } from "../../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { applyOrganizationControlBaselineV3 } from "../../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 
@@ -28,14 +28,7 @@ function currentReviewerState(): SlackDmApprovalReviewerTargetCoordinatesV1 {
 }
 
 function scopes(without?: string): readonly string[] {
-  return Object.freeze(
-    [...new Set([
-      ...SLACK_PRIVATE_APP_BOT_SCOPES_V1,
-      ...SLACK_DM_APPROVAL_REQUIRED_SCOPES,
-    ])]
-      .filter((scope) => scope !== without)
-      .sort(),
-  );
+  return Object.freeze(SLACK_PRIVATE_APP_BOT_SCOPES_V1.filter((scope) => scope !== without));
 }
 
 function openDatabase(): Database.Database {
@@ -213,7 +206,7 @@ describe("resolveCurrentSlackDmApprovalReviewerTargetV1", () => {
     },
   );
 
-  it.each(SLACK_DM_APPROVAL_REQUIRED_SCOPES)(
+  it.each(SLACK_PRIVATE_APP_BOT_SCOPES_V1)(
     "does not select a DM target without %s",
     (missingScope) => {
       expect(resolve(seed({ observed_scope_without: missingScope }))).toBeUndefined();

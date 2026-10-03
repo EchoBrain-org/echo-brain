@@ -66,10 +66,6 @@ export class JiraConnectionStoreV1 {
     }
     return this.publicAttempt(attempt, value);
   }
-  /** Legacy internal completion guard. Public browser polling uses status(). */
-  attempt(person: JiraPersonV1, attempt: string): AttemptBody {
-    return this.pending(person, attempt);
-  }
   pending(person: JiraPersonV1, attempt: string): AttemptBody {
     const result = this.status(person, attempt);
     if (result.status !== 'pending') jiraFailure('stale_access_state');

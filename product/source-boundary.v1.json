@@ -45,9 +45,7 @@
       "src/product/person-client/composition.ts",
       "services/organization-authority/src/composition/jira-person-live-runtime-v1.ts",
       "services/organization-authority/src/composition/provider-context-intakes-v1.ts",
-      "services/organization-authority/src/composition/connector-rehearsal-runtime-v1.ts",
       "services/organization-authority/src/composition/connector-rehearsal-capture-v1.ts",
-      "services/organization-authority/src/composition/staging-connector-rehearsal-runtime-v1.ts",
       "services/organization-authority/src/composition/staging-connector-rehearsal-runtime.ts",
       "services/organization-authority/src/composition/slack-context-capture-runtime-v1.ts"
     ],

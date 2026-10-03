@@ -6,8 +6,7 @@ import { startPersonDocumentProcessingV1 } from './person-document-processing-v1
 import { createProjectContextApplicationV1 } from '../application/project-context-application-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../adapters/persistence/sqlite/project-context-v1.js';
 import { createRecordProjectAuthorizationV1 } from './person-record-project-scope-v1.js';
-import { createPersonToolsHttpApplicationV3 } from '../presentation/person-tools-http-application-v3.js';
-import { createPersonToolsHttpApplicationV4 } from '../presentation/person-tools-http-application-v4.js';
+import { createPersonToolsHttpApplicationV3, createPersonToolsHttpApplicationV4 } from '../presentation/person-tools-http-application.js';
 import type { CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";

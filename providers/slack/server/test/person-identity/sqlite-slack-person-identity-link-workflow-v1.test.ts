@@ -9,7 +9,7 @@ import { readActiveSlackConnectionV1 } from "../../src/organization-control-plan
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOrganizationControlBaselineV3 } from "../../../../../packages/organization-control-plane/src/persistence/baseline.js";
 import { activateNangoSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
 import { FileOrganizationSecretStore } from "../../../../../packages/organization-control-plane/src/security/file-secret-store.js";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -95,11 +95,6 @@ async function setup(
       granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1,
       verification_evidence_sha256: canonicalSha256("connection"),
     })),
-    verifyHuman: vi.fn(async () => ({
-      team_id: "T12345678",
-      user_id: "U12345679",
-      verification_evidence_sha256: canonicalSha256("human"),
-    })),
     postIdentityLinkChallenge: vi.fn(async (_token, input) => ({
       team_id: "T12345678",
       channel_id: input.channel_id,
@@ -147,7 +142,7 @@ async function activateNango(database: Database.Database, slack: SlackIdentityPr
     database, secrets, verifier: slack, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID, state_lineage_id: LINEAGE_ID,
     credential: { reference: secrets.create(serializeSlackAppCredentialsV1(credentials)), credentials },
     nango: { connection_id: "nango-conn-1", tags: {}, team_id: "T12345678",
-      app_id: "A12345678", bot_user_id: "U12345678", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: TOKEN, updated_at: NOW },
+      app_id: "A12345678", bot_user_id: "U12345678", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: TOKEN },
     now: () => NOW, new_connection_id: () => CONNECTION_ID,
   });
 }

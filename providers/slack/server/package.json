@@ -57,10 +57,6 @@
       "types": "./dist/organization-control-plane/application/slack-integration-contracts.d.ts",
       "import": "./dist/organization-control-plane/application/slack-integration-contracts.js"
     },
-    "./organization-control-plane/application/slack-app-credentials-v1": {
-      "types": "./dist/organization-control-plane/application/slack-app-credentials-v1.d.ts",
-      "import": "./dist/organization-control-plane/application/slack-app-credentials-v1.js"
-    },
     "./organization-control-plane/application/slack-bot-token-source-v1": {
       "types": "./dist/organization-control-plane/application/slack-bot-token-source-v1.d.ts",
       "import": "./dist/organization-control-plane/application/slack-bot-token-source-v1.js"
@@ -92,10 +88,6 @@
     "./organization-control-plane/adapters/nango/nango-connection-client-v1": {
       "types": "./dist/organization-control-plane/adapters/nango/nango-connection-client-v1.d.ts",
       "import": "./dist/organization-control-plane/adapters/nango/nango-connection-client-v1.js"
-    },
-    "./organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1": {
-      "types": "./dist/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.d.ts",
-      "import": "./dist/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js"
     },
     "./assets/telemetry-vocabulary.v1.json": "./assets/telemetry-vocabulary.v1.json",
     "./setup/initial-owner-slack-setup-v1": {

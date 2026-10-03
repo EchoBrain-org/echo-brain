@@ -145,7 +145,7 @@ describe("private Slack DM approval stager V1", () => {
     const stager = new PrivateSlackDmApprovalStagerV1({
       authority: authority as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: {
         readCurrent: () => undefined,
         stage: () => {
@@ -277,7 +277,7 @@ describe("private Slack DM approval stager V1", () => {
         quarantineApprovalDelivery,
       } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: { readCurrent: vi.fn(), stage: vi.fn() } as never,
       control_plane: { stage: controlPlaneStage },
       poster: {
@@ -379,7 +379,7 @@ describe("private Slack DM approval stager V1", () => {
         releaseApprovalPostAttempt: vi.fn(), recordSupersededApprovalCardTombstoned: vi.fn(),
       } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: { readCurrent: () => undefined, stage: () => ({ assignment, created: true }) } as never,
       control_plane: { stage: controlPlaneStage },
       poster: {
@@ -416,7 +416,7 @@ describe("private Slack DM approval stager V1", () => {
     const stager = new PrivateSlackDmApprovalStagerV1({
       authority: authority as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: {} as never, control_plane: {} as never,
       poster: { openDirectMessage, postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone: vi.fn() },
       resolve_reviewer_target: () => undefined,
@@ -454,7 +454,7 @@ describe("private Slack DM approval stager V1", () => {
         prepareApprovalPost: () => ({ outbox: outbox("posting"), created: true }),
       } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: { readCurrent: () => undefined, stage: assignmentStage } as never,
       control_plane: {} as never,
       poster: {
@@ -491,7 +491,7 @@ describe("private Slack DM approval stager V1", () => {
         prepareApprovalPost: () => ({ outbox: outbox("posting"), created: true }),
       } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: { readCurrent: () => undefined } as never,
       control_plane: {} as never,
       poster: {
@@ -527,7 +527,7 @@ describe("private Slack DM approval stager V1", () => {
         readCandidateByApprovalId: () => outbox(),
       } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: {} as never, control_plane: {} as never,
       poster: { openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone: vi.fn() },
       resolve_reviewer_target: () => undefined,
@@ -564,7 +564,7 @@ describe("private Slack DM approval stager V1", () => {
         recordSupersededApprovalCardTombstoned: recorded,
       } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: { readForPresentation: () => recovery } as never,
       control_plane: {} as never,
       poster: { openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone },
@@ -588,7 +588,7 @@ describe("private Slack DM approval stager V1", () => {
         recordSupersededApprovalCardTombstoned: vi.fn(),
       } as unknown as SqliteAuthorityMeetingProcessingStateV1,
       authority_database: {} as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: { readForPresentation: () => undefined } as never,
       control_plane: {} as never,
       poster: { openDirectMessage: vi.fn(), postMarker: vi.fn(), reconcileMarker: vi.fn(), publish: vi.fn(), tombstone },

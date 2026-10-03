@@ -49,13 +49,13 @@ export function parseSlackContextMessageV1(value: unknown, input: {
   return {
     external_id: `message:${ts}`,
     content: {
-      schema_version: 1, kind: 'echo-context-capture-v1', source_type: 'message', truth_status: 'source_observation',
+      schema_version: 1, kind: 'echo-context-capture-v1',
       label: `Slack message ${ts} in ${input.channel_id}`,
       provenance: { origin_ref: pointer, ...(updatedAt === undefined ? {} : { source_updated_at: updatedAt }) },
       payload: { schema_version: 1, kind: 'message', channel_ref: channelRef, sent_at: sentAt,
         ...(threadTs === undefined ? {} : { thread_ref: `${channelRef}:message:${threadTs}` }),
         ...(authorRef === undefined ? {} : { author_ref: authorRef }) },
-      representation: { kind: 'pointer', pointer }, observations: [],
+      representation: { kind: 'pointer', pointer },
     },
   };
 }

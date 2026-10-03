@@ -35,7 +35,7 @@ function nangoFake(): NangoConnectionClientV1 & { getSlackConnection: ReturnType
   return {
     getSlackConnection: vi.fn(async (): Promise<NangoSlackConnectionV1> => ({
       connection_id: "nango-conn-1", tags: {}, team_id: "T0TEAM", app_id: "A0APP1", bot_user_id: "U0BOT",
-      granted_scopes: [], bot_token: `xoxb-nango-${(issued += 1)}`, updated_at: "2026-09-30T00:00:00.000Z",
+      granted_scopes: [], bot_token: `xoxb-nango-${(issued += 1)}`,
     })),
   } as unknown as NangoConnectionClientV1 & { getSlackConnection: ReturnType<typeof vi.fn> };
 }
@@ -118,7 +118,7 @@ describe("Slack bot-token source V1", () => {
     const answers: ReadonlyArray<(settle: Settle) => void> = [
       (settle) => settle.reject(new NangoClientErrorV1("not_found", "Nango connection was not found")),
       (settle) => settle.resolve({ connection_id: "nango-conn-1", tags: {}, team_id: "T0TEAM", app_id: "A0APP1", bot_user_id: "U0OTHER",
-        granted_scopes: [], bot_token: "xoxb-other", updated_at: "2026-09-30T00:00:00.000Z" }),
+        granted_scopes: [], bot_token: "xoxb-other" }),
     ];
     for (const answer of answers) {
       let settle!: Settle;

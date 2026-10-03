@@ -10,5 +10,4 @@ export * from "./ports/source.js";
 export * from "./processing/brief.js";
 export * from "./processing/source-admission.js";
 export * from "./processing/meeting-source-bridge.js";
-export * from "./contracts/context-structured-payload-v1.js";
 export * from "./contracts/context-capture-v1.js";

@@ -3,8 +3,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { OrganizationPersonToolV3, OrganizationPersonToolV4, OrganizationToolSetupStatusV4 } from '@echo-brain/organization-api';
 import { composePersonExternalIdentityRuntimeBundlesV1, type PersonExternalIdentityRuntimeBundleV1 } from '@echo-brain/organization-authority-kernel/composition/person-external-identity-runtime';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
-import { createPersonToolsHttpApplicationV3 } from '../../src/presentation/person-tools-http-application-v3.js';
-import { createPersonToolsHttpApplicationV4 } from '../../src/presentation/person-tools-http-application-v4.js';
+import { createPersonToolsHttpApplicationV3, createPersonToolsHttpApplicationV4 } from '../../src/presentation/person-tools-http-application.js';
 
 const authorization: PersonAccessAuthorization = {
   organization_id: 'org_00000000-0000-4000-8000-000000000001', membership_id: 'mem_00000000-0000-4000-8000-000000000001',

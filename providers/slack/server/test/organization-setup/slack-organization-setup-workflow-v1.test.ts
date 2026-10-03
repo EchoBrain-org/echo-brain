@@ -11,11 +11,12 @@ import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_IN
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import { NangoClientErrorV1, type NangoConnectionClientV1, type NangoSlackConnectionV1 } from "../../src/organization-control-plane/adapters/nango/nango-connection-client-v1.js";
-import { buildEchoSlackAppManifestV1, SLACK_PRIVATE_APP_BOT_SCOPES_V1, SlackAppManifestProviderErrorV1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
+import { buildEchoSlackAppManifestV1, SlackAppManifestProviderErrorV1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
 import { SlackIdentityProviderErrorV1 } from "../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { findPendingSlackAppCredentialsV1, findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1 } from "../../src/organization-control-plane/application/slack-app-credentials-v1.js";
+import { createSlackBotTokenSourceV1 } from "../../src/organization-control-plane/application/slack-bot-token-source-v1.js";
 import { SlackConnectionHealthV1 } from "../../src/organization-control-plane/application/slack-connection-health-v1.js";
-import { SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, type SlackPublicChannelContextCapabilityV1 } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, type SlackPublicChannelContextCapabilityV1 } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
 import { slackConnectionVerificationEvidenceSha256V1 } from "../../src/organization-control-plane/application/slack-connection-verification-evidence-v1.js";
 import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { SlackOrganizationSetupWorkflowV1 } from "../../src/organization-setup/slack-organization-setup-workflow-v1.js";
@@ -77,7 +78,7 @@ function controlDatabase(): { directory: string; database: Database.Database } {
 
 function fakes() {
   const connections = new Map<string, NangoSlackConnectionV1>();
-  const session = async (_input: { readonly tags: Readonly<Record<string, string>> }) => ({ connect_link: LINK, expires_at: "2026-09-30T00:30:00.000Z" });
+  const session = async (_input: { readonly tags: Readonly<Record<string, string>> }) => ({ connect_link: LINK });
   const manifest = {
     createApp: vi.fn(async (_input: { configuration_token: string }) => ({ app_id: "A0APP1", client_id: "1234.5678", client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET })),
     updateApp: vi.fn(async (_input: { configuration_token: string; app_id: string }) => undefined),
@@ -111,7 +112,7 @@ function finishConnectFor(f: ReturnType<typeof fakes>, overrides: Partial<NangoS
   const id = `nango-conn-${String(f.connections.size + 1)}`;
   const connection: NangoSlackConnectionV1 = {
     connection_id: id, tags, team_id: "T01", app_id: "A0APP1",
-    bot_user_id: "UBOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: `${BOT_TOKEN}-${id}`, updated_at: T0, ...overrides,
+    bot_user_id: "UBOT", granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, bot_token: `${BOT_TOKEN}-${id}`, ...overrides,
   };
   f.connections.set(connection.connection_id, connection);
   return connection;
@@ -210,8 +211,7 @@ describe("Slack organization setup workflow v1", () => {
     expect(f.nango.createReconnectSession).toHaveBeenLastCalledWith(expect.objectContaining({ connection_id: "nango-conn-1", scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 }));
     // Merely opening the permission page does not upgrade the connection.
     expect(await upgraded.installStatus({ attempt_id: begun.attempt_id }, "owner")).toMatchObject({ status: "pending" });
-    finishReconnectFor(f, { granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1,
-      updated_at: "2026-09-30T00:01:00.000Z" });
+    finishReconnectFor(f, { granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 });
     expect(await upgraded.installStatus({ attempt_id: begun.attempt_id }, "owner")).toMatchObject({ status: "complete", result: { kind: "reconnected" } });
     expect(readActiveSlackConnectionV1(f.database)).toEqual(before);
     expect(f.database.prepare("SELECT connection_state_sha256 FROM organization_private_approval_pending_contracts_v2 WHERE approval_id = 'apr_1'").get())
@@ -220,36 +220,7 @@ describe("Slack organization setup workflow v1", () => {
       .toEqual({ current_status: "active" });
   });
 
-  it("finishes a same-app scope upgrade when Nango retags the connection without advancing its top-level timestamp", async () => {
-    const f = setup();
-    const before = await f.connect();
-    seedWaitingCard(f.database);
-    const snapshot = () => [
-      f.database.prepare("SELECT * FROM organization_private_approval_pending_contracts_v2").all(),
-      f.database.prepare("SELECT * FROM organization_external_human_link_current").all(),
-    ];
-    const frozen = snapshot();
-    const upgraded = f.restart(SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1);
-    await upgraded.setup({ ...SETUP_REQUEST, request_id: `oss_${uuid(2)}` }, "owner");
-    const begun = await upgraded.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
-    const reconnect = f.nango.createReconnectSession.mock.lastCall![0]!;
-
-    // Nango can make the completed reconnect visible through its exact tags and
-    // raw provider grants without changing the connection's top-level timestamp.
-    f.connections.set("nango-conn-1", {
-      ...f.connections.get("nango-conn-1")!,
-      tags: reconnect.tags,
-      granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1,
-      updated_at: T0,
-    });
-
-    await expect(upgraded.installStatus({ attempt_id: begun.attempt_id }, "owner"))
-      .resolves.toMatchObject({ status: "complete", result: { kind: "reconnected" } });
-    expect(readActiveSlackConnectionV1(f.database)).toEqual(before);
-    expect(snapshot()).toEqual(frozen);
-  });
-
-  it("does not finish a reconnect from a newer timestamp with stale, foreign or missing attempt tags", async () => {
+  it("does not finish a reconnect with stale, foreign or missing attempt tags", async () => {
     const f = setup();
     await f.connect();
     const verifierCalls = f.verifier.verifyConnection.mock.calls.length;
@@ -264,11 +235,7 @@ describe("Slack organization setup workflow v1", () => {
     ];
 
     for (const tags of cases) {
-      f.connections.set("nango-conn-1", {
-        ...f.connections.get("nango-conn-1")!,
-        tags,
-        updated_at: "2026-09-30T00:01:00.000Z",
-      });
+      f.connections.set("nango-conn-1", { ...f.connections.get("nango-conn-1")!, tags });
       await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner"))
         .resolves.toMatchObject({ status: "pending", result: null });
     }
@@ -291,11 +258,7 @@ describe("Slack organization setup workflow v1", () => {
       const frozen = snapshot();
       const begun = await f.workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
       const reconnect = f.nango.createReconnectSession.mock.lastCall![0]!;
-      f.connections.set("nango-conn-1", {
-        ...f.connections.get("nango-conn-1")!,
-        tags: { ...reconnect.tags, ...wrongTag },
-        updated_at: "2026-09-30T00:01:00.000Z",
-      });
+      f.connections.set("nango-conn-1", { ...f.connections.get("nango-conn-1")!, tags: { ...reconnect.tags, ...wrongTag } });
 
       await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner"))
         .resolves.toMatchObject({ status: "failed", failure_reason: "workspace_mismatch" });
@@ -315,7 +278,7 @@ describe("Slack organization setup workflow v1", () => {
     const frozen = snapshot();
     const upgraded = f.restart(SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1);
     const begun = await upgraded.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
-    finishReconnectFor(f, { updated_at: "2026-09-30T00:01:00.000Z" });
+    finishReconnectFor(f);
     expect(await upgraded.installStatus({ attempt_id: begun.attempt_id }, "owner")).toMatchObject({ status: "failed", failure_reason: "permissions_missing" });
     expect(readActiveSlackConnectionV1(f.database)).toEqual(before);
     expect(snapshot()).toEqual(frozen);
@@ -331,12 +294,11 @@ describe("Slack organization setup workflow v1", () => {
       f.database.prepare("SELECT * FROM organization_external_human_link_current").all(),
     ];
     const frozen = snapshot();
-    f.connections.set("nango-conn-1", { ...f.connections.get("nango-conn-1")!, granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1,
-      updated_at: "2026-09-30T00:01:00.000Z" });
+    f.connections.set("nango-conn-1", { ...f.connections.get("nango-conn-1")!, granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 });
     const baseline = f.restart();
     const begun = await baseline.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
     expect(f.nango.createReconnectSession).toHaveBeenLastCalledWith(expect.objectContaining({ scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1 }));
-    finishReconnectFor(f, { updated_at: "2026-09-30T00:02:00.000Z" });
+    finishReconnectFor(f);
     expect(await baseline.installStatus({ attempt_id: begun.attempt_id }, "owner")).toMatchObject({ status: "complete", result: { kind: "reconnected" } });
     expect(readActiveSlackConnectionV1(f.database)).toEqual(before);
     expect(snapshot()).toEqual(frozen);
@@ -354,8 +316,7 @@ describe("Slack organization setup workflow v1", () => {
     expect(f.manifest.updateApp).toHaveBeenLastCalledWith(expect.objectContaining({ app_id: "A0APP1" }));
     expect(f.nango.createConnectSession).toHaveBeenCalledOnce();
     expect(f.nango.createReconnectSession).toHaveBeenLastCalledWith(expect.objectContaining({ connection_id: "nango-conn-1", client_id: "1234.5678" }));
-    finishReconnectFor(f, { granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1,
-      updated_at: "2026-09-30T00:01:00.000Z" });
+    finishReconnectFor(f, { granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 });
     expect(await upgraded.installStatus({ attempt_id: begun.attempt_id }, "owner")).toMatchObject({ status: "complete", result: { kind: "reconnected" } });
     expect(readActiveSlackConnectionV1(f.database)).toEqual(before);
   });
@@ -367,8 +328,7 @@ describe("Slack organization setup workflow v1", () => {
     const upgraded = f.restart(SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1);
     f.connections.delete("nango-conn-1");
     const begun = await upgraded.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
-    f.finishConnect({ connection_id: "nango-replacement", granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1,
-      updated_at: "2026-09-30T00:01:00.000Z" });
+    f.finishConnect({ connection_id: "nango-replacement", granted_scopes: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 });
     expect(await upgraded.installStatus({ attempt_id: begun.attempt_id }, "owner")).toMatchObject({ status: "complete", result: { kind: "reconnected" } });
     expect(readActiveSlackConnectionV1(f.database)).toEqual(before);
     expect(findSlackAppCredentialsByReferenceSha256V1(f.secrets, before.state.credential_reference_sha256).credentials.nango_connection_id).toBe("nango-replacement");
@@ -545,18 +505,13 @@ describe("Slack organization setup workflow v1", () => {
 
   it("reconnects the connected app on the same Nango connection and keeps the state hash", async () => {
     const f = setup();
-    const { workflow, nango, connections, health, database, secrets } = f;
+    const { workflow, nango, health, database, secrets } = f;
     const before = await f.connect();
     health.markNeedsReinstall(before.state_sha256);
     expect(workflow.organizationSetup()).toBe("needs_reinstall");
-    // A stray pending bundle for the same app is dropped in favour of the active one (ruling P5).
+    // A stray pending bundle for the same app is dropped in favour of the active one.
     secrets.create(serializeSlackAppCredentialsV1({ kind: "echo-slack-app-credentials-v1", app_id: "A0APP1", client_id: "1234.5678",
       client_secret: CLIENT_SECRET, signing_secret: SIGNING_SECRET, nango_connection_id: null }));
-    // Creating the reconnect session may itself touch the connection; that must not read as finished.
-    nango.createReconnectSession.mockImplementationOnce(async () => {
-      connections.set("nango-conn-1", { ...connections.get("nango-conn-1")!, updated_at: "2026-09-30T00:00:30.000Z" });
-      return { connect_link: LINK, expires_at: "2026-09-30T00:30:00.000Z" };
-    });
     const begun = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
     expect(findPendingSlackAppCredentialsV1(secrets)).toBeUndefined();
     expect(nango.createConnectSession).toHaveBeenCalledOnce();
@@ -564,7 +519,7 @@ describe("Slack organization setup workflow v1", () => {
       tags: { echo_organization_id: ORGANIZATION_ID, echo_membership_id: SESSIONS.owner!.membership_id, echo_attempt_id: begun.attempt_id },
       client_id: "1234.5678", client_secret: CLIENT_SECRET, scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1 });
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "pending" });
-    finishReconnectFor(f, { updated_at: "2026-09-30T00:01:00.000Z" });
+    finishReconnectFor(f);
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete",
       result: { kind: "reconnected", workspace_id: "T01" } });
     expect(readActiveSlackConnectionV1(database)?.state_sha256).toBe(before.state_sha256);
@@ -583,7 +538,7 @@ describe("Slack organization setup workflow v1", () => {
     const frozen = snapshot();
     const begun = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
     // The owner's browser ends up authorizing a different workspace while nominally reconnecting the same app.
-    finishReconnectFor(f, { team_id: "T02", updated_at: "2026-09-30T00:01:00.000Z" });
+    finishReconnectFor(f, { team_id: "T02" });
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "failed", failure_reason: "workspace_mismatch" });
     expect(readActiveSlackConnectionV1(database)?.state_sha256).toBe(before.state_sha256);
     expect(snapshot()).toEqual(frozen);
@@ -591,7 +546,7 @@ describe("Slack organization setup workflow v1", () => {
     expect(workflow.organizationSetup()).toBe("needs_reinstall");
 
     const again = await workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(3)}` }, "owner");
-    finishReconnectFor(f, { team_id: "T01", updated_at: "2026-09-30T00:02:00.000Z" });
+    finishReconnectFor(f, { team_id: "T01" });
     await expect(workflow.installStatus({ attempt_id: again.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete",
       result: { kind: "reconnected", workspace_id: "T01" } });
     expect(readActiveSlackConnectionV1(database)?.state_sha256).toBe(before.state_sha256);
@@ -631,8 +586,8 @@ describe("Slack organization setup workflow v1", () => {
       tags: { echo_organization_id: ORGANIZATION_ID, echo_membership_id: SESSIONS.owner!.membership_id, echo_attempt_id: begun.attempt_id },
       client_id: "1234.5678", client_secret: CLIENT_SECRET, scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1 });
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "pending" });
-    const replacement = finishConnect({ connection_id: "nango-conn-2", updated_at: "2026-09-30T00:01:00.000Z" });
-    // Ruling P8 covers the re-read of the lost connection too: a blip there is not an outcome.
+    const replacement = finishConnect({ connection_id: "nango-conn-2" });
+    // A Nango blip on the re-read of the lost connection is not an outcome either.
     nango.getSlackConnection.mockResolvedValueOnce(replacement).mockRejectedValueOnce(new NangoClientErrorV1("unavailable", `down ${NANGO_KEY}`));
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "pending" });
     await expect(workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete",
@@ -739,7 +694,7 @@ describe("Slack organization setup workflow v1", () => {
 });
 
 describe("Slack runtime bundle with organization setup", () => {
-  function open(options: { readonly setup?: boolean; readonly connection_health?: SlackConnectionHealthV1; readonly setup_health?: SlackConnectionHealthV1 } = {}) {
+  function open(options: { readonly connection_health?: SlackConnectionHealthV1 } = {}) {
     const { directory, database } = controlDatabase();
     database.close();
     const f = fakes();
@@ -748,17 +703,16 @@ describe("Slack runtime bundle with organization setup", () => {
     // The DM link reaches Slack only through these fakes, with the token the bundle's source fetched from Nango.
     const provider = {
       verifyConnection: f.verifier.verifyConnection,
-      verifyHuman: vi.fn(),
       openIdentityLinkDirectMessage: vi.fn(async (_token: string, user: string, team: string) => ({ team_id: team, channel_id: "D0EMPLOYEE", recipient_user_id: user })),
       postIdentityLinkChallenge: vi.fn(async (_token: string, input: { channel_id: string }) => ({ team_id: "T01", channel_id: input.channel_id, challenge_message_ts: "100.000001" })),
       observeIdentityLinkChallenge: vi.fn(),
     };
-    // No bot-token source: the bundle's default fetches the token through the setup options' Nango client.
+    const health = options.connection_health ?? new SlackConnectionHealthV1();
     const opened = createSlackPersonExternalIdentityRuntimeBundleV1({
       provider,
-      ...(options.connection_health === undefined ? {} : { connection_health: options.connection_health }),
-      ...(options.setup === false ? {} : { organization_setup: { authority_url: AUTHORITY_URL, nango: { client: f.nango, callback_url: NANGO_CALLBACK },
-        manifest_provider: f.manifest, verifier: f.verifier, ...(options.setup_health === undefined ? {} : { health: options.setup_health }) } }),
+      bot_token_source: createSlackBotTokenSourceV1({ secrets: new FileOrganizationSecretStore(join(directory, "secrets")), nango: f.nango, health }),
+      connection_health: health,
+      organization_setup: { authority_url: AUTHORITY_URL, nango: { client: f.nango, callback_url: NANGO_CALLBACK }, manifest_provider: f.manifest },
     }).open({ state_directory: directory, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID, state_lineage_id: STATE_LINEAGE_ID,
       authentication, membership_type: ({ membership_id }) => (membership_id === SESSIONS.owner!.membership_id ? "owner" : "employee") });
     /** Records results and thrown errors for the afterEach secret scan. */
@@ -796,12 +750,7 @@ describe("Slack runtime bundle with organization setup", () => {
     try { return readActiveSlackConnectionV1(database)!.state_sha256; } finally { database.close(); }
   }
 
-  it("mounts the identity, browser and setup routes only with setup options", async () => {
-    const without = open({ setup: false });
-    await expect(without.tools("owner")).resolves.toEqual([]);
-    await expect(without.call(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, "owner", {})).rejects.toMatchObject({ code: "unavailable" });
-    expect(without.opened.application.routes.some((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toBe(false);
-    without.opened.close();
+  it("mounts the identity, browser and setup routes", async () => {
     const mounted = open();
     expect(mounted.opened.application.routes).toHaveLength(12);
     expect(mounted.opened.application.routes.filter((route) => route.path.startsWith("/v2/organization/tools/slack/"))).toHaveLength(4);
@@ -887,8 +836,7 @@ describe("Slack runtime bundle with organization setup", () => {
     }
   });
 
-  it("uses the bundle's one connection health for setup and refuses two different ones", async () => {
-    expect(() => open({ connection_health: new SlackConnectionHealthV1(), setup_health: new SlackConnectionHealthV1() })).toThrow(/single instance/);
+  it("uses the bundle's one connection health for setup", async () => {
     const health = new SlackConnectionHealthV1();
     health.markNeedsReinstall("sha256:stale");
     const { opened, call, f } = open({ connection_health: health });

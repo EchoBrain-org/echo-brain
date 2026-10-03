@@ -1,4 +1,4 @@
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../src/organization-control-plane/application/slack-integration-contracts.js";
 import Database from "better-sqlite3";
 import { applyAuthorityBaselineV10 } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/baseline";
 import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "../../src/private-approval/sqlite-stable-private-approval-authority-fence-v1.js";

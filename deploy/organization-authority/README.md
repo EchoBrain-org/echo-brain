@@ -96,20 +96,21 @@ Put exactly these mode-`0600` regular, non-symlink files inside it:
 ### Optional staging connector rehearsal
 
 The ordinary manifest omits `staging_connector_rehearsal`. Initial preparation
-can enable the staging-only V1 Granola/Jira rehearsal with this closed,
+can enable the staging-only Granola/Jira/Slack rehearsal with this closed,
 nonsecret object in `onboarding.clean-v1.json`:
 
 ```json
 {
   "staging_connector_rehearsal": {
-    "schema_version": 1,
-    "kind": "echo-staging-connector-rehearsal-profile-v1",
-    "capture_policy": "initial-owner-granola-retained-jira-request-only-v1",
+    "schema_version": 2,
+    "kind": "echo-staging-connector-rehearsal-profile-v2",
+    "capture_policy": "initial-owner-granola-retained-jira-pointer-slack-pointer-v2",
     "jira": {
       "cloud_id": "a8c0e112-6f72-4a0e-9c12-b7d8439f0abc",
       "integration_key": "jira",
       "project": "ECHO"
-    }
+    },
+    "slack": { "channel_id": "C0123456789" }
   }
 }
 ```
@@ -122,65 +123,60 @@ release-bound environment snapshots. The
 ordinary eight-file preparation carries the profile inside the existing
 nonsecret manifest. The four-synthetic-meeting provider-reuse transfer rejects
 an enabled connector profile; it cannot be used as an alternate connector
-input lane.
+input lane. The profile is fixed for the life of the rehearsal: a different
+Jira project or Slack channel needs a fresh rehearsal.
 
-The profile contains no Nango secret. The Authority continues to read the
-existing `nango-secret-key`; the profile's Jira integration key is an ordinary
-Nango integration identifier. Granola keeps its existing organization-owned credential. Jira remains
-request-only under V1, and its person connection sidecar is owned by the
-Authority runtime beside its retained state directory.
+The profile contains no Nango secret or Slack token. The Authority continues to
+read the existing `nango-secret-key`; the profile's Jira integration key is an
+ordinary Nango integration identifier, and `channel_id` names one public Slack
+channel. Granola keeps its existing organization-owned credential. Jira and
+Slack captures retain pointers and selected metadata only. With this profile
+selected, the owner's `person tools setup --tool slack` also asks for
+`channels:read` and `channels:history` on the same app. Jira's person connection
+sidecar is owned by the Authority runtime beside its retained state directory.
 
 The runtime creates and validates its own
 `clean-data/staging-connector-rehearsal-v1/binding.json`. It binds the
-Authority lineage, initial owner, and canonical profile digest. Recovery allows
-only the exact retained sidecar with that binding; a missing, unsafe, or
-mismatched sidecar fails closed during ordinary same-volume host reconstruction.
-The offline whole-volume backup verifier refuses an enabled V1 or V2 connector
-profile or its sidecar. A retained-volume restore with V2 selected is therefore
-unsupported and fails closed before it starts Authority. It does not discard
-that volume or imply that a replacement preserves its retained pointers or
-connections. Preserve the failed volume and obtain explicit authorization before
-any replacement. The approved recovery lane is provider revocation followed by a
-fresh rehearsal and fresh profile preparation. Do not delete or edit the
-sidecar to make a startup pass.
+Authority lineage, initial owner, and canonical profile digest. Same-volume host
+reconstruction by `restore-clean-v1-host.sh`, including the CloudFormation
+bootstrap's `materialize`, allows only the profile at its fixed path with that
+exact retained sidecar; a missing, unsafe, or mismatched sidecar fails closed.
+The offline whole-volume backup verifier refuses any selected connector
+rehearsal, its profile file or its sidecar, so a backup restore always requires
+provider revocation and a fresh rehearsal. Do not delete or edit the sidecar to
+make a startup pass. The human host operator must first disconnect or revoke
+the affected Jira connection at the provider, then prepare a fresh profile.
 
-### V2 retained-pointer rebind
+#### Moving off the retired V1 profile or V2 rebind
 
-After a reviewed release that supports V2 is installed and the accepted host is
-terminal green, the human host operator may use the exact reviewed command:
+Earlier tooling prepared a request-only V1 profile and rebound it to V2 with
+`configure-connector-rehearsal`. This wrapper has no such action, and the
+Authority refuses both earlier profiles. With no live users, move such a host
+with one fresh rehearsal, in this order:
 
-```text
-./onboard-clean-v1.sh configure-connector-rehearsal \
-  --profile-base64 <canonical-nonsecret-v2-profile> \
-  --profile-sha256 <sha256-of-canonical-profile>
-```
-
-The V2 profile has the fixed kind
-`echo-staging-connector-rehearsal-profile-v2`, policy
-`initial-owner-granola-retained-jira-pointer-slack-pointer-v2`, and only the
-reviewed predecessor digest plus Jira cloud, integration and project coordinates
-and one public Slack channel ID. The wrapper accepts standard base64 only when
-it decodes to bounded canonical JSON with the supplied digest. It never accepts
-a file path or a secret. The predecessor must equal the canonical digest of the
-existing V1 profile.
-
-The action preserves the V1 profile, V1 sidecar and Jira connection database. It
-writes the V2 profile at the fixed private path, switches the exact accepted
-environment snapshot and setup digest together, and restarts the same accepted
-image. It refuses a staged candidate and requires the existing host to be
-terminal green. A failed start restores and verifies the V1 selector. An
-interrupted transition retains a private journal and blocks `status`, `resume`,
-release preparation and other ordinary wrapper actions. Re-run only the same
-reviewed V2 command to reconcile that journal when the operation locks are free.
-A killed process can leave an operation lock: investigate that lock through the
-existing operation-lock recovery procedure; never delete it or the journal by
-hand. Do not edit the environment, profiles or sidecar.
-
-The transition is not an onboarding reset and does not grant production release
-or provider consent. Normal candidate rollback continues to restore the exact
-accepted release tuple. Do not stage an image that lacks V2 selection once this
-profile is active; the ordinary current-host release lane must verify the exact
-candidate and its rollback path before promotion.
+1. With the old wrapper, confirm `status` does not report an interrupted
+   connector rebind. If it does, rerun the same reviewed
+   `configure-connector-rehearsal` command so the old wrapper reconciles its
+   journal first.
+2. While the old rehearsal is still in place, install the target release's
+   reviewed host tooling through the
+   [current-host staging release lane](../release/README.md#automated-current-host-staging-lane)
+   (`inspect-install`, then `install`, each with `--previous-tooling-source`).
+3. Disconnect the retired rehearsal's Jira connection in Nango.
+4. Run `replace-rehearsal --confirm-no-live-users` without
+   `--reuse-provider-inputs`. The archive keeps the old profiles, sidecar and
+   Slack connection state.
+5. Put the profile above in `onboarding.clean-v1.json` and transfer the full
+   eight-file onboarding input directory; the transfer runs `doctor` and
+   `prepare` on the host. Then continue with `resume`.
+6. On the initial-owner machine, run `person tools setup --tool slack` with a
+   new configuration token and complete Slack consent, including the two
+   public-channel read scopes. Then link the owner with
+   `person tools connect --tool slack` and complete Jira consent with
+   `person tools connect --tool jira`.
+7. Save the exact profile object as the runner's local profile before the
+   [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal)
+   captures.
 
 Check that directory before spending an AWS session on it:
 

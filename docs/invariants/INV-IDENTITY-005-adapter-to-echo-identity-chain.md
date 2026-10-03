@@ -10,8 +10,8 @@ component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
 created_at: 2026-08-20
-reviewed_at: 2026-08-20
-reviewed_ref: 77a212134fce762fdffd30e028f3256ba6e75b42
+reviewed_at: 2026-10-02
+reviewed_ref: 30f8e999dadca97a2a653e5fec12a1ad4107deac
 decision_ids:
   - ADR-0006
 normative: MUST
@@ -59,9 +59,9 @@ later edges.
 Provider subjects are always scoped by provider issuer and tenant. The current
 Slack human is `(https://slack.com, team_id, user_id)`, never `user_id` alone.
 The current Slack tool proof also binds the verified workspace, enterprise
-scope, app, bot, bot user, granted scopes, configured channel, opaque secret
-handle, and verification evidence. Missing or disagreeing tuple members deny;
-they are never inferred from display text or copied from a caller.
+scope, app, bot, bot user, granted scopes, opaque secret handle, and
+verification evidence. Missing or disagreeing tuple members deny; they are
+never inferred from display text or copied from a caller.
 
 The stable organization-tool identity contract is distinct from its current
 active/revoked credential-verification state. Both have closed canonical bodies
@@ -79,28 +79,13 @@ or an unreferenced set-level digest is not evidence.
 The approval capability adapter identity binds at least kind, adapter ID,
 instance ID, version, provider connection/binding, approval channel and
 provider-object coordinate, action mapping, and the frozen policy/presentation
-contract. Delivery destination remains separate adapter configuration and
-never becomes approval or read identity. Pending work resolves under its frozen
-approval identity even when delivery configuration changes.
+contract.
 
-Source, processor, and delivery adapters do not synthesize a provider-human
-identity link. A source follows its organization credential, source identity,
-external object/revision, and active custodian chain. A processor follows its
-source input and frozen transformation identity. Delivery follows an exact
-canonical approval receipt and approved snapshot into each configured typed
-delivery surface's distinct configuration, destination, durable attempt, and
-receipt. These are provenance, custody, transformation, or side-effect chains;
-none can create human approval or read authority.
-
-Initial V1 preserves main's delivery behavior: after append, core submits the
-same approved snapshot to every configured delivery surface in deterministic
-order; rejection creates no delivery work. Approval identity cannot substitute
-for a delivery surface, and a delivery receipt cannot authorize approval or a
-read. Slack approval and generic delivery channels remain distinct. Each
-surface validates its own configuration/destination before a provider call and
-recovers unknown outcomes from durable frozen attempt state without blind
-repost. A future stable delivery-binding activation or human-approved
-destination contract requires a separate accepted invariant update.
+Source and processor adapters do not synthesize a provider-human identity link.
+A source follows its organization credential, source identity, external
+object/revision, and active custodian chain. A processor follows its source
+input and frozen transformation identity. These are provenance, custody, or
+transformation chains; neither can create human approval or read authority.
 
 Source activation pulls no meeting and separates two records: a frozen pipeline
 contract (source kind/ID/instance/version, cursor/cutoff lineage, normalizer
@@ -177,6 +162,11 @@ owner or employee membership in the same organization; the frozen approving
 actor is provenance, not the reader list. Contract versions may change the
 authentication mechanism, but they cannot silently change either reader set.
 
+Person-bound provider read grants for live evidence are a separate edge
+governed by [shared connector contracts](../architecture/connector-contracts.md).
+A read grant never substitutes for membership, and an identity link never
+substitutes for a read grant.
+
 Layer 3 commits three non-interchangeable identities: a current caller binding,
 a caller-bound pre-search policy/generation/head/segment scope, and an allow
 release binding over the ordered returned atom/record/policy/content/provenance
@@ -199,12 +189,10 @@ it does not erase, reinterpret, or make an admitted act unrebuildable.
   defined to consume fails closed. Provider approval consumes the current
   connection, human link, adapter binding, capability, and membership; record
   admission/recovery consumes the immutable audit ID, chain-entry hash, and
-  proof; delivery claim/call consumes the canonical append receipt, exact
-  approved snapshot, and the surface's validated configuration/destination,
-  while unknown/delivered recovery consumes only durable attempt state; read consumes
-  the current Person session/membership plus canonical policy facts and the
-  exact retrieval generation. A historical approval-provider edge revoked
-  after append is not a Layer-2 or Layer-3 read-time edge.
+  proof; read consumes the current Person session/membership plus canonical
+  policy facts and the exact retrieval generation. A historical
+  approval-provider edge revoked after append is not a Layer-2 or Layer-3
+  read-time edge.
 - Provider identity repair requires fresh authoritative proof and one atomic,
   audited update across every affected connection and binding. Null or legacy
   fields are never invented or blindly backfilled.
@@ -229,7 +217,7 @@ The current Slack and Person paths are partial enforcement. The lean migration
 must add one end-to-end identity-chain suite covering:
 
 - same Slack user ID in another workspace;
-- correct workspace with the wrong app, bot, bot user, connection, channel,
+- correct workspace with the wrong app, bot, bot user, connection,
   adapter instance/version, action mapping, or frozen presentation;
 - identity link to the wrong principal or membership tenure;
 - revoked/replaced membership, session family, identity link, binding, grant,
@@ -250,12 +238,6 @@ must add one end-to-end identity-chain suite covering:
   canonical revision, `normalizer_version`, nullable provider
   `source_revision`, processor kind/ID/instance/version, or processor contract
   digest never replays an older candidate;
-- rejection creates zero delivery work; approval submits the same canonical
-  snapshot to every configured surface in deterministic order; invalid
-  destination/configuration makes that surface call zero times; approval
-  identity cannot substitute; claimed unknown/delivered recovery uses frozen
-  durable attempt state and exact retry cannot repost an already delivered
-  record;
 - source custodian, meeting participant, matching email/display name, or model
   output attempting to stand in for the approving actor;
 - cross-Authority, cross-organization, mixed-lineage, and replayed provider

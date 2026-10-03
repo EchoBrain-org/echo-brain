@@ -4,8 +4,7 @@ import {
 } from "../../../shared/bounded-json-fetch-v1.js";
 
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
-const DEFAULT_TIMEOUT_MS = 15_000;
-const MAXIMUM_TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = 15_000;
 const INTEGRATION_KEY_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const BOT_TOKEN_PATTERN = /^xoxb-/;
 
@@ -18,7 +17,6 @@ export interface NangoConfigurationV1 {
   readonly base_url: string; // https origin, default "https://api.nango.dev"
   readonly secret_key: string; // from a private credential file; never logged
   readonly integration_key: string; // /^[a-z0-9][a-z0-9_-]{0,63}$/
-  readonly callback_url: string; // `${base_url}/oauth/callback` unless configured
 }
 
 export class NangoClientErrorV1 extends Error {
@@ -34,8 +32,7 @@ export class NangoClientErrorV1 extends Error {
 /**
  * The fields ECHO reads out of a Nango Slack connection. All response-shape
  * knowledge for a connection lives in `parseNangoSlackConnectionV1` below, so
- * a correction after the real-Nango spike (controller ruling P1) touches one
- * place.
+ * a correction once a real Nango response is observed touches one place.
  */
 export interface NangoSlackConnectionV1 {
   readonly connection_id: string;
@@ -45,7 +42,6 @@ export interface NangoSlackConnectionV1 {
   readonly bot_user_id: string; // U…
   readonly granted_scopes: readonly string[]; // sorted, from raw.scope
   readonly bot_token: string; // xoxb-… (only held in memory by callers)
-  readonly updated_at: string; // provider metadata; not proof that this authorization attempt completed
 }
 
 export interface NangoConnectionClientV1 {
@@ -54,14 +50,14 @@ export interface NangoConnectionClientV1 {
     client_id: string;
     client_secret: string;
     scopes: readonly string[];
-  }): Promise<{ connect_link: string; expires_at: string }>;
+  }): Promise<{ connect_link: string }>;
   createReconnectSession(input: {
     connection_id: string;
     tags: Readonly<Record<string, string>>;
     client_id: string;
     client_secret: string;
     scopes: readonly string[];
-  }): Promise<{ connect_link: string; expires_at: string }>;
+  }): Promise<{ connect_link: string }>;
   findConnectionIdByTag(input: { key: string; value: string }): Promise<string | undefined>;
   getSlackConnection(input: { connection_id: string }): Promise<NangoSlackConnectionV1>;
 }
@@ -89,13 +85,14 @@ function invalidConnection(): never {
 }
 
 /**
- * Parses one Nango connection response down to the fields ECHO needs,
- * against assumptions A1/A2/A5 (controller ruling P1, spike pending):
- * `credentials.raw` carries the Slack `oauth.v2.access` response verbatim,
- * `credentials.access_token` is the bot token, and `updated_at` is an ISO
- * timestamp. Strict: throws `NangoClientErrorV1("invalid_response", …)` for
- * any missing or malformed field, and never includes a candidate value
- * (including the bot token) in its thrown message. Refuses an
+ * Parses one Nango connection response down to the fields ECHO needs.
+ * Spike-sensitive: that `credentials.raw` carries the Slack
+ * `oauth.v2.access` response verbatim and `credentials.access_token` is the
+ * bot token is assumed, not observed, since ADR-0025's phase-0 spike is
+ * unrecorded. Strict: throws
+ * `NangoClientErrorV1("invalid_response", …)` for any missing or malformed
+ * field, and never includes a candidate value (including the bot token) in
+ * its thrown message. Refuses an
  * Enterprise-Grid org-wide install (`is_enterprise_install: true`), so no
  * caller sees one; a single-workspace install inside a Grid org is accepted.
  */
@@ -106,7 +103,6 @@ export function parseNangoSlackConnectionV1(value: unknown): NangoSlackConnectio
   const connectionId = nonEmptyString(top.connection_id);
   const tags: Record<string, string> | undefined =
     top.tags === undefined ? {} : stringRecord(top.tags);
-  const updatedAt = nonEmptyString(top.updated_at);
   const credentials = record(top.credentials);
   const botToken = credentials === undefined ? undefined : nonEmptyString(credentials.access_token);
   const raw = credentials === undefined ? undefined : record(credentials.raw);
@@ -120,8 +116,6 @@ export function parseNangoSlackConnectionV1(value: unknown): NangoSlackConnectio
   if (
     connectionId === undefined ||
     tags === undefined ||
-    updatedAt === undefined ||
-    Number.isNaN(Date.parse(updatedAt)) ||
     botToken === undefined ||
     !BOT_TOKEN_PATTERN.test(botToken) ||
     raw === undefined ||
@@ -151,26 +145,21 @@ export function parseNangoSlackConnectionV1(value: unknown): NangoSlackConnectio
     bot_user_id: botUserId,
     granted_scopes: grantedScopes,
     bot_token: botToken,
-    updated_at: updatedAt,
   });
 }
 
-/** `{ data: { token, connect_link, expires_at } }`; `token` is never returned or logged. */
-function parseNangoConnectSessionResponseV1(value: unknown): {
-  connect_link: string;
-  expires_at: string;
-} {
+/** `{ data: { token, connect_link, … } }`; only `connect_link` is returned, and `token` is never logged. */
+function parseNangoConnectSessionResponseV1(value: unknown): { connect_link: string } {
   const top = record(value);
   const data = top === undefined ? undefined : record(top.data);
   const connectLink = data === undefined ? undefined : nonEmptyString(data.connect_link);
-  const expiresAt = data === undefined ? undefined : nonEmptyString(data.expires_at);
-  if (connectLink === undefined || expiresAt === undefined) {
+  if (connectLink === undefined) {
     throw new NangoClientErrorV1("invalid_response", "Nango returned an invalid connect session");
   }
-  return Object.freeze({ connect_link: connectLink, expires_at: expiresAt });
+  return Object.freeze({ connect_link: connectLink });
 }
 
-/** `{ connections: [ { connection_id, tags, … } ] }` (A3); returns only the ids. */
+/** `{ connections: [ { connection_id, tags, … } ] }` (assumed, not observed); returns only the ids. */
 function parseNangoConnectionIdsV1(value: unknown): readonly string[] {
   const top = record(value);
   const list = top === undefined ? undefined : top.connections;
@@ -206,9 +195,7 @@ function assertValidNangoConfigurationV1(value: NangoConfigurationV1): URL {
     typeof value.secret_key !== "string" ||
     value.secret_key.length === 0 ||
     typeof value.integration_key !== "string" ||
-    !INTEGRATION_KEY_PATTERN.test(value.integration_key) ||
-    typeof value.callback_url !== "string" ||
-    value.callback_url.length === 0
+    !INTEGRATION_KEY_PATTERN.test(value.integration_key)
   ) {
     throw new Error("Nango configuration is invalid");
   }
@@ -252,24 +239,17 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
   private readonly secretKey: string;
   private readonly integrationKey: string;
   private readonly fetchImpl: typeof fetch;
-  private readonly timeoutMs: number;
 
   constructor(
     configuration: NangoConfigurationV1,
-    options: { readonly fetch?: typeof fetch; readonly timeoutMs?: number } = {},
+    options: { readonly fetch?: typeof fetch } = {},
   ) {
     const baseUrl = assertValidNangoConfigurationV1(configuration);
     this.baseUrl = baseUrl.origin;
     this.secretKey = configuration.secret_key;
     this.integrationKey = configuration.integration_key;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    if (
-      typeof this.fetchImpl !== "function" ||
-      !Number.isSafeInteger(this.timeoutMs) ||
-      this.timeoutMs <= 0 ||
-      this.timeoutMs > MAXIMUM_TIMEOUT_MS
-    ) {
+    if (typeof this.fetchImpl !== "function") {
       throw new Error("Nango transport configuration is invalid");
     }
   }
@@ -296,12 +276,8 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
           body: input.body === undefined ? undefined : JSON.stringify(input.body),
         },
         fetch: this.fetchImpl,
-        timeoutMs: this.timeoutMs,
+        timeoutMs: TIMEOUT_MS,
         maxBytes: MAXIMUM_RESPONSE_BYTES,
-        // Nango's protocol is carried by HTTP status, not by always having a
-        // body: an error response may have no body at all. Status is
-        // classified below before the (possibly empty) body is ever inspected.
-        allowEmptyBody: true,
       });
     } catch (error) {
       if (error instanceof BoundedJsonFetchErrorV1) {
@@ -326,7 +302,7 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
     client_id: string;
     client_secret: string;
     scopes: readonly string[];
-  }): Promise<{ connect_link: string; expires_at: string }> {
+  }): Promise<{ connect_link: string }> {
     const json = await this.request({
       method: "POST",
       path: "/connect/sessions",
@@ -345,7 +321,7 @@ export class HttpNangoConnectionClientV1 implements NangoConnectionClientV1 {
     client_id: string;
     client_secret: string;
     scopes: readonly string[];
-  }): Promise<{ connect_link: string; expires_at: string }> {
+  }): Promise<{ connect_link: string }> {
     const json = await this.request({
       method: "POST",
       path: "/connect/sessions/reconnect",

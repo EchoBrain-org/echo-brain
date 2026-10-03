@@ -2,7 +2,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { openOrganizationControlDatabase } from '@echo-brain/organization-control-plane/persistence/open-organization-control-database';
-import { createSlackContextSourceV1 } from '@echo-brain/provider-slack-server/context/slack-context-source-v1';
+import { SLACK_CONTEXT_CAPTURE_ADAPTER_ID, SLACK_CONTEXT_CAPTURE_ADAPTER_VERSION, createSlackContextSourceV1 } from '@echo-brain/provider-slack-server/context/slack-context-source-v1';
 import { createSlackContextTransportV1 } from '@echo-brain/provider-slack-server/context/slack-context-transport-v1';
 import { readSlackContextCurrentIdentityV1 } from '@echo-brain/provider-slack-server/context/slack-context-current-identity-v1';
 import { isSlackIdentityTokenRejectedV1, type SlackIdentityProviderV1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-web-identity-provider-v1';
@@ -11,7 +11,7 @@ import type { SlackConnectionHealthV1 } from '@echo-brain/provider-slack-server/
 import { slackPrivateAppBotScopesV1, type SlackPublicChannelContextCapabilityV1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
 import { assertSlackPublicChannelContextConnectionV1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-public-channel-context-capability-v1';
 import { join } from 'node:path';
-import type { ConnectorRehearsalAuthenticatorV1, ConnectorRehearsalInitialOwnerV1, ConnectorRehearsalSlackV1 } from './connector-rehearsal-capture-v1.js';
+import { isActiveInitialOwnerV1, type ConnectorRehearsalAuthenticatorV1, type ConnectorRehearsalInitialOwnerV1, type ConnectorRehearsalSlackV1 } from './connector-rehearsal-capture-v1.js';
 import { verifyOrganizationAuthorityApiLineage } from './organization-authority-api-runtime.js';
 
 /** The same composed objects used by setup, person linking and approval delivery. */
@@ -59,11 +59,7 @@ export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptur
   let closed = false;
   const requireOwner = (access_token: string): void => {
     if (closed) throw unavailable();
-    const access = authenticate({ access_token });
-    if (access.organization_id !== owner.organization_id || access.principal_id !== owner.principal_id ||
-        access.membership_id !== owner.membership_id || access.membership_type !== 'owner') throw unavailable();
-    if (database.prepare(`SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=?
-      AND membership_type='owner' AND status='active'`).get(owner.organization_id, owner.principal_id, owner.membership_id) === undefined) throw unavailable();
+    if (!isActiveInitialOwnerV1(database, owner, authenticate({ access_token }))) throw unavailable();
   };
   return Object.freeze({
     async create_source(input: { readonly access_token: string; readonly signal: AbortSignal }) {
@@ -113,14 +109,9 @@ export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptur
         return response;
       } });
       const source = createSlackContextSourceV1({
-        transport, read_grant_fence: { async requireCurrent({ binding: candidate, signal: caller }) {
-          caller?.throwIfAborted();
-          if (canonicalSha256(candidate) !== canonicalSha256(binding)) throw unavailable();
-          requireCurrent();
-        } },
-        team_id: current.stored.connection.provider_tenant_id, channel_id,
+        transport, team_id: current.stored.connection.provider_tenant_id, channel_id,
         expected_bot_user_id: current.stored.connection.provider_bot_user_id,
-        identity: { kind: 'source', adapter_id: 'slack-context-capture', instance_id: source_instance_id, version: '1.0.0' },
+        identity: { kind: 'source', adapter_id: SLACK_CONTEXT_CAPTURE_ADAPTER_ID, instance_id: source_instance_id, version: SLACK_CONTEXT_CAPTURE_ADAPTER_VERSION },
         representation: 'pointer', public_channel_only: true,
       });
       return Object.freeze({ source, source_instance_id, require_current: requireCurrent });

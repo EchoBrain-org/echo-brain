@@ -101,111 +101,24 @@ state with a durable setup plan, generated internal IDs, Person credentials,
 and initial-owner invitation; Slack is connected afterward, in the app. Do not
 run reset into a directory that already contains state.
 
-## Disposable local connector preparation
-
-Use the [operator router](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md)
-for actor and secret-handling rules. The local connector preparation command
-creates a new private rehearsal directory with a nonsecret configuration
-template, isolated Person directory, private input directory and receipts
-directory. It reserves an absent Authority state path for later bootstrap.
-It never reads installed Person sessions or copies staging inputs.
-
-```sh
-npm run authority:connector-rehearsal -- prepare --directory /absolute/new-rehearsal
-npm run authority:connector-rehearsal -- preflight --directory /absolute/new-rehearsal
-```
-
-Fill the generated configuration with the rehearsal Authority's public HTTPS
-origin, test owner, OIDC configuration path, Nango integration keys, and Jira
-site/project. Private provider input paths are separate from their values.
-Preflight checks configuration shape and private-file ownership/modes; it
-prints missing field names, never credential contents. A configuration-ready
-result does not prove provider credentials or permissions work.
-
-The public HTTPS origin is this test Authority's URL. A local tunnel or proxy
-must forward it to the Authority's loopback listener. Register its
-`/v2/session/oidc/callback` in the test OIDC application. Slack's generated app
-also points identity and interactive-card callbacks at this origin. The
-existing staging Authority URL reaches staging, not the isolated local state.
-
-Preparation and preflight are the only pre-bootstrap actions. They do not
-create a tunnel, bootstrap state, start a listener, connect a provider, or
-qualify anything. `preflight` is an overall profile check: its
-`configuration_ready` result means every later private input is present, not
-that bootstrap must wait for every provider input. Bootstrap needs the public
-origin, organization/owner and OIDC configuration. Use this disposable local
-sequence once those bootstrap inputs are ready:
-
-```sh
-npm run build
-npm run authority:connector-rehearsal -- bootstrap --directory /absolute/new-rehearsal
-
-# Terminal 1: loopback-only service. It reports 127.0.0.1:39489 when ready.
-npm run authority:connector-rehearsal -- serve --directory /absolute/new-rehearsal
-
-# Terminal 2: only the rehearsal's isolated Person home is used.
-npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- \
-  login --invitation /absolute/new-rehearsal/state/onboarding/founder-person-invitation.json
-npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- tools setup --tool slack
-npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- tools connect --tool slack
-npm run authority:connector-rehearsal -- person --directory /absolute/new-rehearsal -- tools connect --tool jira
-```
-
-The human completes OIDC and provider browser consent. The authority URL still
-needs a dedicated public HTTPS test origin and matching test-OIDC callback even
-though the local service listener is loopback-only. Do not use the installed
-Person home, staging origin, or production credentials.
-
-The first `serve` additionally needs the Nango secret and Jira cloud
-configuration. Jira can connect and make a request-only capture before Granola
-credential installation/finalization; the configured Jira project is required
-when the capture runs. Granola and OpenRouter files become necessary for the
-stopped `credentials-install` and `finalize` phase below. Run `preflight` again
-when all of those later inputs are in place to verify the complete profile.
-
-Stop `serve` before installing credentials and finalizing, then start it again:
-
-```sh
-npm run authority:connector-rehearsal -- credentials-install --directory /absolute/new-rehearsal
-npm run authority:connector-rehearsal -- finalize --directory /absolute/new-rehearsal
-npm run authority:connector-rehearsal -- serve --directory /absolute/new-rehearsal
-
-# In another terminal, as the authenticated initial owner:
-npm run authority:connector-rehearsal -- capture --directory /absolute/new-rehearsal --tool granola --limit 1
-npm run authority:connector-rehearsal -- capture --directory /absolute/new-rehearsal --tool jira --limit 1
-npm run authority:connector-rehearsal -- cycle-once --directory /absolute/new-rehearsal
-```
-
-`capture` and `cycle-once` obtain the access token from the isolated Person
-session and send it only over the runner's private `control.sock` Unix socket;
-it is never printed or placed in command arguments. Granola capture is an
-owner-scoped, retained qualification observation under the shared context
-foundation. It does not advance the meeting cursor. `cycle-once` is the
-separate legacy meeting-and-approval processor and remains its cursor owner.
-Jira capture is request-only and disappears after its receipt. No command
-creates an automatic convergence loop or qualifies a provider. Jira remains
-disabled in the normal service CLI. See the
-[integration scope](../../docs/product/2026-10-01-connector-context-integration-v1.md).
-
-Manual scheduling means source polling occurs only through the explicit capture
-or `cycle-once` commands. It does not suppress existing derived approval,
-presentation, or search-reconciliation wakes after a manual cycle.
-
 ## Staging connector rehearsal
 
 This opt-in profile reuses the staging Authority's HTTPS endpoint and Google
 sign-in. First deploy the matching server, host tooling and Person client through
 the [operator playbook](../../docs/operations/PB-OPERATIONS-001-authority-operator-lane.md).
-The [host guide](../../deploy/organization-authority/README.md) owns preparing
-the nonsecret `staging_connector_rehearsal` onboarding field and its private
-profile file. A checkout build alone does not enable a running Authority.
+The [host guide](../../deploy/organization-authority/README.md#optional-staging-connector-rehearsal)
+owns preparing the nonsecret `staging_connector_rehearsal` onboarding field and
+its private profile file. A checkout build alone does not enable a running
+Authority.
 
 Save an exact copy of that profile object as a local nonsecret JSON file. Use
 the release-matched Person client to sign in and run the ordinary shared
 connection commands: `person tools setup --tool slack`,
 `person tools connect --tool slack`, and `person tools connect --tool jira`.
-The staging profile admits Jira connection commands only for its initial owner.
-Granola continues to use the host's direct organization credential.
+With this profile selected, Slack setup also asks for public-channel read
+permissions on the same app; human Slack consent is still required. The staging
+profile admits Jira connection commands only for its initial owner. Granola
+continues to use the host's direct organization credential.
 
 After `npm run build`, the owner Mac can run:
 
@@ -218,46 +131,27 @@ npm run authority:staging-connector-rehearsal -- capture \
 npm run authority:staging-connector-rehearsal -- capture \
   --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
   --tool jira --limit 1
+npm run authority:staging-connector-rehearsal -- capture \
+  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
+  --tool slack --limit 1
 ```
 
-The runner uses the installed Person session in the current user's home. An
-explicit `--person-home` can select another local home, but its session must
-still name the staging Authority and an active initial owner. The release ID
-and profile digest must match the running server. No token is accepted on the
+The runner uses the installed Person session in the current user's home. That
+session must name the staging Authority and an active initial owner. The
+release ID and profile digest must match the running server. No token is accepted on the
 command line or printed. A failed capture is not retried automatically: a lost
 response may follow an already-committed observation.
 
 Receipts contain hashes and counts, never source contents, cursors, provider
 account IDs or credentials. A zero-item receipt is not a successful content
-capture. Granola observations are retained under the separate owner policy;
-Jira observations in V1 are request-only. Ordinary Granola polling owns the cursor
-and continues running. Slack approval tests use the existing synthetic release
-canary and human approval, with separate evidence. No Slack-message capture or
-Jira Ask is enabled by this profile. See the
-[scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal-v1).
-
-The separately selected [V2 profile](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal-v2)
-retains Jira pointers and pointers from one public Slack channel. Follow the
-host guide's reviewed `configure-connector-rehearsal` transition after deploying
-an image that supports it. Keep the original V1 profile and connected Jira
-sidecar; V2 must prove their predecessor binding. Save the exact V2 object as
-the runner's local profile. The runner selects request and receipt version from
-that object, using the same endpoint and staging session.
-
-With V2 selected, run `person tools setup --tool slack` and complete human
-consent to add public-channel read permissions to the existing app. Existing
-approval cards and person links keep their connection state. Then the owner
-can capture using the commands above with the V2 profile, plus:
-
-```sh
-npm run authority:staging-connector-rehearsal -- capture \
-  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile-v2.json \
-  --tool slack --limit 1
-```
-
-V2 receipts report retained admission or duplicate for all three sources. Slack
-and Jira retain pointers and selected metadata only; Slack message snapshots
-remain a separate follow-up. No downstream retrieval or Ask behavior is enabled.
+capture. Receipts report retained admission or duplicate for all three sources.
+Granola observations are retained under the separate owner policy; Jira and
+Slack retain pointers and selected metadata only, and Slack message snapshots
+remain a separate follow-up. Ordinary Granola polling owns the cursor and
+continues running. Slack approval tests use the existing synthetic release
+canary and human approval, with separate evidence. No downstream retrieval, Jira
+Ask or other Ask behavior is enabled by this profile. See the
+[scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal).
 
 ## Initial-owner setup internals
 

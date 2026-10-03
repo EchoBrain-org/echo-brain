@@ -22,10 +22,10 @@ provider API -> server adapter -> processing contracts <- processing cycle
   owns production processing state in SQLite.
 - `packages/organization-processing/src/admitted-meeting-processing/` owns the serialized bounded server cycle.
 - Authority composition selects concrete adapters, credentials, organization
-  policy, and stores through explicit bundles for meeting source, decision
-  processor, answer composition, approval/interaction, and Person external
-  identity. Those bundles are the only place an active external-capability
-  provider is selected.
+  policy, and stores. An active external-capability provider is selected only
+  in the modules that
+  [INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
+  allows.
 
 `npm run check:architecture-boundaries` enforces these rules for every owned
 source file, not only today's entry-point closure. Processing tests live in `packages/organization-processing/test/`; provider tests
@@ -34,7 +34,10 @@ live in their provider workspaces; cross-workspace source and artifact checks li
 
 ## Shared source admission
 
-Context sources share a versioned port before their domain-specific processing:
+Context sources share the versioned `SourceAdapterV1` and
+`SourceAdmissionStoreV1` ports. Person uploads and meeting sources admit through
+`pullAndAdmitSourceBatchV1()` before their domain-specific processing; opt-in
+connector captures pass through the Authority's own context intake gate:
 
 ```text
 Person HTTP upload -> durable Authority inbox -> PersonSourceAdapterV1 --+
@@ -48,7 +51,16 @@ meeting provider -> MeetingSourceAdapter -> MeetingSourceBridgeV1 ------+
                          SourceAdmissionStoreV1
                            /                    \
             document extraction/index       meeting decision workflow
+
+provider context source (Granola, Jira, Slack)
+  -> SourceAdapterV1<ContextCaptureContentV1>.pull()
+  -> createContextSourceIntakeV1() -> intakeContextBatchV1()
+       retained:     SqliteContextCaptureStoreV1 (a SourceAdmissionStoreV1)
+       request_only: request memory only, never stored
 ```
+
+Captured context feeds no processing, retrieval or Ask stage; see
+[connector contracts](connector-contracts.md).
 
 Person submission pushes into an edge inbox; core ingestion pulls from the
 server-owned inbox. The source adapter does not need a contributor's computer
@@ -190,6 +202,13 @@ DeepSeek planner/answer model. The other LLM transports are compiled
 alternatives, not active runtime dependencies. This is an allowed selecting
 composition profile, not evidence that every active provider has completed
 qualification.
+
+Two further selections stay off in production. The Jira live runtime
+(`jira-person-live-runtime-v1.ts`) is composed only when its release gate
+`JIRA_PERSON_LIVE_RELEASE_APPROVED_V1` is open; it is closed. The opt-in
+[context capture](../product/2026-10-01-connector-context-integration-v1.md)
+modules are composed only by the local rehearsal runner and the versioned
+staging selections.
 
 The source-processing model remains separate from the permission-aware
 read/model path. It receives one admitted source revision through the processor

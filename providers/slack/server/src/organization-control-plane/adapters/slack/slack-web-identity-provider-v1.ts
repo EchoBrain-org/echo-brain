@@ -1,10 +1,10 @@
-import type { ReadableStreamReadResult } from "node:stream/web";
 import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonical/canonical-json";
+import { BoundedJsonFetchErrorV1, boundedJsonFetchV1, type BoundedJsonFetchResultV1 } from "../../../shared/bounded-json-fetch-v1.js";
 import type { ObservedSlackIdentityLinkChallenge, ObserveSlackIdentityLinkChallengeInput, PostedSlackIdentityLinkChallenge, PostSlackIdentityLinkChallengeInput, SlackIntegrationProvider, VerifiedSlackConnection, VerifiedSlackHuman } from "../../application/slack-integration-contracts.js";
 import { slackConnectionVerificationEvidenceSha256V1 } from "../../application/slack-connection-verification-evidence-v1.js";
 
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
-const DEFAULT_TIMEOUT_MS = 15_000;
+const TIMEOUT_MS = 15_000;
 const SLACK_ID = /^[A-Z][A-Z0-9]{2,}$/;
 const SLACK_USER_ID = /^[UW][A-Z0-9]{2,}$/;
 const SLACK_TIMESTAMP = /^[0-9]{1,16}\.[0-9]{6}$/;
@@ -13,14 +13,7 @@ const CHALLENGE_CODE = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 const MAXIMUM_CHALLENGE_LIFETIME_MS = 15 * 60 * 1_000;
 const MAXIMUM_CHALLENGE_THREAD_MESSAGES = 100;
 
-export type SlackIdentityProviderV1 = Pick<
-  SlackIntegrationProvider,
-  | "openIdentityLinkDirectMessage"
-  | "verifyConnection"
-  | "verifyHuman"
-  | "postIdentityLinkChallenge"
-  | "observeIdentityLinkChallenge"
->;
+export type SlackIdentityProviderV1 = SlackIntegrationProvider;
 
 export class SlackIdentityProviderErrorV1 extends Error {
   constructor(
@@ -136,11 +129,7 @@ function validateIdentityLinkChallenge(
     );
   }
   requiredId(input.expected_bot_id, "expected bot_id", "B");
-  if (
-    input.expected_app_id !== null &&
-    (!SLACK_ID.test(input.expected_app_id) ||
-      !input.expected_app_id.startsWith("A"))
-  ) {
+  if (!SLACK_ID.test(input.expected_app_id) || !input.expected_app_id.startsWith("A")) {
     throw new SlackIdentityProviderErrorV1(
       "Slack expected app_id is invalid",
       "invalid_response",
@@ -230,82 +219,16 @@ function normalizedScopes(header: string | null): readonly string[] {
   return Object.freeze(scopes);
 }
 
-async function readBoundedResponseBytes(
-  response: Response,
-): Promise<Uint8Array> {
-  if (response.body === null) {
-    throw new SlackIdentityProviderErrorV1(
-      "Slack returned an empty verification response",
-      "invalid_response",
-    );
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    for (;;) {
-      let read: ReadableStreamReadResult<Uint8Array>;
-      try {
-        read = await reader.read();
-      } catch {
-        throw new SlackIdentityProviderErrorV1(
-          "Slack integration verification is unavailable",
-          "unavailable",
-        );
-      }
-      if (read.done) break;
-      totalBytes += read.value.byteLength;
-      if (totalBytes > MAXIMUM_RESPONSE_BYTES) {
-        try {
-          await reader.cancel();
-        } catch {}
-        throw new SlackIdentityProviderErrorV1(
-          "Slack returned an oversized verification response",
-          "invalid_response",
-        );
-      }
-      chunks.push(read.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (totalBytes === 0) {
-    throw new SlackIdentityProviderErrorV1(
-      "Slack returned an empty verification response",
-      "invalid_response",
-    );
-  }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
 /**
  * Slack web identity provider. It deliberately omits reaction verification
  * and therefore never loads retained installation/lease policy grammars.
  */
 export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
   private readonly fetchImpl: typeof fetch;
-  private readonly timeoutMs: number;
 
-  constructor(
-    options: {
-      readonly fetch?: typeof fetch;
-      readonly timeoutMs?: number;
-    } = {},
-  ) {
+  constructor(options: { readonly fetch?: typeof fetch } = {}) {
     this.fetchImpl = options.fetch ?? globalThis.fetch;
-    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    if (
-      typeof this.fetchImpl !== "function" ||
-      !Number.isSafeInteger(this.timeoutMs) ||
-      this.timeoutMs <= 0 ||
-      this.timeoutMs > 60_000
-    ) {
+    if (typeof this.fetchImpl !== "function") {
       throw new Error("Slack integration transport configuration is invalid");
     }
   }
@@ -322,53 +245,50 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
         "unauthorized",
       );
     }
-    const deadline = AbortSignal.timeout(this.timeoutMs);
-    const combined =
-      signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
-    let response: Response;
+    let result: BoundedJsonFetchResultV1;
     try {
-      response = await this.fetchImpl(`https://slack.com/api/${method}`, {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${token}`,
-          "content-type": "application/x-www-form-urlencoded",
+      result = await boundedJsonFetchV1({
+        url: `https://slack.com/api/${method}`,
+        init: {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            authorization: `Bearer ${token}`,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams(parameters),
         },
-        body: new URLSearchParams(parameters),
-        redirect: "error",
-        signal: combined,
+        fetch: this.fetchImpl,
+        timeoutMs: TIMEOUT_MS,
+        signal,
+        maxBytes: MAXIMUM_RESPONSE_BYTES,
       });
-    } catch {
-      throw new SlackIdentityProviderErrorV1(
-        "Slack integration verification is unavailable",
-        "unavailable",
-      );
+    } catch (error) {
+      if (!(error instanceof BoundedJsonFetchErrorV1)) throw error;
+      throw error.code === "transport"
+        ? new SlackIdentityProviderErrorV1(
+            "Slack integration verification is unavailable",
+            "unavailable",
+          )
+        : new SlackIdentityProviderErrorV1(
+            "Slack returned an invalid verification response",
+            "invalid_response",
+          );
     }
-    const declared = response.headers.get("content-length");
-    if (
-      !response.ok ||
-      (declared !== null &&
-        (!/^\d+$/.test(declared) || Number(declared) > MAXIMUM_RESPONSE_BYTES))
-    ) {
+    if (!result.ok) {
       throw new SlackIdentityProviderErrorV1(
         "Slack integration verification failed",
-        response.status === 401 ? "unauthorized" : "unavailable",
-        response.status === 401,
+        result.status === 401 ? "unauthorized" : "unavailable",
+        result.status === 401,
       );
     }
-    const bytes = await readBoundedResponseBytes(response);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-      ) as unknown;
-    } catch {
+    if (result.json === undefined) {
       throw new SlackIdentityProviderErrorV1(
-        "Slack returned invalid JSON",
+        "Slack returned an empty verification response",
         "invalid_response",
       );
     }
-    const value = record(parsed, method);
+    const value = record(result.json, method);
     if (value.ok !== true) {
       const error = value.error;
       const unauthorized =
@@ -395,7 +315,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
         unauthorized,
       );
     }
-    const scopesHeader = response.headers.get("x-oauth-scopes");
+    const scopesHeader = result.headers.get("x-oauth-scopes");
     return {
       value,
       scopes: scopesHeader === null ? null : normalizedScopes(scopesHeader),
@@ -575,7 +495,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
   }
 
   private async verifyChallengeDestination(token: string, input: PostSlackIdentityLinkChallengeInput, signal?: AbortSignal): Promise<void> {
-    const destination = await this.openIdentityLinkDirectMessage(token, input.recipient_user_id!, input.expected_team_id, signal);
+    const destination = await this.openIdentityLinkDirectMessage(token, input.recipient_user_id, input.expected_team_id, signal);
     if (destination.channel_id !== input.channel_id) {
       throw new SlackIdentityProviderErrorV1("Slack identity-link destination changed", "unauthorized");
     }
@@ -622,8 +542,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
       message.text !== challenge.text ||
       message.edited !== undefined ||
       (message.subtype !== undefined && message.subtype !== "bot_message") ||
-      (input.expected_app_id !== null &&
-        message.app_id !== input.expected_app_id)
+      message.app_id !== input.expected_app_id
     ) {
       throw new SlackIdentityProviderErrorV1(
         "Slack did not return the exact bot-authored identity-link challenge",
@@ -726,8 +645,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
       parent.text !== challenge.text ||
       parent.edited !== undefined ||
       (parent.subtype !== undefined && parent.subtype !== "bot_message") ||
-      (input.expected_app_id !== null &&
-        parent.app_id !== input.expected_app_id)
+      parent.app_id !== input.expected_app_id
     ) {
       throw new SlackIdentityProviderErrorV1(
         "Slack identity-link challenge parent changed",

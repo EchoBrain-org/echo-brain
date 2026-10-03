@@ -14,7 +14,6 @@ const CONFIGURATION: NangoConfigurationV1 = Object.freeze({
   base_url: "https://api.nango.dev",
   secret_key: SECRET_KEY,
   integration_key: INTEGRATION_KEY,
-  callback_url: "https://api.nango.dev/oauth/callback",
 });
 
 const TAGS = Object.freeze({
@@ -25,7 +24,7 @@ const TAGS = Object.freeze({
 
 const SCOPES = Object.freeze(["chat:write", "im:history", "im:write", "users:read"] as const);
 
-const A1_CONNECTION_FIXTURE = Object.freeze({
+const CONNECTION_FIXTURE = Object.freeze({
   connection_id: "conn_123",
   tags: TAGS,
   updated_at: "2026-09-30T12:00:00.000Z",
@@ -64,7 +63,7 @@ function emptyNangoFetch(status: number) {
 }
 
 function fixtureWithRawPatch(patch: Record<string, unknown>): unknown {
-  const clone = JSON.parse(JSON.stringify(A1_CONNECTION_FIXTURE)) as Record<string, any>;
+  const clone = JSON.parse(JSON.stringify(CONNECTION_FIXTURE)) as Record<string, any>;
   Object.assign(clone.credentials.raw, patch);
   return clone;
 }
@@ -92,15 +91,10 @@ describe("HttpNangoConnectionClientV1 configuration", () => {
   it("rejects an empty secret_key", () => {
     expect(() => new HttpNangoConnectionClientV1({ ...CONFIGURATION, secret_key: "" })).toThrow();
   });
-
-  it("rejects a timeoutMs outside (0, 60000]", () => {
-    expect(() => new HttpNangoConnectionClientV1(CONFIGURATION, { timeoutMs: 0 })).toThrow();
-    expect(() => new HttpNangoConnectionClientV1(CONFIGURATION, { timeoutMs: 60_001 })).toThrow();
-  });
 });
 
 describe("HttpNangoConnectionClientV1.createConnectSession", () => {
-  it("sends the Bearer secret key and the exact connect-session body, returning only connect_link and expires_at", async () => {
+  it("sends the Bearer secret key and the exact connect-session body, returning only connect_link", async () => {
     const fetch = nangoFetch([
       200,
       {
@@ -120,11 +114,7 @@ describe("HttpNangoConnectionClientV1.createConnectSession", () => {
       scopes: SCOPES,
     });
 
-    expect(session).toEqual({
-      connect_link: "https://connect.nango.dev/abc",
-      expires_at: "2026-10-01T00:00:00.000Z",
-    });
-    expect(session).not.toHaveProperty("token");
+    expect(session).toEqual({ connect_link: "https://connect.nango.dev/abc" });
 
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
@@ -146,25 +136,6 @@ describe("HttpNangoConnectionClientV1.createConnectSession", () => {
         },
       },
     });
-  });
-
-  it("sends the request with redirect: error and a timeout signal", async () => {
-    const fetch = nangoFetch([
-      200,
-      { data: { token: "t", connect_link: "https://connect.nango.dev/abc", expires_at: "2026-10-01T00:00:00.000Z" } },
-    ]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    await client.createConnectSession({
-      tags: TAGS,
-      client_id: "client-id-value",
-      client_secret: CLIENT_SECRET,
-      scopes: SCOPES,
-    });
-
-    const [, init] = fetch.mock.calls[0] as [string, RequestInit];
-    expect(init.redirect).toBe("error");
-    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 });
 
@@ -190,10 +161,7 @@ describe("HttpNangoConnectionClientV1.createReconnectSession", () => {
       scopes: SCOPES,
     });
 
-    expect(session).toEqual({
-      connect_link: "https://connect.nango.dev/def",
-      expires_at: "2026-10-01T00:00:00.000Z",
-    });
+    expect(session).toEqual({ connect_link: "https://connect.nango.dev/def" });
 
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.nango.dev/connect/sessions/reconnect");
@@ -259,8 +227,8 @@ describe("HttpNangoConnectionClientV1.findConnectionIdByTag", () => {
 });
 
 describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
-  it("builds the provider_config_key query and parses the A1 fixture", async () => {
-    const fetch = nangoFetch([200, A1_CONNECTION_FIXTURE]);
+  it("builds the provider_config_key query and parses the connection fixture", async () => {
+    const fetch = nangoFetch([200, CONNECTION_FIXTURE]);
     const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
     const connection = await client.getSlackConnection({ connection_id: "conn_123" });
@@ -273,7 +241,6 @@ describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
       bot_user_id: "U0123456",
       granted_scopes: ["chat:write", "im:history", "im:write", "users:read"],
       bot_token: "xoxb-111-222-abcdef",
-      updated_at: "2026-09-30T12:00:00.000Z",
     });
 
     const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
@@ -293,7 +260,7 @@ describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
   });
 
   it("refuses a non-xoxb token without leaking it", async () => {
-    const clone = JSON.parse(JSON.stringify(A1_CONNECTION_FIXTURE)) as any;
+    const clone = JSON.parse(JSON.stringify(CONNECTION_FIXTURE)) as any;
     clone.credentials.access_token = "xoxp-not-a-bot-token";
     const fetch = nangoFetch([200, clone]);
     const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
@@ -318,44 +285,27 @@ describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
 });
 
 describe("HttpNangoConnectionClientV1 error mapping", () => {
-  it.each([401, 403])("maps a %s status to unauthorized", async (status) => {
-    const fetch = nangoFetch([status, { error: { message: "denied" } }]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
+  it.each([
+    [401, "unauthorized"],
+    [403, "unauthorized"],
+    [404, "not_found"],
+    [500, "unavailable"],
+  ] as const)("maps a %s status to %s whatever its body (status decides, not body)", async (status, code) => {
+    for (const [body, contentType] of [
+      [JSON.stringify({ error: { message: "denied" } }), "application/json"],
+      [null, undefined],
+      ["<html><body>Not Found</body></html>", "text/html"],
+    ] as const) {
+      const fetch = vi.fn<typeof globalThis.fetch>(
+        async () => new Response(body, { status, headers: contentType === undefined ? {} : { "content-type": contentType } }),
+      );
+      const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
+      const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
 
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("unauthorized");
-  });
-
-  it("maps a 404 status to not_found", async () => {
-    const fetch = nangoFetch([404, { error: { message: "missing" } }]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("not_found");
-  });
-
-  it.each([401, 403])("maps an empty-bodied %s status to unauthorized (status decides, not body)", async (status) => {
-    const fetch = emptyNangoFetch(status);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("unauthorized");
-  });
-
-  it("maps an empty-bodied 404 status to not_found (status decides, not body)", async () => {
-    const fetch = emptyNangoFetch(404);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("not_found");
+      expect(failure).toBeInstanceOf(NangoClientErrorV1);
+      expect((failure as NangoClientErrorV1).code).toBe(code);
+    }
   });
 
   it("maps an empty 200 body on getSlackConnection to invalid_response (a body is required)", async () => {
@@ -368,36 +318,17 @@ describe("HttpNangoConnectionClientV1 error mapping", () => {
     expect((failure as NangoClientErrorV1).code).toBe("invalid_response");
   });
 
-  it("maps any other non-2xx status to unavailable", async () => {
-    const fetch = nangoFetch([500, { error: { message: "boom" } }]);
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("unavailable");
-  });
-
-  it("maps a transport failure to unavailable", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+  it.each([
+    ["a transport failure", async (): Promise<Response> => {
       throw new Error("network down");
-    });
-    const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
-
-    const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
-
-    expect(failure).toBeInstanceOf(NangoClientErrorV1);
-    expect((failure as NangoClientErrorV1).code).toBe("unavailable");
-  });
-
-  it("maps an oversized response to unavailable without leaking the secret key", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(
-      async () =>
-        new Response(JSON.stringify(A1_CONNECTION_FIXTURE), {
-          status: 200,
-          headers: { "content-type": "application/json", "content-length": "99999999" },
-        }),
-    );
+    }],
+    ["an oversized response", async () =>
+      new Response(JSON.stringify(CONNECTION_FIXTURE), {
+        status: 200,
+        headers: { "content-type": "application/json", "content-length": "99999999" },
+      })],
+  ])("maps %s to unavailable without leaking the secret key", async (_label, respond) => {
+    const fetch = vi.fn<typeof globalThis.fetch>(respond);
     const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
     const failure = await failureOf(client.getSlackConnection({ connection_id: "conn_123" }));
@@ -435,8 +366,8 @@ describe("HttpNangoConnectionClientV1 error mapping", () => {
 });
 
 describe("parseNangoSlackConnectionV1", () => {
-  it("parses the A1 fixture directly, sorting granted_scopes", () => {
-    expect(parseNangoSlackConnectionV1(A1_CONNECTION_FIXTURE)).toEqual({
+  it("parses the connection fixture directly, sorting granted_scopes", () => {
+    expect(parseNangoSlackConnectionV1(CONNECTION_FIXTURE)).toEqual({
       connection_id: "conn_123",
       tags: TAGS,
       team_id: "T0123456",
@@ -444,7 +375,6 @@ describe("parseNangoSlackConnectionV1", () => {
       bot_user_id: "U0123456",
       granted_scopes: ["chat:write", "im:history", "im:write", "users:read"],
       bot_token: "xoxb-111-222-abcdef",
-      updated_at: "2026-09-30T12:00:00.000Z",
     });
   });
 
@@ -456,11 +386,5 @@ describe("parseNangoSlackConnectionV1", () => {
   it("throws NangoClientErrorV1 invalid_response for a non-object value", () => {
     expect(() => parseNangoSlackConnectionV1("not-an-object")).toThrow(NangoClientErrorV1);
     expect(() => parseNangoSlackConnectionV1(null)).toThrow(NangoClientErrorV1);
-  });
-
-  it("throws invalid_response when updated_at is missing", () => {
-    const clone = JSON.parse(JSON.stringify(A1_CONNECTION_FIXTURE)) as any;
-    delete clone.updated_at;
-    expect(() => parseNangoSlackConnectionV1(clone)).toThrow(NangoClientErrorV1);
   });
 });

@@ -1,6 +1,4 @@
-import type { OrganizationSecretReference } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 export {
-  AUTHORITY_FILE_SECRET_BACKEND,
   type OrganizationSecretReference,
   type OrganizationSecretStore,
 } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
@@ -71,12 +69,12 @@ export interface VerifiedSlackHuman {
 }
 
 export interface PostSlackIdentityLinkChallengeInput {
-  recipient_user_id?: string;
+  recipient_user_id: string;
   expected_team_id: string;
   expected_enterprise_id: string | null;
   expected_bot_user_id: string;
   expected_bot_id: string;
-  expected_app_id: string | null;
+  expected_app_id: string;
   challenge_attempt_id: string;
   channel_id: string;
   issued_at: string;
@@ -105,7 +103,7 @@ export interface ObservedSlackIdentityLinkChallenge {
 }
 
 export interface SlackIntegrationProvider {
-  openIdentityLinkDirectMessage?(
+  openIdentityLinkDirectMessage(
     token: string, recipientUserId: string, expectedTeamId: string, signal?: AbortSignal,
   ): Promise<{ team_id: string; channel_id: string; recipient_user_id: string }>;
 
@@ -113,11 +111,6 @@ export interface SlackIntegrationProvider {
     token: string,
     signal?: AbortSignal,
   ): Promise<VerifiedSlackConnection>;
-  verifyHuman(
-    token: string,
-    userId: string,
-    signal?: AbortSignal,
-  ): Promise<VerifiedSlackHuman>;
   postIdentityLinkChallenge(
     token: string,
     input: PostSlackIdentityLinkChallengeInput,
@@ -132,15 +125,12 @@ export interface SlackIntegrationProvider {
 
 /** The organization's own ECHO app installed through Nango; identity proofs use private DMs only. */
 export interface ActiveSlackOrganizationTool {
-  connection_attempt_id: string;
   connection_id: string;
   team_id: string;
   enterprise_id: string | null;
   bot_user_id: string;
   bot_id: string;
-  app_id: string | null;
-  granted_scopes: readonly string[];
-  secret: OrganizationSecretReference;
+  app_id: string;
 }
 
 export interface BegunSlackIdentityLinkChallenge {

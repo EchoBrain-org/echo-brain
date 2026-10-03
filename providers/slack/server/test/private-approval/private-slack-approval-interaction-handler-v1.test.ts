@@ -197,7 +197,7 @@ describe("private Slack interactions application V1", () => {
   it("durably dispatches V2 project and transcript choices through the V2 receipt API", async () => {
     const enqueueV2 = vi.fn(() => ({ disposition: "resolution" as const, receipt: {} as never, receipt_sha256: `sha256:${"d".repeat(64)}` as const, idempotent: false }));
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue: vi.fn(), enqueueV2 },
       now_unix_seconds: () => NOW,
       now: () => "2026-08-28T22:00:00.000Z",
@@ -216,7 +216,7 @@ describe("private Slack interactions application V1", () => {
   it("durably dispatches a V3 card's owner fields, kept, edited or cleared, through the V3 receipt API", async () => {
     const enqueueV3 = vi.fn(() => ({ disposition: "resolution" as const, receipt: {} as never, receipt_sha256: `sha256:${"d".repeat(64)}` as const, idempotent: false }));
     const enqueueV2 = vi.fn();
-    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2, enqueueV3 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: () => SECRET, persistence: { enqueue: vi.fn(), enqueueV2, enqueueV3 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
     await expect(application.accept(request(rawV2({ owners: { 3: "  Priya   Shah ", 0: "Jules", 7: null } })))).resolves.toBe("accepted");
     expect(enqueueV2).not.toHaveBeenCalled();
     expect(enqueueV3).toHaveBeenCalledWith(expect.objectContaining({
@@ -228,7 +228,7 @@ describe("private Slack interactions application V1", () => {
 
   it("records no owners for a V3 rejection", async () => {
     const enqueueV3 = vi.fn(() => ({ disposition: "resolution" as const, receipt: {} as never, receipt_sha256: `sha256:${"d".repeat(64)}` as const, idempotent: false }));
-    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV3 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: () => SECRET, persistence: { enqueue: vi.fn(), enqueueV3 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
     await expect(application.accept(request(rawV2({ reject: true, owners: { 0: "Jules" } })))).resolves.toBe("accepted");
     expect(enqueueV3).toHaveBeenCalledWith(expect.objectContaining({ action: "reject", action_owners: [] }));
   });
@@ -239,14 +239,14 @@ describe("private Slack interactions application V1", () => {
     ["an owner longer than 120 characters", { owners: { 0: "J".repeat(121) } }],
   ] as const)("refuses a V3 approval carrying %s", async (_label, variant) => {
     const enqueueV3 = vi.fn();
-    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV3 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: () => SECRET, persistence: { enqueue: vi.fn(), enqueueV3 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
     await expect(application.accept(request(rawV2(variant)))).rejects.toMatchObject({ code: "invalid_request" });
     expect(enqueueV3).not.toHaveBeenCalled();
   });
 
   it("refuses owner fields on a V2 card, and a V3 card without any", async () => {
     const enqueueV2 = vi.fn(); const enqueueV3 = vi.fn();
-    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2, enqueueV3 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: () => SECRET, persistence: { enqueue: vi.fn(), enqueueV2, enqueueV3 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
     await expect(application.accept(request(rawV2({ owners: { 0: "Jules" }, button_version: 2 })))).rejects.toMatchObject({ code: "invalid_request" });
     await expect(application.accept(request(rawV2({ button_version: 3 })))).rejects.toMatchObject({ code: "invalid_request" });
     expect(enqueueV2).not.toHaveBeenCalled(); expect(enqueueV3).not.toHaveBeenCalled();
@@ -254,7 +254,7 @@ describe("private Slack interactions application V1", () => {
 
   it("allows rejection after selecting Projects without a project selection", async () => {
     const enqueueV2 = vi.fn(() => ({ disposition: "resolution" as const, receipt: {} as never, receipt_sha256: `sha256:${"d".repeat(64)}` as const, idempotent: false }));
-    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: () => SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
     await expect(application.accept(request(rawV2({ reject: true, projects: [] })))).resolves.toBe("accepted");
     expect(enqueueV2).toHaveBeenCalledWith(expect.objectContaining({ action: "reject", selected_policy_id: null, selected_project_ids: [], share_transcript: false }));
   });
@@ -265,7 +265,7 @@ describe("private Slack interactions application V1", () => {
   ] as const)("refuses to approve %s with projects chosen, never dropping them silently", async (policy_id) => {
     const enqueueV2 = vi.fn();
     const rejections: string[] = [];
-    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z",
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: () => SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z",
       on_rejection: ({ stage }) => { rejections.push(stage); } });
 
     await expect(application.accept(request(rawV2({ policy_id })))).rejects.toMatchObject({ code: "invalid_request" });
@@ -278,7 +278,7 @@ describe("private Slack interactions application V1", () => {
     "restricted-reviewer-person-v2",
   ] as const)("approves %s with no projects chosen", async (policy_id) => {
     const enqueueV2 = vi.fn(() => ({ disposition: "resolution" as const, receipt: {} as never, receipt_sha256: `sha256:${"d".repeat(64)}` as const, idempotent: false }));
-    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: () => SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
 
     await expect(application.accept(request(rawV2({ policy_id, projects: [] })))).resolves.toBe("accepted");
     expect(enqueueV2).toHaveBeenCalledWith(expect.objectContaining({
@@ -290,14 +290,14 @@ describe("private Slack interactions application V1", () => {
 
   it("allows rejection with projects chosen under another audience, dropping them", async () => {
     const enqueueV2 = vi.fn(() => ({ disposition: "resolution" as const, receipt: {} as never, receipt_sha256: `sha256:${"d".repeat(64)}` as const, idempotent: false }));
-    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: () => SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
     await expect(application.accept(request(rawV2({ reject: true, policy_id: "restricted-reviewer-person-v2" })))).resolves.toBe("accepted");
     expect(enqueueV2).toHaveBeenCalledWith(expect.objectContaining({ action: "reject", selected_policy_id: null, selected_project_ids: [] }));
   });
 
   it("still rejects Projects approval without a selected project", async () => {
     const enqueueV2 = vi.fn();
-    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
+    const application = createPrivateSlackApprovalInteractionHandlerV1({ signing_secret: () => SECRET, persistence: { enqueue: vi.fn(), enqueueV2 }, now_unix_seconds: () => NOW, now: () => "2026-08-28T22:00:00.000Z" });
 
     await expect(application.accept(request(rawV2({ projects: [] })))).rejects.toMatchObject({
       code: "invalid_request",
@@ -312,7 +312,7 @@ describe("private Slack interactions application V1", () => {
       idempotent: false,
     }));
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
       now: () => "2026-08-28T22:00:00.000Z",
@@ -347,7 +347,7 @@ describe("private Slack interactions application V1", () => {
       idempotent: false,
     }));
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
       now: () => "2026-08-28T22:00:00.000Z",
@@ -371,7 +371,7 @@ describe("private Slack interactions application V1", () => {
     const telemetry = journeyTelemetry({ queue_age_ms: 42_000 });
     const readStagedAt = vi.fn(() => "2026-08-28T21:18:00.000Z");
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: {
         enqueue: () => ({
           disposition: "resolution" as const,
@@ -396,7 +396,7 @@ describe("private Slack interactions application V1", () => {
   it("does not read the durable wait anchor before HMAC and parser success", async () => {
     const readStagedAt = vi.fn(() => "2026-08-28T21:18:00.000Z");
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue: vi.fn() },
       now_unix_seconds: () => NOW,
       journey_telemetry: journeyTelemetry({}).telemetry as never,
@@ -421,7 +421,7 @@ describe("private Slack interactions application V1", () => {
       idempotent: false,
     }));
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
       read_durable_card_staged_at: readStagedAt,
@@ -443,7 +443,7 @@ describe("private Slack interactions application V1", () => {
       throw new Error("telemetry sidecar unavailable");
     });
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
       journey_telemetry: journeyTelemetry({}).telemetry as never,
@@ -458,7 +458,7 @@ describe("private Slack interactions application V1", () => {
   it("signals the wake hook only after the terminal receipt is durably queued", async () => {
     const order: string[] = [];
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: {
         enqueue: () => {
           order.push("enqueue");
@@ -482,7 +482,7 @@ describe("private Slack interactions application V1", () => {
   it("does not signal the wake hook when durable enqueue fails", async () => {
     const wake = vi.fn();
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue: () => { throw new Error("database busy"); } },
       now_unix_seconds: () => NOW,
       now: () => "2026-08-28T22:00:00.000Z",
@@ -529,7 +529,7 @@ describe("private Slack interactions application V1", () => {
     // gate, where runExclusive starts its operation synchronously.
     await runtime.runExclusive(async () => undefined);
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: {
         enqueue: () => {
           queued = true;
@@ -607,7 +607,7 @@ describe("private Slack interactions application V1", () => {
       idempotent: false,
     }));
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
       now: () => "2026-08-28T22:00:00.000Z",
@@ -623,7 +623,7 @@ describe("private Slack interactions application V1", () => {
   it("closes queue telemetry as failed when durable enqueue fails", async () => {
     const telemetry = journeyTelemetry({});
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue: () => { throw new Error("database busy"); } },
       now_unix_seconds: () => NOW,
       now: () => "2026-08-28T22:00:00.000Z",
@@ -646,7 +646,7 @@ describe("private Slack interactions application V1", () => {
       idempotent: true,
     }));
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
       now: () => "2026-08-28T22:00:00.000Z",
@@ -661,7 +661,7 @@ describe("private Slack interactions application V1", () => {
   it("acknowledges a verified selector event without persisting it", async () => {
     const enqueue = vi.fn();
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
     });
@@ -702,7 +702,7 @@ describe("private Slack interactions application V1", () => {
       idempotent: false,
     }));
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
       now: () => "2026-08-28T22:00:00.000Z",
@@ -731,7 +731,7 @@ describe("private Slack interactions application V1", () => {
 
   it("separates authentication failures, malformed media, and durable queue failure", async () => {
     const queueFailure = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: {
         enqueue: async () => {
           throw new Error("database busy");
@@ -744,7 +744,7 @@ describe("private Slack interactions application V1", () => {
     });
 
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: {
         enqueue: () => ({
           disposition: "resolution" as const,
@@ -768,7 +768,7 @@ describe("private Slack interactions application V1", () => {
       throw new Error("diagnostic sink failed");
     });
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue: vi.fn() },
       now_unix_seconds: () => NOW,
       on_rejection: onRejection,
@@ -789,7 +789,7 @@ describe("private Slack interactions application V1", () => {
   it("does not persist when its durable receipt clock is non-canonical", async () => {
     const enqueue = vi.fn();
     const application = createPrivateSlackApprovalInteractionHandlerV1({
-      signing_secret: SECRET,
+      signing_secret: () => SECRET,
       persistence: { enqueue },
       now_unix_seconds: () => NOW,
       now: () => "not-a-time",

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { canonicalJsonBytes, canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1,
-  validateOrganizationPersonConnectorAccessV1,
+  validatePersonConnectorAccessV1,
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../domain/errors.js';
 import type {
@@ -59,7 +59,7 @@ async function safeCall<T>(operation: () => Promise<T>, signal?: AbortSignal): P
  */
 export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvidenceCitationV1>(options: CreatePersonLiveEvidenceSourceV1Options<C>): PersonLiveEvidenceSourceV1<C> {
   const { reader, authorization, audit } = options;
-  const access = validateOrganizationPersonConnectorAccessV1({ schema_version: 1, kind: 'echo-organization-person-connector-access', organization_id: options.actor.organization_id, membership_id: options.actor.membership_id, connectors: [options.access] }).connectors[0]!;
+  const access = validatePersonConnectorAccessV1(options.access);
   if (access.identity_status !== 'linked' || access.read_status !== 'connected' || !access.read_capabilities.includes('live_evidence')) {
     throw new AuthorityOperationError('unauthorized', 'A personal live evidence grant is required');
   }

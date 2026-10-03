@@ -26,10 +26,11 @@ function root(): string {
 
 function profile(path: string) {
   const value = {
-    schema_version: 1,
-    kind: 'echo-staging-connector-rehearsal-profile-v1',
-    capture_policy: 'initial-owner-granola-retained-jira-request-only-v1',
+    schema_version: 2,
+    kind: 'echo-staging-connector-rehearsal-profile-v2',
+    capture_policy: 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2',
     jira: { cloud_id: '12345678-1234-1234-1234-123456789abc', integration_key: 'jira', project: 'ECHO' },
+    slack: { channel_id: 'CTEST123' },
   } as const;
   writeFileSync(path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);
@@ -89,10 +90,10 @@ function url(input: RequestInfo | URL): URL {
   return new URL(input.url);
 }
 
-function response(profileValue: ReturnType<typeof profile>, action: 'status' | 'capture', tool?: 'granola' | 'jira') {
+function response(profileValue: ReturnType<typeof profile>, action: 'status' | 'capture', tool?: 'granola' | 'jira' | 'slack') {
   const common = {
-    schema_version: 1,
-    kind: 'echo-staging-connector-rehearsal-receipt-v1',
+    schema_version: 2,
+    kind: 'echo-staging-connector-rehearsal-receipt-v2',
     release_id: 'clean-v1-fixture-release',
     profile_sha256: canonicalSha256(profileValue),
     action,
@@ -104,44 +105,21 @@ function response(profileValue: ReturnType<typeof profile>, action: 'status' | '
       schema_version: 1,
       kind: 'echo-context-capture-rehearsal-receipt-v1',
       source_identity_sha256: canonicalSha256({ source: tool }),
-      captures: [{ source_type: tool === 'jira' ? 'ticket' as const : 'note' as const, admission: tool === 'jira' ? 'request_only' as const : 'admitted' as const,
+      captures: [{ source_type: tool === 'jira' ? 'ticket' as const : tool === 'slack' ? 'message' as const : 'note' as const, admission: 'admitted' as const,
         source_id_sha256: canonicalSha256('source'), revision_id_sha256: canonicalSha256('revision'), content_sha256: canonicalSha256('content').slice(7) }],
-      counts: { captured: 1, admitted: tool === 'jira' ? 0 : 1, duplicate: 0, request_only: tool === 'jira' ? 1 : 0 },
+      counts: { captured: 1, admitted: 1, duplicate: 0, request_only: 0 },
     } };
 }
 
 describe('staging connector rehearsal wrapper', () => {
-  it('selects V2 retained Jira and Slack receipts without widening the V1 request', async () => {
+  it('captures retained Jira and Slack pointer receipts and refuses a retired V1 profile before any request', async () => {
     const directory = root();
     const home = join(directory, 'person-home');
     const profilePath = join(directory, 'profile.json');
-    const predecessor = profile(profilePath);
-    const configured = {
-      schema_version: 2,
-      kind: 'echo-staging-connector-rehearsal-profile-v2',
-      capture_policy: 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2',
-      predecessor_profile_sha256: canonicalSha256(predecessor),
-      jira: { ...predecessor.jira, project: 'TEST' },
-      slack: { channel_id: 'CTEST123' },
-    };
-    writeFileSync(profilePath, JSON.stringify(configured));
+    const configured = profile(profilePath);
     install(home);
     for (const tool of ['jira', 'slack'] as const) {
-      const receipt = {
-        schema_version: 2,
-        kind: 'echo-staging-connector-rehearsal-receipt-v2',
-        release_id: 'clean-v1-fixture-release',
-        profile_sha256: canonicalSha256(configured),
-        action: 'capture', tool, qualified: false,
-        receipt: {
-          schema_version: 1, kind: 'echo-context-capture-rehearsal-receipt-v1',
-          source_identity_sha256: canonicalSha256({ source: tool }),
-          captures: [{ source_type: tool === 'jira' ? 'ticket' : 'message', admission: 'admitted',
-            source_id_sha256: canonicalSha256('source'), revision_id_sha256: canonicalSha256('revision'),
-            content_sha256: canonicalSha256('content').slice(7) }],
-          counts: { captured: 1, admitted: 1, duplicate: 0, request_only: 0 },
-        },
-      };
+      const receipt = response(configured, 'capture', tool);
       let captureCalls = 0;
       const fetch: typeof globalThis.fetch = async (input, init) => {
         const target = url(input);
@@ -160,27 +138,27 @@ describe('staging connector rehearsal wrapper', () => {
       assert.equal(captureCalls, 1);
     }
 
-    profile(profilePath);
+    writeFileSync(profilePath, JSON.stringify({ schema_version: 1, kind: 'echo-staging-connector-rehearsal-profile-v1',
+      capture_policy: 'initial-owner-granola-retained-jira-request-only-v1', jira: configured.jira }));
     let calls = 0;
     await assert.rejects(runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release',
-      profile_path: profilePath, person_home: home, tool: 'slack', limit: 1 }, {
+      profile_path: profilePath, person_home: home, tool: 'jira', limit: 1 }, {
       fetch: async () => { calls += 1; return Response.json({}); },
     }), /Staging connector rehearsal failed/);
     assert.equal(calls, 0);
   });
 
-  it('refuses a V1 or request-only receipt for the selected retained V2 profile', async () => {
+  it('refuses a V1 or request-only receipt for the retained pointer profile', async () => {
     const directory = root();
     const home = join(directory, 'person-home');
     const profilePath = join(directory, 'profile.json');
-    const predecessor = profile(profilePath);
-    const configured = { schema_version: 2, kind: 'echo-staging-connector-rehearsal-profile-v2',
-      capture_policy: 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2',
-      predecessor_profile_sha256: canonicalSha256(predecessor), jira: predecessor.jira, slack: { channel_id: 'CTEST123' } };
-    writeFileSync(profilePath, JSON.stringify(configured));
+    const configured = profile(profilePath);
     install(home);
-    const old = { ...response(predecessor, 'capture', 'jira'), profile_sha256: canonicalSha256(configured) };
-    for (const receipt of [old, { ...old, schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2' }]) {
+    const accepted = response(configured, 'capture', 'jira');
+    if (!('receipt' in accepted)) throw new Error('fixture receipt is invalid');
+    const requestOnly = { ...accepted, receipt: { ...accepted.receipt,
+      captures: [{ ...accepted.receipt.captures[0]!, admission: 'request_only' }], counts: { captured: 1, admitted: 0, duplicate: 0, request_only: 1 } } };
+    for (const receipt of [{ ...accepted, schema_version: 1, kind: 'echo-staging-connector-rehearsal-receipt-v1' }, requestOnly]) {
       let captureCalls = 0;
       await assert.rejects(runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release',
         profile_path: profilePath, person_home: home, tool: 'jira', limit: 1 }, {
@@ -255,7 +233,7 @@ describe('staging connector rehearsal wrapper', () => {
       receipt: {
         ...accepted.receipt,
         captures: [...accepted.receipt.captures, { ...accepted.receipt.captures[0], source_id_sha256: canonicalSha256('second-source') }],
-        counts: { captured: 2, admitted: 0, duplicate: 0, request_only: 2 },
+        counts: { captured: 2, admitted: 2, duplicate: 0, request_only: 0 },
       },
     };
     const cases = [

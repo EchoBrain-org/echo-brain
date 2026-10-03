@@ -1,22 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { validateOrganizationPersonConnectorAccessV1, validatePersonConnectorAccessV1 } from '../src/person-connector-access-v1.js';
+import { validatePersonConnectorAccessV1 } from '../src/person-connector-access-v1.js';
 
 const connected = {
   tool_id: 'slack', identity_status: 'linked', external_scope_id: 'T123', external_subject_id: 'U123',
   read_status: 'connected', read_capabilities: ['live_evidence'],
 };
-const envelope = (connectors: unknown[]) => ({ schema_version: 1, kind: 'echo-organization-person-connector-access', organization_id: 'org_00000000-0000-4000-8000-000000000001', membership_id: 'mem_00000000-0000-4000-8000-000000000001', connectors });
 
 describe('Person connector read access V1', () => {
   it('separates a linked identity from authorization and permits export-only meeting access', () => {
-    const statuses = validateOrganizationPersonConnectorAccessV1(envelope([
-      { ...connected, read_status: 'not_connected', read_capabilities: [] },
-      { ...connected, tool_id: 'meeting', external_scope_id: null, read_capabilities: ['source_export'] },
-      { ...connected, tool_id: 'tickets', read_capabilities: ['live_evidence', 'source_export'] },
-    ]));
-    expect(statuses.connectors[0]).toMatchObject({ identity_status: 'linked', read_status: 'not_connected' });
-    expect(statuses.connectors[1]!.read_capabilities).toEqual(['source_export']);
-    expect(validateOrganizationPersonConnectorAccessV1(envelope([])).connectors).toEqual([]);
+    expect(validatePersonConnectorAccessV1({ ...connected, read_status: 'not_connected', read_capabilities: [] })).toMatchObject({ identity_status: 'linked', read_status: 'not_connected' });
+    expect(validatePersonConnectorAccessV1({ ...connected, tool_id: 'meeting', external_scope_id: null, read_capabilities: ['source_export'] }).read_capabilities).toEqual(['source_export']);
+    expect(validatePersonConnectorAccessV1({ ...connected, tool_id: 'tickets', read_capabilities: ['live_evidence', 'source_export'] }).read_capabilities).toEqual(['live_evidence', 'source_export']);
   });
 
   it.each(['reauthorization_required', 'revoked', 'unavailable', 'not_connected'])('clears capabilities when read status is %s', read_status => {
@@ -54,8 +48,5 @@ describe('Person connector read access V1', () => {
       { ...connected, read_capabilities: Array(1) },
       { ...connected, read_capabilities: Object.assign(['live_evidence'], { token: 'secret' }) },
     ]) expect(() => validatePersonConnectorAccessV1(value)).toThrow();
-    for (const value of [envelope([connected, connected]), envelope(Array.from({ length: 33 }, (_, i) => ({ ...connected, tool_id: `tool-${i}` }))), { ...envelope([]), organization_id: 'org_other' }]) {
-      expect(() => validateOrganizationPersonConnectorAccessV1(value)).toThrow();
-    }
   });
 });

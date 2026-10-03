@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraBoundText, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 export const jiraTextDigest = (text: string): `sha256:${string}` => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
@@ -13,6 +14,44 @@ export function jiraSiteOrigin(value: unknown): string {
       url.username !== '' || url.password !== '' || url.port !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '' ||
       (raw !== url.origin && raw !== `${url.origin}/`)) jiraFailure('invalid_output');
   return url.origin;
+}
+
+/**
+ * The one connection check: exactly one Jira resource for the bound cloudid
+ * with both read scopes, its site, then the Atlassian account. The account
+ * check (by default, the bound subject) runs before the account-state check.
+ */
+export async function verifyJiraConnectionV1(transport: JiraCloudTransportV1, input: {
+  readonly signal?: AbortSignal;
+  readonly expected_origin?: string;
+  readonly require_account?: (account_id: string) => void;
+} = {}): Promise<{ readonly origin: string; readonly account_id: string }> {
+  const { signal } = input;
+  const { external_scope_id: cloudid, external_subject_id: subject } = transport.binding;
+  signal?.throwIfAborted();
+  const resources = jiraArray(await transport.request({ path: '/oauth/token/accessible-resources', signal }), 256);
+  signal?.throwIfAborted();
+  const matches: Record<string, unknown>[] = [];
+  for (const raw of resources) {
+    const resource = jiraRecord(raw);
+    jiraString(resource.id, 256);
+    const scopes = jiraArray(resource.scopes, 256).map(scope => jiraString(scope, 128));
+    // A cloudid may also identify a Confluence resource. Never choose the first resource.
+    if (resource.id === cloudid && scopes.some(scope => scope.endsWith(':jira') || scope.includes(':jira-'))) matches.push(resource);
+  }
+  if (matches.length !== 1) jiraFailure('unauthorized');
+  const selected = matches[0]!;
+  const scopes = selected.scopes as readonly string[];
+  if (!['read:jira-work', 'read:jira-user'].every(scope => scopes.includes(scope))) jiraFailure('unauthorized');
+  const origin = jiraSiteOrigin(selected.url);
+  if (input.expected_origin !== undefined && input.expected_origin !== origin) jiraFailure('stale_access_state');
+  const myself = jiraRecord(await transport.request({ path: `/ex/jira/${cloudid}/rest/api/3/myself`, signal }));
+  signal?.throwIfAborted();
+  const account_id = jiraString(myself.accountId);
+  if (input.require_account !== undefined) input.require_account(account_id);
+  else if (account_id !== subject) jiraFailure('unauthorized');
+  if (myself.active !== true || myself.accountType !== 'atlassian') jiraFailure('unauthorized');
+  return { origin, account_id };
 }
 
 /** Validate Jira's returned self link, but never use it as a fetch target. */

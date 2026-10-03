@@ -1,10 +1,19 @@
-# Jira person live reader
+# Jira provider
 
-Support and transport decision recorded on 2026-10-01, before implementation.
-The isolated reader was committed first as `52104ec`. The expanded slice adds
-fixture-tested personal Nango connections and a ticket-capable Ask path.
-ADR-0026 remains proposed; production startup is disabled pending acceptance.
-No live account has been connected or qualified.
+The package has three roles for one Jira Cloud site:
+
+- **Person connection lifecycle:** Nango-managed 3LO grants behind the shared
+  `person tools` commands.
+- **Request-scoped live reader:** `PersonLiveEvidenceReaderV1<PersonTicketCitationV1>`
+  for the ticket-capable Ask path.
+- **Opt-in context source:** `JiraContextSourceV1` maps one fixed project's
+  tickets into the shared capture intake. It is request-only by default; an
+  explicit Authority binding may retain pointers only. See the
+  [connector/context integration](../../docs/product/2026-10-01-connector-context-integration-v1.md).
+
+[ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md)
+remains proposed; production startup is disabled pending acceptance. No live
+account has been connected or qualified.
 
 ## Initial support boundary
 
@@ -88,17 +97,14 @@ Sources: [Nango Jira](https://nango.dev/docs/api-integrations/jira),
 The authenticated-fetch port is trusted server composition, not an untrusted
 plugin boundary. It must preserve the supplied URL, method, redirect mode and
 abort signal, never retry anonymously or log credentials/evidence, and bind
-token refresh to the same immutable ECHO grant. No real credential or account
-validation is authorized by this worktree.
+token refresh to the same immutable ECHO grant.
 
 ## Reader behavior and bounds
 
-`createJiraPersonLiveEvidenceReaderV1` asynchronously verifies a trusted binding
-and returns `PersonLiveEvidenceReaderV1<PersonTicketCitationV1>`. Supply a
-matching `JiraCloudTransportV1`, or construct the direct transport with
-`createJiraCloudTransportV1` and the trusted authenticated-fetch port. Compose
-the reader with `createAuditedPersonLiveEvidenceSourceV1`; the reader alone is
-not a Layer 3 release endpoint. Construct both afresh for each request.
+`createJiraPersonLiveEvidenceReaderV1` verifies a trusted binding over a
+`JiraCloudTransportV1`; the selecting composition wraps it afresh for each
+request in `createAuditedPersonLiveEvidenceSourceV1`, because the reader alone
+is not a Layer 3 release endpoint.
 
 Search treats query text as a literal phrase (or an exact issue key), never
 caller-authored JQL. Open accepts only a handle minted by that reader. List
@@ -138,9 +144,8 @@ ticket index or evidence cache.
 The focused suites in `test/` use synthetic transport and response fixtures.
 They exercise the shared audit boundary and prove authentication drift,
 permission loss, malformed payload refusal, pagination ownership, cancellation,
-exact text digests and audit failure. The shared audited wrapper now consumes adapter-validated citations and neutral
-coordinates without provider branches. Workspace/build/source registration is
-kept separate from behavior changes.
+exact text digests and audit failure. The shared audited wrapper consumes
+adapter-validated citations and neutral coordinates without provider branches.
 
 ## Connection to Ask flow
 
@@ -212,7 +217,8 @@ body, label, permalink, Nango reference or cursor is retained there.
 Only global Ask enables Jira. Mine excludes it. ECHO project scopes have no mapping
 in this slice and never fall back to global Jira; explicit ticket inventory in an
 unsupported scope is refused. There is no Jira addition to Person list/mine,
-connector catalog, settings UI, sync/index or persistent ticket-open API.
+connector catalog, settings UI or persistent ticket-open API, and no sync or
+index. Context capture exists only as the opt-in rehearsal intake.
 
 ## Remaining human inputs and live qualification
 

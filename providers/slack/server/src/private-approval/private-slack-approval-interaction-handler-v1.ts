@@ -40,10 +40,10 @@ export interface PrivateSlackApprovalInteractionResolutionPersistenceV1 {
 
 export interface PrivateSlackApprovalInteractionHandlerInputV1 {
   /**
-   * Private runtime input. It must never be logged or persisted. A getter is
-   * read per request, so the active connection's app secret applies at once.
+   * Private runtime input. It must never be logged or persisted. It is read
+   * per request, so the active connection's app secret applies at once.
    */
-  readonly signing_secret: string | (() => string);
+  readonly signing_secret: () => string;
   readonly persistence: PrivateSlackApprovalInteractionResolutionPersistenceV1;
   /** Clock for request freshness and durable receipt timestamps. */
   readonly now_unix_seconds?: () => number;
@@ -203,7 +203,7 @@ export function createPrivateSlackApprovalInteractionHandlerV1(
       }
       let signingSecret: string;
       try {
-        signingSecret = typeof input.signing_secret === "string" ? input.signing_secret : input.signing_secret();
+        signingSecret = input.signing_secret();
       } catch {
         throw new AuthorityOperationError(
           "unavailable",

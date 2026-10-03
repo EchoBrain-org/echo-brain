@@ -73,11 +73,6 @@ authenticated Person connection. Both changes have synthetic-provider source
 proof; see the [capture integration scope](../product/2026-10-01-connector-context-integration-v1.md)
 for the remaining live profile and qualification work.
 
-Jira discovers a server-tagged Nango connection on zero-based page 0 with a
-two-item limit. `providers/jira/test/jira-nango-v1.test.ts` source-tests that
-one matching connection is found and multiple matches are refused; live
-qualification remains pending.
-
 ## Trust boundary
 
 Provider acknowledgements, stored provider objects, provider identities, and
@@ -85,26 +80,13 @@ local durable state are distinct evidence. Any adapter that causes an external
 effect requires explicit retry, crash, concurrency, and reconciliation
 semantics.
 
-For the private Slack approval surface, Authority completes terminal and V4
-materialization before startup readiness. Terminal-card redraw is a separate,
-bounded presentation reconciliation, requested immediately after approval
-publication and by periodic recovery. Each writer turn attempts one pending
-card; confirmed progress requests another turn, while uncertain outcomes and
-failures wait for a new wake. Cards rotate fairly, and the worker cancellation
-signal is passed to Slack. A card becomes rendered only after the provider
-confirms its replacement update.
-
-Slack reconnect completion requires the existing Nango connection to report the
-current attempt, organization and owner membership tags, followed by fresh Slack
-identity and permission checks. A connection's `updated_at` is not authorization
-completion evidence: it can stay unchanged after a successful reconnect. Focused
-source tests cover this case, stale or foreign tags, and preservation of existing
-approval cards and person links. The repaired completion path still requires a
-live rehearsal after deployment.
+The private Slack approval surface's terminal and card-redraw ordering is
+defined in [adapter responsibilities](../architecture/meeting-processing-core-and-adapters.md#adapter-responsibilities).
 
 ## Current references
 
 - [Meeting processing core and adapters](../architecture/meeting-processing-core-and-adapters.md)
+- [Shared connector contracts](../architecture/connector-contracts.md)
 - [Active-provider boundary invariant](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
 - [First-provider architecture failure pattern](../failure-patterns/FP-ADAPTERS-005-first-provider-becomes-architecture.md)
 - Source: [`providers/`](../../providers)

@@ -55,7 +55,7 @@ demo/
 ├── evaluate-pre-slack.mjs    # fast, no-write extraction gate
 ├── evaluate-rehearsal.mjs    # captured end-to-end rehearsal gate
 ├── meetings/                 # four canonical MeetingDocument fixtures
-├── staging/                  # isolated same-host staging and cached card preview
+├── staging/                  # owner-specific fixture preparer for staging
 └── test/                     # demo harness tests
 ```
 
@@ -95,8 +95,10 @@ An optional `--model author/model-slug` compares another model without changing
 the prompt, schema, fixtures, or oracle. The evaluator never sends Slack, writes
 Authority state, publishes V4 records, or calls retrieval.
 
-For a live rehearsal, follow [staging/STAGING.md](staging/STAGING.md), then the
-customer sequence in [RUNBOOK.md](RUNBOOK.md). Evaluate the captured result with:
+For a live rehearsal, follow
+[Fresh four-meeting staging rehearsal](../deploy/organization-authority/README.md#fresh-four-meeting-staging-rehearsal),
+then the customer sequence in [RUNBOOK.md](RUNBOOK.md). Evaluate the captured
+result with:
 
 ```sh
 node demo/evaluate-rehearsal.mjs \

@@ -21,8 +21,7 @@ const CARD: PrivateSlackApprovalCardPresentationV1 = Object.freeze({
 describe("private Slack approval card poster V1", () => {
   it("opens the exact one-person DM, posts an inert marker, then publishes real blocks", async () => {
     const requests: Array<{ method: string; body: Record<string, unknown> }> = [];
-    const poster = new PrivateSlackApprovalCardPosterV1("test-token", {
-      baseUrl: "https://slack.example.test/api",
+    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
       fetchImpl: async (url, init) => {
         const method = new URL(String(url)).pathname.split("/").at(-1)!;
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -98,8 +97,7 @@ describe("private Slack approval card poster V1", () => {
 
   it("rejects every shared-channel write before calling Slack", async () => {
     let providerCalls = 0;
-    const poster = new PrivateSlackApprovalCardPosterV1("test-token", {
-      baseUrl: "https://slack.example.test/api",
+    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
       fetchImpl: async () => {
         providerCalls += 1;
         return new Response(JSON.stringify({ ok: true }));
@@ -149,8 +147,7 @@ describe("private Slack approval card poster V1", () => {
 
   it("recovers the earliest exact DM marker and makes duplicates inert", async () => {
     const updates: Record<string, unknown>[] = [];
-    const poster = new PrivateSlackApprovalCardPosterV1("test-token", {
-      baseUrl: "https://slack.example.test/api",
+    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
       fetchImpl: async (url, init) => {
         const method = new URL(String(url)).pathname.split("/").at(-1);
         if (method === "auth.test") {
@@ -231,7 +228,7 @@ describe("private Slack approval card poster V1", () => {
 
   it("removes every interactive block only after a consistent terminal outcome", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const poster = new PrivateSlackApprovalCardPosterV1("test-token", {
+    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
       fetchImpl: async (_url, init) => {
         bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
         return new Response(
@@ -287,14 +284,14 @@ describe("private Slack approval card poster V1", () => {
   });
 
   it("keeps transport ambiguity distinct from a definitive retryable rejection", async () => {
-    const ambiguous = new PrivateSlackApprovalCardPosterV1("test-token", {
+    const ambiguous = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
       fetchImpl: async () => {
         throw new Error("connection closed");
       },
     });
     let now = 10_000;
     let postRequests = 0;
-    const rejected = new PrivateSlackApprovalCardPosterV1("test-token", {
+    const rejected = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
       now: () => now,
       fetchImpl: async () =>
         (postRequests += 1) === 1
@@ -326,7 +323,7 @@ describe("private Slack approval card poster V1", () => {
     expect(postRequests).toBe(2);
   });
 
-  it("resolves a function token for every Slack call", async () => {
+  it("resolves the token for every Slack call", async () => {
     const tokens = ["xoxb-first", "xoxb-second"];
     const authorizations: string[] = [];
     const poster = new PrivateSlackApprovalCardPosterV1(async () => tokens.shift()!, {
@@ -360,15 +357,6 @@ describe("private Slack approval card poster V1", () => {
     expect(authorizations).toEqual(["Bearer xoxb-cached", "Bearer xoxb-refreshed"]);
     expect(onAuthFailure).toHaveBeenCalledOnce();
     expect(onAuthFailure.mock.calls[0]?.[0]).toMatchObject({ name: "SlackApiError", code: "auth" });
-
-    authorizations.length = 0;
-    const fixed = new PrivateSlackApprovalCardPosterV1("xoxb-fixed", {
-      fetchImpl: rejectingSlack,
-      on_auth_failure: onAuthFailure,
-    });
-    await expect(fixed.postMarker(input)).resolves.toEqual({ kind: "retry_allowed" });
-    expect(authorizations).toEqual(["Bearer xoxb-fixed"]);
-    expect(onAuthFailure).toHaveBeenCalledTimes(2);
   });
 
   it("answers each step's retry outcome without calling Slack when no bot token can be obtained", async () => {
@@ -428,7 +416,7 @@ describe("private Slack approval card poster V1", () => {
   it("honors Retry-After before retrying a direct-message open", async () => {
     let now = 10_000;
     let requests = 0;
-    const poster = new PrivateSlackApprovalCardPosterV1("test-token", {
+    const poster = new PrivateSlackApprovalCardPosterV1(async () => "test-token", {
       now: () => now,
       fetchImpl: async () =>
         (requests += 1) === 1

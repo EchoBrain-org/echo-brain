@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildEchoSlackAppManifestV1,
-  SLACK_PRIVATE_APP_BOT_SCOPES_V1,
   SlackAppManifestProviderErrorV1,
   SlackWebAppManifestProviderV1,
 } from "../../../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
-import { SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, type SlackPublicChannelContextCapabilityV1 } from "../../../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, type SlackPublicChannelContextCapabilityV1 } from "../../../../src/organization-control-plane/application/slack-integration-contracts.js";
 
 const AUTHORITY_URL = "https://authority.example";
 const NANGO_CALLBACK_URL = "https://api.nango.dev/oauth/callback";
@@ -310,35 +309,17 @@ describe("SlackWebAppManifestProviderV1", () => {
     expect((failure as SlackAppManifestProviderErrorV1).code).toBe("unavailable");
   });
 
-  it("maps a transport failure to unavailable", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+  it.each([
+    ["a transport failure", async (): Promise<Response> => {
       throw new Error("network down");
-    });
-    const provider = new SlackWebAppManifestProviderV1({ fetch });
-    const manifest = buildEchoSlackAppManifestV1({
-      authority_url: AUTHORITY_URL,
-      nango_callback_url: NANGO_CALLBACK_URL,
-    });
-
-    const failure = await provider
-      .createApp({ configuration_token: CONFIGURATION_TOKEN, manifest })
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-
-    expect(failure).toBeInstanceOf(SlackAppManifestProviderErrorV1);
-    expect((failure as SlackAppManifestProviderErrorV1).code).toBe("unavailable");
-  });
-
-  it("maps an oversized response to unavailable, without leaking the configuration token", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(
-      async () =>
-        new Response(JSON.stringify({ ok: true, app_id: "A123APP" }), {
-          status: 200,
-          headers: { "content-type": "application/json", "content-length": "99999999" },
-        }),
-    );
+    }],
+    ["an oversized response", async () =>
+      new Response(JSON.stringify({ ok: true, app_id: "A123APP" }), {
+        status: 200,
+        headers: { "content-type": "application/json", "content-length": "99999999" },
+      })],
+  ])("maps %s to unavailable, without leaking the configuration token", async (_label, respond) => {
+    const fetch = vi.fn<typeof globalThis.fetch>(respond);
     const provider = new SlackWebAppManifestProviderV1({ fetch });
     const manifest = buildEchoSlackAppManifestV1({
       authority_url: AUTHORITY_URL,
@@ -356,34 +337,5 @@ describe("SlackWebAppManifestProviderV1", () => {
     const error = failure as SlackAppManifestProviderErrorV1;
     expect(error.code).toBe("unavailable");
     expect(error.message).not.toContain(CONFIGURATION_TOKEN);
-  });
-
-  it("sends the request with redirect: error and a timeout signal", async () => {
-    const fetch = slackFetch({
-      ok: true,
-      app_id: "A123APP",
-      credentials: {
-        client_id: "123.456",
-        client_secret: "client-secret-value",
-        verification_token: "verification-token-value",
-        signing_secret: "signing-secret-value",
-      },
-    });
-    const provider = new SlackWebAppManifestProviderV1({ fetch });
-    const manifest = buildEchoSlackAppManifestV1({
-      authority_url: AUTHORITY_URL,
-      nango_callback_url: NANGO_CALLBACK_URL,
-    });
-
-    await provider.createApp({ configuration_token: CONFIGURATION_TOKEN, manifest });
-
-    const [, init] = fetch.mock.calls[0] as [string, RequestInit];
-    expect(init.redirect).toBe("error");
-    expect(init.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  it("rejects a timeoutMs outside (0, 60000]", () => {
-    expect(() => new SlackWebAppManifestProviderV1({ timeoutMs: 0 })).toThrow();
-    expect(() => new SlackWebAppManifestProviderV1({ timeoutMs: 60_001 })).toThrow();
   });
 });

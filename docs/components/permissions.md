@@ -32,6 +32,7 @@ decision_ids:
   - ADR-0021
   - ADR-0023
   - ADR-0024
+  - ADR-0028
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-IDENTITY-005
@@ -79,17 +80,20 @@ with a particular action or content boundary.
 
 Permission claims must name their enforcement scope. A bounded pilot or one
 retrieval operation is not evidence of a globally enforced permission system.
-Every served path must link its invariant, enforcement point, denial behavior,
-audit evidence, and qualification case.
+The served-path table below covers the ADR-0024 paths; other served Person read
+paths are governed by
+[INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)
+and the ADR that introduced them.
 
 Person upload reads (notes and documents) release an audience that names only
 the reader's current projects, and a document request ID only to its uploader.
 [ADR-0023](../decisions/ADR-0023-reader-scoped-upload-releases.md) records the
 enforcement point and the negative disclosure tests.
 
-Agentic Ask V1 is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md)
-and [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md). Its V3 route and shared evidence
-desk are capability-gated; implementation and live qualification are separate.
+Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as
+updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): the V3 route
+and shared evidence desk are composed whenever an answer model is configured,
+with no capability switch. Live qualification is separate.
 
 ## Served paths
 

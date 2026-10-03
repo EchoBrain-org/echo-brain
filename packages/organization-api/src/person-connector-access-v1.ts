@@ -1,4 +1,4 @@
-import { asEnumerableRecord, assertExactKeys, assertId, assertPatternString, fail } from './validation.js';
+import { asEnumerableRecord, assertExactKeys, assertPatternString, fail } from './validation.js';
 
 export type PersonConnectorIdentityStatusV1 = 'unlinked' | 'linked' | 'revoked' | 'unavailable';
 export type PersonConnectorReadStatusV1 = 'not_connected' | 'connected' | 'reauthorization_required' | 'revoked' | 'unavailable';
@@ -13,15 +13,6 @@ export interface PersonConnectorAccessV1 {
   readonly read_status: PersonConnectorReadStatusV1;
   /** ECHO capabilities established by the provider, not a list of OAuth scopes. */
   readonly read_capabilities: readonly PersonConnectorReadCapabilityV1[];
-}
-
-/** Additive contract; no HTTP endpoint is introduced and Person tools V3/V4 remain independent. */
-export interface OrganizationPersonConnectorAccessV1 {
-  readonly schema_version: 1;
-  readonly kind: 'echo-organization-person-connector-access';
-  readonly organization_id: string;
-  readonly membership_id: string;
-  readonly connectors: readonly PersonConnectorAccessV1[];
 }
 
 export function validatePersonConnectorAccessV1(value: unknown): PersonConnectorAccessV1 {
@@ -50,16 +41,4 @@ export function validatePersonConnectorAccessV1(value: unknown): PersonConnector
     read_status: r.read_status as PersonConnectorReadStatusV1,
     read_capabilities: Object.freeze([...r.read_capabilities]) as readonly PersonConnectorReadCapabilityV1[],
   });
-}
-
-export function validateOrganizationPersonConnectorAccessV1(value: unknown): OrganizationPersonConnectorAccessV1 {
-  const r = asEnumerableRecord(value, 'Person connector access response');
-  assertExactKeys(r, ['schema_version', 'kind', 'organization_id', 'membership_id', 'connectors'], 'Person connector access response');
-  if (r.schema_version !== 1 || r.kind !== 'echo-organization-person-connector-access') fail('Connector access version is unsupported');
-  assertId(r.organization_id, 'org', 'organization_id');
-  assertId(r.membership_id, 'mem', 'membership_id');
-  if (!Array.isArray(r.connectors) || r.connectors.length > 32) fail('Connector access list is invalid');
-  const connectors = r.connectors.map(validatePersonConnectorAccessV1);
-  if (new Set(connectors.map(value => value.tool_id)).size !== connectors.length) fail('Connector identity is duplicated');
-  return Object.freeze({ schema_version: 1, kind: 'echo-organization-person-connector-access', organization_id: r.organization_id as string, membership_id: r.membership_id as string, connectors: Object.freeze(connectors) });
 }

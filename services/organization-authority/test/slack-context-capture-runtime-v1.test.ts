@@ -62,7 +62,7 @@ async function fixture() {
   });
   const provider = new SlackWebIdentityProviderV1({ fetch });
   let connection: NangoSlackConnectionV1 = { connection_id: 'nango-fixture', tags: {}, team_id: TEAM, app_id: APP, bot_user_id: BOT,
-    bot_token: 'xoxb-fixture-old-token', granted_scopes: scopes, updated_at: NOW };
+    bot_token: 'xoxb-fixture-old-token', granted_scopes: scopes };
   const nango = { getSlackConnection: vi.fn(async () => { beforeToken?.(); return connection; }) } as unknown as NangoConnectionClientV1;
   const credentials = { kind: 'echo-slack-app-credentials-v1' as const, app_id: APP, client_id: '1234.5678',
     client_secret: 'fixture-client-secret', signing_secret: 'fixture-signing-secret', nango_connection_id: null };

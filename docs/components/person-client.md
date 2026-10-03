@@ -91,9 +91,10 @@ submit-v3/status-v3 remain content-free. The carrier and
 optional metadata do not settle the final context shape. See the
 [Person upload scope](../product/2026-09-21-person-update-inbox-v1.md).
 
-Agentic Ask V1 is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md)
-and [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md). Its V3 route and shared evidence
-desk are capability-gated; implementation and live qualification are separate.
+Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as
+updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): the V3 route
+and shared evidence desk are composed whenever an answer model is configured,
+with no capability switch. Live qualification is separate.
 
 `person list [--project <project-id> | --mine] [--cursor <next_cursor>]` and
 `person open --ref <ref> [--cursor <next_cursor>]` read the Authority's

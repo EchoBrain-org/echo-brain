@@ -122,10 +122,6 @@ describe("originals under the mine scope", () => {
     expect(f.ownedBy(f.retrieval.deskSearch({ access_token: "owner", scope: MINE }).items).sort()).toEqual(["owner", "owner"]);
     expect(f.retrieval.deskSearch({ access_token: "owner", scope: MINE, inventory_mode: "items" }).items).toHaveLength(2);
     expect(() => f.retrieval.revalidateDeskRelease({ access_token: "owner", release: mine })).not.toThrow();
-    // Ask's single-batch path narrows the same way.
-    expect(f.retrieval.retrieve({ access_token: "owner", queries: ["sharedterm"], scope: GLOBAL }).query_hit_counts).toEqual([5]);
-    expect(f.retrieval.retrieve({ access_token: "owner", queries: ["sharedterm"], scope: MINE }).release.released_atoms.map((atom) => atom.text).sort())
-      .toEqual([expect.stringContaining("sharedterm owner note"), expect.stringContaining("sharedterm owner document")]);
 
     // A teammate's team note is readable globally, but it is not the caller's.
     for (const item of global.items.filter((value) => f.ownedBy([value])[0] === "member")) {
@@ -149,7 +145,6 @@ describe("originals under the mine scope", () => {
 
     f.statements.length = 0;
     expect(f.retrieval.deskSearch({ access_token: "owner", scope: MINE, query: "revised quote" }).items).toEqual([]);
-    expect(f.retrieval.retrieve({ access_token: "owner", queries: ["revised quote"], scope: MINE }).query_hit_counts).toEqual([0]);
     expect(() => f.retrieval.deskOpen({ access_token: "owner", scope: MINE, citation: globalSearch.items[0]!.citation })).toThrow(AuthorityOperationError);
     expect(() => f.retrieval.read({ access_token: "owner", scope: MINE, citation: globalSearch.items[0]!.citation })).toThrow(AuthorityOperationError);
     expect(() => f.retrieval.readApprovedMeetingTranscript({ access_token: "owner", scope: MINE, citation: f.transcriptCitation })).toThrow(AuthorityOperationError);

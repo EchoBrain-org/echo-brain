@@ -100,7 +100,7 @@ export interface PersonLiveEvidenceResultV1<C extends PersonLiveEvidenceCitation
   readonly next_cursor?: string;
 }
 
-/** Internal source seam for a future desk dispatcher; the released V1 desk/Ask schemas still accept only their existing kinds. */
+/** Internal source seam for the V2 evidence desk dispatcher; the V1 desk and Ask V4 schemas still accept only their existing kinds. */
 export interface PersonLiveEvidenceSourceV1<C extends PersonLiveEvidenceCitationV1 = PersonLiveEvidenceCitationV1> {
   readonly tool_id: string;
   search(input: { readonly query: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceResultV1<C>>;

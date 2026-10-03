@@ -1,25 +1,18 @@
-import type { ReadableStreamReadResult } from "node:stream/web";
-
 /**
  * Provider-neutral transport shared by every Slack setup client that needs a
  * bounded, timed-out JSON fetch: `redirect: "error"`, a combined timeout +
  * caller signal, a response-size cap enforced both from the declared
- * `content-length` and while streaming, and strict JSON parsing. It never
- * inspects or interprets the parsed body — callers own their own
- * success/error vocabulary (e.g. Slack's `ok`/`error` fields) — and it never
- * includes request or response content in a thrown message, since callers
- * may be carrying secrets (tokens) in the request or sensitive detail in the
+ * `content-length` and while streaming, and strict JSON parsing. HTTP status
+ * comes first: a non-2xx response is returned without reading its body, so a
+ * caller classifies a 401 or a 404 whatever the body holds. It never inspects
+ * or interprets the parsed body — callers own their own success/error
+ * vocabulary (e.g. Slack's `ok`/`error` fields) — and it never includes
+ * request or response content in a thrown message, since callers may be
+ * carrying secrets (tokens) in the request or sensitive detail in the
  * response.
- *
- * `SlackWebIdentityProviderV1` (slack-web-identity-provider-v1.ts) keeps its
- * own copy on purpose: it classifies Slack's HTTP status before reading any
- * body (a 401 is a rejected token whatever the body holds), and it gives a
- * failed request and an empty body different codes, which this helper's
- * single `transport` code merges.
  */
 
 export type BoundedJsonFetchErrorCodeV1 =
-  | "timeout"
   | "transport"
   | "oversized"
   | "invalid_json";
@@ -49,39 +42,21 @@ export interface BoundedJsonFetchInputV1 {
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
   readonly maxBytes: number;
-  /**
-   * When true, a null or zero-byte response body is not an error: it
-   * resolves with `json: undefined` instead of throwing
-   * `BoundedJsonFetchErrorV1("transport", …)`. Defaults to false, which
-   * keeps today's behaviour (every existing caller, e.g. the Slack manifest
-   * provider, always expects a JSON body). Callers whose protocol is
-   * expressed through HTTP status rather than a body on every response
-   * (e.g. a 204 delete, or an empty-bodied error response) should pass
-   * `true` and classify by `status`/`ok` first.
-   */
-  readonly allowEmptyBody?: boolean;
 }
 
 async function readBoundedBytes(
   response: Response,
   maxBytes: number,
-  allowEmptyBody: boolean,
 ): Promise<Uint8Array> {
-  if (response.body === null) {
-    if (allowEmptyBody) return new Uint8Array(0);
-    throw new BoundedJsonFetchErrorV1("transport", "The response body is empty");
-  }
+  if (response.body === null) return new Uint8Array(0);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
   try {
     for (;;) {
-      let read: ReadableStreamReadResult<Uint8Array>;
-      try {
-        read = await reader.read();
-      } catch {
+      const read = await reader.read().catch(() => {
         throw new BoundedJsonFetchErrorV1("transport", "The response stream failed");
-      }
+      });
       if (read.done) break;
       totalBytes += read.value.byteLength;
       if (totalBytes > maxBytes) {
@@ -95,10 +70,6 @@ async function readBoundedBytes(
   } finally {
     reader.releaseLock();
   }
-  if (totalBytes === 0) {
-    if (allowEmptyBody) return new Uint8Array(0);
-    throw new BoundedJsonFetchErrorV1("transport", "The response body is empty");
-  }
   const bytes = new Uint8Array(totalBytes);
   let offset = 0;
   for (const chunk of chunks) {
@@ -111,14 +82,12 @@ async function readBoundedBytes(
 /**
  * Fetches `input.url`, enforcing `redirect: "error"`, a timeout of
  * `input.timeoutMs` combined with an optional caller `input.signal` through
- * `AbortSignal.any`, and a `input.maxBytes` response cap. Returns the parsed
- * JSON body alongside the raw HTTP status/ok/headers so a caller can apply
- * its own protocol-specific error mapping; throws `BoundedJsonFetchErrorV1`
- * for every transport-level failure (never for a well-formed JSON body that
- * the caller's own protocol considers an error). A null or zero-byte body is
- * a transport failure (`"transport"`, unchanged default behaviour) unless
- * `input.allowEmptyBody` is true, in which case it resolves normally with
- * `json: undefined`.
+ * `AbortSignal.any`, and a `input.maxBytes` response cap. A non-2xx response
+ * resolves at once with `json: undefined`, its body cancelled unread; a 2xx
+ * response resolves with its parsed JSON body, or `json: undefined` when the
+ * body is null or empty. Throws `BoundedJsonFetchErrorV1` for every
+ * transport-level failure (never for a well-formed JSON body that the
+ * caller's own protocol considers an error).
  */
 export async function boundedJsonFetchV1(
   input: BoundedJsonFetchInputV1,
@@ -135,11 +104,17 @@ export async function boundedJsonFetchV1(
       redirect: "error",
       signal: combined,
     });
-  } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
-      throw new BoundedJsonFetchErrorV1("timeout", "The request timed out");
-    }
+  } catch {
     throw new BoundedJsonFetchErrorV1("transport", "The request is unavailable");
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    return Object.freeze({
+      status: response.status,
+      ok: false,
+      headers: response.headers,
+      json: undefined,
+    });
   }
   const declared = response.headers.get("content-length");
   if (
@@ -148,13 +123,9 @@ export async function boundedJsonFetchV1(
   ) {
     throw new BoundedJsonFetchErrorV1("oversized", "The response is oversized");
   }
-  const bytes = await readBoundedBytes(response, input.maxBytes, input.allowEmptyBody ?? false);
+  const bytes = await readBoundedBytes(response, input.maxBytes);
   let json: unknown;
-  if (bytes.byteLength === 0) {
-    // Only reachable when allowEmptyBody is true; readBoundedBytes throws
-    // otherwise. An empty body has no JSON to parse.
-    json = undefined;
-  } else {
+  if (bytes.byteLength > 0) {
     try {
       json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
     } catch {
@@ -163,7 +134,7 @@ export async function boundedJsonFetchV1(
   }
   return Object.freeze({
     status: response.status,
-    ok: response.ok,
+    ok: true,
     headers: response.headers,
     json,
   });

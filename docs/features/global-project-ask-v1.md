@@ -23,11 +23,11 @@ Choosing **Mine** narrows Ask to what the person added: the notes they saved
 and the documents they uploaded under their current membership, and the
 meetings they approved as final approver, while each is still readable to them
 ([ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)). Mine
-reads no Slack and, in this version, no shared transcripts. It is a narrowing
-of global scope, never another view: a teammate's item is excluded even when
-the person can read it. "My" in a question is only a search hint; it does not
-select Mine. Its citations carry a `ref`, which `person open` reads under
-global scope.
+excludes live external sources and, in this version, shared transcripts. It is
+a narrowing of global scope, never another view: a teammate's item is excluded
+even when the person can read it. "My" in a question is only a search hint; it
+does not select Mine. Its citations carry a `ref`, which `person open` reads
+under global scope.
 
 The separate Find saved context entry is removed. File browsing is not a
 prerequisite for asking. Owner administration is **People & invites**, under
@@ -112,22 +112,18 @@ evidence still requires current access when opened.
 - Transcript search scores every shared transcript the asker may read on each
   query. That is sized for the current number of approved meetings, not for a
   large archive.
-- V2 Ask sends the validated question directly to retrieval, without a model
-  planner. It selects at most five original evidence packets and five approved
-  records in either scope. The core retains its 16-atom / 49,152-byte ceiling
-  and at most one answer model call. Empty evidence makes no model call. The
-  legacy V1 approved-record route retains model planning.
-- Original retrieval uses distinct-term substring coverage, omitting a closed
-  English function-word list, then recency and stable source/ordinal tie-breaks.
-  It ranks matches before the five-result limit, across notes and documents,
-  and chooses the strongest matching immutable packet within a selected chunk.
-  This is not BM25, semantic matching, or exhaustive document inspection.
-  Single-word ties can favor newer incidental matches; broad questions and
-  synonyms can still miss evidence. Scoring scans eligible retained rows;
-  large-corpus latency still needs measurement. No index or migration is added.
-- The Answer Lab's 24-atom budget, claims/quote validation, recomposition,
-  verifier and fixture-specific synonym expansions are not enabled by this
-  adoption. Live model answer quality and latency remain separate checks.
+- Ask is the agentic loop of
+  [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): at most 10 research
+  steps and 24 model calls within 90 s. Live model answer quality and latency
+  remain separate checks.
+- Original search matches whole terms, omitting a closed English function-word
+  list, and ranks by the number of distinct matched terms, then recency and
+  stable source/ordinal tie-breaks. One search returns at most three passages
+  per document. This is not BM25, semantic matching, or exhaustive document
+  inspection. Single-word ties can favor newer incidental matches; broad
+  questions and synonyms can still miss evidence. Scoring scans eligible
+  retained rows; large-corpus latency still needs measurement. No index or
+  migration is added.
 - Ask does not request decision/action extraction or publish approvals. The
   requested-only analysis policy remains unchanged.
 - Professional role/title/team metadata and Undo of completed uploads or
@@ -148,7 +144,11 @@ by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): Ask is now
 it. The CLI accepts
 `person ask --question <text> [--project <project-id> | --mine]`; the two
 flags are exclusive. The client does not silently downgrade a project or mine
-request to global Ask.
+request to global Ask. With Jira live evidence configured
+([ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md), proposed;
+production-disabled), `person ask --tickets` calls `POST /v4/person/ask`, which
+returns V5 answers; a connected Jira account contributes ticket citations only
+in global scope.
 
 Cited original evidence is read through `POST /v2/person/ask/source` or
 `person ask-source`, using the answer's project scope (global for a global or

@@ -49,6 +49,7 @@ separately.
 | [ADR-0025](ADR-0025-nango-holds-slack-connection-credentials.md) | Nango holds Slack connection credentials | accepted |
 | [ADR-0026](ADR-0026-jira-person-live-evidence-nango.md) | Person-bound Jira live evidence with Nango custody | proposed |
 | [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md) | Rebind a lost Nango Slack connection under the same credential handle | proposed |
+| [ADR-0028](ADR-0028-broadened-layer-1-source-captures.md) | Layer 1 holds the people directory, signed record log and source captures | proposed |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

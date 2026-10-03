@@ -10,17 +10,14 @@ import { validatePersonAnswerResponseV4, validatePersonAnswerResponseV5 } from '
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
-import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import type { JiraNangoV1 } from '@echo-brain/provider-jira/jira-nango-v1';
 import type { NangoConnectionClientV1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1';
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1';
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
 import type { BegunPersonOidcLogin } from '../src/application/person-identity-sessions.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
+import { FIXTURE_JIRA_CLOUD_V1 as CLOUD, FIXTURE_JIRA_SITE_V1 as SITE, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fixtures/fake-jira-v1.js';
 
-const CLOUD = '00000000-0000-4000-8000-000000000007';
-const SITE = 'https://echo-fixture.atlassian.net';
 const EMAIL = 'founder@example.test';
 const AUTHORITY = 'https://authority.example.test';
 const OIDC = { issuer: 'https://issuer.example.test', client_id: 'fixture-client', redirect_uri: `${AUTHORITY}/v2/session/oidc/callback`, tenant: { kind: 'issuer' as const }, id_token_algorithms: ['RS256'] };
@@ -46,27 +43,8 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     buildAuthorizationUrl(value: BegunPersonOidcLogin) { attempt = value; return `${OIDC.issuer}/authorize?state=${encodeURIComponent(value.state)}`; },
     async redeemAuthorizationCode() { return { kind: 'verified' as const, token: { issuer: OIDC.issuer, subject: `fixture-${loginEmail}`, audience: OIDC.client_id, nonce: attempt!.nonce, issued_at: Math.floor(Date.now() / 1000), claims: { email: loginEmail, email_verified: true } } }; },
   };
-  let jiraTags: Readonly<Record<string, string>> = {};
-  let jiraConnectAttempt = 0;
-  let pendingJiraReference = '';
-  const jiraConnections = new Map<string, { readonly tags: Readonly<Record<string, string>>; readonly access_token: string; readonly updated_at: string }>();
-  const finishJiraConsent = () => jiraConnections.set(pendingJiraReference, { tags: jiraTags, access_token: 'synthetic-jira-oauth-bearer', updated_at: new Date(Date.UTC(2026, 9, 1) + jiraConnectAttempt * 1000).toISOString() });
-  const nango: JiraNangoV1 = {
-    connect: vi.fn(async tags => { jiraTags = tags; pendingJiraReference = `fixture-jira-reference-${++jiraConnectAttempt}`; return { link: 'https://connect.nango.dev/fixture-jira' }; }),
-    connection: vi.fn(async reference => { const connection = jiraConnections.get(reference); if (connection === undefined) throw new AuthorityOperationError('not_found', 'Synthetic connection not found'); return connection; }),
-    find: vi.fn(async tags => [...jiraConnections].find(([, value]) => canonicalSha256(tags) === canonicalSha256(value.tags))?.[0]),
-    disconnect: vi.fn(async reference => { jiraConnections.delete(reference); }),
-  };
-  let resourceCloud = CLOUD;
-  let jiraAccount = 'fixture-jira-account';
-  const jiraFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input)); expect(init?.redirect).toBe('error'); expect(new Headers(init?.headers).get('authorization')).toBe('Bearer synthetic-jira-oauth-bearer');
-    if (url.pathname === '/oauth/token/accessible-resources') return Response.json([{ id: resourceCloud, url: SITE, scopes: ['read:jira-work', 'read:jira-user'] }]);
-    if (url.pathname.endsWith('/myself')) return Response.json({ accountId: jiraAccount, active: true, accountType: 'atlassian' });
-    if (url.pathname.endsWith('/search/jql')) return Response.json({ isLast: true, issues: [{ id: '10001' }] });
-    if (url.pathname.endsWith('/issue/10001')) return Response.json({ id: '10001', key: 'ECHO-1', self: `${SITE}/rest/api/3/issue/10001`, fields: { summary: 'Ship on Friday', project: { id: '10000', key: 'ECHO', self: `${SITE}/rest/api/3/project/10000` }, description: null, created: '2026-10-01T12:00:00.000Z', status: { name: 'Open' }, assignee: null, duedate: null } });
-    throw new Error('Unexpected fixture Jira endpoint');
-  });
+  const jira = fakeJiraNangoV1();
+  const jiraFetch = fakeJiraCloudFetchV1();
   let slackTags: Readonly<Record<string, string>> = {};
   const slackNango: NangoConnectionClientV1 = {
     createConnectSession: vi.fn(async input => { slackTags = input.tags; return { connect_link: 'https://connect.nango.dev/fixture-slack', expires_at: new Date(Date.now() + 60_000).toISOString() }; }),
@@ -94,8 +72,8 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     granola_credential_file: privateFile('granola.key', 'synthetic-granola-credential-000000000000'), granola_owner_email_file: privateFile('granola-email', EMAIL), openrouter_credential_file: privateFile('openrouter.key', 'synthetic-openrouter-key-000000000000'),
   }, {
     api: { oidc_provider, answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } },
-    jira_person_live_seams: { nango, fetch: jiraFetch },
-    slack: { nango: slackNango, manifest_provider: { createApp: vi.fn(async () => ({ app_id: 'AFIXTURE', client_id: '111.222', client_secret: 'synthetic-slack-client-secret', signing_secret: 'synthetic-slack-signing-secret' })), updateApp: vi.fn() }, provider: { verifyConnection: verifySlack, verifyHuman: vi.fn(), openIdentityLinkDirectMessage: vi.fn(), postIdentityLinkChallenge: vi.fn(), observeIdentityLinkChallenge: vi.fn() } },
+    jira_person_live_seams: { nango: jira.nango, fetch: jiraFetch },
+    slack: { nango: slackNango, manifest_provider: { createApp: vi.fn(async () => ({ app_id: 'AFIXTURE', client_id: '111.222', client_secret: 'synthetic-slack-client-secret', signing_secret: 'synthetic-slack-signing-secret' })), updateApp: vi.fn() }, provider: { verifyConnection: verifySlack, openIdentityLinkDirectMessage: vi.fn(), postIdentityLinkChallenge: vi.fn(), observeIdentityLinkChallenge: vi.fn() } },
   });
   const origin = `http://127.0.0.1:${runtime.address.port}`;
   const post = async (path: string, body: unknown, token = owner) => { const response = await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() as Record<string, any> }; };
@@ -108,14 +86,14 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     owner = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
     expect((await post('/v1/person/tools/jira/connect', { schema_version: 1 }, 'wrong-person-token')).status).toBe(401);
     const connected = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(connected.status).toBe(201);
-    expect(jiraTags).toMatchObject({ organization_id: initialized.organization_id, echo_membership: initialized.owner_membership_id });
+    expect(jira.tags()).toMatchObject({ organization_id: initialized.organization_id, echo_membership: initialized.owner_membership_id });
     const invited = await post('/v1/person/employees', { name: 'Fixture Employee', email: 'employee@example.test' }); expect(invited.status).toBe(201);
     loginEmail = 'employee@example.test';
     const employeeBegin = await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant: invited.body.login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } }); expect(employeeBegin.status).toBe(201);
     const employeePage = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=employee`)).text();
     const employee = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(employeePage)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
     expect((await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt }, employee)).status).toBe(401);
-    finishJiraConsent(); // Browser consent is reconciled only by the server-bound attempt.
+    jira.finish(); // Browser consent is reconciled only by the server-bound attempt.
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete', failure_reason: null } });
     const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should the ticket ship?' }); expect(response.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
@@ -130,26 +108,5 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const slackBegin = await post('/v2/organization/tools/slack/install/begin', { request_id: `osi_${randomUUID()}` }); expect(slackBegin.status).toBe(201);
     const slackStatus = await post('/v2/organization/tools/slack/install/status', { attempt_id: slackBegin.body.attempt_id }); expect(slackStatus).toMatchObject({ status: 200, body: { status: 'complete', result: { kind: 'created', workspace_id: 'TFIXTURE' } } });
     expect(verifySlack).toHaveBeenCalledWith('xoxb-synthetic-slack', undefined);
-    const originalReference = pendingJiraReference;
-    const refreshedOldConnection = { ...jiraConnections.get(originalReference)!, updated_at: '2099-10-01T00:00:00.000Z' };
-    const reconnect = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(reconnect.status).toBe(201);
-    expect(nango.disconnect).toHaveBeenCalledWith(originalReference, expect.any(AbortSignal));
-    expect(vi.mocked(nango.disconnect).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(nango.connect).mock.invocationCallOrder[1]!);
-    expect(jiraConnections.has(originalReference)).toBe(false);
-    expect(pendingJiraReference).not.toBe(originalReference);
-    expect(jiraTags.echo_attempt).toBe(reconnect.body.attempt);
-    // Even stale Nango metadata with an ordinary refresh timestamp cannot complete a new consent attempt.
-    jiraConnections.set(originalReference, refreshedOldConnection);
-    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: reconnect.body.attempt })).toMatchObject({ status: 200, body: { status: 'pending', failure_reason: null } });
-    jiraConnections.delete(originalReference);
-    finishJiraConsent();
-    jiraAccount = 'another-jira-account';
-    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: reconnect.body.attempt })).toMatchObject({ status: 200, body: { status: 'failed', failure_reason: 'account_mismatch' } });
-    jiraAccount = 'fixture-jira-account';
-    const recovery = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(recovery.status).toBe(201);
-    finishJiraConsent();
-    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: recovery.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete', failure_reason: null } });
-    expect(await post('/v1/person/tools/jira/disconnect', { schema_version: 1 })).toMatchObject({ status: 200, body: { schema_version: 1, connected: false } });
-    expect(nango.disconnect).toHaveBeenCalledWith(pendingJiraReference, expect.any(AbortSignal));
   } finally { await runtime.close(); audit.close(); }
 });

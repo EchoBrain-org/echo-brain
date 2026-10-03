@@ -12,10 +12,6 @@
     "./person/jira-tool-provider": {
       "types": "./dist/person/jira-tool-provider.d.ts",
       "import": "./dist/person/jira-tool-provider.js"
-    },
-    "./person/jira-person-client": {
-      "types": "./dist/person/jira-person-client.d.ts",
-      "import": "./dist/person/jira-person-client.js"
     }
   },
   "files": [

@@ -5,7 +5,6 @@ import {
 } from "@echo-brain/federation-protocol";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256, validateOrganizationPersonSlackIdentityLinkBeginRequest, validateOrganizationPersonSlackIdentityLinkBeginResponse, validateOrganizationPersonSlackIdentityLinkCompleteRequest, validateOrganizationPersonSlackIdentityLinkResult, type OrganizationPersonSlackIdentityLinkBeginRequestV2, type OrganizationPersonSlackIdentityLinkBeginResponseV2, type OrganizationPersonSlackIdentityLinkCompleteRequestV2, type OrganizationPersonSlackIdentityLinkResultV2 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { validateOrganizationPersonTools, type OrganizationPersonToolV2, validateOrganizationPersonSlackDisconnectRequest } from "@echo-brain/provider-slack-client/organization-api/person-tools";
-import type { OrganizationSecretReference } from "@echo-brain/organization-control-plane/application/organization-secret-store-contracts";
 import { withSlackBotTokenV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
 import type { ActiveSlackOrganizationTool, BeginPersonSlackIdentityLinkChallengeInput, BegunSlackIdentityLinkChallenge, CompletePersonSlackIdentityLinkChallengeInput, CompletedPersonSlackIdentityLink, PendingPersonSlackIdentityLinkChallenge } from "../organization-control-plane/application/slack-integration-contracts.js";
 import type { SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
@@ -80,6 +79,15 @@ export interface SlackPersonIdentityLinkRepositoryPort {
     readonly person_session: BeginPersonSlackIdentityLinkChallengeInput["person_session"];
     readonly now: string;
   }): readonly OrganizationPersonToolV2[];
+  /** The tool's bot token, read per use; refused once the tool no longer names the active connection. */
+  readSlackToken(
+    tool: ActiveSlackOrganizationTool,
+    options?: { readonly force_refresh?: boolean },
+  ): Promise<string>;
+  /** Slack kept rejecting the tool's token after one refresh. */
+  reportSlackTokenRejected(tool: ActiveSlackOrganizationTool): void;
+  /** True while the tool's connection is marked "needs reinstall". */
+  slackTokenRejected(tool: ActiveSlackOrganizationTool): boolean;
 }
 
 export interface SlackPersonIdentityLinkWorkflowOptionsV1 {
@@ -87,17 +95,6 @@ export interface SlackPersonIdentityLinkWorkflowOptionsV1 {
   readonly organization_id: string;
   readonly authentication: SlackPersonIdentityLinkAuthenticationPort;
   readonly repository: SlackPersonIdentityLinkRepositoryPort;
-  /** Reads the active tool's bot token per use; a plain secret store also fits. */
-  readonly secrets: {
-    read(
-      reference: OrganizationSecretReference,
-      options?: { readonly force_refresh?: boolean },
-    ): string | Promise<string>;
-    /** Slack kept rejecting the token for `reference` after one refresh. */
-    reportRejected?(reference: OrganizationSecretReference): void;
-    /** True while `reference`'s connection is marked "needs reinstall". */
-    isRejected?(reference: OrganizationSecretReference): boolean;
-  };
   readonly slack: SlackIdentityProviderV1;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
   /** Synchronous invalidation of ephemeral provider proof held by this runtime. */
@@ -219,7 +216,7 @@ function repositoryOperation<T>(operation: () => T): T {
  * Bearer-authenticated Person-to-Slack identity proof; it grants nothing.
  *
  * This remains a composition workflow because it coordinates a Slack provider,
- * an organization secret, and a persistence port. Moving it into
+ * the organization's bot token, and a persistence port. Moving it into
  * `application/` would weaken the Authority's inward dependency boundary.
  */
 export class SlackPersonIdentityLinkWorkflowV1 {
@@ -340,14 +337,13 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       });
     }
     const verified = await this.verifyTool(
-      await this.readToolSecret(activeTool),
+      await this.readToolToken(activeTool),
       activeTool,
       signal,
     );
     const token = verified.token;
     let destination: { team_id: string; channel_id: string; recipient_user_id: string };
     try {
-      if (this.options.slack.openIdentityLinkDirectMessage === undefined) throw new Error("DM delivery unavailable");
       destination = await this.options.slack.openIdentityLinkDirectMessage(token, request.recipient_user_id, activeTool.team_id, signal);
       if (destination.team_id !== activeTool.team_id || destination.recipient_user_id !== request.recipient_user_id || !/^D[A-Z0-9]{2,}$/.test(destination.channel_id)) {
         throw new Error("DM recipient mismatch");
@@ -544,7 +540,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         now: before.checked_at,
       }),
     );
-    let token = await this.readToolSecret(activeTool);
+    let token = await this.readToolToken(activeTool);
     let observed: Awaited<
       ReturnType<SlackIdentityProviderV1["observeIdentityLinkChallenge"]>
     >;
@@ -576,7 +572,6 @@ export class SlackPersonIdentityLinkWorkflowV1 {
 
     let currentDestination: { team_id: string; channel_id: string; recipient_user_id: string };
     try {
-      if (this.options.slack.openIdentityLinkDirectMessage === undefined) throw new Error("DM unavailable");
       currentDestination = await this.options.slack.openIdentityLinkDirectMessage(token, challenge.recipient_user_id, activeTool.team_id, signal);
     } catch {
       throw new AuthorityOperationError("unavailable", "Could not revalidate the private Slack DM; try again");
@@ -686,12 +681,12 @@ export class SlackPersonIdentityLinkWorkflowV1 {
     return tool;
   }
 
-  private async readToolSecret(
+  private async readToolToken(
     tool: ActiveSlackOrganizationTool,
     options?: { readonly force_refresh?: boolean },
   ): Promise<string> {
     try {
-      return await this.options.secrets.read(tool.secret, options);
+      return await this.options.repository.readSlackToken(tool, options);
     } catch {
       throw new AuthorityOperationError(
         "unavailable",
@@ -710,11 +705,11 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       {
         token: async (options) =>
           options?.force_refresh === true
-            ? await this.readToolSecret(tool, options)
+            ? await this.readToolToken(tool, options)
             : token,
         is_auth_failure: isSlackIdentityTokenRejectedV1,
-        on_auth_failure: () => this.options.secrets.reportRejected?.(tool.secret),
-        needs_reinstall: () => this.options.secrets.isRejected?.(tool.secret) === true,
+        on_auth_failure: () => this.options.repository.reportSlackTokenRejected(tool),
+        needs_reinstall: () => this.options.repository.slackTokenRejected(tool),
       },
       operation,
     );

@@ -30,14 +30,6 @@ export interface OriginalContextReleaseV1 {
   readonly released_atoms: readonly ReleasedSourceContextAtomV1[];
 }
 
-export interface OriginalContextRetrievalResultV1 {
-  readonly release: OriginalContextReleaseV1;
-  /** Digest of the content-free Layer-3 release audit committed before bytes return. */
-  readonly receipt: Sha256Digest;
-  /** One count for every requested query, before cross-query deduplication. */
-  readonly query_hit_counts: readonly number[];
-}
-
 /**
  * Structural view of the record package's immutable witness. It contains no
  * source bytes; Authority applies its policy inside the current authorization
@@ -102,13 +94,6 @@ export interface ApprovedMeetingTranscriptReadV1 {
  * before Layer 4 can return an answer.
  */
 export interface PersonOriginalContextRetrievalPortV1 {
-  retrieve(input: {
-    readonly access_token: string;
-    readonly queries: readonly string[];
-    readonly scope: PersonAskScopeV2;
-    /** Called only after the actor and requested scope have been authorized. */
-    readonly on_authorized?: () => void;
-  }): OriginalContextRetrievalResultV1;
   revalidate(input: {
     readonly access_token: string;
     readonly release: OriginalContextReleaseV1;
@@ -118,10 +103,7 @@ export interface PersonOriginalContextRetrievalPortV1 {
     readonly scope: PersonAskScopeV2;
     readonly citation: OriginalContextCitationV1;
   }): { readonly scope: PersonAskScopeV2; readonly atom: ReleasedSourceContextAtomV1 };
-  /**
-   * Explicit, approved, page-bounded raw-meeting release. This does not add
-   * meetings to `retrieve`, so Ask remains unable to discover transcripts.
-   */
+  /** Explicit, approved, page-bounded raw-meeting release. */
   readApprovedMeetingTranscript(input: {
     readonly access_token: string;
     readonly scope: PersonAskScopeV2;
@@ -147,7 +129,7 @@ export interface PersonOriginalContextRetrievalPortV1 {
 }
 
 /** Desk-only, request-bound original evidence release.  Callers of the
- * single-batch PersonOriginalContextRetrievalPortV1 cannot invoke these methods. */
+ * PersonOriginalContextRetrievalPortV1 cannot invoke these methods. */
 export type OriginalContextDeskKindV1 = "note" | "document_passage";
 export type OriginalContextDeskVisibilityV1 = "only_me" | "team" | "project" | "projects";
 

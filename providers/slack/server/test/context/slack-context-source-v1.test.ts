@@ -17,7 +17,7 @@ const identity = { kind: 'source' as const, adapter_id: 'slack-context-capture',
 const message = (extra: Record<string, unknown> = {}) => ({ type: 'message', ts, user: 'UAUTHOR123', text: 'Private text must not enter pointer captures.', ...extra });
 const pointer = (stamp = ts) => `${origin}/archives/${channel}/p${stamp.replace('.', '')}`;
 
-function fixture(options: { message?: unknown; page?: unknown; auth?: unknown; channel?: unknown; permalink?: unknown; public_channel_only?: true; now?: () => Date; current?: () => void | Promise<void>; onRead?: (input: SlackContextRequestV1) => void } = {}) {
+function fixture(options: { message?: unknown; page?: unknown; auth?: unknown; channel?: unknown; permalink?: unknown; public_channel_only?: true; now?: () => Date; onRead?: (input: SlackContextRequestV1) => void } = {}) {
   const request = vi.fn(async (input: SlackContextRequestV1): Promise<unknown> => {
     options.onRead?.(input);
     if (input.method === 'auth.test') return options.auth ?? { ok: true, team_id: team, user_id: bot, url: `${origin}/` };
@@ -27,14 +27,13 @@ function fixture(options: { message?: unknown; page?: unknown; auth?: unknown; c
     throw new Error('Unexpected method');
   });
   const transport: SlackContextTransportV1 = { binding, request };
-  const requireCurrent = vi.fn(async () => { await options.current?.(); });
   const source = createSlackContextSourceV1({
-    transport, read_grant_fence: { requireCurrent }, team_id: team, channel_id: channel,
+    transport, team_id: team, channel_id: channel,
     expected_bot_user_id: bot, identity, representation: 'pointer',
     ...(options.public_channel_only === undefined ? {} : { public_channel_only: options.public_channel_only }),
     now: options.now ?? (() => new Date('2026-10-03T00:00:00.000Z')),
   });
-  return { source, transport, request, requireCurrent };
+  return { source, transport, request };
 }
 
 describe('Slack context source V1', () => {
@@ -42,18 +41,15 @@ describe('Slack context source V1', () => {
     const f = fixture({ message: message({ edited: { user: 'UEDITOR123', ts: '1790966401.654321' }, thread_ts: '1790966300.000001' }),
       permalink: { ok: true, channel, permalink: `${pointer()}?thread_ts=1790966300.000001&cid=${channel}` } });
     const result = await f.source.pull({ limit: 2 });
-    expect(f.requireCurrent).toHaveBeenCalledTimes(2);
-    expect(f.requireCurrent).toHaveBeenCalledWith({ binding, signal: undefined });
     expect(f.request).toHaveBeenCalledWith({ method: 'conversations.history', query: { channel, limit: '2' }, signal: undefined });
     expect(result.sources).toHaveLength(1);
     const capture = result.sources[0]!;
     assertContextCaptureEnvelopeV1(capture, identity);
     expect(capture).toMatchObject({ item: { external_id: `message:${ts}` }, content: {
-      source_type: 'message', truth_status: 'source_observation',
       provenance: { origin_ref: `${pointer()}?thread_ts=1790966300.000001&cid=${channel}`, source_updated_at: '2026-10-02T18:40:01.654Z' },
       payload: { kind: 'message', channel_ref: `slack:team:${team}:channel:${channel}`, sent_at: '2026-10-02T18:40:00.123Z',
         author_ref: `slack:team:${team}:user:UAUTHOR123`, thread_ref: `slack:team:${team}:channel:${channel}:message:1790966300.000001` },
-      representation: { kind: 'pointer', pointer: `${pointer()}?thread_ts=1790966300.000001&cid=${channel}` }, observations: [],
+      representation: { kind: 'pointer', pointer: `${pointer()}?thread_ts=1790966300.000001&cid=${channel}` },
     } });
     expect(JSON.stringify(capture)).not.toContain('Private text');
     expect(capture.revision).not.toHaveProperty('contributor');
@@ -128,11 +124,7 @@ describe('Slack context source V1', () => {
     expect((await f.source.pull({ limit: 1 })).sources).toHaveLength(1);
   });
 
-  it('does not release fetched context after grant revocation or cancellation', async () => {
-    let checks = 0;
-    const revoked = fixture({ current() { if (++checks === 2) throw new Error('revoked'); } });
-    await expect(revoked.source.pull({ limit: 1 })).rejects.toThrow('revoked');
-    expect(revoked.request).toHaveBeenCalledWith(expect.objectContaining({ method: 'chat.getPermalink' }));
+  it('does not release fetched context after cancellation', async () => {
     const controller = new AbortController();
     const cancelled = fixture({ onRead(input) { if (input.method === 'conversations.history') controller.abort(); } });
     await expect(cancelled.source.pull({ limit: 1 }, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });

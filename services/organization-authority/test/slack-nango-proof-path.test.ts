@@ -10,7 +10,7 @@ import { OPENROUTER_ANSWER_COMPOSITION_ADAPTER_ID_V1, OPENROUTER_ANSWER_COMPOSIT
 import { createOpenRouterDecisionProcessorAdmissionCommitmentV1 } from "@echo-brain/provider-openrouter/openrouter-decision-processor-admission-commitment";
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts";
 import { openOrganizationControlDatabase, RESTRICTED_REVIEWER_PERSON_POLICY_ID } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
@@ -101,7 +101,7 @@ function fakeSlack() {
   };
 }
 
-/** Nango Cloud, with assumption A1's connection shape: `credentials.raw` is Slack's oauth.v2.access response. */
+/** Nango Cloud, with the assumed connection shape: `credentials.raw` is Slack's oauth.v2.access response. */
 function fakeNango(slack: ReturnType<typeof fakeSlack>) {
   const sessions: { tags: Record<string, string>; reconnect_connection_id: string | null }[] = [];
   let connection: { connection_id: string; tags: Record<string, string>; updated_at: string; credentials: Record<string, unknown> } | undefined;

@@ -7,7 +7,7 @@ import { FileOrganizationSecretStore } from "../organization-control-plane/slack
 import { findSlackAppCredentialsByReferenceSha256V1 } from "../organization-control-plane/application/slack-app-credentials-v1.js";
 import type { SlackBotTokenSourceV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
 import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
-import type { StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
+import { readActiveSlackConnectionV1, type SlackConnectionCoordinatesV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import type { SlackWebApiClientOptions } from "../processing/adapters/shared/slack/slack-web-api-client.js";
 import { SqliteSlackDmApprovalPersistenceV1 } from "../organization-control-plane/persistence/sqlite-slack-dm-approval-persistence-v1.js";
 import { PrivateSlackApprovalCardPosterV1 } from "../processing/adapters/approval-delivery/slack/private-slack-approval-card-poster-v1.js";
@@ -22,7 +22,6 @@ import { PrivateSlackApprovalTerminalCoordinatorV1 } from "./private-slack-appro
 import { createPrivateSlackApprovalInteractionHandlerV1 } from "./private-slack-approval-interaction-handler-v1.js";
 import type { PrivateSlackApprovalInteractionRejectionStageV1 } from "./private-slack-approval-interaction-protocol-v1.js";
 import { resolveMeetingOwnerPrivateSlackApprovalReviewerV1 } from "./resolve-meeting-owner-private-slack-approval-reviewer-v1.js";
-import { resolveActivePrivateSlackConnectionV1, type CurrentPrivateSlackConnectionV1, type PrivateSlackConnectionCoordinatesV1 } from "./resolve-current-private-slack-connection-v1.js";
 import { SqlitePrivateSlackApprovalAssignmentStateV1 } from "./sqlite-private-slack-approval-assignment-state-v1.js";
 import { SqlitePrivateSlackApprovalTerminalAuthorityV1 } from "./sqlite-private-slack-approval-terminal-authority-v1.js";
 import { SqliteStablePrivateApprovalAuthorityFenceV1 } from "./sqlite-stable-private-approval-authority-fence-v1.js";
@@ -68,14 +67,14 @@ export interface PrivateSlackApprovalWorkflowBundleConfigV1 {
 function assertPrivateSlackApprovalPresentationOwnershipV1(
   context: ApprovalWorkflowContextV1,
   database: ReturnType<typeof openAuthorityDatabase>,
-  connection: CurrentPrivateSlackConnectionV1,
+  active: StoredSlackConnectionV1,
 ): void {
   const assignment = database.prepare(`SELECT 1 FROM authority_private_approval_assignments_v3
     WHERE approval_id = ? AND candidate_id = ? AND connection_id = ?
       AND connection_contract_sha256 = ? AND connection_state_sha256 = ?`);
   for (const pending of context.state.listOutstandingApprovalPresentations()) {
-    if (assignment.get(pending.approval_id, pending.candidate_id, connection.connection_id,
-      connection.connection_contract_sha256, connection.connection_state_sha256) === undefined) {
+    if (assignment.get(pending.approval_id, pending.candidate_id, active.connection.connection_id,
+      active.contract_sha256, active.state_sha256) === undefined) {
       throw new Error(`private Slack approval workflow cannot prove ownership of outstanding ${pending.state} presentation ${pending.approval_id}`);
     }
   }
@@ -129,22 +128,38 @@ export function createActivePrivateSlackApprovalPosterV1(input: {
 }
 
 /**
+ * Approvals follow the organization's one active connection, the ECHO app
+ * installed through Nango, read at each use. A missing connection, one in
+ * another lineage, and one stored before in-app setup all fail closed.
+ */
+function requireActiveSlackConnectionV1(
+  database: Database.Database,
+  coordinates: SlackConnectionCoordinatesV1,
+): StoredSlackConnectionV1 {
+  const active = readActiveSlackConnectionV1(database, coordinates);
+  if (active === undefined) {
+    throw new Error("private approval runtime has no active Slack connection");
+  }
+  return active;
+}
+
+/**
  * Every use reads the organization's active connection: its id for a new
  * card, and its credential bundle's signing secret for each interaction.
  */
 function activeConnectionLaneV1(input: {
   readonly state_directory: string;
   readonly database: Database.Database;
-  readonly coordinates: PrivateSlackConnectionCoordinatesV1;
+  readonly coordinates: SlackConnectionCoordinatesV1;
 }) {
   const secrets = new FileOrganizationSecretStore(join(input.state_directory, "secrets"));
-  const active = () => resolveActivePrivateSlackConnectionV1(input.database, input.coordinates);
+  const active = () => requireActiveSlackConnectionV1(input.database, input.coordinates);
   return {
     active,
-    connection_id: () => active().current.connection_id,
+    connection_id: () => active().connection.connection_id,
     signing_secret: (): string => findSlackAppCredentialsByReferenceSha256V1(
       secrets,
-      active().stored.state.credential_reference_sha256,
+      active().state.credential_reference_sha256,
     ).credentials.signing_secret,
   };
 }
@@ -197,7 +212,7 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
     ): Promise<void> {
       const persistence = openPrivateApprovalPersistence(config.state_directory);
       try {
-        const slack = resolveActivePrivateSlackConnectionV1(persistence.control_plane_database, context.coordinates).current;
+        const slack = requireActiveSlackConnectionV1(persistence.control_plane_database, context.coordinates);
         assertPrivateSlackApprovalPresentationOwnershipV1({
           ...context,
           state: bindProviderState(context, persistence.authority_database),
@@ -215,7 +230,7 @@ export function createPrivateSlackApprovalWorkflowBundleV1(
         });
         // Fail at startup when the active connection or its credential bundle is missing.
         lane.signing_secret();
-        const poster = approvalPosterV1(config, () => lane.active().stored);
+        const poster = approvalPosterV1(config, lane.active);
         const assignments = new SqlitePrivateSlackApprovalAssignmentStateV1(
           persistence.authority_database,
         );

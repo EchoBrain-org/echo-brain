@@ -1,16 +1,12 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createJiraCloudTransportV1 } from '@echo-brain/provider-jira/jira-cloud-transport-v1';
+import { createJiraCloudTransportV1 } from '../../../providers/jira/src/jira-cloud-transport-v1.js';
 import type { ContextIntakeAuthorityV1, ContextIntakePolicyV1 } from '../src/application/context-intake-v1.js';
-import { SqliteContextCaptureReaderV1 } from '../src/adapters/persistence/sqlite/context-capture-reader-v1.js';
 import { createJiraContextIntakeV1 } from '../src/composition/provider-context-intakes-v1.js';
+import { retainedContextCapturesV1 } from './fixtures/context-capture-reader-v1.js';
 import { OWNER, projectContextDatabase } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
-const directories: string[] = [];
 const cloudid = '22222222-2222-4222-8222-222222222222';
 const origin = 'https://context-fixture.atlassian.net';
 const api = `/ex/jira/${cloudid}/rest/api/3`;
@@ -33,7 +29,6 @@ const scope = Object.freeze({
 
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
-  for (const directory of directories.splice(0)) rmSync(directory, { force: true, recursive: true });
 });
 
 function response(value: unknown): Response {
@@ -52,8 +47,8 @@ function issue(updated = '2026-10-02T12:34:56.000+0000', summary = 'Keep context
   };
 }
 
-function database(path?: string): Database.Database {
-  const value = projectContextDatabase(path); databases.push(value); return value;
+function database(): Database.Database {
+  const value = projectContextDatabase(); databases.push(value); return value;
 }
 
 function retainedPointerPolicy(): ContextIntakePolicyV1 {
@@ -61,7 +56,6 @@ function retainedPointerPolicy(): ContextIntakePolicyV1 {
 }
 
 function fixture(options: {
-  readonly sourceCurrent?: () => Promise<void>;
   readonly compositionCurrent?: () => Promise<void>;
   readonly authority?: ContextIntakeAuthorityV1;
 } = {}) {
@@ -75,17 +69,16 @@ function fixture(options: {
     if (target.pathname === `${api}/issue/10001`) return response(currentIssue);
     throw new Error(`unexpected Jira request ${target.pathname}`);
   });
-  const sourceCurrent = vi.fn(async () => options.sourceCurrent?.());
   const compositionCurrent = vi.fn(async () => options.compositionCurrent?.());
   const authority = options.authority ?? { select: () => retainedPointerPolicy(), requireCurrent: () => undefined } satisfies ContextIntakeAuthorityV1;
   const transport = createJiraCloudTransportV1({ binding, fetch });
   const intake = (value?: Database.Database, representation: 'pointer' | 'excerpt' = 'pointer') => createJiraContextIntakeV1({
-    transport, read_grant_fence: { requireCurrent: sourceCurrent }, project: 'ECHO', representation,
+    transport, project: 'ECHO', representation,
     source_instance_id: sourceInstanceId, organization_id: OWNER.organization_id, authority,
     require_read_current: compositionCurrent, ...(value === undefined ? {} : { retention: { disposition: 'retained', database: value } }),
     now: () => new Date('2026-10-03T00:00:00.000Z'),
   });
-  return { calls, fetch, sourceCurrent, compositionCurrent, intake, setIssue(value: ReturnType<typeof issue>) { currentIssue = value; } };
+  return { calls, fetch, compositionCurrent, intake, setIssue(value: ReturnType<typeof issue>) { currentIssue = value; } };
 }
 
 describe('Jira retained pointer context intake V1', () => {
@@ -104,14 +97,13 @@ describe('Jira retained pointer context intake V1', () => {
     const f = fixture({ authority: { select: () => retainedPointerPolicy(), requireCurrent: () => undefined } });
 
     await expect(f.intake().pull()).rejects.toThrow('Context source retention or organization differs from its configured binding');
-    expect(new SqliteContextCaptureReaderV1(value).list({ organization_id: OWNER.organization_id })).toEqual([]);
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([]);
   });
 
-  it('retains only selected pointer metadata, deduplicates a replay, persists a changed revision, and survives a SQLite restart', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'echo-jira-context-')); directories.push(directory);
-    const path = join(directory, 'authority.sqlite'); const firstDatabase = database(path); const f = fixture();
+  it('retains only selected pointer metadata, deduplicates a replay, and persists a changed revision', async () => {
+    const value = database(); const f = fixture(); const intake = f.intake(value);
 
-    const first = await f.intake(firstDatabase).pull();
+    const first = await intake.pull();
     const firstCapture = first.captures[0]!.source;
     expect(first.captures).toMatchObject([{ admission: 'admitted', source: {
       item: { external_id: 'issue:10001' }, content: {
@@ -121,54 +113,19 @@ describe('Jira retained pointer context intake V1', () => {
     } }]);
     expect(firstCapture.content.representation).not.toHaveProperty('text');
     expect(firstCapture.content.representation).not.toHaveProperty('passages');
-    expect(new SqliteContextCaptureReaderV1(firstDatabase).list({ organization_id: OWNER.organization_id })).toEqual([
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([
       expect.objectContaining({ source: firstCapture, scope }),
     ]);
 
-    firstDatabase.close(); databases.splice(databases.indexOf(firstDatabase), 1);
-    const reopened = new Database(path); reopened.pragma('foreign_keys = ON'); databases.push(reopened);
-    const restarted = f.intake(reopened);
-    expect(new SqliteContextCaptureReaderV1(reopened).list({ organization_id: OWNER.organization_id })).toEqual([
-      expect.objectContaining({ source: firstCapture, scope }),
-    ]);
-    const replay = await restarted.pull();
+    const replay = await intake.pull();
     expect(replay.captures).toMatchObject([{ admission: 'duplicate', source: { revision: { revision_id: firstCapture.revision.revision_id } } }]);
 
     f.setIssue(issue('2026-10-02T13:34:56.000+0000', 'Retain selected metadata only'));
-    const changed = await restarted.pull();
+    const changed = await intake.pull();
     expect(changed.captures).toMatchObject([{ admission: 'admitted' }]);
     expect(changed.captures[0]!.source.revision.revision_id).not.toBe(firstCapture.revision.revision_id);
-    expect(new SqliteContextCaptureReaderV1(reopened).list({ organization_id: OWNER.organization_id })).toHaveLength(2);
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toHaveLength(2);
     expect(f.calls.some(call => call.pathname === `${api}/issue/10001`)).toBe(true);
-  });
-
-  it('does not retain provider bytes when the person-bound Jira grant is revoked during the pull', async () => {
-    let checks = 0;
-    const f = fixture({ sourceCurrent: async () => { checks += 1; if (checks === 2) throw new Error('Jira read grant revoked'); } });
-    const value = database();
-
-    await expect(f.intake(value).pull()).rejects.toThrow('Jira read grant revoked');
-    expect(f.calls.some(call => call.pathname === `${api}/issue/10001`)).toBe(true);
-    expect(new SqliteContextCaptureReaderV1(value).list({ organization_id: OWNER.organization_id })).toEqual([]);
-  });
-
-  it('rechecks the retained-custody fence after an awaited Authority check and before SQLite admission', async () => {
-    let entered: (() => void) | undefined; let release: (() => void) | undefined; let checks = 0; let revoked = false;
-    const paused = new Promise<void>(resolve => { release = resolve; });
-    const authority: ContextIntakeAuthorityV1 = {
-      select: () => retainedPointerPolicy(),
-      requireCurrent: () => { if (revoked) throw new Error('Jira retention revoked'); },
-    };
-    const f = fixture({ authority, compositionCurrent: async () => {
-      checks += 1;
-      if (checks === 2) { entered?.(); await paused; }
-    } });
-    const value = database();
-    const waiting = new Promise<void>(resolve => { entered = resolve; });
-    const pull = f.intake(value).pull(); await waiting; revoked = true; release!();
-
-    await expect(pull).rejects.toThrow('Jira retention revoked');
-    expect(new SqliteContextCaptureReaderV1(value).list({ organization_id: OWNER.organization_id })).toEqual([]);
   });
 
   it('reselects the Authority custody policy inside the SQLite source-admission transaction', async () => {
@@ -184,11 +141,21 @@ describe('Jira retained pointer context intake V1', () => {
 
     await expect(f.intake(value).pull()).rejects.toThrow('Jira retention revoked at admission');
     expect(selectedInTransaction).toBe(true);
-    expect(new SqliteContextCaptureReaderV1(value).list({ organization_id: OWNER.organization_id })).toEqual([]);
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([]);
+  });
+
+  it('does not retain provider bytes when the person-bound Jira grant is revoked during the pull', async () => {
+    let checks = 0;
+    const f = fixture({ compositionCurrent: async () => { checks += 1; if (checks === 2) throw new Error('Jira read grant revoked'); } });
+    const value = database();
+
+    await expect(f.intake(value).pull()).rejects.toThrow('Jira read grant revoked');
+    expect(f.calls.some(call => call.pathname === `${api}/issue/10001`)).toBe(true);
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([]);
   });
 
   it('rejects a wrong person-bound Jira read grant before provider I/O', async () => {
-    const f = fixture({ sourceCurrent: async () => { throw new Error('wrong Jira read grant'); } });
+    const f = fixture({ compositionCurrent: async () => { throw new Error('wrong Jira read grant'); } });
 
     await expect(f.intake(database()).pull()).rejects.toThrow('wrong Jira read grant');
     expect(f.fetch).not.toHaveBeenCalled();
@@ -205,7 +172,7 @@ describe('Jira retained pointer context intake V1', () => {
     const foreignTransport = createJiraCloudTransportV1({ binding: { ...binding, organization_id: 'org_other' }, fetch });
 
     expect(() => createJiraContextIntakeV1({
-      transport: foreignTransport, read_grant_fence: { requireCurrent: async () => undefined }, project: 'ECHO', representation: 'pointer',
+      transport: foreignTransport, project: 'ECHO', representation: 'pointer',
       source_instance_id: sourceInstanceId, organization_id: OWNER.organization_id,
       authority: { select: () => retainedPointerPolicy(), requireCurrent: () => undefined }, require_read_current: () => undefined,
     })).toThrow('Jira context source differs from its configured organization');

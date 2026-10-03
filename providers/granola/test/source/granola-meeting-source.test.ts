@@ -783,27 +783,6 @@ describe("Granola canonical meeting mapping", () => {
     });
   });
 
-  it("refuses an oversized provider page before fetching any note detail", async () => {
-    const client = new FakeClient([
-      {
-        notes: [{ id: "note-1" }, { id: "note-2" }],
-        hasMore: false,
-        cursor: null,
-      },
-    ]);
-    const adapter = new GranolaMeetingSourceAdapter(config, {
-      client,
-      now: () => "2026-07-16T00:00:00.000Z",
-    });
-
-    await expect(adapter.pull({ limit: 1 })).rejects.toMatchObject({
-      code: "temporarily_unavailable",
-      retryable: true,
-    });
-    expect(client.listCalls).toEqual([{ page_size: 1 }]);
-    expect(client.detailCalls).toEqual([]);
-  });
-
   it("keeps the page token and high-water mark in an opaque stable cursor", async () => {
     const secondDetail: GranolaNoteDetail = {
       ...detail,
@@ -1158,43 +1137,6 @@ describe("Granola adapter failures", () => {
 });
 
 describe("Granola export boundary regressions", () => {
-  it("enforces the configured page bound even when no pull limit is supplied", async () => {
-    const client = new FakeClient([{
-      notes: [{ id: "one" }, { id: "two" }, { id: "three" }],
-      hasMore: false,
-      cursor: null,
-    }]);
-    const adapter = new GranolaMeetingSourceAdapter(config, { client });
-    await expect(adapter.pull({})).rejects.toMatchObject({
-      code: "temporarily_unavailable", retryable: true,
-    });
-    expect(client.detailCalls).toEqual([]);
-  });
-
-  it.each([null, "", "   "])("rejects a missing continuation token (%s) before fetching detail", async (cursor) => {
-    const client = new FakeClient([{
-      notes: [{ id: detail.id }], hasMore: true, cursor,
-    }]);
-    const adapter = new GranolaMeetingSourceAdapter(config, { client });
-    await expect(adapter.pull({})).rejects.toMatchObject({
-      code: "temporarily_unavailable", retryable: true,
-    });
-    expect(client.detailCalls).toEqual([]);
-  });
-
-  it("rejects a provider continuation that makes no progress", async () => {
-    const client = new FakeClient([
-      { notes: [], hasMore: true, cursor: "page-a" },
-      { notes: [{ id: detail.id }], hasMore: true, cursor: "page-a" },
-    ]);
-    const adapter = new GranolaMeetingSourceAdapter(config, { client });
-    const first = await adapter.pull({});
-    await expect(adapter.pull({ cursor: first.next_cursor })).rejects.toMatchObject({
-      code: "temporarily_unavailable", retryable: true,
-    });
-    expect(client.detailCalls).toEqual([]);
-  });
-
   it("locally enforces the post-cutoff update boundary and keeps it through skipped pages", async () => {
     const cutoff = "2026-07-15T17:00:00.000Z";
     const eligible = { ...detail, owner: { email: "audrey@echobrain.org" }, updated_at: "2026-07-15T18:00:00.000Z" };
@@ -1396,22 +1338,5 @@ describe("Granola HTTP response parsing", () => {
     expect(note.provider_fields).toEqual({
       future_context: { source_kind: "provider-specific" },
     });
-  });
-
-  it("keeps an explicit null transcript distinct from an omitted transcript", async () => {
-    const responses = [
-      { id: "note-null", transcript: null },
-      { id: "note-omitted" },
-    ];
-    const client = new HttpGranolaApiClient("grn_test_key", {
-      fetchImpl: async () =>
-        new Response(JSON.stringify(responses.shift()), { status: 200 }),
-    });
-
-    const nullTranscript = await client.getNote("note-null");
-    const omittedTranscript = await client.getNote("note-omitted");
-
-    expect(nullTranscript).toHaveProperty("transcript", null);
-    expect(omittedTranscript).not.toHaveProperty("transcript");
   });
 });

@@ -2,16 +2,16 @@
 
 **Status:** Current
 
-The repository contains eighteen workspaces: eight neutral packages, eight
-provider workspaces under seven provider folders, the Authority service, and
-the Person client. The root package only orchestrates workspaces.
+The root `package.json` workspace list is the source of truth: eight neutral
+packages, the provider workspaces under `providers/`, the Authority service,
+and the Person client. The root package only orchestrates workspaces.
 
 `packages/` owns inward contracts and reusable implementations. `services/`
 owns deployable processes and their lifecycle. `providers/<provider>/` owns
 that provider's wire formats, credentials, persistence translations, model
-vocabulary, command/UI fragments, tests, and runtime assets. Slack has separate
-client and server workspaces because the Person artifact must remain free of
-Authority code and native SQLite.
+vocabulary, command/UI fragments, tests, and runtime assets. Slack and Jira
+have separate client and server workspaces because the Person artifact must
+remain free of Authority code and native SQLite.
 
 ## Dependency direction
 
@@ -48,10 +48,12 @@ traversal or exception mechanism.
 ## Product and build boundaries
 
 The Person tarball contains the client, federation/protocol/API and the Slack
-client fragment. It includes public versioned data exports and contains no
-Authority, processing, server provider or SQLite dependency. Its dedicated build
-compiles these five workspaces. The Authority image contains its fourteen-workspace
-dependency closure and the required frozen SQL/provider assets. The Electron
+and Jira client fragments. It includes public versioned data exports and
+contains no Authority, processing, server provider or SQLite dependency. Its
+dedicated build (`tools/build.mjs --person-client`) compiles only these
+workspaces. The Authority image contains the workspace dependency closure and
+frozen SQL/provider assets that `deploy/organization-authority/Dockerfile`
+copies into its runtime stage. The Electron
 desktop app in `product/echo-desktop` is not a root workspace and imports no
 workspace source; it loads the built Person client package at run time.
 
@@ -75,10 +77,11 @@ Authority transports live with the composing service. Generic processing and
 record tests retain independent fixture implementations and signed protocol
 helpers without importing a provider or application workspace.
 
-The Person client consumes generic v3 tool status. Slack owns its commands and
-retained v2 disconnect decoder. The v2
-HTTP contract remains provider-owned for installed clients; v3 admits up to
-32 independently identified tools without imposing a provider's identity grammar.
+The Person client consumes generic v4 tool status; v3 remains for older
+clients. Slack owns its commands and retained v2 disconnect decoder. The v2
+HTTP contract remains provider-owned for installed clients; v3 and v4 admit up
+to 32 independently identified tools without imposing a provider's identity
+grammar.
 
 `product/source-boundary.v1.json` declares bootstrap modules, provider folders,
 source assemblies and retired roots. The legacy machine runtime remains absent.
@@ -114,12 +117,19 @@ The server uses separate databases with explicit responsibilities:
 
 - `authority.sqlite` owns Authority metadata, principals, memberships,
   Person/OIDC identity and sessions, authorization/audit state, integration
-  anchors, and bounded pre-record
-  processing state including raw meeting and decision documents;
+  anchors, bounded pre-record processing state including raw meeting and
+  decision documents, and immutable source custody under
+  [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md):
+  Person originals and admitted source revisions, including opt-in retained
+  context captures. Custody grants no read;
 - the control-plane database owns verified provider identity, opaque
   connection handles, Person identity links, and private approval evidence;
-- `record-log.sqlite` is the append-only organization record; and
-- retrieval generations are immutable projections built from record state.
+- `record-log.sqlite` is the append-only organization record;
+- retrieval generations are immutable projections built from record state; and
+- when selected, the gated Jira runtime and the staging connector rehearsal keep
+  provider-owned Jira connection state in `jira-person-connections.sqlite`. It
+  is not a manifest role; the staging restore wrapper retains the rehearsal
+  copy as a sidecar.
 
 The V2 root manifest binds six roles: Authority, control plane, record log,
 and retrieval facts, lexical, and content. Each database carries a V1 database

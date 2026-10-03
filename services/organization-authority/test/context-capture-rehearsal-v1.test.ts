@@ -21,13 +21,10 @@ function capture(external_id: string): ContextCaptureEnvelopeV1 {
     content: {
       schema_version: 1,
       kind: 'echo-context-capture-v1',
-      source_type: 'ticket',
-      truth_status: 'source_observation',
       label: 'Private release ticket',
       provenance: { origin_ref: 'https://provider.example.test/private/123' },
       payload: { schema_version: 1, kind: 'ticket', key: 'PRIVATE-123', status: 'Open', labels: [] },
       representation: { kind: 'pointer', pointer: 'https://provider.example.test/private/123' },
-      observations: [],
     },
   });
 }
@@ -133,10 +130,10 @@ describe('context capture rehearsal V1', () => {
     const source = buildContextCaptureEnvelopeV1({
       identity: otherIdentity, external_id: 'private-object', captured_at: '2026-10-01T00:00:00.000Z',
       content: {
-        schema_version: 1, kind: 'echo-context-capture-v1', source_type: 'note', truth_status: 'source_observation',
+        schema_version: 1, kind: 'echo-context-capture-v1',
         label: 'Private', provenance: { origin_ref: 'private:origin' },
         payload: { schema_version: 1, kind: 'note', format: 'plain_text' },
-        representation: { kind: 'pointer', pointer: 'private:origin' }, observations: [],
+        representation: { kind: 'pointer', pointer: 'private:origin' },
       },
     });
     const error = await runContextCaptureRehearsalV1({

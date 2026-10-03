@@ -1,5 +1,5 @@
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbContextV1 } from '@echo-brain/organization-api';
-import { SlackPersonClient } from './slack-person-client.js';
+import { beginSlackBrowserLink, beginSlackIdentityLink, beginSlackInstall, cancelSlackBrowserLink, cancelSlackInstall, completeSlackIdentityLink, disconnectSlack, setupSlackApp, slackBrowserLinkStatus, slackInstallStatus } from './slack-person-client.js';
 
 const POLL_MS = 2_000;
 // The Authority expires an install after 10 minutes and a sign-in after 5;
@@ -76,16 +76,16 @@ async function openAndWait(context: PersonToolVerbContextV1, begun: Attempt, url
 const SETUP_TOKEN_PROMPT = 'Paste the Slack app configuration token (input hidden). Generate one at https://api.slack.com/apps → Your App Configuration Tokens.';
 
 async function setup(context: PersonToolVerbContextV1): Promise<void> {
-  const client = new SlackPersonClient(context.host);
+  const { host } = context;
   try {
     if (context.values.reconnect !== true) {
-      const app = await client.setupSlackApp((await context.read_secret_line(SETUP_TOKEN_PROMPT)).trim());
+      const app = await setupSlackApp(host, (await context.read_secret_line(SETUP_TOKEN_PROMPT)).trim());
       context.print({ ok: true, phase: 'app-ready', app_id: app.app_id, organization_setup: app.organization_setup });
     }
-    const begun = await client.beginSlackInstall();
+    const begun = await beginSlackInstall(host);
     await openAndWait(context, begun, begun.connect_link, 'Slack connect page could not be opened', {
       polls: INSTALL_POLLS, failures: INSTALL_FAILURES,
-      read: () => client.slackInstallStatus(begun.attempt_id), cancel: () => client.cancelSlackInstall(begun.attempt_id),
+      read: () => slackInstallStatus(host, begun.attempt_id), cancel: () => cancelSlackInstall(host, begun.attempt_id),
       expired: "Not finished. If your Slack requires admin approval, try again once it's approved.",
     });
   } catch (error) {
@@ -96,43 +96,43 @@ async function setup(context: PersonToolVerbContextV1): Promise<void> {
 }
 
 /** For machines without a browser: the person replies in a Slack DM with a code, then presses Enter. */
-async function linkByDirectMessageCode(context: PersonToolVerbContextV1, client: SlackPersonClient): Promise<void> {
+async function linkByDirectMessageCode(context: PersonToolVerbContextV1): Promise<void> {
   const slackUser = context.values['slack-user'];
   if (typeof slackUser !== 'string') throw new Error('--method dm-code requires --slack-user');
   if (context.values['no-wait'] === true) throw new Error('--no-wait is not valid with --method dm-code');
-  const begun = await client.beginSlackIdentityLink(slackUser);
+  const begun = await beginSlackIdentityLink(context.host, slackUser);
   // The opaque challenge handles stay in memory; only the code is shown.
   context.print({ ok: true, phase: 'reply-in-slack', challenge_code: begun.challenge_code, expires_at: begun.expires_at,
     instruction: 'Reply with challenge_code in the Slack thread, then press Enter here to confirm.' });
   if ((await context.read_interactive_line()).trim().length !== 0) {
     throw new Error('Person Slack identity-link confirmation must be an empty Enter acknowledgement');
   }
-  context.print({ ok: true, phase: 'linked', result: await client.completeSlackIdentityLink({
+  context.print({ ok: true, phase: 'linked', result: await completeSlackIdentityLink(context.host, {
     challenge_attempt_id: begun.challenge_attempt_id, challenge_message_ts: begun.challenge_message_ts, challenge_code: begun.challenge_code,
   }) });
 }
 
 async function connect(context: PersonToolVerbContextV1): Promise<void> {
-  const client = new SlackPersonClient(context.host);
+  const { host } = context;
   const method = context.values.method ?? 'browser';
-  if (method === 'dm-code') return linkByDirectMessageCode(context, client);
+  if (method === 'dm-code') return linkByDirectMessageCode(context);
   if (method !== 'browser') throw new Error('--method must be browser or dm-code');
   if (context.values['slack-user'] !== undefined) throw new Error('--slack-user is valid only with --method dm-code');
-  const begun = await client.beginSlackBrowserLink();
+  const begun = await beginSlackBrowserLink(host);
   await openAndWait(context, begun, begun.authorization_url, 'Slack authorization browser could not be opened', {
     polls: SIGN_IN_POLLS, failures: SIGN_IN_FAILURES,
-    read: () => client.slackBrowserLinkStatus(begun.attempt_id), cancel: () => client.cancelSlackBrowserLink(begun.attempt_id),
+    read: () => slackBrowserLinkStatus(host, begun.attempt_id), cancel: () => cancelSlackBrowserLink(host, begun.attempt_id),
     expired: 'That took too long. Try again.',
   });
 }
 
 /** Routes by prefix: `ssi_` is an owner's install, `sbl_` a person's sign-in. */
 async function attempt(context: PersonToolVerbContextV1, verb: 'status' | 'cancel'): Promise<void> {
-  const client = new SlackPersonClient(context.host);
+  const { host } = context;
   const id = String(context.values['attempt-id']);
   let result: unknown;
-  if (id.startsWith('ssi_')) result = verb === 'status' ? await client.slackInstallStatus(id) : await client.cancelSlackInstall(id);
-  else if (id.startsWith('sbl_')) result = verb === 'status' ? await client.slackBrowserLinkStatus(id) : await client.cancelSlackBrowserLink(id);
+  if (id.startsWith('ssi_')) result = verb === 'status' ? await slackInstallStatus(host, id) : await cancelSlackInstall(host, id);
+  else if (id.startsWith('sbl_')) result = verb === 'status' ? await slackBrowserLinkStatus(host, id) : await cancelSlackBrowserLink(host, id);
   else throw new Error('--attempt-id must be an ssi_ setup attempt or an sbl_ connect attempt');
   context.print({ ok: true, result });
 }
@@ -155,7 +155,7 @@ export function createSlackPersonToolProviderV1(): PersonToolProviderV1 {
     disconnect: {
       description: 'Removes your personal Slack link.',
       options: {},
-      run: async (context) => context.print({ ok: true, result: await new SlackPersonClient(context.host).disconnectSlack() }),
+      run: async (context) => context.print({ ok: true, result: await disconnectSlack(context.host) }),
     },
     status: {
       description: 'Reads a step started with --no-wait: an ssi_ setup or sbl_ connect attempt.',

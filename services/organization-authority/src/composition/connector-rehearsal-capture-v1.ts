@@ -6,6 +6,7 @@ import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organizatio
 import type { ContextCaptureContentV1, SourceAdapterV1, MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import { GRANOLA_CONTEXT_CAPTURE_ADAPTER_ID, GRANOLA_CONTEXT_CAPTURE_ADAPTER_VERSION } from '@echo-brain/provider-granola/context/granola-context-source-v1';
 import type { JiraPersonConnectionV1 } from '@echo-brain/provider-jira/jira-person-connection-v1';
+import type Database from 'better-sqlite3';
 import { join } from 'node:path';
 import {
   runContextCaptureRehearsalV1,
@@ -82,8 +83,6 @@ export interface ConnectorRehearsalCaptureInputV1 {
   readonly access_token: string;
   readonly limit: number;
   readonly signal?: AbortSignal;
-  /** Optional caller tightening of the fixed 15-second local qualification deadline. */
-  readonly timeout_ms?: number;
 }
 
 export interface OpenedConnectorRehearsalCaptureV1 {
@@ -93,9 +92,15 @@ export interface OpenedConnectorRehearsalCaptureV1 {
 
 function failure(): Error { return new Error('Context capture rehearsal failed'); }
 function cancelled(): DOMException { return new DOMException('Context capture rehearsal was cancelled', 'AbortError'); }
-function sameOwner(left: PersonAccessAuthorization, right: ConnectorRehearsalInitialOwnerV1): boolean {
-  return left.organization_id === right.organization_id && left.principal_id === right.principal_id &&
-    left.membership_id === right.membership_id && left.membership_type === 'owner';
+/** The authenticated Person is still the bootstrap owner, with an active owner membership. */
+export function isActiveInitialOwnerV1(database: Database.Database, owner: ConnectorRehearsalInitialOwnerV1, authorization: PersonAccessAuthorization): boolean {
+  return authorization.organization_id === owner.organization_id && authorization.principal_id === owner.principal_id &&
+    authorization.membership_id === owner.membership_id && authorization.membership_type === 'owner' &&
+    database.prepare(
+      `SELECT 1 FROM authority_memberships
+        WHERE organization_id=? AND principal_id=? AND membership_id=?
+          AND membership_type='owner' AND status='active'`,
+    ).get(owner.organization_id, owner.principal_id, owner.membership_id) !== undefined;
 }
 function sourceIdentity(adapter_id: string, instance_id: string, version: string) {
   return { kind: 'source' as const, adapter_id, instance_id, version };
@@ -127,13 +132,7 @@ export function openConnectorRehearsalCaptureV1(
   const requireOwner = (accessToken: string): PersonAccessAuthorization => {
     if (closed) throw new Error('Connector rehearsal is closed');
     const authorization = options.authenticate_access.authenticateAccess({ access_token: accessToken });
-    if (!sameOwner(authorization, owner)) throw failure();
-    const active = database.prepare(
-      `SELECT 1 FROM authority_memberships
-        WHERE organization_id=? AND principal_id=? AND membership_id=?
-          AND membership_type='owner' AND status='active'`,
-    ).get(owner.organization_id, owner.principal_id, owner.membership_id);
-    if (active === undefined) throw failure();
+    if (!isActiveInitialOwnerV1(database, owner, authorization)) throw failure();
     return authorization;
   };
   const metadata = database.prepare('SELECT organization_id FROM authority_metadata WHERE singleton=1').get() as { organization_id?: unknown } | undefined;
@@ -207,7 +206,6 @@ export function openConnectorRehearsalCaptureV1(
       organization_id: owner.organization_id,
       authority,
       require_read_current: currentRead,
-      representation: 'full_snapshot',
       retention: { disposition: 'retained', database },
     });
     return runContextCaptureRehearsalV1({
@@ -218,7 +216,7 @@ export function openConnectorRehearsalCaptureV1(
       limit: input.limit,
       cursor: admission.source.cursor,
       signal,
-      timeout_ms: input.timeout_ms ?? REHEARSAL_TIMEOUT_MS,
+      timeout_ms: REHEARSAL_TIMEOUT_MS,
     });
   };
 
@@ -250,7 +248,6 @@ export function openConnectorRehearsalCaptureV1(
     };
     const intake = createJiraContextIntakeV1({
       transport: current.transport,
-      read_grant_fence: current.read_grant_fence,
       project: options.jira.project,
       representation,
       source_instance_id: options.jira.source_instance_id,
@@ -266,7 +263,7 @@ export function openConnectorRehearsalCaptureV1(
       )),
       limit: input.limit,
       signal,
-      timeout_ms: input.timeout_ms ?? REHEARSAL_TIMEOUT_MS,
+      timeout_ms: REHEARSAL_TIMEOUT_MS,
     });
   };
 
@@ -302,7 +299,7 @@ export function openConnectorRehearsalCaptureV1(
       expected_source_identity_sha256: canonicalSha256(configured.source.identity),
       limit: input.limit,
       signal,
-      timeout_ms: input.timeout_ms ?? REHEARSAL_TIMEOUT_MS,
+      timeout_ms: REHEARSAL_TIMEOUT_MS,
     });
   };
 

@@ -1,15 +1,14 @@
 import { validateOrganizationPersonTools } from '@echo-brain/provider-slack-client/organization-api/person-tools';
 import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
-import { observeCoreRuntimeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import { ORGANIZATION_API_PERSON_TOOLS_PATH, ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH } from "@echo-brain/provider-slack-client/organization-api/person-tools";
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH } from "@echo-brain/provider-slack-client/organization-api/person-slack-browser-link";
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from "@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { SlackOrganizationSetupWorkflowV1, type SlackOrganizationSetupOptionsV1 } from "../organization-setup/slack-organization-setup-workflow-v1.js";
-import { SlackWebIdentityProviderV1, type SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
-import { createSlackBotTokenSourceV1, type SlackBotTokenSourceV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
-import { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
+import type { SlackIdentityProviderV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
+import type { SlackBotTokenSourceV1 } from "../organization-control-plane/application/slack-bot-token-source-v1.js";
+import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
 import { findSlackAppCredentialsByReferenceSha256V1 } from "../organization-control-plane/application/slack-app-credentials-v1.js";
 import type { ActiveSlackOrganizationTool } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { readActiveSlackConnectionV1, type StoredSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
@@ -57,7 +56,7 @@ const SLACK_BROWSER_IDENTITY_ROUTES_V1 = Object.freeze([
   }),
 ]);
 
-/** Owner-only organization setup; mounted only when setup options are provided. */
+/** Owner-only organization setup. */
 const SLACK_ORGANIZATION_SETUP_ROUTES_V1 = Object.freeze([
   Object.freeze({ route_id: "slack-setup", method: "POST" as const, path: ORGANIZATION_API_SLACK_SETUP_PATH_V1 }),
   Object.freeze({ route_id: "slack-install-begin", method: "POST" as const, path: ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1 }),
@@ -154,60 +153,31 @@ export function createSlackExternalIdentityHttpApplicationV1(input: {
   });
 }
 
-function unavailableSlackIdentityApplication(runtime: PersonExternalIdentityRuntimeInputV1): ProviderHttpApplicationV1 {
-  return Object.freeze({
-    routes: SLACK_IDENTITY_ROUTES_V1,
-    async accept(request: ProviderHttpRequestV1) {
-      if (request.route_id === "tools") {
-        return observeCoreRuntimeV1("person_tools_status", async () => {
-          const auth = runtime.authentication.authenticateAccess({ access_token: accessToken(request.headers) });
-          if (auth.organization_id !== runtime.organization_id) throw new AuthorityOperationError("unauthorized", "person authentication failed");
-          return { status: 200 as const, body: { schema_version: 2, kind: "echo-organization-person-tools", organization_id: auth.organization_id, membership_id: auth.membership_id, tools: [] } };
-        });
-      }
-      throw new AuthorityOperationError("unavailable", "external identity is unavailable");
-    },
-  });
-}
-
 /**
  * Slack-owned composition for the Person-to-Slack identity link and the
  * owner's organization setup. Its control database, provider client, and
  * token lookup never enter the generic Person runtime.
  */
 export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
-  readonly provider?: SlackIdentityProviderV1;
-  /** Defaults to fetching the bot token from Nango through the setup options' client. */
-  readonly bot_token_source?: SlackBotTokenSourceV1;
+  readonly provider: SlackIdentityProviderV1;
+  readonly bot_token_source: SlackBotTokenSourceV1;
   /** Marked when Slack keeps rejecting the bot token after one refresh; the owner's install clears it. */
-  readonly connection_health?: SlackConnectionHealthV1;
-  /** Nango and the app recipe. Present, the identity, browser and owner setup routes mount; absent, Slack is unavailable. */
-  readonly organization_setup?: SlackOrganizationSetupOptionsV1;
+  readonly connection_health: SlackConnectionHealthV1;
+  /** Nango and the app recipe for the owner's setup routes. */
+  readonly organization_setup: SlackOrganizationSetupOptionsV1;
 }): PersonExternalIdentityRuntimeBundleV1 {
   return Object.freeze({
     open(
       runtime: PersonExternalIdentityRuntimeInputV1,
     ): OpenedPersonExternalIdentityRuntimeV1 {
       const setupOptions = input.organization_setup;
-      if (setupOptions === undefined) {
-        return Object.freeze({
-          application: unavailableSlackIdentityApplication(runtime),
-          tools: async () => [],
-          close: () => undefined,
-        });
-      }
-      if (input.connection_health !== undefined && setupOptions.health !== undefined && input.connection_health !== setupOptions.health) {
-        // Token rejections mark one instance and an owner's install clears it; two would never meet.
-        throw new Error("Slack connection health must be a single instance");
-      }
-      const health = input.connection_health ?? setupOptions.health ?? new SlackConnectionHealthV1();
+      const health = input.connection_health;
       const database = openOrganizationControlDatabase(
         `${runtime.state_directory}/integrations.sqlite`,
         { fileMustExist: true },
       );
       try {
         const secrets = new FileOrganizationSecretStore(`${runtime.state_directory}/secrets`);
-        const botTokenSource = input.bot_token_source ?? createSlackBotTokenSourceV1({ secrets, nango: setupOptions.nango.client, health });
         const workflowInput = {
           database,
           authority_id: runtime.authority_id,
@@ -215,9 +185,9 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
           state_lineage_id: runtime.state_lineage_id,
           authentication: runtime.authentication,
           membership_type: runtime.membership_type,
-          slack: input.provider ?? new SlackWebIdentityProviderV1(),
+          slack: input.provider,
           slack_token_access: {
-            readActiveSlackBotToken: (connection, options) => botTokenSource.botToken(connection, options),
+            readActiveSlackBotToken: (connection, options) => input.bot_token_source.botToken(connection, options),
             onActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
               health.markNeedsReinstall(connection.state_sha256),
             isActiveSlackBotTokenRejected: (connection: StoredSlackConnectionV1) =>
@@ -263,7 +233,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
           organization_id: runtime.organization_id,
           state_lineage_id: runtime.state_lineage_id,
           authentication: runtime.authentication,
-          verifier: setupOptions.verifier ?? workflowInput.slack,
+          verifier: workflowInput.slack,
           health,
         });
         return Object.freeze({
