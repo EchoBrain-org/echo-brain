@@ -155,8 +155,8 @@ accepts no credentials, arbitrary endpoints, message bodies or caller-selected
 owner. The selected channel must be a public channel; the provider verifies both
 its C-prefixed coordinate and Slack's explicit `is_private: false` response
 before accepting messages. The earlier request-only V1 profile and its
-predecessor-anchored V2 rebind are retired; the wrapper, Authority and runner
-refuse both.
+predecessor-anchored V2 rebind are retired: the wrapper refuses them at prepare,
+and the Authority and runner refuse them at startup.
 
 This is an explicit staging qualification selection, not a production startup
 profile or downstream read capability. It does not accept ADR-0026 or enable the

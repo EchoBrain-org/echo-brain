@@ -144,6 +144,16 @@ describe('Jira retained pointer context intake V1', () => {
     expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([]);
   });
 
+  it('does not retain provider bytes when the person-bound Jira grant is revoked during the pull', async () => {
+    let checks = 0;
+    const f = fixture({ compositionCurrent: async () => { checks += 1; if (checks === 2) throw new Error('Jira read grant revoked'); } });
+    const value = database();
+
+    await expect(f.intake(value).pull()).rejects.toThrow('Jira read grant revoked');
+    expect(f.calls.some(call => call.pathname === `${api}/issue/10001`)).toBe(true);
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([]);
+  });
+
   it('rejects a wrong person-bound Jira read grant before provider I/O', async () => {
     const f = fixture({ compositionCurrent: async () => { throw new Error('wrong Jira read grant'); } });
 

@@ -1079,10 +1079,13 @@ state = profile_path.lstat()
 if (not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode)
         or stat.S_IMODE(state.st_mode) != 0o600):
     raise SystemExit(1)
-payload = profile_path.read_text(encoding='utf-8')
+try:
+    payload = profile_path.read_text(encoding='utf-8')
+    profile = json.loads(payload)
+except Exception:
+    raise SystemExit(1)
 if not payload.endswith('\n') or payload.count('\n') != 1:
     raise SystemExit(1)
-profile = json.loads(payload)
 canonical = json.dumps(profile, sort_keys=True, separators=(',', ':'))
 if payload != canonical + '\n':
     raise SystemExit(1)
@@ -1119,7 +1122,7 @@ require_prepared() {
   [[ -f "$RELEASE_FILE" && ! -L "$RELEASE_FILE" ]] || fail 'clean release record is missing; run prepare again with the same record'
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Compose environment is missing; run prepare again with the same inputs'
   python3 "$RELEASE_TOOL" validate "$RELEASE_FILE" >/dev/null || fail 'persisted release record is no longer canonical clean-v1'
-  runtime_profile_matches_prepared_tuple || fail 'prepared runtime profile tuple is missing, noncanonical, or drifted from the accepted release'
+  runtime_profile_matches_prepared_tuple || fail 'prepared runtime profile tuple is missing, noncanonical, or drifted from the accepted release; a retired connector rehearsal selection needs a fresh rehearsal (see the deploy README)'
   for required in oidc-config.json oidc-client-secret nango-secret-key granola-credential-source granola-owner-email llm-credential-source; do
     [[ -f "$PRIVATE_DIR/$required" && ! -L "$PRIVATE_DIR/$required" ]] || fail "fixed private input is missing: $required"
   done

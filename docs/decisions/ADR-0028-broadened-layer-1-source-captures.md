@@ -127,6 +127,12 @@ SQL baseline or release path changes. Rejecting this proposal restores option
 A: the foundation design then names captures ADR-0014 source custody and drops
 "Logical Layer 1".
 
+The same cleanup trimmed the `echo-context-capture-v1` content shape in place to
+the meeting, note, ticket and message payloads, without `source_type`,
+`truth_status` or observations. No path reads retained captures, and the
+required fresh staging rehearsal discards captures retained before the trim; a
+future capture reader accepts only the trimmed shape.
+
 Evidence is source-only: the
 [shared intake tests](../../services/organization-authority/test/context-intake-v1.test.ts)
 prove the capture contract and its atomic retention fence, and the architecture
