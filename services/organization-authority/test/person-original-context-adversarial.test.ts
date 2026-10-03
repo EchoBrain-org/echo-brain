@@ -115,11 +115,11 @@ function fixture() {
   return { database, retrieval, repository, documents, upload, uploadChunks, admitLegacyTeamNote };
 }
 
-function texts(result: ReturnType<SqlitePersonOriginalContextRetrievalV1["retrieve"]>): readonly string[] {
+function texts(result: ReturnType<SqlitePersonOriginalContextRetrievalV1["deskSearch"]>): readonly string[] {
   return result.release.released_atoms.map(atom => atom.text);
 }
 
-function citationOf(atom: ReturnType<SqlitePersonOriginalContextRetrievalV1["retrieve"]>["release"]["released_atoms"][number]): OriginalContextCitationV1 {
+function citationOf(atom: ReturnType<SqlitePersonOriginalContextRetrievalV1["deskSearch"]>["release"]["released_atoms"][number]): OriginalContextCitationV1 {
   return {
     kind: "source_revision", source_id: atom.source_id, revision_id: atom.revision_id,
     source_sha256: atom.source_sha256, representation_sha256: atom.representation_sha256,
@@ -194,7 +194,7 @@ describe("adversarial original-context retrieval", () => {
     ] as const;
     for (const [question, required] of questions) {
       // Layer-3 retrieval for the question, then each packet opens at its exact citation.
-      const result = f.retrieval.retrieve({ access_token: "member", queries: [question], scope: { kind: "project", project_id: PROJECT_ALPHA } });
+      const result = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: question });
       const evidence = texts(result).join("\n");
       for (const value of required) expect(evidence, question).toContain(value);
       const atom = result.release.released_atoms[0]!;
@@ -206,8 +206,8 @@ describe("adversarial original-context retrieval", () => {
     const f = fixture();
     f.upload("An ordinary plan", "This is the plan and it is ready for review.");
     for (const question of ["What is it?", "What is the zeppelin budget?"]) {
-      const result = f.retrieval.retrieve({ access_token: "member", queries: [question], scope: { kind: "global" } });
-      expect(result.query_hit_counts).toEqual([0]);
+      const result = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: question });
+      expect(result.items).toEqual([]);
       expect(result.release.released_atoms).toEqual([]);
     }
   });
@@ -215,7 +215,7 @@ describe("adversarial original-context retrieval", () => {
   it("preserves uppercase technical acronyms that overlap English function words", () => {
     const f = fixture();
     f.upload("Interface", "CAN bus connects the controller.");
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["What is CAN?"], scope: { kind: "global" } })).join(" ")).toContain("CAN bus");
+    expect(texts(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "What is CAN?" })).join(" ")).toContain("CAN bus");
   });
 
   it("retrieves the battery requirement from a natural question ahead of newer incidental matches", () => {
@@ -224,7 +224,7 @@ describe("adversarial original-context retrieval", () => {
     for (let index = 0; index < 7; index += 1) {
       f.upload(`Other ${index}`, "The requirements are proposed for review.", { project_id: PROJECT_ALPHA });
     }
-    const result = f.retrieval.retrieve({ access_token: "member", queries: ["What are the battery reserve requirements?"], scope: { kind: "project", project_id: PROJECT_ALPHA } });
+    const result = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "What are the battery reserve requirements?" });
     expect(result.release.released_atoms[0]).toMatchObject({ document_id: documentId });
     expect(texts(result)[0]).toContain("PRD-14");
   });
@@ -235,7 +235,7 @@ describe("adversarial original-context retrieval", () => {
     const projects = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
     projects.archiveProject("owner", { schema_version: 1, kind: "echo-project-archive-v1", request_id: randomUUID(), project_id: PROJECT_ALPHA, archived: true });
     const scope = { kind: "project" as const, project_id: PROJECT_ALPHA };
-    const released = f.retrieval.retrieve({ access_token: "member", queries: ["Where is archive ask marker?"], scope });
+    const released = f.retrieval.deskSearch({ access_token: "member", scope, query: "Where is archive ask marker?" });
     expect(texts(released).join("\n")).toContain("archive-ask-marker");
     const citation = citationOf(released.release.released_atoms[0]!);
     expect(f.retrieval.read({ access_token: "member", scope, citation }).atom.text).toContain("archive-ask-marker");
@@ -249,7 +249,7 @@ describe("adversarial original-context retrieval", () => {
     f.upload("Private", "battery reserve requirements", { audience: { kind: "only_me" }, project_id: PROJECT_ALPHA });
     f.upload("Other project", "battery reserve requirements", { project_id: PROJECT_BETA });
     f.upload("Other audience", "battery reserve requirements", { audience: { kind: "project", project_id: PROJECT_BETA }, project_id: PROJECT_ALPHA });
-    const result = f.retrieval.retrieve({ access_token: "member", queries: ["What are the battery requirements?"], scope: { kind: "project", project_id: PROJECT_ALPHA } });
+    const result = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "What are the battery requirements?" });
     expect(result.release.released_atoms.map(atom => atom.document_id)).toEqual([allowed]);
   });
 
@@ -270,23 +270,23 @@ describe("adversarial original-context retrieval", () => {
     f.documents.uploadV2("owner", { schema_version: 2, kind: "echo-person-document-upload-v2", request_id: randomUUID(), filename: "modern.md", title: "Modern", content_length: bytes.length, sha256: sha256Digest(bytes), audience: { kind: "projects", project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, association_project_ids: [PROJECT_ALPHA, PROJECT_BETA] }, bytes);
     const claim = f.repository.claimExtraction()!;
     expect(f.repository.completeExtraction(claim, { status: "ready", sourceSha256: claim.source_sha256, extractorVersion: "fixture-1", chunks: [{ anchor_kind: "paragraph", anchor_start: 1, text: bytes.toString() }], message: null })).toBe(true);
-    const retrieve = (marker: string, project?: typeof PROJECT_ALPHA | typeof PROJECT_BETA, access_token = "member") => f.retrieval.retrieve({ access_token, queries: [marker], scope: project ? { kind: "project", project_id: project } : { kind: "global" } });
-    expect(texts(retrieve("sharedmodernmarker", PROJECT_ALPHA))).toEqual([expect.stringContaining("sharedmodernmarker")]);
-    expect(texts(retrieve("documentmodernmarker", PROJECT_ALPHA))).toEqual([expect.stringContaining("documentmodernmarker")]);
-    expect(texts(retrieve("privatemodernmarker", PROJECT_ALPHA))).toEqual([]);
-    expect(texts(retrieve("privatemodernmarker", PROJECT_ALPHA, "owner"))).toEqual([expect.stringContaining("privatemodernmarker")]);
-    expect(texts(retrieve("unassociatedmodernmarker", PROJECT_ALPHA))).toEqual([]);
-    expect(texts(retrieve("unassociatedmodernmarker"))).toEqual([expect.stringContaining("unassociatedmodernmarker")]);
-    const home = retrieve("homepersonalnotemarker", undefined, "owner");
+    const search = (marker: string, project?: typeof PROJECT_ALPHA | typeof PROJECT_BETA, access_token = "member") => f.retrieval.deskSearch({ access_token, scope: project ? { kind: "project", project_id: project } : { kind: "global" }, query: marker });
+    expect(texts(search("sharedmodernmarker", PROJECT_ALPHA))).toEqual([expect.stringContaining("sharedmodernmarker")]);
+    expect(texts(search("documentmodernmarker", PROJECT_ALPHA))).toEqual([expect.stringContaining("documentmodernmarker")]);
+    expect(texts(search("privatemodernmarker", PROJECT_ALPHA))).toEqual([]);
+    expect(texts(search("privatemodernmarker", PROJECT_ALPHA, "owner"))).toEqual([expect.stringContaining("privatemodernmarker")]);
+    expect(texts(search("unassociatedmodernmarker", PROJECT_ALPHA))).toEqual([]);
+    expect(texts(search("unassociatedmodernmarker"))).toEqual([expect.stringContaining("unassociatedmodernmarker")]);
+    const home = search("homepersonalnotemarker", undefined, "owner");
     expect(texts(home)).toEqual([expect.stringContaining("homepersonalnotemarker")]);
-    expect(texts(retrieve("homepersonalnotemarker"))).toEqual([]);
-    expect(texts(retrieve("homepersonalnotemarker", PROJECT_ALPHA, "owner"))).toEqual([]);
+    expect(texts(search("homepersonalnotemarker"))).toEqual([]);
+    expect(texts(search("homepersonalnotemarker", PROJECT_ALPHA, "owner"))).toEqual([]);
     expect(f.retrieval.read({ access_token: "owner", scope: { kind: "global" }, citation: citationOf(home.release.released_atoms[0]!) }).atom.text).toContain("homepersonalnotemarker");
     grant(f.database, PROJECT_BETA, MEMBER, "member");
-    expect(texts(retrieve("sharedmodernmarker", PROJECT_BETA))).toEqual([]);
-    expect(texts(retrieve("documentmodernmarker", PROJECT_BETA))).toEqual([expect.stringContaining("documentmodernmarker")]);
-    const global = retrieve("sharedmodernmarker");
-    const scoped = retrieve("sharedmodernmarker", PROJECT_ALPHA);
+    expect(texts(search("sharedmodernmarker", PROJECT_BETA))).toEqual([]);
+    expect(texts(search("documentmodernmarker", PROJECT_BETA))).toEqual([expect.stringContaining("documentmodernmarker")]);
+    const global = search("sharedmodernmarker");
+    const scoped = search("sharedmodernmarker", PROJECT_ALPHA);
     const citation = citationOf(global.release.released_atoms[0]!);
     f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?").run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
     expect(() => f.retrieval.revalidate({ access_token: "member", release: scoped.release })).toThrow();
@@ -303,15 +303,15 @@ describe("adversarial original-context retrieval", () => {
     const fixedSession = new SqlitePersonOriginalContextRetrievalV1(f.database, {
       authenticateAccess: ({ access_token }) => authorization(access_token === "member" ? MEMBER : OWNER),
     }, OWNER.organization_id);
-    const input = { access_token: "member", queries: ["repeated-audit-marker"], scope: { kind: "global" as const } };
-    expect(fixedSession.retrieve(input).query_hit_counts).toEqual([1]);
-    expect(() => fixedSession.retrieve(input)).not.toThrow();
+    const input = { access_token: "member", scope: { kind: "global" as const }, query: "repeated-audit-marker" };
+    expect(fixedSession.deskSearch(input).items).toHaveLength(1);
+    expect(() => fixedSession.deskSearch(input)).not.toThrow();
   });
 
   it("uses actual V8 source admission for legacy notes and excludes a raw meeting source", async () => {
     const f = fixture();
     await f.admitLegacyTeamNote("Legacy handoff", "legacycontextmarker is retained through the common Person source adapter");
-    const legacy = f.retrieval.retrieve({ access_token: "member", queries: ["legacycontextmarker"], scope: { kind: "global" } });
+    const legacy = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "legacycontextmarker" });
     expect(texts(legacy).join(" ")).toContain("legacycontextmarker");
 
     const meeting = {
@@ -330,8 +330,8 @@ describe("adversarial original-context retrieval", () => {
       source: bridge, request: { limit: 1 },
       admission: { store: new SqliteSourceAdmissionStoreV1(f.database), scope: { organization_id: OWNER.organization_id, custody_ref: `organization:${OWNER.organization_id}`, access_policy_ref: "meeting-fixture", analysis_policy: "automatic" } },
     });
-    const raw = f.retrieval.retrieve({ access_token: "member", queries: ["rawmeetingsecretmarker"], scope: { kind: "global" } });
-    expect(raw.query_hit_counts).toEqual([0]);
+    const raw = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "rawmeetingsecretmarker" });
+    expect(raw.items).toEqual([]);
     expect(texts(raw).join(" ")).not.toContain("rawmeetingsecretmarker");
   });
 
@@ -400,14 +400,14 @@ describe("adversarial original-context retrieval", () => {
     // quote" is answerable; identities stay out, and unnamed turns stay bare.
     // Observability: the enclosing evidence span learns how many packets were transcripts.
     const spans: CoreRuntimeObservationV1[] = [];
-    const asked = observeCoreRuntimeSyncV1("evidence_search", () => retrieval.retrieve({ access_token: "member", queries: ["Haddad revised quote"], scope: { kind: "global" } }), { observer: (event) => { spans.push(event); } });
+    const asked = observeCoreRuntimeSyncV1("evidence_search", () => retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "Haddad revised quote" }), { observer: (event) => { spans.push(event); } });
     expect(spans.find(span => span.event === "succeeded")?.counts.transcript_items).toBe(1);
-    expect(asked.query_hit_counts).toEqual([1]);
+    expect(asked.items).toHaveLength(1);
     const packet = asked.release.released_atoms[0]!;
     expect(packet).toMatchObject({ source_id: source.source_id, revision_id: source.revision_id, label: "Transcript: Pricing sync" });
     expect(packet.text).toBe("Transcript: Pricing sync\nOmar Haddad: approved transcript marker: I will send the revised quote by Friday\n\nThanks.\n\nAn unattributed line.");
     expect(packet.text).not.toContain("omar@example.test");
-    expect(retrieval.retrieve({ access_token: "member", queries: ["revised quote"], scope: { kind: "project", project_id: PROJECT_ALPHA } }).query_hit_counts).toEqual([1]);
+    expect(retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "revised quote" }).items).toHaveLength(1);
     expect(retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: citationOf(packet) }).atom).toEqual(packet);
     expect(() => retrieval.revalidate({ access_token: "member", release: asked.release })).not.toThrow();
     // The agentic desk reads the same transcript as a labeled note, and opens it.
@@ -453,12 +453,12 @@ describe("adversarial original-context retrieval", () => {
     expect(() => retrieval.revalidate({ access_token: "member", release: asked.release })).toThrow();
     expect(() => retrieval.revalidateDeskRelease({ access_token: "member", release: desk })).toThrow();
     expect(() => retrieval.read({ access_token: "member", scope: { kind: "global" }, citation: citationOf(packet) })).toThrow();
-    expect(retrieval.retrieve({ access_token: "member", queries: ["revised quote"], scope: { kind: "global" } }).query_hit_counts).toEqual([0]);
-    expect(retrieval.retrieve({ access_token: "owner", queries: ["revised quote"], scope: { kind: "global" } }).query_hit_counts).toEqual([1]);
+    expect(retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "revised quote" }).items).toEqual([]);
+    expect(retrieval.deskSearch({ access_token: "owner", scope: { kind: "global" }, query: "revised quote" }).items).toHaveLength(1);
     enabled = false;
     expect(() => retrieval.readApprovedMeetingTranscript({ access_token: "owner", scope: { kind: "global" }, citation })).toThrow();
     // With no grant (the share toggle off), the same meeting is not Ask evidence.
-    expect(retrieval.retrieve({ access_token: "owner", queries: ["revised quote"], scope: { kind: "global" } }).query_hit_counts).toEqual([0]);
+    expect(retrieval.deskSearch({ access_token: "owner", scope: { kind: "global" }, query: "revised quote" }).items).toEqual([]);
   });
 
   it("enforces audience separately from project association in global and project-scoped reads", () => {
@@ -468,28 +468,17 @@ describe("adversarial original-context retrieval", () => {
     f.upload("Beta audience Alpha association", "betaaudiencealphaassociationmarker", { audience: { kind: "project", project_id: PROJECT_BETA }, project_id: PROJECT_ALPHA });
     f.upload("Alpha audience Beta association", "alphaaudiencebetaassociationmarker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_BETA });
 
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["sharedalphamarker"], scope: { kind: "global" } })).join(" ")).toContain("sharedalphamarker");
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["privatealphamarker"], scope: { kind: "global" } }))).toEqual([]);
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["betaaudiencealphaassociationmarker"], scope: { kind: "project", project_id: PROJECT_ALPHA } }))).toEqual([]);
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["alphaaudiencebetaassociationmarker"], scope: { kind: "global" } })).join(" ")).toContain("alphaaudiencebetaassociationmarker");
-    expect(texts(f.retrieval.retrieve({ access_token: "member", queries: ["alphaaudiencebetaassociationmarker"], scope: { kind: "project", project_id: PROJECT_ALPHA } }))).toEqual([]);
-  });
-
-  it("limits a broad single planned query to five newer originals, leaving later competing originals unreleased", () => {
-    const f = fixture();
-    for (let index = 0; index < 11; index += 1) {
-      f.upload(`Competing ${index}`, `broad-competition-marker document-${index}`);
-    }
-    const result = f.retrieval.retrieve({ access_token: "member", queries: ["broad-competition-marker"], scope: { kind: "global" } });
-    expect(result.query_hit_counts).toEqual([5]);
-    expect(texts(result).join(" ")).toContain("document-10");
-    expect(texts(result).join(" ")).not.toContain("document-0");
+    expect(texts(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "sharedalphamarker" })).join(" ")).toContain("sharedalphamarker");
+    expect(texts(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "privatealphamarker" }))).toEqual([]);
+    expect(texts(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "betaaudiencealphaassociationmarker" }))).toEqual([]);
+    expect(texts(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "alphaaudiencebetaassociationmarker" })).join(" ")).toContain("alphaaudiencebetaassociationmarker");
+    expect(texts(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "alphaaudiencebetaassociationmarker" }))).toEqual([]);
   });
 
   it("keeps a globally readable team original available after an uncited project grant is revoked", () => {
     const f = fixture();
     f.upload("Shared evidence", "uncited-revocation-marker", { project_id: PROJECT_ALPHA });
-    const released = f.retrieval.retrieve({ access_token: "member", queries: ["uncited-revocation-marker"], scope: { kind: "global" } });
+    const released = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "uncited-revocation-marker" });
     f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")
       .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
     expect(f.retrieval.revalidate({ access_token: "member", release: released.release })).toMatchObject({ checked_at: expect.any(String) });
@@ -498,8 +487,8 @@ describe("adversarial original-context retrieval", () => {
   it("fails revalidation after a selected-project grant is revoked, including global project-audience sources", () => {
     const f = fixture();
     f.upload("Selected project", "selected-project-revocation-marker", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });
-    const scoped = f.retrieval.retrieve({ access_token: "member", queries: ["selected-project-revocation-marker"], scope: { kind: "project", project_id: PROJECT_ALPHA } });
-    const global = f.retrieval.retrieve({ access_token: "member", queries: ["selected-project-revocation-marker"], scope: { kind: "global" } });
+    const scoped = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "project", project_id: PROJECT_ALPHA }, query: "selected-project-revocation-marker" });
+    const global = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "selected-project-revocation-marker" });
     f.database.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=?")
       .run(PROJECT_CONTEXT_NOW, PROJECT_ALPHA, MEMBER.membership_id);
     expect(() => f.retrieval.revalidate({ access_token: "member", release: scoped.release }))
@@ -511,7 +500,7 @@ describe("adversarial original-context retrieval", () => {
   it("rejects a tampered representation body when its stored hash is unchanged", () => {
     const f = fixture();
     f.upload("Representation check", "representation-corruption-marker");
-    const released = f.retrieval.retrieve({ access_token: "member", queries: ["representation-corruption-marker"], scope: { kind: "global" } });
+    const released = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "representation-corruption-marker" });
     f.database.exec("DROP TRIGGER authority_source_representations_v1_update_denied");
     f.database.prepare("UPDATE authority_source_representations_v1 SET content_json=?").run('{"tampered":true}');
     expect(() => f.retrieval.revalidate({ access_token: "member", release: released.release }))
@@ -521,8 +510,8 @@ describe("adversarial original-context retrieval", () => {
   it("excludes a mutable document title from released evidence and its citation", () => {
     const f = fixture();
     const documentId = f.upload("Immutable title", "document-title-integrity-marker");
-    const input = { access_token: "member", queries: ["document-title-integrity-marker"], scope: { kind: "global" as const } };
-    const released = f.retrieval.retrieve(input);
+    const input = { access_token: "member", scope: { kind: "global" as const }, query: "document-title-integrity-marker" };
+    const released = f.retrieval.deskSearch(input);
     const citation = citationOf(released.release.released_atoms[0]!);
 
     // The document row has no immutable title column. A retained-row title
@@ -530,10 +519,10 @@ describe("adversarial original-context retrieval", () => {
     f.database.exec("DROP TRIGGER authority_person_documents_v1_update_denied");
     f.database.prepare("UPDATE authority_person_documents_v1 SET title=? WHERE document_id=?")
       .run("Forged document title", documentId);
-    expect(f.retrieval.retrieve({ ...input, queries: ["Forged"] }).release.released_atoms).toEqual([]);
-    expect(f.retrieval.retrieve({ ...input, queries: ["Immutable-title.md"] }).release.released_atoms)
+    expect(f.retrieval.deskSearch({ ...input, query: "Forged" }).release.released_atoms).toEqual([]);
+    expect(f.retrieval.deskSearch({ ...input, query: "Immutable-title.md" }).release.released_atoms)
       .toHaveLength(1);
-    const after = f.retrieval.retrieve(input).release.released_atoms[0]!;
+    const after = f.retrieval.deskSearch(input).release.released_atoms[0]!;
     expect(after).toMatchObject({ label: "Immutable-title.md", anchor_sha256: released.release.released_atoms[0]!.anchor_sha256 });
     expect(after.text).not.toContain("Forged document title");
     expect(f.retrieval.revalidate({ access_token: "member", release: released.release }))
@@ -547,7 +536,7 @@ describe("adversarial original-context retrieval", () => {
     const filename = `${"a".repeat(247)}.md`;
     f.upload("Short title", "long-filename-roundtrip-marker", { filename });
     const scope = { kind: "global" as const };
-    const atom = f.retrieval.retrieve({ access_token: "member", queries: ["long-filename-roundtrip-marker"], scope }).release.released_atoms[0]!;
+    const atom = f.retrieval.deskSearch({ access_token: "member", scope, query: "long-filename-roundtrip-marker" }).release.released_atoms[0]!;
     expect(atom.text.startsWith(`${filename}\n`)).toBe(true);
     expect([...(atom.label ?? "")]).toHaveLength(198);
     const proof = f.retrieval.read({ access_token: "member", scope, citation: citationOf(atom) }).atom;
@@ -568,7 +557,7 @@ describe("adversarial original-context retrieval", () => {
     const f = fixture();
     f.upload("Short title", `public-label-roundtrip-${label}`, { filename });
     const scope = { kind: "global" as const };
-    const atom = f.retrieval.retrieve({ access_token: "member", queries: [`public-label-roundtrip-${label}`], scope }).release.released_atoms[0]!;
+    const atom = f.retrieval.deskSearch({ access_token: "member", scope, query: `public-label-roundtrip-${label}` }).release.released_atoms[0]!;
     expect(atom.text.startsWith(`${filename}\n`)).toBe(true);
     expect(atom.label).toBe(label);
     const citation = citationOf(atom);
@@ -585,10 +574,10 @@ describe("adversarial original-context retrieval", () => {
 
   it("finds a lexical term crossing a proof-packet boundary and opens that exact packet", () => {
     const f = fixture();
-    // This valid 3 KiB extraction chunk puts 'needle' across the former 3,067
-    // body-byte boundary after the title and newline consume five bytes.
-    f.upload("Plan", "a".repeat(3065) + "needle");
-    const result = f.retrieval.retrieve({ access_token: "member", queries: ["needle"], scope: { kind: "global" } });
+    // This extraction chunk puts 'needle' across the first packet's 3,064
+    // body-byte boundary after the filename heading consumes eight bytes.
+    f.upload("Plan", "a".repeat(3060) + " needle");
+    const result = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "needle" });
     expect(result.release.released_atoms).toHaveLength(1);
     const atom = result.release.released_atoms[0]!;
     expect(atom.text).toContain("needle");
@@ -602,8 +591,8 @@ describe("adversarial original-context retrieval", () => {
     async carrier => {
       const f = fixture();
       await f.admitLegacyTeamNote("Integrity proof", "integrity-proof-marker remains original evidence");
-      const input = { access_token: "member", queries: ["integrity-proof-marker"], scope: { kind: "global" as const } };
-      const released = f.retrieval.retrieve(input);
+      const input = { access_token: "member", scope: { kind: "global" as const }, query: "integrity-proof-marker" };
+      const released = f.retrieval.deskSearch(input);
       const citation = citationOf(released.release.released_atoms[0]!);
       expect(f.retrieval.read({ access_token: "member", scope: input.scope, citation }).atom.text).toContain("remains original evidence");
 
@@ -621,7 +610,7 @@ describe("adversarial original-context retrieval", () => {
         f.database.prepare("UPDATE authority_source_revisions_v1 SET manifest_json=json_set(manifest_json,'$.content_sha256',?)")
           .run("0".repeat(64));
       }
-      expect(() => f.retrieval.retrieve(input)).toThrow(expect.objectContaining({ code: "unavailable" }));
+      expect(() => f.retrieval.deskSearch(input)).toThrow(expect.objectContaining({ code: "unavailable" }));
       expect(() => f.retrieval.revalidate({ access_token: "member", release: released.release }))
         .toThrow(expect.objectContaining({ code: "unavailable" }));
       expect(() => f.retrieval.read({ access_token: "member", scope: input.scope, citation }))
@@ -635,7 +624,7 @@ describe("adversarial original-context retrieval", () => {
       audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA,
     });
     const scope = { kind: "project" as const, project_id: PROJECT_ALPHA };
-    const released = f.retrieval.retrieve({ access_token: "member", queries: ["exact-citation-marker"], scope });
+    const released = f.retrieval.deskSearch({ access_token: "member", scope, query: "exact-citation-marker" });
     const atom = released.release.released_atoms[0]!;
     const citation = citationOf(atom);
     const proofAuditCount = () => (f.database.prepare("SELECT count(*) AS count FROM authority_person_upload_read_audit_v1 WHERE json_extract(body_json,'$.kind')='echo-person-original-context-proof-read-audit-v1'").get() as { count: number }).count;
@@ -663,11 +652,11 @@ describe("adversarial original-context retrieval", () => {
     f.upload("Own Beta", "scope-clarification-marker unrelated-beta-private", { audience: { kind: "only_me" }, project_id: PROJECT_BETA });
     f.upload("Organization distractor", "scope-clarification-marker unrelated-org-context");
     const scope = { kind: "project" as const, project_id: PROJECT_ALPHA };
-    const input = { queries: ["scope-clarification-marker"], scope };
-    const own = f.retrieval.retrieve({ ...input, access_token: "owner" });
+    const input = { scope, query: "scope-clarification-marker" };
+    const own = f.retrieval.deskSearch({ ...input, access_token: "owner" });
     expect(own.release.released_atoms).toHaveLength(1);
     expect(texts(own)[0]).toContain("own-associated-private");
-    expect(texts(f.retrieval.retrieve({ ...input, access_token: "member" }))).toEqual([]);
+    expect(texts(f.retrieval.deskSearch({ ...input, access_token: "member" }))).toEqual([]);
     const citation = citationOf(own.release.released_atoms[0]!);
     expect(f.retrieval.read({ access_token: "owner", scope, citation }).atom.text).toContain("own-associated-private");
     expect(() => f.retrieval.read({ access_token: "member", scope, citation }))
@@ -687,7 +676,7 @@ describe("adversarial original-context retrieval", () => {
     const retrieval = new SqlitePersonOriginalContextRetrievalV1(meter.database, {
       authenticateAccess: () => authorization(MEMBER),
     }, OWNER.organization_id);
-    const released = retrieval.retrieve({ access_token: "member", queries: ["late-evidence-marker"], scope: { kind: "global" } });
+    const released = retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "late-evidence-marker" });
     const atom = released.release.released_atoms[0]!;
     expect(atom.text).toContain("late-evidence-marker");
     expect(meter.bytes()).toBeLessThan(extractedBytes * 8);

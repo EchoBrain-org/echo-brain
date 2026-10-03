@@ -9,7 +9,6 @@ import { readPrivateAuthorityCredential } from '@echo-brain/organization-authori
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from '@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1';
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from '@echo-brain/provider-slack-client/organization-api/person-slack-identity-link';
 import { runOrganizationAuthoritySetupCli } from '../src/composition/organization-authority-setup-cli.js';
-import { openStagingConnectorRehearsalServiceV1 } from '../src/composition/staging-connector-rehearsal-runtime-v1.js';
 import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
 import { STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/staging-connector-rehearsal-protocol-v2.js';
 import { readOrganizationAuthoritySetupManifest } from '../src/composition/organization-authority-setup-cli.js';
@@ -69,7 +68,7 @@ it('serves owner-bound Jira connection and request-only capture through staging 
   const selected = selection();
   const profile_sha256 = canonicalSha256(selected.profile);
   privateFile(join(root, 'private', 'staging-connector-rehearsal.json'), JSON.stringify(selected.profile));
-  const open = async () => openStagingConnectorRehearsalServiceV1({
+  const open = async () => openStagingConnectorRehearsalService({
     state_directory: manifest.state_directory, authority_url: STAGING_AUTHORITY_ORIGIN_V1, host: '127.0.0.1', port: await port(), scheduling: 'periodic', worker_interval_ms: 60_000,
     oidc: oidc.configuration, client_authentication: { method: 'none' }, pkce_key_file: manifest.pkce_key_file,
     slack_nango: { secret_key: readPrivateAuthorityCredential(`file:${config.nango.secret_key_file}`), integration_key: 'slack' },

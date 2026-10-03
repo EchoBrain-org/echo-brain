@@ -8,7 +8,6 @@ import {
   personRefKindV1,
   validatePersonListResponseV1,
   validatePersonOpenResponseV1,
-  organizationPersonToolV3FromV4,
   type OrganizationPersonToolV4,
   type PersonAnswerScopeV3,
   type PersonListProjectV1,
@@ -220,7 +219,7 @@ export function createPersonListRouteV1(options: CreatePersonListRouteV1Options)
         case "global": {
           const me = options.directory.me(actor);
           if (me === undefined) denied();
-          const tools = (await options.tools(access_token)).map(organizationPersonToolV3FromV4);
+          const tools = await options.tools(access_token);
           header = {
             me: { display_name: boundedTextV1(me.display_name, PERSON_LIST_TEXT_MAX_BYTES_V1) ?? invalidOutput(), membership_type: actor.membership_type },
             connected: tools.map((tool) => ({ tool: tool.tool_id, status: tool.personal_status })),

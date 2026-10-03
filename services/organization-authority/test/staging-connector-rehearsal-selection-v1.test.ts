@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { readStagingConnectorRehearsalSelectionV1 } from '../src/composition/staging-connector-rehearsal-selection-v1.js';
+import { readStagingConnectorRehearsalSelection } from '../src/composition/staging-connector-rehearsal-selection.js';
 import {
   validateStagingConnectorRehearsalProfileV1,
   validateStagingConnectorRehearsalRequestV1,
@@ -31,32 +31,32 @@ function prepared() {
 
 describe('staging rehearsal opt-in selection', () => {
   it('leaves ordinary profiles disabled without reading any file', () => {
-    expect(readStagingConnectorRehearsalSelectionV1({ state_directory: '/missing', authority_url: 'https://authority.echobrain.org', environment: {} })).toBeUndefined();
+    expect(readStagingConnectorRehearsalSelection({ state_directory: '/missing', authority_url: 'https://authority.echobrain.org', environment: {} })).toBeUndefined();
   });
   it('reads the private profile only for the fixed staging identity', () => {
     const { input } = prepared();
-    expect(readStagingConnectorRehearsalSelectionV1(input)).toEqual({ profile, release_id: binding.release_id, authority_host: 'authority-staging.echobrain.org' });
-    expect(() => readStagingConnectorRehearsalSelectionV1({ ...input, authority_url: 'https://authority.echobrain.org' })).toThrow();
-    expect(() => readStagingConnectorRehearsalSelectionV1({ ...input, environment: { ...input.environment, ECHO_CLEAN_AUTHORITY_HOST: 'authority.echobrain.org' } })).toThrow();
-    expect(() => readStagingConnectorRehearsalSelectionV1({ ...input, environment: { ...input.environment, ECHO_CLEAN_RELEASE_ID: '' } })).toThrow();
+    expect(readStagingConnectorRehearsalSelection(input)).toEqual({ profile, release_id: binding.release_id, authority_host: 'authority-staging.echobrain.org' });
+    expect(() => readStagingConnectorRehearsalSelection({ ...input, authority_url: 'https://authority.echobrain.org' })).toThrow();
+    expect(() => readStagingConnectorRehearsalSelection({ ...input, environment: { ...input.environment, ECHO_CLEAN_AUTHORITY_HOST: 'authority.echobrain.org' } })).toThrow();
+    expect(() => readStagingConnectorRehearsalSelection({ ...input, environment: { ...input.environment, ECHO_CLEAN_RELEASE_ID: '' } })).toThrow();
   });
   it('rejects loose permissions, alternate paths, symlinks and oversized profiles', () => {
     const { path, input } = prepared();
     chmodSync(path, 0o644);
-    expect(() => readStagingConnectorRehearsalSelectionV1(input)).toThrow();
+    expect(() => readStagingConnectorRehearsalSelection(input)).toThrow();
     chmodSync(path, 0o600);
     const alias = join(input.state_directory, '..', 'profile-alias.json');
     symlinkSync(path, alias);
-    expect(() => readStagingConnectorRehearsalSelectionV1({ ...input, environment: { ...input.environment, ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: alias } })).toThrow();
+    expect(() => readStagingConnectorRehearsalSelection({ ...input, environment: { ...input.environment, ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE: alias } })).toThrow();
     rmSync(alias);
     rmSync(path);
     const target = join(input.state_directory, '..', 'target.json');
     writeFileSync(target, JSON.stringify(profile), { mode: 0o600 });
     symlinkSync(target, path);
-    expect(() => readStagingConnectorRehearsalSelectionV1(input)).toThrow();
+    expect(() => readStagingConnectorRehearsalSelection(input)).toThrow();
     rmSync(path);
     writeFileSync(path, ' '.repeat(8193), { mode: 0o600 });
-    expect(() => readStagingConnectorRehearsalSelectionV1(input)).toThrow();
+    expect(() => readStagingConnectorRehearsalSelection(input)).toThrow();
   });
 });
 

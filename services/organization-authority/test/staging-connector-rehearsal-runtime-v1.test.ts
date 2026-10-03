@@ -30,7 +30,8 @@ vi.mock('@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1
 vi.mock('../src/composition/organization-authority-setup-cli.js', () => ({
   readOrganizationAuthoritySetupManifest: (directory: string) => ({ state_directory: directory, authority_url: 'https://authority-staging.echobrain.org', authority_id: 'oau_fixture', organization_id: 'org_fixture', state_lineage_id: 'lineage-fixture', owner_principal_id: 'prn_fixture', owner_membership_id: 'mem_fixture' }),
 }));
-vi.mock('../src/composition/connector-rehearsal-capture-v1.js', () => ({
+vi.mock('../src/composition/connector-rehearsal-capture-v1.js', async importOriginal => ({
+  ...await importOriginal<typeof import('../src/composition/connector-rehearsal-capture-v1.js')>(),
   openConnectorRehearsalCaptureV1: () => ({
     async capture() {
       state.captures += 1;
@@ -59,7 +60,7 @@ vi.mock('../src/composition/organization-authority-composition-root.js', () => (
   },
 }));
 
-import { openStagingConnectorRehearsalServiceV1 } from '../src/composition/staging-connector-rehearsal-runtime-v1.js';
+import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
 import { STAGING_CONNECTOR_REHEARSAL_PATH_V1 } from '../src/composition/staging-connector-rehearsal-protocol-v1.js';
 
 const roots: string[] = [];
@@ -88,7 +89,7 @@ it('binds a staging-only owner surface to a lineage/profile sidecar and returns 
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
   const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
   const selected = selection();
-  const opened = await openStagingConnectorRehearsalServiceV1(config(stateDirectory), selected);
+  const opened = await openStagingConnectorRehearsalService(config(stateDirectory), selected);
   const capture = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
   const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
   await expect(capture.accept(request('staging-connector-rehearsal', 'other', { schema_version: 1, release_id: selected.release_id, profile_sha256, action: 'status' }))).rejects.toThrow('unavailable');
@@ -107,7 +108,7 @@ it('withholds a capture receipt if the owner loses eligibility during provider w
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
   const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
   const selected = selection();
-  const opened = await openStagingConnectorRehearsalServiceV1(config(stateDirectory), selected);
+  const opened = await openStagingConnectorRehearsalService(config(stateDirectory), selected);
   const capture = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
   const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
   state.demoteDuringCapture = true;
@@ -118,7 +119,7 @@ it('withholds a capture receipt if the owner loses eligibility during provider w
 it('does not expose Jira connection commands to a non-owner', async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
   const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
-  const opened = await openStagingConnectorRehearsalServiceV1(config(stateDirectory), selection());
+  const opened = await openStagingConnectorRehearsalService(config(stateDirectory), selection());
   const jira = state.apps.find(app => app.routes.some(route => route.path === '/v1/person/tools/jira/connect'))!;
   expect(() => jira.accept(request('jira-connect', 'other', { schema_version: 1 }))).toThrow('unavailable');
   expect(state.jira).toBe(0);

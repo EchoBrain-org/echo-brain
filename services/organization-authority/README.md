@@ -220,10 +220,9 @@ npm run authority:staging-connector-rehearsal -- capture \
   --tool jira --limit 1
 ```
 
-The runner uses the installed Person session in the current user's home. An
-explicit `--person-home` can select another local home, but its session must
-still name the staging Authority and an active initial owner. The release ID
-and profile digest must match the running server. No token is accepted on the
+The runner uses the installed Person session in the current user's home. That
+session must name the staging Authority and an active initial owner. The
+release ID and profile digest must match the running server. No token is accepted on the
 command line or printed. A failed capture is not retried automatically: a lost
 response may follow an already-committed observation.
 

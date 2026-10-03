@@ -22,7 +22,7 @@ import {
 } from './staging-connector-rehearsal-protocol-v1.js';
 import { stagingConnectorRehearsalProtocol, validateStagingConnectorRehearsalProfile, type StagingConnectorRehearsalProfile, type StagingConnectorRehearsalRequest, type StagingConnectorRehearsalResponse } from './staging-connector-rehearsal-protocol.js';
 import type { StagingConnectorRehearsalProfileV2 } from './staging-connector-rehearsal-protocol-v2.js';
-import { openConnectorRehearsalCaptureV1, type OpenedConnectorRehearsalCaptureV1 } from './connector-rehearsal-capture-v1.js';
+import { isActiveInitialOwnerV1, openConnectorRehearsalCaptureV1, type OpenedConnectorRehearsalCaptureV1 } from './connector-rehearsal-capture-v1.js';
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveRuntimeSeamsV1, type OpenedJiraPersonLiveRuntimeV1 } from './jira-person-live-runtime-v1.js';
 import {
   openOrganizationAuthorityService,
@@ -275,10 +275,7 @@ export async function openStagingConnectorRehearsalService(
       const application = authenticate;
       if (application === undefined) unavailable();
       const authorization = application({ access_token });
-      if (authorization.organization_id !== owner.organization_id || authorization.principal_id !== owner.principal_id ||
-          authorization.membership_id !== owner.membership_id || authorization.membership_type !== 'owner') unavailable();
-      const active = fenceDatabase!.prepare(`SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=? AND membership_type='owner' AND status='active'`).get(owner.organization_id, owner.principal_id, owner.membership_id);
-      if (active === undefined) unavailable();
+      if (!isActiveInitialOwnerV1(fenceDatabase!, owner, authorization)) unavailable();
       return authorization;
     };
     let captureInFlight = false;
@@ -322,14 +319,14 @@ export async function openStagingConnectorRehearsalService(
           state_directory: config.state_directory, initial_owner: owner,
           channel_id: selected.profile.slack.channel_id, source_instance_id: 'staging-slack-context-v2',
           profile_sha256: selected.profile_sha256, capability: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1,
-          authenticate_access: { authenticateAccess: input => requireOwner(input.access_token) },
+          authenticate_access: sessions,
           slack: slackPorts,
         });
       }
       captures = openConnectorRehearsalCaptureV1({
         state_directory: config.state_directory,
         initial_owner: owner,
-        authenticate_access: { authenticateAccess: input => requireOwner(input.access_token) },
+        authenticate_access: sessions,
         exclusive: { run_exclusive: operation => runtime === undefined ? Promise.reject(new Error('Staging connector rehearsal is starting')) : runtime.runExclusive(operation) },
         ...(granola === undefined ? {} : { granola }),
         ...(slack === undefined ? {} : { slack }),

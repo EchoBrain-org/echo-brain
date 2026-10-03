@@ -11,7 +11,7 @@ import type { SlackConnectionHealthV1 } from '@echo-brain/provider-slack-server/
 import { slackPrivateAppBotScopesV1, type SlackPublicChannelContextCapabilityV1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
 import { assertSlackPublicChannelContextConnectionV1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-public-channel-context-capability-v1';
 import { join } from 'node:path';
-import type { ConnectorRehearsalAuthenticatorV1, ConnectorRehearsalInitialOwnerV1, ConnectorRehearsalSlackV1 } from './connector-rehearsal-capture-v1.js';
+import { isActiveInitialOwnerV1, type ConnectorRehearsalAuthenticatorV1, type ConnectorRehearsalInitialOwnerV1, type ConnectorRehearsalSlackV1 } from './connector-rehearsal-capture-v1.js';
 import { verifyOrganizationAuthorityApiLineage } from './organization-authority-api-runtime.js';
 
 /** The same composed objects used by setup, person linking and approval delivery. */
@@ -59,11 +59,7 @@ export function openSlackContextCaptureRuntimeV1(options: OpenSlackContextCaptur
   let closed = false;
   const requireOwner = (access_token: string): void => {
     if (closed) throw unavailable();
-    const access = authenticate({ access_token });
-    if (access.organization_id !== owner.organization_id || access.principal_id !== owner.principal_id ||
-        access.membership_id !== owner.membership_id || access.membership_type !== 'owner') throw unavailable();
-    if (database.prepare(`SELECT 1 FROM authority_memberships WHERE organization_id=? AND principal_id=? AND membership_id=?
-      AND membership_type='owner' AND status='active'`).get(owner.organization_id, owner.principal_id, owner.membership_id) === undefined) throw unavailable();
+    if (!isActiveInitialOwnerV1(database, owner, authenticate({ access_token }))) throw unavailable();
   };
   return Object.freeze({
     async create_source(input: { readonly access_token: string; readonly signal: AbortSignal }) {

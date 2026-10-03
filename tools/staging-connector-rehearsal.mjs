@@ -123,21 +123,14 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
 }
 
 function usage() {
-  return "usage: node tools/staging-connector-rehearsal.mjs <status|capture> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--person-home <absolute-home>] [--tool <granola|jira|slack> --limit <1..5>]";
+  return "usage: node tools/staging-connector-rehearsal.mjs <status|capture> --release-id <clean-v1-release> --profile <absolute-local-profile-json> [--tool <granola|jira|slack> --limit <1..5>]";
 }
 
 function parseCli(argv) {
   const action = argv[0];
   const expected = action === "status" ? 5 : action === "capture" ? 9 : 0;
-  const personHomeOffset = action === "status" ? 5 : 9;
-  const withPersonHome = argv.length === expected + 2 && argv[personHomeOffset] === "--person-home";
-  if ((argv.length !== expected && !withPersonHome) || argv[1] !== "--release-id" || argv[3] !== "--profile") fail(usage());
-  const base = {
-    action,
-    release_id: argv[2],
-    profile_path: absolutePath(argv[4], "profile"),
-    ...(withPersonHome ? { person_home: absolutePath(argv[personHomeOffset + 1], "person home") } : {}),
-  };
+  if (argv.length !== expected || argv[1] !== "--release-id" || argv[3] !== "--profile") fail(usage());
+  const base = { action, release_id: argv[2], profile_path: absolutePath(argv[4], "profile") };
   if (action === "status") return Object.freeze(base);
   if (argv[5] !== "--tool" || argv[7] !== "--limit" || !["granola", "jira", "slack"].includes(argv[6]) || !/^[1-5]$/.test(argv[8])) fail(usage());
   return Object.freeze({ ...base, tool: argv[6], limit: Number(argv[8]) });

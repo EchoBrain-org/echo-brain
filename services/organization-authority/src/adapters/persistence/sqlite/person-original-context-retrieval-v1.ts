@@ -22,20 +22,16 @@ import type {
 import { personOriginalAclV1, personOriginalGrantedProjectIdsV1, personOriginalScopeFilterV1, personUnknownScopeV1 } from "./person-original-access-v1.js";
 
 const MAXIMUM_PACKET_BYTES = 3_072;
-/** Leave room for five approved-record atoms in a 10-hit Ask query budget. */
-const MAXIMUM_RESULTS_PER_QUERY = 5;
 const SOURCE_ID = /^source:[0-9a-f]{64}$/;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 
 
-/** Legacy retrieval and the desk share admission/ACL joins, but retain their own matching rules and caps. */
+/** Desk search and inventory share admission/ACL joins; inventory skips term matching. */
 interface OriginalRowsQueryV1 {
-  readonly match: "substring" | "whole_term";
   readonly limit: number;
   readonly inventory?: true;
   readonly first_document_passage?: true;
 }
-const LEGACY_ORIGINAL_ROWS_V1: OriginalRowsQueryV1 = Object.freeze({ match: "substring", limit: MAXIMUM_RESULTS_PER_QUERY });
 const ORIGINAL_TEXT_CUSTODY_V1 = `(SELECT request_version AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,audience_kind,audience_project_id,received_at FROM authority_person_updates_v2
   UNION ALL SELECT 1 AS api_version,organization_id,principal_id,membership_id,membership_type,context_id,title,text,payload_sha256,visibility AS audience_kind,NULL AS audience_project_id,received_at FROM authority_person_updates_v1)`;
 
@@ -97,13 +93,6 @@ type TranscriptCandidate = {
   readonly representation_sha256: Sha256Digest;
   readonly received_at: string;
 };
-/** The best-matching packet of one transcript for one query. */
-type TranscriptHit = {
-  readonly transcript: TranscriptCandidate;
-  readonly source_id: string;
-  readonly received_at: string;
-  readonly lexical_score: number;
-};
 
 interface Sessions {
   authenticateAccess(input: { readonly access_token: string }): PersonAccessAuthorization;
@@ -137,13 +126,6 @@ const QUERY_FUNCTION_WORDS = new Set([
   "this", "that", "these", "those", "of", "to", "for", "from", "in", "on",
   "at", "with", "by", "and", "or", "as", "about",
 ]);
-
-function lexicalScore(title: string, text: string, terms: readonly string[]): number {
-  const value = `${title}\n${text}`.normalize("NFC").toLocaleLowerCase("en-US");
-  // Preserve the original substring matching contract, but rank by distinct
-  // matched terms. Repetition cannot boost a source's score.
-  return terms.reduce((score, term) => score + (value.includes(term) ? 1 : 0), 0);
-}
 
 /** Desk ranking deliberately matches complete Unicode terms, never substrings. */
 function wholeTermScore(title: string, text: string, terms: readonly string[]): number {
@@ -191,18 +173,6 @@ function packets(title: string, body: string): readonly string[] {
     offset = Math.max(offset + 1, end - 256);
   }
   return Object.freeze(values);
-}
-
-function matchingPacket(title: string, body: string, terms: readonly string[]): { readonly index: number; readonly text: string } {
-  const values = packets(title, body);
-  let index = -1;
-  let bestScore = 0;
-  for (let candidate = 0; candidate < values.length; candidate += 1) {
-    const score = lexicalScore("", values[candidate]!, terms);
-    if (score > bestScore) { bestScore = score; index = candidate; }
-  }
-  if (index < 0) unavailable();
-  return Object.freeze({ index, text: values[index]! });
 }
 
 function wholeMatchingPacket(title: string, body: string, terms: readonly string[]): { readonly index: number; readonly text: string } {
@@ -255,16 +225,6 @@ function speakerTranscript(meeting: MeetingDocument): string {
     const name = block.speaker_participant_id === undefined ? undefined : names.get(block.speaker_participant_id);
     return name === undefined ? block.text : `${name}: ${block.text}`;
   }).join("\n\n");
-}
-
-/** Each transcript's best packet for these terms, when it matches at all. */
-function transcriptHits(transcripts: readonly TranscriptCandidate[], terms: readonly string[]): readonly TranscriptHit[] {
-  const hits: TranscriptHit[] = [];
-  for (const transcript of transcripts) {
-    const score = lexicalScore(transcript.title, transcript.body, terms);
-    if (score > 0) hits.push(Object.freeze({ transcript, source_id: transcript.grant.source_id, received_at: transcript.received_at, lexical_score: score }));
-  }
-  return hits.sort((left, right) => right.lexical_score - left.lexical_score || right.received_at.localeCompare(left.received_at)).slice(0, MAXIMUM_RESULTS_PER_QUERY);
 }
 
 /** A transcript packet as released evidence. Its anchor binds the approval that shared it. */
@@ -336,102 +296,14 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     }>,
   ) {
     // The query parameter is a bound, adapter-created JSON array of validated terms.
-    database.function("echo_original_context_score_v1", { deterministic: true }, (title, text, query) =>
-      typeof title === "string" && typeof text === "string" && typeof query === "string"
-        ? lexicalScore(title, text, JSON.parse(query) as readonly string[]) : 0);
     database.function("echo_original_context_whole_score_v1", { deterministic: true }, (title, text, query) =>
       typeof title === "string" && typeof text === "string" && typeof query === "string"
         ? wholeTermScore(title, text, JSON.parse(query) as readonly string[]) : 0);
   }
 
-  retrieve(input: {
-    readonly access_token: string;
-    readonly queries: readonly string[];
-    readonly scope: PersonAskScopeV2;
-    readonly on_authorized?: () => void;
-  }) {
-    if (input.queries.length < 1 || input.queries.length > 4) {
-      throw new AuthorityOperationError("invalid_request", "request is invalid");
-    }
-    const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
-    this.assertOrganization(actor);
-    const revision = this.authorizationRevision(actor.organization_id);
-    this.assertScope(actor, input.scope);
-    input.on_authorized?.();
-    const selected = new Map<string, ReleasedSourceContextAtomV1>();
-    const transcriptKeys = new Set<string>();
-    const counts: number[] = [];
-    const transcripts = this.transcriptCandidates(actor, input.scope);
-    for (const query of input.queries) {
-      const terms = queryTerms(query);
-      if (terms.length === 0) { counts.push(0); continue; }
-      const rows = [
-        ...this.textRows(actor, input.scope, terms),
-        ...this.documentRows(actor, input.scope, terms),
-        ...transcriptHits(transcripts, terms),
-      ].sort((left, right) => right.lexical_score - left.lexical_score
-        || right.received_at.localeCompare(left.received_at)
-        || left.source_id.localeCompare(right.source_id)
-        || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0)).slice(0, MAXIMUM_RESULTS_PER_QUERY);
-      counts.push(rows.length);
-      for (const row of rows) {
-        const atom = "transcript" in row
-          ? transcriptAtom(row.transcript, matchingPacket(row.transcript.title, row.transcript.body, terms))
-          : "document_id" in row
-          ? this.documentAtom(row, terms)
-          : this.textAtom(row, terms);
-        const key = `${atom.source_id}\u0000${atom.revision_id}\u0000${atom.representation_sha256}\u0000${atom.anchor_sha256}`;
-        if (!selected.has(key)) selected.set(key, atom);
-        if ("transcript" in row) transcriptKeys.add(key);
-      }
-    }
-    // Observability only: how many released packets came from shared transcripts.
-    annotateCoreRuntimeV1({ counts: { transcript_items: transcriptKeys.size } });
-    const release: OriginalContextReleaseV1 = Object.freeze({
-      authorization: Object.freeze({
-        principal_id: actor.principal_id,
-        membership_id: actor.membership_id,
-        session_family_id: actor.session_family_id,
-        checked_at: actor.checked_at,
-      }),
-      scope: Object.freeze({ ...input.scope }),
-      authorization_revision: revision,
-      released_atoms: Object.freeze([...selected.values()]),
-    });
-    this.releases.add(release);
-    // Layer 3 must leave an immutable, content-free read witness before any
-    // source text can enter a provider prompt. Revalidate every selected atom
-    // first so the witness cannot describe a stale release.
-    this.revalidate({ access_token: input.access_token, release });
-    const audit = {
-      schema_version: 1,
-      kind: "echo-person-original-context-release-audit-v1",
-      audit_id: randomUUID(),
-      organization_id: actor.organization_id,
-      principal_id: actor.principal_id,
-      membership_id: actor.membership_id,
-      session_family_id: actor.session_family_id,
-      scope: input.scope,
-      authorization_revision: revision,
-      released_atoms_sha256: canonicalSha256(release.released_atoms.map((atom) => ({
-        source_id: atom.source_id,
-        revision_id: atom.revision_id,
-        source_sha256: atom.source_sha256,
-        representation_sha256: atom.representation_sha256,
-        anchor_sha256: atom.anchor_sha256,
-      }))),
-      released_count: release.released_atoms.length,
-      checked_at: actor.checked_at,
-    };
-    const receipt = canonicalSha256(audit);
-    this.database.prepare("INSERT INTO authority_person_upload_read_audit_v1(row_sha256,body_json,recorded_at) VALUES (?,?,?)").run(receipt, canonicalJson(audit), actor.checked_at);
-    return Object.freeze({ release, receipt, query_hit_counts: Object.freeze(counts) });
-  }
-
   /**
-   * Request-bound desk search.  This is intentionally distinct from V2's
-   * substring matcher: whole terms and the three-passages-per-document cap
-   * apply only to the new desk surface.
+   * Request-bound desk search: whole terms, at most three passages per
+   * document.
    */
   deskSearch(input: {
     readonly access_token: string;
@@ -562,7 +434,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     if (!this.deskReleases.has(input.release)) unavailable();
     const checked = this.revalidate({ access_token: input.access_token, release: input.release.release });
     const actor = this.sessions.authenticateAccess({ access_token: input.access_token });
-    // Batch releases keep their per-atom revalidation semantics.  The
+    // The release keeps its per-atom revalidation semantics.  The
     // request-bound desk additionally pins the authorization revision so a
     // later desk call cannot mix project-association snapshots.
     if (this.authorizationRevision(actor.organization_id) !== input.release.release.authorization_revision) denied();
@@ -878,7 +750,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private deskSearchRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], limit: number, kinds: readonly ("note" | "document_passage")[] | undefined): readonly (SourceRow | DocumentRow)[] {
-    const candidates = [...this.textRows(actor, scope, terms, { match: "whole_term", limit: 100 }), ...this.documentRows(actor, scope, terms, { match: "whole_term", limit: 100 })]
+    const candidates = [...this.textRows(actor, scope, terms, { limit: 100 }), ...this.documentRows(actor, scope, terms, { limit: 100 })]
       .filter((row) => kinds === undefined || kinds.includes("document_id" in row ? "document_passage" : "note"))
       .sort((left, right) => right.lexical_score - left.lexical_score || right.received_at.localeCompare(left.received_at) || left.source_id.localeCompare(right.source_id) || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0));
     const documents = new Map<string, number>();
@@ -901,8 +773,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     // but fetches only limit+1 rows from each sorted source before merging.
     const sourceLimit = allDocumentPassages ? limit : 100;
     const candidates = [
-      ...this.textRows(actor, scope, [], { match: "whole_term", inventory: true, limit: sourceLimit }),
-      ...this.documentRows(actor, scope, [], { match: "whole_term", inventory: true, limit: sourceLimit, ...(allDocumentPassages ? {} : { first_document_passage: true }) }),
+      ...this.textRows(actor, scope, [], { inventory: true, limit: sourceLimit }),
+      ...this.documentRows(actor, scope, [], { inventory: true, limit: sourceLimit, ...(allDocumentPassages ? {} : { first_document_passage: true }) }),
     ]
       .filter((row) => kinds === undefined || kinds.includes("document_id" in row ? "document_passage" : "note"))
       .sort((left, right) => right.received_at.localeCompare(left.received_at) || left.source_id.localeCompare(right.source_id) || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0));
@@ -970,12 +842,10 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return result;
   }
 
-  private textRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], query: OriginalRowsQueryV1 = LEGACY_ORIGINAL_ROWS_V1): readonly SourceRow[] {
+  private textRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], query: OriginalRowsQueryV1): readonly SourceRow[] {
     const acl = this.acl(actor, "u");
     const scoped = personOriginalScopeFilterV1("u", actor, scope);
-    const score = query.match === "substring" ? "echo_original_context_score_v1" : "echo_original_context_whole_score_v1";
-    const visibility = query.match === "substring" ? "" : "u.audience_kind AS visibility,";
-    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,${visibility}${score}(u.title,u.text,?) AS lexical_score
+    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || r.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,u.api_version,u.context_id,u.title,u.text,u.received_at,u.audience_kind AS visibility,echo_original_context_whole_score_v1(u.title,u.text,?) AS lexical_score
       FROM ${ORIGINAL_TEXT_CUSTODY_V1} u
       JOIN authority_sources_v1 s ON s.organization_id=u.organization_id AND s.adapter_id='person' AND s.instance_id='authority-inbox' AND s.external_id=u.context_id
       JOIN authority_source_revisions_v1 r ON r.organization_id=s.organization_id AND r.source_id=s.source_id AND r.revision_id=u.payload_sha256
@@ -985,14 +855,12 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...scoped.args, query.limit) as readonly SourceRow[];
   }
 
-  private documentRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], query: OriginalRowsQueryV1 = LEGACY_ORIGINAL_ROWS_V1): readonly DocumentRow[] {
+  private documentRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, terms: readonly string[], query: OriginalRowsQueryV1): readonly DocumentRow[] {
     const acl = this.acl(actor, "d");
     const scoped = personOriginalScopeFilterV1("d", actor, scope);
-    const score = query.match === "substring" ? "echo_original_context_score_v1" : "echo_original_context_whole_score_v1";
-    const visibility = query.match === "substring" ? "" : "d.audience_kind AS visibility,";
     const firstChunk = query.first_document_passage === true ? "AND t.ordinal=(SELECT MIN(first_t.ordinal) FROM authority_person_document_text_v1 first_t WHERE first_t.document_id=d.document_id AND first_t.extractor=t.extractor)" : "";
     // Matching and packet titles use the verified filename, never a display title.
-    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at,${visibility}${score}(d.filename,t.text,?) AS lexical_score
+    const sql = `SELECT s.source_id,r.revision_id,('sha256:' || r.revision_sha256) AS source_sha256,('sha256:' || representation.content_sha256) AS representation_sha256,r.content_sha256 AS source_content_sha256,r.manifest_json,content.content_json AS source_content_json,d.document_id,d.filename AS title,d.filename,d.original_sha256,d.original_size,d.detected_media_type,t.ordinal,t.anchor_kind,t.anchor_start,t.text,t.extractor,representation.content_json AS representation_json,d.received_at,d.audience_kind AS visibility,echo_original_context_whole_score_v1(d.filename,t.text,?) AS lexical_score
       FROM authority_person_documents_v1 d
       JOIN authority_person_document_text_v1 t ON t.document_id=d.document_id
       JOIN authority_person_document_work_v1 work ON work.document_id=d.document_id AND work.state='complete' AND work.extraction_state IN ('ready','partial') AND work.extractor=t.extractor
@@ -1003,21 +871,6 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql} ${query.inventory === true ? "" : "AND lexical_score > 0"} ${firstChunk}
       ORDER BY lexical_score DESC,d.received_at DESC,s.source_id,t.ordinal LIMIT ?`;
     return this.database.prepare(sql).all(JSON.stringify(terms), actor.organization_id, ...acl.args, ...scoped.args, query.limit) as readonly DocumentRow[];
-  }
-
-  private textAtom(row: SourceRow, terms: readonly string[]): ReleasedSourceContextAtomV1 {
-    this.assertIntegrity(row);
-    this.assertTextSourceRevision(row);
-    const selected = matchingPacket(row.title, row.text, terms);
-    return originalPacketAtomV1(row, selected);
-  }
-
-  private documentAtom(row: DocumentRow, terms: readonly string[]): ReleasedSourceContextAtomV1 {
-    this.assertIntegrity(row);
-    this.assertDocumentSourceRevision(row);
-    this.assertDocumentChunk(row, this.representationChunks(row));
-    const selected = matchingPacket(row.title, row.text, terms);
-    return originalPacketAtomV1(row, selected);
   }
 
   private assertIntegrity(row: Pick<SourceRow, "source_id" | "revision_id" | "source_sha256" | "representation_sha256">): void {

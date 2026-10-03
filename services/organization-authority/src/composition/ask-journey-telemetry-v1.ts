@@ -22,9 +22,6 @@ type AskJourneyStageV1 = Extract<JourneyStageV1, `ask_${string}`>;
 type AskJourneyOutcomeV1 = Extract<
   JourneyOutcomeV1,
   | "answered"
-  | "insufficient_evidence"
-  | "authorship_unsupported"
-  | "completed"
   | "partial"
   | "not_found"
   | "off_scope"

@@ -56,8 +56,8 @@ export interface CreatePersonAnswerV3RouteOptions {
   };
 }
 
-function askerOf(
-  options: CreatePersonAnswerV3RouteOptions,
+export function askerOf(
+  options: Pick<CreatePersonAnswerV3RouteOptions, "organization_id" | "memberships">,
   authorization: { readonly principal_id: string; readonly membership_id: string },
 ): { readonly display_name: string } | undefined {
   const membership = options.memberships?.membership(authorization.membership_id);
@@ -71,7 +71,7 @@ function askerOf(
 }
 
 /** Every request shape maps to exactly one scope; mine with a project is refused, never widened. */
-function scopeOf(request: { readonly project_id?: string; readonly mine?: true }): PersonAskScopeV2 {
+export function scopeOf(request: { readonly project_id?: string; readonly mine?: true }): PersonAskScopeV2 {
   if (request.mine !== undefined && (request.mine !== true || request.project_id !== undefined)) throw new AuthorityOperationError("invalid_request", "Ask scope is invalid");
   if (request.project_id !== undefined) return Object.freeze({ kind: "project" as const, project_id: request.project_id });
   return request.mine === true ? Object.freeze({ kind: "mine" as const }) : Object.freeze({ kind: "global" as const });
