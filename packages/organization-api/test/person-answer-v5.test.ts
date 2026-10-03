@@ -5,8 +5,6 @@ import {
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV4,
   validatePersonAnswerResponseV5,
-  validatePersonEvidenceDeskResponseV1,
-  validatePersonEvidenceDeskResponseV2,
 } from '../src/index.js';
 
 const ticket = {
@@ -55,16 +53,5 @@ describe('Ticket-capable answer and evidence contracts', () => {
     expect(() => validatePersonAnswerResponseV5({ ...response(), citations: [{ ...cited, citation: { ...ticket, permalink: 'https://fixture.atlassian.net/browse/ECHO-1?token=synthetic' } }] })).toThrow();
     expect(() => validatePersonAnswerResponseV5({ ...response(), citations: [cited, { ...cited, citation: { ...ticket, text_sha256: canonicalSha256('new revision') } }] })).toThrow('duplicate citations');
     expect(() => validatePersonAnswerResponseV5({ ...response(), parts: [{ question: 'When is launch?', status: 'answered', statements: [{ text: 'Launch is Tuesday.', citation_indexes: [0], private: false }] }] })).toThrow();
-  });
-
-  it('extends evidence packets for inventory metadata and released ticket bodies without widening V1', () => {
-    const item = { id: 'request-owned-ticket-1', citation: { ...ticket, text_sha256: sha256Digest('') }, kind: 'ticket', label: 'ECHO-1: Launch', visibility: 'only_me', attributes: { status: 'Open', owner: 'Fixture Person' }, receipt_sha256: canonicalSha256('inventory receipt') };
-    const packet = { schema_version: 2, kind: 'echo-person-evidence-desk-v2', scope: { kind: 'global' }, items: [item], truncated: false };
-    expect(validatePersonEvidenceDeskResponseV2(packet).items[0]).not.toHaveProperty('text');
-    expect(validatePersonEvidenceDeskResponseV2({ ...packet, items: [{ ...item, citation: ticket, text: 'ECHO-1: Launch is Tuesday.' }] }).items[0]).toHaveProperty('text');
-    expect(() => validatePersonEvidenceDeskResponseV1({ ...packet, schema_version: 1, kind: 'echo-person-evidence-desk-v1' })).toThrow();
-    expect(() => validatePersonEvidenceDeskResponseV2({ ...packet, items: [{ ...item, kind: 'note' }] })).toThrow();
-    expect(() => validatePersonEvidenceDeskResponseV2({ ...packet, items: [{ ...item, citation: ticket, text: 'Altered ticket text.' }] })).toThrow('text digest');
-    expect(() => validatePersonEvidenceDeskResponseV2({ ...packet, items: [{ ...item, citation: ticket }] })).toThrow('text digest');
   });
 });

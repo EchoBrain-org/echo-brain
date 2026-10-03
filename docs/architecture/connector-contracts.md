@@ -53,9 +53,8 @@ names and Nango connection references belong in provider state, rather than
 this status projection. The validator owns immutable copies and rejects
 unknown fields, duplicate capabilities and inconsistent state.
 
-`OrganizationPersonConnectorAccessV1` binds up to 32 such entries to an
-organization and membership. This change supplies the schema and validators;
-it does not introduce a status endpoint or modify the released tools response.
+This change supplies the schema and validator; it does not introduce a status
+endpoint or modify the released tools response.
 The Slack worktree's owner-only organization setup state remains independent
 of this personal read state.
 

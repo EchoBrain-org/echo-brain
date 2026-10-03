@@ -5,11 +5,18 @@ import {
   sourceItemIdV1,
 } from '../processing/source-admission.js';
 import type { SourceAdapterIdentityV1, SourceEnvelopeV1 } from './source.js';
-import {
-  assertContextStructuredPayloadV1,
-  type ContextStructuredPayloadV1,
-  type ContextStructuredSourceTypeV1,
-} from './context-structured-payload-v1.js';
+import { isCanonicalTimestamp } from './validation.js';
+
+export type ContextStructuredPayloadV1 =
+  | { readonly schema_version: 1; readonly kind: 'document'; readonly media_type: string; readonly language?: string }
+  | { readonly schema_version: 1; readonly kind: 'note'; readonly format: 'plain_text' | 'markdown' }
+  | { readonly schema_version: 1; readonly kind: 'message'; readonly channel_ref: string; readonly sent_at: string; readonly thread_ref?: string; readonly author_ref?: string }
+  | { readonly schema_version: 1; readonly kind: 'ticket'; readonly key: string; readonly status: string; readonly priority?: string; readonly assignee_ref?: string; readonly due_at?: string; readonly labels: readonly string[] }
+  | { readonly schema_version: 1; readonly kind: 'meeting'; readonly started_at: string; readonly ended_at?: string; readonly participant_refs: readonly string[] }
+  | { readonly schema_version: 1; readonly kind: 'activity'; readonly action: string; readonly occurred_at: string; readonly subject_ref: string; readonly actor_ref?: string }
+  | { readonly schema_version: 1; readonly kind: 'task'; readonly status: string; readonly due_at?: string; readonly completed_at?: string; readonly assignee_ref?: string }
+  | { readonly schema_version: 1; readonly kind: 'decision'; readonly status: string; readonly decided_at?: string; readonly decider_refs: readonly string[] };
+export type ContextStructuredSourceTypeV1 = ContextStructuredPayloadV1['kind'];
 
 export const CONTEXT_CAPTURE_LIMITS_V1 = Object.freeze({
   envelope_bytes: 256 * 1024, snapshot_bytes: 128 * 1024, excerpt_bytes: 32 * 1024,
@@ -49,6 +56,22 @@ export interface ContextCaptureContentV1 {
 }
 export type ContextCaptureEnvelopeV1 = SourceEnvelopeV1<ContextCaptureContentV1>;
 
+const MAXIMUM_PAYLOAD_BYTES = 16 * 1024;
+const MAXIMUM_REF_BYTES = 2048;
+const MAXIMUM_FIELD_BYTES = 256;
+const MAXIMUM_ARRAY_VALUES = 32;
+const PAYLOAD_FIELDS: Readonly<Record<ContextStructuredSourceTypeV1, readonly string[]>> = {
+  document: ['media_type', 'language'],
+  note: ['format'],
+  message: ['channel_ref', 'sent_at', 'thread_ref', 'author_ref'],
+  ticket: ['key', 'status', 'priority', 'assignee_ref', 'due_at', 'labels'],
+  meeting: ['started_at', 'ended_at', 'participant_refs'],
+  activity: ['action', 'occurred_at', 'subject_ref', 'actor_ref'],
+  task: ['status', 'due_at', 'completed_at', 'assignee_ref'],
+  decision: ['status', 'decided_at', 'decider_refs'],
+};
+const PAYLOAD_KEYS = ['schema_version', 'kind', ...new Set(Object.values(PAYLOAD_FIELDS).flat())];
+
 function object(value: unknown, allowed: readonly string[], label: string): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value) ||
       ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new Error(`${label} must be a plain object`);
@@ -59,8 +82,23 @@ function object(value: unknown, allowed: readonly string[], label: string): Reco
 function text(value: unknown, maximum: number, label: string): asserts value is string {
   if (typeof value !== 'string' || value.trim() === '' || Buffer.byteLength(value, 'utf8') > maximum || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)) throw new Error(`${label} must be bounded text`);
 }
-function timestamp(value: unknown): void {
-  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) throw new Error('Context timestamp must be canonical UTC');
+function timestamp(value: unknown, label: string): asserts value is string {
+  if (!isCanonicalTimestamp(value)) throw new Error(`${label} must be canonical UTC`);
+}
+function optionalText(value: unknown, maximum: number, label: string): void {
+  if (value !== undefined) text(value, maximum, label);
+}
+function optionalTimestamp(value: unknown, label: string): void {
+  if (value !== undefined) timestamp(value, label);
+}
+function opaqueList(value: unknown, label: string, maximum = MAXIMUM_REF_BYTES): void {
+  if (!Array.isArray(value) || value.length > MAXIMUM_ARRAY_VALUES) throw new Error(`${label} exceeds its bound`);
+  const unique = new Set<string>();
+  for (const entry of value) {
+    text(entry, maximum, label);
+    if (unique.has(entry)) throw new Error(`${label} must be unique`);
+    unique.add(entry);
+  }
 }
 
 /** Reject executable/accessor values before snapshotting adapter-owned data. */
@@ -74,6 +112,49 @@ function plainData(value: unknown, depth = 0): void {
     if (array && key === 'length') continue;
     if (!('value' in descriptor) || !descriptor.enumerable || (array && !/^(0|[1-9][0-9]*)$/.test(key))) throw new Error('Context data has non-data fields');
     plainData(descriptor.value, depth + 1);
+  }
+}
+
+/** A closed object of plain data, checked before a JSON snapshot can erase non-data fields. */
+export function assertPlainContextObjectV1(value: unknown, allowed: readonly string[], label: string): void {
+  plainData(value);
+  object(value, allowed, label);
+}
+
+/**
+ * Provider metadata only. Opaque refs remain source data and cannot establish
+ * a directory identity, membership, permission grant, or durable body copy.
+ */
+function assertPayload(value: unknown, sourceType: ContextStructuredSourceTypeV1): void {
+  if (Buffer.byteLength(canonicalSourceContentV1(value), 'utf8') > MAXIMUM_PAYLOAD_BYTES) throw new Error('Context structured payload exceeds its bound');
+  const payload = object(value, PAYLOAD_KEYS, 'Context structured payload');
+  if (payload.schema_version !== 1 || payload.kind !== sourceType) throw new Error('Context structured payload kind does not match its source type');
+  object(value, ['schema_version', 'kind', ...PAYLOAD_FIELDS[sourceType]], `Context ${sourceType} payload`);
+  switch (sourceType) {
+    case 'document':
+      text(payload.media_type, MAXIMUM_FIELD_BYTES, 'Context document media type'); optionalText(payload.language, MAXIMUM_FIELD_BYTES, 'Context document language'); break;
+    case 'note':
+      if (payload.format !== 'plain_text' && payload.format !== 'markdown') throw new Error('Context note format is unsupported'); break;
+    case 'message':
+      text(payload.channel_ref, MAXIMUM_REF_BYTES, 'Context message channel'); timestamp(payload.sent_at, 'Context message sent time');
+      optionalText(payload.thread_ref, MAXIMUM_REF_BYTES, 'Context message thread'); optionalText(payload.author_ref, MAXIMUM_REF_BYTES, 'Context message author'); break;
+    case 'ticket':
+      text(payload.key, MAXIMUM_FIELD_BYTES, 'Context ticket key'); text(payload.status, MAXIMUM_FIELD_BYTES, 'Context ticket status'); optionalText(payload.priority, MAXIMUM_FIELD_BYTES, 'Context ticket priority'); optionalText(payload.assignee_ref, MAXIMUM_REF_BYTES, 'Context ticket assignee'); optionalTimestamp(payload.due_at, 'Context ticket due time'); opaqueList(payload.labels, 'Context ticket labels', MAXIMUM_FIELD_BYTES); break;
+    case 'meeting': {
+      timestamp(payload.started_at, 'Context meeting start time');
+      const endedAt = payload.ended_at;
+      if (endedAt !== undefined) {
+        timestamp(endedAt, 'Context meeting end time');
+        if (Date.parse(endedAt) < Date.parse(payload.started_at)) throw new Error('Context meeting ends before it starts');
+      }
+      opaqueList(payload.participant_refs, 'Context meeting participants'); break;
+    }
+    case 'activity':
+      text(payload.action, MAXIMUM_FIELD_BYTES, 'Context activity action'); timestamp(payload.occurred_at, 'Context activity occurrence'); text(payload.subject_ref, MAXIMUM_REF_BYTES, 'Context activity subject'); optionalText(payload.actor_ref, MAXIMUM_REF_BYTES, 'Context activity actor'); break;
+    case 'task':
+      text(payload.status, MAXIMUM_FIELD_BYTES, 'Context task status'); optionalTimestamp(payload.due_at, 'Context task due time'); optionalTimestamp(payload.completed_at, 'Context task completion time'); optionalText(payload.assignee_ref, MAXIMUM_REF_BYTES, 'Context task assignee'); break;
+    case 'decision':
+      text(payload.status, MAXIMUM_FIELD_BYTES, 'Context decision status'); optionalTimestamp(payload.decided_at, 'Context decision time'); opaqueList(payload.decider_refs, 'Context decision deciders'); break;
   }
 }
 export interface BuildContextCaptureEnvelopeInputV1 {
@@ -131,12 +212,12 @@ export function assertContextCaptureEnvelopeV1(value: unknown, identity: SourceA
   if (value.revision.artifact_refs.length !== 0 || value.revision.representation_refs.length !== 0 || value.revision.contributor !== undefined) throw new Error('Context V1 does not accept artifact, derived or identity claims');
   const content = object(value.content, ['schema_version', 'kind', 'source_type', 'truth_status', 'label', 'provenance', 'payload', 'representation', 'observations'], 'Context capture');
   if (content.schema_version !== 1 || content.kind !== 'echo-context-capture-v1' || content.truth_status !== 'source_observation' ||
-      typeof content.source_type !== 'string' || !['document', 'note', 'message', 'ticket', 'meeting', 'activity', 'task', 'decision'].includes(content.source_type)) throw new Error('Context capture contract is unsupported');
+      typeof content.source_type !== 'string' || !Object.hasOwn(PAYLOAD_FIELDS, content.source_type)) throw new Error('Context capture contract is unsupported');
   text(content.label, 200, 'Context label');
   const provenance = object(content.provenance, ['origin_ref', 'source_updated_at'], 'Context provenance');
   text(provenance.origin_ref, 2048, 'Context origin');
-  if (provenance.source_updated_at !== undefined) timestamp(provenance.source_updated_at);
-  assertContextStructuredPayloadV1(content.payload, content.source_type as ContextStructuredSourceTypeV1);
+  if (provenance.source_updated_at !== undefined) timestamp(provenance.source_updated_at, 'Context timestamp');
+  assertPayload(content.payload, content.source_type as ContextStructuredSourceTypeV1);
   const representation = object(content.representation, ['kind', 'pointer', 'text', 'passages'], 'Context representation');
   const anchors = new Set<string>();
   if (representation.kind === 'pointer') {
@@ -185,7 +266,7 @@ export function assertContextCaptureEnvelopeV1(value: unknown, identity: SourceA
     if (!anchors.has(observation.anchor_id)) throw new Error('Context observation lacks a source anchor');
     const target = object(observation.target, ['source_id', 'revision_id'], 'Context observation target');
     if (typeof target.source_id !== 'string' || !/^source:[a-f0-9]{64}$/.test(target.source_id)) throw new Error('Context target identity is invalid');
-    text(target.revision_id, 512, 'Context target revision'); timestamp(observation.occurred_at);
+    text(target.revision_id, 512, 'Context target revision'); timestamp(observation.occurred_at, 'Context timestamp');
     const key = canonicalSourceContentV1(observation);
     if (observed.has(key)) throw new Error('Context observations must be unique');
     observed.add(key);

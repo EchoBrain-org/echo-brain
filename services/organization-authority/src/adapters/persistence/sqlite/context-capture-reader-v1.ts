@@ -1,9 +1,9 @@
 import type Database from 'better-sqlite3';
-import { assertSourceAdmissionScopeV1, canonicalSourceContentV1, sourceContentSha256V1, type SourceAdapterIdentityV1 } from '@echo-brain/organization-processing/core';
 import {
-  assertContextCaptureEnvelopeV1, CONTEXT_CAPTURE_LIMITS_V1,
-  type ContextCaptureEnvelopeV1, type ContextCaptureReadPortV1, type RetainedContextCaptureV1,
-} from '../../../application/context-intake-v1.js';
+  assertContextCaptureEnvelopeV1, assertSourceAdmissionScopeV1, canonicalSourceContentV1, CONTEXT_CAPTURE_LIMITS_V1, sourceContentSha256V1,
+  type ContextCaptureEnvelopeV1, type SourceAdapterIdentityV1,
+} from '@echo-brain/organization-processing/core';
+import { deepFreezeContextV1, type ContextCaptureReadPortV1, type RetainedContextCaptureV1 } from '../../../application/context-intake-v1.js';
 
 interface Row {
   readonly source_id: string; readonly adapter_id: string; readonly instance_id: string;
@@ -46,15 +46,7 @@ export class SqliteContextCaptureReaderV1 implements ContextCaptureReadPortV1 {
       const scope = { organization_id: input.organization_id, custody_ref: row.custody_ref, access_policy_ref: row.access_policy_ref, analysis_policy: row.analysis_policy } as const;
       assertSourceAdmissionScopeV1(scope);
       if (scope.analysis_policy !== 'on_request') throw new Error('Context retained processing policy is unsupported');
-      return deepFreeze({ source, scope, revision_sha256: row.revision_sha256 });
+      return deepFreezeContextV1({ source, scope, revision_sha256: row.revision_sha256 });
     }));
   }
-}
-
-function deepFreeze<T>(value: T): T {
-  if (value !== null && typeof value === 'object') {
-    for (const child of Object.values(value)) deepFreeze(child);
-    Object.freeze(value);
-  }
-  return value;
 }

@@ -1,8 +1,8 @@
-import { sourceContentSha256V1, sourceItemIdV1, type SourceAdapterIdentityV1 } from '@echo-brain/organization-processing/core';
-import type {
-  ContextCaptureContentV1, ContextCaptureEnvelopeV1, ContextObservationV1, ContextRepresentationV1,
-} from '../../src/application/context-intake-v1.js';
-import type { ContextStructuredPayloadV1, ContextStructuredSourceTypeV1 } from '../../src/application/context-structured-payload-v1.js';
+import {
+  sourceContentSha256V1, sourceItemIdV1,
+  type ContextCaptureContentV1, type ContextCaptureEnvelopeV1, type ContextObservationV1, type ContextRepresentationV1,
+  type ContextStructuredPayloadV1, type ContextStructuredSourceTypeV1, type SourceAdapterIdentityV1,
+} from '@echo-brain/organization-processing/core';
 
 export const CONTEXT_CAPTURE_IDENTITY_V1 = Object.freeze({
   kind: 'source', adapter_id: 'synthetic-context', instance_id: 'fixture', version: '1',

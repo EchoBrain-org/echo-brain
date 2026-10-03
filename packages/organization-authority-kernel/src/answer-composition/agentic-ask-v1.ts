@@ -1,11 +1,8 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
-  PersonAnswerCitationV4,
   PersonAnswerResponseV5,
-  PersonAnswerEvidenceFallbackV4,
   PersonAnswerPartV4,
   PersonAnswerResponseV4,
-  PersonAnswerStatementV4,
 } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import type {
@@ -26,6 +23,7 @@ import {
   type EvidenceDeskResultV2,
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
+import type { EvidenceDeskPortV1 } from "../shared/evidence-desk-v1.js";
 import { observeCoreRuntimeV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
 import {
   ANSWER_PROMPT,
@@ -122,17 +120,12 @@ class AgenticAskGenerationFailureV1 extends AgenticAskOutputErrorV1 {
   constructor(message: string, readonly recovery: "retry" | "repair" | "fallback") { super(message); }
 }
 
-export type AgenticAskStatementV1 = PersonAnswerStatementV4;
-export type AgenticAskRecordFallbackV1 = PersonAnswerEvidenceFallbackV4;
-export type AgenticAskPartV1 = PersonAnswerPartV4;
-export type AgenticAskCitationV1 = PersonAnswerCitationV4;
-export type AgenticAskResultV1 = PersonAnswerResponseV4;
 export type AgenticAskModelRoleV1 = "step" | "answer";
 
 /** Content-free terminal witness. Route adapters bind identity and storage details. */
 export interface AgenticAskAuditEntryV1 {
   readonly kind: "echo-agentic-ask-audit-v1";
-  readonly outcome: AgenticAskResultV1["outcome"] | "cancelled" | "timed_out";
+  readonly outcome: PersonAnswerResponseV4["outcome"] | "cancelled" | "timed_out";
   readonly receipt_digests: readonly Sha256Digest[];
   /** Research steps run. */
   readonly rounds: number;
@@ -162,7 +155,7 @@ export interface AgenticAskAuditPortV1 {
 }
 
 export interface CreateAgenticAskV1Options {
-  readonly desk: import("../shared/evidence-desk-v1.js").EvidenceDeskPortV1;
+  readonly desk: EvidenceDeskPortV1;
   readonly model: StructuredGenerationPort;
   /** The existing provider binding; every role uses answer_model. */
   readonly generation: AnswerCompositionGenerationProfileV1;

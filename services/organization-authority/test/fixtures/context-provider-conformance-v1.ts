@@ -1,10 +1,9 @@
 import {
   sourceContentSha256V1, sourceItemIdV1,
   type AdapterConfig, type AdapterConfigValidation, type AdapterHealth, type AdapterOperationContext,
+  type ContextCaptureContentV1, type ContextCaptureEnvelopeV1, type ContextRepresentationV1, type ContextStructuredPayloadV1, type ContextStructuredSourceTypeV1,
   type SourceAdapterIdentityV1, type SourceAdapterV1, type SourceBatchV1, type SourcePullRequestV1,
 } from '@echo-brain/organization-processing/core';
-import type { ContextCaptureContentV1, ContextCaptureEnvelopeV1, ContextRepresentationV1 } from '../../src/application/context-intake-v1.js';
-import type { ContextStructuredPayloadV1, ContextStructuredSourceTypeV1 } from '../../src/application/context-structured-payload-v1.js';
 
 export const CONTEXT_PROVIDER_CONFORMANCE_IDENTITY_V1 = Object.freeze({
   kind: 'source', adapter_id: 'synthetic-provider-conformance', instance_id: 'fixture', version: '1',

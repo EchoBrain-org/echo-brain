@@ -1,9 +1,9 @@
 import type Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { sourceContentSha256V1 } from '@echo-brain/organization-processing/core';
+import { sourceContentSha256V1, type ContextCaptureEnvelopeV1 } from '@echo-brain/organization-processing/core';
 import { SqliteContextCaptureReaderV1 } from '../src/adapters/persistence/sqlite/context-capture-reader-v1.js';
 import { SqliteContextCaptureStoreV1 } from '../src/adapters/persistence/sqlite/context-capture-store-v1.js';
-import { intakeContextBatchV1, type ContextCaptureEnvelopeV1, type ContextIntakeAuthorityV1, type ContextIntakePolicyV1 } from '../src/application/context-intake-v1.js';
+import { intakeContextBatchV1, type ContextIntakeAuthorityV1, type ContextIntakePolicyV1 } from '../src/application/context-intake-v1.js';
 import { projectContextDatabase } from './fixtures/project-context-sqlite.js';
 import {
   CONTEXT_PROVIDER_CONFORMANCE_IDENTITY_V1, CONTEXT_PROVIDER_CONFORMANCE_SCOPE_V1, ContextProviderConformanceAdapterV1,

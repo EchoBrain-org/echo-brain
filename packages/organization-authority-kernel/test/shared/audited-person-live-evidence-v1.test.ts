@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { validatePersonSlackMessageCitationV1, validatePersonTicketCitationV1, type PersonConnectorAccessV1, type PersonSlackMessageCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import { validatePersonTicketCitationV1, type PersonConnectorAccessV1, type PersonSlackMessageCitationV1, type PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../../src/domain/errors.js';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '../../src/shared/audited-person-live-evidence-v1.js';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceCitationV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceReleaseV1, PersonLiveEvidenceValueV1 } from '../../src/shared/person-live-evidence-v1.js';
@@ -19,6 +19,10 @@ const slack = (): PersonLiveEvidenceValueV1<PersonSlackMessageCitationV1> => ({
   handle: 'private:channel-and-thread', label: '#launch · Alex', text: 'Launch is Friday', visibility: 'team',
   citation: { kind: 'slack_message', team_id: 'T123', channel_id: 'C123', message_ts: '1758873600.000100', permalink: 'https://example.slack.com/archives/C123/p1758873600000100', text_sha256: textDigest('Launch is Friday') },
 });
+const slackCitation = (value: unknown): PersonSlackMessageCitationV1 => {
+  if ((value as { readonly kind?: unknown } | null)?.kind !== 'slack_message') throw new Error('Slack citation kind is invalid');
+  return value as PersonSlackMessageCitationV1;
+};
 const page = <C extends PersonLiveEvidenceCitationV1>(items: readonly PersonLiveEvidenceValueV1<C>[], next_cursor?: string): PersonLiveEvidencePageV1<C> => ({ items, truncated: false, ...(next_cursor === undefined ? {} : { next_cursor }) });
 
 function fixture<C extends PersonLiveEvidenceCitationV1>(tool_id: string, initial: PersonLiveEvidencePageV1<C>) {
@@ -28,7 +32,7 @@ function fixture<C extends PersonLiveEvidenceCitationV1>(tool_id: string, initia
   const reader: PersonLiveEvidenceReaderV1<C> = {
     binding: binding(tool_id),
     validateCitation(value) {
-      const citation = tool_id === 'slack' ? validatePersonSlackMessageCitationV1(value) : validatePersonTicketCitationV1(value);
+      const citation = tool_id === 'slack' ? slackCitation(value) : validatePersonTicketCitationV1(value);
       return { citation: citation as C, tool_id: citation.kind === 'ticket' ? citation.tool_id : 'slack', external_scope_id: citation.kind === 'ticket' ? citation.external_scope_id : citation.team_id, coordinates: { object_id: citation.kind === 'ticket' ? citation.ticket_id : citation.message_ts, ...(citation.kind === 'ticket' ? {} : { container_id: citation.channel_id }) } };
     },
     search: vi.fn(async () => { events.push('read'); return selected; }),
