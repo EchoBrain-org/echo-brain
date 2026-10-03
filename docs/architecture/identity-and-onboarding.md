@@ -21,7 +21,10 @@ sign-in and the signing secret for inbound-interaction verification
 - A Person session family is the current machine-facing authentication and
   revocation unit. Access and refresh credentials are private bearer secrets,
   not durable identities.
-- Provider connections represent organization-owned provider accounts.
+- Organization provider connections represent organization-owned provider
+  accounts. A person-bound read grant, such as the gated Jira connection, is a
+  separate per-membership connection in provider-owned state; it creates no
+  identity link or membership.
   External identity links bind a provider-observed human, such as a Slack user,
   to one exact principal and membership.
 - Meeting participants remain source observations until explicitly resolved.
@@ -58,17 +61,11 @@ revocation state on the Authority.
 
 Organization-tool onboarding is an owner operation done from the owner's own
 ECHO client, not an Authority administrator operation on the host. An owner
-runs `echo-brain person tools setup --tool slack` and pastes one Slack app
-configuration token at its hidden prompt; the desktop app's Connected tools
-page shows status only for now. ECHO creates a private Slack app for that
-organization and installs it through Nango, which runs the OAuth exchange
-and holds the resulting bot token. The Authority verifies the workspace, app,
-bot, and scopes before activating the
-connection and storing the Nango connection ID, the app's client ID and
-secret, and the signing secret in its private credential store
-([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
-SQLite receives only that credential reference and verified public identity;
-it holds no bot token.
+runs `echo-brain person tools setup --tool slack`; ECHO creates the
+organization's private Slack app and installs it through Nango, and the
+Authority activates the connection only after verifying it. The
+[Slack connection onboarding gate](organization-control-plane.md#slack-connection-onboarding-gate)
+defines that ceremony and its credential custody.
 
 Granola is one organization-owned meeting export and admission bridge. Its
 credential and canonical owner-email binding stay on the Authority; people do
@@ -77,21 +74,26 @@ It emits revisions through the existing meeting-source admission and approval
 path before any meeting becomes readable context.
 
 After that organization tool is active, a signed-in Person runs
-`echo-brain person tools connect --tool slack`, which opens Slack's sign-in
-page in the browser, or, on a machine without a browser,
-`echo-brain person tools connect --tool slack --method dm-code --slack-user U…`,
-the earlier DM-code challenge. Either way the Authority verifies the exact
-Slack human and creates or reuses that membership's external identity link.
-The Person flow creates no shared-channel/reaction adapter binding or
-approve/reject grant. Private meeting-owner approvals are instead delivered as
-signed Block Kit DMs. The visibility selector defaults to **Only me**
-(`restricted-reviewer-person-v2`); before clicking Approve the owner may select
+`echo-brain person tools connect --tool slack` (browser sign-in, or a DM-code
+challenge without a browser). The Authority verifies the exact Slack human and
+creates or reuses that membership's external identity link; the
+[Person Slack identity link](organization-control-plane.md#person-slack-identity-link)
+defines both methods. The Person flow creates no shared-channel/reaction
+adapter binding or approve/reject grant. Private meeting-owner approvals are
+instead delivered as signed Block Kit DMs. The visibility selector defaults to
+**Only me** (`restricted-reviewer-person-v2`); before clicking Approve the owner may select
 **Team** (`organization-member-readable-person-v2`) or, with an active project,
 **Projects** (`project-members-readable-person-v1`) and one to twenty of their
 projects. A separate **Share transcript with the selected audience** checkbox,
 off by default, also releases the exact meeting transcript to that audience.
 The selected policy, projects and transcript choice bind only at approval;
 Reject creates no V4 record.
+
+Jira is a person-bound read connection, not an organization tool:
+`echo-brain person tools connect --tool jira` binds one membership's Nango-held
+Jira grant. The production Authority keeps it behind the
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) release
+gate. See [shared connector contracts](connector-contracts.md).
 
 ## Evidence boundary
 
@@ -100,6 +102,6 @@ verification method. Display names, unverified email text, token possession,
 and unscoped provider IDs are not canonical identity. Provider credentials and
 raw meeting content never enter Person session state or Person CLI output.
 
-Multi-organization tenancy, IdP/SCIM provisioning, generalized provider
-catalogs, and Person-bound record publication are outside this minimum V1
+Multi-organization tenancy, IdP/SCIM provisioning, a server-side provider
+catalog, and Person-bound record publication are outside this minimum V1
 identity foundation.

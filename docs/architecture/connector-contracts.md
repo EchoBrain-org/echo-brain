@@ -1,18 +1,19 @@
 # Shared connector contracts
 
-This first implementation gives connector worktrees a common definition of
-personal read access and an audited boundary for live evidence. Provider
-protocols and transport remain in their provider workspaces. The contracts are
-additive: existing Person tools, Ask responses, source admission and Slack
-onboarding continue through their current interfaces.
+These contracts give connectors a common definition of personal read access
+and an audited boundary for live evidence. Provider protocols and transport
+remain in their provider workspaces. The contracts are additive: existing Person
+tools, Ask responses, source admission and Slack onboarding continue through
+their current interfaces.
 
 The [connector/context integration](../product/2026-10-01-connector-context-integration-v1.md)
-also provides opt-in typed source capture for Granola and Jira. This is an intake
-capability alongside the live release contracts below, with no production source
-registration or new Ask wiring. Shared capture types live in
+also provides opt-in typed source capture: Granola reuses its configured adapter,
+Jira is request-only unless an explicit Authority binding retains pointers, and
+Slack has a fixed public-channel pointer source. Only the staging V2 selection
+retains Jira and Slack pointers. This intake capability has no production source
+registration or Ask wiring. Shared capture types live in
 `organization-processing/core`; Authority owns the fixed disposition and current
-retention fence. Granola reuses its configured adapter; the Jira profile is
-request-only. Slack onboarding does not provide a content reader.
+retention fence.
 
 ## Shared connection commands
 
@@ -53,10 +54,10 @@ names and Nango connection references belong in provider state, rather than
 this status projection. The validator owns immutable copies and rejects
 unknown fields, duplicate capabilities and inconsistent state.
 
-This change supplies the schema and validator; it does not introduce a status
-endpoint or modify the released tools response.
-The Slack worktree's owner-only organization setup state remains independent
-of this personal read state.
+Only the schema and validator exist: no endpoint exposes this status, and the
+Person tools responses report identity link status, not read status. Slack's
+owner-only organization setup state remains independent of this personal read
+state.
 
 ## Live evidence
 
@@ -71,10 +72,12 @@ The provider returns normalized items with citations, bounded text, labels and
 optional inventory metadata. It validates its own API payload, tenant URL and
 item coordinates. The shared boundary checks the citation's tenant/tool,
 verifies the digest of released text and owns all handles visible to the desk.
-Slack uses its existing typed message citation; ticket tools use
+A Slack reader, when adapted, uses the existing typed message citation; ticket
+tools use
 [`PersonTicketCitationV1`](../../packages/organization-api/src/person-ticket-citation-v1.ts),
 whose coordinates include the tool, tenant and ticket identity. Neither changes
-the citation union of `PersonAnswerResponseV4`.
+the citation union of `PersonAnswerResponseV4`; ticket citations reach Ask only
+through `PersonAnswerResponseV5`.
 
 [`createAuditedPersonLiveEvidenceSourceV1`](../../packages/organization-authority-kernel/src/shared/audited-person-live-evidence-v1.ts)
 implements the common release boundary:
@@ -141,23 +144,20 @@ from Nango and call its API directly. Nango Functions, syncs and webhook
 forwarding are separate implementation choices; they cannot replace ECHO's
 authorization, admission or audit checks.
 
-The revised Slack onboarding work can keep its organization bot installation,
-personal identity link and signed approval callbacks. It need not implement a
-live reader as part of onboarding, and the shared contracts introduce no
-replacement or migration of its connection persistence.
+## Current integration
 
-## Integration sequence
+Connectors implement the reader, authorization and audit ports and run fixture
+conformance tests independently. Meeting work uses the existing admission ports.
+The provider-neutral tests exercise the common release boundary with both Slack
+and ticket fixtures; they do not call either service.
 
-Connector work can now implement the reader/authorization/audit ports and run
-fixture conformance tests independently. Meeting work uses the existing
-admission ports. The provider-neutral tests exercise the common release
-boundary with both Slack and ticket fixtures; they do not call either service.
-
-The remaining shared integration work is to register readers in a versioned
-Evidence Desk, add a new answer/evidence response version for tickets, wire
-authorization and durable audit implementations, and expose read status to
-clients. The existing Slack reader is still service-owned and is not adapted
-by this slice. No real connector is connected by these contracts.
+Ticket evidence reaches Ask through Evidence Desk V2 and `PersonAnswerResponseV5`
+at `POST /v4/person/ask`, with the durable live-read audit. The Authority mounts
+that route only when a Jira ticket-live runtime is selected; the production CLI
+keeps Jira behind `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=false` while
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is proposed.
+Jira is the only live reader. The Slack reader port, `PersonSlackReaderV1`, has
+no implementation, and read status is not exposed to clients.
 
 The dispatcher must preserve [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)
 scope rules: `mine` excludes live external reads. Provider selection and

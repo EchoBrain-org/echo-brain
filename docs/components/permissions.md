@@ -79,8 +79,10 @@ with a particular action or content boundary.
 
 Permission claims must name their enforcement scope. A bounded pilot or one
 retrieval operation is not evidence of a globally enforced permission system.
-Every served path must link its invariant, enforcement point, denial behavior,
-audit evidence, and qualification case.
+The served-path table below covers the ADR-0024 paths; other served Person read
+paths are governed by
+[INV-PERMISSIONS-015](../invariants/INV-PERMISSIONS-015-layer-3-person-release-boundary.md)
+and the ADR that introduced them.
 
 Person upload reads (notes and documents) release an audience that names only
 the reader's current projects, and a document request ID only to its uploader.

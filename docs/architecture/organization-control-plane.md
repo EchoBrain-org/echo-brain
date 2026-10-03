@@ -5,7 +5,9 @@ Slack identity linking, and private Slack DM approval persistence.
 
 The control plane is a library linked into the Organization Authority. It owns
 no HTTP listener. The Authority composes neutral control contracts with the
-Slack adapters under `providers/slack/server/src/organization-control-plane`:
+Slack adapters under `providers/slack/server/src/`. Setup lives in
+`organization-setup/` and browser sign-in in `adapters/oidc/`; the other Slack
+paths below are relative to its `organization-control-plane/` folder:
 
 | Entry point | Responsibility |
 | --- | --- |
@@ -97,7 +99,11 @@ asks the owner for it directly. The required Slack scopes are exactly
 verified meeting owner's private DM and `im:history` reconciles a retry
 without duplicating that DM card. There is no public channel step: the
 public identity-link channel and its reaction-era scopes (`channels:history`,
-`channels:read`, `reactions:read`) are retired (revision 3). The recipe also
+`channels:read`, `reactions:read`) are retired (revision 3). Only the staging
+V2 connector rehearsal selects an optional public-channel context capability
+that also requests `channels:history` and `channels:read` on the same app, a
+source proposal recorded in ADR-0027; the stored connection contract still
+names only the four approval scopes as required. The recipe also
 declares the user scopes `openid` and `profile` for the person's browser
 sign-in alone: the install never requests them and no connection contract
 records them. Rerunning setup with a new configuration token updates an
@@ -116,7 +122,10 @@ workspace or bot, so the connection reads "needs reinstall" until the owner
 reconnects to the original one. A failed, incomplete, or unavailable
 verification leaves no active connection; absence therefore means inactive. A
 reconnect of the same app reuses the same Nango connection ID and leaves every
-outstanding approval card untouched. When Nango no longer has that connection
+outstanding approval card untouched. It completes only once that connection
+reports the current attempt, organization and owner membership tags and fresh
+Slack identity and permission checks pass; Nango's `updated_at` is not
+completion evidence. When Nango no longer has that connection
 (a 404 for it marks the connection "needs reinstall"), the owner's
 `person tools setup --tool slack --reconnect` opens a new install and, once it
 reproduces the stored verification evidence for the same app, workspace and
@@ -128,24 +137,21 @@ proposed).
 The Slack bot token is never written to Authority state: Nango holds it, and
 the Authority fetches it at use time and caches it in memory for at most five
 minutes ([ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md)).
-Startup recovery first materializes every finalized approval and its V4 receipt
-without contacting Slack. Private terminal-card redraw is an optional,
-post-durable step requested immediately after approval publication, with periodic
-recovery. It tries one unrendered card per writer turn, continues after confirmed
-progress, rotates after an uncertain result, and forwards cancellation to the
-provider call. A
-Nango outage therefore leaves the durable decision intact and the card-render
-marker pending for a later pass without delaying Authority readiness or letting one
-card starve the rest. Only a confirmed Slack update records the card as
-rendered. The owner's setup and install report "Slack setup is unavailable
-right now". Unavailability and Nango's 401 or 403 never mark the connection
-"needs reinstall".
 The organization-scoped Authority private secret store instead holds one
 credential bundle: the app's client ID and secret, its signing secret, and the
 Nango connection ID. `integrations.sqlite` receives only an opaque handle to
 that bundle plus the verified workspace, bot identity, app ID, granted scopes,
 evidence digests, and activation audit. The database never receives the bot
 token, the client secret, or the signing secret.
+
+Startup recovery first materializes every finalized approval and its V4 receipt
+without contacting Slack. Terminal-card redraw is a later, optional presentation
+step; its scheduling and retry rules are in
+[meeting processing core and adapters](meeting-processing-core-and-adapters.md#adapter-responsibilities).
+A Nango outage therefore leaves the durable decision intact and the card
+pending without delaying Authority readiness. The owner's setup and install
+report "Slack setup is unavailable right now". Unavailability and Nango's 401
+or 403 never mark the connection "needs reinstall".
 
 The `slack-organization-tool-v1` ready state is accepted only while its opaque
 credential reference resolves to a private readable secret during Authority
@@ -186,8 +192,10 @@ from email, display name, or caller-supplied IDs.
 
 ### Employee Connected tools
 
-`GET /v2/person/tools` is a bearer-authenticated read of the current
-organization connection and the current member's external identity link. No
+`GET /v4/person/tools` is a bearer-authenticated read of the current
+organization connection and the current member's external identity link; owners
+also see the organization setup state. The v3 route and Slack's v2 route remain
+for older clients. No
 configured tool returns an empty list; an unavailable connection returns an
 unavailable row. An active Slack tool reports its workspace separately from
 the member's unlinked, linked, or revoked status. Failed reads return an
@@ -260,15 +268,16 @@ those facts.
 - Derive provider issuer, tenant, subject, and granted scopes from an
   authenticated provider lookup. Never trust email, display name, or
   caller-supplied provider IDs.
-- Verify the bot, workspace, required scopes, canonical non-null app
-  identity, and exact public channel access before creating an active
-  connection. The app ID embedded in a reviewed Slack message is never trusted
-  as the connection identity.
+- Verify the bot, workspace, required scopes, and canonical non-null app
+  identity before creating an active connection. The app ID embedded in a
+  reviewed Slack message is never trusted as the connection identity.
 - Normalize scopes and require the provider's granted scope set to contain
   every scope required by the selected flow.
-- Store provider tokens in a private mode-0600 file under organization-scoped
-  Authority state. SQLite stores only an opaque handle, never token bytes,
-  authorization codes, or raw OAuth state, nonce, or PKCE material.
+- Store the app credential bundle (client ID and secret, signing secret, Nango
+  connection ID) in a private mode-0600 file under organization-scoped
+  Authority state; the bot token stays in Nango. SQLite stores only an opaque
+  handle, never token bytes, authorization codes, or raw OAuth state, nonce, or
+  PKCE material.
 - Commit the link, receipt, or terminal evidence before publishing success.
 - Never reuse a provider event as authorization. Every approval action is
   revalidated inside the Authority transaction against the current membership
@@ -305,9 +314,9 @@ when an accepted milestone has an externally observable behavior that cannot
 be implemented safely with the current model.
 
 No Teams, Granola, project-management, or other non-Slack organization-tool
-onboarding is implemented. A multi-provider Person connect catalog is also
-explicitly deferred; the Connected tools response is a single-Slack contract
-today.
+onboarding is implemented. The Person CLI dispatches the Slack and server-gated
+Jira tool fragments ([connector contracts](connector-contracts.md)); the
+server's Connected tools list reports Slack only today.
 
 ## Schema growth rule
 

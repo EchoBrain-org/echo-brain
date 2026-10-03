@@ -232,8 +232,8 @@ person who runs them; an agent has no membership of its own
 ## Artifact boundary
 
 `tools/pack-person-client.mjs` builds the Person client and only its protocol
-and provider-client dependency closure. The Slack client fragment owns wire
-contracts and commands without acquiring server code. The tarball contains no
+and provider-client dependency closure. The Slack and Jira client fragments own
+their wire contracts and commands without acquiring server code. The tarball contains no
 Authority service, processing runtime, server provider, native SQLite, LaunchAgent
 code, JSONL outbox, or root product package.
 

@@ -34,7 +34,10 @@ live in their provider workspaces; cross-workspace source and artifact checks li
 
 ## Shared source admission
 
-Context sources share a versioned port before their domain-specific processing:
+Context sources share the versioned `SourceAdapterV1` and
+`SourceAdmissionStoreV1` ports. Person uploads and meeting sources admit through
+`pullAndAdmitSourceBatchV1()` before their domain-specific processing; opt-in
+connector captures pass through the Authority's own context intake gate:
 
 ```text
 Person HTTP upload -> durable Authority inbox -> PersonSourceAdapterV1 --+
@@ -48,7 +51,16 @@ meeting provider -> MeetingSourceAdapter -> MeetingSourceBridgeV1 ------+
                          SourceAdmissionStoreV1
                            /                    \
             document extraction/index       meeting decision workflow
+
+provider context source (Granola, Jira, Slack)
+  -> SourceAdapterV1<ContextCaptureContentV1>.pull()
+  -> createContextSourceIntakeV1() -> intakeContextBatchV1()
+       retained:     SqliteContextCaptureStoreV1 (a SourceAdmissionStoreV1)
+       request_only: request memory only, never stored
 ```
+
+Captured context feeds no processing, retrieval or Ask stage; see
+[connector contracts](connector-contracts.md).
 
 Person submission pushes into an edge inbox; core ingestion pulls from the
 server-owned inbox. The source adapter does not need a contributor's computer

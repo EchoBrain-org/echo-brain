@@ -65,9 +65,10 @@ qualification_ids:
 
 ## Responsibility
 
-The single-organization Authority process runs a fourteen-workspace dependency
-closure, the set its image copies from the build stage. Its hosting account and
-operator are selected under
+The single-organization Authority process runs the workspace dependency closure
+that [`deploy/organization-authority/Dockerfile`](../../deploy/organization-authority/Dockerfile)
+copies into its runtime stage. Its hosting account and operator are selected
+under
 [ADR-0008](../decisions/ADR-0008-echo-hosted-authority-by-default.md):
 
 | Workspace                       | Owns                                                                                  |
@@ -81,10 +82,10 @@ operator are selected under
 
 The rest of the closure is the shared `federation-protocol`,
 `organization-protocol` and `organization-api` contracts plus the composed
-providers: `providers/granola`, `providers/openrouter`,
-`providers/synthetic-demo`, `providers/slack/server` and
-`providers/slack/client`. Only `organization-authority` is a process entry
-point; the other thirteen are libraries linked into the Authority runtime. The
+providers: `providers/granola`, `providers/jira`, `providers/jira/client`,
+`providers/openrouter`, `providers/synthetic-demo`, `providers/slack/server`
+and `providers/slack/client`. Only `organization-authority` is a process entry
+point; the others are libraries linked into the Authority runtime. The
 deployment also includes a separate reverse proxy.
 
 ## Data authority
@@ -98,6 +99,13 @@ the pending approval boundary: it is not an organization record, retrieval
 input, or delivery payload until an audited resolution admits it. Central state
 must not accept unrestricted provider payloads or bypass that pending-only
 boundary.
+
+Central state also holds immutable source custody under
+[ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md):
+Person originals and admitted source revisions, including opt-in retained
+context captures. Custody grants no read access. The
+[persistence ownership](../architecture/organization-workspace-boundaries.md#persistence-ownership)
+map lists the databases, including the gated Jira connection sidecar.
 
 ## Provider identity-link composition
 
@@ -115,28 +123,9 @@ would weaken the Authority boundary.
 An opt-in [connector capture composition](../product/2026-10-01-connector-context-integration-v1.md)
 binds provider-neutral capture envelopes to explicit Authority disposition,
 organization, read authorization and atomic retention checks. It is not installed
-in the production root and grants no retrieval or release authority.
-The local rehearsal runner reserves isolated state and Person paths, preflights
-before bootstrap, and serves its disposable profile on loopback only. It has a
-private control socket for authenticated bounded capture and one manual legacy
-processing cycle. Granola's retained owner-scoped capture is separate from the
-legacy meeting cursor owner; the local and V1 staging runners keep Jira
-request-only and have no Slack source. Jira's factory defaults to
-request-only but can accept an explicit retained-pointer Authority binding; the
-shared SQLite admission fence still selects and rechecks custody independently
-of the provider read grant. The versioned staging V2 selection binds retained
-Jira pointers and one fixed public Slack channel's pointers to the current
-initial owner. Its optional provider-owned Slack capability adds channel read
-scopes to the same app while preserving the connection state used by approval
-cards. It proves the retained V1 predecessor before reusing the existing Jira
-sidecar. The host wrapper owns the journaled profile transition. Message
-snapshots remain deferred, with edits and deletes policy required before that
-addition. This is a source implementation claim, not provider qualification or
-a production composition; downstream retrieval and Ask remain unchanged.
-
-Focused source proof is in the [Jira intake test](../../services/organization-authority/test/jira-context-source-intake-v1.test.ts),
-[Slack source test](../../providers/slack/server/test/context/slack-context-source-v1.test.ts)
-and [Slack transport test](../../providers/slack/server/test/context/slack-context-transport-v1.test.ts).
+in the production root and grants no retrieval or release authority; only the
+local rehearsal runner and the versioned staging selections compose it, and
+only staging V2 retains Jira and Slack pointers.
 
 - [One-organization workspace boundaries](../architecture/organization-workspace-boundaries.md)
 - [Organization control plane](../architecture/organization-control-plane.md)
