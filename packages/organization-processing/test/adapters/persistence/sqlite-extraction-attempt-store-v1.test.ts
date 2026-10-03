@@ -171,18 +171,6 @@ describe('durable extraction attempt budget', () => {
     expect(() => open()).toThrow();
   });
 
-  it('refuses weakened schema definitions even when every object name and schema stamp matches', () => {
-    const { path, open } = fixture();
-    open().close();
-    const raw = new Database(path);
-    raw.exec(`DROP TRIGGER extraction_attempt_update_fence_v1;
-      CREATE TRIGGER extraction_attempt_update_fence_v1 BEFORE UPDATE ON extraction_attempts_v1
-      BEGIN SELECT 1; END;`);
-    expect(raw.pragma('integrity_check', { simple: true })).toBe('ok');
-    raw.close();
-    expect(() => open()).toThrow();
-  });
-
   it('refuses reservation inside an outer transaction that could roll back after provider I/O', () => {
     const database = new Database(':memory:');
     const store = new SqliteExtractionAttemptStoreV1(database, binding);

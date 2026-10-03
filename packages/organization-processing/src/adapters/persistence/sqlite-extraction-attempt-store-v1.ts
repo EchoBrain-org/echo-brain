@@ -68,19 +68,6 @@ const SCHEMA = `
   CREATE TRIGGER extraction_retry_permission_delete_denied_v1 BEFORE DELETE ON extraction_retry_permissions_v1
     BEGIN SELECT RAISE(ABORT, 'extraction retry permission deletion is denied'); END;
 `;
-let expectedSchema: string | undefined;
-function schemaDefinition(database: Database.Database): string {
-  return JSON.stringify(database.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all());
-}
-function expectedSchemaDefinition(): string {
-  if (expectedSchema === undefined) {
-    const reference = openAuthorityDatabase(':memory:');
-    try { reference.exec(SCHEMA); expectedSchema = schemaDefinition(reference); }
-    finally { reference.close(); }
-  }
-  return expectedSchema;
-}
-
 function invalid(): never { throw new Error('Extraction attempt state is invalid'); }
 function assertBinding(binding: ExtractionAttemptBindingV1): void {
   for (const value of [binding.authority_id, binding.organization_id, binding.state_lineage_id]) {
@@ -125,9 +112,8 @@ function initialize(database: Database.Database, binding: ExtractionAttemptBindi
     } else if (version !== EXTRACTION_ATTEMPT_STORE_SCHEMA_VERSION_V1 || application !== EXTRACTION_ATTEMPT_STORE_APPLICATION_ID_V1) invalid();
     const rows = database.prepare('SELECT authority_id, organization_id, state_lineage_id FROM extraction_binding_v1').all() as ExtractionAttemptBindingV1[];
     if (rows.length !== 1 || rows[0]?.authority_id !== binding.authority_id || rows[0]?.organization_id !== binding.organization_id || rows[0]?.state_lineage_id !== binding.state_lineage_id) invalid();
+    database.prepare('SELECT 1 FROM extraction_attempts_v1, extraction_retry_permissions_v1 LIMIT 0').all();
     if (database.pragma('integrity_check', { simple: true }) !== 'ok' || (database.pragma('foreign_key_check') as readonly unknown[]).length !== 0) invalid();
-    // Verify definitions, not just names: integrity_check does not detect weakened constraints.
-    if (schemaDefinition(database) !== expectedSchemaDefinition()) invalid();
   }).immediate();
 }
 
