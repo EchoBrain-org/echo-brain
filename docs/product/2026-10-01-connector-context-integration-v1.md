@@ -20,6 +20,11 @@ The envelope, structured payload, semantic revision builder and validation live
 in `organization-processing/core`. Providers depend inward on that contract;
 they do not import Authority service internals. Authority retains policy
 selection, current authorization, transaction fencing and storage ownership.
+The contract accepts only the note, message, ticket and meeting payloads these
+providers emit. The payload kind is the capture's source type, and captures
+carry no observation list. Captures retained in staging before this contract
+was narrowed on 2026-10-02 keep their earlier content; capturing the same
+source again admits a new revision rather than a duplicate.
 
 `createContextSourceIntakeV1` binds a configured source identity, organization
 and disposition. It serializes pulls, checks the read grant before and after a

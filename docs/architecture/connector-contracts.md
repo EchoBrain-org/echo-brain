@@ -13,7 +13,9 @@ Slack has a fixed public-channel pointer source. Only the staging V2 selection
 retains Jira and Slack pointers. This intake capability has no production source
 registration or Ask wiring. Shared capture types live in
 `organization-processing/core`; Authority owns the fixed disposition and current
-retention fence.
+retention fence. The capture contract accepts only the note, message, ticket
+and meeting payloads these providers emit. The payload kind is the source type,
+and every capture is a source observation, never an approved fact.
 
 ## Shared connection commands
 

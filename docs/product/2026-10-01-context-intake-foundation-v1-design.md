@@ -31,7 +31,7 @@ the existing `SourceAdmissionStoreV1`; no SQL baseline changes or new database
 roles are introduced. Source keys reuse `sourceItemIdV1`. Adapter version records
 the implementation in the envelope without changing stable source identity or
 creating a new revision by itself. A typed content
-digest commits metadata, representation, provenance, anchors and observations.
+digest commits metadata, representation, provenance and anchors.
 Admission also commits the immutable revision manifest and Authority custody
 and policy references. Replay capture time is observational, as in existing
 admission; changing any immutable content or revision field conflicts. New
@@ -48,29 +48,27 @@ admission baseline and production composition stay unchanged.
 ## Typed capture contract
 
 `ContextCaptureContentV1` has explicit schema version 1 and content kind
-`echo-context-capture-v1`. Its source type, storage representation, truth status
-and access policy remain separate dimensions. Source types are document, note,
-message, ticket, meeting, activity, task and decision. Every capture has the fixed
-truth status `source_observation`, including a decision-shaped source; approval
-requires the separately owned signed human-act record contract.
+`echo-context-capture-v1`. Its source type, storage representation and access
+policy remain separate dimensions. The source type is the structured payload's
+`kind`: note, message, ticket or meeting, the kinds the Granola, Jira and Slack
+mappings emit. Every capture is a source observation, never an approved fact;
+approval requires the separately owned signed human-act record contract. The
+content carries no separate source-type or truth-status field. Another source
+type requires a new capture version.
 
-The required `payload` is a closed, versioned structured value whose `kind`
-matches `source_type`. It preserves selected source fields rather than flattening
-every input into a title and text body:
+The required `payload` is a closed, versioned structured value. It preserves
+selected source fields rather than flattening every input into a title and text
+body:
 
 | Source type | Structured payload fields (besides version and kind) |
 | --- | --- |
-| Document | Media type; optional language |
 | Note | Plain-text or Markdown format |
 | Message | Channel reference and sent time; optional thread and author references |
 | Ticket | Key, status and labels; optional priority, assignee reference and due time |
 | Meeting | Start time and participant references; optional end time |
-| Activity | Action, occurrence time and subject reference; optional actor reference |
-| Task | Status; optional due time, completion time and assignee reference |
-| Decision | Source status and decider references; optional decision time |
 
 External references remain opaque source coordinates. They cannot create or merge
-directory identities or memberships. A provider's decision status is still a
+directory identities or memberships. A provider's ticket status is still a
 source observation, not an ECHO approval. Unknown fields and unversioned provider
 blobs are rejected; provider mappings select only fields covered by this contract
 and the Authority retention decision. Bodies belong in the representation, not a
@@ -91,16 +89,13 @@ Excerpts commit each passage and its source anchor without claiming the
 unavailable whole body. Overlapping excerpts within the same source anchor must
 agree on every shared character; different source anchors are independent
 coordinate domains. Snapshot passages must match their committed text.
-Pointer metadata cannot support anchored observations in V1. Source identity,
-exact revision, provenance and policy references remain available even for a
-pointer capture.
+Source identity, exact revision, provenance and policy references remain
+available even for a pointer capture.
 
-Optional adapter-declared `references` and `activity` observations are preserved
-as source data. Each names an existing passage anchor and exact target source
-and revision. They are neither projected relationships nor approved claims and
-never imply permissions or identity links. This contract performs no inference
-or traversal. Contributor identity claims, artifacts and derived representation
-references are excluded from this bounded V1 intake contract.
+A capture declares no relationships or activity between sources, and this
+contract performs no inference or traversal. Contributor identity claims,
+artifacts and derived representation references are excluded from this bounded
+V1 intake contract.
 
 The time and revision semantics follow existing main admission:
 
@@ -108,7 +103,7 @@ The time and revision semantics follow existing main admission:
 | --- | --- |
 | `revision.captured_at` | Read/poll observation and capture time; excluded from the immutable revision witness |
 | `provenance.source_updated_at` | Optional provider-declared time stable for this exact source revision; included in content digest |
-| Payload/event times, including `observation.occurred_at` | Source event times, included in content digest |
+| Payload times, such as a meeting start or message send time | Source event times, included in content digest |
 
 An adapter never substitutes its current fetch time for a missing source time.
 It omits `source_updated_at` when unavailable. Fetch-time `observed_at` is rejected
@@ -171,7 +166,7 @@ configured adapter and retention policy.
 
 For request-only intake, the coordinator returns a validated frozen value owned
 by the request and never invokes a supplied admission store. It creates no
-durable source item, revision, metadata, content, representation or observation.
+durable source item, revision, metadata, content or representation.
 The request owner must discard references when its work ends; V1 provides no
 cache or durable request log. Live reader integration, release audits, retrieval,
 Evidence Desk and Ask remain outside this milestone.
@@ -186,8 +181,7 @@ Evidence Desk and Ask remain outside this milestone.
 | Individual passage | 4 KiB |
 | Canonical structured payload | 16 KiB; at most 32 entries per reference/label list |
 | Passage anchors per capture | 32 |
-| Observations per capture | 32 |
-| Intake batch or custody inventory read | 100 captures |
+| Intake batch | 100 captures |
 
 The entire batch is validated, including within-batch revision and custody
 conflicts, before writes. Each retained capture commits atomically through
@@ -197,12 +191,11 @@ capture. A later failure can leave earlier captures committed; bounded replay
 deduplicates those captures and retries the rest. No cursor or permanent queue
 is advanced by this capability.
 
-`SqliteContextCaptureReaderV1` is a server-internal custody read port for exact
-retained captures. It reconstructs the envelope and Authority scope, verifies
-stored canonical content and immutable revision commitments, and uses stable
-source/revision ordering. It fails when its inventory bound would truncate the
-result. It provides no search, graph projection, discovery or release authority.
-Closing and reopening file-backed SQLite preserves captured revisions without
+Retained captures have no server read path yet; their first consumer, such as
+retrieval or Evidence Desk, designs one. The intake tests read rows back through
+a test fixture that reconstructs the envelope and Authority scope and verifies
+stored canonical content and immutable revision commitments. Closing and
+reopening file-backed SQLite preserves captured revisions without
 reinitializing state; replay uses the existing immutable witnesses.
 
 The fixtures cover pointer, excerpt and full capture; identity and anchor
@@ -229,7 +222,7 @@ composing tests belong to Authority.
 ## Future consumers and deferred decisions
 
 Future consumers can use the preserved source coordinates, exact revision
-manifest, content digest, typed representation, anchors, observation times and
+manifest, content digest, typed representation, anchors, source times and
 Authority policy references. Those bindings do not authorize processing or
 release. Graph projection and discovery, retrieval changes, Evidence Desk
 composition and cited Ask answers are deferred in full; ADR-0010's approved-atom
