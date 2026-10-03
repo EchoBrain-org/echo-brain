@@ -73,7 +73,7 @@ export function crossSourceLiveFixture(actor: { readonly organization_id: string
         });
         return createAuditedPersonLiveEvidenceSourceV1({ actor: binding, read_grant_sha256: binding.read_grant_sha256,
           access: { tool_id: 'slack', external_scope_id: SLACK_TEAM, external_subject_id: binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] },
-          authorization: { assertCurrent: requireCurrent, async requireCurrent() { requireCurrent(); } }, reader, audit: input.audit });
+          authorization: { assertCurrent: requireCurrent }, reader, audit: input.audit });
       },
     },
     close() {},

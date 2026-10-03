@@ -16,9 +16,7 @@ export interface PersonConnectorReadBindingV1 {
 }
 
 export interface PersonConnectorReadAuthorizationV1 {
-  /** Checks current ECHO membership, identity link, grant commitment and live_evidence permission. Throws on drift or revocation. */
-  requireCurrent(binding: PersonConnectorReadBindingV1, input: { readonly signal?: AbortSignal }): Promise<void>;
-  /** Synchronous local-only final fence. No provider I/O or asynchronous work is permitted. */
+  /** Checks current ECHO membership, identity link, grant commitment and live_evidence permission synchronously. No provider I/O or asynchronous work is permitted. */
   assertCurrent(binding: PersonConnectorReadBindingV1): void;
 }
 

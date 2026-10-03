@@ -8,7 +8,7 @@ import { askerOf, scopeOf, type CreatePersonAnswerV3RouteOptions } from './perso
 import { createPersonEvidenceDeskV1 } from './person-evidence-desk-v1.js';
 import { createPersonLiveEvidenceDeskV2 } from './person-live-evidence-desk-v2.js';
 
-export interface CreatePersonAnswerV4RouteOptions extends Omit<CreatePersonAnswerV3RouteOptions, 'ask_journey_telemetry'> {
+export interface CreatePersonAnswerV4RouteOptions extends Omit<CreatePersonAnswerV3RouteOptions, 'ask_journey_telemetry' | 'slack_for'> {
   readonly ticket_for?: (input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined>;
   /** Explicit server-selected Slack scope; it never implies a Person-wide user-token grant. */
   readonly slack_live_for?: (input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonSlackMessageCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1> | undefined>;
@@ -33,8 +33,7 @@ export function createPersonAnswerV4Route(options: CreatePersonAnswerV4RouteOpti
       // A project has no verified Jira mapping in this slice. Never widen project or mine to global Jira.
       const ticket = scope.kind === 'global' ? await options.ticket_for?.({ access_token: input.access_token, audit: options.audit.forLiveRequest(context), ...(input.signal === undefined ? {} : { signal: input.signal }) }) : undefined;
       const liveSlack = scope.kind === 'global' ? await options.slack_live_for?.({ access_token: input.access_token, audit: options.audit.forLiveRequest(context), ...(input.signal === undefined ? {} : { signal: input.signal }) }) : undefined;
-      const slack = scope.kind === 'mine' || options.slack_live_for !== undefined ? undefined : options.slack_for?.({ principal_id: authorization.principal_id, membership_id: authorization.membership_id });
-      const base = createPersonEvidenceDeskV1({ access_token: input.access_token, scope, originals: options.originals, records: options.records, ...(slack === undefined ? {} : { slack }) });
+      const base = createPersonEvidenceDeskV1({ access_token: input.access_token, scope, originals: options.originals, records: options.records });
       const desk = createPersonLiveEvidenceDeskV2(base, ticket, liveSlack);
       const asker = askerOf(options, authorization);
       try {

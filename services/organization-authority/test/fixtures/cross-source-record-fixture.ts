@@ -3,24 +3,18 @@ import type { JsonObject, Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   buildHumanActRecordInputV1,
   createOrganizationRecordEnvelopeV4,
-  createOrganizationRecordReceiptV2,
-  createRecordInputCodecRegistryV4,
-  HUMAN_ACT_RECORD_INPUT_CODEC_V1,
   organizationAuthorityPinSha256,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-  validateOrganizationRecordReceiptBodyV2,
   verifyOrganizationAuthorityPin,
   verifyOrganizationRecordEnvelopeV4,
-  verifyOrganizationRecordReceiptV2,
-} from "@echo-brain/organization-protocol";
+} from "../../../../packages/organization-protocol/src/index.js";
 import {
   createPersonPolicyFactProjectorV2,
   createRecordPolicyFactProjectorRegistryV1,
   openOrganizationRecordDatabase,
   OrganizationRecordAppenderV4,
   type V4RecordEnvelopeView,
-  type V4ReceiptFactory,
 } from "@echo-brain/organization-record/organization-record-api-v1";
 import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage";
 import { openAuthorityDatabase } from "@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database";
@@ -29,12 +23,9 @@ import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1 } from '@echo-brain/or
 import { SqliteSourceAdmissionStoreV1 } from '../../src/adapters/persistence/sqlite/source-admission-v1.js';
 import { FileOrganizationAuthoritySigner } from "../../src/adapters/security/file-organization-authority-signer.js";
 import { createReadableSearchGenerationReconcilerV1 } from "../../src/composition/readable-search-generation-composition.js";
-import { humanAct, sourceProvenance as fixtureSourceProvenance, processorProvenance as fixtureProcessorProvenance } from "../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
+import { authorizationWitness, humanAct, receiptFactory, RECORD_INPUT_CODECS, sourceProvenance as fixtureSourceProvenance, processorProvenance as fixtureProcessorProvenance } from "../../../../packages/organization-record/test/fixtures/record-append-fixture.js";
 import { addMembership } from "./project-context-sqlite.js";
 
-const RECORD_INPUT_CODECS = createRecordInputCodecRegistryV4([
-  HUMAN_ACT_RECORD_INPUT_CODEC_V1,
-]);
 const ISSUED_AT = "2026-10-02T12:00:00.000Z";
 
 export interface CrossSourceRecordFixtureCoordinatesV1 {
@@ -66,56 +57,6 @@ function processorProvenance(input: CrossSourceRecordFixtureCoordinatesV1) {
   return { ...fixtureProcessorProvenance(), authority_id: input.authority_id, organization_id: input.organization_id, state_lineage_id: input.state_lineage_id };
 }
 
-function receiptFactory(input: {
-  readonly signer: FileOrganizationAuthoritySigner;
-  readonly pinned: ReturnType<typeof verifyOrganizationAuthorityPin>;
-  readonly coordinates: CrossSourceRecordFixtureCoordinatesV1;
-}): V4ReceiptFactory {
-  return {
-    createSeed({ envelope, position, issued_at, policy_fact_outcome }) {
-      return validateOrganizationRecordReceiptBodyV2({
-        schema_version: 2,
-        kind: "echo-organization-record-receipt-v2",
-        authority_id: envelope.body.authority_id,
-        organization_id: envelope.body.organization_id,
-        state_lineage_id: envelope.body.state_lineage_id,
-        envelope_id: envelope.body.envelope_id,
-        semantic_idempotency_key: envelope.body.semantic_idempotency_key,
-        event_kind: envelope.body.event.kind,
-        record_position: position,
-        record_sha256: envelope.record_sha256,
-        predecessor_record_sha256: envelope.body.predecessor_record_sha256,
-        record_head_position: position,
-        record_head_sha256: envelope.record_sha256,
-        issued_at,
-        policy_fact_outcome,
-      }) as unknown as JsonObject;
-    },
-    async sign({ envelope, receipt_seed }) {
-      return createOrganizationRecordReceiptV2(
-        {
-          envelope: envelope as never,
-          record_position: (receipt_seed as { readonly record_position: number }).record_position,
-          issued_at: (receipt_seed as { readonly issued_at: string }).issued_at,
-        },
-        input.pinned,
-        input.coordinates.state_lineage_id,
-        input.signer.sign.bind(input.signer),
-        RECORD_INPUT_CODECS,
-      ) as unknown as JsonObject;
-    },
-    verify({ receipt, envelope }) {
-      return verifyOrganizationRecordReceiptV2(
-        receipt,
-        envelope,
-        input.pinned,
-        input.coordinates.state_lineage_id,
-        RECORD_INPUT_CODECS,
-      ) as unknown as JsonObject;
-    },
-  };
-}
-
 async function appendApprovedGranolaRecord(input: {
   readonly appender: OrganizationRecordAppenderV4;
   readonly signer: FileOrganizationAuthoritySigner;
@@ -138,48 +79,16 @@ async function appendApprovedGranolaRecord(input: {
     },
     event: seeded.event,
   });
-  const ref = human.human_act_resolution_ref;
-  const witness = {
-    authorization_allow: {
-      authority_id: input.coordinates.authority_id,
-      organization_id: input.coordinates.organization_id,
-      state_lineage_id: input.coordinates.state_lineage_id,
-      approval_id: ref.approval_id,
-      action: ref.action,
-      policy_id: ref.policy_id,
-      policy_contract_sha256: ref.policy_contract_sha256,
-      principal_id: input.reviewer.principal_id,
-      membership_id: input.reviewer.membership_id,
-      provider_action_sha256: ref.provider_action_sha256,
-      decision: "allow" as const,
-    },
-    authorization_proof_sha256: ref.authorization_proof_sha256,
-    provider_action_kind: ref.provider_action_kind,
-    provider_action_schema_version: ref.provider_action_schema_version,
-    audit_entry: {
-      authority_id: input.coordinates.authority_id,
-      organization_id: input.coordinates.organization_id,
-      state_lineage_id: input.coordinates.state_lineage_id,
-      audit_event_id: ref.audit_event_id,
-      audit_sequence: ref.audit_sequence,
-      actor_class: "provider_human" as const,
-      principal_id: input.reviewer.principal_id,
-      membership_id: input.reviewer.membership_id,
-      action: ref.action,
-      subject_kind: "approval" as const,
-      subject_id: ref.approval_id,
-      detail_digest: ref.authorization_proof_sha256,
-      provider_action_sha256: ref.provider_action_sha256,
-    },
-    audit_entry_sha256: ref.audit_entry_sha256,
-  };
-  const receipt_factory = receiptFactory(input);
+  const receipt_factory = receiptFactory(
+    { pinned: input.pinned, sign: input.signer.sign.bind(input.signer) },
+    { sign_calls: { value: 0 }, state_lineage_id: input.coordinates.state_lineage_id },
+  );
   const appended = await input.appender.append({
     approval_id: input.approval_id,
     action: "approve",
     semantic_idempotency_key: human.semantic_idempotency_key,
     receipt_issued_at: ISSUED_AT,
-    authorization_witness: witness,
+    authorization_witness: authorizationWitness(human, input.reviewer),
     envelope_factory: {
       async create(allocation) {
         return createOrganizationRecordEnvelopeV4(

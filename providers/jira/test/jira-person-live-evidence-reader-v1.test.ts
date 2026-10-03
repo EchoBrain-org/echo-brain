@@ -49,7 +49,7 @@ function fixture() {
     throw new Error('Unexpected synthetic endpoint');
   });
   const transport: JiraCloudTransportV1 = { binding: { ...binding }, request };
-  const authorization = { requireCurrent: vi.fn(async () => {}), assertCurrent: vi.fn(() => {}) };
+  const authorization = { assertCurrent: vi.fn(() => {}) };
   const releases: PersonLiveEvidenceReleaseV1<PersonTicketCitationV1>[] = [];
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1<PersonTicketCitationV1>) => { releases.push(release); return canonicalSha256(release); }) };
   async function make(fixedProject?: string) {
@@ -123,7 +123,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
       citation: { ticket_id: '10001', external_scope_id: cloudid, permalink: `${origin}/browse/ECHO-1`, text_sha256: digest(item.text!) } });
     expect(item).not.toHaveProperty('handle');
     expect(f.audit.record).toHaveBeenCalledTimes(1);
-    expect(f.authorization.requireCurrent).toHaveBeenCalledTimes(3);
+    expect(f.authorization.assertCurrent).toHaveBeenCalledTimes(3);
     const auditText = JSON.stringify(f.releases);
     for (const hidden of ['Ship connector', 'Launch Friday', 'launch', 'jira_item_', 'never-return', 'emailAddress']) expect(auditText).not.toContain(hidden);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description' } }));
@@ -297,7 +297,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     for (const failure of ['audit', 'grant', 'abort']) {
       const f = fixture(); const { source } = await f.make(); const controller = new AbortController();
       if (failure === 'audit') f.audit.record.mockRejectedValueOnce(new Error('private raw ticket and synthetic bearer'));
-      if (failure === 'grant') f.authorization.requireCurrent.mockRejectedValueOnce(new AuthorityOperationError('stale_access_state', 'private grant'));
+      if (failure === 'grant') f.authorization.assertCurrent.mockImplementationOnce(() => { throw new AuthorityOperationError('stale_access_state', 'private grant'); });
       if (failure === 'abort') f.state.hook = input => { expect(input.signal).toBe(controller.signal); if (input.path.includes('/issue/')) controller.abort(); };
       await expect(source.search({ query: 'ship', signal: controller.signal })).rejects.toMatchObject(failure === 'abort' ? { name: 'AbortError' } : { code: failure === 'audit' ? 'unavailable' : 'stale_access_state', message: 'Live evidence operation could not be completed' });
       if (failure !== 'audit') expect(f.audit.record).not.toHaveBeenCalled();

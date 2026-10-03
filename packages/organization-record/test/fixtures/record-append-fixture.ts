@@ -299,8 +299,9 @@ export function humanAct(
   });
 }
 
-function authorizationWitness(
+export function authorizationWitness(
   human: ReturnType<typeof humanAct>,
+  reviewer: { readonly principal_id: string; readonly membership_id: string } = { principal_id: "principal-1", membership_id: "membership-1" },
 ): RevalidatedPersonPolicyAuthorizationWitnessV2 {
   const ref = human.human_act_resolution_ref;
   return {
@@ -312,8 +313,8 @@ function authorizationWitness(
       action: ref.action,
       policy_id: ref.policy_id,
       policy_contract_sha256: ref.policy_contract_sha256,
-      principal_id: "principal-1",
-      membership_id: "membership-1",
+      principal_id: reviewer.principal_id,
+      membership_id: reviewer.membership_id,
       provider_action_sha256: ref.provider_action_sha256,
       decision: "allow",
     },
@@ -327,8 +328,8 @@ function authorizationWitness(
       audit_event_id: ref.audit_event_id,
       audit_sequence: ref.audit_sequence,
       actor_class: "provider_human",
-      principal_id: "principal-1",
-      membership_id: "membership-1",
+      principal_id: reviewer.principal_id,
+      membership_id: reviewer.membership_id,
       action: ref.action,
       subject_kind: "approval",
       subject_id: ref.approval_id,
@@ -410,9 +411,11 @@ export function receiptFactory(
   options: {
     readonly sign_calls: { value: number };
     readonly fail_sign?: boolean;
+    readonly state_lineage_id?: string;
   },
   codecs = RECORD_INPUT_CODECS,
 ): V4ReceiptFactory {
+  const lineage = options.state_lineage_id ?? COORDINATES.state_lineage_id;
   return {
     createSeed({ envelope, position, issued_at, policy_fact_outcome }) {
       return validateOrganizationRecordReceiptBodyV2({
@@ -448,7 +451,7 @@ export function receiptFactory(
           issued_at: seed.issued_at,
         },
         authority.pinned,
-        COORDINATES.state_lineage_id,
+        lineage,
         authority.sign, codecs,
       );
       if (canonicalJson(receipt.body) !== canonicalJson(receipt_seed))
@@ -462,7 +465,7 @@ export function receiptFactory(
         receipt,
         envelope,
         authority.pinned,
-        COORDINATES.state_lineage_id, codecs,
+        lineage, codecs,
       ) as unknown as JsonObject;
     },
   };

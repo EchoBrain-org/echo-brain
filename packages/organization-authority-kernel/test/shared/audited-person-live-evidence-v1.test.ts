@@ -40,7 +40,7 @@ function fixture<C extends PersonLiveEvidenceCitationV1>(tool_id: string, initia
     list: vi.fn(async () => { events.push('list'); return selected; }),
     revalidate: vi.fn(async () => { events.push('provider-check'); }),
   };
-  const authorization = { requireCurrent: vi.fn(async () => { events.push('grant-check'); }), assertCurrent: vi.fn(() => { events.push('grant-fence'); }) };
+  const authorization = { assertCurrent: vi.fn(() => { events.push('grant-check'); }) };
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1<C>) => { events.push('audit'); releases.push(release); return canonicalSha256(release); }) };
   const options = { actor, access: access(tool_id), read_grant_sha256, authorization, reader, audit };
   return { options, reader, audit, authorization, releases, events, select: (value: PersonLiveEvidencePageV1<C>) => { selected = value; }, make: () => createAuditedPersonLiveEvidenceSourceV1(options) };
@@ -50,7 +50,7 @@ describe('shared audited live evidence source V1', () => {
   it('exposes a synchronous local grant fence without a provider read or another audit', () => {
     const f = fixture('tickets', page([ticket()])); const source = f.make();
     expect(source.assertCurrent()).toBeUndefined();
-    expect(f.events).toEqual(['grant-fence']);
+    expect(f.events).toEqual(['grant-check']);
     expect(f.authorization.assertCurrent).toHaveBeenCalledWith(binding('tickets'));
     expect(f.reader.revalidate).not.toHaveBeenCalled(); expect(f.audit.record).not.toHaveBeenCalled();
     f.authorization.assertCurrent.mockImplementation(() => { throw new AuthorityOperationError('stale_access_state', 'private grant state'); });
@@ -80,7 +80,7 @@ describe('shared audited live evidence source V1', () => {
     expect(f.releases[0]!.value_digests).toEqual([canonicalSha256(releasedValue)]);
     expect(JSON.stringify(f.releases)).not.toContain(item.handle);
     expect(Object.isFrozen(result.items[0])).toBe(true);
-    expect(f.authorization.requireCurrent).toHaveBeenCalledWith(binding(tool_id), {});
+    expect(f.authorization.assertCurrent).toHaveBeenCalledWith(binding(tool_id));
     await source.revalidate({});
     expect(f.reader.revalidate).toHaveBeenCalledWith({ citations: [item.citation] });
   });
@@ -100,7 +100,7 @@ describe('shared audited live evidence source V1', () => {
     for (const failAt of [2, 3]) {
       const f = fixture('tickets', page([ticket()]));
       let calls = 0;
-      f.authorization.requireCurrent.mockImplementation(async () => {
+      f.authorization.assertCurrent.mockImplementation(() => {
         if (++calls === failAt) throw new AuthorityOperationError('stale_access_state', 'private grant state');
       });
       await expect(f.make().search({ query: 'launch' })).rejects.toMatchObject({ code: 'stale_access_state', message: 'Live evidence operation could not be completed' });
