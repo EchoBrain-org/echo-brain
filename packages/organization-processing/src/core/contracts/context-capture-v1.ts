@@ -125,7 +125,7 @@ export function assertPlainContextObjectV1(value: unknown, allowed: readonly str
  * Provider metadata only. Opaque refs remain source data and cannot establish
  * a directory identity, membership, permission grant, or durable body copy.
  */
-function assertPayload(value: unknown, sourceType: ContextStructuredSourceTypeV1): void {
+export function assertContextStructuredPayloadV1(value: unknown, sourceType: ContextStructuredSourceTypeV1): void {
   if (Buffer.byteLength(canonicalSourceContentV1(value), 'utf8') > MAXIMUM_PAYLOAD_BYTES) throw new Error('Context structured payload exceeds its bound');
   const payload = object(value, PAYLOAD_KEYS, 'Context structured payload');
   if (payload.schema_version !== 1 || payload.kind !== sourceType) throw new Error('Context structured payload kind does not match its source type');
@@ -217,7 +217,7 @@ export function assertContextCaptureEnvelopeV1(value: unknown, identity: SourceA
   const provenance = object(content.provenance, ['origin_ref', 'source_updated_at'], 'Context provenance');
   text(provenance.origin_ref, 2048, 'Context origin');
   if (provenance.source_updated_at !== undefined) timestamp(provenance.source_updated_at, 'Context timestamp');
-  assertPayload(content.payload, content.source_type as ContextStructuredSourceTypeV1);
+  assertContextStructuredPayloadV1(content.payload, content.source_type as ContextStructuredSourceTypeV1);
   const representation = object(content.representation, ['kind', 'pointer', 'text', 'passages'], 'Context representation');
   const anchors = new Set<string>();
   if (representation.kind === 'pointer') {
