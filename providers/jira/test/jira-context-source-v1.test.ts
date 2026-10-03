@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createJiraContextSourceV1, type JiraContextSourceReadGrantFenceV1 } from '../src/jira-context-source-v1.js';
+import { createJiraContextSourceV1 } from '../src/jira-context-source-v1.js';
 import type { JiraCloudRequestV1, JiraCloudTransportV1 } from '../src/jira-cloud-transport-v1.js';
 
 const cloudid = '11111111-1111-1111-1111-111111111111';
@@ -29,7 +29,7 @@ function issue(input: { updated?: string; status?: string; labels?: readonly str
   };
 }
 
-function fixture(options: { current?: () => void | Promise<void>; issue?: ReturnType<typeof issue>; projectSelf?: string; page?: unknown; representation?: 'pointer' | 'excerpt'; now?: () => Date } = {}) {
+function fixture(options: { issue?: ReturnType<typeof issue>; projectSelf?: string; page?: unknown; representation?: 'pointer' | 'excerpt'; now?: () => Date } = {}) {
   const raw = options.issue ?? issue();
   if (options.projectSelf !== undefined) raw.fields.project.self = options.projectSelf;
   const request = vi.fn(async (input: JiraCloudRequestV1): Promise<unknown> => {
@@ -41,15 +41,12 @@ function fixture(options: { current?: () => void | Promise<void>; issue?: Return
     throw new Error(`unexpected path ${input.path}`);
   });
   const transport: JiraCloudTransportV1 = { binding, request };
-  const requireCurrent: JiraContextSourceReadGrantFenceV1['requireCurrent'] = vi.fn(async () => { await options.current?.(); });
   return {
     request,
-    requireCurrent,
     source: createJiraContextSourceV1({
       transport,
-      read_grant_fence: { requireCurrent },
       project: 'ECHO',
-      identity: { kind: 'source', adapter_id: 'jira-context-capture', instance_id: `jira-cloud:${cloudid}:project:ECHO`, version: '1.0.0' },
+      instance_id: `jira-cloud:${cloudid}:project:ECHO`,
       representation: options.representation ?? 'excerpt',
       now: options.now ?? (() => new Date('2026-10-03T00:00:00.000Z')),
     }),
@@ -60,7 +57,6 @@ describe('Jira context source V1', () => {
   it('maps a provider response through the existing person-bound transport into a bounded ticket excerpt', async () => {
     const f = fixture();
     const result = await f.source.pull({ limit: 2 });
-    expect(f.requireCurrent).toHaveBeenCalledTimes(2);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({
       path: `${prefix}/search/jql`, method: 'POST', body: {
         jql: 'project = 10000 ORDER BY updated ASC, id ASC', maxResults: 2, fields: ['id'],
@@ -144,17 +140,6 @@ describe('Jira context source V1', () => {
     expect(result.sources[0]!.content.provenance.source_updated_at).toBe(expected);
   });
 
-  it('does not return fetched source bytes when the bound person grant is revoked during the pull', async () => {
-    let calls = 0;
-    const f = fixture({ current: () => {
-      calls += 1;
-      if (calls === 2) throw new Error('grant was revoked');
-    } });
-    await expect(f.source.pull({ limit: 1 })).rejects.toThrow('grant was revoked');
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001` }));
-    expect(f.requireCurrent).toHaveBeenCalledTimes(2);
-  });
-
   it('can preserve only a pointer when Authority selected pointer capture', async () => {
     const source = fixture({ representation: 'pointer' }).source;
     const result = await source.pull({ limit: 1 });
@@ -174,7 +159,7 @@ describe('Jira context source V1', () => {
     );
   });
 
-  it('snapshots mutable construction seams before a grant fence yields to the provider', async () => {
+  it('snapshots mutable construction seams before a pull reaches the provider', async () => {
     const raw = issue();
     const originalRequest = vi.fn(async (input: JiraCloudRequestV1): Promise<unknown> => {
       if (input.path === '/oauth/token/accessible-resources') return [{ id: cloudid, url: origin, scopes: ['read:jira-work', 'read:jira-user'] }];
@@ -186,18 +171,14 @@ describe('Jira context source V1', () => {
     });
     const divertedRequest = vi.fn(async () => { throw new Error('mutated transport was used'); });
     const transport: JiraCloudTransportV1 = { binding, request: originalRequest };
-    const fence = { requireCurrent: vi.fn(async () => {
-      // These mutations occur after construction and before the first HTTP call.
-      (transport as { request: JiraCloudTransportV1['request'] }).request = divertedRequest;
-      (options as { representation: 'pointer' | 'excerpt' }).representation = 'pointer';
-      (fence as { requireCurrent: JiraContextSourceReadGrantFenceV1['requireCurrent'] }).requireCurrent = async () => { throw new Error('mutated fence was used'); };
-    }) };
     const options = {
-      transport, read_grant_fence: fence, project: 'ECHO',
-      identity: { kind: 'source' as const, adapter_id: 'jira-context-capture', instance_id: `jira-cloud:${cloudid}:project:ECHO`, version: '1.0.0' },
+      transport, project: 'ECHO', instance_id: `jira-cloud:${cloudid}:project:ECHO`,
       representation: 'excerpt' as const, now: () => new Date('2026-10-03T00:00:00.000Z'),
     };
     const source = createJiraContextSourceV1(options);
+    // These mutations occur after construction and before the first HTTP call.
+    (transport as { request: JiraCloudTransportV1['request'] }).request = divertedRequest;
+    (options as { representation: 'pointer' | 'excerpt' }).representation = 'pointer';
     const result = await source.pull({ limit: 1 });
     expect(divertedRequest).not.toHaveBeenCalled();
     expect(originalRequest).toHaveBeenCalled();

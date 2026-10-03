@@ -61,7 +61,6 @@ function retainedPointerPolicy(): ContextIntakePolicyV1 {
 }
 
 function fixture(options: {
-  readonly sourceCurrent?: () => Promise<void>;
   readonly compositionCurrent?: () => Promise<void>;
   readonly authority?: ContextIntakeAuthorityV1;
 } = {}) {
@@ -75,17 +74,16 @@ function fixture(options: {
     if (target.pathname === `${api}/issue/10001`) return response(currentIssue);
     throw new Error(`unexpected Jira request ${target.pathname}`);
   });
-  const sourceCurrent = vi.fn(async () => options.sourceCurrent?.());
   const compositionCurrent = vi.fn(async () => options.compositionCurrent?.());
   const authority = options.authority ?? { select: () => retainedPointerPolicy(), requireCurrent: () => undefined } satisfies ContextIntakeAuthorityV1;
   const transport = createJiraCloudTransportV1({ binding, fetch });
   const intake = (value?: Database.Database, representation: 'pointer' | 'excerpt' = 'pointer') => createJiraContextIntakeV1({
-    transport, read_grant_fence: { requireCurrent: sourceCurrent }, project: 'ECHO', representation,
+    transport, project: 'ECHO', representation,
     source_instance_id: sourceInstanceId, organization_id: OWNER.organization_id, authority,
     require_read_current: compositionCurrent, ...(value === undefined ? {} : { retention: { disposition: 'retained', database: value } }),
     now: () => new Date('2026-10-03T00:00:00.000Z'),
   });
-  return { calls, fetch, sourceCurrent, compositionCurrent, intake, setIssue(value: ReturnType<typeof issue>) { currentIssue = value; } };
+  return { calls, fetch, compositionCurrent, intake, setIssue(value: ReturnType<typeof issue>) { currentIssue = value; } };
 }
 
 describe('Jira retained pointer context intake V1', () => {
@@ -144,7 +142,7 @@ describe('Jira retained pointer context intake V1', () => {
 
   it('does not retain provider bytes when the person-bound Jira grant is revoked during the pull', async () => {
     let checks = 0;
-    const f = fixture({ sourceCurrent: async () => { checks += 1; if (checks === 2) throw new Error('Jira read grant revoked'); } });
+    const f = fixture({ compositionCurrent: async () => { checks += 1; if (checks === 2) throw new Error('Jira read grant revoked'); } });
     const value = database();
 
     await expect(f.intake(value).pull()).rejects.toThrow('Jira read grant revoked');
@@ -188,7 +186,7 @@ describe('Jira retained pointer context intake V1', () => {
   });
 
   it('rejects a wrong person-bound Jira read grant before provider I/O', async () => {
-    const f = fixture({ sourceCurrent: async () => { throw new Error('wrong Jira read grant'); } });
+    const f = fixture({ compositionCurrent: async () => { throw new Error('wrong Jira read grant'); } });
 
     await expect(f.intake(database()).pull()).rejects.toThrow('wrong Jira read grant');
     expect(f.fetch).not.toHaveBeenCalled();
@@ -205,7 +203,7 @@ describe('Jira retained pointer context intake V1', () => {
     const foreignTransport = createJiraCloudTransportV1({ binding: { ...binding, organization_id: 'org_other' }, fetch });
 
     expect(() => createJiraContextIntakeV1({
-      transport: foreignTransport, read_grant_fence: { requireCurrent: async () => undefined }, project: 'ECHO', representation: 'pointer',
+      transport: foreignTransport, project: 'ECHO', representation: 'pointer',
       source_instance_id: sourceInstanceId, organization_id: OWNER.organization_id,
       authority: { select: () => retainedPointerPolicy(), requireCurrent: () => undefined }, require_read_current: () => undefined,
     })).toThrow('Jira context source differs from its configured organization');

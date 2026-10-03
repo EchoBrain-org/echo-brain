@@ -13,26 +13,23 @@ import {
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { parseJiraContextIssueV1 } from './jira-context-payload-v1.js';
-import { jiraSiteOrigin, parseJiraProject } from './jira-payload-v1.js';
+import { parseJiraProject, verifyJiraConnectionV1 } from './jira-payload-v1.js';
 import { JIRA_ID, JIRA_PROJECT_KEY, copyJiraBindingV1, jiraArray, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 const JIRA_CONTEXT_SOURCE_FIELDS_V1 = 'summary,project,created,status,assignee,duedate,description,updated,labels,priority';
 const JIRA_CONTEXT_SOURCE_MAX_LIMIT_V1 = 50;
 const JIRA_CONTEXT_SOURCE_MAX_CURSOR_BYTES_V1 = 4096;
 
-export interface JiraContextSourceReadGrantFenceV1 {
-  requireCurrent(input: { readonly binding: PersonConnectorReadBindingV1; readonly signal?: AbortSignal }): Promise<void>;
-}
+export const JIRA_CONTEXT_CAPTURE_ADAPTER_ID = 'jira-context-capture';
+export const JIRA_CONTEXT_CAPTURE_ADAPTER_VERSION = '1.0.0';
 
 export interface JiraContextSourceOptionsV1 {
   /** Existing person-bound authorized transport. This factory persists no credential. */
   readonly transport: JiraCloudTransportV1;
-  /** Bound grant/membership fence supplied by Authority composition. */
-  readonly read_grant_fence: JiraContextSourceReadGrantFenceV1;
   /** Fixed safe Jira project coordinate chosen by Authority composition. */
   readonly project: string;
-  /** Stable installation identity chosen by Authority composition, never a model input. */
-  readonly identity: SourceAdapterIdentityV1;
+  /** Stable installation instance chosen by Authority composition, never a model input. */
+  readonly instance_id: string;
   /** The selected retention representation; Authority makes this policy choice. */
   readonly representation: 'pointer' | 'excerpt';
   readonly now?: () => Date;
@@ -41,14 +38,6 @@ export interface JiraContextSourceOptionsV1 {
 function assertProject(value: string): string {
   if (!(JIRA_ID.test(value) || JIRA_PROJECT_KEY.test(value))) throw new Error('Jira context source project must be a Jira project id or key');
   return value;
-}
-
-function assertIdentity(value: SourceAdapterIdentityV1): SourceAdapterIdentityV1 {
-  if (value.kind !== 'source' || value.adapter_id !== 'jira-context-capture' || value.version !== '1.0.0') {
-    throw new Error('Jira context source identity is not supported');
-  }
-  jiraString(value.instance_id, 256);
-  return Object.freeze({ ...value });
 }
 
 function requestLimit(value: number | undefined): number {
@@ -78,22 +67,24 @@ export class JiraContextSourceV1 implements SourceAdapterV1<ContextCaptureConten
   readonly identity: SourceAdapterIdentityV1;
   private readonly binding: PersonConnectorReadBindingV1;
   private readonly transport: JiraCloudTransportV1;
-  private readonly requireReadGrant: JiraContextSourceReadGrantFenceV1['requireCurrent'];
   private readonly pathPrefix: string;
   private readonly project: string;
   private readonly representation: 'pointer' | 'excerpt';
   private readonly now: () => Date;
 
   constructor(options: JiraContextSourceOptionsV1) {
-    this.identity = assertIdentity(options.identity);
+    this.identity = Object.freeze({
+      kind: 'source' as const,
+      adapter_id: JIRA_CONTEXT_CAPTURE_ADAPTER_ID,
+      instance_id: jiraString(options.instance_id, 256),
+      version: JIRA_CONTEXT_CAPTURE_ADAPTER_VERSION,
+    });
     this.binding = copyJiraBindingV1(options.transport.binding);
     const request = options.transport.request;
-    if (typeof request !== 'function' || options.read_grant_fence === null || typeof options.read_grant_fence !== 'object' ||
-        typeof options.read_grant_fence.requireCurrent !== 'function') throw new Error('Jira context source dependencies are invalid');
+    if (typeof request !== 'function') throw new Error('Jira context source dependencies are invalid');
     // Capture callable seams at construction. A mutable options object cannot
-    // swap a transport, fence or representation while a pull is in flight.
+    // swap a transport or representation while a pull is in flight.
     this.transport = Object.freeze({ binding: this.binding, request: request.bind(options.transport) });
-    this.requireReadGrant = options.read_grant_fence.requireCurrent.bind(options.read_grant_fence);
     this.project = assertProject(options.project);
     if (options.representation !== 'pointer' && options.representation !== 'excerpt') throw new Error('Jira context source representation is invalid');
     this.representation = options.representation;
@@ -108,7 +99,7 @@ export class JiraContextSourceV1 implements SourceAdapterV1<ContextCaptureConten
 
   async healthCheck(context?: AdapterOperationContext): Promise<AdapterHealth> {
     context?.signal.throwIfAborted();
-    await this.requireCurrent(context?.signal);
+    await verifyJiraConnectionV1(this.transport, { signal: context?.signal });
     return { status: 'healthy', checked_at: canonicalNow(this.now) };
   }
 
@@ -116,9 +107,7 @@ export class JiraContextSourceV1 implements SourceAdapterV1<ContextCaptureConten
     context?.signal.throwIfAborted();
     const limit = requestLimit(request.limit);
     const cursor = requestCursor(request.cursor);
-    await this.requireCurrent(context?.signal);
-    context?.signal.throwIfAborted();
-    const origin = await this.verifyConnection(context?.signal);
+    const { origin } = await verifyJiraConnectionV1(this.transport, { signal: context?.signal });
     const project = parseJiraProject(await this.transport.request({ path: `${this.pathPrefix}/project/${this.project}`, signal: context?.signal }), origin, `https://api.atlassian.com/ex/jira/${this.binding.external_scope_id}`);
     context?.signal.throwIfAborted();
     const page = jiraRecord(await this.transport.request({
@@ -159,35 +148,7 @@ export class JiraContextSourceV1 implements SourceAdapterV1<ContextCaptureConten
         content: capture.content,
       }));
     }
-    // The second fence makes grant revocation win over bytes fetched during this pull.
-    await this.requireCurrent(context?.signal);
-    context?.signal.throwIfAborted();
     return Object.freeze({ sources: Object.freeze(sources), ...(next === undefined ? {} : { next_cursor: next }) });
-  }
-
-  private async requireCurrent(signal?: AbortSignal): Promise<void> {
-    signal?.throwIfAborted();
-    await this.requireReadGrant({ binding: this.binding, signal });
-    signal?.throwIfAborted();
-  }
-
-  private async verifyConnection(signal?: AbortSignal): Promise<string> {
-    const cloudid = this.binding.external_scope_id!;
-    const resources = jiraArray(await this.transport.request({ path: '/oauth/token/accessible-resources', signal }), 256);
-    const matches: Record<string, unknown>[] = [];
-    for (const value of resources) {
-      const resource = jiraRecord(value);
-      const scopes = jiraArray(resource.scopes, 256).map(scope => jiraString(scope, 128));
-      if (resource.id === cloudid && scopes.some(scope => scope.endsWith(':jira') || scope.includes(':jira-'))) matches.push(resource);
-    }
-    if (matches.length !== 1) jiraFailure('unauthorized');
-    const selected = matches[0]!;
-    const scopes = selected.scopes as readonly string[];
-    if (!['read:jira-work', 'read:jira-user'].every(scope => scopes.includes(scope))) jiraFailure('unauthorized');
-    const origin = jiraSiteOrigin(selected.url);
-    const myself = jiraRecord(await this.transport.request({ path: `${this.pathPrefix}/myself`, signal }));
-    if (jiraString(myself.accountId) !== this.binding.external_subject_id || myself.active !== true || myself.accountType !== 'atlassian') jiraFailure('unauthorized');
-    return origin;
   }
 }
 

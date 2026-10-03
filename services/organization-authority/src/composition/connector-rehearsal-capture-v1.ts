@@ -207,7 +207,6 @@ export function openConnectorRehearsalCaptureV1(
       organization_id: owner.organization_id,
       authority,
       require_read_current: currentRead,
-      representation: 'full_snapshot',
       retention: { disposition: 'retained', database },
     });
     return runContextCaptureRehearsalV1({
@@ -250,7 +249,6 @@ export function openConnectorRehearsalCaptureV1(
     };
     const intake = createJiraContextIntakeV1({
       transport: current.transport,
-      read_grant_fence: current.read_grant_fence,
       project: options.jira.project,
       representation,
       source_instance_id: options.jira.source_instance_id,

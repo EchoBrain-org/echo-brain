@@ -202,26 +202,6 @@ describe("Granola context capture source", () => {
     }
   });
 
-  it("allows an oversized provider body when pointer capture is selected", async () => {
-    const oversized: GranolaNoteDetail = {
-      ...detail,
-      id: "pointer-large",
-      summary_markdown: "A".repeat(129 * 1024),
-    };
-    const { source } = meetingSource(oversized);
-    const adapter = createGranolaContextSourceV1({
-      source,
-      representation: "pointer",
-      now: () => "2026-07-16T01:00:00.000Z",
-    });
-
-    const batch = await adapter.pull({ limit: 1 });
-    expect(batch.sources[0]!.content.representation).toEqual({
-      kind: "pointer",
-      pointer: "https://app.granola.ai/notes/note-1",
-    });
-  });
-
   it("rejects a returned meeting whose provenance is not the configured source", async () => {
     const { source } = meetingSource(detail);
     const meeting = (await source.pull({ limit: 1 })).meetings[0]!;

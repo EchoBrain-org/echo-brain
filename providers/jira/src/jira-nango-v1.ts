@@ -22,14 +22,14 @@ export function createJiraNangoV1(options: { readonly integration_id: string; re
       if (method === 'DELETE' && response.status === 404) return undefined;
       if (!response.ok) jiraFailure('unavailable');
       if (method === 'DELETE') return undefined;
-      if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) jiraFailure('invalid_output');
+      if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) jiraFailure('unavailable');
       const reader = response.body?.getReader();
-      if (reader === undefined) jiraFailure('invalid_output');
+      if (reader === undefined) jiraFailure('unavailable');
       const chunks: Uint8Array[] = []; let bytes = 0;
       const abort = () => { void reader.cancel().catch(() => {}); };
       combined.addEventListener('abort', abort, { once: true });
       try {
-        for (;;) { combined.throwIfAborted(); const part = await reader.read(); combined.throwIfAborted(); if (part.done) break; bytes += part.value.byteLength; if (bytes > 128 * 1024) jiraFailure('invalid_output'); chunks.push(part.value); }
+        for (;;) { combined.throwIfAborted(); const part = await reader.read(); combined.throwIfAborted(); if (part.done) break; bytes += part.value.byteLength; if (bytes > 128 * 1024) jiraFailure('unavailable'); chunks.push(part.value); }
         return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
       } finally { combined.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
     } catch { signal?.throwIfAborted(); jiraFailure('unavailable'); }

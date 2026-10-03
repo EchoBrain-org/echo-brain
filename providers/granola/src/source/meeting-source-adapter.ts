@@ -15,7 +15,7 @@ import type {
   MeetingSourceAdapter,
 } from "@echo-brain/organization-processing/core";
 import { AdapterError } from "@echo-brain/organization-processing/core";
-import { DEFAULT_GRANOLA_PAGE_SIZE, DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS, GRANOLA_API_KEY_RE, GranolaApiError, HttpGranolaApiClient, granolaNoteTimestamp, type GranolaApiClient, type GranolaListNote, type GranolaNoteDetail, type GranolaTranscriptItem } from "./granola-api-client.js";
+import { DEFAULT_GRANOLA_PAGE_SIZE, GRANOLA_API_KEY_RE, GranolaApiError, HttpGranolaApiClient, granolaNoteTimestamp, type GranolaApiClient, type GranolaListNote, type GranolaNoteDetail, type GranolaTranscriptItem } from "./granola-api-client.js";
 import { granolaRecordOwnerMatches, isCanonicalGranolaOwnerEmail } from "./record-owner-observation.js";
 
 export const GRANOLA_MEETING_SOURCE_ADAPTER_ID = "granola";
@@ -23,7 +23,6 @@ export const GRANOLA_MEETING_SOURCE_ADAPTER_VERSION = "2.2.0";
 export const DEFAULT_GRANOLA_CURSOR_OVERLAP_MS = 1_000;
 
 const GRANOLA_CURSOR_PREFIX = "granola:v1:";
-const MAX_REQUEST_TIMEOUT_MS = 120_000;
 const MAX_CURSOR_OVERLAP_MS = 3_600_000;
 
 export type GranolaCredentialResolver = (
@@ -33,13 +32,10 @@ export type GranolaCredentialResolver = (
 export interface GranolaMeetingSourceAdapterOptions {
   client?: GranolaApiClient;
   credentialResolver?: GranolaCredentialResolver;
-  env?: NodeJS.ProcessEnv;
   now?: () => string;
 }
 
 interface GranolaMeetingSourceSettings {
-  baseUrl?: string;
-  requestTimeoutMs: number;
   pageSize: number;
   cursorOverlapMs: number;
   ownerEmail?: string;
@@ -313,28 +309,9 @@ function adapterError(error: unknown): AdapterError {
   );
 }
 
-function defaultCredentialResolver(
-  env: NodeJS.ProcessEnv,
-): GranolaCredentialResolver {
-  return (reference) => {
-    const variable = reference.startsWith("env:")
-      ? reference.slice("env:".length)
-      : reference;
-    return isNonEmptyString(variable) ? env[variable] : undefined;
-  };
-}
-
 function settingsFrom(config: AdapterConfig): GranolaMeetingSourceSettings {
   const settings = config.settings;
   return {
-    baseUrl:
-      typeof settings["base_url"] === "string"
-        ? settings["base_url"]
-        : undefined,
-    requestTimeoutMs:
-      typeof settings["request_timeout_ms"] === "number"
-        ? settings["request_timeout_ms"]
-        : DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS,
     pageSize:
       typeof settings["page_size"] === "number"
         ? settings["page_size"]
@@ -987,7 +964,7 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
   readonly identity: MeetingSourceAdapter["identity"];
   private readonly settings: GranolaMeetingSourceSettings;
   private readonly now: () => string;
-  private readonly credentialResolver: GranolaCredentialResolver;
+  private readonly credentialResolver: GranolaCredentialResolver | undefined;
   private client: GranolaApiClient | undefined;
 
   constructor(
@@ -1002,9 +979,7 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
     });
     this.settings = settingsFrom(config);
     this.now = options.now ?? (() => new Date().toISOString());
-    this.credentialResolver =
-      options.credentialResolver ??
-      defaultCredentialResolver(options.env ?? process.env);
+    this.credentialResolver = options.credentialResolver;
     this.client = options.client;
   }
 
@@ -1024,8 +999,6 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
       errors.push("credential_ref is required");
     }
     const allowedSettings = new Set([
-      "base_url",
-      "request_timeout_ms",
       "page_size",
       "cursor_overlap_ms",
       "owner_email",
@@ -1033,26 +1006,6 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
     for (const key of Object.keys(config.settings)) {
       if (!allowedSettings.has(key))
         errors.push(`settings.${key} is not supported`);
-    }
-    const baseUrl = config.settings["base_url"];
-    if (baseUrl !== undefined) {
-      try {
-        const url = new URL(String(baseUrl));
-        if (url.protocol !== "https:" || !isNonEmptyString(baseUrl)) {
-          errors.push("settings.base_url must be an HTTPS URL");
-        }
-      } catch {
-        errors.push("settings.base_url must be an HTTPS URL");
-      }
-    }
-    const requestTimeout = config.settings["request_timeout_ms"];
-    if (
-      requestTimeout !== undefined &&
-      !positiveInteger(requestTimeout, MAX_REQUEST_TIMEOUT_MS)
-    ) {
-      errors.push(
-        `settings.request_timeout_ms must be an integer from 1 to ${MAX_REQUEST_TIMEOUT_MS}`,
-      );
     }
     const pageSize = config.settings["page_size"];
     if (
@@ -1171,24 +1124,6 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
         },
         { signal: operation?.signal },
       );
-      if (response.notes.length > pageSize) {
-        throw new GranolaApiError(
-          'Granola returned more notes than the requested page size',
-          'pagination_failed',
-        );
-      }
-      if (response.hasMore && !isNonEmptyString(response.cursor)) {
-        throw new GranolaApiError(
-          "Granola pagination indicated more results without a cursor",
-          "pagination_failed",
-        );
-      }
-      if (response.hasMore && response.cursor === cursor.page_cursor) {
-        throw new GranolaApiError(
-          "Granola pagination did not advance its cursor",
-          "pagination_failed",
-        );
-      }
 
       // The provider filter is not an admission proof. Validate the whole
       // incremental page before fetching content, then enforce it locally.
@@ -1313,7 +1248,7 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
         false,
       );
     }
-    const apiKey = await this.credentialResolver(reference);
+    const apiKey = await this.credentialResolver?.(reference);
     if (!isNonEmptyString(apiKey) || !GRANOLA_API_KEY_RE.test(apiKey)) {
       throw new AdapterError(
         "unauthorized",
@@ -1321,10 +1256,7 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
         false,
       );
     }
-    this.client = new HttpGranolaApiClient(apiKey, {
-      baseUrl: this.settings.baseUrl,
-      requestTimeoutMs: this.settings.requestTimeoutMs,
-    });
+    this.client = new HttpGranolaApiClient(apiKey);
     return this.client;
   }
 

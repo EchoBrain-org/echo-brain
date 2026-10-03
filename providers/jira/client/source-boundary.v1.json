@@ -8,7 +8,6 @@
   "package_json": "providers/jira/client/package.json",
   "entry_points": [
     "providers/jira/client/src/organization-api/jira-person-connection-v1.ts",
-    "providers/jira/client/src/person/jira-person-client.ts",
     "providers/jira/client/src/person/jira-tool-provider.ts"
   ],
   "owned_source_paths": ["providers/jira/client/src/**"],

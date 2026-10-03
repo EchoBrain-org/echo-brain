@@ -424,10 +424,18 @@ describe("Granola malformed exports and custody boundary", () => {
     { notes: [{ id: note.id, private_notes_text: "Synthetic private." }], hasMore: false, cursor: null },
     { notes: [], hasMore: true, cursor: null },
     { notes: [], hasMore: true, cursor: "" },
+    { notes: [], hasMore: true, cursor: "   " },
     { notes: [note, note], hasMore: false, cursor: null },
   ])("rejects malformed list exports and oversized requested pages (%j)", async (response) => {
     const { client } = fixtureClient([response]);
     await expect(client.listNotes({ page_size: 1 })).rejects.toMatchObject({
+      reason: "pagination_failed",
+    });
+  });
+
+  it("rejects a list continuation that repeats the requested cursor", async () => {
+    const { client } = fixtureClient([{ notes: [], hasMore: true, cursor: "page-a" }]);
+    await expect(client.listNotes({ page_size: 1, cursor: "page-a" })).rejects.toMatchObject({
       reason: "pagination_failed",
     });
   });

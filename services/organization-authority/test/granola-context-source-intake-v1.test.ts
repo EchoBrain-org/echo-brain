@@ -130,7 +130,6 @@ function intake(input: {
     organization_id: OWNER.organization_id,
     authority: input.authority,
     require_read_current: input.requireReadCurrent ?? (() => undefined),
-    representation: "full_snapshot",
     now: input.source.captureAt,
     retention:
       disposition === "retained"

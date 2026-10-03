@@ -3,13 +3,13 @@ import {
   AdapterError,
   buildContextCaptureEnvelopeV1,
   CONTEXT_CAPTURE_LIMITS_V1,
+  isCanonicalTimestamp,
   type AdapterConfig,
   type AdapterConfigValidation,
   type AdapterHealth,
   type AdapterOperationContext,
   type ContextCaptureContentV1,
   type ContextPassageV1,
-  type ContextRepresentationV1,
   type MeetingDocument,
   type MeetingSourceAdapter,
   type SourceAdapterIdentityV1,
@@ -21,18 +21,15 @@ import {
 export const GRANOLA_CONTEXT_CAPTURE_ADAPTER_ID = "granola-context-capture";
 export const GRANOLA_CONTEXT_CAPTURE_ADAPTER_VERSION = "1.0.0";
 
-export type GranolaContextRepresentationV1 = "pointer" | "full_snapshot";
-
 export interface GranolaContextSourceV1Options {
   /** The one already-configured Granola source. This wrapper never creates transport. */
   readonly source: MeetingSourceAdapter;
   /** Injection is for the source revision's observation time, never meeting time. */
   readonly now?: () => string;
-  readonly representation?: GranolaContextRepresentationV1;
 }
 
 /** Mapping failure is permanent for this source observation and never returns a cursor. */
-export class GranolaContextCaptureMappingError extends Error {
+class GranolaContextCaptureMappingError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GranolaContextCaptureMappingError";
@@ -45,14 +42,6 @@ function sha256(value: string): string {
 
 function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
-}
-
-function isCanonicalTimestamp(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    Number.isFinite(Date.parse(value)) &&
-    new Date(value).toISOString() === value
-  );
 }
 
 function isBoundedText(value: unknown, maximum: number): value is string {
@@ -228,16 +217,10 @@ function meetingPayload(meeting: MeetingDocument): ContextCaptureContentV1["payl
  */
 export function mapGranolaMeetingToContextCaptureContentV1(
   meeting: MeetingDocument,
-  representation: GranolaContextRepresentationV1 = "full_snapshot",
 ): ContextCaptureContentV1 {
   const sourceUpdatedAt = meeting.provenance.source_updated_at;
   const payload = meetingPayload(meeting);
-  const captureRepresentation: ContextRepresentationV1 = representation === "pointer"
-    ? { kind: "pointer", pointer: sourceReference(meeting) }
-    : (() => {
-        const snapshot = snapshotAndPassages(selectedBlocks(meeting));
-        return { kind: "full_snapshot", text: snapshot.text, passages: snapshot.passages };
-      })();
+  const snapshot = snapshotAndPassages(selectedBlocks(meeting));
   return {
     schema_version: 1,
     kind: "echo-context-capture-v1",
@@ -251,7 +234,7 @@ export function mapGranolaMeetingToContextCaptureContentV1(
         : {}),
     },
     payload,
-    representation: captureRepresentation,
+    representation: { kind: "full_snapshot", text: snapshot.text, passages: snapshot.passages },
     observations: [],
   };
 }
@@ -261,7 +244,6 @@ export class GranolaContextSourceV1
 {
   readonly identity: SourceAdapterIdentityV1;
   private readonly now: () => string;
-  private readonly representation: GranolaContextRepresentationV1;
   private readonly sourceIdentity: SourceAdapterIdentityV1;
 
   constructor(private readonly source: MeetingSourceAdapter, options: Omit<GranolaContextSourceV1Options, "source"> = {}) {
@@ -273,7 +255,6 @@ export class GranolaContextSourceV1
       version: GRANOLA_CONTEXT_CAPTURE_ADAPTER_VERSION,
     });
     this.now = options.now ?? (() => new Date().toISOString());
-    this.representation = options.representation ?? "full_snapshot";
   }
 
   validateConfig(config: AdapterConfig): AdapterConfigValidation {
@@ -323,10 +304,7 @@ export class GranolaContextSourceV1
             identity: this.identity,
             external_id: meeting.provenance.external_id,
             captured_at: capturedAt,
-            content: mapGranolaMeetingToContextCaptureContentV1(
-              meeting,
-              this.representation,
-            ),
+            content: mapGranolaMeetingToContextCaptureContentV1(meeting),
           });
         }),
         ...(pulled.next_cursor === undefined

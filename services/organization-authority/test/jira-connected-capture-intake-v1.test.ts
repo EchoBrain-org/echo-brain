@@ -71,7 +71,7 @@ function fixture() {
       requireCurrent: () => capability.require_current(),
     };
     return createJiraContextIntakeV1({
-      transport: capability.transport, read_grant_fence: capability.read_grant_fence, project: 'ECHO', representation: 'excerpt',
+      transport: capability.transport, project: 'ECHO', representation: 'excerpt',
       source_instance_id: `jira-cloud:${cloud}:project:ECHO`, organization_id: organization, authority,
       require_read_current: () => capability.require_current(), now: () => new Date('2026-10-03T00:00:00.000Z'),
     });

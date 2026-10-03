@@ -7,8 +7,8 @@ import { JiraConnectionStoreV1, type JiraConnectionAttemptFailureV1, type JiraCo
 import { createJiraCloudTransportV1, type JiraCloudAuthenticatedFetchV1, type JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { createJiraPersonLiveEvidenceReaderV1 } from './jira-person-live-evidence-reader-v1.js';
 import type { JiraNangoV1 } from './jira-nango-v1.js';
-import { jiraSiteOrigin } from './jira-payload-v1.js';
-import { copyJiraBindingV1, JIRA_CLOUD_ID, jiraArray, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
+import { verifyJiraConnectionV1 } from './jira-payload-v1.js';
+import { copyJiraBindingV1, JIRA_CLOUD_ID, jiraFailure, jiraString } from './jira-validation-v1.js';
 
 export interface JiraPersonAuthorizationV1 extends JiraPersonV1 { readonly authorization_sha256: Sha256Digest }
 /**
@@ -20,9 +20,6 @@ export interface JiraCurrentCaptureConnectionV1 {
   readonly transport: JiraCloudTransportV1;
   /** Synchronous final Authority-runner fence over the same actor and grant. */
   require_current(): void;
-  readonly read_grant_fence: {
-    requireCurrent(input: { readonly binding: PersonConnectorReadBindingV1; readonly signal?: AbortSignal }): Promise<void>;
-  };
 }
 type JiraAttemptResponseV1 = Readonly<{
   schema_version: 1;
@@ -87,15 +84,10 @@ export function createJiraPersonConnectionV1(options: {
     const safeReference = jiraString(reference, 512);
     const temporary = copyJiraBindingV1({ ...person, tool_id: 'jira', external_scope_id: cloud, external_subject_id: pending.expected_account ?? 'unverified', read_grant_sha256: canonicalSha256({ attempt }) });
     const transport = createJiraCloudTransportV1(authenticated(temporary, safeReference, tags(person, attempt), current));
-    const resources = jiraArray(await transport.request({ path: '/oauth/token/accessible-resources', signal }), 256).map(jiraRecord).filter(value => value.id === cloud && Array.isArray(value.scopes) && value.scopes.includes('read:jira-work'));
-    if (resources.length !== 1) throw new JiraCompletionFailure('provider_rejected');
-    const site = jiraSiteOrigin(resources[0]!.url);
-    const myself = jiraRecord(await transport.request({ path: `/ex/jira/${cloud}/rest/api/3/myself`, signal }));
-    const account = jiraString(myself.accountId);
-    if (pending.expected_account !== undefined && account !== pending.expected_account) throw new JiraCompletionFailure('account_mismatch');
-    const verified = copyJiraBindingV1({ ...temporary, external_subject_id: account });
-    await createJiraPersonLiveEvidenceReaderV1({ binding: verified, transport: createJiraCloudTransportV1(authenticated(verified, safeReference, tags(person, attempt), current)), expected_origin: site, signal });
-    current(); options.store.complete(person, attempt, safeReference, cloud, account, site);
+    const verified = await verifyJiraConnectionV1(transport, { signal, require_account: account => {
+      if (pending.expected_account !== undefined && account !== pending.expected_account) throw new JiraCompletionFailure('account_mismatch');
+    } });
+    current(); options.store.complete(person, attempt, safeReference, cloud, verified.account_id, verified.origin);
   }
   return Object.freeze({
     async connect(input: { readonly access_token: string; readonly signal?: AbortSignal }) {
@@ -112,19 +104,6 @@ export function createJiraPersonConnectionV1(options: {
       const result = await options.nango.connect(tags(person, pending.attempt), input.signal);
       current();
       return Object.freeze({ schema_version: 1 as const, attempt: pending.attempt, connect_link: result.link, expires_at: expiresAt(pending.expires) });
-    },
-    /** Retained provider-internal helper. Public browser polling uses status(), never a caller-supplied locator. */
-    async complete(input: { readonly access_token: string; readonly attempt: string; readonly connection?: string; readonly signal?: AbortSignal }) {
-      const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
-      options.store.pending(person, jiraString(input.attempt, 128));
-      const discovered = input.connection ?? await options.nango.find(tags(person, input.attempt), input.signal);
-      if (discovered === undefined) jiraFailure('unauthorized');
-      try { await finish(person, requirePerson, input.attempt, discovered, input.signal); }
-      catch (error) {
-        if (error instanceof JiraCompletionFailure) jiraFailure('unauthorized');
-        throw error;
-      }
-      return Object.freeze({ schema_version: 1 as const, connected: true as const });
     },
     async status(input: { readonly access_token: string; readonly attempt: string; readonly signal?: AbortSignal }): Promise<JiraAttemptResponseV1> {
       const { person, requirePerson } = actor(input.access_token); input.signal?.throwIfAborted();
@@ -186,14 +165,7 @@ export function createJiraPersonConnectionV1(options: {
       const current = () => { requirePerson(); options.store.requireCurrent(binding); };
       current(); input.signal?.throwIfAborted();
       const transport = createJiraCloudTransportV1(authenticated(binding, stored.reference, tags(person, stored.attempt), current));
-      const read_grant_fence = Object.freeze({
-        async requireCurrent(request: { readonly binding: PersonConnectorReadBindingV1; readonly signal?: AbortSignal }): Promise<void> {
-          request.signal?.throwIfAborted();
-          if (canonicalSha256(copyJiraBindingV1(request.binding)) !== canonicalSha256(binding)) jiraFailure('stale_access_state');
-          current(); request.signal?.throwIfAborted();
-        },
-      });
-      return Object.freeze({ transport, require_current: current, read_grant_fence });
+      return Object.freeze({ transport, require_current: current });
     },
     async source(input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }): Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined> {
       const { person, requirePerson } = actor(input.access_token); const stored: JiraStoredConnectionV1 | undefined = options.store.current(person);
