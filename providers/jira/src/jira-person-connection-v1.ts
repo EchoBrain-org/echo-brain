@@ -47,12 +47,15 @@ export function createJiraPersonConnectionV1(options: {
   readonly store: JiraConnectionStoreV1;
   readonly nango: JiraNangoV1;
   readonly cloud_id: string;
+  /** Trusted runtime scope, never selected by a Person request or the model. */
+  readonly project?: string;
   readonly fetch: typeof fetch;
   /** Existing ECHO session resolver, including current exact membership and session checks. */
   readonly authenticate: (access_token: string) => JiraPersonAuthorizationV1;
 }) {
   if (!JIRA_CLOUD_ID.test(options.cloud_id)) jiraFailure('invalid_request');
   const cloud = options.cloud_id;
+  const project = options.project;
   function actor(token: string) {
     const authorization = Object.freeze({ ...options.authenticate(token) });
     const person = Object.freeze({ organization_id: authorization.organization_id, principal_id: authorization.principal_id, membership_id: authorization.membership_id });
@@ -172,9 +175,9 @@ export function createJiraPersonConnectionV1(options: {
       if (stored === undefined || !stored.active) return undefined;
       const current = () => { requirePerson(); options.store.requireCurrent(stored.binding); };
       current();
-      const reader = await createJiraPersonLiveEvidenceReaderV1({ binding: stored.binding, transport: createJiraCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current)), expected_origin: stored.site, signal: input.signal });
+      const reader = await createJiraPersonLiveEvidenceReaderV1({ binding: stored.binding, transport: createJiraCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current)), expected_origin: stored.site, signal: input.signal, ...(project === undefined ? {} : { project }) });
       current();
-      return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { async requireCurrent(_binding, request) { request.signal?.throwIfAborted(); current(); } }, access: { tool_id: 'jira', external_scope_id: cloud, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
+      return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current }, access: { tool_id: 'jira', external_scope_id: cloud, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
     },
   });
 }

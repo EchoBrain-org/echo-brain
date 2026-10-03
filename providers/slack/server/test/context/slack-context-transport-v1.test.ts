@@ -25,12 +25,22 @@ describe('bounded Slack context transport V1', () => {
       { method: 'chat.postMessage' }, { method: 'https://evil.example/' }, { method: 'auth.test', query: { token: 'private' } },
       { method: 'conversations.info', query: { channel: 'https://evil.example/' } },
       { method: 'conversations.history', query: { channel: 'CTEST123', limit: '16' } },
-      { method: 'conversations.history', query: { channel: 'CTEST123', limit: '1', oldest: '1790966400.000001' } },
+      { method: 'conversations.history', query: { channel: 'CTEST123', limit: '1', oldest: 'https://evil.example/' } },
+      { method: 'conversations.history', query: { channel: 'CTEST123', limit: '1', oldest: '1790966402.000001', latest: '1790966400.000001' } },
+      { method: 'conversations.history', query: { channel: 'CTEST123', limit: '1', inclusive: 'maybe' } },
       { method: 'conversations.history', query: { channel: 'CTEST123', limit: '1', cursor: 'x'.repeat(4097) } },
       { method: 'chat.getPermalink', query: { channel: 'CTEST123', message_ts: '../message' } },
     ];
     for (const request of requests) await expect(transport.request(request as SlackContextRequestV1)).rejects.toMatchObject({ code: 'invalid_request' });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('supports exact message reads using validated Slack time selectors without expanding endpoint access', async () => {
+    const fetch = vi.fn(async (_url: string, _init: RequestInit) => json({ ok: true, messages: [] }));
+    const transport = createSlackContextTransportV1({ binding, fetch });
+    await transport.request({ method: 'conversations.history', query: { channel: 'CTEST123', limit: '1',
+      oldest: '1790966400.000001', latest: '1790966400.000001', inclusive: 'true' } });
+    expect(fetch.mock.calls[0]?.[0]).toBe('https://slack.com/api/conversations.history?channel=CTEST123&limit=1&oldest=1790966400.000001&latest=1790966400.000001&inclusive=true');
   });
 
   it.each([[401, 'unauthorized'], [403, 'unauthorized'], [404, 'not_found'], [429, 'rate_limited'], [503, 'unavailable']])('classifies HTTP %s without parsing private response diagnostics', async (status, code) => {

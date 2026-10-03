@@ -5,6 +5,10 @@
   "license": "MIT",
   "type": "module",
   "exports": {
+    "./context/slack-channel-live-evidence-reader-v1": {
+      "types": "./dist/context/slack-channel-live-evidence-reader-v1.d.ts",
+      "import": "./dist/context/slack-channel-live-evidence-reader-v1.js"
+    },
     "./organization-control-plane/application/slack-public-channel-context-capability-v1": {
       "types": "./dist/organization-control-plane/application/slack-public-channel-context-capability-v1.d.ts",
       "import": "./dist/organization-control-plane/application/slack-public-channel-context-capability-v1.js"

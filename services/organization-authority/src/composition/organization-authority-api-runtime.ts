@@ -46,6 +46,7 @@ import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRou
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { createPersonAnswerV4Route } from './person-answer-v4-route.js';
 import type { PersonTicketLiveRuntimeFactoryV1, OpenedPersonTicketLiveRuntimeV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
+import type { PersonSlackLiveRuntimeFactoryV1, OpenedPersonSlackLiveRuntimeV1 } from '../application/ports/person-slack-live-runtime-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonOriginalItemsV1 } from "../adapters/persistence/sqlite/person-original-items-v1.js";
@@ -84,6 +85,8 @@ export interface OrganizationAuthorityApiRuntimeDependencies {
   };
   /** Absent by default. The selecting root owns provider construction and release approval. */
   readonly ticket_live_runtime_factory?: PersonTicketLiveRuntimeFactoryV1;
+  /** Explicitly selected read scope. Organization bot possession alone never selects this capability. */
+  readonly slack_live_runtime_factory?: PersonSlackLiveRuntimeFactoryV1;
   /** Server-only agentic Ask experiment: open the whole readable scope first when it is small. */
   readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Historical record protocol projection, independent of live ingress. */
@@ -168,6 +171,7 @@ export async function startOrganizationAuthorityApiRuntime(
     | OpenedPersonExternalIdentityRuntimeV1
     | undefined;
   let ticketLive: OpenedPersonTicketLiveRuntimeV1 | undefined;
+  let slackLive: OpenedPersonSlackLiveRuntimeV1 | undefined;
   let personHttp: ReturnType<NonNullable<OrganizationAuthorityApiRuntimeDependencies['person_http_runtime_factory']>> | undefined;
   try {
     recordDatabase = openOrganizationRecordDatabase(
@@ -198,6 +202,7 @@ export async function startOrganizationAuthorityApiRuntime(
     );
     sessions.expireOidcLoginAttempts({ limit: 1000 });
     ticketLive = dependencies.ticket_live_runtime_factory?.(sessions);
+    slackLive = dependencies.slack_live_runtime_factory?.(sessions);
     personHttp = dependencies.person_http_runtime_factory?.(sessions);
     externalIdentity = dependencies.external_identity_runtime_bundle?.open({
       state_directory: config.state_directory,
@@ -330,7 +335,7 @@ export async function startOrganizationAuthorityApiRuntime(
                 ? { small_scope_shortcut: true }
                 : {}),
             }),
-            ...(ticketLive === undefined ? {} : {
+            ...(ticketLive === undefined && slackLive === undefined ? {} : {
               person_answer_v4: createPersonAnswerV4Route({
                 authority_id: metadata.authority_id,
                 organization_id: metadata.organization_id,
@@ -340,7 +345,8 @@ export async function startOrganizationAuthorityApiRuntime(
                 model: dependencies.answer_composition_generation.structured_output,
                 generation: dependencies.answer_composition_generation.generation,
                 audit: new SqlitePersonAgenticAskAuditV1(database),
-                ticket_for: input => ticketLive!.application.source(input),
+                ...(ticketLive === undefined ? {} : { ticket_for: (input: Parameters<OpenedPersonTicketLiveRuntimeV1['application']['source']>[0]) => ticketLive!.application.source(input) }),
+                ...(slackLive === undefined ? {} : { slack_live_for: (input: Parameters<OpenedPersonSlackLiveRuntimeV1['application']['source']>[0]) => slackLive!.application.source(input) }),
                 ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
               }),
             }),
@@ -399,6 +405,7 @@ export async function startOrganizationAuthorityApiRuntime(
         stopAcceptingRequests();
         await Promise.all([serverClosed, documentWorker?.close()]);
         ticketLive?.close();
+        slackLive?.close();
         personHttp?.close();
         externalIdentity?.close();
         recordDatabase?.close();
@@ -408,6 +415,7 @@ export async function startOrganizationAuthorityApiRuntime(
   } catch (error) {
     await documentWorker?.close();
     ticketLive?.close();
+    slackLive?.close();
     personHttp?.close();
     externalIdentity?.close();
     recordDatabase?.close();

@@ -76,6 +76,47 @@ These are local source proofs. They are not provider-live, artifact, deployment
 or customer acceptance qualification. Real Slack/Nango and Granola probes from
 the connector review remain separate work.
 
+### Cross-source Ask verification
+
+`npm run test:context-e2e` exercises the production HTTP/API composition with
+real Person authentication, SQLite records and search, provider parsers, audited
+request-local readers, and synthetic provider/model responses. It is also part
+of the ordinary `npm run check` suite and spends no provider model credit.
+
+The shared question requires a seeded, approved record with Granola provenance,
+a readable document, a Jira ticket, and a Slack message. Granola ingestion and
+human approval are not exercised in this HTTP test. The test checks that all four
+reach the answer prompt and produce validated citations, that release audits
+precede model access, and that the happy path makes exactly three model calls.
+That assertion describes the synthetic fixture; it does not reduce the ordinary
+Ask request's existing 24-call ceiling. A paid qualification run needs its own
+lower call/token budget and replay protection before activation.
+Negative cases cover private evidence, missing/revoked source grants, and
+stale source content. A connection, retained pointer, empty response, or a
+successful answer from only one source is not a cross-source pass.
+
+Source selection remains explicit. The generic API can compose an audited Slack
+reader alongside Jira for global Ask. Source results share the existing bounded
+result limit; the dispatcher interleaves them and preserves truncation and
+release receipts. Mine and unmapped project scopes never expand to these live
+sources. `person records --query` still searches approved records; request-local
+Jira and Slack search belongs to the Ask evidence path.
+
+The new Slack provider reader is limited to one explicitly authorized public
+channel and a bounded recent-history window. It keeps text in request memory,
+checks current channel visibility and exact message digests, and reports
+truncation rather than claiming workspace-wide coverage. It does not implement
+the separate Person-wide user-token reader. Jira can be constrained to the
+configured project, including exact reads and final citation revalidation.
+
+These source tests do not activate new permissions on the current V2 staging
+profile. That profile still rejects generic live-reader injection and retains
+its pointer-only capture behavior. A live cross-source qualification must be
+separately authorized for the exact release, owner, Jira project, Slack channel,
+request-only model release and spending bounds. It must require nonempty reads,
+cross-source search, and a cited answer through these same paths. The ordinary
+synthetic approval canary alone does not establish that qualification.
+
 ## Connector recovery repairs included
 
 Startup recovers durable approval outcomes without reaching Slack/Nango for

@@ -1,7 +1,7 @@
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { SLACK_CONTEXT_CHANNEL_V1, SLACK_CONTEXT_MAX_CURSOR_BYTES_V1, SLACK_CONTEXT_MAX_PAGE_V1, SLACK_CONTEXT_TS_V1,
-  copySlackContextBindingV1, requireSlackContextResponseV1, slackContextFailureV1 } from './slack-context-validation-v1.js';
+  copySlackContextBindingV1, requireSlackContextResponseV1, slackContextFailureV1, slackContextTimestampMicrosV1 } from './slack-context-validation-v1.js';
 
 export interface SlackContextRequestV1 {
   readonly method: 'auth.test' | 'conversations.info' | 'conversations.history' | 'chat.getPermalink';
@@ -26,7 +26,7 @@ export const SLACK_CONTEXT_RESPONSE_MAX_BYTES_V1 = 512 * 1024;
 function requestUrl(input: SlackContextRequestV1): URL {
   const fields = {
     'auth.test': [], 'conversations.info': ['channel'],
-    'conversations.history': ['channel', 'limit', 'cursor'], 'chat.getPermalink': ['channel', 'message_ts'],
+    'conversations.history': ['channel', 'limit', 'cursor', 'oldest', 'latest', 'inclusive'], 'chat.getPermalink': ['channel', 'message_ts'],
   } as const;
   if (!Object.hasOwn(fields, input.method)) slackContextFailureV1('invalid_request');
   const query = input.query ?? {};
@@ -39,6 +39,11 @@ function requestUrl(input: SlackContextRequestV1): URL {
     if (typeof query.limit !== 'string' || !/^[1-9][0-9]*$/.test(query.limit) || Number(query.limit) > SLACK_CONTEXT_MAX_PAGE_V1) slackContextFailureV1('invalid_request');
     if (query.cursor !== undefined && (typeof query.cursor !== 'string' || query.cursor.trim() === '' ||
         Buffer.byteLength(query.cursor, 'utf8') > SLACK_CONTEXT_MAX_CURSOR_BYTES_V1 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query.cursor))) slackContextFailureV1('invalid_request');
+    for (const field of ['oldest', 'latest'] as const) {
+      if (query[field] !== undefined && (typeof query[field] !== 'string' || !SLACK_CONTEXT_TS_V1.test(query[field]))) slackContextFailureV1('invalid_request');
+    }
+    if (query.oldest !== undefined && query.latest !== undefined && slackContextTimestampMicrosV1(query.oldest) > slackContextTimestampMicrosV1(query.latest)) slackContextFailureV1('invalid_request');
+    if (query.inclusive !== undefined && query.inclusive !== 'true' && query.inclusive !== 'false') slackContextFailureV1('invalid_request');
   }
   if (input.method === 'chat.getPermalink' && (typeof query.message_ts !== 'string' || !SLACK_CONTEXT_TS_V1.test(query.message_ts))) slackContextFailureV1('invalid_request');
   const url = new URL(`https://slack.com/api/${input.method}`);

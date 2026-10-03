@@ -49,11 +49,11 @@ function fixture() {
     throw new Error('Unexpected synthetic endpoint');
   });
   const transport: JiraCloudTransportV1 = { binding: { ...binding }, request };
-  const authorization = { requireCurrent: vi.fn(async () => {}) };
+  const authorization = { assertCurrent: vi.fn(() => {}) };
   const releases: PersonLiveEvidenceReleaseV1<PersonTicketCitationV1>[] = [];
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1<PersonTicketCitationV1>) => { releases.push(release); return canonicalSha256(release); }) };
-  async function make() {
-    const reader = await createJiraPersonLiveEvidenceReaderV1({ binding, transport });
+  async function make(fixedProject?: string) {
+    const reader = await createJiraPersonLiveEvidenceReaderV1({ binding, transport, ...(fixedProject === undefined ? {} : { project: fixedProject }) });
     const source = createAuditedPersonLiveEvidenceSourceV1({ actor: binding,
       access: { tool_id: 'jira', identity_status: 'linked', external_scope_id: cloudid, external_subject_id: binding.external_subject_id,
         read_status: 'connected', read_capabilities: ['live_evidence'] }, read_grant_sha256: binding.read_grant_sha256, reader, authorization, audit });
@@ -63,6 +63,56 @@ function fixture() {
 }
 
 describe('person-bound Jira live reader through the shared audited wrapper', () => {
+  it('pins a trusted project for keyword/key search and inventory without a model-selected container', async () => {
+    const f = fixture(); f.state.pages = [page(), page(), page()];
+    const { source } = await f.make('ECHO');
+    await source.search({ query: 'launch' });
+    await source.search({ query: 'ECHO-1' });
+    await source.list({});
+    expect(f.request.mock.calls.filter(([request]) => request.path === `${prefix}/search/jql`).map(([request]) => request.body?.jql)).toEqual([
+      'project = 10000 AND (text ~ "\\\"launch\\\"") ORDER BY created DESC, id DESC',
+      'project = 10000 AND (key = "ECHO-1") ORDER BY created DESC, id DESC',
+      'project = 10000 ORDER BY created DESC, id DESC',
+    ]);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/project/ECHO` }));
+  });
+
+  it.each(['search', 'list', 'open', 'revalidate'] as const)('refuses an exact issue outside the pinned project during %s', async operation => {
+    const f = fixture(); const { source } = await f.make('ECHO');
+    const first = operation === 'open' || operation === 'revalidate' ? await source.search({ query: 'launch' }) : undefined;
+    const auditsBefore = f.audit.record.mock.calls.length;
+    f.state.tickets.set('10001', { ...ticket(), key: 'OTHER-1', fields: { ...ticket().fields,
+      project: { id: '99999', key: 'OTHER', self: `${origin}/rest/api/3/project/99999` } } });
+    const result = operation === 'search' ? source.search({ query: 'launch' })
+      : operation === 'list' ? source.list({})
+      : operation === 'open' ? source.open({ item: first!.items[0]!.id }) : source.revalidate({});
+    await expect(result).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.audit.record).toHaveBeenCalledTimes(auditsBefore);
+  });
+
+  it('refuses a different list project before provider reads while accepting the fixed project ID', async () => {
+    const f = fixture(); const { source } = await f.make('ECHO'); f.request.mockClear();
+    await expect(source.list({ container: 'OTHER' })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.request).not.toHaveBeenCalled(); expect(f.audit.record).not.toHaveBeenCalled();
+    await expect(source.list({ container: '10000' })).resolves.toMatchObject({ items: [{ kind: 'ticket' }] });
+  });
+
+  it.each(['before', 'during'] as const)('refuses a configured project key remapped to another ID %s a read', async moment => {
+    const f = fixture(); const { source } = await f.make('ECHO');
+    const remap = () => { f.state.project = { id: '99999', key: 'ECHO', self: `${origin}/rest/api/3/project/99999` }; };
+    if (moment === 'before') remap();
+    else f.state.hook = request => { if (request.path === `${prefix}/issue/10001`) remap(); };
+    await expect(source.search({ query: 'launch' })).rejects.toMatchObject({ code: 'stale_access_state' });
+    expect(f.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid trusted project selectors before any provider call', async () => {
+    for (const fixedProject of ['', 'ECHO OR project = OTHER', `${origin}/browse/ECHO-1`]) {
+      const f = fixture(); await expect(f.make(fixedProject)).rejects.toMatchObject({ code: 'invalid_request' });
+      expect(f.request).not.toHaveBeenCalled();
+    }
+  });
+
   it('releases normalized exact-read evidence, digests the bounded bytes and opens only issued handles', async () => {
     const f = fixture(); const { source } = await f.make();
     await expect(source.open({ item: '10001' })).rejects.toMatchObject({ code: 'not_found' });
@@ -73,7 +123,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
       citation: { ticket_id: '10001', external_scope_id: cloudid, permalink: `${origin}/browse/ECHO-1`, text_sha256: digest(item.text!) } });
     expect(item).not.toHaveProperty('handle');
     expect(f.audit.record).toHaveBeenCalledTimes(1);
-    expect(f.authorization.requireCurrent).toHaveBeenCalledTimes(3);
+    expect(f.authorization.assertCurrent).toHaveBeenCalledTimes(3);
     const auditText = JSON.stringify(f.releases);
     for (const hidden of ['Ship connector', 'Launch Friday', 'launch', 'jira_item_', 'never-return', 'emailAddress']) expect(auditText).not.toContain(hidden);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/10001`, query: { fields: 'summary,project,created,status,assignee,duedate,description' } }));
@@ -247,7 +297,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     for (const failure of ['audit', 'grant', 'abort']) {
       const f = fixture(); const { source } = await f.make(); const controller = new AbortController();
       if (failure === 'audit') f.audit.record.mockRejectedValueOnce(new Error('private raw ticket and synthetic bearer'));
-      if (failure === 'grant') f.authorization.requireCurrent.mockRejectedValueOnce(new AuthorityOperationError('stale_access_state', 'private grant'));
+      if (failure === 'grant') f.authorization.assertCurrent.mockImplementationOnce(() => { throw new AuthorityOperationError('stale_access_state', 'private grant'); });
       if (failure === 'abort') f.state.hook = input => { expect(input.signal).toBe(controller.signal); if (input.path.includes('/issue/')) controller.abort(); };
       await expect(source.search({ query: 'ship', signal: controller.signal })).rejects.toMatchObject(failure === 'abort' ? { name: 'AbortError' } : { code: failure === 'audit' ? 'unavailable' : 'stale_access_state', message: 'Live evidence operation could not be completed' });
       if (failure !== 'audit') expect(f.audit.record).not.toHaveBeenCalled();

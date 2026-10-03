@@ -76,10 +76,24 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
   const cursors = new Map<string, { readonly provider: string; readonly selection: string }>();
   let cursorSequence = 0;
   const requestId = randomBytes(16).toString('hex');
-  const current = (signal?: AbortSignal) => safeCall(async () => {
-    if (canonicalSha256(reader.binding) !== bindingDigest) throw new AuthorityOperationError('stale_access_state', 'Live evidence reader binding changed');
-    await authorization.requireCurrent(binding, { ...(signal === undefined ? {} : { signal }) });
-  }, signal);
+  const current = (signal?: AbortSignal): void => {
+    signal?.throwIfAborted();
+    try {
+      if (canonicalSha256(reader.binding) !== bindingDigest) throw new AuthorityOperationError('stale_access_state', 'Live evidence reader binding changed');
+      const result: unknown = authorization.assertCurrent(binding);
+      // TypeScript permits async functions where void is expected. Refuse
+      // them so the same local check can also fence final publication.
+      if (result !== undefined) {
+        if (result instanceof Promise) void result.catch(() => undefined);
+        throw new AuthorityOperationError('unavailable', 'Live evidence grant fence must be synchronous');
+      }
+      signal?.throwIfAborted();
+    } catch (error) {
+      signal?.throwIfAborted();
+      const code = error instanceof AuthorityOperationError && ERROR_CODES.has(error.code) ? error.code : 'unavailable';
+      throw new AuthorityOperationError(code, 'Live evidence operation could not be completed');
+    }
+  };
 
   const prepare = (value: PersonLiveEvidenceValueV1<C>): PersonLiveEvidenceValueV1<C> & { readonly coordinates: PersonLiveEvidenceCoordinatesV1 } => {
     // Copy and validate the whole page before the first await/audit so adapters
@@ -149,10 +163,10 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       truncated, receipt_digests: Object.freeze([receipt]), ...(nextCursor === undefined ? {} : { next_cursor: nextCursor }),
     });
     if (canonicalJsonBytes(withReceipt(`sha256:${'0'.repeat(64)}`)).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) invalidOutput();
-    await current(signal);
+    current(signal);
     const receipt = await safeCall(() => audit.record(Object.freeze({ schema_version: 1, binding, operation, coordinates: Object.freeze(prepared.map(value => value.coordinates)), value_digests: Object.freeze(prepared.map(({ handle: _handle, coordinates: _coordinates, ...value }) => canonicalSha256(value))), citations: Object.freeze(prepared.map(value => value.citation)) })), signal);
     if (typeof receipt !== 'string' || !DIGEST.test(receipt)) throw new AuthorityOperationError('unavailable', 'Live evidence release receipt is invalid');
-    await current(signal);
+    current(signal);
     const result = withReceipt(receipt);
     // All audited citations remain tracked, including overwritten inventory
     // items and pages later omitted by a composing desk's result limit.
@@ -169,7 +183,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     async search(input) {
       const maximum = limit(input.limit);
       if (typeof input.query !== 'string' || input.query.trim().length === 0 || Buffer.byteLength(input.query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(input.query)) invalid('Live evidence query is invalid');
-      await current(input.signal);
+      current(input.signal);
       const page = await safeCall(() => reader.search({ query: input.query, limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
       return release('search', page, maximum, undefined, input.signal);
     },
@@ -177,7 +191,7 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       const maximum = limit(input.limit);
       const value = stored.get(input.item);
       if (value === undefined) throw new AuthorityOperationError('not_found', 'Live evidence item is not available in this request');
-      await current(input.signal);
+      current(input.signal);
       const page = await safeCall(() => reader.open({ handle: value.handle, limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
       return release('open', page, maximum, undefined, input.signal);
     },
@@ -191,15 +205,16 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       const cursor = input.cursor === undefined ? undefined : cursors.get(input.cursor);
       if (input.cursor !== undefined && (cursor === undefined || cursor.selection !== selection)) invalid('Live evidence cursor is not available for this list');
       const request: PersonLiveEvidenceListInputV1 = { limit: maximum, ...(input.container === undefined ? {} : { container: input.container }), ...(input.since === undefined ? {} : { since: input.since }), ...(input.until === undefined ? {} : { until: input.until }), ...(cursor === undefined ? {} : { cursor: cursor.provider }), ...(input.signal === undefined ? {} : { signal: input.signal }) };
-      await current(input.signal);
+      current(input.signal);
       const page = await safeCall(() => reader.list(request), input.signal);
       return release('list', page, maximum, selection, input.signal);
     },
     async revalidate(input) {
-      await current(input.signal);
+      current(input.signal);
       const citations = Object.freeze([...released.values()]);
       await safeCall(() => reader.revalidate({ citations, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
-      await current(input.signal);
+      current(input.signal);
     },
+    assertCurrent: current,
   } satisfies PersonLiveEvidenceSourceV1<C>);
 }

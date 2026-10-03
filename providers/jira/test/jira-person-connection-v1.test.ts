@@ -13,10 +13,10 @@ import type { JiraNangoV1 } from '../src/jira-nango-v1.js';
 const cloud = '00000000-0000-4000-8000-000000000007';
 const site = 'https://echo-fixture.atlassian.net';
 const person = { organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'person-fixture', membership_id: 'mem_00000000-0000-4000-8000-000000000001' };
-function fixture() {
+function fixture(project?: string) {
   let now = Date.UTC(2026, 9, 1, 0, 0, 0);
   const database = new Database(':memory:'); const store = new JiraConnectionStoreV1(database, () => now);
-  let active = true; let account = 'synthetic-account'; let resourceCloud = cloud; let resourceSite = site; let scopes = ['read:jira-work', 'read:jira-user'];
+  let active = true; let account = 'synthetic-account'; let resourceCloud = cloud; let resourceSite = site; let scopes = ['read:jira-work', 'read:jira-user']; let moved = false;
   let pendingTags: Readonly<Record<string, string>> = {}; let refresh = 0; let connectionIndex = 0; let denied = false; let hook: ((url: string, init: RequestInit) => Promise<void> | void) | undefined;
   const connections = new Map<string, { readonly tags: Readonly<Record<string, string>> }>();
   const finishAuthorization = () => { const reference = `synthetic-nango-reference-${++connectionIndex}`; connections.set(reference, { tags: pendingTags }); return reference; };
@@ -39,10 +39,12 @@ function fixture() {
     let body: unknown;
     if (parsed.pathname === '/oauth/token/accessible-resources') body = [{ id: resourceCloud, url: resourceSite, scopes }];
     else if (parsed.pathname.endsWith('/myself')) body = { accountId: account, active: true, accountType: 'atlassian' };
+    else if (parsed.pathname.endsWith('/project/ECHO') || parsed.pathname.endsWith('/project/10000')) body = { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000` };
     else if (parsed.pathname.endsWith('/search/jql')) body = { issues: [{ id: '10001' }], isLast: true };
     else if (parsed.pathname.endsWith('/issue/10001')) {
       if (denied) return new Response('', { status: 403 });
-      body = { id: '10001', key: 'ECHO-1', self: `${site}/rest/api/3/issue/10001`, fields: { summary: 'Synthetic launch', project: { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000` }, assignee: null, duedate: null, created: '2026-10-01T00:00:00.000+0000', status: { name: 'Open' }, description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Synthetic Friday' }] }] } } };
+      const issueProject = moved ? { id: '99999', key: 'OTHER', self: `${site}/rest/api/3/project/99999` } : { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000` };
+      body = { id: '10001', key: moved ? 'OTHER-1' : 'ECHO-1', self: `${site}/rest/api/3/issue/10001`, fields: { summary: 'Synthetic launch', project: issueProject, assignee: null, duedate: null, created: '2026-10-01T00:00:00.000+0000', status: { name: 'Open' }, description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Synthetic Friday' }] }] } } };
     } else throw new Error('Unexpected fake Jira request');
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   });
@@ -50,7 +52,7 @@ function fixture() {
     if (!active) throw new AuthorityOperationError('unauthorized', 'Fixture membership revoked');
     return { ...person, ...(token === 'synthetic-person-two' ? { principal_id: 'person-two', membership_id: 'mem_00000000-0000-4000-8000-000000000002' } : {}), authorization_sha256: canonicalSha256({ session: token }) };
   });
-  const service = createJiraPersonConnectionV1({ store, nango, cloud_id: cloud, fetch: transport as typeof fetch, authenticate });
+  const service = createJiraPersonConnectionV1({ store, nango, cloud_id: cloud, fetch: transport as typeof fetch, authenticate, ...(project === undefined ? {} : { project }) });
   const audit = { record: vi.fn(async (release: PersonLiveEvidenceReleaseV1) => canonicalSha256(release)) };
   const token = 'synthetic-echo-access';
   async function connected() {
@@ -59,11 +61,32 @@ function fixture() {
     return begun;
   }
   return { database, store, service, nango, transport, authenticate, audit, token, connected, finishAuthorization,
+    moveIssue: () => { moved = true; },
     seedConnection: (reference: string, tags: Readonly<Record<string, string>>) => { connections.set(reference, { tags }); },
     setActive: (value: boolean) => { active = value; }, setNow: (value: number) => { now = value; }, setAccount: (value: string) => { account = value; }, setCloud: (value: string) => { resourceCloud = value; }, setSite: (value: string) => { resourceSite = value; }, setScopes: (value: string[]) => { scopes = value; }, setDenied: () => { denied = true; }, setHook: (value: typeof hook) => { hook = value; } };
 }
 
 describe('Nango-backed personal Jira connection', () => {
+  it('passes the trusted configured project into the authenticated source search', async () => {
+    const f = fixture('ECHO'); try {
+      await f.connected();
+      const source = await f.service.source({ access_token: f.token, audit: f.audit });
+      await source!.search({ query: 'launch' });
+      const search = f.transport.mock.calls.find(([url]) => new URL(String(url)).pathname.endsWith('/search/jql'))!;
+      expect(JSON.parse(search[1]!.body as string).jql).toBe('project = 10000 AND (text ~ "\\\"launch\\\"") ORDER BY created DESC, id DESC');
+    } finally { f.database.close(); }
+  });
+
+  it.each(['open', 'revalidate'] as const)('refuses %s after a source ticket moves outside the configured project', async operation => {
+    const f = fixture('ECHO'); try {
+      await f.connected();
+      const source = (await f.service.source({ access_token: f.token, audit: f.audit }))!;
+      const page = await source.search({ query: 'launch' }); f.moveIssue();
+      await expect(operation === 'open' ? source.open({ item: page.items[0]!.id }) : source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(f.audit.record).toHaveBeenCalledTimes(1);
+    } finally { f.database.close(); }
+  });
+
   it('persists a terminal cancellation across a file-backed store restart and rejects late completion', () => {
     const directory = mkdtempSync(join(tmpdir(), 'echo-jira-attempt-'));
     const path = join(directory, 'connections.sqlite');
