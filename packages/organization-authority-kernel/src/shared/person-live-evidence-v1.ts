@@ -18,6 +18,8 @@ export interface PersonConnectorReadBindingV1 {
 export interface PersonConnectorReadAuthorizationV1 {
   /** Checks current ECHO membership, identity link, grant commitment and live_evidence permission. Throws on drift or revocation. */
   requireCurrent(binding: PersonConnectorReadBindingV1, input: { readonly signal?: AbortSignal }): Promise<void>;
+  /** Synchronous local-only final fence. No provider I/O or asynchronous work is permitted. */
+  assertCurrent(binding: PersonConnectorReadBindingV1): void;
 }
 
 /** Provider-normalized data, kept only in request memory. Provider wire parsing and tenant URL validation stay with the provider. */
@@ -108,6 +110,8 @@ export interface PersonLiveEvidenceSourceV1<C extends PersonLiveEvidenceCitation
   list(input: Omit<PersonLiveEvidenceListInputV1, 'limit'> & { readonly limit?: number }): Promise<PersonLiveEvidenceResultV1<C>>;
   /** Required before every subsequent model call and final response containing any released evidence. */
   revalidate(input: { readonly signal?: AbortSignal }): Promise<void>;
+  /** Rechecks the pinned local grant synchronously after all sources have finished provider I/O. */
+  assertCurrent(): void;
 }
 
 export interface CreatePersonLiveEvidenceSourceV1Options<C extends PersonLiveEvidenceCitationV1 = PersonLiveEvidenceCitationV1> {

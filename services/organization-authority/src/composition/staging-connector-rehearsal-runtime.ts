@@ -172,7 +172,8 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
       selection.authority_host !== 'authority-staging.echobrain.org' || (config.slack_nango.base_url !== undefined && config.slack_nango.base_url !== 'https://api.nango.dev') ||
       config.jira_person_live !== undefined ||
       config.staging_synthetic_meetings_directory !== undefined || config.staging_synthetic_owner_email !== undefined ||
-      dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.person_http_runtime_factory_with_slack !== undefined ||
+      dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.api?.slack_live_runtime_factory !== undefined ||
+      dependencies.person_http_runtime_factory_with_slack !== undefined ||
       config.slack_public_channel_context !== undefined) {
     throw new Error('Staging connector rehearsal selection is invalid');
   }

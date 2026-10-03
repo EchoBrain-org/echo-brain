@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -88,6 +88,20 @@ function config(directory: string) {
 function request(route_id: string, token: string, body: unknown) {
   return { route_id, method: 'POST' as const, path: route_id === 'staging-connector-rehearsal' ? STAGING_CONNECTOR_REHEARSAL_PATH_V1 : '/v1/person/tools/jira/connect', headers: { authorization: `Bearer ${token}` }, content_type: 'application/json', raw_body: new TextEncoder().encode(JSON.stringify(body)) };
 }
+
+it('refuses a Slack live-evidence factory under the capture-only V2 profile before opening state', async () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
+  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  const factory = vi.fn(() => ({ application: { async source() { return undefined; } }, close() {} }));
+  const result = await openStagingConnectorRehearsalService(config(stateDirectory), selection(), {
+    api: { slack_live_runtime_factory: factory },
+  }).then(async opened => { await opened.close(); return 'opened'; }, (error: unknown) => error);
+  expect(result).toBeInstanceOf(Error);
+  expect((result as Error).message).toBe('Staging connector rehearsal selection is invalid');
+  expect(factory).not.toHaveBeenCalled();
+  expect(state.apps).toEqual([]);
+  expect(existsSync(join(root, 'staging-connector-rehearsal-v1'))).toBe(false);
+});
 
 it('binds a staging-only owner surface to a lineage/profile sidecar and returns content-free receipts', async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);

@@ -15,6 +15,8 @@ export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = false;
 export interface JiraPersonLiveConfigurationV1 {
   readonly enabled: true;
   readonly cloud_id: string;
+  /** Optional fixed project selected by trusted runtime composition. */
+  readonly project?: string;
   readonly integration_id: string;
   readonly nango_authorization: () => string;
 }
@@ -49,6 +51,7 @@ export function openJiraPersonLiveRuntimeV1(options: {
       store: new JiraConnectionStoreV1(database),
       nango: options.seams?.nango ?? createJiraNangoV1({ integration_id: options.configuration.integration_id, authorization: options.configuration.nango_authorization, fetch: transport }),
       cloud_id: options.configuration.cloud_id,
+      ...(options.configuration.project === undefined ? {} : { project: options.configuration.project }),
       fetch: transport,
       authenticate(access_token) {
         const authorization = options.sessions.authenticateAccess({ access_token });

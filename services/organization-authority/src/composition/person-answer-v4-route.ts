@@ -1,4 +1,4 @@
-import type { PersonAnswerResponseV5, PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import type { PersonAnswerResponseV5, PersonTicketCitationV1, PersonSlackMessageCitationV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1, createAgenticAskV2 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -9,7 +9,9 @@ import { createPersonEvidenceDeskV1 } from './person-evidence-desk-v1.js';
 import { createPersonLiveEvidenceDeskV2 } from './person-live-evidence-desk-v2.js';
 
 export interface CreatePersonAnswerV4RouteOptions extends Omit<CreatePersonAnswerV3RouteOptions, 'ask_journey_telemetry'> {
-  readonly ticket_for: (input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined>;
+  readonly ticket_for?: (input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined>;
+  /** Explicit server-selected Slack scope; it never implies a Person-wide user-token grant. */
+  readonly slack_live_for?: (input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonSlackMessageCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1> | undefined>;
 }
 
 /** A new request-owned desk and audit context. No provider coordinates come from the model. */
@@ -29,10 +31,11 @@ export function createPersonAnswerV4Route(options: CreatePersonAnswerV4RouteOpti
         request_id: `ask_${randomUUID()}`,
       };
       // A project has no verified Jira mapping in this slice. Never widen project or mine to global Jira.
-      const ticket = scope.kind === 'global' ? await options.ticket_for({ access_token: input.access_token, audit: options.audit.forLiveRequest(context), ...(input.signal === undefined ? {} : { signal: input.signal }) }) : undefined;
-      const slack = scope.kind === 'mine' ? undefined : options.slack_for?.({ principal_id: authorization.principal_id, membership_id: authorization.membership_id });
+      const ticket = scope.kind === 'global' ? await options.ticket_for?.({ access_token: input.access_token, audit: options.audit.forLiveRequest(context), ...(input.signal === undefined ? {} : { signal: input.signal }) }) : undefined;
+      const liveSlack = scope.kind === 'global' ? await options.slack_live_for?.({ access_token: input.access_token, audit: options.audit.forLiveRequest(context), ...(input.signal === undefined ? {} : { signal: input.signal }) }) : undefined;
+      const slack = scope.kind === 'mine' || options.slack_live_for !== undefined ? undefined : options.slack_for?.({ principal_id: authorization.principal_id, membership_id: authorization.membership_id });
       const base = createPersonEvidenceDeskV1({ access_token: input.access_token, scope, originals: options.originals, records: options.records, ...(slack === undefined ? {} : { slack }) });
-      const desk = createPersonLiveEvidenceDeskV2(base, ticket);
+      const desk = createPersonLiveEvidenceDeskV2(base, ticket, liveSlack);
       const asker = askerOf(options, authorization);
       try {
         return await createAgenticAskV2({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context), ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }).answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });

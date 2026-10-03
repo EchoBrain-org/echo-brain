@@ -201,5 +201,20 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
       await safeCall(() => reader.revalidate({ citations, ...(input.signal === undefined ? {} : { signal: input.signal }) }), input.signal);
       await current(input.signal);
     },
+    assertCurrent() {
+      try {
+        if (canonicalSha256(reader.binding) !== bindingDigest) throw new AuthorityOperationError('stale_access_state', 'Live evidence reader binding changed');
+        const result: unknown = authorization.assertCurrent(binding);
+        // TypeScript permits async functions where void is expected. Refuse
+        // such an implementation instead of silently weakening this fence.
+        if (result !== undefined) {
+          if (result instanceof Promise) void result.catch(() => undefined);
+          throw new AuthorityOperationError('unavailable', 'Live evidence grant fence must be synchronous');
+        }
+      } catch (error) {
+        const code = error instanceof AuthorityOperationError && ERROR_CODES.has(error.code) ? error.code : 'unavailable';
+        throw new AuthorityOperationError(code, 'Live evidence operation could not be completed');
+      }
+    },
   } satisfies PersonLiveEvidenceSourceV1<C>);
 }
