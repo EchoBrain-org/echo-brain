@@ -47,7 +47,7 @@ describe("private Slack DM approval stager V2", () => {
         recordSupersededApprovalCardTombstoned: vi.fn(), releaseApprovalPostAttempt: vi.fn(),
       } as never,
       authority_database: database, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: { readDeliveryV2: () => undefined, freezeDeliveryV2: vi.fn(), readCurrent: vi.fn(), stage: vi.fn() } as never,
       control_plane: { stage: vi.fn(), stageV2: vi.fn() }, poster,
       resolve_reviewer_target: () => ({ reviewer: { principal_id: "prn_1", membership_id: "mem_1", membership_type: "owner" }, slack_target: { connection: { body: { organization_id: "org_1", connection_id: "con_1", provider_app_id: "A01", provider_bot_id: "B01", provider_bot_user_id: "U02", provider_tenant_id: "T01", provider_enterprise_id: null }, sha256: digest("6") }, connection_state: { body: {}, sha256: digest("7") }, current_slack_identity_link: { provider: "slack", external_identity_link_id: "clm_1", external_identity_link_contract_sha256: digest("4"), provider_subject_id: "U01" } } }) as never,
@@ -120,7 +120,7 @@ describe("private Slack DM approval stager V2", () => {
     let recipientChanged = false;
     const stager = new PrivateSlackDmApprovalStagerV1({
       authority: authority as never, authority_database: authorityDatabase as never, control_plane_database: {} as never,
-      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+      coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
       assignments: {
         readDeliveryV2: (approvalId: string) => deliveryReader.readDeliveryV2(approvalId),
         freezeDeliveryV2: (delivery: any) => { operations.push("freeze-v2"); frozenPending = frozenDelivery.freezeDeliveryV2(delivery); return frozenPending; },

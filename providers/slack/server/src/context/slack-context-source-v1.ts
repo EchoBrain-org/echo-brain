@@ -7,14 +7,11 @@ import { SLACK_CONTEXT_CHANNEL_V1, SLACK_CONTEXT_MAX_CURSOR_BYTES_V1, SLACK_CONT
   SLACK_CONTEXT_TS_V1, SLACK_CONTEXT_USER_V1, copySlackContextBindingV1, requireSlackContextResponseV1, slackContextArrayV1,
   slackContextFailureV1, slackContextRecordV1, slackContextStringV1, slackContextWorkspaceOriginV1 } from './slack-context-validation-v1.js';
 
-export interface SlackContextSourceReadGrantFenceV1 {
-  /** Authority checks its explicit owner, organization connection and configured-channel read grant. */
-  requireCurrent(input: { readonly binding: PersonConnectorReadBindingV1; readonly signal?: AbortSignal }): Promise<void>;
-}
+export const SLACK_CONTEXT_CAPTURE_ADAPTER_ID = 'slack-context-capture';
+export const SLACK_CONTEXT_CAPTURE_ADAPTER_VERSION = '1.0.0';
 
 export interface SlackContextSourceOptionsV1 {
   readonly transport: SlackContextTransportV1;
-  readonly read_grant_fence: SlackContextSourceReadGrantFenceV1;
   readonly team_id: string;
   readonly channel_id: string;
   /** Bot authorization is separate from binding.external_subject_id, which identifies the linked human. */
@@ -32,7 +29,6 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
   private readonly binding: PersonConnectorReadBindingV1;
   private readonly originalTransport: SlackContextTransportV1;
   private readonly request: SlackContextTransportV1['request'];
-  private readonly requireReadGrant: SlackContextSourceReadGrantFenceV1['requireCurrent'];
   private readonly team: string;
   private readonly channel: string;
   private readonly botUser: string;
@@ -40,8 +36,8 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
   private readonly now: () => Date;
 
   constructor(options: SlackContextSourceOptionsV1) {
-    if (options.identity.kind !== 'source' || options.identity.adapter_id !== 'slack-context-capture' || options.identity.version !== '1.0.0' ||
-        options.representation !== 'pointer' || typeof options.transport.request !== 'function' || typeof options.read_grant_fence?.requireCurrent !== 'function') throw new Error('Slack context source configuration is invalid');
+    if (options.identity.kind !== 'source' || options.identity.adapter_id !== SLACK_CONTEXT_CAPTURE_ADAPTER_ID || options.identity.version !== SLACK_CONTEXT_CAPTURE_ADAPTER_VERSION ||
+        options.representation !== 'pointer' || typeof options.transport.request !== 'function') throw new Error('Slack context source configuration is invalid');
     slackContextStringV1(options.identity.instance_id, 256);
     this.identity = Object.freeze({ ...options.identity });
     this.binding = copySlackContextBindingV1(options.transport.binding);
@@ -54,7 +50,6 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
     if (this.binding.external_scope_id !== this.team) slackContextFailureV1('unauthorized');
     this.originalTransport = options.transport;
     this.request = options.transport.request.bind(options.transport);
-    this.requireReadGrant = options.read_grant_fence.requireCurrent.bind(options.read_grant_fence);
     this.now = options.now ?? (() => new Date());
   }
 
@@ -64,7 +59,7 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
   }
 
   async healthCheck(context?: AdapterOperationContext): Promise<AdapterHealth> {
-    await this.requireCurrent(context?.signal);
+    await this.verifyBot(context?.signal);
     return { status: 'healthy', checked_at: this.capturedAt() };
   }
 
@@ -75,10 +70,7 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > SLACK_CONTEXT_MAX_PAGE_V1) slackContextFailureV1('invalid_request');
     const cursor = request.cursor;
     if (cursor !== undefined && (typeof cursor !== 'string' || cursor.trim() === '' || Buffer.byteLength(cursor, 'utf8') > SLACK_CONTEXT_MAX_CURSOR_BYTES_V1 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(cursor))) slackContextFailureV1('invalid_request');
-    await this.requireCurrent(signal);
-    const auth = await this.read({ method: 'auth.test', signal });
-    if (auth.team_id !== this.team || auth.user_id !== this.botUser) slackContextFailureV1('unauthorized');
-    const origin = slackContextWorkspaceOriginV1(auth.url);
+    const origin = await this.verifyBot(signal);
     const conversation = slackContextRecordV1((await this.read({ method: 'conversations.info', query: { channel: this.channel }, signal })).channel);
     if (conversation.id !== this.channel || conversation.is_member !== true ||
         (this.publicChannelOnly && conversation.is_private !== false) ||
@@ -100,8 +92,13 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
       const parsed = parseSlackContextMessageV1(message, { team_id: this.team, channel_id: this.channel, workspace_origin: origin, permalink });
       sources.push(buildContextCaptureEnvelopeV1({ identity: this.identity, external_id: parsed.external_id, captured_at: this.capturedAt(), content: parsed.content }));
     }
-    await this.requireCurrent(signal);
     return Object.freeze({ sources: Object.freeze(sources), ...(next === undefined ? {} : { next_cursor: next }) });
+  }
+
+  private async verifyBot(signal?: AbortSignal): Promise<string> {
+    const auth = await this.read({ method: 'auth.test', signal });
+    if (auth.team_id !== this.team || auth.user_id !== this.botUser) slackContextFailureV1('unauthorized');
+    return slackContextWorkspaceOriginV1(auth.url);
   }
 
   private async read(input: SlackContextRequestV1): Promise<Record<string, unknown>> {
@@ -115,14 +112,6 @@ export class SlackContextSourceV1 implements SourceAdapterV1<ContextCaptureConte
 
   private assertBinding(): void {
     if (JSON.stringify(copySlackContextBindingV1(this.originalTransport.binding)) !== JSON.stringify(this.binding)) slackContextFailureV1('stale_access_state');
-  }
-
-  private async requireCurrent(signal?: AbortSignal): Promise<void> {
-    signal?.throwIfAborted();
-    this.assertBinding();
-    await this.requireReadGrant({ binding: this.binding, signal });
-    signal?.throwIfAborted();
-    this.assertBinding();
   }
 
   private capturedAt(): string {

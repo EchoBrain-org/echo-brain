@@ -6,7 +6,6 @@ describe("SlackWebApiClient conversations.open", () => {
     const calls: Array<{ readonly url: string; readonly init: RequestInit }> =
       [];
     const client = new SlackWebApiClient("test-token", {
-      baseUrl: "https://slack.example.test/api",
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init: init ?? {} });
         return new Response(
@@ -24,9 +23,7 @@ describe("SlackWebApiClient conversations.open", () => {
       user_id: "U123",
     });
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe(
-      "https://slack.example.test/api/conversations.open",
-    );
+    expect(calls[0]?.url).toBe("https://slack.com/api/conversations.open");
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
       users: "U123",
       return_im: true,
@@ -82,7 +79,6 @@ describe("SlackWebApiClient conversations.history recovery", () => {
   it("reads every cursor page and preserves exact bot-authored evidence", async () => {
     const urls: string[] = [];
     const client = new SlackWebApiClient("test-token", {
-      baseUrl: "https://slack.example.test/api",
       fetchImpl: async (url) => {
         urls.push(String(url));
         const cursor = new URL(String(url)).searchParams.get("cursor");
@@ -226,7 +222,6 @@ describe("SlackWebApiClient chat.update", () => {
     const calls: Array<{ readonly url: string; readonly init: RequestInit }> =
       [];
     const client = new SlackWebApiClient("test-token", {
-      baseUrl: "https://slack.example.test/api",
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init: init ?? {} });
         return new Response(
@@ -244,7 +239,7 @@ describe("SlackWebApiClient chat.update", () => {
     ).resolves.toEqual({ channel: "C123", ts: "123.000001" });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("https://slack.example.test/api/chat.update");
+    expect(calls[0]?.url).toBe("https://slack.com/api/chat.update");
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
       channel: "C123",
       ts: "123.000001",

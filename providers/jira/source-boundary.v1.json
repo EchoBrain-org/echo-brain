@@ -7,7 +7,6 @@
   "source_root": "providers/jira/src",
   "package_json": "providers/jira/package.json",
   "entry_points": [
-    "providers/jira/src/jira-cloud-transport-v1.ts",
     "providers/jira/src/jira-person-connection-v1.ts",
     "providers/jira/src/jira-connection-store-v1.ts",
     "providers/jira/src/jira-nango-v1.ts",

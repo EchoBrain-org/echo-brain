@@ -75,7 +75,7 @@ async function stageThrough(stageInput: ApprovalWorkflowStageInputV1) {
       listPendingApprovalDeliveries: () => [], releaseApprovalPostAttempt: vi.fn(), recordSupersededApprovalCardTombstoned: vi.fn(),
     } as never,
     authority_database: authorityDatabase as never, control_plane_database: {} as never,
-    coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: "con_1",
+    coordinates: { authority_id: "oau_1", organization_id: "org_1", state_lineage_id: "lin_1" }, connection_id: () => "con_1",
     assignments: {
       readDeliveryV2: (approvalId: string) => delivery.readDeliveryV2(approvalId),
       freezeDeliveryV2: (value: any) => delivery.freezeDeliveryV2(value),

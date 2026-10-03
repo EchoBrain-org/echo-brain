@@ -271,7 +271,7 @@ export async function createCoreApproval({ context, owner, employee, sessions } 
     authority_database: context.authority_database,
     control_plane_database: context.control_plane_database,
     coordinates: location,
-    connection_id: connection.connection_id,
+    connection_id: () => connection.connection_id,
     assignments,
     control_plane,
     poster,

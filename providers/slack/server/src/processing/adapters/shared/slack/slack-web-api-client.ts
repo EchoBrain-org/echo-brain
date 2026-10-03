@@ -1,5 +1,5 @@
-const DEFAULT_BASE_URL = "https://slack.com/api";
-const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const BASE_URL = "https://slack.com/api";
+const REQUEST_TIMEOUT_MS = 10_000;
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const HISTORY_PAGE_LIMIT = 200;
 const MAX_HISTORY_PAGES = 25;
@@ -78,8 +78,6 @@ export interface SlackDirectMessage {
 }
 
 export interface SlackWebApiClientOptions {
-  baseUrl?: string;
-  requestTimeoutMs?: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -264,17 +262,12 @@ function requireSlackScopeEvidence(
  * the transport status and the body envelope are checked on every call.
  */
 export class SlackWebApiClient {
-  private readonly baseUrl: string;
-  private readonly requestTimeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(
     private readonly token: string,
     options: SlackWebApiClientOptions = {},
   ) {
-    this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
-    this.requestTimeoutMs =
-      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -695,17 +688,16 @@ export class SlackWebApiClient {
     if (options.signal?.aborted === true) abortUpstream();
     const timer = setTimeout(
       () => controller.abort(new Error(`Slack ${method} timed out`)),
-      this.requestTimeoutMs,
+      REQUEST_TIMEOUT_MS,
     );
     try {
-      let url = `${this.baseUrl}/${method}`;
+      let url = `${BASE_URL}/${method}`;
       const init: RequestInit = {
         method: httpMethod,
         signal: controller.signal,
         // Slack API methods are not expected to redirect. Refusing redirects
         // prevents fetch from forwarding the bearer credential to a different
-        // endpoint if Slack, a proxy, or a configured test endpoint responds
-        // with a redirect.
+        // endpoint if Slack or a proxy responds with a redirect.
         redirect: "error",
         headers: { authorization: `Bearer ${this.token}` },
       };

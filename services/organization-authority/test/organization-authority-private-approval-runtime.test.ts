@@ -34,9 +34,9 @@ import {
   openOrganizationControlDatabase,
 } from "@echo-brain/provider-slack-server/organization-control-plane/slack-approval-integration-v1";
 import { buildExternalHumanIdentityLinkContractV2, buildOrganizationToolConnectionStateV2, validateOrganizationToolConnectionStateV2 } from "../../../providers/slack/server/src/organization-control-plane/application/organization-tool-connection-contracts-v2.js";
-import { activateNangoSlackConnectionV1 } from "@echo-brain/provider-slack-server/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1";
-import { serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-app-credentials-v1";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1";
+import { activateNangoSlackConnectionV1 } from "../../../providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
+import { serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../../../providers/slack/server/src/organization-control-plane/application/slack-app-credentials-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts";
 import { SlackConnectionHealthV1 } from "@echo-brain/provider-slack-server/organization-control-plane/application/slack-connection-health-v1";
 import { FileOrganizationSecretStore } from "@echo-brain/organization-control-plane/security/file-secret-store";
 import { openOrganizationRecordDatabase } from "@echo-brain/organization-record/organization-record-api-v1";

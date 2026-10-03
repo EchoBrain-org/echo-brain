@@ -32,8 +32,7 @@ export class NangoClientErrorV1 extends Error {
 /**
  * The fields ECHO reads out of a Nango Slack connection. All response-shape
  * knowledge for a connection lives in `parseNangoSlackConnectionV1` below, so
- * a correction after the real-Nango spike (controller ruling P1) touches one
- * place.
+ * a correction once a real Nango response is observed touches one place.
  */
 export interface NangoSlackConnectionV1 {
   readonly connection_id: string;
@@ -86,10 +85,11 @@ function invalidConnection(): never {
 }
 
 /**
- * Parses one Nango connection response down to the fields ECHO needs,
- * against assumptions A1/A2/A5 (controller ruling P1, spike pending):
- * `credentials.raw` carries the Slack `oauth.v2.access` response verbatim
- * and `credentials.access_token` is the bot token. Strict: throws
+ * Parses one Nango connection response down to the fields ECHO needs.
+ * Spike-sensitive: that `credentials.raw` carries the Slack
+ * `oauth.v2.access` response verbatim and `credentials.access_token` is the
+ * bot token is assumed, not observed, since ADR-0025's phase-0 spike is
+ * unrecorded. Strict: throws
  * `NangoClientErrorV1("invalid_response", …)` for any missing or malformed
  * field, and never includes a candidate value (including the bot token) in
  * its thrown message. Refuses an
@@ -159,7 +159,7 @@ function parseNangoConnectSessionResponseV1(value: unknown): { connect_link: str
   return Object.freeze({ connect_link: connectLink });
 }
 
-/** `{ connections: [ { connection_id, tags, … } ] }` (A3); returns only the ids. */
+/** `{ connections: [ { connection_id, tags, … } ] }` (assumed, not observed); returns only the ids. */
 function parseNangoConnectionIdsV1(value: unknown): readonly string[] {
   const top = record(value);
   const list = top === undefined ? undefined : top.connections;

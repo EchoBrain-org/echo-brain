@@ -175,13 +175,13 @@ export class PrivateSlackApprovalCardPosterV1 {
     | undefined;
 
   /**
-   * A function token is resolved for every Slack call. `on_auth_failure`
-   * hears a Slack auth error that one refreshed token did not cure (see
-   * `withSlackBotTokenV1`); a fixed string token is never refreshed, and
-   * neither is a connection `needs_reinstall` reports as already marked.
+   * The token is resolved for every Slack call. `on_auth_failure` hears a
+   * Slack auth error that one refreshed token did not cure (see
+   * `withSlackBotTokenV1`); a connection `needs_reinstall` reports as already
+   * marked is never refreshed.
    */
   constructor(
-    token: string | SlackBotTokenGetterV1,
+    token: SlackBotTokenGetterV1,
     options: SlackWebApiClientOptions & {
       readonly now?: () => number;
       readonly on_auth_failure?: (error: SlackApiError) => void;
@@ -190,7 +190,7 @@ export class PrivateSlackApprovalCardPosterV1 {
   ) {
     const { now, on_auth_failure, needs_reinstall, ...clientOptions } = options;
     this.now = now ?? Date.now;
-    this.token = typeof token === "string" ? async () => token : token;
+    this.token = token;
     this.client_options = clientOptions;
     this.on_auth_failure = on_auth_failure;
     this.needs_reinstall = needs_reinstall;

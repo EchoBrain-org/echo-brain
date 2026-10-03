@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildEchoSlackAppManifestV1,
-  SLACK_PRIVATE_APP_BOT_SCOPES_V1,
   SlackAppManifestProviderErrorV1,
   SlackWebAppManifestProviderV1,
 } from "../../../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
-import { SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, type SlackPublicChannelContextCapabilityV1 } from "../../../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, type SlackPublicChannelContextCapabilityV1 } from "../../../../src/organization-control-plane/application/slack-integration-contracts.js";
 
 const AUTHORITY_URL = "https://authority.example";
 const NANGO_CALLBACK_URL = "https://api.nango.dev/oauth/callback";

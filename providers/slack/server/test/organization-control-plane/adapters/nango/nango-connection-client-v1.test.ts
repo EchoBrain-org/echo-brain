@@ -24,7 +24,7 @@ const TAGS = Object.freeze({
 
 const SCOPES = Object.freeze(["chat:write", "im:history", "im:write", "users:read"] as const);
 
-const A1_CONNECTION_FIXTURE = Object.freeze({
+const CONNECTION_FIXTURE = Object.freeze({
   connection_id: "conn_123",
   tags: TAGS,
   updated_at: "2026-09-30T12:00:00.000Z",
@@ -63,7 +63,7 @@ function emptyNangoFetch(status: number) {
 }
 
 function fixtureWithRawPatch(patch: Record<string, unknown>): unknown {
-  const clone = JSON.parse(JSON.stringify(A1_CONNECTION_FIXTURE)) as Record<string, any>;
+  const clone = JSON.parse(JSON.stringify(CONNECTION_FIXTURE)) as Record<string, any>;
   Object.assign(clone.credentials.raw, patch);
   return clone;
 }
@@ -227,8 +227,8 @@ describe("HttpNangoConnectionClientV1.findConnectionIdByTag", () => {
 });
 
 describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
-  it("builds the provider_config_key query and parses the A1 fixture", async () => {
-    const fetch = nangoFetch([200, A1_CONNECTION_FIXTURE]);
+  it("builds the provider_config_key query and parses the connection fixture", async () => {
+    const fetch = nangoFetch([200, CONNECTION_FIXTURE]);
     const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
 
     const connection = await client.getSlackConnection({ connection_id: "conn_123" });
@@ -260,7 +260,7 @@ describe("HttpNangoConnectionClientV1.getSlackConnection", () => {
   });
 
   it("refuses a non-xoxb token without leaking it", async () => {
-    const clone = JSON.parse(JSON.stringify(A1_CONNECTION_FIXTURE)) as any;
+    const clone = JSON.parse(JSON.stringify(CONNECTION_FIXTURE)) as any;
     clone.credentials.access_token = "xoxp-not-a-bot-token";
     const fetch = nangoFetch([200, clone]);
     const client = new HttpNangoConnectionClientV1(CONFIGURATION, { fetch });
@@ -323,7 +323,7 @@ describe("HttpNangoConnectionClientV1 error mapping", () => {
       throw new Error("network down");
     }],
     ["an oversized response", async () =>
-      new Response(JSON.stringify(A1_CONNECTION_FIXTURE), {
+      new Response(JSON.stringify(CONNECTION_FIXTURE), {
         status: 200,
         headers: { "content-type": "application/json", "content-length": "99999999" },
       })],
@@ -366,8 +366,8 @@ describe("HttpNangoConnectionClientV1 error mapping", () => {
 });
 
 describe("parseNangoSlackConnectionV1", () => {
-  it("parses the A1 fixture directly, sorting granted_scopes", () => {
-    expect(parseNangoSlackConnectionV1(A1_CONNECTION_FIXTURE)).toEqual({
+  it("parses the connection fixture directly, sorting granted_scopes", () => {
+    expect(parseNangoSlackConnectionV1(CONNECTION_FIXTURE)).toEqual({
       connection_id: "conn_123",
       tags: TAGS,
       team_id: "T0123456",

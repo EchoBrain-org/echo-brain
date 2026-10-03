@@ -6,9 +6,6 @@ import {
 } from "../../../shared/bounded-json-fetch-v1.js";
 import { SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1, slackPrivateAppBotScopesV1, type SlackPublicChannelContextCapabilityV1 } from "../../application/slack-integration-contracts.js";
 
-/** Owned by the application contracts; re-exported for this adapter's existing importers. */
-export { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../../application/slack-integration-contracts.js";
-
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const TIMEOUT_MS = 15_000;
 

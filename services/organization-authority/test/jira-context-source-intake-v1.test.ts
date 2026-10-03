@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createJiraCloudTransportV1 } from '@echo-brain/provider-jira/jira-cloud-transport-v1';
+import { createJiraCloudTransportV1 } from '../../../providers/jira/src/jira-cloud-transport-v1.js';
 import type { ContextIntakeAuthorityV1, ContextIntakePolicyV1 } from '../src/application/context-intake-v1.js';
 import { createJiraContextIntakeV1 } from '../src/composition/provider-context-intakes-v1.js';
 import { retainedContextCapturesV1 } from './fixtures/context-capture-reader-v1.js';

@@ -129,11 +129,7 @@ function validateIdentityLinkChallenge(
     );
   }
   requiredId(input.expected_bot_id, "expected bot_id", "B");
-  if (
-    input.expected_app_id !== null &&
-    (!SLACK_ID.test(input.expected_app_id) ||
-      !input.expected_app_id.startsWith("A"))
-  ) {
+  if (!SLACK_ID.test(input.expected_app_id) || !input.expected_app_id.startsWith("A")) {
     throw new SlackIdentityProviderErrorV1(
       "Slack expected app_id is invalid",
       "invalid_response",
@@ -499,7 +495,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
   }
 
   private async verifyChallengeDestination(token: string, input: PostSlackIdentityLinkChallengeInput, signal?: AbortSignal): Promise<void> {
-    const destination = await this.openIdentityLinkDirectMessage(token, input.recipient_user_id!, input.expected_team_id, signal);
+    const destination = await this.openIdentityLinkDirectMessage(token, input.recipient_user_id, input.expected_team_id, signal);
     if (destination.channel_id !== input.channel_id) {
       throw new SlackIdentityProviderErrorV1("Slack identity-link destination changed", "unauthorized");
     }
@@ -546,8 +542,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
       message.text !== challenge.text ||
       message.edited !== undefined ||
       (message.subtype !== undefined && message.subtype !== "bot_message") ||
-      (input.expected_app_id !== null &&
-        message.app_id !== input.expected_app_id)
+      message.app_id !== input.expected_app_id
     ) {
       throw new SlackIdentityProviderErrorV1(
         "Slack did not return the exact bot-authored identity-link challenge",
@@ -650,8 +645,7 @@ export class SlackWebIdentityProviderV1 implements SlackIdentityProviderV1 {
       parent.text !== challenge.text ||
       parent.edited !== undefined ||
       (parent.subtype !== undefined && parent.subtype !== "bot_message") ||
-      (input.expected_app_id !== null &&
-        parent.app_id !== input.expected_app_id)
+      parent.app_id !== input.expected_app_id
     ) {
       throw new SlackIdentityProviderErrorV1(
         "Slack identity-link challenge parent changed",
