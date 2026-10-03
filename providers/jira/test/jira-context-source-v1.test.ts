@@ -71,9 +71,9 @@ describe('Jira context source V1', () => {
       item: { adapter: { adapter_id: 'jira-context-capture', instance_id: `jira-cloud:${cloudid}:project:ECHO`, version: '1.0.0' }, external_id: 'issue:10001' },
       revision: { captured_at: '2026-10-03T00:00:00.000Z' },
       content: {
-        source_type: 'ticket', label: 'ECHO-1: Ship context capture',
+        label: 'ECHO-1: Ship context capture',
         provenance: { origin_ref: `${origin}/browse/ECHO-1`, source_updated_at: '2026-10-02T10:04:05.000Z' },
-        payload: { key: 'ECHO-1', status: 'Open', labels: ['context', 'capture'], priority: 'High', assignee_ref: 'jira:account:account-ada' },
+        payload: { kind: 'ticket', key: 'ECHO-1', status: 'Open', labels: ['context', 'capture'], priority: 'High', assignee_ref: 'jira:account:account-ada' },
         representation: { kind: 'excerpt', passages: [{ id: 'rendered-body', source_anchor: 'jira:issue:10001:rendered-v1', start: 0, text: 'ECHO-1: Ship context capture\n\nKeep this exact Jira evidence bounded.' }] },
       },
     });

@@ -4,11 +4,11 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { sourceContentSha256V1, type ContextCaptureEnvelopeV1, type SourceAdmissionStoreV1 } from '@echo-brain/organization-processing/core';
-import { SqliteContextCaptureReaderV1 } from '../src/adapters/persistence/sqlite/context-capture-reader-v1.js';
 import { SqliteContextCaptureStoreV1 } from '../src/adapters/persistence/sqlite/context-capture-store-v1.js';
 import { SqliteSourceAdmissionStoreV1 } from '../src/adapters/persistence/sqlite/source-admission-v1.js';
 import { intakeContextBatchV1, type ContextIntakeAuthorityV1, type ContextIntakePolicyV1 } from '../src/application/context-intake-v1.js';
 import { projectContextDatabase } from './fixtures/project-context-sqlite.js';
+import { retainedContextCapturesV1 } from './fixtures/context-capture-reader-v1.js';
 import {
   CONTEXT_CAPTURE_IDENTITY_V1, CONTEXT_CAPTURE_SCOPE_V1, contextCaptureV1,
   excerptRepresentationV1, pointerRepresentationV1, snapshotRepresentationV1,
@@ -142,7 +142,7 @@ describe('context intake V1 shared gate', () => {
     await expect(new SqliteContextCaptureStoreV1(value, mutating, CONTEXT_CAPTURE_IDENTITY_V1).admitSourceRevision({ scope: expectedScope, source })).resolves.toBe('admitted');
     expect(selectMutationRejected).toBe(true);
     expect(fenceMutationRejected).toBe(true);
-    const retained = new SqliteContextCaptureReaderV1(value).list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id });
+    const retained = retainedContextCapturesV1(value, CONTEXT_CAPTURE_SCOPE_V1.organization_id);
     expect(retained.map(entry => [entry.source, entry.scope])).toEqual([[source, expectedScope]]);
   });
 
@@ -157,7 +157,7 @@ describe('context intake V1 shared gate', () => {
     await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: captures, authority: authority(), store: new SqliteSourceAdmissionStoreV1(value) }))
       .resolves.toMatchObject([{ admission: 'admitted' }, { admission: 'admitted' }, { admission: 'admitted' }]);
 
-    const retained = new SqliteContextCaptureReaderV1(value).list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id });
+    const retained = retainedContextCapturesV1(value, CONTEXT_CAPTURE_SCOPE_V1.organization_id);
     const orderedCaptures = [...captures].sort((left, right) => left.item.source_id.localeCompare(right.item.source_id));
     expect(retained.map(entry => entry.source)).toEqual(orderedCaptures);
     expect(retained.map(entry => entry.scope)).toEqual([CONTEXT_CAPTURE_SCOPE_V1, CONTEXT_CAPTURE_SCOPE_V1, CONTEXT_CAPTURE_SCOPE_V1]);
@@ -173,13 +173,7 @@ describe('context intake V1 shared gate', () => {
     const initial = projectContextDatabase(path);
     const pointer = contextCaptureV1({ external_id: 'restart-pointer', representation: pointerRepresentationV1('synthetic://restart/pointer') });
     const excerpt = contextCaptureV1({ external_id: 'restart-excerpt', representation: excerptRepresentationV1('A retained exact excerpt.') });
-    const snapshot = contextCaptureV1({
-      external_id: 'restart-snapshot', representation: snapshotRepresentationV1('A retained full snapshot.'),
-      observations: [{
-        kind: 'references', anchor_id: 'passage-1',
-        target: { source_id: pointer.item.source_id, revision_id: pointer.revision.revision_id }, occurred_at: '2026-10-01T00:00:00.000Z',
-      }],
-    });
+    const snapshot = contextCaptureV1({ external_id: 'restart-snapshot', representation: snapshotRepresentationV1('A retained full snapshot.') });
     const captures = [pointer, excerpt, snapshot];
     await intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: captures, authority: authority(), store: new SqliteSourceAdmissionStoreV1(initial) });
     initial.close();
@@ -187,17 +181,15 @@ describe('context intake V1 shared gate', () => {
     const reopened = new Database(path);
     reopened.pragma('foreign_keys = ON');
     databases.push(reopened);
-    const reader = new SqliteContextCaptureReaderV1(reopened);
-    const retained = reader.list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id });
+    const retained = retainedContextCapturesV1(reopened, CONTEXT_CAPTURE_SCOPE_V1.organization_id);
     const ordered = [...captures].sort((left, right) => left.item.source_id.localeCompare(right.item.source_id));
     expect(retained.map(entry => entry.source)).toEqual(ordered);
     expect(retained.map(entry => entry.scope)).toEqual([CONTEXT_CAPTURE_SCOPE_V1, CONTEXT_CAPTURE_SCOPE_V1, CONTEXT_CAPTURE_SCOPE_V1]);
-    expect(retained.find(entry => entry.source.item.external_id === 'restart-snapshot')!.source.content.observations).toEqual(snapshot.content.observations);
 
     const replay = captures.map(source => ({ ...source, revision: { ...source.revision, captured_at: '2026-10-01T00:02:00.000Z' } }));
     await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: replay, authority: authority(), store: new SqliteSourceAdmissionStoreV1(reopened) }))
       .resolves.toMatchObject([{ admission: 'duplicate' }, { admission: 'duplicate' }, { admission: 'duplicate' }]);
-    expect(reader.list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id }).map(entry => entry.source)).toEqual(ordered);
+    expect(retainedContextCapturesV1(reopened, CONTEXT_CAPTURE_SCOPE_V1.organization_id).map(entry => entry.source)).toEqual(ordered);
   });
 
   it('rejects a malformed capture under either disposition and malformed Authority policy before storage', async () => {
@@ -245,16 +237,15 @@ describe('context intake V1 shared gate', () => {
     expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
   });
 
-  it('retains every structured source type exactly and only as a source observation', async () => {
+  it('retains every structured source type exactly', async () => {
     const value = database();
-    const captures = (['document', 'note', 'message', 'ticket', 'meeting', 'activity', 'task', 'decision'] as const).map(source_type => contextCaptureV1({
+    const captures = (['note', 'message', 'ticket', 'meeting'] as const).map(source_type => contextCaptureV1({
       external_id: `${source_type}-metadata`, source_type, representation: excerptRepresentationV1(`${source_type} evidence.`),
     }));
     await intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: captures, authority: authority(), store: new SqliteSourceAdmissionStoreV1(value) });
-    const retained = new SqliteContextCaptureReaderV1(value).list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id });
+    const retained = retainedContextCapturesV1(value, CONTEXT_CAPTURE_SCOPE_V1.organization_id);
     expect(retained.map(entry => entry.source)).toEqual([...captures].sort((left, right) => left.item.source_id.localeCompare(right.item.source_id)));
-    expect(retained.every(entry => entry.source.content.truth_status === 'source_observation')).toBe(true);
-    expect(retained.map(entry => entry.scope)).toEqual(new Array(8).fill(CONTEXT_CAPTURE_SCOPE_V1));
+    expect(retained.map(entry => entry.scope)).toEqual(new Array(4).fill(CONTEXT_CAPTURE_SCOPE_V1));
   });
 
   it('deduplicates an identical revision, rejects immutable conflicts, and retains a new revision separately', async () => {
@@ -265,7 +256,7 @@ describe('context intake V1 shared gate', () => {
     const conflicts = [
       contextCaptureV1({ representation: snapshotRepresentationV1('Changed source bytes.') }),
       contextCaptureV1({ source_updated_at: '2026-10-01T00:01:00.000Z' }),
-      contextCaptureV1({ payload: { schema_version: 1, kind: 'document', media_type: 'text/markdown', language: 'fr' } }),
+      contextCaptureV1({ payload: { schema_version: 1, kind: 'note', format: 'plain_text' } }),
     ];
     const next = contextCaptureV1({ revision_id: 'revision-2', previous_revision_id: 'revision-1', representation: snapshotRepresentationV1('The revised release is Monday.') });
 
@@ -275,7 +266,7 @@ describe('context intake V1 shared gate', () => {
       await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [changed], authority: authority(), store })).rejects.toThrow('conflicts');
     }
     await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [next], authority: authority(), store })).resolves.toMatchObject([{ admission: 'admitted' }]);
-    expect(new SqliteContextCaptureReaderV1(value).list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id }).map(entry => entry.source.revision.revision_id))
+    expect(retainedContextCapturesV1(value, CONTEXT_CAPTURE_SCOPE_V1.organization_id).map(entry => entry.source.revision.revision_id))
       .toEqual(['revision-1', 'revision-2']);
   });
 
@@ -285,7 +276,7 @@ describe('context intake V1 shared gate', () => {
     const badBase = contextCaptureV1({ external_id: 'bad' });
     const invalidContent = { ...badBase.content, truth_status: 'approved_fact' };
     const invalid = { ...badBase, content: invalidContent, revision: { ...badBase.revision, content_sha256: sourceContentSha256V1(invalidContent) } };
-    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [valid, invalid], authority: authority(), store: new SqliteSourceAdmissionStoreV1(value) })).rejects.toThrow('unsupported');
+    await expect(intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [valid, invalid], authority: authority(), store: new SqliteSourceAdmissionStoreV1(value) })).rejects.toThrow('unknown field');
     expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
   });
 
@@ -303,20 +294,6 @@ describe('context intake V1 shared gate', () => {
       identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [first, second], authority: changingAuthority, store: new SqliteSourceAdmissionStoreV1(value),
     })).rejects.toThrow('custody conflicts');
     expect(counts(value)).toEqual({ sources: 0, revisions: 0, contents: 0, representations: 0 });
-  });
-
-  it('rejects a partial retained input set and detects corruption in current retained content', async () => {
-    const value = database();
-    const first = contextCaptureV1({ external_id: 'complete-a' });
-    const second = contextCaptureV1({ external_id: 'complete-b' });
-    await intakeContextBatchV1({ identity: CONTEXT_CAPTURE_IDENTITY_V1, sources: [first, second], authority: authority(), store: new SqliteSourceAdmissionStoreV1(value) });
-    const reader = new SqliteContextCaptureReaderV1(value);
-    expect(() => reader.list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id, limit: 1 })).toThrow('exceeds its bound');
-
-    value.exec('DROP TRIGGER authority_source_contents_v1_update_denied');
-    value.prepare('UPDATE authority_source_contents_v1 SET content_json=? WHERE source_id=? AND revision_id=?')
-      .run('{"kind":"echo-context-capture-v1"}', first.item.source_id, first.revision.revision_id);
-    expect(() => reader.list({ organization_id: CONTEXT_CAPTURE_SCOPE_V1.organization_id })).toThrow();
   });
 
   it('snapshots input before policy checks, rechecks Authority, and lets cancellation stop a held admission', async () => {

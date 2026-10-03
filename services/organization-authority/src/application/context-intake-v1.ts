@@ -11,15 +11,6 @@ import {
   type SourceAdmissionStoreV1, type SourceEnvelopeV1,
 } from '@echo-brain/organization-processing/core';
 
-export interface RetainedContextCaptureV1 {
-  readonly source: ContextCaptureEnvelopeV1;
-  readonly scope: SourceAdmissionScopeV1;
-  /** Existing admission's immutable manifest commitment, excluding capture time. */
-  readonly revision_sha256: string;
-}
-export interface ContextCaptureReadPortV1 {
-  list(input: { readonly organization_id: string; readonly limit?: number }): readonly RetainedContextCaptureV1[];
-}
 export interface ContextIntakePolicyV1 {
   readonly disposition: 'retained' | 'request_only';
   readonly scope: SourceAdmissionScopeV1;
@@ -110,7 +101,7 @@ export async function intakeContextBatchV1(options: {
   return results;
 }
 
-export function deepFreezeContextV1<T>(value: T): T {
+function deepFreezeContextV1<T>(value: T): T {
   if (value !== null && typeof value === 'object') {
     for (const child of Object.values(value)) deepFreezeContextV1(child);
     Object.freeze(value);

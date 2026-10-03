@@ -7,7 +7,6 @@ import {
   type ContextCaptureContentV1,
   type ContextCaptureEnvelopeV1,
   type ContextPassageV1,
-  type ContextStructuredSourceTypeV1,
   type SourceAdapterIdentityV1,
 } from '../../src/core/index.js';
 
@@ -19,17 +18,14 @@ function content(label = 'Design brief'): ContextCaptureContentV1 {
   return {
     schema_version: 1,
     kind: 'echo-context-capture-v1',
-    source_type: 'document',
-    truth_status: 'source_observation',
     label,
-    provenance: { origin_ref: 'fixture://document/design-1', source_updated_at: '2026-10-01T00:00:00.000Z' },
-    payload: { schema_version: 1, kind: 'document', media_type: 'text/markdown', language: 'en' },
+    provenance: { origin_ref: 'fixture://note/design-1', source_updated_at: '2026-10-01T00:00:00.000Z' },
+    payload: { schema_version: 1, kind: 'note', format: 'markdown' },
     representation: {
       kind: 'full_snapshot',
       text: 'The design is ready for review.',
       passages: [{ id: 'body', source_anchor: 'body', start: 0, end: 31, text: 'The design is ready for review.' }],
     },
-    observations: [],
   };
 }
 
@@ -69,11 +65,11 @@ describe('context capture contract', () => {
     assertContextCaptureEnvelopeV1(first, identity);
   });
 
-  it('rejects a malformed typed payload before a provider can emit an envelope', () => {
+  it('rejects an unsupported typed payload before a provider can emit an envelope', () => {
     expect(() => buildContextCaptureEnvelopeV1({
       identity, external_id: 'design-1', captured_at: '2026-10-01T00:00:01.000Z',
-      content: { ...content(), payload: { schema_version: 1, kind: 'ticket', key: 'D-1', status: 'open', labels: [] } } as unknown as ContextCaptureContentV1,
-    })).toThrow('kind does not match');
+      content: { ...content(), payload: { schema_version: 1, kind: 'task', status: 'open' } } as unknown as ContextCaptureContentV1,
+    })).toThrow('kind is unsupported');
   });
 
   it('rejects noncanonical identity, digest, provenance, anchors, bounds and closed fields', () => {
@@ -95,13 +91,10 @@ describe('context capture contract', () => {
     for (const [value, message] of cases) expect(() => assertContextCaptureEnvelopeV1(value, identity), message).toThrow(message);
   });
 
-  it('rejects pointer observations and provider policy, approval or contributor claims', () => {
-    const pointer = envelope({ representation: { kind: 'pointer', pointer: 'fixture://document/design-1' } });
+  it('rejects provider truth, policy, approval or contributor claims', () => {
+    const pointer = envelope({ representation: { kind: 'pointer', pointer: 'fixture://note/design-1' } });
     const cases: readonly (readonly [unknown, string])[] = [
-      [withContent(pointer, {
-        ...pointer.content,
-        observations: [{ kind: 'references', anchor_id: 'metadata:pointer', target: { source_id: pointer.item.source_id, revision_id: pointer.revision.revision_id }, occurred_at: '2026-10-01T00:00:00.000Z' }],
-      }), 'lacks a source anchor'],
+      [withContent(pointer, { ...pointer.content, truth_status: 'approved_fact' }), 'unknown field'],
       [withContent(pointer, { ...pointer.content, policy: { disposition: 'retained', audience: 'everyone' } }), 'unknown field'],
       [withContent(pointer, { ...pointer.content, approval: { approved: true } }), 'unknown field'],
       [{ ...pointer, revision: { ...pointer.revision, contributor: { principal_id: 'prn_provider', membership_id: 'mem_provider' } } }, 'identity claims'],
@@ -111,7 +104,7 @@ describe('context capture contract', () => {
 
   it('rejects sparse, accessor and symbol-bearing adapter data without running provider getters', () => {
     const base = envelope();
-    const sparse = { ...base, content: { ...base.content, observations: new Array(1) } };
+    const sparse = { ...base, content: { ...base.content, representation: { ...base.content.representation, passages: new Array(1) } } };
     const accessor = envelope();
     let getterRan = false;
     Object.defineProperty(accessor.content, 'label', { enumerable: true, configurable: true, get: () => { getterRan = true; return 'getter must not run'; } });
@@ -151,22 +144,20 @@ describe('context capture contract', () => {
     }
   });
 
-  it('rejects malformed structured provider payloads for their source type', () => {
+  it('rejects malformed structured provider payloads for their kind', () => {
     const ticket = { schema_version: 1, kind: 'ticket', key: 'CON-17', status: 'open', labels: ['fixture'] };
-    const activity = { schema_version: 1, kind: 'activity', action: 'commented', occurred_at: '2026-10-01T11:50:00.000Z', subject_ref: 'ticket:CON-17' };
+    const message = { schema_version: 1, kind: 'message', channel_ref: 'channel:CON', sent_at: '2026-10-01T11:50:00.000Z' };
     const meeting = { schema_version: 1, kind: 'meeting', started_at: '2026-10-01T10:00:00.000Z', ended_at: '2026-10-01T11:00:00.000Z', participant_refs: ['provider-user:ada'] };
-    for (const [value, sourceType] of [[ticket, 'ticket'], [activity, 'activity'], [meeting, 'meeting']] as const) {
-      expect(() => assertContextStructuredPayloadV1(value, sourceType)).not.toThrow();
-    }
-    const cases: readonly (readonly [unknown, ContextStructuredSourceTypeV1, string])[] = [
-      [activity, 'ticket', 'kind does not match'],
-      [{ ...ticket, permission: 'provider-admin' }, 'ticket', 'unknown field'],
-      [{ ...activity, occurred_at: 'not-a-utc-time' }, 'activity', 'canonical UTC'],
-      [{ ...meeting, ended_at: '2026-10-01T09:00:00.000Z' }, 'meeting', 'ends before it starts'],
-      [{ ...meeting, participant_refs: ['provider-user:dup', 'provider-user:dup'] }, 'meeting', 'must be unique'],
-      [{ ...meeting, participant_refs: [''] }, 'meeting', 'must be bounded text'],
-      [{ ...ticket, labels: new Array(32).fill('x'.repeat(600)) }, 'ticket', 'exceeds its bound'],
+    for (const value of [ticket, message, meeting]) expect(() => assertContextStructuredPayloadV1(value)).not.toThrow();
+    const cases: readonly (readonly [unknown, string])[] = [
+      [{ ...message, key: 'CON-17' }, 'unknown field'],
+      [{ ...ticket, permission: 'provider-admin' }, 'unknown field'],
+      [{ ...message, sent_at: 'not-a-utc-time' }, 'canonical UTC'],
+      [{ ...meeting, ended_at: '2026-10-01T09:00:00.000Z' }, 'ends before it starts'],
+      [{ ...meeting, participant_refs: ['provider-user:dup', 'provider-user:dup'] }, 'must be unique'],
+      [{ ...meeting, participant_refs: [''] }, 'must be bounded text'],
+      [{ ...ticket, labels: new Array(32).fill('x'.repeat(600)) }, 'exceeds its bound'],
     ];
-    for (const [value, sourceType, message] of cases) expect(() => assertContextStructuredPayloadV1(value, sourceType), message).toThrow(message);
+    for (const [value, error] of cases) expect(() => assertContextStructuredPayloadV1(value), error).toThrow(error);
   });
 });

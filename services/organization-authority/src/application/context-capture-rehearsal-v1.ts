@@ -3,6 +3,7 @@ import {
   assertContextCaptureEnvelopeV1,
   type AdapterOperationContext,
   type ContextCaptureEnvelopeV1,
+  type ContextStructuredSourceTypeV1,
   type SourcePullRequestV1,
 } from '@echo-brain/organization-processing/core';
 
@@ -41,7 +42,7 @@ export interface ContextCaptureRehearsalReceiptV1 {
   /** Commitment to the configured adapter identity, never its raw instance ID. */
   readonly source_identity_sha256: `sha256:${string}`;
   readonly captures: readonly {
-    readonly source_type: ContextCaptureEnvelopeV1['content']['source_type'];
+    readonly source_type: ContextStructuredSourceTypeV1;
     readonly admission: ContextCaptureRehearsalCaptureV1['admission'];
     readonly source_id_sha256: `sha256:${string}`;
     /** A source revision can be an opaque provider string, so only its digest leaves rehearsal. */
@@ -135,7 +136,7 @@ export async function runContextCaptureRehearsalV1(
       assertContextCaptureEnvelopeV1(source, source.item.adapter);
       if (canonicalSha256(source.item.adapter) !== input.expected_source_identity_sha256) throw failure();
       return Object.freeze({
-        source_type: source.content.source_type,
+        source_type: source.content.payload.kind,
         admission: capture.admission,
         source_id_sha256: canonicalSha256(source.item.source_id),
         revision_id_sha256: canonicalSha256(source.revision.revision_id),

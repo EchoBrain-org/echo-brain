@@ -114,7 +114,7 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
       const content = (adapter: string) => (retained.prepare('SELECT contents.content_json FROM authority_source_contents_v1 AS contents JOIN authority_sources_v1 AS source ON source.organization_id=contents.organization_id AND source.source_id=contents.source_id WHERE source.adapter_id=?').get(adapter) as { content_json: string }).content_json;
       expect(JSON.parse(content('jira-context-capture'))).toMatchObject({ representation: { kind: 'pointer' } });
       expect(content('jira-context-capture')).not.toContain('The ticket body stays with Jira.');
-      expect(JSON.parse(content('slack-context-capture'))).toMatchObject({ source_type: 'message', representation: { kind: 'pointer' } });
+      expect(JSON.parse(content('slack-context-capture'))).toMatchObject({ payload: { kind: 'message' }, representation: { kind: 'pointer' } });
       expect(content('slack-context-capture')).not.toContain('Slack body must not be retained.');
     } finally { retained.close(); }
     expect((await post(PERSON_ANSWER_PATH_V4, { question: 'fixture' })).status).toBe(503);

@@ -224,8 +224,6 @@ export function mapGranolaMeetingToContextCaptureContentV1(
   return {
     schema_version: 1,
     kind: "echo-context-capture-v1",
-    source_type: payload.kind,
-    truth_status: "source_observation",
     label: sourceLabel(meeting),
     provenance: {
       origin_ref: sourceReference(meeting),
@@ -235,7 +233,6 @@ export function mapGranolaMeetingToContextCaptureContentV1(
     },
     payload,
     representation: { kind: "full_snapshot", text: snapshot.text, passages: snapshot.passages },
-    observations: [],
   };
 }
 

@@ -2,8 +2,8 @@ import type Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJiraCloudTransportV1 } from '@echo-brain/provider-jira/jira-cloud-transport-v1';
 import type { ContextIntakeAuthorityV1, ContextIntakePolicyV1 } from '../src/application/context-intake-v1.js';
-import { SqliteContextCaptureReaderV1 } from '../src/adapters/persistence/sqlite/context-capture-reader-v1.js';
 import { createJiraContextIntakeV1 } from '../src/composition/provider-context-intakes-v1.js';
+import { retainedContextCapturesV1 } from './fixtures/context-capture-reader-v1.js';
 import { OWNER, projectContextDatabase } from './fixtures/project-context-sqlite.js';
 
 const databases: Database.Database[] = [];
@@ -97,7 +97,7 @@ describe('Jira retained pointer context intake V1', () => {
     const f = fixture({ authority: { select: () => retainedPointerPolicy(), requireCurrent: () => undefined } });
 
     await expect(f.intake().pull()).rejects.toThrow('Context source retention or organization differs from its configured binding');
-    expect(new SqliteContextCaptureReaderV1(value).list({ organization_id: OWNER.organization_id })).toEqual([]);
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([]);
   });
 
   it('retains only selected pointer metadata, deduplicates a replay, and persists a changed revision', async () => {
@@ -113,7 +113,7 @@ describe('Jira retained pointer context intake V1', () => {
     } }]);
     expect(firstCapture.content.representation).not.toHaveProperty('text');
     expect(firstCapture.content.representation).not.toHaveProperty('passages');
-    expect(new SqliteContextCaptureReaderV1(value).list({ organization_id: OWNER.organization_id })).toEqual([
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([
       expect.objectContaining({ source: firstCapture, scope }),
     ]);
 
@@ -124,7 +124,7 @@ describe('Jira retained pointer context intake V1', () => {
     const changed = await intake.pull();
     expect(changed.captures).toMatchObject([{ admission: 'admitted' }]);
     expect(changed.captures[0]!.source.revision.revision_id).not.toBe(firstCapture.revision.revision_id);
-    expect(new SqliteContextCaptureReaderV1(value).list({ organization_id: OWNER.organization_id })).toHaveLength(2);
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toHaveLength(2);
     expect(f.calls.some(call => call.pathname === `${api}/issue/10001`)).toBe(true);
   });
 
@@ -141,7 +141,7 @@ describe('Jira retained pointer context intake V1', () => {
 
     await expect(f.intake(value).pull()).rejects.toThrow('Jira retention revoked at admission');
     expect(selectedInTransaction).toBe(true);
-    expect(new SqliteContextCaptureReaderV1(value).list({ organization_id: OWNER.organization_id })).toEqual([]);
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([]);
   });
 
   it('rejects a wrong person-bound Jira read grant before provider I/O', async () => {

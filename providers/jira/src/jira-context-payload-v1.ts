@@ -54,8 +54,6 @@ export function parseJiraContextIssueV1(value: unknown, input: {
   const content: ContextCaptureContentV1 = {
     schema_version: 1,
     kind: 'echo-context-capture-v1',
-    source_type: 'ticket',
-    truth_status: 'source_observation',
     label,
     provenance: { origin_ref: permalink, source_updated_at: updatedAt },
     payload: {
@@ -81,7 +79,6 @@ export function parseJiraContextIssueV1(value: unknown, input: {
             text,
           }],
         },
-    observations: [],
   };
   return Object.freeze({ id: jiraString(parsed.id, 20, JIRA_ID), project_id: parsed.project_id, label, content: Object.freeze(content) });
 }

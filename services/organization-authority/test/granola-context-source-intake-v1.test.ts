@@ -7,13 +7,13 @@ import type {
   GranolaNoteDetail,
 } from "../../../providers/granola/src/source/granola-api-client.js";
 import { GranolaMeetingSourceAdapter } from "../../../providers/granola/src/source/meeting-source-adapter.js";
-import { SqliteContextCaptureReaderV1 } from "../src/adapters/persistence/sqlite/context-capture-reader-v1.js";
 import { createGranolaContextIntakeV1 } from "../src/composition/provider-context-intakes-v1.js";
 import type { ContextSourceIntakeV1 } from "../src/composition/context-source-intake-v1.js";
 import type {
   ContextIntakeAuthorityV1,
   ContextIntakePolicyV1,
 } from "../src/application/context-intake-v1.js";
+import { retainedContextCapturesV1 } from "./fixtures/context-capture-reader-v1.js";
 import {
   OWNER,
   projectContextDatabase,
@@ -152,9 +152,7 @@ describe("Granola context source intake V1", () => {
     expect(first.captures).toMatchObject([{ admission: "admitted" }]);
     expect(configured.client.listCalls).toEqual([{ page_size: 1 }]);
     expect(configured.client.detailCalls).toEqual(["note-1"]);
-    expect(new SqliteContextCaptureReaderV1(value).list({
-      organization_id: OWNER.organization_id,
-    })).toEqual([
+    expect(retainedContextCapturesV1(value, OWNER.organization_id)).toEqual([
       expect.objectContaining({ source: firstCapture, scope }),
     ]);
 

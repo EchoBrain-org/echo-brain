@@ -49,11 +49,10 @@ describe('Slack context source V1', () => {
     const capture = result.sources[0]!;
     assertContextCaptureEnvelopeV1(capture, identity);
     expect(capture).toMatchObject({ item: { external_id: `message:${ts}` }, content: {
-      source_type: 'message', truth_status: 'source_observation',
       provenance: { origin_ref: `${pointer()}?thread_ts=1790966300.000001&cid=${channel}`, source_updated_at: '2026-10-02T18:40:01.654Z' },
       payload: { kind: 'message', channel_ref: `slack:team:${team}:channel:${channel}`, sent_at: '2026-10-02T18:40:00.123Z',
         author_ref: `slack:team:${team}:user:UAUTHOR123`, thread_ref: `slack:team:${team}:channel:${channel}:message:1790966300.000001` },
-      representation: { kind: 'pointer', pointer: `${pointer()}?thread_ts=1790966300.000001&cid=${channel}` }, observations: [],
+      representation: { kind: 'pointer', pointer: `${pointer()}?thread_ts=1790966300.000001&cid=${channel}` },
     } });
     expect(JSON.stringify(capture)).not.toContain('Private text');
     expect(capture.revision).not.toHaveProperty('contributor');
