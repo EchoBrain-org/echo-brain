@@ -94,16 +94,17 @@ app for that organization through Slack's Manifest API, then opens a Nango
 connect session that carries that app's client ID and secret as a
 per-connection override. Nango runs the OAuth install and returns the bot
 token; the Authority never
-asks the owner for it directly. The required Slack scopes are exactly
-`chat:write`, `im:history`, `im:write`, and `users:read`. `im:write` opens the
-verified meeting owner's private DM and `im:history` reconciles a retry
-without duplicating that DM card. There is no public channel step: the
-public identity-link channel and its reaction-era scopes (`channels:history`,
-`channels:read`, `reactions:read`) are retired (revision 3). Only the staging
-V2 connector rehearsal selects an optional public-channel context capability
-that also requests `channels:history` and `channels:read` on the same app, a
-source proposal recorded in ADR-0027; the stored connection contract still
-names only the four approval scopes as required. The recipe also
+asks the owner for it directly. By default the install requests exactly four
+bot scopes: `chat:write`, `im:history`, `im:write`, and `users:read`.
+`im:write` opens the verified meeting owner's private DM and `im:history`
+reconciles a retry without duplicating that DM card. Six scopes are requested
+only when the staging V2 connector rehearsal selects its public-channel context
+capability, which adds `channels:history` and `channels:read` on the same app
+for public-channel pointer capture, a source proposal recorded in
+[ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md). The
+stored connection contract names only the four approval scopes as required in
+both cases. The public identity-link channel and `reactions:read` stay
+retired. The recipe also
 declares the user scopes `openid` and `profile` for the person's browser
 sign-in alone: the install never requests them and no connection contract
 records them. Rerunning setup with a new configuration token updates an

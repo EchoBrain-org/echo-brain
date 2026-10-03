@@ -3,9 +3,10 @@
 **Status: Proposed.** The user authorized bounded backend implementation and
 synthetic fixture proof on 2026-10-01, then narrowed this milestone to ingestion
 and capture. Production activation and acceptance of this proposal remain
-separate decisions. This proposal does not amend accepted ADRs, including
-[ADR-0010](../decisions/ADR-0010-disposable-related-atom-projection-v1.md).
-It was implemented for source testing in #251 (`1d7e72b`).
+separate decisions. Its broadened Layer 1 is recorded in the proposed
+[ADR-0028](../decisions/ADR-0028-broadened-layer-1-source-captures.md), which
+lists the accepted wording it changes on acceptance. It was implemented for
+source testing in #251 (`1d7e72b`).
 
 The subsequent [connector integration](2026-10-01-connector-context-integration-v1.md)
 composes that foundation with the connector implementation. It moves
@@ -17,12 +18,14 @@ provider mappings and their activation limits.
 
 ## Logical Layer 1 and ownership
 
-Layer 1 includes permitted immutable source captures alongside the separately
-owned authoritative people directory and signed human-act record log. Captures
-are source observations, never approved facts. Directory membership and verified
-identity links remain authoritative; actor labels and mentions in captures do
-not create people, memberships or identity links. Activity, tasks and approved
-decisions remain distinct. External systems own their current mutable state.
+As [ADR-0028](../decisions/ADR-0028-broadened-layer-1-source-captures.md)
+proposes, Layer 1 includes permitted immutable source captures alongside the
+separately owned authoritative people directory and signed human-act record
+log. Captures are source observations, never approved facts. Directory
+membership and verified identity links remain authoritative; actor labels and
+mentions in captures do not create people, memberships or identity links.
+Activity, tasks and approved decisions remain distinct. External systems own
+their current mutable state.
 
 The service's existing `authority_sources_v1`, `authority_source_revisions_v1`
 and `authority_source_contents_v1` tables suffice for this bounded capability.

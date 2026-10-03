@@ -34,9 +34,13 @@ provider may impose a lower bound. Returned cursors are caller-owned and are
 returned only after successful admission of the batch. Cancellation and identity
 drift prevent admission. A read grant never implies a retention grant.
 
-The opt-in provider profiles in
+The opt-in Granola and Jira profiles in
 [`provider-context-intakes-v1.ts`](../../services/organization-authority/src/composition/provider-context-intakes-v1.ts)
-make the integration choices explicit:
+and the Slack source in
+[`slack-context-capture-runtime-v1.ts`](../../services/organization-authority/src/composition/slack-context-capture-runtime-v1.ts),
+whose intake
+[`connector-rehearsal-capture-v1.ts`](../../services/organization-authority/src/composition/connector-rehearsal-capture-v1.ts)
+builds, make the integration choices explicit:
 
 | Source  | Mapping and representation                                                                                                                                                                                                                                          | Authority disposition                                                                                                                            |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -275,9 +279,12 @@ must also define the policy for provider message edits and deletes, including
 which revisions remain retained and when retained snapshots are removed. The
 staging selection retains Jira and Slack pointers.
 
-Graph projection, enrichment/learning, Evidence Desk, retrieval, Ask, release
-audits and Ask response schemas are unchanged. Request-only local Jira captures
-disappear with the request. Staging retained pointers provide durable shared
+This capture path changes no graph projection, enrichment/learning, Evidence
+Desk, retrieval, Ask, release audit or Ask response schema. The separately gated
+Jira ticket Ask route and its answer version belong to
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md), not to
+capture. Request-only Jira captures disappear with the request. Staging retained
+pointers provide durable shared
 context but do not yet enrich a graph or feed Ask through this capture path.
 The normal production Jira gate is unchanged.
 

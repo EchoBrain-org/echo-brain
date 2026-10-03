@@ -31,8 +31,10 @@ Provider-neutral runtime components must not import a provider implementation.
   and `synthetic-demo-*` is the demo lane.
 
 Provider-neutral bundle seams live in `packages/organization-processing/src/ports/`.
-Concrete bundles live in `providers/granola`, `providers/openrouter` and
-`providers/slack/server` (private approval, Person identity and the private-DM
-staging canary). Secret values enter only through private-file adapters.
+Concrete bundles live in `providers/granola`, `providers/openrouter`,
+`providers/slack/server` (private approval, Person identity, the private-DM
+staging canary and the fixed-channel context pointer source) and
+`providers/jira` (the gated Person connection, live reader and context
+source). Secret values enter only through private-file adapters.
 Public `clean-*` command names and versioned `clean-founder` wire values are
 compatibility contracts, not component names.

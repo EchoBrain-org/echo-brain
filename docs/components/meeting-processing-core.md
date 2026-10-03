@@ -49,10 +49,11 @@ processors, and source-admission storage only through ports. It owns the
 context-capture contract; the Authority owns the intake that admits captures.
 Concrete
 provider and infrastructure code depends inward on the core; the core must not
-depend outward on them. Provider selection belongs in explicit composition
-bundles for source, processor, answer composition, approval/interaction, and
-Person external identity. Shared flow retains only opaque presentation
-references and approved-record policy projectors.
+depend outward on them. Provider selection belongs only in the selecting
+modules that
+[INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
+allows. Shared flow retains only opaque presentation references and
+approved-record policy projectors.
 
 ## Current references
 

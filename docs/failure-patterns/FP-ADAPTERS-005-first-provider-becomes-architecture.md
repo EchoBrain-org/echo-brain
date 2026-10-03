@@ -73,11 +73,11 @@ to accept a second provider payload.
 
 Normalize provider data at the edge into canonical contracts. Keep provider
 cursors, interaction payloads, identity claims, and presentation references
-opaque to shared state. Construct meeting source, decision processor, Layer 4
-generation, approval/interaction, and Person external identity through
-explicit provider bundles. The shared path receives generic presentation
-references and approved-record policy projectors, not a Slack card, an
-OpenRouter response, or a provider identity object.
+opaque to shared state. Select concrete providers only in the modules that
+[INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
+allows. The shared path receives generic presentation references and
+approved-record policy projectors, not a Slack card, an OpenRouter response, or
+a provider identity object.
 
 The reviewed repair introduces provider-neutral source state, processor and
 Layer 4 bundles, generic approval and external-identity ingress, approved-record

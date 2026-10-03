@@ -22,10 +22,10 @@ provider API -> server adapter -> processing contracts <- processing cycle
   owns production processing state in SQLite.
 - `packages/organization-processing/src/admitted-meeting-processing/` owns the serialized bounded server cycle.
 - Authority composition selects concrete adapters, credentials, organization
-  policy, and stores through explicit bundles for meeting source, decision
-  processor, answer composition, approval/interaction, and Person external
-  identity. Those bundles are the only place an active external-capability
-  provider is selected.
+  policy, and stores. An active external-capability provider is selected only
+  in the modules that
+  [INV-ADAPTERS-005](../invariants/INV-ADAPTERS-005-provider-semantics-at-boundary.md)
+  allows.
 
 `npm run check:architecture-boundaries` enforces these rules for every owned
 source file, not only today's entry-point closure. Processing tests live in `packages/organization-processing/test/`; provider tests
@@ -202,6 +202,13 @@ DeepSeek planner/answer model. The other LLM transports are compiled
 alternatives, not active runtime dependencies. This is an allowed selecting
 composition profile, not evidence that every active provider has completed
 qualification.
+
+Two further selections stay off in production. The Jira live runtime
+(`jira-person-live-runtime-v1.ts`) is composed only when its release gate
+`JIRA_PERSON_LIVE_RELEASE_APPROVED_V1` is open; it is closed. The opt-in
+[context capture](../product/2026-10-01-connector-context-integration-v1.md)
+modules are composed only by the local rehearsal runner and the versioned
+staging selections.
 
 The source-processing model remains separate from the permission-aware
 read/model path. It receives one admitted source revision through the processor

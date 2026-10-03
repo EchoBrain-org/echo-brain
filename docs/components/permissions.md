@@ -32,6 +32,7 @@ decision_ids:
   - ADR-0021
   - ADR-0023
   - ADR-0024
+  - ADR-0028
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-IDENTITY-005
@@ -89,9 +90,10 @@ the reader's current projects, and a document request ID only to its uploader.
 [ADR-0023](../decisions/ADR-0023-reader-scoped-upload-releases.md) records the
 enforcement point and the negative disclosure tests.
 
-Agentic Ask V1 is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md)
-and [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md). Its V3 route and shared evidence
-desk are capability-gated; implementation and live qualification are separate.
+Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as
+updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): the V3 route
+and shared evidence desk are composed whenever an answer model is configured,
+with no capability switch. Live qualification is separate.
 
 ## Served paths
 

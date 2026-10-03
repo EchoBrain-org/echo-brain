@@ -36,6 +36,7 @@ decision_ids:
   - ADR-0024
   - ADR-0025
   - ADR-0027
+  - ADR-0028
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -103,7 +104,9 @@ boundary.
 Central state also holds immutable source custody under
 [ADR-0014](../decisions/ADR-0014-unified-source-ingestion-and-document-custody.md):
 Person originals and admitted source revisions, including opt-in retained
-context captures. Custody grants no read access. The
+context captures, which the proposed
+[ADR-0028](../decisions/ADR-0028-broadened-layer-1-source-captures.md) names
+Layer 1 source captures. Custody grants no read access. The
 [persistence ownership](../architecture/organization-workspace-boundaries.md#persistence-ownership)
 map lists the databases, including the gated Jira connection sidecar.
 
@@ -154,9 +157,10 @@ The [PC-01 persistence handoff](../product/2026-09-21-project-context-pc01-persi
 describes the original V7 project storage. The current Authority is V10, which
 accepts only fresh state, and its project routes and client operations are live.
 
-Agentic Ask V1 is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md)
-and [RFC-0002](../rfcs/RFC-0002-agentic-ask-v1.md). Its V3 route and shared evidence
-desk are capability-gated; implementation and live qualification are separate.
+Ask is specified by [ADR-0019](../decisions/ADR-0019-agentic-ask-v1.md) as
+updated by [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): the V3 route
+and shared evidence desk are composed whenever an answer model is configured,
+with no capability switch. Live qualification is separate.
 
 The desk owns Person authorization, the pinned retrieval snapshot and release
 audits. Record coordinates are resolved through that authorized snapshot before

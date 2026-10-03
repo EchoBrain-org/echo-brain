@@ -55,7 +55,7 @@ demo/
 ├── evaluate-pre-slack.mjs    # fast, no-write extraction gate
 ├── evaluate-rehearsal.mjs    # captured end-to-end rehearsal gate
 ├── meetings/                 # four canonical MeetingDocument fixtures
-├── staging/                  # isolated same-host staging and cached card preview
+├── staging/                  # owner-specific fixture preparer for staging
 └── test/                     # demo harness tests
 ```
 

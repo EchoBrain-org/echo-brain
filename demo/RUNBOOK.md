@@ -47,10 +47,9 @@ It selects the four notes in the normal Authority runtime and retains its
 observability, approval, and read paths. Continue with the customer-facing
 sequence below once onboarding is ready.
 
-The direct commands below are compatibility commands for an existing isolated
-demo state whose manifest Authority URL is exactly
-`https://authority-staging.echobrain.org`. Other origins are rejected. The old
-`staging/STAGING.md` switchover is historical; do not use it for a new rehearsal.
+The direct commands below run the synthetic demo composition against an
+isolated demo state whose manifest Authority URL is exactly
+`https://authority-staging.echobrain.org`. Other origins are rejected.
 
 Use the same absolute isolated state and personalized meeting-copy paths for
 admission and service startup:
