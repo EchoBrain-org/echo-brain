@@ -85,13 +85,10 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
     if (input === null || typeof input !== "object") fail();
     if (input.action !== "status" && input.action !== "capture") fail();
     const { contract, federation, client, store, authority } = await dependencies();
-    const profile = contract.validateStagingConnectorRehearsalProfile(profileFile(input.profile_path));
-    const protocol = contract.stagingConnectorRehearsalProtocol(profile);
-    const releaseId = input.release_id;
-    const request = protocol.validate_request(
-      input.action === "status"
-        ? { schema_version: protocol.schema_version, release_id: releaseId, profile_sha256: federation.canonicalSha256(profile), action: "status" }
-        : { schema_version: protocol.schema_version, release_id: releaseId, profile_sha256: federation.canonicalSha256(profile), action: "capture", tool: input.tool, limit: input.limit },
+    const profile = contract.validateStagingConnectorRehearsalProfileV2(profileFile(input.profile_path));
+    const binding = { schema_version: 2, release_id: input.release_id, profile_sha256: federation.canonicalSha256(profile) };
+    const request = contract.validateStagingConnectorRehearsalRequestV2(
+      input.action === "status" ? { ...binding, action: "status" } : { ...binding, action: "capture", tool: input.tool, limit: input.limit },
     );
     const personHome = absolutePath(input.person_home ?? homedir(), "person home");
     const fetchImplementation = options.fetch ?? globalThis.fetch;
@@ -108,8 +105,8 @@ export async function runStagingConnectorRehearsal(input, options = {}) {
       return session.transport.json({
         path: contract.STAGING_CONNECTOR_REHEARSAL_PATH_V1,
         body: request,
-        validate_request: protocol.validate_request,
-        validate_response: protocol.validate_response,
+        validate_request: contract.validateStagingConnectorRehearsalRequestV2,
+        validate_response: contract.validateStagingConnectorRehearsalResponseV2,
         maximum_response_bytes: 64 * 1024,
         timeout_ms: 75_000,
       });

@@ -1,11 +1,9 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
-import { validateStagingConnectorRehearsalProfileV1 } from './staging-connector-rehearsal-protocol-v1.js';
-import { validateStagingConnectorRehearsalProfileV2 } from './staging-connector-rehearsal-protocol-v2.js';
+import { validateStagingConnectorRehearsalProfileV2 } from './staging-connector-rehearsal-protocol.js';
 
-const STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH_V1 = 'staging-connector-rehearsal.json';
-export const STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH_V2 = 'staging-connector-rehearsal-v2.json';
+const STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE = 'staging-connector-rehearsal.json';
 
 export type StagingConnectorRehearsalSelectionInput = {
   readonly state_directory: string;
@@ -13,13 +11,13 @@ export type StagingConnectorRehearsalSelectionInput = {
   readonly environment: Readonly<Record<string, string | undefined>>;
 };
 
-/** Only the prepared, host-owned profile can opt the staging service into rehearsal. */
-function readSelection<Profile>(input: StagingConnectorRehearsalSelectionInput, fileName: string, validate: (value: unknown) => Profile) {
+/** Only the prepared, host-owned profile at its fixed path can opt the staging service into rehearsal. */
+export function readStagingConnectorRehearsalSelection(input: StagingConnectorRehearsalSelectionInput) {
   const requested = input.environment.ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE;
   if (requested === undefined || requested === '') return undefined;
   const release_id = input.environment.ECHO_CLEAN_RELEASE_ID ?? '';
   const authority_host = input.environment.ECHO_CLEAN_AUTHORITY_HOST ?? '';
-  const expected = join(dirname(input.state_directory), 'private', fileName);
+  const expected = join(dirname(input.state_directory), 'private', STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE);
   if (input.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 ||
       authority_host !== new URL(STAGING_AUTHORITY_ORIGIN_V1).hostname ||
       !/^clean-v1-[a-z0-9][a-z0-9-]{2,63}$/.test(release_id) ||
@@ -37,17 +35,7 @@ function readSelection<Profile>(input: StagingConnectorRehearsalSelectionInput, 
     const after = fstatSync(file);
     if (length !== state.size || length > 8192 || state.size !== after.size || state.mtimeMs !== after.mtimeMs ||
         state.ctimeMs !== after.ctimeMs) throw new Error('Staging connector rehearsal profile changed while reading');
-    const profile = validate(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length))));
+    const profile = validateStagingConnectorRehearsalProfileV2(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length))));
     return Object.freeze({ profile, release_id, authority_host });
   } finally { closeSync(file); }
-}
-
-/** The fixed host-owned file name selects the parser; request bodies never select a version. */
-export function readStagingConnectorRehearsalSelection(input: StagingConnectorRehearsalSelectionInput) {
-  const requested = input.environment.ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE;
-  if (requested !== undefined && requested.endsWith(`/${STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH_V2}`)) {
-    // Only the prepared, host-owned V2 profile can select retained pointer capture.
-    return readSelection(input, STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH_V2, validateStagingConnectorRehearsalProfileV2);
-  }
-  return readSelection(input, STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH_V1, validateStagingConnectorRehearsalProfileV1);
 }

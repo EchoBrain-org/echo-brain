@@ -84,7 +84,9 @@ type OrganizationAuthorityServiceAdapterOverrides = NonNullable<
 };
 
 export interface OrganizationAuthorityServiceDependencies
-  extends Omit<OrganizationAuthorityRuntimeDependencies, "processing_adapter_overrides"> {
+  extends Omit<OrganizationAuthorityRuntimeDependencies, "processing_adapter_overrides" | "api"> {
+  /** This root alone derives the Person HTTP factory, from the Slack-aware selection below. */
+  readonly api?: Omit<OrganizationAuthorityApiRuntimeDependencies, "person_http_runtime_factory">;
   readonly processing_adapter_overrides?: OrganizationAuthorityServiceAdapterOverrides;
   readonly jira_person_live_seams?: JiraPersonLiveRuntimeSeamsV1;
   /** Selected bootstrap receives the exact Slack ports shared with approvals and setup. */
@@ -155,9 +157,6 @@ export async function openOrganizationAuthorityService(
     on_private_approval_slack_rejection,
     ...sharedConfig
   } = config;
-  if (dependencies.person_http_runtime_factory_with_slack !== undefined && dependencies.api?.person_http_runtime_factory !== undefined) {
-    throw new Error('Only one Person HTTP runtime factory may be selected');
-  }
   const slack = composeSlackV1({ ...sharedConfig, slack_nango, ...(slack_public_channel_context === undefined ? {} : { slack_public_channel_context }) }, dependencies.slack);
   let meetingSourceBundle;
   if (staging_synthetic_meetings_directory === undefined) {

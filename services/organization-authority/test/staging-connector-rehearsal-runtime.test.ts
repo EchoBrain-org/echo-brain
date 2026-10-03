@@ -47,30 +47,34 @@ vi.mock('../src/composition/jira-person-live-runtime-v1.js', () => ({
     close() {},
   }),
 }));
+vi.mock('../src/composition/slack-context-capture-runtime-v1.js', () => ({
+  openSlackContextCaptureRuntimeV1: () => ({ async create_source() { throw new Error('not linked'); }, close() {} }),
+}));
 vi.mock('../src/composition/organization-authority-composition-root.js', () => ({
-  async openOrganizationAuthorityService(_config: unknown, dependencies: { api: { person_http_runtime_factory: (sessions: unknown) => { applications: typeof state.apps } } }) {
-    state.apps = dependencies.api.person_http_runtime_factory({
+  async openOrganizationAuthorityService(_config: unknown, dependencies: { person_http_runtime_factory_with_slack: (sessions: unknown, slack: unknown) => { applications: typeof state.apps } }) {
+    state.apps = dependencies.person_http_runtime_factory_with_slack({
       authenticateAccess({ access_token }: { access_token: string }) {
         return access_token === 'owner' && !(state.demoteDuringCapture && state.captures > 0)
           ? { organization_id: 'org_fixture', principal_id: 'prn_fixture', membership_id: 'mem_fixture', membership_type: 'owner', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' }
           : { organization_id: 'org_fixture', principal_id: 'prn_other', membership_id: 'mem_other', membership_type: 'member', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' };
       },
-    }).applications;
+    }, {}).applications;
     return { processing: 'active', address: {}, runExclusive: <T>(operation: (signal: AbortSignal) => Promise<T>) => operation(new AbortController().signal), async runProcessingCycleOnce() {}, async drain() {}, async close() {} };
   },
 }));
 
 import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
-import { STAGING_CONNECTOR_REHEARSAL_PATH_V1 } from '../src/composition/staging-connector-rehearsal-protocol-v1.js';
+import { STAGING_CONNECTOR_REHEARSAL_PATH_V1, STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 
 const roots: string[] = [];
 afterEach(() => { state.apps = []; state.captures = 0; state.jira = 0; state.demoteDuringCapture = false; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 function selection() {
   return { release_id: 'clean-v1-connector-test', authority_host: 'authority-staging.echobrain.org', profile: {
-    schema_version: 1 as const, kind: 'echo-staging-connector-rehearsal-profile-v1' as const,
-    capture_policy: 'initial-owner-granola-retained-jira-request-only-v1' as const,
+    schema_version: 2 as const, kind: 'echo-staging-connector-rehearsal-profile-v2' as const,
+    capture_policy: STAGING_CONNECTOR_REHEARSAL_POLICY_V2 as typeof STAGING_CONNECTOR_REHEARSAL_POLICY_V2,
     jira: { cloud_id: '00000000-0000-4000-8000-000000000001', integration_key: 'jira', project: 'ECHO' },
+    slack: { channel_id: 'C01234567' },
   } };
 }
 function config(directory: string) {
@@ -92,10 +96,10 @@ it('binds a staging-only owner surface to a lineage/profile sidecar and returns 
   const opened = await openStagingConnectorRehearsalService(config(stateDirectory), selected);
   const capture = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
   const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
-  await expect(capture.accept(request('staging-connector-rehearsal', 'other', { schema_version: 1, release_id: selected.release_id, profile_sha256, action: 'status' }))).rejects.toThrow('unavailable');
-  const status = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 1, release_id: selected.release_id, profile_sha256, action: 'status' })) as { body: { qualified: boolean; granola_available: boolean } };
+  await expect(capture.accept(request('staging-connector-rehearsal', 'other', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'status' }))).rejects.toThrow('unavailable');
+  const status = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'status' })) as { body: { qualified: boolean; granola_available: boolean } };
   expect(status.body).toMatchObject({ qualified: false, granola_available: false });
-  const captured = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 1, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 })) as { body: { receipt: { captures: unknown[] }; qualified: boolean } };
+  const captured = await capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 })) as { body: { receipt: { captures: unknown[] }; qualified: boolean } };
   expect(captured.body).toMatchObject({ qualified: false, receipt: { captures: [] } });
   expect(state.captures).toBe(1);
   const marker = JSON.parse(readFileSync(join(root, 'staging-connector-rehearsal-v1', 'binding.json'), 'utf8')) as Record<string, unknown>;
@@ -112,7 +116,7 @@ it('withholds a capture receipt if the owner loses eligibility during provider w
   const capture = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
   const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
   state.demoteDuringCapture = true;
-  await expect(capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 1, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 }))).rejects.toThrow('unavailable');
+  await expect(capture.accept(request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 }))).rejects.toThrow('unavailable');
   await opened.close();
 });
 

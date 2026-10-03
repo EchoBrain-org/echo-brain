@@ -37,9 +37,6 @@ ACTIVATION_ROLLBACK_FAILURE_STAGE=''
 ACTIVATION_CHILD_PID=''
 OPERATION_LOCK_HELD=false
 STAGING_RELEASE_GUARD_HELD=false
-STAGING_CONNECTOR_REHEARSAL_PROFILE_V1_PATH="$PRIVATE_DIR/staging-connector-rehearsal.json"
-STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH="$PRIVATE_DIR/staging-connector-rehearsal-v2.json"
-CONNECTOR_REBIND_DIR="$DEPLOY_DIR/.connector-rehearsal-rebind-v2"
 REHEARSAL_ARCHIVE=''
 REHEARSAL_ARCHIVED_DATA=''
 REHEARSAL_ROLLBACK_ARMED=false
@@ -122,7 +119,6 @@ usage:
   onboard-clean-v1.sh stage-rehearsal-inputs --operation-id <onboarding-id> --artifact-sha256 <sha256> --input-dir <absolute-private-nonsecret-input-directory> --staging-synthetic-meetings-dir <absolute-private-four-note-directory>
   onboard-clean-v1.sh prepare-rehearsal --operation-id <onboarding-id>
   onboard-clean-v1.sh activate-provider-credentials --input-dir <absolute-private-provider-directory>
-  onboard-clean-v1.sh configure-connector-rehearsal --profile-base64 <canonical-v2-profile> --profile-sha256 <sha256:canonical-profile>
   onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users [--reuse-provider-inputs <onboarding-id> [--content-telemetry <true|false>]]
   onboard-clean-v1.sh resume
   onboard-clean-v1.sh status
@@ -157,9 +153,6 @@ input_authority_host=''
 input_aws_region=''
 input_nango_integration=''
 input_staging_connector_rehearsal_enabled=false
-input_staging_connector_rehearsal_cloud_id=''
-input_staging_connector_rehearsal_integration=''
-input_staging_connector_rehearsal_project=''
 input_staging_connector_rehearsal_sha256=disabled
 input_staging_synthetic_meetings_dir=''
 STAGING_MEETING_FILES=(
@@ -515,32 +508,32 @@ profile = value.get('staging_connector_rehearsal')
 if profile is None:
     print('false')
     print('disabled')
-    print('disabled')
-    print('disabled')
-    print('disabled')
 else:
-    expected_profile = {'schema_version', 'kind', 'capture_policy', 'jira'}
+    expected_profile = {'schema_version', 'kind', 'capture_policy', 'jira', 'slack'}
     if authority_host != 'authority-staging.echobrain.org' or not isinstance(profile, dict) or set(profile) != expected_profile:
         raise SystemExit(1)
-    if profile.get('schema_version') != 1 or profile.get('kind') != 'echo-staging-connector-rehearsal-profile-v1' or profile.get('capture_policy') != 'initial-owner-granola-retained-jira-request-only-v1':
+    if profile.get('schema_version') != 2 or profile.get('kind') != 'echo-staging-connector-rehearsal-profile-v2' or profile.get('capture_policy') != 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2':
         raise SystemExit(1)
     jira = profile.get('jira')
+    slack = profile.get('slack')
     if not isinstance(jira, dict) or set(jira) != {'cloud_id', 'integration_key', 'project'}:
+        raise SystemExit(1)
+    if not isinstance(slack, dict) or set(slack) != {'channel_id'}:
         raise SystemExit(1)
     cloud_id = jira.get('cloud_id')
     jira_integration = jira.get('integration_key')
     project = jira.get('project')
+    channel_id = slack.get('channel_id')
     if not isinstance(cloud_id, str) or not re.fullmatch(r'[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}', cloud_id):
         raise SystemExit(1)
     if not isinstance(jira_integration, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', jira_integration):
         raise SystemExit(1)
     if not isinstance(project, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{1,31}', project):
         raise SystemExit(1)
+    if not isinstance(channel_id, str) or not re.fullmatch(r'C[A-Z0-9]{2,63}', channel_id):
+        raise SystemExit(1)
     canonical = json.dumps(profile, sort_keys=True, separators=(',', ':'))
     print('true')
-    print(cloud_id)
-    print(jira_integration)
-    print(project)
     print('sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest())
 PY
 )" || return 1
@@ -554,24 +547,17 @@ PY
       5) input_aws_region="$value" ;;
       6) input_nango_integration="$value" ;;
       7) input_staging_connector_rehearsal_enabled="$value" ;;
-      8) input_staging_connector_rehearsal_cloud_id="$value" ;;
-      9) input_staging_connector_rehearsal_integration="$value" ;;
-      10) input_staging_connector_rehearsal_project="$value" ;;
-      11) input_staging_connector_rehearsal_sha256="$value" ;;
+      8) input_staging_connector_rehearsal_sha256="$value" ;;
       *) return 1 ;;
     esac
     count=$((count + 1))
   done <<< "$extracted"
-  [[ "$count" -eq 12 ]]
+  [[ "$count" -eq 9 ]]
 }
 
 validate_staging_connector_rehearsal_selection() {
-  if [[ "$input_staging_connector_rehearsal_enabled" == false ]]; then
-    [[ "$input_staging_connector_rehearsal_cloud_id" == disabled && "$input_staging_connector_rehearsal_integration" == disabled && "$input_staging_connector_rehearsal_project" == disabled && "$input_staging_connector_rehearsal_sha256" == disabled ]] || return 1
-    return 0
-  fi
-  [[ "$input_staging_connector_rehearsal_enabled" == true && "$input_authority_host" == authority-staging.echobrain.org && -z "$input_staging_synthetic_meetings_dir" ]] || return 1
-  [[ "$input_staging_connector_rehearsal_cloud_id" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ && "$input_staging_connector_rehearsal_integration" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$ && "$input_staging_connector_rehearsal_project" =~ ^[A-Z][A-Z0-9_]{1,31}$ && "$input_staging_connector_rehearsal_sha256" =~ ^sha256:[a-f0-9]{64}$ ]]
+  [[ "$input_staging_connector_rehearsal_enabled" == false && "$input_staging_connector_rehearsal_sha256" == disabled ]] && return 0
+  [[ "$input_staging_connector_rehearsal_enabled" == true && "$input_authority_host" == authority-staging.echobrain.org && -z "$input_staging_synthetic_meetings_dir" && "$input_staging_connector_rehearsal_sha256" =~ ^sha256:[a-f0-9]{64}$ ]]
 }
 
 materialize_staging_connector_rehearsal_profile() {
@@ -1064,85 +1050,43 @@ PY
 }
 
 staging_connector_rehearsal_matches_prepared_tuple() {
-  python3 - "$ENV_FILE" "$SETUP_FILE" "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V1_PATH" "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH" "$DATA_DIR/staging-connector-rehearsal-v1" "$ACTIVE_RUNTIME_PROFILE_FILE" <<'PY'
+  python3 - "$ENV_FILE" "$SETUP_FILE" "$STAGING_CONNECTOR_REHEARSAL_PROFILE_PATH" "$DATA_DIR/staging-connector-rehearsal-v1" "$ACTIVE_RUNTIME_PROFILE_FILE" <<'PY'
 import hashlib
 import json
 import pathlib
 import stat
 import sys
 
-environment, setup, v1_path, v2_path, sidecar, runtime_profile = map(pathlib.Path, sys.argv[1:])
-v1_expected_path = '/echo-clean/private/staging-connector-rehearsal.json'
-v2_expected_path = '/echo-clean/private/staging-connector-rehearsal-v2.json'
-v2_policy = 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2'
+environment, setup, profile_path, sidecar, runtime_profile = map(pathlib.Path, sys.argv[1:])
+expected_path = '/echo-clean/private/staging-connector-rehearsal.json'
 
 def rows(path, key):
     return [line[len(key) + 1:] for line in path.read_text(encoding='utf-8').splitlines()
             if line.startswith(key + '=')]
-
-def canonical_profile(path):
-    state = path.lstat()
-    if (not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode)
-            or stat.S_IMODE(state.st_mode) != 0o600):
-        raise ValueError()
-    payload = path.read_text(encoding='utf-8')
-    if not payload.endswith('\n') or payload.count('\n') != 1:
-        raise ValueError()
-    profile = json.loads(payload)
-    canonical = json.dumps(profile, sort_keys=True, separators=(',', ':'))
-    if payload != canonical + '\n':
-        raise ValueError()
-    return profile, 'sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest()
-
-def v2_valid(profile, predecessor, previous_profile):
-    if not isinstance(profile, dict) or set(profile) != {
-        'schema_version', 'kind', 'capture_policy', 'predecessor_profile_sha256', 'jira', 'slack'
-    }:
-        return False
-    if profile.get('schema_version') != 2 or profile.get('kind') != 'echo-staging-connector-rehearsal-profile-v2' or \
-       profile.get('capture_policy') != v2_policy or profile.get('predecessor_profile_sha256') != predecessor:
-        return False
-    jira = profile.get('jira')
-    slack = profile.get('slack')
-    if not isinstance(jira, dict) or set(jira) != {'cloud_id', 'integration_key', 'project'}:
-        return False
-    previous_jira = previous_profile.get('jira') if isinstance(previous_profile, dict) else None
-    if not isinstance(previous_jira, dict) or jira.get('cloud_id') != previous_jira.get('cloud_id') or jira.get('integration_key') != previous_jira.get('integration_key'):
-        return False
-    if not isinstance(slack, dict) or set(slack) != {'channel_id'}:
-        return False
-    import re
-    return bool(
-        isinstance(jira.get('cloud_id'), str) and re.fullmatch(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', jira['cloud_id']) and
-        isinstance(jira.get('integration_key'), str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', jira['integration_key']) and
-        isinstance(jira.get('project'), str) and re.fullmatch(r'[A-Z][A-Z0-9_]{1,31}', jira['project']) and
-        isinstance(slack.get('channel_id'), str) and re.fullmatch(r'C[A-Z0-9]{2,63}', slack['channel_id'])
-    )
 
 profile_rows = rows(environment, 'ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE')
 if len(profile_rows) > 1:
     raise SystemExit(1)
 setup_digests = rows(setup, 'staging_connector_rehearsal_profile_sha256')
 if profile_rows in ([], ['']):
-    if setup_digests or v1_path.exists() or v1_path.is_symlink() or v2_path.exists() or v2_path.is_symlink() or sidecar.exists() or sidecar.is_symlink():
+    if setup_digests or profile_path.exists() or profile_path.is_symlink() or sidecar.exists() or sidecar.is_symlink():
         raise SystemExit(1)
     raise SystemExit(0)
 selected = profile_rows[0]
-if len(setup_digests) != 1:
+if selected != expected_path or len(setup_digests) != 1:
     raise SystemExit(1)
-try:
-    if selected == v1_expected_path:
-        _, digest = canonical_profile(v1_path)
-    elif selected == v2_expected_path:
-        previous_profile, predecessor = canonical_profile(v1_path)
-        profile, digest = canonical_profile(v2_path)
-        sidecar_state = sidecar.lstat()
-        if stat.S_ISLNK(sidecar_state.st_mode) or not stat.S_ISDIR(sidecar_state.st_mode) or not v2_valid(profile, predecessor, previous_profile):
-            raise ValueError()
-    else:
-        raise ValueError()
-except Exception:
+state = profile_path.lstat()
+if (not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode)
+        or stat.S_IMODE(state.st_mode) != 0o600):
     raise SystemExit(1)
+payload = profile_path.read_text(encoding='utf-8')
+if not payload.endswith('\n') or payload.count('\n') != 1:
+    raise SystemExit(1)
+profile = json.loads(payload)
+canonical = json.dumps(profile, sort_keys=True, separators=(',', ':'))
+if payload != canonical + '\n':
+    raise SystemExit(1)
+digest = 'sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 if setup_digests != [digest]:
     raise SystemExit(1)
 runtime = json.loads(runtime_profile.read_text(encoding='utf-8'))
@@ -1171,7 +1115,6 @@ runtime_profile_matches_prepared_tuple() {
 }
 
 require_prepared() {
-  [[ ! -e "$CONNECTOR_REBIND_DIR" && ! -L "$CONNECTOR_REBIND_DIR" ]] || fail 'connector rehearsal rebind is interrupted; rerun configure-connector-rehearsal with the exact same reviewed profile'
   [[ -f "$SETUP_FILE" && ! -L "$SETUP_FILE" ]] || fail 'run prepare first'
   [[ -f "$RELEASE_FILE" && ! -L "$RELEASE_FILE" ]] || fail 'clean release record is missing; run prepare again with the same record'
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Compose environment is missing; run prepare again with the same inputs'
@@ -2106,465 +2049,6 @@ activate_provider_credentials() {
   fail "provider credential activation failed; automatic rollback could not be verified at stage=$ACTIVATION_ROLLBACK_FAILURE_STAGE and rollback copies were retained"
 }
 
-require_connector_rebind_arguments() {
-  [[ $# -eq 4 && "$1" == --profile-base64 && "$3" == --profile-sha256 ]] || usage
-  [[ "$2" =~ ^[A-Za-z0-9+/]+={0,2}$ && ${#2} -le 8192 ]] || \
-    fail 'connector rehearsal profile must be bounded canonical standard base64'
-  [[ "$4" =~ ^sha256:[a-f0-9]{64}$ ]] || \
-    fail 'connector rehearsal profile digest must be a lowercase sha256 digest'
-}
-
-connector_rebind_journal_present() {
-  [[ -e "$CONNECTOR_REBIND_DIR" || -L "$CONNECTOR_REBIND_DIR" ]]
-}
-
-require_safe_connector_rebind_journal() {
-  [[ -d "$CONNECTOR_REBIND_DIR" && ! -L "$CONNECTOR_REBIND_DIR" ]] || \
-    fail 'connector rehearsal rebind journal is unsafe; preserve it for the operator recovery procedure'
-  [[ "$(portable_stat_mode "$CONNECTOR_REBIND_DIR")" == 700 ]] || \
-    fail 'connector rehearsal rebind journal permissions are unsafe; preserve it for the operator recovery procedure'
-}
-
-connector_rebind_snapshot_sha256() {
-  python3 - "$1" <<'PY'
-import hashlib
-import pathlib
-import stat
-import sys
-
-path = pathlib.Path(sys.argv[1])
-state = path.lstat()
-if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or stat.S_IMODE(state.st_mode) != 0o600 or state.st_nlink != 1:
-    raise SystemExit(1)
-print('sha256:' + hashlib.sha256(path.read_bytes()).hexdigest())
-PY
-}
-
-validate_connector_rebind_journal() {
-  local target_digest="$1" release_id runtime_profile_sha256
-  release_id="$(release_field release-id)" || return 1
-  runtime_profile_sha256="sha256:$(release_field runtime-profile-sha256)" || return 1
-  require_safe_connector_rebind_journal
-  python3 - "$CONNECTOR_REBIND_DIR" "$target_digest" "$release_id" "$runtime_profile_sha256" "$ACTIVE_RUNTIME_PROFILE_FILE" <<'PY'
-import hashlib
-import json
-import pathlib
-import stat
-import sys
-
-root, target, release_id, runtime_profile_sha256, active_profile = sys.argv[1:]
-root = pathlib.Path(root)
-allowed = {'journal.json', 'environment.previous', 'accepted-environment.previous', 'setup.previous'}
-if {entry.name for entry in root.iterdir()} != allowed:
-    raise SystemExit(1)
-def safe(path):
-    state = path.lstat()
-    if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or stat.S_IMODE(state.st_mode) != 0o600 or state.st_nlink != 1:
-        raise SystemExit(1)
-    return path.read_bytes()
-def digest(path):
-    return 'sha256:' + hashlib.sha256(safe(path)).hexdigest()
-path = root / 'journal.json'
-payload = safe(path).decode('utf-8')
-value = json.loads(payload)
-canonical = json.dumps(value, sort_keys=True, separators=(',', ':'))
-keys = {
-    'schema_version', 'kind', 'previous_profile_sha256', 'target_profile_sha256',
-    'release_id', 'runtime_profile_sha256', 'environment_previous_sha256',
-    'accepted_environment_previous_sha256', 'setup_previous_sha256',
-}
-if payload != canonical + '\n' or set(value) != keys or value.get('schema_version') != 1 or \
-   value.get('kind') != 'echo-staging-connector-rebind-v2' or value.get('target_profile_sha256') != target or \
-   value.get('release_id') != release_id or value.get('runtime_profile_sha256') != runtime_profile_sha256:
-    raise SystemExit(1)
-for key in ('previous_profile_sha256', 'target_profile_sha256', 'runtime_profile_sha256', 'environment_previous_sha256', 'accepted_environment_previous_sha256', 'setup_previous_sha256'):
-    item = value.get(key)
-    if not isinstance(item, str) or len(item) != 71 or not item.startswith('sha256:') or any(c not in '0123456789abcdef' for c in item[7:]):
-        raise SystemExit(1)
-if not isinstance(value.get('release_id'), str) or not value['release_id']:
-    raise SystemExit(1)
-if digest(root / 'environment.previous') != value['environment_previous_sha256'] or \
-   digest(root / 'accepted-environment.previous') != value['accepted_environment_previous_sha256'] or \
-   digest(root / 'setup.previous') != value['setup_previous_sha256']:
-    raise SystemExit(1)
-active = pathlib.Path(active_profile)
-active_state = active.lstat()
-if not stat.S_ISREG(active_state.st_mode) or stat.S_ISLNK(active_state.st_mode) or \
-   'sha256:' + hashlib.sha256(active.read_bytes()).hexdigest() != runtime_profile_sha256:
-    raise SystemExit(1)
-PY
-}
-
-remove_connector_rebind_journal() {
-  require_safe_connector_rebind_journal
-  local file
-  for file in journal.json environment.previous accepted-environment.previous setup.previous; do
-    [[ -f "$CONNECTOR_REBIND_DIR/$file" && ! -L "$CONNECTOR_REBIND_DIR/$file" && "$(portable_stat_mode "$CONNECTOR_REBIND_DIR/$file")" == 600 && "$(portable_stat_nlink "$CONNECTOR_REBIND_DIR/$file")" == 1 ]] || return 1
-  done
-  rm -f "$CONNECTOR_REBIND_DIR/journal.json" \
-    "$CONNECTOR_REBIND_DIR/environment.previous" \
-    "$CONNECTOR_REBIND_DIR/accepted-environment.previous" \
-    "$CONNECTOR_REBIND_DIR/setup.previous" || return 1
-  rmdir "$CONNECTOR_REBIND_DIR"
-}
-copy_host_private_atomically() {
-  local source="$1" destination="$2" label="$3" temporary directory
-  directory="${destination%/*}"
-  temporary="$(mktemp "$directory/.${label}.XXXXXX" 2>/dev/null)" || return 1
-  if ! install -m 0600 "$source" "$temporary" >/dev/null 2>&1 || ! mv -f "$temporary" "$destination" >/dev/null 2>&1; then
-    rm -f "$temporary" >/dev/null 2>&1 || true
-    return 1
-  fi
-}
-
-remove_connector_rebind_v2_profile() {
-  if [[ -e "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH" || -L "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH" ]]; then
-    [[ -f "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH" && ! -L "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH" ]] || return 1
-    rm -f "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH" || return 1
-  fi
-}
-
-validate_and_materialize_connector_rebind_profile() {
-  local encoded="$1" expected_digest="$2" destination="$3"
-  python3 - "$encoded" "$expected_digest" "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V1_PATH" "$destination" <<'PY'
-import base64
-import binascii
-import hashlib
-import json
-import os
-import pathlib
-import re
-import stat
-import sys
-
-encoded, expected_digest, predecessor_path, destination = sys.argv[1:]
-if len(encoded) > 8192 or re.fullmatch(r'[A-Za-z0-9+/]+={0,2}', encoded) is None:
-    raise SystemExit(1)
-try:
-    decoded = base64.b64decode(encoded, validate=True)
-except binascii.Error:
-    raise SystemExit(1)
-if base64.b64encode(decoded).decode('ascii') != encoded or len(decoded) < 1 or len(decoded) > 4096:
-    raise SystemExit(1)
-try:
-    payload = decoded.decode('utf-8')
-except UnicodeDecodeError:
-    raise SystemExit(1)
-try:
-    value = json.loads(payload)
-except json.JSONDecodeError:
-    raise SystemExit(1)
-canonical = json.dumps(value, sort_keys=True, separators=(',', ':'))
-if payload != canonical + '\n':
-    raise SystemExit(1)
-digest = 'sha256:' + hashlib.sha256(canonical.encode('utf-8')).hexdigest()
-if digest != expected_digest:
-    raise SystemExit(1)
-predecessor = pathlib.Path(predecessor_path)
-state = predecessor.lstat()
-if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode) or stat.S_IMODE(state.st_mode) != 0o600:
-    raise SystemExit(1)
-previous_payload = predecessor.read_text(encoding='utf-8')
-try:
-    previous_value = json.loads(previous_payload)
-except json.JSONDecodeError:
-    raise SystemExit(1)
-previous_canonical = json.dumps(previous_value, sort_keys=True, separators=(',', ':'))
-if previous_payload != previous_canonical + '\n':
-    raise SystemExit(1)
-previous_digest = 'sha256:' + hashlib.sha256(previous_canonical.encode('utf-8')).hexdigest()
-if not isinstance(value, dict) or set(value) != {
-    'schema_version', 'kind', 'capture_policy', 'predecessor_profile_sha256', 'jira', 'slack'
-} or value.get('schema_version') != 2 or value.get('kind') != 'echo-staging-connector-rehearsal-profile-v2' or \
-   value.get('capture_policy') != 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2' or \
-   value.get('predecessor_profile_sha256') != previous_digest:
-    raise SystemExit(1)
-jira, slack = value.get('jira'), value.get('slack')
-previous_jira = previous_value.get('jira') if isinstance(previous_value, dict) else None
-if not isinstance(jira, dict) or set(jira) != {'cloud_id', 'integration_key', 'project'} or \
-   not isinstance(previous_jira, dict) or jira.get('cloud_id') != previous_jira.get('cloud_id') or jira.get('integration_key') != previous_jira.get('integration_key') or \
-   not isinstance(slack, dict) or set(slack) != {'channel_id'}:
-    raise SystemExit(1)
-if not (isinstance(jira.get('cloud_id'), str) and re.fullmatch(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', jira['cloud_id']) and
-        isinstance(jira.get('integration_key'), str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', jira['integration_key']) and
-        isinstance(jira.get('project'), str) and re.fullmatch(r'[A-Z][A-Z0-9_]{1,31}', jira['project']) and
-        isinstance(slack.get('channel_id'), str) and re.fullmatch(r'C[A-Z0-9]{2,63}', slack['channel_id'])):
-    raise SystemExit(1)
-fd = os.open(destination, os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW)
-try:
-    state = os.fstat(fd)
-    if not stat.S_ISREG(state.st_mode) or stat.S_IMODE(state.st_mode) != 0o600 or state.st_nlink != 1:
-        raise SystemExit(1)
-    with os.fdopen(fd, 'wb', closefd=False) as output:
-        output.write(decoded)
-        output.flush()
-        os.fsync(output.fileno())
-finally:
-    os.close(fd)
-print(previous_digest)
-PY
-}
-
-create_connector_rebind_journal() {
-  local previous_digest="$1" target_digest="$2" accepted_environment staging
-  accepted_environment="$(accepted_runtime_environment_path)" || return 1
-  staging="$DEPLOY_DIR/.connector-rehearsal-rebind-v2.prepare.$$"
-  [[ ! -e "$staging" && ! -L "$staging" && ! -e "$CONNECTOR_REBIND_DIR" && ! -L "$CONNECTOR_REBIND_DIR" ]] || return 1
-  mkdir -m 0700 "$staging" || return 1
-  if ! install -m 0600 "$ENV_FILE" "$staging/environment.previous" || \
-    ! install -m 0600 "$accepted_environment" "$staging/accepted-environment.previous" || \
-    ! install -m 0600 "$SETUP_FILE" "$staging/setup.previous"; then
-    rm -f "$staging/environment.previous" "$staging/accepted-environment.previous" "$staging/setup.previous" >/dev/null 2>&1 || true
-    rmdir "$staging" >/dev/null 2>&1 || true
-    return 1
-  fi
-  if ! python3 - "$staging/environment.previous" "$staging/accepted-environment.previous" "$staging/setup.previous" "$staging" <<'PY'
-import os
-import sys
-for path in sys.argv[1:-1]:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-directory = os.open(sys.argv[-1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-try:
-    os.fsync(directory)
-finally:
-    os.close(directory)
-PY
-  then
-    return 1
-  fi
-  local environment_sha accepted_environment_sha setup_sha runtime_profile_sha
-  environment_sha="$(connector_rebind_snapshot_sha256 "$staging/environment.previous")" || return 1
-  accepted_environment_sha="$(connector_rebind_snapshot_sha256 "$staging/accepted-environment.previous")" || return 1
-  setup_sha="$(connector_rebind_snapshot_sha256 "$staging/setup.previous")" || return 1
-  runtime_profile_sha="sha256:$(release_field runtime-profile-sha256)" || return 1
-  python3 - "$staging/journal.json" "$previous_digest" "$target_digest" "$(release_field release-id)" "$runtime_profile_sha" "$environment_sha" "$accepted_environment_sha" "$setup_sha" <<'PY'
-import json
-import os
-import sys
-
-path, previous, target, release_id, runtime_profile, environment, accepted_environment, setup = sys.argv[1:]
-payload = json.dumps({
-    'schema_version': 1,
-    'kind': 'echo-staging-connector-rebind-v2',
-    'previous_profile_sha256': previous,
-    'target_profile_sha256': target,
-    'release_id': release_id,
-    'runtime_profile_sha256': runtime_profile,
-    'environment_previous_sha256': environment,
-    'accepted_environment_previous_sha256': accepted_environment,
-    'setup_previous_sha256': setup,
-}, sort_keys=True, separators=(',', ':')) + '\n'
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-try:
-    os.write(fd, payload.encode('utf-8'))
-    os.fsync(fd)
-finally:
-    os.close(fd)
-directory = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY)
-try:
-    os.fsync(directory)
-finally:
-    os.close(directory)
-PY
-  if ! mv "$staging" "$CONNECTOR_REBIND_DIR"; then
-    return 1
-  fi
-  python3 - "$DEPLOY_DIR" <<'PY'
-import os
-import sys
-fd = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-try:
-    os.fsync(fd)
-finally:
-    os.close(fd)
-PY
-}
-
-rewrite_connector_rebind_metadata() {
-  local previous_digest="$1" target_digest="$2" accepted_environment
-  accepted_environment="$(accepted_runtime_environment_path)" || return 1
-  python3 - "$ENV_FILE" "$accepted_environment" "$SETUP_FILE" "$previous_digest" "$target_digest" <<'PY'
-import os
-import pathlib
-import stat
-import sys
-
-environment, accepted, setup, previous, target = map(pathlib.Path, sys.argv[1:])
-v1_path = '/echo-clean/private/staging-connector-rehearsal.json'
-v2_path = '/echo-clean/private/staging-connector-rehearsal-v2.json'
-
-def rewrite(path, key, expected, replacement):
-    state = path.lstat()
-    if not stat.S_ISREG(state.st_mode) or stat.S_ISLNK(state.st_mode):
-        raise SystemExit(1)
-    lines = path.read_text(encoding='utf-8').splitlines()
-    found = [index for index, line in enumerate(lines) if line.startswith(key + '=')]
-    if len(found) != 1 or lines[found[0]] != key + '=' + expected:
-        raise SystemExit(1)
-    lines[found[0]] = key + '=' + replacement
-    payload = ('\n'.join(lines) + '\n').encode('utf-8')
-    directory = str(path.parent)
-    temporary = os.path.join(directory, '.' + path.name + '.connector-rebind.tmp')
-    try:
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    except FileExistsError:
-        raise SystemExit(1)
-    try:
-        os.write(fd, payload)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(temporary, path)
-    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
-
-rewrite(environment, 'ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE', v1_path, v2_path)
-rewrite(accepted, 'ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE', v1_path, v2_path)
-rewrite(setup, 'staging_connector_rehearsal_profile_sha256', str(previous), str(target))
-PY
-}
-
-connector_rebind_rollback_and_verify() {
-  local target_digest="$1"
-  validate_connector_rebind_journal "$target_digest" || { ACTIVATION_ROLLBACK_FAILURE_STAGE='journal'; return 1; }
-  ACTIVATION_ROLLBACK_FAILURE_STAGE=''
-  local accepted_environment
-  accepted_environment="$(accepted_runtime_environment_path)" || { ACTIVATION_ROLLBACK_FAILURE_STAGE='accepted-environment'; return 1; }
-  if ! activation_compose_quiet down; then
-    ACTIVATION_ROLLBACK_FAILURE_STAGE='stop'
-    return 1
-  fi
-  if ! copy_host_private_atomically "$CONNECTOR_REBIND_DIR/environment.previous" "$ENV_FILE" 'connector-rebind-environment' || \
-    ! copy_host_private_atomically "$CONNECTOR_REBIND_DIR/accepted-environment.previous" "$accepted_environment" 'connector-rebind-accepted-environment' || \
-    ! copy_host_private_atomically "$CONNECTOR_REBIND_DIR/setup.previous" "$SETUP_FILE" 'connector-rebind-setup' || \
-    ! remove_connector_rebind_v2_profile; then
-    ACTIVATION_ROLLBACK_FAILURE_STAGE='restore'
-    return 1
-  fi
-  if ! activation_compose_quiet up -d --no-build --wait --wait-timeout 90; then
-    ACTIVATION_ROLLBACK_FAILURE_STAGE='start'
-    return 1
-  fi
-  if ! running_authority; then ACTIVATION_ROLLBACK_FAILURE_STAGE='running'; return 1; fi
-  if ! healthy_authority; then ACTIVATION_ROLLBACK_FAILURE_STAGE='health'; return 1; fi
-  if ! authority_uses_accepted_image; then ACTIVATION_ROLLBACK_FAILURE_STAGE='image'; return 1; fi
-  if ! runtime_uses_accepted_runtime_profile; then ACTIVATION_ROLLBACK_FAILURE_STAGE='runtime-profile'; return 1; fi
-  if ! wait_for_public_descriptor; then ACTIVATION_ROLLBACK_FAILURE_STAGE='descriptor'; return 1; fi
-}
-
-connector_rebind_rollback_on_exit() {
-  local exit_status="${1:-1}"
-  trap - EXIT HUP INT TERM
-  if connector_rebind_rollback_and_verify "$CONNECTOR_REBIND_TARGET_DIGEST" >/dev/null 2>&1 && remove_connector_rebind_journal; then
-    rm -f "${CONNECTOR_REBIND_TARGET_FILE:-}" >/dev/null 2>&1 || true
-    printf 'onboard-clean-v1: connector rehearsal rebind was interrupted; the V1 selector was restored and verified\n' >&2
-  else
-    printf 'onboard-clean-v1: connector rehearsal rebind was interrupted; automatic rollback could not be verified at stage=%s and the journal was retained\n' "$ACTIVATION_ROLLBACK_FAILURE_STAGE" >&2
-  fi
-  release_operation_lock
-  exit "$exit_status"
-}
-
-connector_rebind_signal_exit() {
-  local exit_status="$1"
-  trap - HUP INT TERM
-  if [[ "$ACTIVATION_CHILD_PID" =~ ^[0-9]+$ ]] && kill -0 "$ACTIVATION_CHILD_PID" >/dev/null 2>&1; then
-    kill -TERM "$ACTIVATION_CHILD_PID" >/dev/null 2>&1 || true
-    wait "$ACTIVATION_CHILD_PID" >/dev/null 2>&1 || true
-  fi
-  ACTIVATION_CHILD_PID=''
-  exit "$exit_status"
-}
-
-arm_connector_rebind_rollback() {
-  trap 'connector_rebind_rollback_on_exit "$?"' EXIT
-  trap 'connector_rebind_signal_exit 129' HUP
-  trap 'connector_rebind_signal_exit 130' INT
-  trap 'connector_rebind_signal_exit 143' TERM
-}
-
-disarm_connector_rebind_rollback() {
-  trap - HUP INT TERM
-  trap 'release_operation_lock' EXIT
-}
-
-recover_connector_rebind() {
-  local target_digest="$1"
-  if ! validate_connector_rebind_journal "$target_digest"; then
-    fail 'connector rehearsal rebind journal does not bind the current accepted release, runtime profile, and rollback snapshots; preserve it for the operator recovery procedure'
-  fi
-  if ! connector_rebind_rollback_and_verify "$target_digest"; then
-    fail "connector rehearsal rebind recovery could not be verified at stage=$ACTIVATION_ROLLBACK_FAILURE_STAGE; the journal was retained"
-  fi
-  remove_connector_rebind_journal || \
-    fail 'connector rehearsal rebind recovery restored V1 but could not remove its journal; preserve it for the operator recovery procedure'
-}
-
-configure_connector_rehearsal() {
-  require_connector_rebind_arguments "$@"
-  local encoded="$2" target_digest="$4" target_profile previous_digest status_json
-  CONNECTOR_REBIND_TARGET_DIGEST="$target_digest"
-  require_host_prerequisites
-  acquire_operation_lock
-  trap 'release_operation_lock' EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-
-  target_profile="$(mktemp "$PRIVATE_DIR/.connector-rehearsal-v2.XXXXXX" 2>/dev/null)" || fail 'could not prepare bounded connector rehearsal profile'
-  chmod 0600 "$target_profile"
-  CONNECTOR_REBIND_TARGET_FILE="$target_profile"
-  previous_digest="$(validate_and_materialize_connector_rebind_profile "$encoded" "$target_digest" "$target_profile")" || \
-    fail 'connector rehearsal profile must be strict canonical V2 JSON, match its digest, and anchor the current V1 profile'
-
-  if connector_rebind_journal_present; then
-    recover_connector_rebind "$target_digest"
-  fi
-  require_prepared
-  [[ "$(environment_value "$ENV_FILE" ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE)" == /echo-clean/private/staging-connector-rehearsal.json ]] || \
-    fail 'connector rehearsal is not on the V1 selector required for this one-way V2 rebind'
-  [[ ! -e "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH" && ! -L "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH" ]] || \
-    fail 'connector rehearsal V2 profile already exists outside a recoverable rebind journal'
-  staged_candidate_present && fail 'a candidate release is staged; finish its promotion or rollback before changing connector rehearsal selection'
-  select_runtime_identity "$(setup_value runtime_user)"
-  require_image_present
-  status_json="$(setup_status)"
-  terminal_green "$status_json" || \
-    fail 'connector rehearsal can rebind only after terminal green on the exact accepted runtime'
-
-  create_connector_rebind_journal "$previous_digest" "$target_digest" || \
-    fail 'could not prepare the private connector rehearsal rebind journal'
-  arm_connector_rebind_rollback
-  if ! activation_compose_quiet down; then
-    fail 'could not stop the healthy Authority before connector rehearsal rebind'
-  fi
-  if ! replace_runtime_private "$target_profile" "$STAGING_CONNECTOR_REHEARSAL_PROFILE_V2_PATH" 'connector-rehearsal-v2' || \
-    ! rewrite_connector_rebind_metadata "$previous_digest" "$target_digest" || \
-    ! activation_compose_quiet up -d --no-build --wait --wait-timeout 90 || \
-    ! running_authority || ! healthy_authority || ! authority_uses_accepted_image || \
-    ! runtime_uses_accepted_runtime_profile || ! wait_for_public_descriptor; then
-    fail 'connector rehearsal rebind failed; automatic rollback will restore the V1 selector'
-  fi
-  disarm_connector_rebind_rollback
-  if ! remove_connector_rebind_journal; then
-    fail 'connector rehearsal rebind succeeded, but its journal could not be removed; preserve it for the operator recovery procedure'
-  fi
-  rm -f "$target_profile"
-  CONNECTOR_REBIND_TARGET_FILE=''
-  printf 'connector_rehearsal_rebound=true\n'
-  printf 'profile_sha256=%s\n' "$target_digest"
-  printf 'release_id=%s\n' "$(release_field release-id)"
-  printf 'authority_healthy=true\n'
-  printf 'authority_exact_accepted_image=true\n'
-}
-
 finalize() {
   local directory
   directory="$(staging_meetings_directory)"
@@ -2688,17 +2172,12 @@ status() {
   print_status "$status_json"
 }
 
-if connector_rebind_journal_present && [[ "${1:-}" != configure-connector-rehearsal ]]; then
-  fail 'connector rehearsal rebind is interrupted; rerun configure-connector-rehearsal with the exact same reviewed profile'
-fi
-
 case "${1:-}" in
   doctor) shift; doctor "$@" ;;
   prepare) shift; prepare "$@" ;;
   stage-rehearsal-inputs) shift; stage_rehearsal_inputs "$@" ;;
   prepare-rehearsal) shift; prepare_rehearsal "$@" ;;
   activate-provider-credentials) shift; activate_provider_credentials "$@" ;;
-  configure-connector-rehearsal) shift; configure_connector_rehearsal "$@" ;;
   replace-rehearsal) shift; replace_rehearsal "$@" ;;
   resume) [[ $# -eq 1 ]] || usage; resume ;;
   status) [[ $# -eq 1 ]] || usage; status ;;

@@ -146,11 +146,11 @@ export async function signInOwner(origin: string, seams: ProviderSeamsV1, invita
 }
 
 /** Sets up and installs the organization Slack app, then links the signed-in owner's Slack identity. */
-export async function connectSlackAndLinkOwner(post: FixturePostV1, seams: ProviderSeamsV1): Promise<void> {
+export async function connectSlackAndLinkOwner(post: FixturePostV1, seams: ProviderSeamsV1, scopes?: readonly string[]): Promise<void> {
   expect((await post(ORGANIZATION_API_SLACK_SETUP_PATH_V1, { request_id: `oss_${randomUUID()}`, configuration_token: 'xoxe.fixture-configuration-token' })).status).toBe(201);
   const install = await post(ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, { request_id: `osi_${randomUUID()}` });
   expect(install.status).toBe(201);
-  seams.finishSlack();
+  seams.finishSlack(scopes);
   expect(await post(ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, { attempt_id: install.body.attempt_id })).toMatchObject({ status: 200, body: { status: 'complete' } });
   const code = randomBytes(32).toString('base64url');
   const linked = await post(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, { request_id: `psb_${randomUUID()}`, recipient_user_id: 'UFOUNDER', challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(code) });
