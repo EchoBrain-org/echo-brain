@@ -121,11 +121,12 @@ describe('Nango-backed personal Jira connection', () => {
     } finally { f.database.close(); }
   });
 
-  it('revokes a capture handoff before its transport can obtain another Jira credential', async () => {
+  it.each(['disconnect', 'reconnect'])('revokes a capture handoff on %s before its transport can obtain another Jira credential', async revoke => {
     const f = fixture(); try {
       await f.connected(); const capability = await f.service.captureConnection({ access_token: f.token });
       const calls = vi.mocked(f.nango.connection).mock.calls.length;
-      await f.service.disconnect({ access_token: f.token });
+      if (revoke === 'disconnect') await f.service.disconnect({ access_token: f.token });
+      else await f.service.connect({ access_token: f.token });
       expect(() => capability.require_current()).toThrow(expect.objectContaining({ code: 'stale_access_state' }));
       await expect(capability.transport.request({ path: '/oauth/token/accessible-resources' })).rejects.toMatchObject({ code: 'stale_access_state' });
       expect(f.nango.connection).toHaveBeenCalledTimes(calls);
@@ -275,6 +276,13 @@ describe('Nango-backed personal Jira connection', () => {
       expect(f.store.current(person)).toMatchObject({ active: true, reference: fresh, attempt: retry.attempt });
       expect(f.store.current(person)!.binding.read_grant_sha256).not.toBe(old.binding.read_grant_sha256);
       await expect(source!.search({ query: 'launch' })).rejects.toMatchObject({ code: 'stale_access_state' });
+    } finally { f.database.close(); }
+  });
+
+  it('reports a fresh consent for another Jira account as a terminal account mismatch', async () => {
+    const f = fixture(); try {
+      await f.connected(); const again = await f.service.connect({ access_token: f.token }); f.finishAuthorization(); f.setAccount('another-account');
+      await expect(f.service.status({ access_token: f.token, attempt: again.attempt })).resolves.toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
     } finally { f.database.close(); }
   });
 

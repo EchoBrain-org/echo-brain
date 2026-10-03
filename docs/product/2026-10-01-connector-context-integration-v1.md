@@ -56,8 +56,8 @@ character. Pointer metadata is still content and requires policy authorization.
 The Authority integration tests compose actual provider implementations with
 fake provider responses, then use the shared intake and real SQLite:
 
-- [Granola integration](../../services/organization-authority/test/granola-context-source-intake-v1.test.ts): actual meeting adapter over a fake Granola API client; one configured pull, retained captures, immutable replay/change, restart and retention revocation.
-- [Jira integration](../../services/organization-authority/test/jira-context-source-intake-v1.test.ts): actual bounded HTTP transport/parser over fake HTTP responses; default request-only capture, explicit retained-pointer admission, replay/change, SQLite restart, grant and custody-fence revocation, and organization/disposition refusal.
+- [Granola integration](../../services/organization-authority/test/granola-context-source-intake-v1.test.ts): actual meeting adapter over a fake Granola API client; one configured pull, retained captures, immutable replay/change and configured-instance refusal.
+- [Jira integration](../../services/organization-authority/test/jira-context-source-intake-v1.test.ts): actual bounded HTTP transport/parser over fake HTTP responses; default request-only capture, explicit retained-pointer admission, replay/change, wrong read grant and transaction-time custody-fence revocation, and organization/disposition refusal.
 - [Slack provider adapter](../../providers/slack/server/test/context/slack-context-source-v1.test.ts) and [transport](../../providers/slack/server/test/context/slack-context-transport-v1.test.ts): fake Slack API responses exercise fixed-channel pointer mapping, grant fences, bounded paging and provider-response validation. They do not compose an Authority intake or prove configured Slack scopes.
 - [Slack capture runtime](../../services/organization-authority/test/slack-context-capture-runtime-v1.test.ts): real Authority and provider SQLite state, fresh scope proof, current owner/link fences and retained pointer admission with synthetic provider responses.
 - [Staging runtime HTTP](../../services/organization-authority/test/staging-connector-rehearsal-runtime-http.test.ts) and [V2 predecessor checks](../../services/organization-authority/test/staging-connector-rehearsal-predecessor-v2.test.ts): versioned request selection, V1 connection preservation, retained pointer replay, and refusal of changed lineage, owner or Jira tenant/integration before sidecar reuse.
@@ -123,9 +123,10 @@ qualification remains the outstanding live proof:
 - Jira's server-only `captureConnection` derives a transport and current-grant
   fences from the authenticated Person's stored connection. It accepts no
   caller-selected account, site or connection locator. The
-  [connected-capture test](../../services/organization-authority/test/jira-connected-capture-intake-v1.test.ts)
-  connects this actual handoff to shared request-only intake and proves that
-  reconnect and disconnect invalidate it before another provider read.
+  [rehearsal capture test](../../services/organization-authority/test/connector-rehearsal-capture-v1.test.ts)
+  connects this actual handoff to shared request-only intake, and the
+  [provider connection test](../../providers/jira/test/jira-person-connection-v1.test.ts)
+  proves that reconnect and disconnect invalidate it before another provider read.
 - `runContextCaptureRehearsalV1` performs one pull of 1–5 items through an
   already-authorized intake with a cooperative deadline. Its receipt contains
   source identity and revision hashes, source type, admission results and

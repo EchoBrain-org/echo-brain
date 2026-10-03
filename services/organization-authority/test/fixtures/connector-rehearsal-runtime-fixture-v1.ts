@@ -1,11 +1,12 @@
-import { chmodSync, writeFileSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { join } from 'node:path';
 import { expect, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import type { JiraNangoV1 } from '@echo-brain/provider-jira/jira-nango-v1';
+import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from '@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1';
+import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from '@echo-brain/provider-slack-client/organization-api/person-slack-identity-link';
 import type { NangoConnectionClientV1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/nango/nango-connection-client-v1';
 import type { ObserveSlackIdentityLinkChallengeInput, SlackIntegrationProvider } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1';
@@ -13,11 +14,11 @@ import { slackConnectionVerificationEvidenceSha256V1 } from '../../../../provide
 import type { BegunPersonOidcLogin } from '../../src/application/person-identity-sessions.js';
 import { runConnectorRehearsalV1, type ConnectorRehearsalConfigurationV1 } from '../../src/composition/connector-rehearsal-runtime-v1.js';
 import { prepare } from '../../../../tools/connector-rehearsal.mjs';
+import { FIXTURE_JIRA_CLOUD_V1, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fake-jira-v1.js';
 export { prepare } from '../../../../tools/connector-rehearsal.mjs';
 export const FIXTURE_AUTHORITY = 'https://connector-rehearsal.example.test';
 export const FIXTURE_EMAIL = 'founder@example.test';
-export const FIXTURE_CLOUD = '00000000-0000-4000-8000-000000000007';
-export const FIXTURE_SITE = 'https://echo-fixture.atlassian.net';
+export const FIXTURE_CLOUD = FIXTURE_JIRA_CLOUD_V1;
 
 export async function port(): Promise<number> {
   const server = createServer();
@@ -124,31 +125,35 @@ export function providerSeams() {
         reply_message_ts: '1727700000.000002', verification_evidence_sha256: canonicalSha256({ fixture: input.recipient_user_id, reply: true }) };
     }),
   };
-  let jiraTags: Readonly<Record<string, string>> = {};
-  let pendingJiraReference = '';
-  let jiraAttempt = 0;
-  const jiraConnections = new Map<string, { readonly tags: Readonly<Record<string, string>>; readonly access_token: string; readonly updated_at: string }>();
-  const jira: JiraNangoV1 = {
-    connect: vi.fn(async tags => { jiraTags = tags; pendingJiraReference = `fixture-jira-${++jiraAttempt}`; return { link: 'https://connect.nango.dev/fixture-jira' }; }),
-    connection: vi.fn(async reference => {
-      const result = jiraConnections.get(reference);
-      if (result === undefined) throw new AuthorityOperationError('not_found', 'fixture Jira connection is absent');
-      return result;
-    }),
-    find: vi.fn(async tags => [...jiraConnections].find(([, value]) => canonicalSha256(tags) === canonicalSha256(value.tags))?.[0]),
-    disconnect: vi.fn(async reference => { jiraConnections.delete(reference); }),
-  };
-  const finishJira = () => jiraConnections.set(pendingJiraReference, { tags: jiraTags, access_token: 'synthetic-jira-oauth-bearer', updated_at: new Date().toISOString() });
-  const jiraFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(String(input));
-    expect(init?.redirect).toBe('error');
-    expect(new Headers(init?.headers).get('authorization')).toBe('Bearer synthetic-jira-oauth-bearer');
-    if (url.pathname === '/oauth/token/accessible-resources') return Response.json([{ id: FIXTURE_CLOUD, url: FIXTURE_SITE, scopes: ['read:jira-work', 'read:jira-user'] }]);
-    if (url.pathname.endsWith('/myself')) return Response.json({ accountId: 'fixture-jira-account', active: true, accountType: 'atlassian' });
-    if (url.pathname.endsWith('/project/ECHO')) return Response.json({ id: '10000', key: 'ECHO', self: `${FIXTURE_SITE}/rest/api/3/project/10000` });
-    if (url.pathname.endsWith('/search/jql')) return Response.json({ isLast: true, issues: [{ id: '10001' }] });
-    if (url.pathname.endsWith('/issue/10001')) return Response.json({ id: '10001', key: 'ECHO-1', self: `${FIXTURE_SITE}/rest/api/3/issue/10001`, fields: { summary: 'Ship connector rehearsal', project: { id: '10000', key: 'ECHO', self: `${FIXTURE_SITE}/rest/api/3/project/10000` }, description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Capture Jira through the rehearsal.' }] }] }, created: '2026-10-01T12:00:00.000Z', updated: '2026-10-02T03:04:05.000-0700', status: { name: 'Open' }, assignee: { displayName: 'Fixture Owner', accountId: 'fixture-jira-account' }, duedate: null, labels: ['rehearsal'], priority: { name: 'High' } } });
-    throw new Error(`unexpected Jira endpoint ${url.pathname}`);
+  const jira = fakeJiraNangoV1();
+  const jiraFetch = fakeJiraCloudFetchV1();
+  return { oidc_provider, oidcState: () => attempted?.state ?? '', slack: { nango: slackNango, manifest_provider: { createApp: vi.fn(async () => ({ app_id: 'AFIXTURE', client_id: '111.222', client_secret: 'synthetic-slack-client-secret', signing_secret: 'synthetic-slack-signing-secret' })), updateApp: vi.fn() }, provider }, jira_person_live_seams: { nango: jira.nango, fetch: jiraFetch }, finishSlack, finishJira: jira.finish, jiraFetch };
+}
+
+type ProviderSeamsV1 = ReturnType<typeof providerSeams>;
+type FixturePostV1 = (path: string, body: unknown) => Promise<{ readonly status: number; readonly body: Record<string, unknown> }>;
+
+/** Completes the owner's invitation sign-in as a browser would and returns the sealed access token. */
+export async function signInOwner(origin: string, seams: ProviderSeamsV1, invitationPath: string): Promise<string> {
+  const { login_grant } = JSON.parse(readFileSync(invitationPath, 'utf8')) as { login_grant: string };
+  const begun = await fetch(`${origin}/v2/session/oidc/begin`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'identity_bootstrap', login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } }),
   });
-  return { oidc_provider, oidcState: () => attempted?.state ?? '', slack: { nango: slackNango, manifest_provider: { createApp: vi.fn(async () => ({ app_id: 'AFIXTURE', client_id: '111.222', client_secret: 'synthetic-slack-client-secret', signing_secret: 'synthetic-slack-signing-secret' })), updateApp: vi.fn() }, provider }, jira_person_live_seams: { nango: jira, fetch: jiraFetch }, finishSlack, finishJira, jiraFetch };
+  expect(begun.status).toBe(201);
+  const callback = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(seams.oidcState())}&code=fixture`)).text();
+  return (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(callback)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+}
+
+/** Sets up and installs the organization Slack app, then links the signed-in owner's Slack identity. */
+export async function connectSlackAndLinkOwner(post: FixturePostV1, seams: ProviderSeamsV1): Promise<void> {
+  expect((await post(ORGANIZATION_API_SLACK_SETUP_PATH_V1, { request_id: `oss_${randomUUID()}`, configuration_token: 'xoxe.fixture-configuration-token' })).status).toBe(201);
+  const install = await post(ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, { request_id: `osi_${randomUUID()}` });
+  expect(install.status).toBe(201);
+  seams.finishSlack();
+  expect(await post(ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, { attempt_id: install.body.attempt_id })).toMatchObject({ status: 200, body: { status: 'complete' } });
+  const code = randomBytes(32).toString('base64url');
+  const linked = await post(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, { request_id: `psb_${randomUUID()}`, recipient_user_id: 'UFOUNDER', challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(code) });
+  expect(linked.status).toBe(201);
+  expect((await post(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, { request_id: `psc_${randomUUID()}`, challenge_attempt_id: linked.body.challenge_attempt_id, challenge_message_ts: linked.body.challenge_message_ts, challenge_code: code })).status).toBe(200);
 }

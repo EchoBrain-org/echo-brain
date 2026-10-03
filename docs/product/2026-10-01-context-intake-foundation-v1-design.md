@@ -214,24 +214,20 @@ sources; restart; transactional policy revocation; malformed and oversized input
 cancellation; atomic storage failure; partial-batch recovery; and request-only
 non-retention under the same rules. No model or external endpoint is involved.
 
-Provider conformance fixtures emit existing main `SourceAdapterV1` /
-`SourceEnvelopeV1` values. Provider code keeps those inward dependencies;
-Authority composition owns mapping validation and intake, and a provider never
-imports Authority service internals. Synthetic mappings for each payload kind
-prove exact structured-field roundtrip, stable revision replay with later poll
-time, semantic-time conflicts/new revisions, closed-field/bound rejection in both
-dispositions, and queued disposition/representation/scope drift at the atomic
-fence. The conformance helper accepts a provider-owned map and adapter identity;
-it is fixture composition, not another production intake pipeline.
-
-Authority integration tests can reuse
-[`ContextProviderConformanceAdapterV1(rawValues, mapRaw, identity)`](../../services/organization-authority/test/fixtures/context-provider-conformance-v1.ts)
-with a provider-owned raw mapper. Pull its existing `SourceBatchV1`, run the
-shared intake coordinator, and supply
-`SqliteContextCaptureStoreV1(database, authority, identity)` for retained cases.
-The [conformance suite](../../services/organization-authority/test/context-intake-conformance-v1.test.ts)
-is the executable acceptance matrix. Provider production packages continue to
-depend only on inward source contracts; composing tests belong to Authority.
+Provider adapters emit existing main `SourceAdapterV1` / `SourceEnvelopeV1`
+values. Provider code keeps those inward dependencies; Authority composition
+owns mapping validation and intake, and a provider never imports Authority
+service internals. The
+[core contract tests](../../packages/organization-processing/test/core/context-capture.test.ts)
+prove closed-field, bound, anchor and structured-payload rejection. The
+[shared intake tests](../../services/organization-authority/test/context-intake-v1.test.ts)
+prove exact structured-field roundtrip for each payload kind, stable revision
+replay with later poll time, semantic-time conflicts/new revisions, malformed
+input rejection in both dispositions, and queued disposition/representation/scope
+drift at the atomic fence of
+`SqliteContextCaptureStoreV1(database, authority, identity)`. Provider
+production packages continue to depend only on inward source contracts;
+composing tests belong to Authority.
 
 ## Future consumers and deferred decisions
 

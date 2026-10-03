@@ -1,5 +1,5 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-import { readFileSync, realpathSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -7,7 +7,6 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { readPrivateAuthorityCredential } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from '@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1';
-import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from '@echo-brain/provider-slack-client/organization-api/person-slack-identity-link';
 import { runOrganizationAuthoritySetupCli } from '../src/composition/organization-authority-setup-cli.js';
 import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
 import { STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/staging-connector-rehearsal-protocol-v2.js';
@@ -15,7 +14,7 @@ import { readOrganizationAuthoritySetupManifest } from '../src/composition/organ
 import { readPersonOidcConfiguration } from '../src/composition/organization-authority-person-administration-cli.js';
 import { PERSON_ANSWER_PATH_V4 } from '@echo-brain/organization-api';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
-import { FIXTURE_CLOUD, FIXTURE_EMAIL, configuration, port, prepare, privateFile, providerSeams } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
+import { FIXTURE_CLOUD, FIXTURE_EMAIL, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
 import { SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
 
 const roots: string[] = [];
@@ -82,10 +81,7 @@ it('serves owner-bound Jira connection and request-only capture through staging 
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
   try {
-    const invitation = JSON.parse(readFileSync(manifest.invitation_path, 'utf8')) as { login_grant: string };
-    expect((await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant: invitation.login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } }, '')).status).toBe(201);
-    const callback = await (await fetch(`http://127.0.0.1:${runtime.address.port}/v2/session/oidc/callback?state=${encodeURIComponent(seams.oidcState())}&code=fixture`)).text();
-    owner = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(callback)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+    owner = await signInOwner(`http://127.0.0.1:${runtime.address.port}`, seams, manifest.invitation_path);
     const connect = await post('/v1/person/tools/jira/connect', { schema_version: 1 });
     expect(connect.status).toBe(201);
     seams.finishJira();
@@ -97,14 +93,7 @@ it('serves owner-bound Jira connection and request-only capture through staging 
     expect((await post('/v1/staging/connector-rehearsal', { schema_version: 1, release_id: 'clean-v1-wrong-binding', profile_sha256, action: 'capture', tool: 'jira', limit: 1 })).status).toBe(503);
     expect(seams.jiraFetch).toHaveBeenCalledTimes(before);
     expect((await post('/v1/staging/connector-rehearsal', { schema_version: 1, release_id: selected.release_id, profile_sha256, action: 'capture', tool: 'jira', limit: 1 }, '')).status).toBe(401);
-    expect((await post(ORGANIZATION_API_SLACK_SETUP_PATH_V1, { request_id: `oss_${randomUUID()}`, configuration_token: 'xoxe.fixture-configuration-token' })).status).toBe(201);
-    const install = await post(ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, { request_id: `osi_${randomUUID()}` });
-    seams.finishSlack();
-    expect((await post(ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, { attempt_id: install.body.attempt_id })).status).toBe(200);
-    const code = randomBytes(32).toString('base64url');
-    const linked = await post(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, { request_id: `psb_${randomUUID()}`, recipient_user_id: 'UFOUNDER', challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(code) });
-    expect(linked.status).toBe(201);
-    expect((await post(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, { request_id: `psc_${randomUUID()}`, challenge_attempt_id: linked.body.challenge_attempt_id, challenge_message_ts: linked.body.challenge_message_ts, challenge_code: code })).status).toBe(200);
+    await connectSlackAndLinkOwner(post, seams);
   } finally { await runtime.close(); }
   const finalizeErrors: string[] = []; const finalized = await runOrganizationAuthoritySetupCli(['finalize', '--state-dir', stateDirectory], { stdout: () => {}, stderr: value => finalizeErrors.push(value) }); expect(finalized, finalizeErrors.join('')).toBe(0);
   runtime = await open();
@@ -182,7 +171,7 @@ it('serves owner-bound Jira connection and request-only capture through staging 
     try {
       const row = retained.prepare("SELECT contents.content_json FROM authority_source_contents_v1 AS contents JOIN authority_sources_v1 AS source ON source.organization_id=contents.organization_id AND source.source_id=contents.source_id WHERE source.adapter_id='jira-context-capture'").get() as { content_json: string };
       expect(JSON.parse(row.content_json)).toMatchObject({ representation: { kind: 'pointer' } });
-      expect(row.content_json).not.toContain('Capture Jira through the rehearsal.');
+      expect(row.content_json).not.toContain('The ticket body stays with Jira.');
       const slack = retained.prepare("SELECT contents.content_json FROM authority_source_contents_v1 AS contents JOIN authority_sources_v1 AS source ON source.organization_id=contents.organization_id AND source.source_id=contents.source_id WHERE source.adapter_id='slack-context-capture'").get() as { content_json: string };
       expect(JSON.parse(slack.content_json)).toMatchObject({ source_type: 'message', representation: { kind: 'pointer' } });
       expect(slack.content_json).not.toContain('Slack body must not be retained.');

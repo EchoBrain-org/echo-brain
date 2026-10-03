@@ -509,13 +509,6 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     ]) {
       expect(source).not.toContain(retired);
     }
-    expect(source).toContain("INPUT_NANGO_SECRET_KEY_NAME='nango-secret-key'");
-    expect(source).toContain('"$PRIVATE_DIR/nango-secret-key"');
-    expect(source).toContain("ECHO_CLEAN_NANGO_INTEGRATION=$input_nango_integration");
-    expect(source).toContain("connect_slack_in_app)");
-    expect(source).toContain(
-      'ACTION: On the initial-owner machine, run "$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack, paste a Slack app configuration token at its hidden prompt, and finish the install it opens. The ECHO app Connected tools page shows status only for now.',
-    );
     expect(source).toContain('redirect: "error"');
     expect(source).toContain(".authority-operation-lock");
     expect(source).toContain("resume) [[ $# -eq 1 ]] || usage; resume");

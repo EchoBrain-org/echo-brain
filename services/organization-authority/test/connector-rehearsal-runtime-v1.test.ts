@@ -1,16 +1,13 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, chmodSync } from 'node:fs';
+import { cpSync, mkdtempSync, realpathSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { verifyAuthorityStateLineage } from '@echo-brain/organization-authority-kernel/composition/verify-authority-state-lineage';
-import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1 } from '@echo-brain/provider-slack-client/organization-api/organization-slack-setup-v1';
-import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256 } from '@echo-brain/provider-slack-client/organization-api/person-slack-identity-link';
 import { requestConnectorRehearsalControlV1 } from '../src/composition/connector-rehearsal-control-v1.js';
 import { bootstrapConnectorRehearsalV1, openConnectorRehearsalRuntimeV1 } from '../src/composition/connector-rehearsal-runtime-v1.js';
 import { readOrganizationAuthoritySetupManifest } from '../src/composition/organization-authority-setup-cli.js';
 import { runOrganizationAuthorityServiceCli } from '../src/composition/organization-authority-service-cli.js';
-import { FIXTURE_CLOUD as CLOUD, FIXTURE_EMAIL as EMAIL, port, prepareConfiguration, providerSeams, privateFile, quietly } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
+import { FIXTURE_CLOUD as CLOUD, FIXTURE_EMAIL as EMAIL, connectSlackAndLinkOwner, port, prepareConfiguration, providerSeams, privateFile, quietly, signInOwner } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllGlobals(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -54,22 +51,10 @@ it('boots the isolated profile, performs real Person setup, captures Jira reques
     return { status: response.status, body: await response.json() as Record<string, any> };
   };
   try {
-    const invitation = JSON.parse(readFileSync(manifest.invitation_path, 'utf8')) as { login_grant: string };
-    expect((await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant: invitation.login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } }, '')).status).toBe(201);
-    const callback = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(seams.oidcState())}&code=fixture`)).text();
-    // The provider intentionally retains the opaque state only inside the fake. Extract the sealed local handoff, as a browser would.
-    owner = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(callback)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+    owner = await signInOwner(origin, seams, manifest.invitation_path);
     await expect(requestConnectorRehearsalControlV1({ socket_path: join(root, 'control.sock'), input: { action: 'cycle-once', access_token: owner }, signal: AbortSignal.timeout(5_000) })).rejects.toThrow('Connector rehearsal control request failed');
 
-    expect((await post(ORGANIZATION_API_SLACK_SETUP_PATH_V1, { request_id: `oss_${randomUUID()}`, configuration_token: 'xoxe.fixture-configuration-token' })).status).toBe(201);
-    const install = await post(ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, { request_id: `osi_${randomUUID()}` });
-    expect(install.status).toBe(201);
-    seams.finishSlack();
-    expect((await post(ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, { attempt_id: install.body.attempt_id })).body).toMatchObject({ status: 'complete' });
-    const code = randomBytes(32).toString('base64url');
-    const linked = await post(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, { request_id: `psb_${randomUUID()}`, recipient_user_id: 'UFOUNDER', challenge_code_sha256: organizationPersonSlackIdentityLinkChallengeCodeSha256(code) });
-    expect(linked.status).toBe(201);
-    expect((await post(ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, { request_id: `psc_${randomUUID()}`, challenge_attempt_id: linked.body.challenge_attempt_id, challenge_message_ts: linked.body.challenge_message_ts, challenge_code: code })).status).toBe(200);
+    await connectSlackAndLinkOwner(post, seams);
 
     const jira = await post('/v1/person/tools/jira/connect', { schema_version: 1 });
     expect(jira.status).toBe(201);
