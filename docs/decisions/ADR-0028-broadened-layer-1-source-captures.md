@@ -65,9 +65,8 @@ It has three separately owned parts:
 3. **Source captures**: retained `echo-context-capture-v1` revisions admitted
    through an Authority-selected retention binding. They are immutable.
 
-Captures are source observations, never approved facts. Their truth status is
-always `source_observation`, including a decision-shaped source; only the signed
-record log holds approval. Actor labels and mentions in a capture create no
+Captures are source observations, never approved facts, even when the source
+records a decision; only the signed record log holds approval. Actor labels and mentions in a capture create no
 person, membership or identity link. Captures change no directory entry and
 append no record.
 
