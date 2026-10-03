@@ -49,7 +49,7 @@ describe("Person client help", () => {
 
   it("documents sign-in, reads, session commands, and nested employee commands", async () => {
     await expect(help(["tools", "--help"])).resolves.toContain("echo-brain person tools [<setup|connect|disconnect|status|cancel> --tool <tool>");
-    await expect(help(["tools", "setup", "--help"])).resolves.toContain("--tool slack [--reconnect] [--no-wait]");
+    await expect(help(["tools", "setup", "--help"])).resolves.toContain("--tool slack [--reconnect] [--existing-app <value>] [--no-wait]");
     await expect(help(["tools", "connect", "--help"])).resolves.toContain("--method dm-code --slack-user");
     await expect(help(["tools", "status", "--help"])).resolves.toContain("--tool slack --attempt-id <value>");
     await expect(help(["login", "--help"])).resolves.toContain(

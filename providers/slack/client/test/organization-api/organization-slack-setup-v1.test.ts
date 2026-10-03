@@ -10,6 +10,7 @@ import {
 
 const ATTEMPT_ID = 'ssi_00000000-0000-4000-8000-000000000001';
 const SETUP = { request_id: 'oss_00000000-0000-4000-8000-000000000001', configuration_token: 'xoxe.xoxp-1-config-token-value' };
+const EXISTING_APP = { app_id: 'A0C6AEG49TQ', client_id: '123456789.987654321', client_secret: 'synthetic-client-secret', signing_secret: 'synthetic-signing-secret' };
 const BEGIN = { request_id: 'osi_00000000-0000-4000-8000-000000000001' };
 const SETUP_RESPONSE = { schema_version: 1, kind: 'echo-organization-slack-setup-v1', app_id: 'A0APP1', organization_setup: 'app_created' };
 const BEGUN = {
@@ -29,6 +30,47 @@ function thrown(run: () => unknown): string {
 }
 
 describe('organization Slack setup contract v1', () => {
+  it('accepts an explicitly selected existing app with bounded credentials', () => {
+    const request = { ...SETUP, existing_app: EXISTING_APP };
+    const validated = validateOrganizationSlackSetupRequestV1(request);
+    expect(validated).toEqual(request);
+    expect(validated.existing_app).not.toBe(EXISTING_APP);
+    expect(Object.isFrozen(validated.existing_app)).toBe(true);
+    expect(validateOrganizationSlackSetupRequestV1({ ...SETUP, existing_app: { ...EXISTING_APP,
+      client_id: `${'1'.repeat(32)}.${'2'.repeat(32)}`, client_secret: 'x'.repeat(255), signing_secret: 'x'.repeat(8) } })).toBeTruthy();
+  });
+
+  it('rejects malformed adoption credentials and unknown fields without disclosing supplied values', () => {
+    const invalid = [
+      undefined, null, [],
+      { ...EXISTING_APP, app_id: 'private-invalid-app' },
+      { ...EXISTING_APP, app_id: 'A'.repeat(65) },
+      { ...EXISTING_APP, client_id: 'private-invalid-client' },
+      { ...EXISTING_APP, client_id: `${'1'.repeat(33)}.2` },
+      { ...EXISTING_APP, client_secret: 'short' },
+      { ...EXISTING_APP, client_secret: 'x'.repeat(256) },
+      { ...EXISTING_APP, signing_secret: 'private signing secret' },
+      { ...EXISTING_APP, signing_secret: 'private\tsigning-secret' },
+      { ...EXISTING_APP, signing_secret: undefined },
+      { app_id: EXISTING_APP.app_id, client_id: EXISTING_APP.client_id, client_secret: EXISTING_APP.client_secret },
+      { ...EXISTING_APP, extra: 'private-extra-value' },
+    ];
+    for (const existing_app of invalid) {
+      const error = thrown(() => validateOrganizationSlackSetupRequestV1({ ...SETUP, existing_app }));
+      for (const candidate of [...Object.values(EXISTING_APP), 'private-invalid-app', 'private-invalid-client', 'private signing secret', 'private-extra-value']) {
+        expect(error).not.toContain(candidate);
+      }
+    }
+    const hidden = { ...EXISTING_APP };
+    Object.defineProperty(hidden, 'hidden', { value: 'private-hidden-value' });
+    expect(() => validateOrganizationSlackSetupRequestV1({ ...SETUP, existing_app: hidden })).toThrow();
+    let getterRan = false;
+    const accessor = { ...EXISTING_APP };
+    Object.defineProperty(accessor, 'client_secret', { enumerable: true, get: () => { getterRan = true; return 'private-getter-value'; } });
+    expect(() => validateOrganizationSlackSetupRequestV1({ ...SETUP, existing_app: accessor })).toThrow();
+    expect(getterRan).toBe(false);
+  });
+
   it('accepts the documented shapes', () => {
     expect(validateOrganizationSlackSetupRequestV1(SETUP)).toEqual(SETUP);
     expect(validateOrganizationSlackInstallBeginRequestV1(BEGIN)).toEqual(BEGIN);

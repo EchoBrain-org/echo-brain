@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import type { PersonToolHostV1, PersonToolJsonRequestV1, PersonToolSessionV1 } from '@echo-brain/organization-api';
 import { ORGANIZATION_API_PERSON_SLACK_DISCONNECT_PATH, validateOrganizationPersonTools, validateOrganizationPersonSlackDisconnectRequest, type OrganizationPersonToolsV2 } from "../organization-api/person-tools.js";
 import { ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_CHALLENGES_PATH, ORGANIZATION_API_PERSON_SLACK_IDENTITY_LINK_COMPLETIONS_PATH, organizationPersonSlackIdentityLinkChallengeCodeSha256, validateOrganizationPersonSlackIdentityLinkBeginRequest, validateOrganizationPersonSlackIdentityLinkBeginResponse, validateOrganizationPersonSlackIdentityLinkCompleteRequest, validateOrganizationPersonSlackIdentityLinkResult } from "../organization-api/person-slack-identity-link.js";
-import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1, validateOrganizationSlackInstallAttemptRequestV1, validateOrganizationSlackInstallBeginRequestV1, validateOrganizationSlackInstallBeginResponseV1, validateOrganizationSlackInstallStatusResponseV1, validateOrganizationSlackSetupRequestV1, validateOrganizationSlackSetupResponseV1, type OrganizationSlackInstallBeginResponseV1 } from "../organization-api/organization-slack-setup-v1.js";
+import { ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1, ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1, ORGANIZATION_API_SLACK_SETUP_PATH_V1, validateOrganizationSlackInstallAttemptRequestV1, validateOrganizationSlackInstallBeginRequestV1, validateOrganizationSlackInstallBeginResponseV1, validateOrganizationSlackInstallStatusResponseV1, validateOrganizationSlackSetupRequestV1, validateOrganizationSlackSetupResponseV1, type OrganizationSlackExistingAppV1, type OrganizationSlackInstallBeginResponseV1 } from "../organization-api/organization-slack-setup-v1.js";
 import { ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_BEGIN_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_STATUS_PATH, ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CANCEL_PATH, validateOrganizationPersonSlackBrowserLinkAttemptRequest, validateOrganizationPersonSlackBrowserLinkBeginRequest, validateOrganizationPersonSlackBrowserLinkBeginResponse, validateOrganizationPersonSlackBrowserLinkStatusResponse, type OrganizationPersonSlackBrowserLinkBeginResponseV1 } from "../organization-api/person-slack-browser-link.js";
 const SLACK_TIMEOUT_MS = 75_000;
 function validateSlackAuthorizationUrl(value: unknown): string {
@@ -115,8 +115,9 @@ export function cancelSlackBrowserLink(host: PersonToolHostV1, attemptId: string
 }
 
 /** Owner only; the Authority re-checks. */
-export function setupSlackApp(host: PersonToolHostV1, configurationToken: string) {
-  return slackJson(host, (session) => ({ path: ORGANIZATION_API_SLACK_SETUP_PATH_V1, body: { request_id: session.request_id('oss'), configuration_token: configurationToken },
+export function setupSlackApp(host: PersonToolHostV1, configurationToken: string, existingApp?: OrganizationSlackExistingAppV1) {
+  return slackJson(host, (session) => ({ path: ORGANIZATION_API_SLACK_SETUP_PATH_V1, body: { request_id: session.request_id('oss'), configuration_token: configurationToken,
+    ...(existingApp === undefined ? {} : { existing_app: existingApp }) },
     validate_request: validateOrganizationSlackSetupRequestV1, validate_response: validateOrganizationSlackSetupResponseV1 }));
 }
 

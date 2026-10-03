@@ -1,4 +1,6 @@
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbContextV1 } from '@echo-brain/organization-api';
+import { asEnumerableRecord, assertExactKeys } from '@echo-brain/organization-api/validation';
+import { validateOrganizationSlackExistingAppV1 } from '../organization-api/organization-slack-setup-v1.js';
 import { beginSlackBrowserLink, beginSlackIdentityLink, beginSlackInstall, cancelSlackBrowserLink, cancelSlackInstall, completeSlackIdentityLink, disconnectSlack, setupSlackApp, slackBrowserLinkStatus, slackInstallStatus } from './slack-person-client.js';
 
 const POLL_MS = 2_000;
@@ -74,12 +76,37 @@ async function openAndWait(context: PersonToolVerbContextV1, begun: Attempt, url
 }
 
 const SETUP_TOKEN_PROMPT = 'Paste the Slack app configuration token (input hidden). Generate one at https://api.slack.com/apps → Your App Configuration Tokens.';
+const EXISTING_APP_PROMPT = 'Paste one-line JSON with configuration_token, client_id, client_secret and signing_secret (input hidden).';
+
+function existingAppInput(raw: string, appId: string) {
+  try {
+    if (Buffer.byteLength(raw, 'utf8') > 16 * 1024) throw new Error();
+    const input = asEnumerableRecord(JSON.parse(raw), 'Slack existing-app input');
+    assertExactKeys(input, ['configuration_token', 'client_id', 'client_secret', 'signing_secret'], 'Slack existing-app input');
+    if (typeof input.configuration_token !== 'string' || input.configuration_token.length < 16 ||
+        input.configuration_token.length > 512 || !/^[\x21-\x7e]+$/.test(input.configuration_token)) throw new Error();
+    const existingApp = validateOrganizationSlackExistingAppV1({ app_id: appId, client_id: input.client_id,
+      client_secret: input.client_secret, signing_secret: input.signing_secret });
+    return { configurationToken: input.configuration_token, existingApp };
+  } catch {
+    // JSON parser errors can contain the document, including credential bytes.
+    throw new Error('Slack existing-app input is invalid');
+  }
+}
 
 async function setup(context: PersonToolVerbContextV1): Promise<void> {
   const { host } = context;
+  const existingAppId = context.values['existing-app'];
+  if (existingAppId !== undefined && context.values.reconnect === true) throw new Error('--existing-app and --reconnect are mutually exclusive');
+  if (existingAppId !== undefined && (typeof existingAppId !== 'string' || !/^A[A-Z0-9]{2,63}$/.test(existingAppId))) {
+    throw new Error('--existing-app must be a Slack app ID');
+  }
   try {
     if (context.values.reconnect !== true) {
-      const app = await setupSlackApp(host, (await context.read_secret_line(SETUP_TOKEN_PROMPT)).trim());
+      const input = existingAppId === undefined
+        ? { configurationToken: (await context.read_secret_line(SETUP_TOKEN_PROMPT)).trim(), existingApp: undefined }
+        : existingAppInput(await context.read_secret_line(EXISTING_APP_PROMPT), existingAppId);
+      const app = await setupSlackApp(host, input.configurationToken, input.existingApp);
       context.print({ ok: true, phase: 'app-ready', app_id: app.app_id, organization_setup: app.organization_setup });
     }
     const begun = await beginSlackInstall(host);
@@ -143,8 +170,8 @@ const noWait = { type: 'boolean' } as const;
 export function createSlackPersonToolProviderV1(): PersonToolProviderV1 {
   const verbs: PersonToolProviderV1['verbs'] = {
     setup: {
-      description: 'Owner only. Reads a Slack app configuration token from standard input (hidden at a terminal), creates or updates the ECHO app, opens Install and waits up to 10 minutes. --reconnect reads no token and installs the app already set up.',
-      options: { reconnect: { type: 'boolean' }, 'no-wait': noWait },
+      description: 'Owner only. Reads a Slack app configuration token from standard input (hidden at a terminal), creates or updates the ECHO app, opens Install and waits up to 10 minutes. --existing-app <A…> adopts that app using one hidden JSON line with configuration_token, client_id, client_secret and signing_secret. --reconnect reads no token and installs the app already set up. --existing-app and --reconnect are mutually exclusive.',
+      options: { reconnect: { type: 'boolean' }, 'existing-app': { type: 'string' }, 'no-wait': noWait },
       run: setup,
     },
     connect: {

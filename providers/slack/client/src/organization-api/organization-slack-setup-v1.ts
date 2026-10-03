@@ -1,5 +1,6 @@
 import {
   asRecord,
+  asEnumerableRecord,
   assertExactKeys,
   assertId,
   assertTimestamp,
@@ -11,10 +12,19 @@ export const ORGANIZATION_API_SLACK_INSTALL_BEGIN_PATH_V1 = '/v2/organization/to
 export const ORGANIZATION_API_SLACK_INSTALL_STATUS_PATH_V1 = '/v2/organization/tools/slack/install/status';
 export const ORGANIZATION_API_SLACK_INSTALL_CANCEL_PATH_V1 = '/v2/organization/tools/slack/install/cancel';
 
+/** Credentials supplied for the explicitly selected Slack app, never echoed. */
+export interface OrganizationSlackExistingAppV1 {
+  readonly app_id: string;
+  readonly client_id: string;
+  readonly client_secret: string;
+  readonly signing_secret: string;
+}
+
 /** Owner only. The configuration token is used once in memory and never stored or echoed. */
 export interface OrganizationSlackSetupRequestV1 {
   request_id: string;
   configuration_token: string;
+  existing_app?: OrganizationSlackExistingAppV1;
 }
 
 export interface OrganizationSlackSetupResponseV1 {
@@ -70,6 +80,7 @@ const RESULT_KINDS: readonly string[] = ['created', 'reconnected'];
 // Bounded, visible, printable ASCII: no whitespace and no control bytes.
 const VISIBLE_ASCII = /^[\x21-\x7e]+$/;
 const APP_ID = /^A[A-Z0-9]{2,63}$/;
+const CLIENT_ID = /^[0-9]{1,32}\.[0-9]{1,32}$/;
 const WORKSPACE_ID = /^T[A-Z0-9]{2,}$/;
 const HTTPS_LINK = /^https:\/\/[A-Za-z0-9.-]+(?::[1-9][0-9]{0,4})?(?:[/?#]|$)/;
 
@@ -86,11 +97,27 @@ function assertMatch(value: unknown, pattern: RegExp, label: string): void {
 
 export function validateOrganizationSlackSetupRequestV1(value: unknown): OrganizationSlackSetupRequestV1 {
   const label = 'Slack setup request';
-  const record = asRecord(value, label);
-  assertExactKeys(record, ['request_id', 'configuration_token'], label);
+  const record = asEnumerableRecord(value, label);
+  assertExactKeys(record, ['request_id', 'configuration_token', ...(Object.hasOwn(record, 'existing_app') ? ['existing_app'] : [])], label);
   assertId(record.request_id, 'oss', `${label} request_id`);
   assertVisibleAscii(record.configuration_token, 16, 512, `${label} configuration_token`);
+  if (Object.hasOwn(record, 'existing_app')) {
+    return { request_id: record.request_id as string, configuration_token: record.configuration_token as string,
+      existing_app: validateOrganizationSlackExistingAppV1(record.existing_app) };
+  }
   return record as unknown as OrganizationSlackSetupRequestV1;
+}
+
+export function validateOrganizationSlackExistingAppV1(value: unknown): OrganizationSlackExistingAppV1 {
+  const label = 'Slack existing app';
+  const record = asEnumerableRecord(value, label);
+  assertExactKeys(record, ['app_id', 'client_id', 'client_secret', 'signing_secret'], label);
+  assertMatch(record.app_id, APP_ID, `${label} app_id`);
+  assertMatch(record.client_id, CLIENT_ID, `${label} client_id`);
+  assertVisibleAscii(record.client_secret, 8, 255, `${label} client_secret`);
+  assertVisibleAscii(record.signing_secret, 8, 255, `${label} signing_secret`);
+  return Object.freeze({ app_id: record.app_id as string, client_id: record.client_id as string,
+    client_secret: record.client_secret as string, signing_secret: record.signing_secret as string });
 }
 
 export function validateOrganizationSlackSetupResponseV1(value: unknown): OrganizationSlackSetupResponseV1 {

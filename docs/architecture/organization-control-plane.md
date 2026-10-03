@@ -69,10 +69,10 @@ no active organization Slack connection
 Slack is inactive and unavailable for employee connection
         |
         v
-owner pastes a Slack app configuration token into person tools setup
+owner runs person tools setup with a configuration token or existing-app input
         |
         v
-ECHO creates the private Slack app and installs it through a Nango connect session
+ECHO creates or adopts the private Slack app and opens a Nango connect session
         |
         v
 Authority verifies the app, workspace, bot, and the four required scopes
@@ -110,6 +110,18 @@ sign-in alone: the install never requests them and no connection contract
 records them. Rerunning setup with a new configuration token updates an
 existing app to the current recipe.
 
+Before the organization has any active Slack connection, an owner may instead
+run `person tools setup --tool slack --existing-app A0EXAMPLE`. This explicit
+option accepts the chosen app's credentials and a configuration token in one
+hidden stdin JSON object; it cannot be combined with `--reconnect`. The
+Authority updates that app to its current manifest, replaces any pending
+credential bundle, and cancels stale pending install attempts before the new
+install. It does not delete an earlier external Slack app. An active
+organization connection blocks adoption even when the requested app ID matches;
+this is not an active-connection migration or replacement path. Standard setup
+and reconnect remain unchanged. The [owner instructions](../../deploy/organization-authority/README.md#use-an-existing-slack-app-before-the-first-connection)
+define the exact input and the matching client/server release requirement.
+
 Provider verification requires the Nango install to be for the
 organization's own app (the credential bundle's app ID) and to grant the four
 scopes, then calls Slack `auth.test` with the Nango-held bot token and requires
@@ -134,6 +146,11 @@ bot, rebinds the bundle's Nango connection ID under the same handle; the state
 hash and the cards stay unchanged
 ([ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md),
 proposed).
+
+Existing-app adoption preserves these checks. Applying the Slack manifest does
+not configure Nango's integration or establish OAuth configuration alignment;
+the returned connection still has to identify the chosen app and pass the
+same verification before activation.
 
 The Slack bot token is never written to Authority state: Nango holds it, and
 the Authority fetches it at use time and caches it in memory for at most five

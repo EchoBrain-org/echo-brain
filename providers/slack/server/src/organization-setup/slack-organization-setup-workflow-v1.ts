@@ -176,12 +176,38 @@ export class SlackOrganizationSetupWorkflowV1 {
       public_channel_context: this.publicChannelContext });
   }
 
-  /** Creates the ECHO app, or updates the organization's existing one; never a duplicate. */
+  /** Creates or updates the ECHO app; explicit adoption replaces only pending setup. */
   async setup(input: unknown, accessToken: string): Promise<OrganizationSlackSetupResponseV1> {
     this.owner(accessToken);
     const request = this.request(() => validateOrganizationSlackSetupRequestV1(input), "Slack setup request is invalid");
     return this.exclusive(async () => {
       try {
+        if (request.existing_app !== undefined) {
+          this.requireNoActiveConnection();
+          const pending = findPendingSlackAppCredentialsV1(this.options.secrets);
+          const replacement = serializeSlackAppCredentialsV1({ kind: SLACK_APP_CREDENTIALS_KIND_V1,
+            ...request.existing_app, nango_connection_id: null });
+          await this.options.manifest_provider.updateApp({ configuration_token: request.configuration_token,
+            app_id: request.existing_app.app_id, manifest: this.manifest });
+          this.owner(accessToken);
+          this.requireNoActiveConnection();
+          const current = findPendingSlackAppCredentialsV1(this.options.secrets);
+          if (pending === undefined ? current !== undefined : current?.reference.secret_handle_id !== pending.reference.secret_handle_id || !this.credentialIsCurrent(pending)) {
+            throw new AuthorityOperationError("conflict", "Slack setup changed; start setup again");
+          }
+          try {
+            if (pending === undefined) this.options.secrets.create(replacement);
+            else this.options.secrets.replace(pending.reference, replacement);
+          } finally {
+            // A store failure can occur after the atomic rename. Retire only
+            // attempts whose credential changed, preserving usable old state
+            // when the write failed before replacing it.
+            for (const attempt of this.attempts.values()) {
+              if (attempt.status === "pending" && attempt.credential !== null && !this.credentialIsCurrent(attempt.credential)) this.settle(attempt, "cancelled");
+            }
+          }
+          return setupResponse(request.existing_app.app_id, "app_created");
+        }
         const active = this.activeNangoBundle();
         const target = active ?? findPendingSlackAppCredentialsV1(this.options.secrets);
         if (target !== undefined) {
@@ -248,6 +274,7 @@ export class SlackOrganizationSetupWorkflowV1 {
   async installStatus(input: unknown, accessToken: string): Promise<OrganizationSlackInstallStatusResponseV1> {
     const attempt = this.ownedAttempt(input, this.owner(accessToken));
     if (typeof attempt === "string") return this.expired(attempt);
+    if (attempt.status === "pending" && attempt.credential !== null && !this.credentialIsCurrent(attempt.credential)) this.settle(attempt, "cancelled");
     // A concurrent check or setup decides first; the client polls again.
     if (attempt.status !== "pending" || attempt.credential === null || this.busy) return statusResponse(attempt);
     const credential = attempt.credential;
@@ -268,6 +295,9 @@ export class SlackOrganizationSetupWorkflowV1 {
       const verifier: SlackConnectionVerifierV1 = { verifyConnection: async (token, signal) => {
         const verified = await this.options.verifier.verifyConnection(token, signal);
         this.owner(accessToken);
+        if (attempt.status !== "pending" || !this.credentialIsCurrent(credential)) {
+          throw new AuthorityOperationError("conflict", "Slack setup changed; start setup again");
+        }
         return verified;
       } };
       const activation = {
@@ -295,7 +325,7 @@ export class SlackOrganizationSetupWorkflowV1 {
       this.settle(attempt, "complete", null, result);
     } catch (error) {
       if (error instanceof AuthorityOperationError) {
-        // The caller is no longer an owner: nothing was written, and the attempt ends.
+        // Ownership or the pending credential changed: no activation was written.
         this.settle(attempt, "cancelled");
         throw error;
       }
@@ -372,6 +402,17 @@ export class SlackOrganizationSetupWorkflowV1 {
     return active === undefined
       ? undefined
       : findSlackAppCredentialsByReferenceSha256V1(this.options.secrets, active.state.credential_reference_sha256);
+  }
+
+  private requireNoActiveConnection(): void {
+    if (readActiveSlackConnectionV1(this.options.database) !== undefined) {
+      throw new AuthorityOperationError("conflict", "Slack is already connected; an existing app can only be adopted before the first install");
+    }
+  }
+
+  private credentialIsCurrent(credential: FoundSlackAppCredentialsV1): boolean {
+    try { return this.options.secrets.read(credential.reference) === serializeSlackAppCredentialsV1(credential.credentials); }
+    catch { return false; }
   }
 
   /** The pending app, else the connected Nango app (a reconnect). */
