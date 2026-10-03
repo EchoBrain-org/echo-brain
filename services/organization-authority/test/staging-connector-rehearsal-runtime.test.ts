@@ -59,7 +59,7 @@ vi.mock('../src/composition/organization-authority-composition-root.js', () => (
           : { organization_id: 'org_fixture', principal_id: 'prn_other', membership_id: 'mem_other', membership_type: 'member', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' };
       },
     }, {}).applications;
-    return { processing: 'active', address: {}, runExclusive: <T>(operation: (signal: AbortSignal) => Promise<T>) => operation(new AbortController().signal), async runProcessingCycleOnce() {}, async drain() {}, async close() {} };
+    return { processing: 'active', address: {}, runExclusive: <T>(operation: (signal: AbortSignal) => Promise<T>) => operation(new AbortController().signal), async drain() {}, async close() {} };
   },
 }));
 

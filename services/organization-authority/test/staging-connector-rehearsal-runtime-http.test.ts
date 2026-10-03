@@ -31,7 +31,7 @@ function selection() {
 it('serves owner-bound Jira connection and retained Granola, Jira and Slack pointer capture through staging HTTP across restart', async () => {
   const root = join(realpathSync(tmpdir()), `echo-staging-connector-${randomUUID()}`); roots.push(root);
   prepare(root);
-  const config = configuration(root, STAGING_AUTHORITY_ORIGIN_V1);
+  const config = configuration(root);
   privateFile(config.oidc.config_file, JSON.stringify({ issuer: 'https://issuer.example.test', client_id: 'connector-rehearsal-client', redirect_uri: `${STAGING_AUTHORITY_ORIGIN_V1}/v2/session/oidc/callback`, tenant: { kind: 'issuer' }, id_token_algorithms: ['RS256'], client_authentication: 'none' }));
   privateFile(config.nango.secret_key_file, 'synthetic-nango-key-0000000000000000'); privateFile(config.granola.credential_file, `grn_${'a'.repeat(32)}`); privateFile(config.granola.owner_email_file, FIXTURE_EMAIL); privateFile(config.openrouter.credential_file, 'synthetic-openrouter-key-000000000000');
   const stateDirectory = join(root, 'state');
@@ -68,7 +68,7 @@ it('serves owner-bound Jira connection and retained Granola, Jira and Slack poin
   const profile_sha256 = canonicalSha256(selected.profile);
   privateFile(join(root, 'private', 'staging-connector-rehearsal.json'), JSON.stringify(selected.profile));
   const open = async () => openStagingConnectorRehearsalService({
-    state_directory: manifest.state_directory, authority_url: STAGING_AUTHORITY_ORIGIN_V1, host: '127.0.0.1', port: await port(), scheduling: 'periodic', worker_interval_ms: 60_000,
+    state_directory: manifest.state_directory, authority_url: STAGING_AUTHORITY_ORIGIN_V1, host: '127.0.0.1', port: await port(), worker_interval_ms: 60_000,
     oidc: oidc.configuration, client_authentication: { method: 'none' }, pkce_key_file: manifest.pkce_key_file,
     slack_nango: { secret_key: readPrivateAuthorityCredential(`file:${config.nango.secret_key_file}`), integration_key: 'slack' },
     granola_credential_file: manifest.granola_credential_file, granola_owner_email_file: manifest.granola_owner_email_file, openrouter_credential_file: manifest.llm_credential_file,

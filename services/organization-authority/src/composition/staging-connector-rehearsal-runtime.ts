@@ -170,7 +170,7 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
   const authority = new URL(config.authority_url);
   if (config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 || selection.authority_host !== authority.host ||
       selection.authority_host !== 'authority-staging.echobrain.org' || (config.slack_nango.base_url !== undefined && config.slack_nango.base_url !== 'https://api.nango.dev') ||
-      (config.scheduling !== undefined && config.scheduling !== 'periodic') || config.jira_person_live !== undefined ||
+      config.jira_person_live !== undefined ||
       config.staging_synthetic_meetings_directory !== undefined || config.staging_synthetic_owner_email !== undefined ||
       dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.person_http_runtime_factory_with_slack !== undefined ||
       config.slack_public_channel_context !== undefined) {

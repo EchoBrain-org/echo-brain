@@ -1,13 +1,10 @@
 import { annotateCoreRuntimeV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationScopeV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
 export const DEFAULT_MEETING_PROCESSING_WORKER_INTERVAL_MS = 30_000;
-export type MeetingProcessingWorkerSchedulingV1 = "periodic" | "manual";
 
 export interface SerializedMeetingProcessingWorkerOptions {
   readonly observation?: CoreRuntimeObservationScopeV1;
   readonly runCycle: (signal: AbortSignal) => Promise<void>;
   readonly intervalMs?: number;
-  /** Manual mode keeps the writer gate but starts no automatic source cycle. */
-  readonly scheduling?: MeetingProcessingWorkerSchedulingV1;
   /** Requests derived work only after the cycle releases the writer gate. */
   readonly onCycleComplete?: () => void;
   /** A cycle failure notification; callback failures never stop the worker. */
@@ -39,7 +36,6 @@ function errorFrom(value: unknown): Error {
 export class SerializedMeetingProcessingWorker {
   private readonly controller = new AbortController();
   private readonly intervalMs: number;
-  private readonly scheduling: MeetingProcessingWorkerSchedulingV1;
   private readonly loop: Promise<void>;
   /**
    * The worker is also the one in-process exclusion boundary for bounded
@@ -58,11 +54,7 @@ export class SerializedMeetingProcessingWorker {
     if (!Number.isSafeInteger(this.intervalMs) || this.intervalMs < 1) {
       throw new Error('meeting-processing worker interval must be a positive integer');
     }
-    this.scheduling = options.scheduling ?? "periodic";
-    if (this.scheduling !== "periodic" && this.scheduling !== "manual") {
-      throw new Error("meeting-processing worker scheduling is invalid");
-    }
-    this.loop = this.scheduling === "periodic" ? this.run() : Promise.resolve();
+    this.loop = this.run();
   }
 
   /** Aborts the active cycle or delay and resolves only after it has stopped. */
@@ -78,20 +70,6 @@ export class SerializedMeetingProcessingWorker {
    */
   runExclusive<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
     return observeCoreRuntimeRootV1("worker_request", () => this.runExclusiveObserved(operation), this.options.observation);
-  }
-
-  /** Runs one caller-bounded cycle through the same writer gate as periodic work. */
-  async runCycleOnce(signal: AbortSignal): Promise<void> {
-    signal.throwIfAborted();
-    await this.runExclusive(async (workerSignal) => {
-      const combined = AbortSignal.any([signal, workerSignal]);
-      combined.throwIfAborted();
-      await this.options.runCycle(combined);
-      combined.throwIfAborted();
-    });
-    if (!this.controller.signal.aborted && !signal.aborted) {
-      this.options.onCycleComplete?.();
-    }
   }
 
   private runExclusiveObserved<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -132,7 +110,10 @@ export class SerializedMeetingProcessingWorker {
     while (!signal.aborted) {
       let failed = false;
       try {
-        await this.runCycleOnce(signal);
+        await this.runExclusive((exclusiveSignal) =>
+          this.options.runCycle(exclusiveSignal),
+        );
+        if (!signal.aborted) this.options.onCycleComplete?.();
       } catch (failure) {
         failed = true;
         if (!signal.aborted) this.report(failure);

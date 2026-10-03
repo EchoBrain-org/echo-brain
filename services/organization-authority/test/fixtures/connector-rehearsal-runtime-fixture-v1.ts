@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { join } from 'node:path';
@@ -12,11 +12,7 @@ import type { ObserveSlackIdentityLinkChallengeInput, SlackIntegrationProvider }
 import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1';
 import { slackConnectionVerificationEvidenceSha256V1 } from '../../../../providers/slack/server/src/organization-control-plane/application/slack-connection-verification-evidence-v1.js';
 import type { BegunPersonOidcLogin } from '../../src/application/person-identity-sessions.js';
-import { runConnectorRehearsalV1, type ConnectorRehearsalConfigurationV1 } from '../../src/composition/connector-rehearsal-runtime-v1.js';
-import { prepare } from '../../../../tools/connector-rehearsal.mjs';
 import { FIXTURE_JIRA_CLOUD_V1, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fake-jira-v1.js';
-export { prepare } from '../../../../tools/connector-rehearsal.mjs';
-export const FIXTURE_AUTHORITY = 'https://connector-rehearsal.example.test';
 export const FIXTURE_EMAIL = 'founder@example.test';
 export const FIXTURE_CLOUD = FIXTURE_JIRA_CLOUD_V1;
 
@@ -36,42 +32,25 @@ export function privateFile(path: string, value: string): void {
   chmodSync(path, 0o600);
 }
 
-export function configuration(root: string, authority = FIXTURE_AUTHORITY): ConnectorRehearsalConfigurationV1 {
+/** Creates a new private root whose `private/` directory holds the staging profile and test inputs. */
+export function prepare(root: string): void {
+  for (const path of [root, join(root, 'private')]) {
+    mkdirSync(path, { mode: 0o700 });
+    chmodSync(path, 0o700);
+  }
+}
+
+export function configuration(root: string) {
   const privateRoot = join(root, 'private');
   return {
-    schema_version: 1,
-    kind: 'echo-connector-rehearsal-config-v1',
-    authority_url: authority,
     organization_name: 'Connector rehearsal fixture',
     owner_name: 'Fixture Founder',
     owner_email: FIXTURE_EMAIL,
-    oidc: { config_file: join(privateRoot, 'oidc-config.json'), client_secret_file: null },
-    nango: { secret_key_file: join(privateRoot, 'nango-secret-key'), slack_integration_key: 'slack', jira_integration_key: 'jira' },
-    jira: { cloud_id: FIXTURE_CLOUD, project: 'ECHO' },
+    oidc: { config_file: join(privateRoot, 'oidc-config.json') },
+    nango: { secret_key_file: join(privateRoot, 'nango-secret-key') },
     granola: { credential_file: join(privateRoot, 'granola-organization-key'), owner_email_file: join(privateRoot, 'granola-owner-email') },
     openrouter: { credential_file: join(privateRoot, 'openrouter-credential') },
   };
-}
-
-export function prepareConfiguration(root: string, authority = FIXTURE_AUTHORITY): ConnectorRehearsalConfigurationV1 {
-  prepare(root);
-  const config = configuration(root, authority);
-  privateFile(config.oidc.config_file, JSON.stringify({
-    issuer: 'https://issuer.example.test', client_id: 'connector-rehearsal-client',
-    redirect_uri: `${authority}/v2/session/oidc/callback`, tenant: { kind: 'issuer' },
-    id_token_algorithms: ['RS256'], client_authentication: 'none',
-  }));
-  privateFile(config.nango.secret_key_file, 'synthetic-nango-key-0000000000000000');
-  privateFile(config.granola.credential_file, `grn_${'a'.repeat(32)}`);
-  privateFile(config.granola.owner_email_file, FIXTURE_EMAIL);
-  privateFile(config.openrouter.credential_file, 'synthetic-openrouter-key-000000000000');
-  privateFile(join(root, 'connector-rehearsal.json'), JSON.stringify(config));
-  return config;
-}
-
-export async function quietly(input: Parameters<typeof runConnectorRehearsalV1>[0]): Promise<number> {
-  const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-  try { return await runConnectorRehearsalV1(input); } finally { write.mockRestore(); }
 }
 
 export function providerSeams() {
