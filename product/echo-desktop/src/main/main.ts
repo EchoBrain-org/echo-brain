@@ -491,11 +491,12 @@ function createWindow(): BrowserWindow {
   });
   // Quitting closes the window before macOS stops reporting app events.
   created.on('closed', () => { if (window === created) window = null; });
+  // Hidden tests drive lifecycle explicitly; native focus must not override their state.
   created.on('blur', () => {
-    if (process.platform === 'darwin') return;
+    if (process.platform === 'darwin' || test.ECHO_DESKTOP_HIDDEN) return;
     setTimeout(() => { if (!BrowserWindow.getFocusedWindow()) send('lifecycle.conceal', {}); }, 150);
   });
-  created.on('focus', () => { if (process.platform !== 'darwin') send('lifecycle.resume', {}); });
+  created.on('focus', () => { if (process.platform !== 'darwin' && !test.ECHO_DESKTOP_HIDDEN) send('lifecycle.resume', {}); });
   void created.loadURL(`${ORIGIN}/index.html`);
   return created;
 }

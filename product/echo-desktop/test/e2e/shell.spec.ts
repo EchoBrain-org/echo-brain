@@ -113,3 +113,27 @@ test('while another app is in front the page is covered, and the project rows st
   await expect(page.getByTestId('ask-field')).toHaveValue('ship');
   await expect(page.getByTestId('match-row')).toHaveCount(1);
 });
+
+test('hidden tests ignore native window focus changes but honor explicit conceal and resume', async () => {
+  run = await launch();
+  const { page, app } = run;
+  await page.getByTestId('sidebar-capture').click();
+  await page.getByTestId('compose-body').fill('Synthetic lifecycle proof');
+  await page.getByTestId('compose-send').click();
+  const toast = page.getByTestId('toast');
+  await expect(toast).toHaveText('Saved for you');
+  expect(run.calls().filter(call => call.method === 'POST' && call.path === '/v3/person/updates')).toHaveLength(1);
+  const nativeEvent = (name: 'blur' | 'focus') => app.evaluate(async ({ BrowserWindow }, event) => {
+    BrowserWindow.getAllWindows()[0]!.emit(event);
+    // Exercise Linux's real 150ms blur callback before checking that the toast stays visible.
+    await new Promise(resolve => setTimeout(resolve, 175));
+  }, name);
+  await nativeEvent('blur');
+  await expect(toast).toHaveText('Saved for you');
+  await emit(app, 'echo-test:conceal');
+  await expect(toast).toHaveCount(0);
+  await nativeEvent('focus');
+  await expect(toast).toHaveCount(0);
+  await emit(app, 'echo-test:resume');
+  await expect(toast).toHaveText('Saved for you');
+});
