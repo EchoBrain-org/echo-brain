@@ -1,7 +1,7 @@
 import { render, type ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { on } from './api.js';
-import { ConfirmSignOut, ConnectedTools } from './screens/account.js';
+import { ConfirmSignOut } from './screens/account.js';
 import { AskView, Bar, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Home } from './screens/home.js';
@@ -16,6 +16,7 @@ import { ProjectSettings, ProjectSettingsButton } from './screens/project-settin
 import { Reader } from './screens/reader.js';
 import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
+import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
   acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeProjects, closeReader,
   closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, openMine, pageCovered,
@@ -120,11 +121,12 @@ function App() {
   const inProject = state.route.page === 'project' ? state.route.project : null;
   const organization = state.route.page === 'organization' ? state.organization : null;
   const mine = state.route.page === 'mine';
+  const tools = state.route.page === 'tools' ? state.tools : null;
   // Another app is in front: cover what a project, Mine, People & invites, an
   // answer or an original shows until ECHO is back. Project rows stay (Home's
   // and the sidebar's), so a file dragged from Finder can still be dropped on one.
   const covered = pageCovered(state);
-  const pageName = inProject ? inProject.name : organization ? 'People & invites' : mine ? 'Mine' : null;
+  const pageName = inProject ? inProject.name : organization ? 'People & invites' : tools ? 'Tools' : mine ? 'Mine' : null;
   const title = covered ? 'ECHO' : state.ask ? 'Ask' : pageName ?? 'ECHO';
   // Back leaves Ask for the page it was asked from; asked over a reader, Back goes to the reader.
   const backLabel = covered ? null : state.ask && state.reader ? 'Back'
@@ -143,6 +145,7 @@ function App() {
           : state.reader ? <Reader state={state} reader={state.reader} backTo={pageName ?? 'Home'} />
           : inProject ? <Project state={state} project={inProject} />
           : organization ? <Organization state={state} page={organization} />
+          : tools ? <Tools state={state} page={tools} />
           : mine ? <Mine state={state} /> : <Home state={state} />}
       </main>
       {/* Always there, so a screen reader announces each toast as it appears. A save only Mine shows opens it. */}
@@ -159,7 +162,8 @@ function App() {
       {pane && <SourcePane state={state} />}
       {state.compose && !state.compose.hidden && <Compose state={state} />}
       {!state.concealed && <ProjectSettings state={state} />}
-      {sheet?.kind === 'tools' ? <ConnectedTools state={state} sheet={sheet} />
+      {sheet?.kind === 'tool-connect' ? <ToolConnect sheet={sheet} />
+        : sheet?.kind === 'tool-manage' ? <ToolManage sheet={sheet} />
         : sheet?.kind === 'people' ? !state.concealed && <People state={state} sheet={sheet} />
         : sheet?.kind === 'new-project' ? <NewProject state={state} sheet={sheet} />
         : sheet && <ConfirmSignOut state={state} sheet={sheet} />}

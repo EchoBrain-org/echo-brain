@@ -14,7 +14,7 @@ import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.
 import {
   abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, invitationView, isRecordRef, listView,
   membersView, noteMatchesView, noteTitle, openView, projectMatchesView, projectPageView, projectSettingsView, projectView,
-  NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolsView, unwrap, ViewError, writeStatusView,
+  NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -85,6 +85,7 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
   'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
+  'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
@@ -614,6 +615,27 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
     case 'account.tools': {
       const { expect } = params as Params<'account.tools'>;
       return forAccount(method, expect, ['tools'], stdout => toolsView(lastJson(stdout), expect.membership_id));
+    }
+    // Each tool step is one short client call, the same verbs as the terminal's
+    // `person tools <verb> --tool <id>`. Connect returns once the page is open;
+    // the window then reads the attempt every few seconds, so no call holds the
+    // session for the minutes a person takes in the browser.
+    case 'tools.connect': {
+      const { expect, tool_id: tool } = params as Params<'tools.connect'>;
+      if (typeof tool !== 'string' || !TOOL_ID.test(tool)) return code('invalid_request');
+      return forAccount(method, expect, ['tools', 'connect', option('tool', tool), '--no-wait'], stdout => toolAttemptView(lastJson(stdout)));
+    }
+    case 'tools.status':
+    case 'tools.cancel': {
+      const { expect, tool_id: tool, attempt_id: attempt } = params as Params<'tools.status'>;
+      if (typeof tool !== 'string' || !TOOL_ID.test(tool) || typeof attempt !== 'string' || !TOOL_ATTEMPT_ID.test(attempt)) return code('invalid_request');
+      const verb = method === 'tools.status' ? 'status' : 'cancel';
+      return forAccount(method, expect, ['tools', verb, option('tool', tool), option('attempt-id', attempt)], stdout => toolAttemptStatusView(lastJson(stdout)));
+    }
+    case 'tools.disconnect': {
+      const { expect, tool_id: tool } = params as Params<'tools.disconnect'>;
+      if (typeof tool !== 'string' || !TOOL_ID.test(tool)) return code('invalid_request', true);
+      return forAccount(method, expect, ['tools', 'disconnect', option('tool', tool)], () => null);
     }
     case 'account.signOut': {
       const { expect } = params as Params<'account.signOut'>;
