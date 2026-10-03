@@ -75,7 +75,7 @@ function fixture(options: {
   const intake = (value?: Database.Database, representation: 'pointer' | 'excerpt' = 'pointer') => createJiraContextIntakeV1({
     transport, project: 'ECHO', representation,
     source_instance_id: sourceInstanceId, organization_id: OWNER.organization_id, authority,
-    require_read_current: () => undefined, ...(value === undefined ? {} : { retention: { disposition: 'retained', database: value } }),
+    require_read_current: compositionCurrent, ...(value === undefined ? {} : { retention: { disposition: 'retained', database: value } }),
     now: () => new Date('2026-10-03T00:00:00.000Z'),
   });
   return { calls, fetch, compositionCurrent, intake, setIssue(value: ReturnType<typeof issue>) { currentIssue = value; } };
