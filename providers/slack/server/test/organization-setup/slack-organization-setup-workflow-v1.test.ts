@@ -195,8 +195,174 @@ function seedWaitingCard(database: Database.Database): void {
 
 const SETUP_REQUEST = { request_id: `oss_${uuid(1)}`, configuration_token: CONFIG_TOKEN };
 const BEGIN_REQUEST = { request_id: `osi_${uuid(1)}` };
+const EXISTING_APP = { app_id: "A0C6AEG49TQ", client_id: "9999.8888", client_secret: `${CLIENT_SECRET}-existing`, signing_secret: `${SIGNING_SECRET}-existing` };
+const ADOPT_REQUEST = { ...SETUP_REQUEST, existing_app: EXISTING_APP };
 
 describe("Slack organization setup workflow v1", () => {
+  it("adopts an existing app under the single pending handle and retires its old install attempt", async () => {
+    const f = setup();
+    await f.workflow.setup(SETUP_REQUEST, "owner");
+    const pending = findPendingSlackAppCredentialsV1(f.secrets)!;
+    const oldAttempt = await f.workflow.beginInstall(BEGIN_REQUEST, "owner");
+    f.finishConnect();
+
+    await expect(f.workflow.setup(ADOPT_REQUEST, "owner")).resolves.toMatchObject({ app_id: EXISTING_APP.app_id, organization_setup: "app_created" });
+    expect(f.manifest.createApp).toHaveBeenCalledOnce();
+    expect(f.manifest.updateApp).toHaveBeenCalledWith(expect.objectContaining({ configuration_token: CONFIG_TOKEN, app_id: EXISTING_APP.app_id }));
+    expect(f.secrets.listReferences()).toEqual([pending.reference]);
+    expect(findPendingSlackAppCredentialsV1(f.secrets)).toEqual({ reference: pending.reference,
+      credentials: { kind: "echo-slack-app-credentials-v1", ...EXISTING_APP, nango_connection_id: null } });
+    await expect(f.workflow.installStatus({ attempt_id: oldAttempt.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
+    expect(readActiveSlackConnectionV1(f.database)).toBeUndefined();
+    expect(f.verifier.verifyConnection).not.toHaveBeenCalled();
+
+    // Restart proves the next install reads the adopted app's durable credentials.
+    const restarted = f.restart();
+    const next = await restarted.beginInstall({ request_id: `osi_${uuid(2)}` }, "owner");
+    expect(f.nango.createConnectSession).toHaveBeenLastCalledWith(expect.objectContaining({ client_id: EXISTING_APP.client_id, client_secret: EXISTING_APP.client_secret }));
+    f.finishConnect({ app_id: EXISTING_APP.app_id });
+    await expect(restarted.installStatus({ attempt_id: next.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete" });
+    expect(readActiveSlackConnectionV1(f.database)?.connection.provider_app_id).toBe(EXISTING_APP.app_id);
+  });
+
+  it("adopts an existing app without creating a Slack app and refuses non-owners", async () => {
+    const f = setup();
+    await expect(f.workflow.setup(ADOPT_REQUEST, "employee")).rejects.toMatchObject({ code: "unauthorized" });
+    expect(f.manifest.updateApp).not.toHaveBeenCalled();
+    expect(f.secrets.listReferences()).toHaveLength(0);
+    await f.workflow.setup(ADOPT_REQUEST, "owner");
+    expect(f.manifest.createApp).not.toHaveBeenCalled();
+    expect(f.secrets.listReferences()).toHaveLength(1);
+    expect(findPendingSlackAppCredentialsV1(f.secrets)?.credentials).toMatchObject({ ...EXISTING_APP, nango_connection_id: null });
+  });
+
+  it("refuses adoption before touching Slack when any connection is active, even if its credentials are unavailable", async () => {
+    const f = setup();
+    const active = await f.connect();
+    const read = vi.spyOn(f.secrets, "read").mockImplementation(() => { throw new Error("unavailable fixture store"); });
+    try {
+      for (const app_id of ["A0APP1", EXISTING_APP.app_id]) {
+        await expect(f.workflow.setup({ ...ADOPT_REQUEST, existing_app: { ...EXISTING_APP, app_id } }, "owner")).rejects.toMatchObject({ code: "conflict" });
+      }
+      expect(f.manifest.updateApp).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+      expect(readActiveSlackConnectionV1(f.database)).toEqual(active);
+    } finally { read.mockRestore(); }
+  });
+
+  it.each(["provider", "store"] as const)("keeps the pending app and install usable after an adoption %s failure", async (failure) => {
+    const f = setup();
+    await f.workflow.setup(SETUP_REQUEST, "owner");
+    const pending = findPendingSlackAppCredentialsV1(f.secrets)!;
+    const begun = await f.workflow.beginInstall(BEGIN_REQUEST, "owner");
+    if (failure === "provider") f.manifest.updateApp.mockRejectedValueOnce(new Error(`failed ${CONFIG_TOKEN}`));
+    else vi.spyOn(f.secrets, "replace").mockImplementationOnce(() => { throw new Error("fixture write failed"); });
+    await expect(f.workflow.setup(ADOPT_REQUEST, "owner")).rejects.toMatchObject({ code: "unavailable" });
+    expect(findPendingSlackAppCredentialsV1(f.secrets)).toEqual(pending);
+    expect(f.secrets.listReferences()).toEqual([pending.reference]);
+    f.finishConnect();
+    await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete" });
+    expect(readActiveSlackConnectionV1(f.database)?.connection.provider_app_id).toBe("A0APP1");
+  });
+
+  it("retires the old attempt if the store reports failure after replacing the pending bundle", async () => {
+    const f = setup();
+    await f.workflow.setup(SETUP_REQUEST, "owner");
+    const reference = findPendingSlackAppCredentialsV1(f.secrets)!.reference;
+    const begun = await f.workflow.beginInstall(BEGIN_REQUEST, "owner");
+    const replace = f.secrets.replace.bind(f.secrets);
+    vi.spyOn(f.secrets, "replace").mockImplementationOnce((handle, secret) => {
+      replace(handle, secret);
+      throw new Error("fixture directory sync failed");
+    });
+    await expect(f.workflow.setup(ADOPT_REQUEST, "owner")).rejects.toMatchObject({ code: "unavailable" });
+    expect(f.secrets.listReferences()).toEqual([reference]);
+    expect(findPendingSlackAppCredentialsV1(f.secrets)?.credentials.app_id).toBe(EXISTING_APP.app_id);
+    f.finishConnect();
+    await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
+    expect(readActiveSlackConnectionV1(f.database)).toBeUndefined();
+  });
+
+  it("blocks install work while adoption updates the manifest, then cancels the previous attempt", async () => {
+    const f = setup();
+    await f.workflow.setup(SETUP_REQUEST, "owner");
+    const begun = await f.workflow.beginInstall(BEGIN_REQUEST, "owner");
+    f.finishConnect();
+    let release!: () => void;
+    f.manifest.updateApp.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve; }));
+    const adopting = f.workflow.setup(ADOPT_REQUEST, "owner");
+    await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "pending" });
+    await expect(f.workflow.beginInstall({ request_id: `osi_${uuid(2)}` }, "owner")).rejects.toMatchObject({ code: "conflict" });
+    expect(f.verifier.verifyConnection).not.toHaveBeenCalled();
+    release();
+    await adopting;
+    await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
+  });
+
+  it("refuses adoption while a status check is activating the current pending app", async () => {
+    const f = setup();
+    await f.workflow.setup(SETUP_REQUEST, "owner");
+    const begun = await f.workflow.beginInstall(BEGIN_REQUEST, "owner");
+    f.finishConnect();
+    let release!: () => void;
+    const verify = f.verifier.verifyConnection.getMockImplementation()!;
+    f.verifier.verifyConnection.mockImplementationOnce(async (token) => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return verify(token);
+    });
+    const checking = f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner");
+    await vi.waitFor(() => expect(f.verifier.verifyConnection).toHaveBeenCalledOnce());
+    await expect(f.workflow.setup(ADOPT_REQUEST, "owner")).rejects.toMatchObject({ code: "conflict" });
+    expect(f.manifest.updateApp).not.toHaveBeenCalled();
+    release();
+    await expect(checking).resolves.toMatchObject({ status: "complete" });
+  });
+
+  it("fences an old credential snapshot replaced by another workflow during Slack verification", async () => {
+    const f = setup();
+    await f.workflow.setup(SETUP_REQUEST, "owner");
+    const begun = await f.workflow.beginInstall(BEGIN_REQUEST, "owner");
+    f.finishConnect();
+    const verify = f.verifier.verifyConnection.getMockImplementation()!;
+    f.verifier.verifyConnection.mockImplementationOnce(async (token) => {
+      const verified = await verify(token);
+      await f.restart().setup(ADOPT_REQUEST, "owner");
+      return verified;
+    });
+    await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).rejects.toMatchObject({ code: "conflict" });
+    await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "cancelled" });
+    expect(readActiveSlackConnectionV1(f.database)).toBeUndefined();
+    expect(findPendingSlackAppCredentialsV1(f.secrets)?.credentials.app_id).toBe(EXISTING_APP.app_id);
+  });
+
+  it("rechecks the owner's authority after the manifest update before replacing the pending app", async () => {
+    const f = setup();
+    await f.workflow.setup(SETUP_REQUEST, "owner");
+    const pending = findPendingSlackAppCredentialsV1(f.secrets)!;
+    SESSIONS.demoted = person("owner", 5);
+    try {
+      f.manifest.updateApp.mockImplementationOnce(async () => { SESSIONS.demoted = person("employee", 5); });
+      await expect(f.workflow.setup(ADOPT_REQUEST, "demoted")).rejects.toMatchObject({ code: "unauthorized" });
+      expect(findPendingSlackAppCredentialsV1(f.secrets)).toEqual(pending);
+    } finally { delete SESSIONS.demoted; }
+  });
+
+  it("preserves a connection activated by another workflow while the manifest update was in flight", async () => {
+    const f = setup();
+    await f.workflow.setup(SETUP_REQUEST, "owner");
+    const installer = f.restart();
+    const begun = await installer.beginInstall(BEGIN_REQUEST, "owner");
+    f.finishConnect();
+    f.manifest.updateApp.mockImplementationOnce(async () => {
+      await expect(installer.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete" });
+    });
+    await expect(f.workflow.setup(ADOPT_REQUEST, "owner")).rejects.toMatchObject({ code: "conflict" });
+    const active = readActiveSlackConnectionV1(f.database)!;
+    expect(active.connection.provider_app_id).toBe("A0APP1");
+    expect(findPendingSlackAppCredentialsV1(f.secrets)).toBeUndefined();
+    expect(findSlackAppCredentialsByReferenceSha256V1(f.secrets, active.state.credential_reference_sha256).credentials.app_id).toBe("A0APP1");
+  });
+
   it("upgrades the same app through ordinary setup and reconnect without changing waiting cards or identity links", async () => {
     const f = setup();
     const before = await f.connect();

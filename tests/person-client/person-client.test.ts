@@ -1192,6 +1192,9 @@ describe("Person client", () => {
 
   describe("person tools verbs for Slack", () => {
     const SETUP_TOKEN = "xoxe.xoxp-1-private-setup-token";
+    const EXISTING_APP = { app_id: "A0C6AEG49TQ", client_id: "123456789.987654321", client_secret: "synthetic-client-secret", signing_secret: "synthetic-signing-secret" };
+    const EXISTING_INPUT = { configuration_token: SETUP_TOKEN, client_id: EXISTING_APP.client_id,
+      client_secret: EXISTING_APP.client_secret, signing_secret: EXISTING_APP.signing_secret };
     const CONNECT_LINK = "https://connect.nango.dev/?session_token=private-session";
     const INSTALL = fixtureId("ssi", 1);
     const SIGN_IN = fixtureId("sbl", 7);
@@ -1312,6 +1315,79 @@ describe("Person client", () => {
         expect(started.code, started.stderr).toBe(0);
         expect(started.paths).toEqual(["/v2/organization/tools/slack/install/begin"]);
         expect(lines(started.stdout)).toEqual([{ ok: true, phase: "waiting", attempt_id: INSTALL, expires_at: "2026-08-18T00:12:00.000Z" }]);
+      });
+    });
+
+    it("adopts the selected Slack app from one hidden JSON input without printing credentials", async () => {
+      await withHome(async home => {
+        await installFixtureSession(home);
+        const run = await runTools(home, ["tools", "setup", "--tool", "slack", "--existing-app", EXISTING_APP.app_id, "--no-wait"], {
+          read_input: () => JSON.stringify(EXISTING_INPUT),
+        });
+        expect(run.code, run.stderr).toBe(0);
+        expect(run.prompts).toHaveLength(1);
+        expect(run.prompts[0]).toContain("input hidden");
+        expect(run.paths).toEqual(["/v2/organization/tools/slack/setup", "/v2/organization/tools/slack/install/begin"]);
+        expect(run.bodies[0]).toEqual({ request_id: "oss_00000000-0000-4000-8000-000000000021",
+          configuration_token: SETUP_TOKEN, existing_app: EXISTING_APP });
+        for (const value of Object.values(EXISTING_INPUT)) {
+          expect(run.stdout).not.toContain(value);
+          expect(run.stderr).not.toContain(value);
+        }
+      });
+    });
+
+    it("refuses conflicting or invalid existing-app flags before reading input or making a request", async () => {
+      await withHome(async home => {
+        await installFixtureSession(home);
+        for (const args of [["--existing-app", EXISTING_APP.app_id, "--reconnect"], ["--existing-app", "bad-private-value"],
+          ["--existing-app", "A"], ["--existing-app", "A".repeat(65)]]) {
+          const run = await runTools(home, ["tools", "setup", "--tool", "slack", ...args], {
+            read_input: () => { throw new Error("secret input must not be read"); },
+          });
+          expect(run.code).not.toBe(0);
+          expect(run.prompts).toEqual([]);
+          expect(run.paths).toEqual([]);
+          expect(run.stderr).not.toContain("bad-private-value");
+          expect(run.stderr).not.toContain("secret input must not be read");
+        }
+        for (const [flag, value] of Object.entries(EXISTING_INPUT)) {
+          const run = await runTools(home, ["tools", "setup", "--tool", "slack", "--existing-app", EXISTING_APP.app_id,
+            `--${flag.replaceAll("_", "-")}`, value]);
+          expect(run.code).toBe(2);
+          expect(run.prompts).toEqual([]);
+          expect(run.paths).toEqual([]);
+          expect(run.stdout).toBe("");
+          expect(run.stderr).not.toContain(value);
+        }
+      });
+    });
+
+    it("rejects malformed adoption JSON and credentials before any request without echoing input", async () => {
+      await withHome(async home => {
+        await installFixtureSession(home);
+        const values = [
+          '{"configuration_token":"private-malformed-json"',
+          JSON.stringify({ ...EXISTING_INPUT, app_id: "A0OTHER" }),
+          JSON.stringify({ ...EXISTING_INPUT, client_id: "private-invalid-client-id" }),
+          JSON.stringify({ ...EXISTING_INPUT, configuration_token: "private invalid token" }),
+          JSON.stringify({ ...EXISTING_INPUT, client_secret: "private invalid secret" }),
+          JSON.stringify({ ...EXISTING_INPUT, signing_secret: "x".repeat(256) }),
+          JSON.stringify({ configuration_token: SETUP_TOKEN, client_id: EXISTING_APP.client_id, client_secret: EXISTING_APP.client_secret }),
+          JSON.stringify([EXISTING_INPUT]),
+          "null",
+        ];
+        for (const value of values) {
+          const run = await runTools(home, ["tools", "setup", "--tool", "slack", "--existing-app", EXISTING_APP.app_id], { read_input: () => value });
+          expect(run.code).toBe(1);
+          expect(run.prompts).toHaveLength(1);
+          expect(run.paths).toEqual([]);
+          expect(run.stdout).toBe("");
+          expect(JSON.parse(run.stderr).error).toBe("Slack existing-app input is invalid");
+          for (const secret of [...Object.values(EXISTING_INPUT), "private-malformed-json", "private-invalid-client-id", "private invalid secret"]) {
+            expect(run.stderr).not.toContain(secret);
+          }
+        }
       });
     });
 

@@ -64,6 +64,8 @@ ECHO client, not an Authority administrator operation on the host. An owner
 runs `echo-brain person tools setup --tool slack`; ECHO creates the
 organization's private Slack app and installs it through Nango, and the
 Authority activates the connection only after verifying it. The
+owner may choose an existing app with `--existing-app` only before an active
+organization Slack connection exists. The
 [Slack connection onboarding gate](organization-control-plane.md#slack-connection-onboarding-gate)
 defines that ceremony and its credential custody.
 

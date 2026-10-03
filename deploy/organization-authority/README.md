@@ -221,8 +221,8 @@ mode-`0700` private data directory.
 ### Slack setup, in the app
 
 Nothing Slack-specific needs to happen in the Slack admin console or on the
-host before `doctor` and `prepare`. ECHO creates the private "ECHO" Slack app
-itself, from its own manifest recipe, through Slack's Manifest API; the
+host before `doctor` and `prepare`. Standard setup creates the private "ECHO"
+Slack app from ECHO's own manifest recipe through Slack's Manifest API; the
 Interactivity Request URL, the OAuth redirect URLs, and the four required bot
 scopes (`chat:write`, `im:history`, `im:write`, `users:read`) are part of that
 recipe, so nobody sets them by hand
@@ -250,6 +250,45 @@ app's Connected tools page shows status only for now. Add `--reconnect` to
 resume an unfinished install, or reconnect after Slack was uninstalled, after
 Nango lost the connection, or after an install landed in another workspace,
 without a new setup token.
+
+#### Use an existing Slack app before the first connection
+
+An owner can instead choose an existing app while the organization has **no
+active Slack connection**. This also replaces credentials from an unfinished
+setup. Any active connection blocks this option, even for the same app ID;
+disconnecting a person's Slack link does not remove the organization connection.
+Standard setup and `--reconnect` retain their existing behavior.
+
+Use a matching Person CLI and Authority release that supports `--existing-app`.
+This requires the [coordinated server and client release](../release/README.md#coordinated-server-and-client-release),
+with no state migration. A source change alone does not switch staging or
+upgrade the installed owner client.
+
+The human owner runs the following on their own machine, replacing the
+synthetic app ID with the chosen app's ID:
+
+```sh
+"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup \
+  --tool slack --existing-app A0EXAMPLE
+```
+
+At the hidden prompt, paste one single-line JSON object containing exactly
+`configuration_token`, `client_id`, `client_secret`, and `signing_secret`, all
+strings. Use an app configuration token authorized to update the chosen app
+and that app's client ID, client secret, and signing secret. Only the app ID
+belongs in the command; never put the JSON in shell arguments, shell history,
+logs, or chat. A human may also pipe the privately prepared JSON from standard
+input. `--existing-app` cannot be combined with `--reconnect`.
+
+ECHO applies its current manifest to the chosen app, replaces the pending
+credential bundle, cancels stale pending install attempts, and opens a new
+Nango install. Any prior app remains in Slack; this command does not delete it.
+The human completes browser consent in the intended workspace. Adoption does
+not reconfigure the Nango integration or prove its OAuth configuration aligns
+with the chosen app. Completion still requires the existing app, workspace,
+bot, and scope checks; a different app or workspace is not an acceptable result.
+After installation completes, run `person tools` to verify organization setup,
+then `person tools connect --tool slack` for the owner's personal link.
 
 ### Slack sign-in for the person link
 
