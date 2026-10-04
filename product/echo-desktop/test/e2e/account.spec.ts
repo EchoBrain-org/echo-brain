@@ -173,23 +173,6 @@ test('Open invitation… signs in with the folder the owner sent, and the page n
   expect(readFileSync(join(run.userData, 'logs', 'desktop.log'), 'utf8')).not.toContain(folder);
 });
 
-test('Connected tools… shows what your organization has enabled and whether you are linked', async () => {
-  run = await launch();
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await chooseFromAccountMenu(run, page.getByTestId('account-row'), 'Connected tools…');
-  await expect(page.getByTestId('tools')).toContainText('Ari · https://authority.example');
-  await expect(page.getByTestId('tool-row')).toHaveText([
-    'SlackOrganization: enabled · Your link: Connected',
-    'GranolaNot enabled for this organization. Ask an owner to connect it.',
-  ]);
-  // The external workspace and account ids never reach the page.
-  expect(await page.content()).not.toMatch(/T0123ABCD|U0123ABCD/);
-  expect(run.calls().filter(call => call.path === '/v4/person/tools')).toHaveLength(1);
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('tools')).toHaveCount(0);
-});
-
 test('a sign-out still forgets everything when a status read showed sign-in first', async () => {
   run = await launch('signout-slow');
   const { page, app } = run;

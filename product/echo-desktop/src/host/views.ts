@@ -5,7 +5,7 @@ import type {
   Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, CreatedProject, DocumentSummary,
   Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
   ProjectChange, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
-  Visibility, WriteStatus,
+  ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus,
 } from '../shared/protocol.js';
 import { slackPermalink, ticketPermalink } from '../shared/protocol.js';
 
@@ -668,7 +668,7 @@ export function evidenceView(raw: unknown): SourceEvidence {
   return { label: text(object(value.citation).label), text: text(value.text) };
 }
 
-/** Connected tools: each name and state. External workspace and account ids stay behind. */
+/** Connected tools: each tool's id, name and your connection. External workspace and account ids stay behind. */
 export function toolsView(raw: unknown, membershipId: string): ConnectedTools {
   const value = object(unwrap(raw));
   if (value.schema_version !== 4 || value.kind !== 'echo-organization-person-tools' || value.membership_id !== membershipId) {
@@ -679,9 +679,36 @@ export function toolsView(raw: unknown, membershipId: string): ConnectedTools {
   return {
     tools: tools.map(entry => {
       const tool = object(entry);
-      return { name: text(tool.display_name), enabled: tool.availability === 'enabled', linked: tool.personal_status === 'linked' };
+      const status = tool.availability === 'enabled' ? tool.personal_status : 'unavailable';
+      if (typeof tool.tool_id !== 'string' || !TOOL_ID.test(tool.tool_id) ||
+        (status !== 'linked' && status !== 'unlinked' && status !== 'revoked' && status !== 'unavailable')) throw new ViewError();
+      return { tool_id: tool.tool_id, name: text(tool.display_name), status };
     }),
   };
+}
+
+/** A tool id as the client takes it after --tool. */
+export const TOOL_ID = /^[a-z][a-z0-9-]{0,63}$/;
+/** An attempt id as a tool prints it: Slack's sbl_…, Jira's UUID. */
+export const TOOL_ATTEMPT_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const ATTEMPT_STATUS: ReadonlySet<string> = new Set(['pending', 'complete', 'cancelled', 'expired', 'failed']);
+
+/** connect --no-wait: the waiting line, whichever key the tool names its attempt with. */
+export function toolAttemptView(raw: unknown): ToolAttempt {
+  const value = object(raw);
+  const attemptId = value.attempt_id ?? value.attempt;
+  const expiresAt = isoTime(value.expires_at);
+  if (value.phase !== 'waiting' || typeof attemptId !== 'string' || !TOOL_ATTEMPT_ID.test(attemptId) || expiresAt === undefined) throw new ViewError();
+  return { attempt_id: attemptId, expires_at: expiresAt };
+}
+
+/** status and cancel: only where the attempt is and the tool's failure code. */
+export function toolAttemptStatusView(raw: unknown): ToolAttemptStatus {
+  const value = object(object(raw).result);
+  const reason = value.failure_reason;
+  if (typeof value.status !== 'string' || !ATTEMPT_STATUS.has(value.status) ||
+    !(reason === null || reason === undefined || (typeof reason === 'string' && /^[a-z_]{1,64}$/.test(reason)))) throw new ViewError();
+  return { status: value.status as ToolAttemptStatus['status'], failure_reason: typeof reason === 'string' ? reason : null };
 }
 
 const EXTRACTION: ReadonlySet<string> = new Set<Extraction>([
@@ -722,7 +749,9 @@ const MAYBE_SENT = new Set(['outcome_unknown', 'timeout', 'unavailable', 'transp
 /** A failure the renderer may see: a code, never the server's or client's text. */
 export function failureView(raw: unknown, fallback: string, write: boolean, requestId?: string): Failure {
   const value = raw !== null && typeof raw === 'object' ? raw as Json : {};
-  const code = typeof value.code === 'string' && /^[a-z_]{1,64}$/.test(value.code) ? value.code : fallback;
+  // A tool step that was refused, cancelled or unfinished names its reason instead of a code.
+  const code = typeof value.code === 'string' && /^[a-z_]{1,64}$/.test(value.code) ? value.code
+    : typeof value.reason === 'string' && /^[a-z_]{1,64}$/.test(value.reason) ? value.reason : fallback;
   // An employee change says more: one the Authority refused was not made, and
   // one it made (whose invitation file could not be written) is not unknown.
   const reported = value.mutation_outcome;

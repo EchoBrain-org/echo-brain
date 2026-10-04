@@ -314,11 +314,29 @@ export interface Receipt {
   readonly extraction?: Extraction;
 }
 
-/** One of the organization's tools, and whether you linked your own account to it. */
+/**
+ * Your connection to one tool: linked, not yet (unlinked), stopped (revoked),
+ * or not turned on for your organization (unavailable).
+ */
+export type ToolStatus = 'linked' | 'unlinked' | 'revoked' | 'unavailable';
+
+/** One of the organization's tools and your connection to it. The page never names a tool: it shows what the Authority lists. */
 export interface ConnectedTool {
+  readonly tool_id: string;
   readonly name: string;
-  readonly enabled: boolean;
-  readonly linked: boolean;
+  readonly status: ToolStatus;
+}
+
+/** A connection started in the browser: its id and when the Authority gives up on it. */
+export interface ToolAttempt {
+  readonly attempt_id: string;
+  readonly expires_at: string;
+}
+
+/** Where a started connection is. failure_reason is the tool's own code when it failed. */
+export interface ToolAttemptStatus {
+  readonly status: 'pending' | 'complete' | 'cancelled' | 'expired' | 'failed';
+  readonly failure_reason: string | null;
 }
 
 export interface ConnectedTools {
@@ -416,8 +434,15 @@ export interface HostMethods {
   'documents.abandon': { params: { expect: Expect; request_id: string }; result: null };
   /** Signs the account on screen out of this computer; the reply is the new status. */
   'account.signOut': { params: { expect: Expect }; result: AppStatus };
-  /** Connected tools…: a read, for the account on screen. */
+  /** Tools: the organization's tools and your connection to each, for the account on screen. */
   'account.tools': { params: { expect: Expect }; result: ConnectedTools };
+  /** Connect or Reconnect: opens the tool's page in the browser and returns at once with the attempt. */
+  'tools.connect': { params: { expect: Expect; tool_id: string }; result: ToolAttempt };
+  /** Reads a started connection; a status read is what completes it. */
+  'tools.status': { params: { expect: Expect; tool_id: string; attempt_id: string }; result: ToolAttemptStatus };
+  'tools.cancel': { params: { expect: Expect; tool_id: string; attempt_id: string }; result: ToolAttemptStatus };
+  /** Removes your own connection to the tool. */
+  'tools.disconnect': { params: { expect: Expect; tool_id: string }; result: null };
 }
 
 export interface MainMethods {
@@ -458,7 +483,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
-  'employees.reissue', 'employees.revoke',
+  'employees.reissue', 'employees.revoke', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openSlack', 'source.openTicket', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -467,7 +492,7 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
-  'employees.revoke',
+  'employees.revoke', 'tools.disconnect',
 ]);
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);

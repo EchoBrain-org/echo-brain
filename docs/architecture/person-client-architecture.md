@@ -116,9 +116,13 @@ not claim that the employee is currently online or has a live device session.
 
 ## Account and answer Sources
 
-Ask is the agentic `/v3/person/ask` route with V4 answers
-([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md)); the earlier `/v1` and
-`/v2/person/ask` routes are retired. It keeps the
+Ask uses the agentic routes ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md));
+the earlier `/v1` and `/v2/person/ask` routes are retired. The default CLI Ask and
+desktop project/Mine Ask use `/v3/person/ask` with V4 answers. Desktop global Ask
+selects `person ask --tickets`, using `/v4/person/ask` with V5 answers so the
+person's connected Jira account can contribute live evidence when enabled by
+the Authority. Ticket citations open directly in Jira; they are not retained
+originals. Jira project mapping is not supported. Ask keeps the
 [global/project Ask](../features/global-project-ask-v1.md) scope rules: global
 scope includes authorized originals and approved records; explicit project
 scope is restricted to readable associated context. Uploaded sources remain
@@ -185,15 +189,23 @@ changes and reloaded on return. Runtime processing and telemetry are unchanged.
 
 ## Connected tools
 
-The desktop app's **Account → Connected tools…** reads the organization's
-supported tools and the signed-in person's connection status from the
-Authority through `person tools`. Slack is supported today. The page shows
-status only; it has no Connect or Disconnect button yet. Connecting uses the
-Person CLI's tools verbs: `person tools connect --tool slack` opens Slack's
-sign-in page and polls for completion, or, on a machine without a browser,
+The desktop app's **Tools** page (the sidebar's Tools row, or **Account →
+Connected tools…**) lists every tool the Authority returns from `person tools`,
+grouped by the signed-in person's connection: needs attention (revoked),
+connected, available, and not turned on. The page names no tool itself, so a
+tool the Authority adds appears without desktop changes. Connect, Reconnect and
+Disconnect run the same Person CLI tools verbs as the terminal:
+`person tools connect --tool <id> --no-wait` opens the tool's page and returns
+the attempt, the window reads it with `person tools status --tool <id>
+--attempt-id …` every 2 seconds until it settles (a status read is what
+completes a Slack link), Cancel or Escape runs `person tools cancel`, and
+Manage → Disconnect runs `person tools disconnect --tool <id>`. A failed
+attempt's reason code (`account_mismatch`, `identity_conflict`, …) is shown in
+the app's own words. On a machine without a browser,
 `person tools connect --tool slack --method dm-code --slack-user U…` runs the
-DM-code challenge. An owner sets up the organization's Slack connection the
-same way, with `person tools setup --tool slack`
+DM-code challenge from the terminal. Organization setup stays in the CLI: an
+owner sets up the organization's Slack connection with
+`person tools setup --tool slack`
 ([identity and onboarding](identity-and-onboarding.md)).
 
 `person tools disconnect --tool slack` removes only the current person's Slack

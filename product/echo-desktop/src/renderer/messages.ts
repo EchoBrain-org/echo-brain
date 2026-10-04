@@ -39,3 +39,25 @@ export function message(failure: Failure): string {
   if (failure.mutation_outcome === 'unknown') return 'This may not have been sent.';
   return MESSAGES[failure.code] ?? 'Something went wrong. Try again.';
 }
+
+/**
+ * A tool step that did not finish, in the renderer's words. Every tool reports
+ * from the same small set of reasons, so a new tool needs no new copy.
+ */
+const TOOL_REASONS: Record<string, (name: string) => string> = {
+  provider_rejected: name => `${name} did not confirm the connection. Try again.`,
+  provider_unavailable: name => `${name} is unavailable right now. Try again.`,
+  identity_conflict: name => `This ${name} account is already connected to another ECHO person.`,
+  account_mismatch: name => `That ${name} account does not match the one you connected before. Sign in with that account and try again.`,
+  tool_unavailable: name => `${name} is not turned on for your organization.`,
+  browser_unavailable: name => `The ${name} page could not be opened.`,
+  expired: () => 'That took too long. Try again.',
+  timed_out: () => 'That took too long. Try again.',
+};
+
+export function toolMessage(name: string, reason: string | undefined, failure: Failure | undefined): string {
+  const code = reason ?? failure?.code;
+  const words = code === undefined ? undefined : TOOL_REASONS[code];
+  if (words) return words(name);
+  return failure ? message(failure) : `${name} could not be connected. Try again.`;
+}

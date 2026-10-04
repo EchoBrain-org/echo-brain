@@ -256,7 +256,7 @@ V3 or shared-channel rehearsal state directory, database, or approval binding.
 An owner sets Slack up from their own machine with
 `"$HOME/Library/Application Support/ECHO/cli/bin/echo-brain" person tools setup --tool slack`,
 pasting a Slack app configuration token at its hidden prompt; the ECHO desktop
-app's Connected tools page shows status only for now. Add `--reconnect` to
+app's Tools page connects only each person's own tools, not the organization's. Add `--reconnect` to
 resume an unfinished install, or reconnect after Slack was uninstalled, after
 Nango lost the connection, or after an install landed in another workspace,
 without a new setup token.

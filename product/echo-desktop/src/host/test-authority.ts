@@ -83,6 +83,9 @@ interface Store {
   install(authority: string, authorityId: string, session: Record<string, string>): unknown;
 }
 
+const JIRA_CLOUD = '11111111-2222-4333-8444-555555555555';
+const JIRA_CONNECT_LINK = 'https://connect.nango.example/jira';
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
@@ -270,6 +273,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // The browser, never a real one: past Google, the Authority's callback page
   // posts the new session to the loopback receiver the sign-in began with.
   const openAuthorizationUrl = (address: string): boolean => {
+    // A tool's consent page: the person is "in the browser" until the attempt's reads settle it.
+    if (address === JIRA_CONNECT_LINK) return true;
     const url = new URL(address);
     const state = url.searchParams.get('state') ?? '';
     const handoff = url.origin === IDENTITY_PROVIDER ? handoffs.get(state) : undefined;
@@ -418,6 +423,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }));
   });
 
+  // Your connections to the organization's tools, as Tools changes them.
+  let slackLinked = true;
+  let jiraLinked = false;
+  let jiraAttempt: { attempt: string; expires_at: string; status: string; failure_reason: string | null; reads: number } | null = null;
+
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     const method = init?.method ?? 'GET';
@@ -453,15 +463,45 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       return json({ ...session, access_token: 'B'.repeat(43), refresh_token: 'S'.repeat(43), access_expires_at: '2026-09-22T10:30:00.000Z' });
     }
     if (method === 'GET' && path === '/v4/person/tools') {
+      const tool = (tool_id: string, display_name: string, personal_status: string, scope: string | null, subject: string | null) => ({
+        tool_id, display_name, availability: 'enabled', personal_status, external_scope_id: scope, external_subject_id: subject, organization_setup: null,
+      });
       return json({
         schema_version: 4, kind: 'echo-organization-person-tools', organization_id: session.organization_id, membership_id: session.membership_id,
         tools: [
-          { tool_id: 'slack', display_name: 'Slack', availability: 'enabled', personal_status: 'linked',
-            external_scope_id: 'T0123ABCD', external_subject_id: 'U0123ABCD', organization_setup: null },
+          slackLinked ? tool('slack', 'Slack', 'linked', 'T0123ABCD', 'U0123ABCD') : tool('slack', 'Slack', 'unlinked', 'T0123ABCD', null),
+          tool('jira', 'Jira', jiraLinked ? 'linked' : mode === 'tools-revoked' ? 'revoked' : 'unlinked', JIRA_CLOUD, jiraLinked ? 'atlassian-account-1' : null),
           { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
             external_scope_id: null, external_subject_id: null, organization_setup: null },
         ],
       });
+    }
+    // Jira: the browser consent is never shown; the second status read finds it done,
+    // or, in tools-mismatch, signed in as another Jira account.
+    if (method === 'POST' && path === '/v1/person/tools/jira/connect') {
+      if (JSON.stringify(body) !== '{"schema_version":1}') return failure('invalid_request', 400);
+      jiraAttempt = { attempt: randomUUID(), expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), status: 'pending', failure_reason: null, reads: 0 };
+      return json({ schema_version: 1, attempt: jiraAttempt.attempt, connect_link: JIRA_CONNECT_LINK, expires_at: jiraAttempt.expires_at });
+    }
+    if (method === 'POST' && (path === '/v1/person/tools/jira/status' || path === '/v1/person/tools/jira/cancel')) {
+      if (!jiraAttempt || body?.attempt !== jiraAttempt.attempt) return failure('not_found', 404);
+      if (path.endsWith('/cancel')) {
+        if (jiraAttempt.status === 'pending') jiraAttempt.status = 'cancelled';
+      } else if (jiraAttempt.status === 'pending' && ++jiraAttempt.reads >= 2 && mode !== 'tools-waiting') {
+        if (mode === 'tools-mismatch') Object.assign(jiraAttempt, { status: 'failed', failure_reason: 'account_mismatch' });
+        else { jiraAttempt.status = 'complete'; jiraLinked = true; }
+      }
+      const { attempt, expires_at, status, failure_reason } = jiraAttempt;
+      return json({ schema_version: 1, attempt, expires_at, status, failure_reason });
+    }
+    if (method === 'POST' && path === '/v1/person/tools/jira/disconnect') {
+      jiraLinked = false;
+      return json({ schema_version: 1, connected: false });
+    }
+    if (method === 'POST' && path === '/v2/person/external-identities/slack/disconnect') {
+      slackLinked = false;
+      return json({ schema_version: 2, kind: 'echo-organization-person-tools', organization_id: session.organization_id, membership_id: session.membership_id,
+        tools: [{ provider: 'slack', availability: 'enabled', personal_status: 'unlinked', workspace_id: 'T0123ABCD', account_id: null }] });
     }
     // Sign-out: the Authority ends the session; its request body is always empty.
     if (method === 'POST' && path === '/v2/session/revocations') {
@@ -875,7 +915,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    if (method === 'POST' && path === '/v3/person/ask') {
+    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask')) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);
@@ -888,15 +928,29 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // One project, only what you added, or all you may read.
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : request.mine ? { kind: 'mine' } : { kind: 'global' };
       const question = request.question;
+      const tickets = path === '/v4/person/ask';
+      const answer = { ...desktop.answer, ...(tickets ? { schema_version: 5, kind: 'echo-clean-person-answer-v5' } : {}) };
+      if (mode === 'ask-ticket') {
+        const included = tickets && scope.kind === 'global';
+        return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
+          citations: included ? [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
+            kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10007',
+            permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: sha('ECHO-7: Jira launch'),
+          } }] : [],
+          parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
+            ? [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }]
+            : [], ...(included ? {} : { gap: 'No accessible Jira ticket was found.' }) }],
+        });
+      }
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const answered = (text?: string) => {
         const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];
         const statements = text === undefined ? part!.statements : [{ ...part!.statements[0], text }];
-        return json({ ...desktop.answer, scope, parts: [{ ...part, question, statements }] });
+        return json({ ...answer, scope, parts: [{ ...part, question, statements }] });
       };
       if (mode === 'ask-slack') {
         const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];
-        return json({ ...desktop.answer, scope,
+        return json({ ...answer, scope,
           citations: [...desktop.answer.citations as unknown[], {
             kind: 'slack_message', label: '#launch · Maya', visibility: 'only_me', citation: {
               kind: 'slack_message', team_id: 'T01ABCDEF', channel_id: 'C01ABCDEF', message_ts: '1758873600.000100',
@@ -914,7 +968,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const label = 'Apollo-launch-plan-v2.md';
         const first = { ...passage!, label, citation: { ...passage!.citation, label } };
         const second = { ...first, citation: { ...first.citation, anchor_sha256: sha('second passage') } };
-        return json({ ...desktop.answer, scope, citations: [record, first, second],
+        return json({ ...answer, scope, citations: [record, first, second],
           parts: [{ question, status: 'answered', statements: [
             { text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0, 1], private: false },
             { text: 'Monthly plans follow the launch.', citation_indexes: [2], private: false },
