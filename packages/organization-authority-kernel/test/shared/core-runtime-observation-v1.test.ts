@@ -1,5 +1,6 @@
 import {
   annotateCoreRuntimeV1,
+  normalizeCoreRuntimeDetailV1,
   observeCoreRuntimeSyncV1,
   observeCoreRuntimeV1,
   type CoreRuntimeObservationV1
@@ -10,6 +11,16 @@ const linked = "11111111-1111-4111-8111-111111111111";
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 
 describe("core runtime observations", () => {
+  it("round-trips only finite live-source categories and preserves legacy observations", async () => {
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1("evidence_connection", async () => {
+      annotateCoreRuntimeV1({ evidence_source: "ticket", result: "verified" });
+    }, { observer: event => { events.push(event); } });
+    expect(normalizeCoreRuntimeDetailV1(events[0]!)).not.toHaveProperty("evidence_source");
+    expect(normalizeCoreRuntimeDetailV1(events[1]!)).toMatchObject({ evidence_source: "ticket", result: "verified" });
+    expect(() => normalizeCoreRuntimeDetailV1({ ...events[1]!, evidence_source: "private-provider-url" as "ticket" })).toThrow("invalid core runtime observation");
+  });
+
   it("keeps concurrent operations separate, links shared work, and isolates throwing observers", async () => {
     const events: CoreRuntimeObservationV1[] = [];
     const scope = { observer: (event: CoreRuntimeObservationV1) => { events.push(event); } };

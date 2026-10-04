@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV2, type AgenticAskAuditEntryV1 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
-import { captureCoreRuntimeContentV1, observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
+import { captureCoreRuntimeContentV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '../../src/shared/core-runtime-observation-v1.js';
 
 const checked = { checked_at: '2026-10-01T00:00:00.000Z' };
 const body = 'ECHO-1: Launch is Tuesday.';
@@ -68,6 +68,36 @@ function fixture(options: {
 }
 
 describe('Agentic Ask V2 ticket release', () => {
+  it('distinguishes retrieved ticket inventory, answer context and final citations', async () => {
+    const f = fixture();
+    const events: CoreRuntimeObservationV1[] = [];
+    await observeCoreRuntimeV1('ask_request', () => f.run(), { observer: event => { events.push(event); } });
+    expect(events.find(event => event.root && event.event === 'succeeded')).toMatchObject({
+      counts: { ticket_retrieved_items: 2, ticket_context_items: 1, ticket_citations: 1 },
+    });
+    expect(JSON.stringify(events)).not.toContain(body);
+    expect(JSON.stringify(events)).not.toContain('request-private-ticket');
+  });
+
+  it('does not claim citations were returned when the final live fence refuses publication', async () => {
+    const refusal = new Error('connection disconnected');
+    const f = fixture({ fence: async number => { if (number === 6) throw refusal; return checked; } });
+    const events: CoreRuntimeObservationV1[] = [];
+    await expect(observeCoreRuntimeV1('ask_request', () => f.run(), { observer: event => { events.push(event); } })).rejects.toBe(refusal);
+    expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({
+      counts: { ticket_retrieved_items: 2, ticket_context_items: 1, ticket_citations: 0 },
+    });
+  });
+
+  it('counts no answer context when the provider fence prevents the answer call', async () => {
+    const refusal = new Error('connection disconnected before answer');
+    const f = fixture({ fence: async number => { if (number === 4) throw refusal; return checked; } });
+    const events: CoreRuntimeObservationV1[] = [];
+    await expect(observeCoreRuntimeV1('ask_request', () => f.run(), { observer: event => { events.push(event); } })).rejects.toBe(refusal);
+    expect(f.generate).toHaveBeenCalledTimes(3);
+    expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({ counts: { ticket_retrieved_items: 2, ticket_context_items: 0, ticket_citations: 0 } });
+  });
+
   it('lists ticket metadata, opens its request-owned item, and returns a strict V5 citation', async () => {
     const f = fixture();
     const answer = await f.run();
@@ -143,7 +173,8 @@ describe('Agentic Ask V2 ticket release', () => {
     const released = deferred<typeof checked>();
     const controller = new AbortController();
     const f = fixture({ fence: async number => { if (number === 6) { entered.resolve(); return released.promise; } return checked; } });
-    const pending = f.run(controller.signal);
+    const events: CoreRuntimeObservationV1[] = [];
+    const pending = observeCoreRuntimeV1('ask_request', () => f.run(controller.signal), { observer: event => { events.push(event); } });
     await entered.promise;
     const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     controller.abort();
@@ -152,5 +183,6 @@ describe('Agentic Ask V2 ticket release', () => {
     await Promise.resolve();
     expect(f.append).toHaveBeenCalledTimes(1);
     expect(f.generate).toHaveBeenCalledTimes(4);
+    expect(events.find(event => event.root && event.event === 'failed')).toMatchObject({ result: 'cancelled', counts: { ticket_retrieved_items: 2, ticket_context_items: 1, ticket_citations: 0 } });
   });
 });

@@ -16,6 +16,7 @@ import type { BegunPersonOidcLogin } from '../src/application/person-identity-se
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { openOrganizationAuthorityService } from '../src/composition/organization-authority-composition-root.js';
+import { createStagingJourneyTelemetryTransportV1 } from '../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js';
 import { FIXTURE_JIRA_CLOUD_V1 as CLOUD, FIXTURE_JIRA_SITE_V1 as SITE, fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fixtures/fake-jira-v1.js';
 
 const EMAIL = 'founder@example.test';
@@ -65,7 +66,11 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'search', args: { query: 'ship', kinds: ['ticket'] } }] };
   });
   const privateFile = (name: string, value: string) => { const path = join(root, name); writeFileSync(path, value, { mode: 0o600 }); return path; };
+  const telemetry: string[] = [];
+  const transport = createStagingJourneyTelemetryTransportV1({ release_sha: 'a'.repeat(40), build_number: 1 }, { write: line => { telemetry.push(line); } });
+  const events = () => telemetry.map(line => JSON.parse(line)).filter(event => event.kind === 'echo-authority-journey-stage-v1');
   const runtime = await openOrganizationAuthorityService({
+    core_runtime_observation: transport.core_runtime,
     state_directory: state, host: '127.0.0.1', port: await port(), authority_url: AUTHORITY, oidc: OIDC, client_authentication: { method: 'none' }, pkce_key_file: keys.pkce_sealing_key_reference.slice(5),
     slack_nango: { secret_key: 'synthetic-nango-key-0000000000000000', integration_key: 'slack' },
     jira_person_live: { enabled: true, cloud_id: CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' },
@@ -95,18 +100,54 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect((await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt }, employee)).status).toBe(401);
     jira.finish(); // Browser consent is reconciled only by the server-bound attempt.
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete', failure_reason: null } });
+    telemetry.length = 0;
     const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should the ticket ship?' }); expect(response.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
     expect(() => validatePersonAnswerResponseV4(response.body)).toThrow();
     expect(generate).toHaveBeenCalledTimes(3);
+    const completed = events().find(event => event.diagnostic?.phase === 'http_request' && event.event === 'succeeded');
+    expect(completed).toMatchObject({ diagnostic: { result: 'answered', counts: { ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 } } });
+    expect(events()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ journey_id: completed.journey_id, event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'verified' }) }),
+      expect.objectContaining({ journey_id: completed.journey_id, event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_search', evidence_source: 'ticket', result: 'returned', counts: expect.objectContaining({ included_count: 1 }) }) }),
+    ]));
+    for (const privateValue of ['When should the ticket ship?', 'Ship on Friday', 'synthetic-jira-oauth-bearer', CLOUD, SITE, 'fixture-jira-account']) expect(telemetry.join('')).not.toContain(privateValue);
     const rows = audit.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').all() as { body_json: string }[];
     const releases = rows.map(row => JSON.parse(row.body_json)).filter(row => row.kind === 'echo-person-live-evidence-release-audit-v1'); expect(releases[0].citations[0]).toMatchObject({ coordinates: { object_id: '10001' }, text_sha256: cited.text_sha256 });
     for (const row of rows) { expect(row.body_json).not.toContain('Ship on Friday'); expect(row.body_json).not.toContain('synthetic-jira-oauth-bearer'); expect(row.body_json).not.toContain('jira_item_'); }
+    telemetry.length = 0;
+    const jiraCalls = jiraFetch.mock.calls.length;
+    expect((await post('/v4/person/ask', { schema_version: 3, question: 'What are my tickets?', mine: true })).body.outcome).toBe('not_found');
+    expect(jiraFetch).toHaveBeenCalledTimes(jiraCalls);
+    expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'out_of_scope' }) })]));
+    const connectedFetch = jiraFetch.getMockImplementation()!;
+    for (const status of [200, 429]) {
+      telemetry.length = 0;
+      jiraFetch.mockImplementation(async (input, init) => new URL(String(input)).pathname.endsWith('/search/jql')
+        ? Response.json(status === 200 ? { isLast: true, issues: [] } : { error: 'private-provider-error' }, { status })
+        : connectedFetch(input, init));
+      const result = await post('/v4/person/ask', { schema_version: 3, question: 'Find a Jira ticket' });
+      if (status === 200) expect(result).toMatchObject({ status: 200, body: { outcome: 'not_found' } });
+      else expect(result.status).toBe(429);
+      expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: status === 200 ? 'succeeded' : 'failed', diagnostic: expect.objectContaining({ phase: 'evidence_search', evidence_source: 'ticket', result: status === 200 ? 'empty' : 'rate_limited', ...(status === 200 ? { counts: expect.objectContaining({ included_count: 0 }) } : {}) }) })]));
+      expect(telemetry.join('')).not.toContain('private-provider-error');
+    }
+    jiraFetch.mockImplementation(connectedFetch);
     // Both live connectors share this production root without retired Slack startup fields.
     expect((await post('/v2/organization/tools/slack/setup', { request_id: `oss_${randomUUID()}`, configuration_token: 'synthetic-slack-configuration-token' })).status).toBe(201);
     const slackBegin = await post('/v2/organization/tools/slack/install/begin', { request_id: `osi_${randomUUID()}` }); expect(slackBegin.status).toBe(201);
     const slackStatus = await post('/v2/organization/tools/slack/install/status', { attempt_id: slackBegin.body.attempt_id }); expect(slackStatus).toMatchObject({ status: 200, body: { status: 'complete', result: { kind: 'created', workspace_id: 'TFIXTURE' } } });
     expect(verifySlack).toHaveBeenCalledWith('xoxb-synthetic-slack', undefined);
-  } finally { await runtime.close(); audit.close(); }
+    telemetry.length = 0;
+    jiraFetch.mockImplementationOnce(async () => Response.json({ error: 'private-provider-error' }, { status: 401 }));
+    expect((await post('/v4/person/ask', { schema_version: 3, question: 'Check Jira again' })).status).toBe(401);
+    expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'failed', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'authorization' }) })]));
+    expect(telemetry.join('')).not.toContain('private-provider-error');
+    expect((await post('/v1/person/tools/jira/disconnect', { schema_version: 1 })).status).toBe(200);
+    telemetry.length = 0;
+    expect((await post('/v4/person/ask', { schema_version: 3, question: 'What is in Jira?' })).body.outcome).toBe('not_found');
+    expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'unlinked' }) })]));
+    expect(events().filter(event => event.diagnostic?.phase === 'evidence_search' && event.diagnostic.evidence_source === 'ticket')).toEqual([]);
+  } finally { await runtime.close(); transport.close(); audit.close(); }
 });

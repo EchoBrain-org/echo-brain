@@ -24,7 +24,7 @@ import {
   type EvidenceDeskSourceV2,
 } from "../shared/evidence-desk-v2.js";
 import type { EvidenceDeskPortV1 } from "../shared/evidence-desk-v1.js";
-import { observeCoreRuntimeV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
+import { annotateCoreRuntimeV1, observeCoreRuntimeV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
 import {
   ANSWER_PROMPT,
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
@@ -484,6 +484,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       const receipts: Sha256Digest[] = [];
       const notice = new Set<string>();
       const entries = new Map<string, Entry>();
+      const retrievedTickets = new Set<string>();
+      let selectedTicketCount = 0; let ticketContextCount = 0; let ticketCitationCount = 0;
       const byShort = new Map<string, string>();
       const searchesRun: string[] = [];
       let listsRun = 0;
@@ -499,6 +501,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       };
       const observe = (result: EvidenceDeskResultV2) => {
         if (result.notice !== undefined) notice.add(result.notice);
+        for (const item of result.items) if (item.citation.kind === "ticket") retrievedTickets.add(item.id);
         // Audits bind every released item, even one that never reaches a prompt.
         for (const item of result.items) if (!receipts.includes(item.receipt_sha256)) receipts.push(item.receipt_sha256);
         for (const receipt of result.receipt_digests) if (!receipts.includes(receipt)) receipts.push(receipt);
@@ -703,7 +706,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         // Live-provider evidence must never reach runtime content capture.
         const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => {
           // Each call is its own span, so provider model calls carry the step or answer purpose.
-          const observed = () => observeCoreRuntimeV1(role === "step" ? "ask_planner" : "ask_answer", operation);
+          const observed = () => observeCoreRuntimeV1(role === "step" ? "ask_planner" : "ask_answer", () => {
+            if (role === "answer") ticketContextCount = selectedTicketCount;
+            return operation();
+          });
           const started = now();
           const settle = () => { const spent = Math.max(0, now() - started); if (role === "step") stepModelMs += spent; else answerModelMs += spent; };
           return (liveInPrompt() ? withoutCoreRuntimeContentV1(observed) : observed()).then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
@@ -863,6 +869,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         let answer: Answer | null = null;
         const answerTimeout = () => remaining() - AGENTIC_ASK_FINALIZE_RESERVE_MS_V1;
         if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
+          selectedTicketCount = evidence.filter(entry => entry.item.citation.kind === "ticket").length;
           const user = {
             question: input.question, ...context(), scope,
             research_plan: plan.map((part, index) => ({ part: index + 1, question: part.question, notes: part.notes, needs: part.needs.map(need => ({ need: need.need, status: need.status, suggested_evidence: need.evidence.filter(short => allowed.has(short)) })) })),
@@ -945,6 +952,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         if (input.signal?.aborted) abort();
         assertLive();
         clearTimeout(deadlineTimer);
+        ticketCitationCount = validated.citations.filter(value => value.citation.kind === "ticket").length;
         return validated;
       } catch (error) {
         clearTimeout(deadlineTimer);
@@ -960,6 +968,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         }
         terminalAbort.abort();
         throw error;
+      } finally {
+        if (tickets) annotateCoreRuntimeV1({ counts: { ticket_retrieved_items: retrievedTickets.size, ticket_context_items: ticketContextCount, ticket_citations: ticketCitationCount } });
       }
     },
   });
