@@ -138,8 +138,8 @@ describe("private Slack DM approval stager V2", () => {
     });
 
     await expect(stager.stage(input)).resolves.toEqual({ kind: "delivery_pending" });
-    expect(operations.indexOf("freeze-v2")).toBeLessThan(operations.indexOf("prepare"));
-    expect(operations.indexOf("prepare")).toBeLessThan(operations.indexOf("open-dm"));
+    expect(operations.indexOf("freeze-v2")).toBeLessThan(operations.indexOf("open-dm"));
+    expect(operations).not.toContain("prepare");
     expect(frozenPending).toMatchObject({ schema_version: 2, eligible_projects: [{ project_id: PROJECT, project_membership_id: PROJECT_MEMBERSHIP }], transcript_source: { revision_id: "revision-1", source_sha256: `sha256:${sourceContentSha256V1((({ captured_at: _capturedAt, ...immutable }) => immutable)(meetingSourceEnvelopeV1(input.meeting).revision))}` } });
 
     expect(frozenPending.eligible_projects).toHaveLength(1);

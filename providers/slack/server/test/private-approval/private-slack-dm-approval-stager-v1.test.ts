@@ -182,7 +182,7 @@ describe("private Slack DM approval stager V1", () => {
     ownerLinked = true;
     await expect(stager.stage(reviewedInput)).resolves.toEqual({ kind: "staged", stage_id: "apr_1" });
     expect(operations).toEqual([
-      "journey-delivery_pending", "freeze", "open-dm", "assignment", "marker", "marker-durable", "cp-pending", "publish", "authority-staged", "journey-card-staged", "journey-staged",
+      "journey-delivery_pending", "open-dm", "assignment", "freeze", "marker", "marker-durable", "cp-pending", "publish", "authority-staged", "journey-card-staged", "journey-staged",
     ]);
     expect(journeyTelemetry.beginStageForApproval).toHaveBeenCalledTimes(2);
     expect(journeyTelemetry.beginStageForApproval).toHaveBeenNthCalledWith(
