@@ -2,7 +2,7 @@
 schema_version: 1
 id: ADR-0026
 kind: decision
-status: proposed
+status: accepted
 title: Person-bound Jira live evidence with Nango custody
 component_ids:
   - CMP-IDENTITY-ACCESS
@@ -10,8 +10,8 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERSON-CLIENT
 created_at: 2026-10-01
-reviewed_at: 2026-10-02
-reviewed_ref: 1d7e72bd75babcfbc8025b4a089a8517aef80d7b
+reviewed_at: 2026-10-03
+reviewed_ref: 254d5ddcbdbc1c7881e7a4ba541f5383ab19af59
 supersedes: []
 superseded_by: []
 updates:
@@ -21,12 +21,12 @@ updates:
 
 # ADR-0026: Person-bound Jira live evidence with Nango custody
 
-This is a proposal awaiting founder acceptance. Fixture implementation is allowed;
-the new Authority composition is opt-in and disabled by default. Acceptance must
-explicitly extend INV-PERMISSIONS-015's enforcement scope before live enablement.
-It does not claim a qualified live account, deployment, or permission migration.
+Accepted under the founder's tools-are-read-live scope. The Authority composition
+remains explicitly selected; INV-PERMISSIONS-015 includes its person-bound release
+path. This decision permits live Jira Ask, not tool capture. Acceptance and fixture
+proof do not establish live deployment or completion of the qualification matrix.
 
-## Decision proposed before implementation
+## Decision
 
 Support Jira Cloud OAuth 2.0 (3LO) for one server-configured cloud ID. Nango owns
 OAuth authorization, encrypted credential storage, refresh and reconnect. Configure
@@ -65,7 +65,7 @@ or SDK dependency is necessary.
 Persist a compact provider-owned SQLite binding plus the latest connection attempt
 per Person tenure. Its expiry and terminal state survive restart; replaced attempts
 cannot be reused. Remote consent completed after cancellation cleanup may still
-leave an orphaned Nango connection; an orphan sweeper is outside this proposal's
+leave an orphaned Nango connection; an orphan sweeper is outside this decision's
 implemented connection slice.
 Bind to the exact ECHO membership tenure, verified Jira account/site, opaque Nango
 reference, active/revoked state and immutable grant commitment. Current session and
@@ -100,12 +100,19 @@ link to the verified Jira URL directly; there is no durable ticket-open endpoint
 - [Get credentials](https://nango.dev/docs/reference/backend/http-api/connections/get): refresh-on-fetch; refresh-token return defaults off.
 - [Refresh implementation](https://github.com/NangoHQ/nango/blob/master/packages/shared/lib/services/connections/credentials/refresh.ts): ordinary refresh updates `updated_at`, so it cannot establish completed reconnect consent.
 
-## Required acceptance and qualification
+## Runtime selection and live qualification
 
-Founder review must accept the Nango custody boundary and the additional Person
-release path, including audit retention and exact membership fences. A human must
-configure the Nango Jira integration/OAuth application, allowed callback and scopes,
-server cloud ID and runtime credential injection. Live qualification must exercise
+The accepted boundary includes Nango credential custody, minimized read-decision
+audits and exact membership fences. Ordinary runtime selection requires both
+`--jira-cloud-id` and `--jira-nango-integration`. Staging may instead select
+`ECHO_STAGING_JIRA_ASK_V1=true` with its validated connector profile. That path reuses
+the initial owner's existing profile-bound grant and fixed Jira project; it does
+not create a second connection store or require a profile rewrite or state reset.
+The EC2 runtime profile selects this switch only when a connector profile exists.
+
+A human configures the Nango Jira integration/OAuth application, allowed callback
+and scopes, server cloud ID and runtime credential injection. Reuse a working
+connection rather than initiating replacement consent. Live qualification must exercise
 consent, refreshed reads, reconnect, revoke, denied tickets, site/account mismatch
 and cancellation without putting credentials or ticket bodies in durable logs.
 The Slack lane owns its provider and composition changes; this lane adds optional

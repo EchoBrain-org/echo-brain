@@ -1,5 +1,5 @@
 import { canonicalJson } from "@echo-brain/federation-protocol";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +24,7 @@ const runtimeState = vi.hoisted(() => ({
   startup_error: undefined as Error | undefined,
   open_gate: undefined as Promise<void> | undefined,
   slack_nango: undefined as object | undefined,
+  jira_person_live: undefined as object | undefined,
   openrouter_credential_file: undefined as string | undefined,
   staging_synthetic_meetings_directory: undefined as string | undefined,
   staging_synthetic_owner_email: undefined as string | undefined,
@@ -76,6 +77,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     readonly agentic_ask_v1_enabled?: true;
     readonly agentic_ask_v1_small_scope_shortcut?: true;
     readonly slack_nango: object;
+    readonly jira_person_live?: object;
     readonly openrouter_credential_file: string;
     readonly staging_synthetic_meetings_directory?: string;
     readonly staging_synthetic_owner_email?: string;
@@ -97,6 +99,7 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     runtimeState.agentic_ask_v1_small_scope_shortcut =
       config.agentic_ask_v1_small_scope_shortcut;
     runtimeState.slack_nango = config.slack_nango;
+    runtimeState.jira_person_live = config.jira_person_live;
     runtimeState.openrouter_credential_file = config.openrouter_credential_file;
     runtimeState.staging_synthetic_meetings_directory =
       config.staging_synthetic_meetings_directory;
@@ -113,6 +116,16 @@ vi.mock("../src/composition/organization-authority-composition-root.js", () => (
     };
   },
 }));
+
+vi.mock(
+  "../src/composition/staging-connector-rehearsal-runtime.js",
+  () => ({
+    async openStagingConnectorRehearsalService(config: unknown) {
+      const { openOrganizationAuthorityService } = await import("../src/composition/organization-authority-composition-root.js");
+      return openOrganizationAuthorityService(config as Parameters<typeof openOrganizationAuthorityService>[0]);
+    },
+  }),
+);
 
 vi.mock(
   "../src/composition/staging/observability/staging-journey-telemetry-transport-v1.js",
@@ -159,12 +172,17 @@ afterEach(() => {
   delete process.env.ECHO_AGENTIC_ASK_SMALL_SCOPE_SHORTCUT;
   delete process.env.ECHO_BUILD_NUMBER;
   delete process.env.ECHO_SOURCE_SHA;
+  delete process.env.ECHO_STAGING_JIRA_ASK_V1;
+  delete process.env.ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE;
+  delete process.env.ECHO_CLEAN_RELEASE_ID;
+  delete process.env.ECHO_CLEAN_AUTHORITY_HOST;
   runtimeState.worker_error = undefined;
   runtimeState.worker_telemetry = undefined;
   runtimeState.approved_search_backlog = undefined;
   runtimeState.startup_error = undefined;
   runtimeState.open_gate = undefined;
   runtimeState.slack_nango = undefined;
+  runtimeState.jira_person_live = undefined;
   runtimeState.openrouter_credential_file = undefined;
   runtimeState.staging_synthetic_meetings_directory = undefined;
   runtimeState.staging_synthetic_owner_email = undefined;
@@ -214,7 +232,67 @@ function start(
   );
 }
 
+function stagingProfileDirectory(): string {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "echo-service-cli-jira-"));
+  temporaryRoots.push(root);
+  mkdirSync(join(root, "private"));
+  const path = join(root, "private", "staging-connector-rehearsal.json");
+  writeFileSync(path, JSON.stringify({
+    schema_version: 2, kind: "echo-staging-connector-rehearsal-profile-v2",
+    capture_policy: "initial-owner-granola-retained-jira-pointer-slack-pointer-v2",
+    jira: { cloud_id: "11111111-1111-4111-8111-111111111111", integration_key: "jira", project: "ECHO" },
+    slack: { channel_id: "C01234567" },
+  }), { mode: 0o600 });
+  runtimeState.authority_url = "https://authority-staging.echobrain.org";
+  process.env.ECHO_STAGING_CONNECTOR_REHEARSAL_PROFILE_FILE = path;
+  process.env.ECHO_CLEAN_RELEASE_ID = "clean-v1-cli-fixture";
+  process.env.ECHO_CLEAN_AUTHORITY_HOST = "authority-staging.echobrain.org";
+  return join(root, "state");
+}
+
 describe("admitted runtime CLI events", () => {
+  it.each([undefined, "", "false", "true"])("selects profile-bound Jira Ask only with the staging switch enabled (%s)", async flag => {
+    const directory = stagingProfileDirectory();
+    if (flag !== undefined) process.env.ECHO_STAGING_JIRA_ASK_V1 = flag;
+    const errors: string[] = [];
+    const running = start({ stderr: value => errors.push(value) }, directory);
+    try {
+      await vi.waitFor(() => expect(runtimeState.worker_error).toBeDefined());
+      if (flag === "true") expect(runtimeState.jira_person_live).toMatchObject({
+        enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "jira",
+      });
+      else expect(runtimeState.jira_person_live).toBeUndefined();
+    } finally { process.emit("SIGTERM"); await running; }
+    expect(await running, errors.join("")).toBe(0);
+  });
+
+  it.each(["true", "invalid"])("refuses a staging Jira switch without its fixed profile (%s)", async flag => {
+    process.env.ECHO_STAGING_JIRA_ASK_V1 = flag;
+    expect(await start({ stderr: () => undefined })).toBe(1);
+    expect(runtimeState.worker_error).toBeUndefined();
+  });
+
+  it.each(["--jira-cloud-id", "--jira-nango-integration"])("refuses an incomplete explicit Jira selection (%s)", async flag => {
+    expect(await start({ stderr: () => undefined }, "/private/state", [
+      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack", flag, "fixture",
+    ])).toBe(1);
+    expect(runtimeState.worker_error).toBeUndefined();
+  });
+
+  it("selects the approved person-bound Jira reader only with complete explicit flags", async () => {
+    const errors: string[] = [];
+    const running = start({ stderr: value => errors.push(value) }, "/private/state", [
+      "--nango-secret-key-file", nangoKeyFile(), "--nango-integration", "slack",
+      "--jira-cloud-id", "11111111-1111-4111-8111-111111111111", "--jira-nango-integration", "jira",
+    ]);
+    try {
+      await vi.waitFor(() => expect(runtimeState.jira_person_live).toMatchObject({
+        enabled: true, cloud_id: "11111111-1111-4111-8111-111111111111", integration_id: "jira",
+      }));
+    } finally { process.emit("SIGTERM"); await running; }
+    expect(await running, errors.join("")).toBe(0);
+  });
+
   it("serves agentic Ask without a flag and passes the shortcut only when it is switched on", async () => {
     for (const input of [
       { agentic: undefined, shortcut: undefined },

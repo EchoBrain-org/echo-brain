@@ -158,11 +158,11 @@ Receipts contain hashes and counts, never source contents, cursors, provider
 account IDs or credentials. A zero-item receipt is not a successful content
 capture. Only Granola supports capture; its receipts report retained admission
 or duplicate under the separate owner policy. Jira and Slack support live
-`verify-read` only: capture requests are rejected before provider I/O, and no
+`verify-read`: capture requests are rejected before provider I/O, and no
 tool pointers, metadata or bodies enter Layer 1. Ordinary Granola polling owns the cursor and
 continues running. Slack approval tests use the existing synthetic release
-canary and human approval, with separate evidence. No downstream retrieval, Jira
-Ask or other Ask behavior is enabled by this profile. See the
+canary and human approval, with separate evidence. The diagnostic profile alone
+does not enable Ask. See the
 [scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal).
 
 The V2 profile identifier and digest remain unchanged for compatibility with
@@ -170,6 +170,14 @@ existing host and connection-sidecar bindings. Its historical pointer-policy
 name no longer enables tool capture. This code change requires an ordinary
 release update, not a profile rewrite or staging reset. It prevents new tool
 captures; it does not delete existing retained rows or deploy itself.
+
+The EC2 Compose overlay additionally selects `ECHO_STAGING_JIRA_ASK_V1=true`
+when the fixed connector profile is present. The CLI validates that profile and
+reuses its initial-owner Jira grant for global Ask, bounded to the configured Jira
+project. The profile digest and sidecar remain unchanged. Without that switch,
+the diagnostic-only behavior remains available. Explicit Jira flags must match
+the selected profile; other sites, integrations and projects fail before startup.
+Mine and ECHO project scopes still exclude Jira until project mappings exist.
 
 ## Initial-owner setup internals
 
