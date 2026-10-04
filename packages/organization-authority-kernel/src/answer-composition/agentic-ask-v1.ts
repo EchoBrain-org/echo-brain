@@ -273,9 +273,9 @@ function toolRefusal(error: unknown): string | null {
 }
 function abort(): never { throw new DOMException("Ask cancelled", "AbortError"); }
 /** What the model is told the desk reads. Adding a scope kind is a compile error here. */
-function scopeText(scope: EvidenceDeskPortV2["scope"]): string {
+function scopeText(scope: EvidenceDeskPortV2["scope"], liveTickets: boolean): string {
   switch (scope.kind) {
-    case "project": return "one project: meetings and documents are limited to it; Slack is not";
+    case "project": return liveTickets ? "one project: meetings and documents are limited to it; live tickets are limited to its saved Jira project mapping, if configured; Slack is not read" : "one project: meetings and documents are limited to it; Slack is not";
     case "mine": return "only what the asker added: their own notes and uploaded documents, and meetings they approved; Slack and shared transcripts are not read";
     case "global": return "everything the asker can read";
     default: return unknownScope(scope);
@@ -424,7 +424,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
   const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
   const ticketGuidance = [
     "Live tickets (source \"ticket\") report the ticket's current title, description, owner, due date and status under the asker's connection. They are not approved meeting decisions. Distinguish their reported state from approved records and cite both when they disagree.",
-    "Search includes available tickets. To browse them, use list with {\"source\": \"tickets\", optional \"since\", \"until\"}; it returns metadata only, so open an item by its request-owned id before relying on the body. Ticket dates are creation dates. Tickets are available only in global scope; project and mine exclude them. Never infer a project mapping or choose a tenant, account or connection.",
+    "Search includes available tickets. To browse them, use list with {\"source\": \"tickets\", optional \"since\", \"until\"}; it returns metadata only, so open an item by its request-owned id before relying on the body. Ticket dates are creation dates. Tickets are available in global scope and in project scope only when a lead has saved a Jira project mapping. Project tickets are already limited to that mapping by the server. Mine excludes tickets. For project status, list tickets first; the ECHO project name need not appear in ticket text. Never infer a project mapping or choose a tenant, account or connection.",
   ].join("\n");
   const stepPrompt = tickets ? `${STEP_PROMPT}\n\n${ticketGuidance}` : STEP_PROMPT;
   const answerPrompt = tickets ? `${ANSWER_PROMPT}\n\n${ticketGuidance}` : ANSWER_PROMPT;
@@ -489,7 +489,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       let listsRun = 0;
       const lists = new Map<string, ListState>();
       let touch = 0;
-      const scope = scopeText(options.desk.scope);
+      const scope = scopeText(options.desk.scope, tickets) + (tickets && options.desk.ticket_available === false ? "; Jira tickets are unavailable in this scope for this asker. Do not call ticket tools; answer from available sources and report any missing Jira status." : "");
 
       const remaining = () => deadline - now();
       const assertLive = () => {

@@ -1,3 +1,4 @@
+import { PERSON_JIRA_PROJECT_READ_PATH_V1, PERSON_JIRA_PROJECT_SET_PATH_V1, validateJiraProjectReadV1, validateJiraProjectSetV1, validateJiraProjectMappingV1, type JiraProjectSetV1, type JiraProjectMappingV1 } from '../organization-api/jira-project-mapping-v1.js';
 import type { PersonToolHostV1 } from "@echo-brain/organization-api";
 import {
   PERSON_JIRA_CANCEL_PATH_V1,
@@ -20,6 +21,20 @@ const JIRA_TOOL_MAXIMUM_RESPONSE_BYTES = 8_192;
 /** Uses the host session for every request, preserving its current-account checks. */
 export class JiraPersonClientV1 {
   constructor(private readonly host: PersonToolHostV1) {}
+
+  projectRead(project_id: string): Promise<JiraProjectMappingV1> {
+    return this.projectRequest(PERSON_JIRA_PROJECT_READ_PATH_V1, validateJiraProjectReadV1({ schema_version: 1, project_id }), validateJiraProjectReadV1);
+  }
+  projectSet(request: JiraProjectSetV1): Promise<JiraProjectMappingV1> {
+    return this.projectRequest(PERSON_JIRA_PROJECT_SET_PATH_V1, validateJiraProjectSetV1(request), validateJiraProjectSetV1);
+  }
+  private projectRequest(path: string, body: { readonly project_id: string }, validate_request: (value: unknown) => unknown): Promise<JiraProjectMappingV1> {
+    return this.host.withToolSession(session => session.transport.json({ path, body, validate_request, validate_response: value => {
+      const result = validateJiraProjectMappingV1(value);
+      if (result.project_id !== body.project_id) throw new Error('Jira project response did not match the requested project');
+      return result;
+    }, maximum_response_bytes: JIRA_TOOL_MAXIMUM_RESPONSE_BYTES, timeout_ms: JIRA_TOOL_TIMEOUT_MS }));
+  }
 
   connect(): Promise<PersonJiraConnectV1> {
     return this.host.withToolSession(async (session) => {

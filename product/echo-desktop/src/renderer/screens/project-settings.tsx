@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
 import { message } from '../messages.js';
 import {
+  beginProjectJira, setProjectJira, saveProjectJira, projectJiraValid,
   askProjectSetting, beginProjectRename, cancelProjectSettingsAction, closeProjectSettings, confirmProjectSetting, dismissProjectSetting,
   keepProjectSetting, projectRenameValid, projectSettingsBlocked, retryProjectSetting, setProjectRename, toggleProjectSettings, type State, type ProjectSettingsState,
 } from '../store.js';
@@ -74,6 +75,7 @@ function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anc
   }, [anchor]);
   return createPortal(
     <div ref={menu} class="menu project-actions-menu" style={position} role="menu" data-testid="project-settings-menu">
+      <button type="button" role="menuitem" class="menu-item" data-testid="project-jira" onClick={() => void beginProjectJira()}>Jira project</button>
       {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-rename" onClick={beginProjectRename}>Rename project</button>}
       {settings.project.role === 'lead' && <button type="button" role="menuitem" class="menu-item" data-testid="project-archive"
         onClick={() => askProjectSetting(settings.project.status === 'archived' ? 'unarchive' : 'archive')}>
@@ -82,6 +84,47 @@ function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anc
       {settings.project.role === 'lead' && <div class="menu-rule" />}
       <button type="button" role="menuitem" class="menu-item danger" data-testid="project-leave" onClick={() => askProjectSetting('leave')}>Leave project</button>
     </div>, document.body,
+  );
+}
+
+function JiraProject({ state }: { state: State }) {
+  const settings = state.projectSettings!;
+  const jira = settings.jira!;
+  const box = useRef<HTMLDivElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+  const done = useRef<HTMLButtonElement>(null);
+  const lead = settings.project.role === 'lead';
+  const busy = jira.status === 'loading' || jira.status === 'saving';
+  useEffect(() => { if (jira.status === 'ready' && lead) field.current?.focus(); else done.current?.focus(); }, [jira.status, lead]);
+  return (
+    <div class="overlay" onClick={cancelProjectSettingsAction}>
+      <div class="sheet confirm project-setting-sheet" role="dialog" aria-labelledby="jira-project-title" ref={box}
+        onClick={event => event.stopPropagation()} onKeyDown={event => {
+          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelProjectSettingsAction(); }
+          else trapTab(event, box.current);
+        }}>
+        <h2 id="jira-project-title">Jira project</h2>
+        <p>Questions in {settings.project.name} read this Jira project live, using each person’s connected Jira account.</p>
+        {jira.status === 'loading' && <p role="status">Loading setting…</p>}
+        {jira.value && <>
+          <p data-testid="project-jira-current">{jira.value.mapping ? `Mapped to ${jira.value.mapping.project_key}` : 'No Jira project mapped'}</p>
+          {lead ? <label class="jira-project-field">Jira project key
+            <input ref={field} class="field" data-testid="project-jira-input" aria-label="Jira project key" maxLength={64} placeholder="e.g. KAN"
+              value={jira.key} disabled={jira.status !== 'ready'} onInput={event => setProjectJira((event.target as HTMLInputElement).value)}
+              onKeyDown={event => { if (event.key === 'Enter' && projectJiraValid(jira)) { event.preventDefault(); void saveProjectJira(); } }} />
+          </label> : <p>A project lead can change this setting.</p>}
+          {lead && <p>Connect your Jira account in Tools before saving.</p>}
+        </>}
+        {jira.status === 'saving' && <p role="status">Checking Jira and saving…</p>}
+        {jira.failure && <p class="error" data-testid="project-jira-error">{jira.failure.code === 'conflict' ? 'This setting changed. Reload it before editing.' : jira.writeFailed ? 'The change could not be confirmed. Reload the setting before editing again.' : message(jira.failure)}</p>}
+        <div class="choices">
+          <button ref={done} type="button" class="plain-button" disabled={jira.status === 'saving'} onClick={cancelProjectSettingsAction}>Done</button>
+          {jira.status === 'failed' && <button type="button" class="plain-button" onClick={() => void beginProjectJira()}>Reload setting</button>}
+          {lead && jira.value?.mapping && <button type="button" class="plain-button" data-testid="project-jira-remove" disabled={jira.status !== 'ready'} onClick={() => void saveProjectJira(true)}>Remove mapping</button>}
+          {lead && jira.value && <button type="button" class="plain-button" data-testid="project-jira-save" disabled={busy || !projectJiraValid(jira)} onClick={() => void saveProjectJira()}>Save</button>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -163,6 +206,7 @@ function Write({ state }: { state: State }) {
 export function ProjectSettings({ state }: { state: State }) {
   const settings = state.projectSettings;
   if (!settings) return null;
+  if (settings.jira) return state.sheet ? null : <JiraProject state={state} />;
   if (settings.write) return <Write state={state} />;
   if (settings.rename !== null) return <Rename state={state} />;
   if (settings.confirm) return <Confirm state={state} />;

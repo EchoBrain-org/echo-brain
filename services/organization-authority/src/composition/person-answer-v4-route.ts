@@ -9,7 +9,7 @@ import { createPersonEvidenceDeskV1 } from './person-evidence-desk-v1.js';
 import { createPersonLiveEvidenceDeskV2 } from './person-live-evidence-desk-v2.js';
 
 export interface CreatePersonAnswerV4RouteOptions extends Omit<CreatePersonAnswerV3RouteOptions, 'ask_journey_telemetry' | 'slack_for'> {
-  readonly ticket_for?: (input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined>;
+  readonly ticket_for?: (input: { readonly project_id?: string; readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonTicketCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonTicketCitationV1> | undefined>;
   /** Explicit server-selected Slack scope; it never implies a Person-wide user-token grant. */
   readonly slack_live_for?: (input: { readonly access_token: string; readonly audit: PersonLiveEvidenceAuditV1<PersonSlackMessageCitationV1>; readonly signal?: AbortSignal }) => Promise<PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1> | undefined>;
 }
@@ -30,11 +30,11 @@ export function createPersonAnswerV4Route(options: CreatePersonAnswerV4RouteOpti
         session_family_id: authorization.session_family_id,
         request_id: `ask_${randomUUID()}`,
       };
-      // A project has no verified Jira mapping in this slice. Never widen project or mine to global Jira.
-      const ticket = scope.kind === 'global' ? await options.ticket_for?.({ access_token: input.access_token, audit: options.audit.forLiveRequest(context), ...(input.signal === undefined ? {} : { signal: input.signal }) }) : undefined;
+      // The provider resolves project settings under current membership; an unmapped project never falls back to global Jira.
+      const ticket = scope.kind !== 'mine' ? await options.ticket_for?.({ ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}), access_token: input.access_token, audit: options.audit.forLiveRequest(context), ...(input.signal === undefined ? {} : { signal: input.signal }) }) : undefined;
       const liveSlack = scope.kind === 'global' ? await options.slack_live_for?.({ access_token: input.access_token, audit: options.audit.forLiveRequest(context), ...(input.signal === undefined ? {} : { signal: input.signal }) }) : undefined;
       const base = createPersonEvidenceDeskV1({ access_token: input.access_token, scope, originals: options.originals, records: options.records });
-      const desk = createPersonLiveEvidenceDeskV2(base, ticket, liveSlack);
+      const desk = createPersonLiveEvidenceDeskV2(base, ticket, liveSlack, scope.kind === 'project' ? scope.project_id : undefined);
       const asker = askerOf(options, authorization);
       try {
         return await createAgenticAskV2({ desk, model: options.model, generation: options.generation, audit: options.audit.forRequest(context), ...(asker === undefined ? {} : { asker }), ...(options.small_scope_shortcut === true ? { small_scope_shortcut: true } : {}) }).answer({ question: input.request.question, ...(input.signal === undefined ? {} : { signal: input.signal }) });

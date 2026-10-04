@@ -245,7 +245,7 @@ export const STEP_PROMPT = [
   "- Slack messages (source \"slack\") show what people discussed around and after a decision. They add context and often the latest status, but a Slack message is not a decision unless it says what was decided and by whom.",
   "- Look for Slack context when the question asks about current status, recent changes, why something changed, or open questions, and whenever a record may be out of date.",
   "- When Slack and a record or document disagree, note both with their ids and dates. Do not decide which is right.",
-  "- Slack covers everything the asker can see, across all projects. If \"scope\" says the question is about one project, meetings and documents are already limited to it but Slack is not: use only Slack messages about the same work, and check the channel and names.",
+  "- Read the supplied scope before selecting sources. It states whether Slack is available and whether it spans projects. When it spans projects, use only messages about the same work and check the channel and names. Never widen the supplied scope.",
   "",
   "Tools. Each action is {\"tool\": <name>, \"args\": {...}}.",
   "",

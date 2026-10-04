@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   abandonView, answerView, changeView, createdView, directoryView, employeesView, failureView, invitationView, listView, membersView, noteMatchesView,
   noteTitle, openView, revokedView, NotReadable, projectMatchesView, projectPageView, projectSettingsView, projectView, receiptView, recordView,
-  savedOriginalView, statusView, toolsView, ViewError, writeStatusView,
+  savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, ViewError, writeStatusView,
 } from '../../src/host/views.js';
 import type { ApprovedRecord } from '../../src/shared/protocol.js';
 import { askText, searchQuery } from '../../src/shared/query.js';
@@ -45,16 +45,42 @@ describe('view models copy only what the renderer may see', () => {
     expect(JSON.stringify(view)).not.toContain('SECRET');
   });
 
-  it('tools keep each name and state, never external ids, and only for the account asked about', () => {
-    const reply = (membership: string) => ({ ok: true, result: {
-      schema_version: 4, kind: 'echo-organization-person-tools', organization_id: 'org_1', membership_id: membership,
-      tools: [{ tool_id: 'slack', display_name: 'Slack', availability: 'enabled', personal_status: 'linked',
-        external_scope_id: 'T0SECRET', external_subject_id: 'U0SECRET', organization_setup: 'connected' }],
-    } });
+  it('tools keep each id, name and your connection, never external ids, and only for the account asked about', () => {
+    const tool = (tool_id: string, availability: string, personal_status: string) => ({ tool_id, display_name: tool_id.toUpperCase(), availability,
+      personal_status, external_scope_id: availability === 'enabled' ? 'T0SECRET' : null,
+      external_subject_id: personal_status === 'linked' ? 'U0SECRET' : null, organization_setup: 'connected' });
+    const reply = (membership: string, tools = [tool('slack', 'enabled', 'linked'), tool('jira', 'enabled', 'revoked'), tool('granola', 'unavailable', 'unavailable')]) =>
+      ({ ok: true, result: { schema_version: 4, kind: 'echo-organization-person-tools', organization_id: 'org_1', membership_id: membership, tools } });
     const view = toolsView(reply('mem_1'), 'mem_1');
-    expect(view).toEqual({ tools: [{ name: 'Slack', enabled: true, linked: true }] });
+    expect(view).toEqual({ tools: [
+      { tool_id: 'slack', name: 'SLACK', status: 'linked' },
+      { tool_id: 'jira', name: 'JIRA', status: 'revoked' },
+      { tool_id: 'granola', name: 'GRANOLA', status: 'unavailable' },
+    ] });
     expect(JSON.stringify(view)).not.toContain('SECRET');
     expect(() => toolsView(reply('mem_2'), 'mem_1')).toThrow(ViewError);
+    // A tool id the client could not take after --tool is refused, not passed on.
+    expect(() => toolsView(reply('mem_1', [tool('--tool', 'enabled', 'unlinked')]), 'mem_1')).toThrow(ViewError);
+  });
+
+  it('a started connection keeps only its attempt and expiry, whichever key the tool prints', () => {
+    const expires = '2026-10-02T12:30:00.000Z';
+    expect(toolAttemptView({ ok: true, phase: 'waiting', attempt_id: 'sbl_abc', expires_at: expires })).toEqual({ attempt_id: 'sbl_abc', expires_at: expires });
+    expect(toolAttemptView({ ok: true, phase: 'waiting', attempt: '6f1c2a4e-0b7d-4c55-9a1e-2f3b4c5d6e7f', expires_at: expires }))
+      .toEqual({ attempt_id: '6f1c2a4e-0b7d-4c55-9a1e-2f3b4c5d6e7f', expires_at: expires });
+    expect(() => toolAttemptView({ ok: true, phase: 'connected', attempt_id: 'sbl_abc', expires_at: expires })).toThrow(ViewError);
+    expect(() => toolAttemptView({ ok: true, phase: 'waiting', attempt_id: 'a b', expires_at: expires })).toThrow(ViewError);
+
+    expect(toolAttemptStatusView({ ok: true, result: { attempt: 'x', status: 'failed', failure_reason: 'account_mismatch', expires_at: expires } }))
+      .toEqual({ status: 'failed', failure_reason: 'account_mismatch' });
+    expect(toolAttemptStatusView({ ok: true, result: { attempt_id: 'sbl_abc', status: 'pending', failure_reason: null } }))
+      .toEqual({ status: 'pending', failure_reason: null });
+    expect(() => toolAttemptStatusView({ ok: true, result: { status: 'done', failure_reason: null } })).toThrow(ViewError);
+  });
+
+  it('a tool step that did not finish reports its reason as the failure code', () => {
+    expect(failureView({ ok: false, error: 'Jira connection page could not be opened.', reason: 'browser_unavailable' }, 'failed', false).code)
+      .toBe('browser_unavailable');
   });
 
   it('rejects a reply of the wrong kind', () => {

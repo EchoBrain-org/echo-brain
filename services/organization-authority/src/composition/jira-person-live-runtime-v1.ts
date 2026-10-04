@@ -1,3 +1,5 @@
+import { JiraProjectMappingStoreV1 } from '@echo-brain/provider-jira/jira-project-mapping-store-v1';
+import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 import { createJiraPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-jira/jira-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
@@ -7,6 +9,7 @@ import { createJiraPersonConnectionV1, type JiraPersonConnectionV1 } from '@echo
 import Database from 'better-sqlite3';
 import { join } from 'node:path';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
+import type { OrganizationPersonToolV4 } from '@echo-brain/organization-api';
 
 /** ADR-0026 permits person-bound live reads; runtime selection remains explicit. */
 export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = true;
@@ -28,6 +31,7 @@ export interface JiraPersonLiveRuntimeSeamsV1 {
 export interface OpenedJiraPersonLiveRuntimeV1 {
   readonly application: JiraPersonConnectionV1;
   readonly connection_http: ProviderHttpApplicationV1;
+  tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]>;
   close(): void;
 }
 
@@ -37,6 +41,9 @@ export function openJiraPersonLiveRuntimeV1(options: {
   readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   readonly configuration: JiraPersonLiveConfigurationV1;
   readonly seams?: JiraPersonLiveRuntimeSeamsV1;
+  readonly authorize_project?: PersonTicketProjectAuthorizationV1;
+  /** Selecting runtime may hide grant state from people outside its rollout fence. */
+  readonly catalog_available?: (access_token: string) => boolean;
 }): OpenedJiraPersonLiveRuntimeV1 {
   if (options.configuration.enabled !== true) throw new Error('Jira live evidence is not enabled');
   const owned = options.seams?.database === undefined;
@@ -49,6 +56,8 @@ export function openJiraPersonLiveRuntimeV1(options: {
     const transport = options.seams?.fetch ?? fetch;
     const application = createJiraPersonConnectionV1({
       store: new JiraConnectionStoreV1(database),
+      project_mappings: new JiraProjectMappingStoreV1(database),
+      ...(options.authorize_project === undefined ? {} : { authorize_project: options.authorize_project }),
       nango: options.seams?.nango ?? createJiraNangoV1({ integration_id: options.configuration.integration_id, authorization: options.configuration.nango_authorization, fetch: transport }),
       cloud_id: options.configuration.cloud_id,
       ...(options.configuration.project === undefined ? {} : { project: options.configuration.project }),
@@ -70,6 +79,16 @@ export function openJiraPersonLiveRuntimeV1(options: {
         });
       },
     });
-    return Object.freeze({ application, connection_http: createJiraPersonConnectionHttpApplicationV1(application), close() { if (owned) database.close(); } });
+    return Object.freeze({
+      application, connection_http: createJiraPersonConnectionHttpApplicationV1(application),
+      async tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]> {
+        if (options.catalog_available?.(access_token) === false) return Object.freeze([Object.freeze({
+          tool_id: 'jira', display_name: 'Jira', availability: 'unavailable', personal_status: 'unavailable',
+          external_scope_id: null, external_subject_id: null, organization_setup: null,
+        })]);
+        return Object.freeze([application.tool({ access_token })]);
+      },
+      close() { if (owned) database.close(); },
+    });
   } catch (error) { if (owned) database.close(); throw error; }
 }

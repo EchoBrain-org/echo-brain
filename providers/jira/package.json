@@ -28,6 +28,10 @@
     "./jira-person-connection-http-application-v1": {
       "types": "./dist/jira-person-connection-http-application-v1.d.ts",
       "import": "./dist/jira-person-connection-http-application-v1.js"
+    },
+    "./jira-project-mapping-store-v1": {
+      "types": "./dist/jira-project-mapping-store-v1.d.ts",
+      "import": "./dist/jira-project-mapping-store-v1.js"
     }
   },
   "files": [

@@ -12,7 +12,7 @@ import { STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/stagin
 import { readOrganizationAuthoritySetupManifest } from '../src/composition/organization-authority-setup-cli.js';
 import { readPersonOidcConfiguration } from '../src/composition/organization-authority-person-administration-cli.js';
 import { PERSON_ANSWER_PATH_V4 } from '@echo-brain/organization-api';
-import { validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
+import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
 import { FIXTURE_CLOUD, FIXTURE_EMAIL, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
@@ -195,6 +195,29 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     // Enabling Ask reuses the existing consent in the same profile-bound sidecar.
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: jiraAttempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
     const custodyBeforeAsk = custodyCounts();
+    const tools = async (token = owner) => {
+      const response = await fetch(`http://127.0.0.1:${runtime.address.port}/v4/person/tools`, { headers: { authorization: `Bearer ${token}` } });
+      expect(response.status).toBe(200);
+      return validateOrganizationPersonToolsV4(await response.json()).tools;
+    };
+    const catalog = await tools();
+    expect(catalog.map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
+    expect(catalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'enabled', personal_status: 'linked', external_scope_id: FIXTURE_CLOUD })]));
+    // A valid non-owner still gets the catalog, but cannot see or use the owner's Jira grant.
+    const invited = await post('/v1/person/employees', { name: 'Fixture Employee', email: 'employee@example.test' });
+    expect(invited.status).toBe(201);
+    const redeem = seams.oidc_provider.redeemAuthorizationCode;
+    vi.spyOn(seams.oidc_provider, 'redeemAuthorizationCode').mockImplementation(async () => {
+      const result = await redeem();
+      return { ...result, token: { ...result.token, subject: 'fixture-employee', claims: { email: 'employee@example.test', email_verified: true } } };
+    });
+    expect((await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant: invited.body.login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } })).status).toBe(201);
+    const page = await (await fetch(`http://127.0.0.1:${runtime.address.port}/v2/session/oidc/callback?state=${encodeURIComponent(seams.oidcState())}&code=employee`)).text();
+    const employee = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+    const employeeCatalog = await tools(employee);
+    expect(employeeCatalog.map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
+    expect(employeeCatalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'unavailable', personal_status: 'unavailable', external_scope_id: null, external_subject_id: null })]));
+    expect((await post('/v1/person/tools/jira/connect', { schema_version: 1 }, employee)).status).toBe(503);
     const answerResponse = await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'When should the ticket ship?' });
     expect(answerResponse.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(answerResponse.body);

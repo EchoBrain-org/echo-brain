@@ -36,7 +36,7 @@ export function fakeJiraCloudFetchV1() {
     expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${ACCESS_TOKEN}`);
     if (url.pathname === '/oauth/token/accessible-resources') return Response.json([{ id: FIXTURE_JIRA_CLOUD_V1, url: site, scopes: ['read:jira-work', 'read:jira-user'] }]);
     if (url.pathname.endsWith('/myself')) return Response.json({ accountId: 'fixture-jira-account', active: true, accountType: 'atlassian' });
-    if (url.pathname.endsWith('/project/ECHO')) return Response.json(project);
+    if (url.pathname.endsWith('/project/ECHO') || url.pathname.endsWith('/project/10000')) return Response.json(project);
     if (url.pathname.endsWith('/search/jql')) return Response.json({ isLast: true, issues: [{ id: '10001' }] });
     if (url.pathname.endsWith('/issue/10001')) return Response.json({ id: '10001', key: 'ECHO-1', self: `${site}/rest/api/3/issue/10001`, fields: { summary: 'Ship on Friday', project, description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'The ticket body stays with Jira.' }] }] }, created: '2026-10-01T12:00:00.000Z', updated: '2026-10-02T03:04:05.000-0700', status: { name: 'Open' }, assignee: { displayName: 'Fixture Owner', accountId: 'fixture-jira-account' }, duedate: null, labels: ['fixture'], priority: { name: 'High' } } });
     throw new Error(`unexpected Jira endpoint ${url.pathname}`);

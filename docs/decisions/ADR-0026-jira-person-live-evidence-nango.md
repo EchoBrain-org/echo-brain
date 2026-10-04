@@ -86,9 +86,29 @@ final response. Audit failure releases no evidence.
 Add a ticket-capable Ask response V5 and Evidence Desk V2 behind a separate HTTP
 route. Existing V4 remains strict and retains its route. A thin neutral dispatcher
 adds the server-selected ticket source to the existing desk; Jira rules stay inside
-its provider. Only global Ask includes Jira. Mine and unmapped ECHO project scopes
-exclude it, and explicit ticket lists in those scopes fail closed. Ticket citations
+its provider. Global Ask includes Jira; project Ask includes only the Jira project
+mapped by a current ECHO project lead. Mine and unmapped ECHO project scopes exclude
+it, and explicit ticket lists in those scopes fail closed. Ticket citations
 link to the verified Jira URL directly; there is no durable ticket-open endpoint.
+
+Project leads can read, set or remove one mapping in the desktop project settings
+or `person tools project --tool jira --echo-project <project-id>`. Any current
+project member can read the setting. The provider verifies a selected Jira key or
+ID live using the lead's own connection, then retains only the configured cloud ID,
+stable Jira project ID and display key. Each question still requires the asker's
+own connection and current ECHO project membership; a mapping confers no Jira access.
+Jira reads pin the stable project ID, including exact issue reads after search and
+before final output. The server's fixed runtime project remains an upper bound.
+
+The latest mapping and a fresh revision live in `jira_project_mapping_v1` in the
+existing provider-owned sidecar. No immutable Authority schema migration, ticket
+content, capture pointer or tool history is added. Writes compare the expected
+revision atomically and retain only the latest command digest for exact retry.
+After an intervening edit, an old retry conflicts; removal keeps a fresh revision
+so remove/re-add cannot revive an in-flight reader. Session, exact project grant,
+connection and mapping revision are checked across provider I/O and at final
+release. The desktop reloads after an unconfirmed save before allowing another edit.
+The model is told when Jira is unavailable and receives no provider selector.
 
 ## Primary documentation checked 2026-10-01
 

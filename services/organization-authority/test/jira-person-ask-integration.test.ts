@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validatePersonAnswerResponseV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
+import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -54,7 +54,12 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   const verifySlack = vi.fn(async () => ({ team_id: 'TFIXTURE', enterprise_id: null, bot_user_id: 'UBOTFIXTURE', bot_id: 'BFIXTURE', app_id: 'AFIXTURE', granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, verification_evidence_sha256: canonicalSha256({ fixture: 'slack-identity' }) }));
   const audit = openAuthorityDatabase(join(state, 'authority.sqlite'), { fileMustExist: true });
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
+    const prompt = JSON.parse(input.user_prompt) as { question: string; scope: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
+    if (prompt.scope.includes('Jira tickets are unavailable')) {
+      if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [], not_found: ['Jira status is unavailable.'] };
+      return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: prompt.last_results?.length ? 'not_found' : 'open', evidence: [] }], notes: '' }],
+        actions: [{ tool: prompt.last_results?.length ? 'finish' : 'list', args: prompt.last_results?.length ? {} : { source: 'documents' } }] };
+    }
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
     const hit = prompt.last_results?.[0]?.results?.[0]?.id;
     if (hit !== undefined) {
@@ -78,12 +83,18 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   const origin = `http://127.0.0.1:${runtime.address.port}`;
   const post = async (path: string, body: unknown, token = owner) => { const response = await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() as Record<string, any> }; };
   let owner = '';
+  const tools = async (token = owner) => {
+    const response = await fetch(`${origin}/v4/person/tools`, { headers: { authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    return validateOrganizationPersonToolsV4(await response.json()).tools;
+  };
   try {
     const login_grant = (JSON.parse(readFileSync(invitation, 'utf8')) as { login_grant: string }).login_grant;
     const begun = await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } });
     expect(begun.status).toBe(201);
     const page = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=synthetic`)).text();
     owner = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', display_name: 'Jira', availability: 'enabled', personal_status: 'unlinked', external_subject_id: null })]));
     expect((await post('/v1/person/tools/jira/connect', { schema_version: 1 }, 'wrong-person-token')).status).toBe(401);
     const connected = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(connected.status).toBe(201);
     expect(jira.tags()).toMatchObject({ organization_id: initialized.organization_id, echo_membership: initialized.owner_membership_id });
@@ -95,6 +106,8 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect((await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt }, employee)).status).toBe(401);
     jira.finish(); // Browser consent is reconciled only by the server-bound attempt.
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete', failure_reason: null } });
+    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'linked', external_scope_id: CLOUD })]));
+    expect(await tools(employee)).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'unlinked', external_subject_id: null })]));
     const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should the ticket ship?' }); expect(response.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
@@ -103,10 +116,46 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const rows = audit.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').all() as { body_json: string }[];
     const releases = rows.map(row => JSON.parse(row.body_json)).filter(row => row.kind === 'echo-person-live-evidence-release-audit-v1'); expect(releases[0].citations[0]).toMatchObject({ coordinates: { object_id: '10001' }, text_sha256: cited.text_sha256 });
     for (const row of rows) { expect(row.body_json).not.toContain('Ship on Friday'); expect(row.body_json).not.toContain('synthetic-jira-oauth-bearer'); expect(row.body_json).not.toContain('jira_item_'); }
+    // Real ECHO project grants select the provider-owned mapping; the model receives no Jira selector.
+    const created = await post('/v1/person/projects', { schema_version: 1, kind: 'echo-project-create-v1', request_id: randomUUID(), name: 'Project A' });
+    expect(created.status).toBe(201);
+    const project_id = created.body.project_id;
+    expect(typeof project_id).toBe('string');
+    const mappingRead = { schema_version: 1, project_id };
+    expect(await post('/v1/person/tools/jira/project/read', mappingRead)).toMatchObject({ status: 200, body: { mapping: null, revision: null } });
+    expect((await post('/v1/person/tools/jira/project/read', mappingRead, employee)).status).toBe(404);
+    const mappingCommand = { ...mappingRead, request_id: randomUUID(), expected_revision: null, jira_project: 'ECHO' };
+    const mapped = await post('/v1/person/tools/jira/project/set', mappingCommand);
+    expect(mapped).toMatchObject({ status: 200, body: { mapping: { project_id: '10000', project_key: 'ECHO' } } });
+    jiraFetch.mockClear(); generate.mockClear();
+    const scoped = await post('/v4/person/ask', { schema_version: 3, question: 'What is the status of Project A?', project_id });
+    expect(scoped.status).toBe(200);
+    expect(validatePersonAnswerResponseV5(scoped.body)).toMatchObject({ scope: { kind: 'project', project_id }, outcome: 'answered', citations: [expect.objectContaining({ kind: 'ticket' })] });
+    const search = jiraFetch.mock.calls.find(([url]) => String(url).endsWith('/search/jql'))!;
+    expect(JSON.parse(search[1]!.body as string).jql).toContain('project = 10000 AND');
+    expect(JSON.parse(generate.mock.calls[0]![0].user_prompt).scope).toContain('saved Jira project mapping');
+    const employeeMembership = audit.prepare('SELECT membership_id FROM authority_memberships WHERE membership_id != ?').get(initialized.owner_membership_id) as { membership_id: string };
+    expect((await post('/v1/person/projects/members/add', { schema_version: 1, kind: 'echo-project-member-add-v1', request_id: randomUUID(), project_id, membership_id: employeeMembership.membership_id })).status).toBe(200);
+    expect((await post('/v1/person/tools/jira/project/read', mappingRead, employee)).body).toEqual(mapped.body);
+    expect((await post('/v1/person/tools/jira/project/set', { ...mappingCommand, request_id: randomUUID(), expected_revision: mapped.body.revision, jira_project: null }, employee)).status).toBe(401);
+    jiraFetch.mockClear();
+    const unconnected = await post('/v4/person/ask', { schema_version: 3, question: 'What is the status of Project A?', project_id }, employee);
+    expect(unconnected.status).toBe(200);
+    expect(validatePersonAnswerResponseV5(unconnected.body).citations).toHaveLength(0);
+    expect(jiraFetch).not.toHaveBeenCalled();
+    const removed = await post('/v1/person/tools/jira/project/set', { ...mappingCommand, request_id: randomUUID(), expected_revision: mapped.body.revision, jira_project: null });
+    expect(removed).toMatchObject({ status: 200, body: { mapping: null } });
+    const unmapped = await post('/v4/person/ask', { schema_version: 3, question: 'What is the status of Project A?', project_id });
+    expect(unmapped.status).toBe(200);
+    expect(validatePersonAnswerResponseV5(unmapped.body).citations).toHaveLength(0);
+    expect(jiraFetch).not.toHaveBeenCalled();
     // Both live connectors share this production root without retired Slack startup fields.
     expect((await post('/v2/organization/tools/slack/setup', { request_id: `oss_${randomUUID()}`, configuration_token: 'synthetic-slack-configuration-token' })).status).toBe(201);
     const slackBegin = await post('/v2/organization/tools/slack/install/begin', { request_id: `osi_${randomUUID()}` }); expect(slackBegin.status).toBe(201);
     const slackStatus = await post('/v2/organization/tools/slack/install/status', { attempt_id: slackBegin.body.attempt_id }); expect(slackStatus).toMatchObject({ status: 200, body: { status: 'complete', result: { kind: 'created', workspace_id: 'TFIXTURE' } } });
     expect(verifySlack).toHaveBeenCalledWith('xoxb-synthetic-slack', undefined);
+    expect((await tools()).map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
+    expect((await post('/v1/person/tools/jira/disconnect', { schema_version: 1 })).status).toBe(200);
+    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'revoked', external_subject_id: null })]));
   } finally { await runtime.close(); audit.close(); }
 });

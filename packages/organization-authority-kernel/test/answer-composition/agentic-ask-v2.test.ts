@@ -83,7 +83,8 @@ describe('Agentic Ask V2 ticket release', () => {
       expect(input.user_prompt).not.toContain('atlassian.net');
       expect(input.user_prompt).not.toContain('10001');
       expect(input.system_prompt).toContain('"source": "tickets"');
-      expect(input.system_prompt).toContain('project and mine exclude them');
+      expect(input.system_prompt).toContain('project scope only when a lead has saved a Jira project mapping');
+      expect(input.system_prompt).toContain('Mine excludes tickets');
     }
     expect(f.auditEntries[0]).toMatchObject({ outcome: 'answered', model_calls: 4, citation_count: 1, receipt_digests: [metadata.receipt_sha256, uncitedMetadata.receipt_sha256, opened.receipt_sha256], response_sha256: canonicalSha256(answer) });
     expect(JSON.stringify(f.auditEntries)).not.toContain(body);

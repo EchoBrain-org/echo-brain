@@ -7,8 +7,8 @@ import { AuthorityOperationError } from '@echo-brain/organization-authority-kern
 const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['decision', 'action', 'rationale', 'note', 'document_passage'];
 
 /** A request-owned dispatcher. Server composition selects live sources; models select only read tools. */
-export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?: PersonLiveEvidenceSourceV1, slack?: PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1>): EvidenceDeskPortV2 {
-  if ((ticket !== undefined || slack !== undefined) && base.scope.kind !== 'global') throw new AuthorityOperationError('unauthorized', 'Live source is unsupported in this scope');
+export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?: PersonLiveEvidenceSourceV1, slack?: PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1>, ticketProjectId?: string): EvidenceDeskPortV2 {
+  if ((slack !== undefined && base.scope.kind !== 'global') || (ticket !== undefined && base.scope.kind !== 'global' && !(base.scope.kind === 'project' && base.scope.project_id === ticketProjectId))) throw new AuthorityOperationError('unauthorized', 'Live source is unsupported in this scope');
   type Source = EvidenceDeskPortV1 | PersonLiveEvidenceSourceV1;
   const issued = new Map<string, Source>();
   const remember = (result: EvidenceDeskResultV2, source: Source) => {
@@ -22,6 +22,7 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
   const refused = (): never => { throw new AuthorityOperationError('unauthorized', 'Live source is unavailable in this scope'); };
   return Object.freeze<EvidenceDeskPortV2>({
     scope: base.scope,
+    ticket_available: ticket !== undefined,
     async search(input) {
       input.signal?.throwIfAborted();
       const maximum = input.limit ?? 8;

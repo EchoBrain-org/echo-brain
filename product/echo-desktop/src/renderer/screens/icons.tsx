@@ -75,3 +75,7 @@ export const Meeting = () => (
 export const Hash = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4 8 20M16 4l-2 16M4.5 9h15M4 15h15" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" fill="none" /></svg>
 );
+/** Tools: a plug, in the sidebar's outline. */
+export const Plug = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3.5v4.5M15 3.5v4.5M6 8h12v3.5a6 6 0 0 1-12 0zM12 17.5v3" stroke="rgba(240,236,230,0.66)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none" /></svg>
+);

@@ -13,8 +13,8 @@ import { askText, searchQuery } from '../shared/query.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import {
   abandonView, answerView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, invitationView, isRecordRef, listView,
-  membersView, noteMatchesView, noteTitle, openView, projectMatchesView, projectPageView, projectSettingsView, projectView,
-  NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolsView, unwrap, ViewError, writeStatusView,
+  membersView, noteMatchesView, noteTitle, openView, projectMatchesView, projectJiraMappingView, projectPageView, projectSettingsView, projectView,
+  NotReadable, receiptView, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -85,6 +85,8 @@ const TIMEOUT_MS: Record<HostMethodName, number> = {
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'projects.rename': 45_000, 'projects.archive': 45_000,
   'projects.leave': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,
   'employees.reissue': 45_000, 'employees.revoke': 45_000,
+  'projects.jiraRead': 45_000, 'projects.jiraSet': 90_000,
+  'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
 };
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
 const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon']);
@@ -424,6 +426,20 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       return forAccount(method, expect, ['documents', 'download-v2', option('document-id', document_id), option('out', out)],
         stdout => savedOriginalView(lastJson(stdout), document_id));
     }
+    case 'projects.jiraRead': {
+      const { expect, project_id } = params as Params<'projects.jiraRead'>;
+      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) return code('invalid_request');
+      return forAccount(method, expect, ['tools', 'project', '--tool=jira', option('echo-project', project_id)], stdout => projectJiraMappingView(lastJson(stdout), project_id));
+    }
+    case 'projects.jiraSet': {
+      const { expect, project_id, request_id, expected_revision, jira_project } = params as Params<'projects.jiraSet'>;
+      if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id) || typeof request_id !== 'string' || !REQUEST_ID.test(request_id) ||
+          (expected_revision !== null && (typeof expected_revision !== 'string' || !REQUEST_ID.test(expected_revision))) ||
+          (jira_project !== null && (typeof jira_project !== 'string' || !/^(?:[A-Z][A-Z0-9_]{0,63}|[1-9][0-9]{0,19})$/.test(jira_project)))) return code('invalid_request', true);
+      return forAccount(method, expect, ['tools', 'project', '--tool=jira', option('echo-project', project_id),
+        option('mapping-request', request_id), option('mapping-revision', expected_revision ?? 'none'), ...(jira_project === null ? ['--clear'] : [option('jira-project', jira_project)])],
+        stdout => projectJiraMappingView(lastJson(stdout), project_id), request_id);
+    }
     case 'projects.read': {
       const { expect, project_id } = params as Params<'projects.read'>;
       if (typeof project_id !== 'string' || !PROJECT_ID.test(project_id)) return code('invalid_request');
@@ -559,7 +575,7 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       const { expect, question, scope } = params as Params<'ask.run'>;
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      return forAccount(method, expect, ['ask', option('question', text), ...askScopeArgs(scope)],
+      return forAccount(method, expect, ['ask', option('question', text), ...(scope.kind !== 'mine' ? ['--tickets'] : []), ...askScopeArgs(scope)],
         stdout => answerView(lastJson(stdout), scope), undefined, abortSignal);
     }
     case 'ask.cancel':
@@ -614,6 +630,27 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
     case 'account.tools': {
       const { expect } = params as Params<'account.tools'>;
       return forAccount(method, expect, ['tools'], stdout => toolsView(lastJson(stdout), expect.membership_id));
+    }
+    // Each tool step is one short client call, the same verbs as the terminal's
+    // `person tools <verb> --tool <id>`. Connect returns once the page is open;
+    // the window then reads the attempt every few seconds, so no call holds the
+    // session for the minutes a person takes in the browser.
+    case 'tools.connect': {
+      const { expect, tool_id: tool } = params as Params<'tools.connect'>;
+      if (typeof tool !== 'string' || !TOOL_ID.test(tool)) return code('invalid_request');
+      return forAccount(method, expect, ['tools', 'connect', option('tool', tool), '--no-wait'], stdout => toolAttemptView(lastJson(stdout)));
+    }
+    case 'tools.status':
+    case 'tools.cancel': {
+      const { expect, tool_id: tool, attempt_id: attempt } = params as Params<'tools.status'>;
+      if (typeof tool !== 'string' || !TOOL_ID.test(tool) || typeof attempt !== 'string' || !TOOL_ATTEMPT_ID.test(attempt)) return code('invalid_request');
+      const verb = method === 'tools.status' ? 'status' : 'cancel';
+      return forAccount(method, expect, ['tools', verb, option('tool', tool), option('attempt-id', attempt)], stdout => toolAttemptStatusView(lastJson(stdout)));
+    }
+    case 'tools.disconnect': {
+      const { expect, tool_id: tool } = params as Params<'tools.disconnect'>;
+      if (typeof tool !== 'string' || !TOOL_ID.test(tool)) return code('invalid_request', true);
+      return forAccount(method, expect, ['tools', 'disconnect', option('tool', tool)], () => null);
     }
     case 'account.signOut': {
       const { expect } = params as Params<'account.signOut'>;

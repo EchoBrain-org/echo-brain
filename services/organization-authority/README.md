@@ -177,7 +177,10 @@ reuses its initial-owner Jira grant for global Ask, bounded to the configured Ji
 project. The profile digest and sidecar remain unchanged. Without that switch,
 the diagnostic-only behavior remains available. Explicit Jira flags must match
 the selected profile; other sites, integrations and projects fail before startup.
-Mine and ECHO project scopes still exclude Jira until project mappings exist.
+ECHO project Ask requires a lead-configured Jira mapping and the asker's own
+connection. Its mapped Jira project must also fit the profile's fixed project;
+the setting cannot widen the staging fence. Mine and unmapped projects exclude
+Jira.
 
 ## Initial-owner setup internals
 
