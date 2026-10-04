@@ -108,7 +108,7 @@ function JiraProject({ state }: { state: State }) {
         {jira.status === 'loading' && <p role="status">Loading setting…</p>}
         {jira.value && <>
           <p data-testid="project-jira-current">{jira.value.mapping ? `Mapped to ${jira.value.mapping.project_key}` : 'No Jira project mapped'}</p>
-          {lead ? <label>Jira project key
+          {lead ? <label class="jira-project-field">Jira project key
             <input ref={field} class="field" data-testid="project-jira-input" aria-label="Jira project key" maxLength={64} placeholder="e.g. KAN"
               value={jira.key} disabled={jira.status !== 'ready'} onInput={event => setProjectJira((event.target as HTMLInputElement).value)}
               onKeyDown={event => { if (event.key === 'Enter' && projectJiraValid(jira)) { event.preventDefault(); void saveProjectJira(); } }} />

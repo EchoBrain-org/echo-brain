@@ -322,6 +322,7 @@ button.toast:hover { background: #211f1f; }
 .members-button .face { margin-left: -6px; border: 2px solid var(--ink); box-sizing: content-box; }
 .project-settings { position: relative; }
 .project-settings .menu { top: 30px; }
+.jira-project-field { display: flex; flex-direction: column; gap: 6px; }
 .archived-projects { display: flex; flex-direction: column; margin-top: 16px; }
 .archived-heading { align-self: flex-start; display: flex; align-items: center; gap: 4px; padding: 8px 12px 4px; border: 0; border-radius: 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.8px; color: var(--faint); background: transparent; }
 .archived-heading:hover { color: var(--text); background: var(--hover); }
