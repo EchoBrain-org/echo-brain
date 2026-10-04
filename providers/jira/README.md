@@ -180,7 +180,8 @@ organization, grant or site selector in model arguments or connection commands.
    after the terminal audit. The desk rechecks its local snapshot after Jira I/O.
 4. V5 citations open the adapter-verified Jira permalink directly. The desktop
    validates and displays V5 tickets, with a safe direct-link opener. Its
-   default Ask and `person ask` without `--tickets` retain strict V4 behavior.
+   global and project Ask use V5; `person ask` without `--tickets` retains
+   strict V4 behavior.
 5. `echo-brain person tools disconnect --tool jira` calls
    `POST /v1/person/tools/jira/disconnect`. Local revocation is committed before
    remote deletion; a failed deletion cannot restore read access. Missing
@@ -206,7 +207,8 @@ Nango, SQLite and Authority dependencies stay in the server provider. The select
 Authority composition mounts provider-owned connection routes through the generic
 HTTP application port. No Jira command or route dispatcher remains in shared core.
 
-The provider-owned SQLite file stores compact binding/attempt data only. It retains only the latest attempt per Person tenure, including terminal status,
+The provider-owned SQLite file stores compact binding/attempt data and the latest
+project mapping setting. It retains only the latest attempt per Person tenure, including terminal status,
 so polling and cancellation survive an Authority restart. It keeps no credential,
 consent URL, ticket body or provider cursor. Cancellation and expiry prevent a
 late consent from creating an ECHO grant; remote connections created after cleanup
@@ -214,11 +216,17 @@ can still require operator cleanup. This slice adds no remote orphan sweeper. Re
 neutral coordinates, digests, grant/session/tenure and request commitments; no
 body, label, permalink, Nango reference or cursor is retained there.
 
-Only global Ask enables Jira. Mine excludes it. ECHO project scopes have no mapping
-in this slice and never fall back to global Jira; explicit ticket inventory in an
-unsupported scope is refused. There is no Jira addition to Person list/mine,
-connector catalog, settings UI or persistent ticket-open API, and no sync or
-index. Jira capture is disabled, including in the staging rehearsal.
+Global Ask enables Jira under the asker's connection. Project Ask additionally
+requires a saved mapping set by a current ECHO project lead. The desktop project's
+**Jira project** setting verifies the key live and saves only the cloud ID, stable
+Jira project ID and key. Members can read the setting; leads can change or remove
+it. Each asker still needs their own connection. The configured runtime project,
+when present, remains an upper bound. Mine and unmapped projects exclude Jira and
+never fall back to global Jira; explicit ticket inventory in an unsupported scope
+is refused. There is no persistent ticket-open API, sync or index. Jira capture
+is disabled, including in the staging rehearsal. See
+[project settings](../../docs/features/project-settings-v1.md#jira-project-mapping)
+for the setting's CLI and revision checks.
 
 ## Remaining human inputs and live qualification
 
