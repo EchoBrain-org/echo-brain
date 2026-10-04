@@ -4,6 +4,10 @@ The app shares its TypeScript client, host, renderer and Electron main process
 across macOS and Linux. Packages currently target macOS arm64 and Linux x64.
 Windows packaging is not implemented.
 
+Global Ask includes live Jira reads through the person's connected account and
+shows ticket citations that open directly in Jira. Project and Mine scopes keep
+their existing boundaries; Jira project mapping is separate work.
+
 ## Build
 
 Use the repository's pinned Node and npm versions. From the repository root:

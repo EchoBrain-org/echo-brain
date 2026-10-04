@@ -9,7 +9,7 @@ test.afterEach(async () => { await run?.close(); });
 const RECORD = `sha256:${'5'.repeat(64)}`;
 const recordReads = () => run.calls().filter(call => call.method === 'GET' && call.path === '/v1/person/records');
 const evidenceReads = () => run.calls().filter(call => call.path === '/v2/person/ask/source');
-const questions = () => run.calls().filter(call => call.path === '/v3/person/ask').map(call => call.body?.question);
+const questions = () => run.calls().filter(call => call.path === '/v4/person/ask').map(call => call.body?.question);
 
 async function askFromHome(page: Page, question: string): Promise<void> {
   await expect(page.getByTestId('project-row')).toHaveCount(2);
@@ -25,6 +25,34 @@ async function followUp(page: Page, question: string): Promise<void> {
   await expect(page.getByTestId('asking')).toHaveCount(0);
   await expect(page.getByTestId('answer')).toBeVisible();
 }
+
+test('global Ask reads Jira live and opens its ticket citation', async () => {
+  run = await launch('ask-ticket');
+  const { page, app } = run;
+  const question = 'Open one Jira ticket I can access and tell me its title.';
+  const permalink = 'https://example.atlassian.net/browse/ECHO-7';
+  await app.evaluate(({ shell }) => {
+    (globalThis as { openedTickets?: string[] }).openedTickets = [];
+    shell.openExternal = async url => { (globalThis as { openedTickets?: string[] }).openedTickets!.push(url); };
+  });
+  const opened = () => app.evaluate(() => (globalThis as { openedTickets?: string[] }).openedTickets);
+  await askFromHome(page, question);
+  await expect(page.getByTestId('answer')).toBeVisible();
+  expect(run.calls().filter(call => /^\/v[34]\/person\/ask$/.test(call.path)).map(call => ({ path: call.path, body: call.body })))
+    .toEqual([{ path: '/v4/person/ask', body: { schema_version: 3, question } }]);
+  await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
+  await expect(page.getByTestId('private-mark')).toHaveCount(1);
+  await expect(page.getByTestId('source-row')).toHaveText(/^1\s*ECHO-7 · Jira launch$/);
+  await page.getByTestId('citation').click();
+  const pane = page.getByTestId('source-pane');
+  await expect(pane).toContainText('Ticket');
+  await expect(pane.getByTestId('open-ticket-source')).toHaveAttribute('title', permalink);
+  expect(await opened()).toEqual([]);
+  await pane.getByTestId('open-ticket-source').click();
+  await expect.poll(opened).toEqual([permalink]);
+  expect(evidenceReads()).toHaveLength(0);
+  expect(recordReads()).toHaveLength(0);
+});
 
 test('follow-ups stack in a thread, newest at the bottom: earlier answers collapse, five at most, and Back leaves the thread', async () => {
   run = await launch();
@@ -131,7 +159,7 @@ test('a follow-up can be cancelled and its late answer is dropped; one that fail
 test('a project question that finds nothing says so and offers, never makes, one tap to ask across everything', async () => {
   run = await launch('ask-project-empty');
   const { page } = run;
-  const asks = () => run.calls().filter(call => call.path === '/v3/person/ask').map(call => ({ question: call.body?.question, project: call.body?.project_id }));
+  const asks = () => run.calls().filter(call => /^\/v[34]\/person\/ask$/.test(call.path)).map(call => ({ question: call.body?.question, project: call.body?.project_id }));
   await page.getByTestId('project-row').nth(0).click();
   await page.getByTestId('ask-field').fill('What did we agree on pricing?');
   await page.getByTestId('ask-field').press('Enter');

@@ -56,8 +56,9 @@ test('ask inside a project is scoped to it until the chip is cleared', async () 
   await page.getByTestId('ask-field').fill('Anything else?');
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
-  const asks = run.calls().filter(call => call.path === '/v3/person/ask');
+  const asks = run.calls().filter(call => /^\/v[34]\/person\/ask$/.test(call.path));
   expect(asks).toHaveLength(2);
+  expect(asks.map(call => call.path)).toEqual(['/v3/person/ask', '/v4/person/ask']);
   expect(asks[1]!.body && 'project_id' in asks[1]!.body).toBe(false);
 });
 

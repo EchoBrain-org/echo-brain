@@ -560,7 +560,7 @@ async function handle(method: HostMethodName, params: unknown, abortSignal?: Abo
       const { expect, question, scope } = params as Params<'ask.run'>;
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      return forAccount(method, expect, ['ask', option('question', text), ...askScopeArgs(scope)],
+      return forAccount(method, expect, ['ask', option('question', text), ...(scope.kind === 'global' ? ['--tickets'] : []), ...askScopeArgs(scope)],
         stdout => answerView(lastJson(stdout), scope), undefined, abortSignal);
     }
     case 'ask.cancel':

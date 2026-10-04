@@ -915,7 +915,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    if (method === 'POST' && path === '/v3/person/ask') {
+    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask')) {
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);
@@ -928,15 +928,29 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // One project, only what you added, or all you may read.
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : request.mine ? { kind: 'mine' } : { kind: 'global' };
       const question = request.question;
+      const tickets = path === '/v4/person/ask';
+      const answer = { ...desktop.answer, ...(tickets ? { schema_version: 5, kind: 'echo-clean-person-answer-v5' } : {}) };
+      if (mode === 'ask-ticket') {
+        const included = tickets && scope.kind === 'global';
+        return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
+          citations: included ? [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
+            kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10007',
+            permalink: 'https://example.atlassian.net/browse/ECHO-7', text_sha256: sha('ECHO-7: Jira launch'),
+          } }] : [],
+          parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
+            ? [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }]
+            : [], ...(included ? {} : { gap: 'No accessible Jira ticket was found.' }) }],
+        });
+      }
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const answered = (text?: string) => {
         const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];
         const statements = text === undefined ? part!.statements : [{ ...part!.statements[0], text }];
-        return json({ ...desktop.answer, scope, parts: [{ ...part, question, statements }] });
+        return json({ ...answer, scope, parts: [{ ...part, question, statements }] });
       };
       if (mode === 'ask-slack') {
         const [part] = desktop.answer.parts as { statements: Record<string, unknown>[] }[];
-        return json({ ...desktop.answer, scope,
+        return json({ ...answer, scope,
           citations: [...desktop.answer.citations as unknown[], {
             kind: 'slack_message', label: '#launch · Maya', visibility: 'only_me', citation: {
               kind: 'slack_message', team_id: 'T01ABCDEF', channel_id: 'C01ABCDEF', message_ts: '1758873600.000100',
@@ -954,7 +968,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const label = 'Apollo-launch-plan-v2.md';
         const first = { ...passage!, label, citation: { ...passage!.citation, label } };
         const second = { ...first, citation: { ...first.citation, anchor_sha256: sha('second passage') } };
-        return json({ ...desktop.answer, scope, citations: [record, first, second],
+        return json({ ...answer, scope, citations: [record, first, second],
           parts: [{ question, status: 'answered', statements: [
             { text: 'We agreed to ship Apollo with annual plans first.', citation_indexes: [0, 1], private: false },
             { text: 'Monthly plans follow the launch.', citation_indexes: [2], private: false },
