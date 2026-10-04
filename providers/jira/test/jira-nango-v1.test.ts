@@ -45,6 +45,33 @@ describe('Jira Nango HTTP authentication adapter', () => {
     taggedConnections.length = 0; expect(await f.nango.find(tags)).toBeUndefined();
     taggedConnections.push(connection, connection); await expect(f.nango.find(tags)).rejects.toMatchObject({ code: 'unauthorized' });
   });
+  it('accepts Nango\'s already-deleted connection response so reconnect can start fresh consent', async () => {
+    const f = fixture();
+    f.fetch.mockResolvedValueOnce(Response.json({ success: true }));
+    await f.nango.disconnect('reference-fixture');
+    f.fetch.mockResolvedValueOnce(Response.json({ error: { code: 'unknown_connection' } }, { status: 400 }));
+    await expect(f.nango.disconnect('reference-fixture')).resolves.toBeUndefined();
+    f.fetch.mockResolvedValueOnce(json({ data: { connect_link: 'https://connect.nango.dev/fixture-reconnect' } }));
+    await expect(f.nango.connect({ ...tags, echo_attempt: 'fresh-attempt-fixture' })).resolves.toEqual({ link: 'https://connect.nango.dev/fixture-reconnect' });
+  });
+  it.each([
+    [400, { error: { code: 'invalid_query_params' } }],
+    [400, { code: 'unknown_connection' }],
+    [400, { error: { code: 'unknown_connection' }, private: 'x'.repeat(128 * 1024) }],
+    [401, { error: { code: 'unknown_connection' } }],
+    [403, { error: { code: 'unknown_connection' } }],
+    [429, { error: { code: 'unknown_connection' } }],
+    [500, { error: { code: 'unknown_connection' } }],
+  ] as const)('keeps other deletion failures closed (case %#, HTTP %s)', async (status, body) => {
+    const f = fixture(); f.fetch.mockResolvedValueOnce(Response.json(body, { status }));
+    await expect(f.nango.disconnect('reference-fixture')).rejects.toMatchObject({ code: 'unavailable', message: 'Jira live evidence operation could not be completed' });
+  });
+  it('does not accept unknown_connection as success for connection reads or fresh consent', async () => {
+    const f = fixture();
+    f.fetch.mockImplementation(async () => Response.json({ error: { code: 'unknown_connection' } }, { status: 400 }));
+    await expect(f.nango.connection('reference-fixture')).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(f.nango.connect(tags)).rejects.toMatchObject({ code: 'unavailable' });
+  });
   it.each([{ connection_id: 'another-reference' }, { provider_config_key: 'another-integration' }, { provider: 'jira-data-center' }, { credentials: { type: 'BASIC', password: 'synthetic-private' } }, { tags: { ...tags, echo_attempt: undefined } }])('fails closed for mismatched or malformed connection data', async change => {
     const f = fixture(); f.fetch.mockResolvedValueOnce(json({ ...connection, ...change }));
     await expect(f.nango.connection('reference-fixture')).rejects.toMatchObject({ message: 'Jira live evidence operation could not be completed' });

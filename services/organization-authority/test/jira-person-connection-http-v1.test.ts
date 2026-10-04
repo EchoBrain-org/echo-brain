@@ -1,9 +1,15 @@
 import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import { expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { JiraConnectionStoreV1 } from '@echo-brain/provider-jira/jira-connection-store-v1';
+import { createJiraPersonConnectionV1 } from '@echo-brain/provider-jira/jira-person-connection-v1';
+import { createJiraNangoV1 } from '@echo-brain/provider-jira/jira-nango-v1';
 import { createJiraPersonConnectionHttpApplicationV1, type JiraPersonConnectionHttpPortV1 } from '@echo-brain/provider-jira/jira-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { createOrganizationAuthorityHttpServer } from '../src/presentation/organization-authority-http-server.js';
+import { fakeJiraCloudFetchV1, FIXTURE_JIRA_CLOUD_V1, FIXTURE_JIRA_SITE_V1 } from './fixtures/fake-jira-v1.js';
 
 const ATTEMPT = '00000000-0000-4000-8000-000000000001';
 const EXPIRES_AT = '2026-10-01T00:10:00.000Z';
@@ -82,4 +88,59 @@ it('aborts an in-flight shared Jira connect when its Person HTTP client disconne
     request.on('error', () => {}); request.end(JSON.stringify({ schema_version: 1 }));
     await begun; request.destroy(); await cancelled;
   } finally { await value.close(); }
+});
+
+it('reconnects through the Person HTTP routes after disconnect deleted the Nango connection', async () => {
+  const database = new Database(':memory:');
+  const store = new JiraConnectionStoreV1(database);
+  const person = { organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'fixture-person', membership_id: 'mem_00000000-0000-4000-8000-000000000001' };
+  const initial = store.begin(person);
+  const old = store.complete(person, initial.attempt, 'old-reference', FIXTURE_JIRA_CLOUD_V1, 'fixture-jira-account', FIXTURE_JIRA_SITE_V1);
+  let oldExists = true; let consent = false; let tags: Record<string, string> = {};
+  const deletionStatuses: number[] = [];
+  const nangoFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = new URL(String(input));
+    if (init?.method === 'DELETE' && url.pathname === '/connections/old-reference') {
+      const status = oldExists ? 200 : 400; oldExists = false; deletionStatuses.push(status);
+      return Response.json(status === 200 ? { success: true } : { error: { code: 'unknown_connection' } }, { status });
+    }
+    if (init?.method === 'POST' && url.pathname === '/connect/sessions') {
+      tags = JSON.parse(init.body as string).tags;
+      return Response.json({ data: { connect_link: 'https://connect.nango.dev/fixture-reconnect' } });
+    }
+    const connected = { connection_id: 'fresh-reference', provider_config_key: 'jira-fixture', provider: 'jira', tags, credentials: { type: 'OAUTH2', access_token: 'synthetic-jira-oauth-bearer' } };
+    if (init?.method === 'GET' && url.pathname === '/connections') {
+      expect(url.searchParams.get('tags[echo_attempt]')).toBe(tags.echo_attempt);
+      return Response.json({ connections: consent ? [connected] : [] });
+    }
+    if (init?.method === 'GET' && url.pathname === '/connections/fresh-reference' && consent) return Response.json(connected);
+    throw new Error('Unexpected fixture Nango request');
+  });
+  const connection = createJiraPersonConnectionV1({
+    store, nango: createJiraNangoV1({ integration_id: 'jira-fixture', authorization: () => 'synthetic-nango-key', fetch: nangoFetch }),
+    cloud_id: FIXTURE_JIRA_CLOUD_V1, fetch: fakeJiraCloudFetchV1(),
+    authenticate: token => { expect(token).toBe('fixture'); return { ...person, authorization_sha256: canonicalSha256(person) }; },
+  });
+  const value = await server(createJiraPersonConnectionHttpApplicationV1(connection));
+  const post = (verb: string, extra = {}) => fetch(`${value.origin}/v1/person/tools/jira/${verb}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer fixture' }, body: JSON.stringify({ schema_version: 1, ...extra }),
+  });
+  try {
+    expect((await post('disconnect')).status).toBe(200);
+    expect(connection.tool({ access_token: 'fixture' })).toMatchObject({ personal_status: 'revoked' });
+    const reconnect = await post('connect');
+    expect(reconnect.status).toBe(201);
+    const begun = await reconnect.json() as { attempt: string; connect_link: string };
+    expect(begun.connect_link).toBe('https://connect.nango.dev/fixture-reconnect');
+    expect(begun.attempt).not.toBe(initial.attempt);
+    expect(deletionStatuses).toEqual([200, 400]);
+    expect(store.current(person)).toMatchObject({ active: false, version: old.version });
+    expect(await (await post('status', { attempt: begun.attempt })).json()).toMatchObject({ status: 'pending' });
+    consent = true;
+    expect(await (await post('status', { attempt: begun.attempt })).json()).toMatchObject({ status: 'complete' });
+    expect(connection.tool({ access_token: 'fixture' })).toMatchObject({ personal_status: 'linked' });
+    expect(store.current(person)).toMatchObject({ active: true, reference: 'fresh-reference' });
+    expect(store.current(person)!.binding.read_grant_sha256).not.toBe(old.binding.read_grant_sha256);
+    expect(() => store.requireCurrent(old.binding)).toThrow();
+  } finally { await value.close(); database.close(); }
 });
