@@ -276,6 +276,8 @@ test('a Jira mapping save stays visible until its reply and Escape closes the se
   await page.getByTestId('project-jira-input').fill('ECHO');
   await page.getByTestId('project-jira-save').click();
   await expect.poll(() => run.calls().filter(call => call.path === '/v1/person/tools/jira/project/set').length).toBe(1);
+  // Disabling the focused Save button may return focus to the document.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Done', exact: true })).toBeDisabled();

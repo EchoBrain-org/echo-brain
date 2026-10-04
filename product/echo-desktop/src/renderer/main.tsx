@@ -18,7 +18,7 @@ import { Sidebar } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
-  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeProjects, closeReader,
+  acceptDrop, accountCommand, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, closeAsk, closeCompose, closeProjects, closeReader,
   closeSheet, closeSigninForm, conceal, findingSheet, getState, goHome, hostFailed, keepNewProject, matchesShown, openCapture, openMine, pageCovered,
   refreshStatus, resume, retryStart, signinPhase, toastOpensMine, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization,
   useStore, WARNINGS, windowShown, windowTakesDrop, type State,
@@ -61,6 +61,7 @@ function back(): void {
   if (state.sheet?.kind === 'new-project' && state.sheet.skip !== null) return cancelSkip();
   if (state.sheet?.kind === 'new-project' && state.sheet.confirmClose) return keepNewProject();
   if (state.sheet) return closeSheet();
+  if (state.projectSettings?.jira) return cancelProjectSettingsAction();
   if (!state.status?.signed_in) return closeSigninForm();
   // Escape closes the Projects list first, and only the list.
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
