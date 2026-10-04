@@ -128,12 +128,6 @@ npm run authority:staging-connector-rehearsal -- status \
 npm run authority:staging-connector-rehearsal -- capture \
   --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
   --tool granola --limit 1
-npm run authority:staging-connector-rehearsal -- capture \
-  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
-  --tool jira --limit 1
-npm run authority:staging-connector-rehearsal -- capture \
-  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
-  --tool slack --limit 1
 npm run authority:staging-connector-rehearsal -- verify-read \
   --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
   --tool jira
@@ -162,14 +156,20 @@ before initiating a new consent flow, which can replace an existing connection.
 
 Receipts contain hashes and counts, never source contents, cursors, provider
 account IDs or credentials. A zero-item receipt is not a successful content
-capture. Capture receipts report retained admission or duplicate for all three sources.
-Granola observations are retained under the separate owner policy; Jira and
-Slack retain pointers and selected metadata only, and Slack message snapshots
-remain a separate follow-up. Ordinary Granola polling owns the cursor and
+capture. Only Granola supports capture; its receipts report retained admission
+or duplicate under the separate owner policy. Jira and Slack support live
+`verify-read` only: capture requests are rejected before provider I/O, and no
+tool pointers, metadata or bodies enter Layer 1. Ordinary Granola polling owns the cursor and
 continues running. Slack approval tests use the existing synthetic release
 canary and human approval, with separate evidence. No downstream retrieval, Jira
 Ask or other Ask behavior is enabled by this profile. See the
 [scope and custody rules](../../docs/product/2026-10-01-connector-context-integration-v1.md#staging-connector-rehearsal).
+
+The V2 profile identifier and digest remain unchanged for compatibility with
+existing host and connection-sidecar bindings. Its historical pointer-policy
+name no longer enables tool capture. This code change requires an ordinary
+release update, not a profile rewrite or staging reset. It prevents new tool
+captures; it does not delete existing retained rows or deploy itself.
 
 ## Initial-owner setup internals
 

@@ -18,7 +18,6 @@ import { activateNangoSlackConnectionV1 } from '../../../providers/slack/server/
 import { readActiveSlackConnectionV1 } from '../../../providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js';
 import { bootstrapOrganizationAuthorityState } from '../src/composition/organization-authority-state-bootstrap.js';
 import { openSlackContextCaptureRuntimeV1, type OpenSlackContextCaptureRuntimeInputV1 } from '../src/composition/slack-context-capture-runtime-v1.js';
-import { createContextSourceIntakeV1 } from '../src/composition/context-source-intake-v1.js';
 
 const NOW = '2026-10-02T00:00:00.000Z';
 const CHANNEL = 'CTEST123';
@@ -91,7 +90,7 @@ async function fixture() {
     profile_sha256: canonicalSha256('exact-v2-profile'), capability: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, channel_id: CHANNEL,
     source_instance_id: 'staging-slack-context-v1', slack: { bot_token_source: tokenSource, connection_health: health, provider }, fetch };
   const runtime = openSlackContextCaptureRuntimeV1(options);
-  const create = (signal = new AbortController().signal) => runtime.create_source({ access_token: 'owner-token', signal });
+  const create = (signal = new AbortController().signal) => runtime.create_reader({ access_token: 'owner-token', signal });
   const revokeLink = () => { control.prepare("UPDATE organization_external_human_link_current SET current_status='revoked'").run(); };
   const revokeOwner = () => { database.prepare("UPDATE authority_memberships SET status='revoked', revoked_at=?, revocation_reason='test' WHERE membership_id=?").run(NOW, owner.membership_id); };
   return { runtime, create, control, database, owner, active, options, fetch, nango, health, revokeLink, revokeOwner,
@@ -102,11 +101,15 @@ async function fixture() {
     close: () => { runtime.close(); control.close(); database.close(); } };
 }
 
-describe('Slack context capture runtime', () => {
+describe('Slack live read runtime', () => {
   it('opens and revalidates transient text through the same authorized fixed-channel preparation without retaining a source', async () => {
     const f = await fixture();
     try {
       const prepared = await f.runtime.create_reader({ access_token: 'owner-token', signal: new AbortController().signal });
+      expect(f.fetch.mock.calls.map(([input, init]) => new Request(input, init).headers.get('authorization'))).toEqual([
+        'Bearer xoxb-fixture-fresh-token', 'Bearer xoxb-fixture-fresh-token',
+      ]);
+      expect(f.active.state.observed_granted_scopes).toEqual(SLACK_PRIVATE_APP_BOT_SCOPES_V1);
       const listed = await prepared.reader.list({ limit: 1, since: '2026-10-01' });
       expect(listed.items).toHaveLength(1);
       expect(listed.items[0]!.text).toBeUndefined();
@@ -168,29 +171,6 @@ describe('Slack context capture runtime', () => {
     } finally { f.close(); }
   });
 
-  it('uses a fresh token and real Slack scope proof with the unchanged four-scope approval state, then retains only pointer metadata', async () => {
-    const f = await fixture();
-    try {
-      const configured = await f.create();
-      expect(f.nango.getSlackConnection).toHaveBeenCalledTimes(1);
-      expect(f.fetch.mock.calls.map(([input, init]) => new Request(input, init).headers.get('authorization'))).toEqual([
-        'Bearer xoxb-fixture-fresh-token', 'Bearer xoxb-fixture-fresh-token',
-      ]);
-      expect(f.active.state.observed_granted_scopes).toEqual(SLACK_PRIVATE_APP_BOT_SCOPES_V1);
-      const intake = createContextSourceIntakeV1({ source: configured.source, identity: configured.source.identity, organization_id: f.owner.organization_id,
-        require_read_current: configured.require_current, authority: {
-          select: () => ({ disposition: 'retained', scope: { organization_id: f.owner.organization_id, custody_ref: 'fixture-owner', access_policy_ref: 'fixture-explicit-channel', analysis_policy: 'on_request' }, permitted_representations: ['pointer'] }),
-          requireCurrent: configured.require_current,
-        }, retention: { disposition: 'retained', database: f.database } });
-      const result = await intake.pull({ limit: 1 });
-      expect(result).toBeDefined();
-      const sources = f.database.prepare('SELECT * FROM authority_sources_v1').all();
-      expect(sources).toHaveLength(1);
-      expect(JSON.stringify(sources)).not.toContain('Do not retain this body');
-      expect(readActiveSlackConnectionV1(f.control)).toEqual(f.active);
-    } finally { f.close(); }
-  });
-
   it.each(['missing-scope', 'extra-scope', 'different-bot'] as const)('refuses a fresh provider proof with %s before channel reads', async failure => {
     const f = await fixture();
     try {
@@ -228,14 +208,14 @@ describe('Slack context capture runtime', () => {
     finally { f.close(); }
   });
 
-  it.each(['link', 'reconnect', 'owner'] as const)('fences %s drift during history and synchronously before admission', async failure => {
+  it.each(['link', 'reconnect', 'owner'] as const)('fences %s drift during history and before releasing text', async failure => {
     const f = await fixture();
     try {
       const configured = await f.create();
       f.setBeforeFetch(method => { if (method === 'conversations.history') {
         if (failure === 'link') f.revokeLink(); else if (failure === 'owner') f.revokeOwner(); else f.health.clear();
       } });
-      await expect(configured.source.pull({ limit: 1 })).rejects.toThrow();
+      await expect(configured.reader.list({ limit: 1, since: '2026-10-01' })).rejects.toThrow();
       expect(() => configured.require_current()).toThrow();
       expect(f.database.prepare('SELECT 1 FROM authority_sources_v1').all()).toHaveLength(0);
     } finally { f.close(); }
@@ -245,7 +225,7 @@ describe('Slack context capture runtime', () => {
     const f = await fixture();
     try {
       if (failure === 'private') f.setPrivate(); else f.setNotMember();
-      const configured = await f.create(); await expect(configured.source.pull({ limit: 1 })).rejects.toThrow();
+      const configured = await f.create(); await expect(configured.reader.list({ limit: 1, since: '2026-10-01' })).rejects.toThrow();
       expect(f.fetch.mock.calls.every(([input]) => !String(input).includes('conversations.history'))).toBe(true);
     } finally { f.close(); }
   });
@@ -256,13 +236,13 @@ describe('Slack context capture runtime', () => {
     finally { f.close(); }
   });
 
-  it('cancels before provider work and refuses previously opened sources after close', async () => {
+  it('cancels before provider work and refuses previously opened readers after close', async () => {
     const f = await fixture();
     try {
       const controller = new AbortController(); controller.abort();
       await expect(f.create(controller.signal)).rejects.toMatchObject({ name: 'AbortError' }); expect(f.fetch).not.toHaveBeenCalled();
       const configured = await f.create(); f.runtime.close();
-      expect(() => configured.require_current()).toThrow(); await expect(configured.source.pull({ limit: 1 })).rejects.toThrow();
+      expect(() => configured.require_current()).toThrow(); await expect(configured.reader.list({ limit: 1, since: '2026-10-01' })).rejects.toThrow();
     } finally { f.close(); }
   });
 });

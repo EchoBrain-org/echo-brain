@@ -7,15 +7,13 @@ tools, Ask responses, source admission and Slack onboarding continue through
 their current interfaces.
 
 The [connector/context integration](../product/2026-10-01-connector-context-integration-v1.md)
-also provides opt-in typed source capture: Granola reuses its configured adapter,
-Jira is request-only unless an explicit Authority binding retains pointers, and
-Slack has a fixed public-channel pointer source. Only the staging V2 selection
-retains Jira and Slack pointers. This intake capability has no production source
-registration or Ask wiring. Shared capture types live in
-`organization-processing/core`; Authority owns the fixed disposition and current
-retention fence. The capture contract accepts only the note, message, ticket
-and meeting payloads these providers emit. The payload kind is the source type,
-and every capture is a source observation, never an approved fact.
+provides retained Granola capture and live Jira/Slack read verification in the
+staging rehearsal. Jira and Slack capture requests are refused, and their
+pointers, metadata and bodies are not admitted to Layer 1. Existing provider
+capture contracts remain dormant library code; they have no active rehearsal
+or production registration. Shared capture types remain in
+`organization-processing/core`. A retained meeting capture is a source
+observation, never an approved fact.
 
 ## Shared connection commands
 
