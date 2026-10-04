@@ -386,8 +386,6 @@ export async function openStagingConnectorRehearsalService(
         authenticate_access: sessions,
         exclusive: { run_exclusive: operation => runtime === undefined ? Promise.reject(new Error('Staging connector rehearsal is starting')) : runtime.runExclusive(operation) },
         ...(granola === undefined ? {} : { granola }),
-        slack,
-        jira: { connection: jira.application, project: selected.profile.jira.project, source_instance_id: 'staging-jira-context-v1', representation: 'pointer', retention: 'retained_pointer' },
       });
       const ownerJira: ProviderHttpApplicationV1 = Object.freeze({
         routes: jira.connection_http.routes,

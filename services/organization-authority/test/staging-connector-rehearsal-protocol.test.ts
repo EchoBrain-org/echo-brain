@@ -16,11 +16,17 @@ const profile = Object.freeze({
   slack: { channel_id: 'C01234567' },
 });
 const binding = Object.freeze({ schema_version: 2 as const, release_id: 'clean-v1-connector-test', profile_sha256: canonicalSha256(profile) });
-const capture = Object.freeze({ source_type: 'message', admission: 'admitted', source_id_sha256: digest, revision_id_sha256: digest, content_sha256: digest.slice(7) });
+const capture = Object.freeze({ source_type: 'note', admission: 'admitted', source_id_sha256: digest, revision_id_sha256: digest, content_sha256: digest.slice(7) });
 const receipt = Object.freeze({ schema_version: 1 as const, kind: 'echo-context-capture-rehearsal-receipt-v1' as const, source_identity_sha256: digest,
   captures: [capture], counts: { captured: 1, admitted: 1, duplicate: 0, request_only: 0 as const } });
 
 describe('closed staging connector protocol', () => {
+  it.each(['jira', 'slack'])('rejects %s capture requests and receipts', tool => {
+    expect(() => validateStagingConnectorRehearsalRequestV2({ ...binding, action: 'capture', tool, limit: 1 })).toThrow('value is invalid');
+    expect(() => validateStagingConnectorRehearsalResponseV2({ ...binding, kind: 'echo-staging-connector-rehearsal-receipt-v2',
+      action: 'capture', qualified: false, tool, receipt })).toThrow('value is invalid');
+  });
+
   it('accepts only fixed-scope Slack and Jira read verification without caller-selected content or budgets', () => {
     for (const tool of ['slack', 'jira'] as const) {
       const request = { ...binding, action: 'verify-read', tool };
@@ -47,7 +53,7 @@ describe('closed staging connector protocol', () => {
     ]) expect(() => validateStagingConnectorRehearsalResponseV2(invalid)).toThrow('value is invalid');
   });
 
-  it('accepts only the fixed durable-pointer policy, KAN-like Jira selection and one public Slack channel', () => {
+  it('accepts only the unchanged persisted profile, KAN-like Jira selection and one public Slack channel', () => {
     expect(validateStagingConnectorRehearsalProfileV2(profile)).toEqual(profile);
     for (const invalid of [
       { ...profile, capture_policy: 'retain-everything' },
@@ -58,8 +64,8 @@ describe('closed staging connector protocol', () => {
     ]) expect(() => validateStagingConnectorRehearsalProfileV2(invalid)).toThrow('value is invalid');
   });
 
-  it('binds only status or bounded selected-tool capture requests', () => {
-    const request = { ...binding, action: 'capture' as const, tool: 'slack' as const, limit: 1 };
+  it('binds only status or bounded Granola capture requests', () => {
+    const request = { ...binding, action: 'capture' as const, tool: 'granola' as const, limit: 1 };
     expect(validateStagingConnectorRehearsalRequestV2(request)).toEqual(request);
     for (const invalid of [
       { ...request, schema_version: 1 }, { ...request, tool: 'other' }, { ...request, channel_id: 'C01234567' },
@@ -67,8 +73,8 @@ describe('closed staging connector protocol', () => {
     ]) expect(() => validateStagingConnectorRehearsalRequestV2(invalid)).toThrow('value is invalid');
   });
 
-  it('accepts retained pointer receipt hashes only as an unqualified observation', () => {
-    const response = { ...binding, kind: 'echo-staging-connector-rehearsal-receipt-v2' as const, action: 'capture' as const, qualified: false as const, tool: 'slack' as const, receipt };
+  it('accepts retained meeting receipt hashes only as an unqualified observation', () => {
+    const response = { ...binding, kind: 'echo-staging-connector-rehearsal-receipt-v2' as const, action: 'capture' as const, qualified: false as const, tool: 'granola' as const, receipt };
     expect(validateStagingConnectorRehearsalResponseV2(response)).toEqual(response);
     for (const invalid of [
       { ...response, kind: 'echo-staging-connector-rehearsal-receipt-v1' },

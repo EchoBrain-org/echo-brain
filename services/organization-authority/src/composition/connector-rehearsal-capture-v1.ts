@@ -3,9 +3,8 @@ import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { AdmittedMeetingSourceCursorPolicyV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/admitted-meeting-source-cursor-policy-v1';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
-import type { ContextCaptureContentV1, SourceAdapterV1, MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
+import type { MeetingSourceAdapter } from '@echo-brain/organization-processing/core';
 import { GRANOLA_CONTEXT_CAPTURE_ADAPTER_ID, GRANOLA_CONTEXT_CAPTURE_ADAPTER_VERSION } from '@echo-brain/provider-granola/context/granola-context-source-v1';
-import type { JiraPersonConnectionV1 } from '@echo-brain/provider-jira/jira-person-connection-v1';
 import type Database from 'better-sqlite3';
 import { join } from 'node:path';
 import {
@@ -13,12 +12,9 @@ import {
   type ContextCaptureRehearsalReceiptV1,
 } from '../application/context-capture-rehearsal-v1.js';
 import type { ContextIntakeAuthorityV1 } from '../application/context-intake-v1.js';
-import { createGranolaContextIntakeV1, createJiraContextIntakeV1 } from './provider-context-intakes-v1.js';
-import { createContextSourceIntakeV1 } from './context-source-intake-v1.js';
+import { createGranolaContextIntakeV1 } from './provider-context-intakes-v1.js';
 import { verifyOrganizationAuthorityApiLineage } from './organization-authority-api-runtime.js';
 
-const JIRA_CONTEXT_CAPTURE_ADAPTER_ID = 'jira-context-capture';
-const CONTEXT_CAPTURE_ADAPTER_VERSION = '1.0.0';
 const REHEARSAL_TIMEOUT_MS = 15_000;
 
 export interface ConnectorRehearsalInitialOwnerV1 {
@@ -43,27 +39,6 @@ export interface ConnectorRehearsalGranolaV1 {
   readonly processor_adapter_id: string;
 }
 
-export interface ConnectorRehearsalJiraV1 {
-  readonly connection: JiraPersonConnectionV1;
-  /** Fixed by the Authority profile, never selected by the caller. */
-  readonly project: string;
-  /** Fixed non-secret capture identity selected by the Authority profile. */
-  readonly source_instance_id: string;
-  /** V1 remains request-only excerpts; V2 explicitly selects retained pointers. */
-  readonly representation?: 'excerpt' | 'pointer';
-  readonly retention?: 'retained_pointer';
-}
-
-export interface ConnectorRehearsalSlackV1 {
-  /** Opens one source after fresh owner, active-connection and scope proof. */
-  create_source(input: { readonly access_token: string; readonly signal: AbortSignal }): Promise<{
-    readonly source: SourceAdapterV1<ContextCaptureContentV1>;
-    readonly source_instance_id: string;
-    /** Synchronous Authority/active-connection fence, repeated at SQLite admission. */
-    readonly require_current: () => void;
-  }>;
-}
-
 export interface OpenConnectorRehearsalCaptureInputV1 {
   /** An isolated, bootstrapped Authority; Granola capture additionally requires admission. */
   readonly state_directory: string;
@@ -73,13 +48,10 @@ export interface OpenConnectorRehearsalCaptureInputV1 {
   readonly exclusive: ConnectorRehearsalExclusiveRunnerV1;
   /** Optional until the Authority has completed Granola admission. */
   readonly granola?: ConnectorRehearsalGranolaV1;
-  readonly jira: ConnectorRehearsalJiraV1;
-  /** V2-only explicit public-channel pointer source. */
-  readonly slack?: ConnectorRehearsalSlackV1;
 }
 
 export interface ConnectorRehearsalCaptureInputV1 {
-  readonly tool: 'granola' | 'jira' | 'slack';
+  readonly tool: 'granola';
   readonly access_token: string;
   readonly limit: number;
   readonly signal?: AbortSignal;
@@ -180,7 +152,7 @@ export function openConnectorRehearsalCaptureV1(
     const authority: ContextIntakeAuthorityV1 = {
       select: () => ({
         // This is a deliberately separate rehearsal qualification policy. A
-        // Granola credential or Jira grant never selects retained custody.
+        // Granola credential alone never selects retained custody.
         disposition: 'retained',
         scope: {
           organization_id: owner.organization_id,
@@ -220,99 +192,14 @@ export function openConnectorRehearsalCaptureV1(
     });
   };
 
-  const captureJira = async (input: ConnectorRehearsalCaptureInputV1, signal: AbortSignal): Promise<ContextCaptureRehearsalReceiptV1> => {
-    const authorization = requireOwner(input.access_token);
-    const current = await options.jira.connection.captureConnection({ access_token: input.access_token, signal });
-    const binding = current.transport.binding;
-    if (binding.organization_id !== owner.organization_id || binding.principal_id !== authorization.principal_id ||
-        binding.membership_id !== authorization.membership_id) throw failure();
-    const requireCurrent = () => {
-      requireOwner(input.access_token);
-      current.require_current();
-    };
-    const retained = options.jira.retention === 'retained_pointer';
-    const representation = options.jira.representation ?? 'excerpt';
-    if (retained && representation !== 'pointer') throw failure();
-    const authority: ContextIntakeAuthorityV1 = {
-      select: () => ({
-        disposition: retained ? 'retained' : 'request_only',
-        scope: {
-          organization_id: owner.organization_id,
-          custody_ref: `membership:${owner.membership_id}`,
-          access_policy_ref: `connector-rehearsal-jira-initial-owner:${owner.membership_id}`,
-          analysis_policy: 'on_request',
-        },
-        permitted_representations: [representation],
-      }),
-      requireCurrent: requireCurrent,
-    };
-    const intake = createJiraContextIntakeV1({
-      transport: current.transport,
-      project: options.jira.project,
-      representation,
-      source_instance_id: options.jira.source_instance_id,
-      organization_id: owner.organization_id,
-      authority,
-      require_read_current: requireCurrent,
-      ...(retained ? { retention: { disposition: 'retained' as const, database } } : {}),
-    });
-    return runContextCaptureRehearsalV1({
-      intake,
-      expected_source_identity_sha256: canonicalSha256(sourceIdentity(
-        JIRA_CONTEXT_CAPTURE_ADAPTER_ID, options.jira.source_instance_id, CONTEXT_CAPTURE_ADAPTER_VERSION,
-      )),
-      limit: input.limit,
-      signal,
-      timeout_ms: REHEARSAL_TIMEOUT_MS,
-    });
-  };
-
-  const captureSlack = async (input: ConnectorRehearsalCaptureInputV1, signal: AbortSignal): Promise<ContextCaptureRehearsalReceiptV1> => {
-    if (options.slack === undefined) throw failure();
-    const configured = await options.slack.create_source({ access_token: input.access_token, signal });
-    if (configured.source.identity.kind !== 'source' || configured.source.identity.adapter_id !== 'slack-context-capture' ||
-        configured.source.identity.instance_id !== configured.source_instance_id || configured.source.identity.version !== CONTEXT_CAPTURE_ADAPTER_VERSION) throw failure();
-    const requireCurrent = () => { requireOwner(input.access_token); configured.require_current(); };
-    const authority: ContextIntakeAuthorityV1 = {
-      select: () => ({
-        disposition: 'retained',
-        scope: {
-          organization_id: owner.organization_id,
-          custody_ref: `membership:${owner.membership_id}`,
-          access_policy_ref: `connector-rehearsal-slack-initial-owner:${owner.membership_id}`,
-          analysis_policy: 'on_request',
-        },
-        permitted_representations: ['pointer'],
-      }),
-      requireCurrent,
-    };
-    const intake = createContextSourceIntakeV1({
-      source: configured.source,
-      identity: configured.source.identity,
-      organization_id: owner.organization_id,
-      authority,
-      require_read_current: requireCurrent,
-      retention: { disposition: 'retained', database },
-    });
-    return runContextCaptureRehearsalV1({
-      intake,
-      expected_source_identity_sha256: canonicalSha256(configured.source.identity),
-      limit: input.limit,
-      signal,
-      timeout_ms: REHEARSAL_TIMEOUT_MS,
-    });
-  };
-
   return Object.freeze({
     async capture(input: ConnectorRehearsalCaptureInputV1): Promise<ContextCaptureRehearsalReceiptV1> {
-      if (closed || input === null || typeof input !== 'object' || !['granola', 'jira', 'slack'].includes(input.tool)) throw failure();
+      if (closed || input === null || typeof input !== 'object' || input.tool !== 'granola') throw failure();
       return options.exclusive.run_exclusive(async shutdown => {
         const signal = combinedSignal(shutdown, input.signal);
         if (signal.aborted) throw cancelled();
         try {
-          if (input.tool === 'granola') return await captureGranola(input, signal);
-          if (input.tool === 'jira') return await captureJira(input, signal);
-          return await captureSlack(input, signal);
+          return await captureGranola(input, signal);
         } catch (_error) {
           if (signal.aborted) throw cancelled();
           throw failure();
