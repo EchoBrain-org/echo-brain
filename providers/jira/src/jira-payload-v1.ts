@@ -80,7 +80,7 @@ function jiraDescription(value: unknown): string {
   const doc = jiraRecord(value);
   if (doc.type !== 'doc' || doc.version !== 1) jiraFailure('invalid_output');
   let nodes = 0; let bytes = 0;
-  const blocks = new Set(['doc', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'codeBlock', 'table', 'tableRow', 'tableCell', 'tableHeader', 'panel']);
+  const blocks = new Set(['doc', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'taskList', 'codeBlock', 'table', 'tableRow', 'tableCell', 'tableHeader', 'panel']);
   function walk(value: unknown, depth: number): string {
     if (++nodes > 4096 || depth > 32) jiraFailure('invalid_output');
     const node = jiraRecord(value); const type = jiraString(node.type, 64);
@@ -105,6 +105,13 @@ function jiraDescription(value: unknown): string {
     if (type === 'mention' || type === 'emoji' || type === 'status') {
       const attrs = jiraRecord(node.attrs);
       return jiraString(attrs.text ?? (type === 'emoji' ? attrs.shortName : undefined), 512);
+    }
+    if (type === 'taskItem') {
+      const state = jiraRecord(node.attrs).state;
+      // Checklist completion is evidence, distinct from the issue's workflow status.
+      if (state !== 'TODO' && state !== 'DONE') jiraFailure('invalid_output');
+      const text = jiraArray(node.content ?? [], 4096).map(child => walk(child, depth + 1)).join('');
+      return `[${state === 'DONE' ? 'x' : ' '}] ${text}\n`;
     }
     if (!blocks.has(type)) jiraFailure('invalid_output');
     const content = jiraArray(type === 'doc' ? node.content : node.content ?? [], 4096);

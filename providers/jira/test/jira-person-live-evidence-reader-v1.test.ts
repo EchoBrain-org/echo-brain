@@ -257,6 +257,44 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     await source.revalidate({});
   });
 
+  it('searches and opens checklist tickets while preserving task completion in the cited text', async () => {
+    const f = fixture();
+    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, description: {
+      type: 'doc', version: 1, content: [{ type: 'taskList', attrs: { localId: 'private-list-id' }, content: [
+        { type: 'taskItem', attrs: { localId: 'private-task-id', state: 'TODO' }, content: [
+          { type: 'text', text: 'Review ' }, { type: 'text', text: 'gate', marks: [{ type: 'strong' }] },
+        ] },
+        { type: 'taskList', attrs: { localId: 'private-nested-id' }, content: [
+          { type: 'taskItem', attrs: { localId: 'private-done-id', state: 'DONE' }, content: [{ type: 'text', text: 'Run tests' }] },
+        ] },
+      ] }],
+    } } });
+    f.state.pages = [page(['10002', '10001']), page()];
+    const { source } = await f.make();
+    const searched = await source.search({ query: 'gate' });
+    expect(searched.items).toHaveLength(2);
+    const text = 'ECHO-1: Ship connector\n\n[ ] Review gate\n[x] Run tests';
+    expect(searched.items[1]).toMatchObject({ text, attributes: { status: 'In progress' }, citation: { text_sha256: digest(text) } });
+    const inventory = await source.list({ limit: 1 });
+    const opened = await source.open({ item: inventory.items[0]!.id });
+    expect(opened.items[0]).toMatchObject({ text, citation: { text_sha256: digest(text) } });
+    for (const hidden of ['Review gate', 'Run tests', 'private-task-id', 'private-list-id']) {
+      expect(JSON.stringify(f.releases)).not.toContain(hidden);
+    }
+  });
+
+  it.each([undefined, null, 'done', 'IN_PROGRESS'])('refuses a checklist with an unknown completion state (%j)', async state => {
+    const f = fixture();
+    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, description: {
+      type: 'doc', version: 1, content: [{ type: 'taskList', attrs: { localId: 'list' }, content: [
+        { type: 'taskItem', attrs: { localId: 'task', ...(state === undefined ? {} : { state }) }, content: [{ type: 'text', text: 'Review gate' }] },
+      ] }],
+    } } });
+    const { source } = await f.make();
+    await expect(source.search({ query: 'gate' })).rejects.toMatchObject({ code: 'invalid_output' });
+    expect(f.audit.record).not.toHaveBeenCalled();
+  });
+
   it.each(['ECHO-1', 'echo-1'])('uses exact issue-key search for %s', async query => {
     const f = fixture(); const { source } = await f.make();
     const result = await source.search({ query });

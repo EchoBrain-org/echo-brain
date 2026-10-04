@@ -134,6 +134,8 @@ or project coordinates, and are never followed.
 Text is the issue key, summary and supported ADF description. Formatting marks
 are not rendered; supported blocks include paragraphs, headings, lists,
 quotes, code, tables and panels, plus text, breaks, mentions, emoji and status.
+Checklist `taskList` and `taskItem` nodes preserve TODO as `[ ]` and DONE as
+`[x]`, including nested lists; an unknown or missing completion state is refused.
 URL-backed inline link cards contribute their URL as plain text; their target
 and metadata are never fetched. Unsupported nodes (including media and
 data-backed cards), malformed fields and control bytes
