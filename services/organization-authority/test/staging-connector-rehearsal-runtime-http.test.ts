@@ -156,7 +156,10 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     expect(slackReads.slice(readStart).filter(path => path === '/api/conversations.history')).toHaveLength(3);
     const jiraReads = seams.jiraFetch.mock.calls.slice(jiraStart);
     expect(jiraReads).toHaveLength(25);
-    expect(jiraReads.filter(([input]) => String(input).includes('/issue/10001'))).toHaveLength(3);
+    expect(jiraReads.filter(([input]) => String(input).includes('/issue/10001'))).toHaveLength(2);
+    const rechecks = jiraReads.filter(([input]) => String(input).includes('/issue/bulkfetch'));
+    expect(rechecks).toHaveLength(1);
+    expect(JSON.parse(String(rechecks[0]![1]?.body)).issueIdsOrKeys).toEqual(['10001']);
     const searches = jiraReads.filter(([input]) => String(input).includes('/search/jql'));
     expect(searches).toHaveLength(1);
     expect(JSON.parse(String(searches[0]![1]?.body))).toMatchObject({ jql: 'project = 10000 ORDER BY created DESC, id DESC', maxResults: 1 });

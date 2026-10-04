@@ -47,10 +47,11 @@ function fixture(project?: string, previousKeys: readonly string[] = []) {
     else if (parsed.pathname.endsWith('/project/ECHO') || parsed.pathname.endsWith('/project/10000') || previousKeys.some(key => parsed.pathname.endsWith(`/project/${key}`))) body = { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000`, ...(parsed.searchParams.get('expand') === 'projectKeys' ? { projectKeys: [...previousKeys, 'ECHO'] } : {}) };
     else if (parsed.pathname.endsWith('/project/OTHER')) body = { id: '99999', key: 'OTHER', self: `${site}/rest/api/3/project/99999` };
     else if (parsed.pathname.endsWith('/search/jql')) body = { issues: [{ id: '10001' }], isLast: true };
-    else if (parsed.pathname.endsWith('/issue/10001')) {
+    else if (parsed.pathname.endsWith('/issue/10001') || parsed.pathname.endsWith('/issue/bulkfetch')) {
       if (denied) return new Response('', { status: 403 });
       const issueProject = moved ? { id: '99999', key: 'OTHER', self: `${site}/rest/api/3/project/99999` } : { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000` };
       body = { id: '10001', key: moved ? 'OTHER-1' : 'ECHO-1', self: `${site}/rest/api/3/issue/10001`, fields: { summary: 'Synthetic launch', project: issueProject, assignee: null, duedate: null, created: '2026-10-01T00:00:00.000+0000', status: { name: 'Open' }, description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Synthetic Friday' }] }] } } };
+      if (parsed.pathname.endsWith('/issue/bulkfetch')) body = { issues: [body], issueErrors: [] };
     } else throw new Error('Unexpected fake Jira request');
     return new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
   });

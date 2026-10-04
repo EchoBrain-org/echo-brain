@@ -10,6 +10,12 @@ function fixture() {
   return { fetch, nango };
 }
 describe('Jira Nango HTTP authentication adapter', () => {
+  it('preserves credential throttling without exposing the response or retrying it', async () => {
+    const f = fixture();
+    f.fetch.mockResolvedValueOnce(new Response('private provider body', { status: 429, headers: { 'Retry-After': '41' } }));
+    await expect(f.nango.connection('reference-fixture')).rejects.toMatchObject({ code: 'rate_limited', message: 'Jira live evidence operation could not be completed' });
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+  });
   it('limits fresh Connect sessions to Jira and server tags/read scopes and never requests a refresh token', async () => {
     const f = fixture(); f.fetch.mockResolvedValueOnce(json({ data: { connect_link: 'https://connect.nango.dev/fixture-consent' } }));
     expect(await f.nango.connect(tags)).toEqual({ link: 'https://connect.nango.dev/fixture-consent' });
@@ -64,7 +70,7 @@ describe('Jira Nango HTTP authentication adapter', () => {
     [500, { error: { code: 'unknown_connection' } }],
   ] as const)('keeps other deletion failures closed (case %#, HTTP %s)', async (status, body) => {
     const f = fixture(); f.fetch.mockResolvedValueOnce(Response.json(body, { status }));
-    await expect(f.nango.disconnect('reference-fixture')).rejects.toMatchObject({ code: 'unavailable', message: 'Jira live evidence operation could not be completed' });
+    await expect(f.nango.disconnect('reference-fixture')).rejects.toMatchObject({ code: status === 429 ? 'rate_limited' : 'unavailable', message: 'Jira live evidence operation could not be completed' });
   });
   it('does not accept unknown_connection as success for connection reads or fresh consent', async () => {
     const f = fixture();

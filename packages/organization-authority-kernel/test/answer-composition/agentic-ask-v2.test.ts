@@ -68,6 +68,42 @@ function fixture(options: {
 }
 
 describe('Agentic Ask V2 ticket release', () => {
+  it('uses the same research tools for a non-Jira ticket source without prescribing a provider or lookup order', async () => {
+    const identifier = 'team/repo#42';
+    const text = `${identifier}: Launch is Tuesday.`;
+    const ticket: EvidenceDeskItemV2 = {
+      id: 'opaque-request-handle', kind: 'ticket', label: identifier, text, visibility: 'only_me',
+      citation: { kind: 'ticket', tool_id: 'issue-fixture', external_scope_id: 'workspace-fixture', ticket_id: 'opaque-42', permalink: 'https://issues.example.test/team/repo/42', text_sha256: sha256Digest(text) },
+      receipt_sha256: canonicalSha256('other-provider-release'),
+    };
+    const desk: EvidenceDeskPortV2 = {
+      scope: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' }, ticket_available: true,
+      search: vi.fn(async () => ({ items: [ticket], truncated: false, receipt_digests: [ticket.receipt_sha256] })),
+      list: vi.fn(async () => { throw new Error('model did not choose list'); }),
+      open: vi.fn(async () => { throw new Error('search already returned full text'); }),
+      revalidate: vi.fn(async () => checked),
+    };
+    const inputs: StructuredGenerationInput[] = [];
+    const script = [
+      { parts: need('open', []), actions: [{ tool: 'search', args: { source: 'tickets', query: identifier } }] },
+      { parts: need('found', ['E1']), actions: [{ tool: 'finish', args: {} }] },
+      replies[3],
+    ];
+    const ask = createAgenticAskV2({ desk, model: { generate: async input => { inputs.push(input); return script[inputs.length - 1]; } },
+      audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } });
+    const result = await ask.answer({ question: `When is launch according to ${identifier}?` });
+    expect(validatePersonAnswerResponseV5(result)).toMatchObject({ outcome: 'answered', citations: [{ citation: ticket.citation }] });
+    expect(desk.search).toHaveBeenCalledWith(expect.objectContaining({ query: identifier, kinds: ['ticket'] }));
+    expect(desk.list).not.toHaveBeenCalled();
+    expect(desk.open).not.toHaveBeenCalled();
+    expect(desk.revalidate).toHaveBeenCalledTimes(inputs.length + 2);
+    for (const input of inputs) {
+      expect(input.system_prompt).not.toMatch(/Jira|JQL|Atlassian|ECHO-123|list tickets first/iu);
+      expect(JSON.parse(input.user_prompt).scope).not.toMatch(/Jira/iu);
+      for (const hidden of ['opaque-request-handle', 'workspace-fixture', 'opaque-42', 'issues.example.test']) expect(input.user_prompt).not.toContain(hidden);
+    }
+  });
+
   it('distinguishes retrieved ticket inventory, answer context and final citations', async () => {
     const f = fixture();
     const events: CoreRuntimeObservationV1[] = [];
@@ -113,7 +149,7 @@ describe('Agentic Ask V2 ticket release', () => {
       expect(input.user_prompt).not.toContain('atlassian.net');
       expect(input.user_prompt).not.toContain('10001');
       expect(input.system_prompt).toContain('"source": "tickets"');
-      expect(input.system_prompt).toContain('project scope only when a lead has saved a Jira project mapping');
+      expect(input.system_prompt).toContain('project scope only when a lead has saved a tool project mapping');
       expect(input.system_prompt).toContain('Mine excludes tickets');
     }
     expect(f.auditEntries[0]).toMatchObject({ outcome: 'answered', model_calls: 4, citation_count: 1, receipt_digests: [metadata.receipt_sha256, uncitedMetadata.receipt_sha256, opened.receipt_sha256], response_sha256: canonicalSha256(answer) });

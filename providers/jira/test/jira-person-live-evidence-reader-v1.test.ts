@@ -31,6 +31,7 @@ function fixture() {
     project: project() as unknown,
     tickets: new Map<string, unknown>([['10001', ticket()], ['10002', ticket('10002', 'Review security')]]),
     pages: [page()] as unknown[],
+    bulkResponse: undefined as unknown,
     hook: undefined as ((input: JiraCloudRequestV1) => void) | undefined,
     denied: new Map<string, 'unauthorized' | 'not_found'>(),
   };
@@ -40,6 +41,9 @@ function fixture() {
     if (input.path === `${prefix}/myself`) return f.myself;
     if (input.path.startsWith(`${prefix}/project/`)) return f.project;
     if (input.path === `${prefix}/search/jql`) return f.pages.shift() ?? page([]);
+    if (input.path === `${prefix}/issue/bulkfetch`) return f.bulkResponse !== undefined ? f.bulkResponse : {
+      issues: (input.body!.issueIdsOrKeys as string[]).filter(id => !f.denied.has(id)).map(id => f.tickets.get(id)), issueErrors: [],
+    };
     if (input.path.startsWith(`${prefix}/issue/`)) {
       const id = input.path.slice(`${prefix}/issue/`.length);
       const denied = f.denied.get(id);
@@ -63,6 +67,26 @@ function fixture() {
 }
 
 describe('person-bound Jira live reader through the shared audited wrapper', () => {
+  it('finishes 22-ticket research and both release fences within the 200-credential-request window', async () => {
+    const f = fixture();
+    const ids = Array.from({ length: 22 }, (_, index) => String(10001 + index));
+    for (const id of ids) f.state.tickets.set(id, ticket(id));
+    f.state.pages = [page(ids.slice(0, 2)), page(ids.slice(2)), page(ids.slice(0, 5)), page(ids.slice(0, 1))];
+    let credentialRequests = 0;
+    f.state.hook = () => { if (++credentialRequests > 200) throw new AuthorityOperationError('unavailable', 'Credential endpoint rate limit'); };
+    const { source } = await f.make('ECHO');
+    await source.revalidate({});
+    await source.search({ query: 'MRD', limit: 5 });
+    await source.list({ limit: 20 });
+    await source.revalidate({});
+    await source.search({ query: 'ECHO program management', limit: 5 });
+    await source.search({ query: 'ECHO-1', limit: 5 });
+    await source.revalidate({});
+    await source.revalidate({});
+    await source.revalidate({});
+    await expect(source.revalidate({})).resolves.toBeUndefined();
+    expect(credentialRequests).toBeLessThanOrEqual(200);
+  });
   it.each(['KAN', '10000'])('keeps live reads in the same project after its configured key is renamed (%s)', async selection => {
     const f = fixture();
     f.state.project = { ...project(), projectKeys: ['KAN', 'ECHO'] };
@@ -410,12 +434,59 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const edited = await source.search({ query: 'edited' });
     expect(original.items[0]!.citation.text_sha256).not.toBe(edited.items[0]!.citation.text_sha256);
     f.request.mockClear(); await source.revalidate({});
-    expect(f.request.mock.calls.filter(([r]) => r.path.includes('/issue/')).map(([r]) => r.path)).toEqual([`${prefix}/issue/10001`, `${prefix}/issue/10002`]);
+    expect(f.request.mock.calls.filter(([r]) => r.path.includes('/issue/')).map(([r]) => r.body?.issueIdsOrKeys)).toEqual([['10001', '10002']]);
     await expect(reader.revalidate({ citations: [{ ...inventory.items[0]!.citation, permalink: `${origin}/browse/ECHO-999` }] })).rejects.toMatchObject({ code: 'unauthorized' });
     f.state.denied.set('10002', 'not_found');
     await expect(source.revalidate({})).rejects.toMatchObject({ code: 'not_found' });
     f.state.denied.clear(); f.state.myself = { accountId: 'changed', active: true, accountType: 'atlassian' };
     await expect(source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it('checks every released issue in bounded batches and accepts a different response order', async () => {
+    const f = fixture(); const ids = Array.from({ length: 107 }, (_, index) => String(10001 + index));
+    for (const id of ids) f.state.tickets.set(id, ticket(id));
+    f.state.pages = [];
+    for (let index = 0; index < ids.length; index += 20) f.state.pages.push(page(ids.slice(index, index + 20)));
+    const { source } = await f.make('ECHO');
+    while (f.state.pages.length > 0) await source.list({ limit: 20 });
+    f.state.hook = input => {
+      if (input.path === `${prefix}/issue/bulkfetch`) f.state.bulkResponse = { issues: [...input.body!.issueIdsOrKeys as string[]].reverse().map(id => ticket(id)), issueErrors: [] };
+    };
+    f.request.mockClear();
+    await source.revalidate({});
+    const batches = f.request.mock.calls.map(([request]) => request).filter(request => request.path === `${prefix}/issue/bulkfetch`);
+    expect(batches.map(request => (request.body!.issueIdsOrKeys as string[]).length)).toEqual([50, 50, 7]);
+    expect(batches.flatMap(request => request.body!.issueIdsOrKeys)).toEqual(ids);
+    expect(batches.every(request => request.method === 'POST' && !(request.body!.fields as string[]).includes('description'))).toBe(true);
+  });
+
+  it.each([
+    ['missing', { issues: [ticket()] }, 'not_found'],
+    ['duplicate', { issues: [ticket(), ticket()] }, 'invalid_output'],
+    ['unexpected', { issues: [ticket(), ticket('10003')] }, 'invalid_output'],
+    ['oversized', { issues: [ticket(), ticket('10002'), ticket('10003')] }, 'invalid_output'],
+    ['provider error', { issues: [ticket()], issueErrors: [{ id: '10002', errorMessage: 'private provider detail' }] }, 'unavailable'],
+    ['malformed errors', { issues: [ticket(), ticket('10002')], issueErrors: {} }, 'invalid_output'],
+  ] as const)('withholds release for a %s bulk permission response', async (_label, response, code) => {
+    const f = fixture(); f.state.pages = [page(['10001', '10002'])];
+    const { source } = await f.make('ECHO'); await source.list({});
+    const auditsBefore = f.audit.record.mock.calls.length;
+    f.state.bulkResponse = response;
+    await expect(source.revalidate({})).rejects.toMatchObject({ code, message: 'Live evidence operation could not be completed' });
+    expect(f.audit.record).toHaveBeenCalledTimes(auditsBefore);
+  });
+
+  it('cancels between permission batches without fetching the remaining issues', async () => {
+    const f = fixture(); const ids = Array.from({ length: 51 }, (_, index) => String(10001 + index));
+    for (const id of ids) f.state.tickets.set(id, ticket(id));
+    f.state.pages = [page(ids.slice(0, 20)), page(ids.slice(20, 40)), page(ids.slice(40))];
+    const { source } = await f.make('ECHO');
+    while (f.state.pages.length > 0) await source.list({ limit: 20 });
+    const controller = new AbortController();
+    f.state.hook = input => { if (input.path === `${prefix}/issue/bulkfetch`) controller.abort(); };
+    f.request.mockClear();
+    await expect(source.revalidate({ signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(f.request.mock.calls.filter(([request]) => request.path === `${prefix}/issue/bulkfetch`)).toHaveLength(1);
   });
 
   it('fails closed on audit failure, ECHO grant changes and cancellation with no evidence release', async () => {

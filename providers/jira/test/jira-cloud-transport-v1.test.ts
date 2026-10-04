@@ -21,6 +21,8 @@ describe('bounded direct Jira Cloud transport', () => {
     expect(fetch.mock.calls.at(-1)![1]).toMatchObject({ method: 'POST', redirect: 'error', body: '{"jql":"project = 10000","maxResults":1}', headers: { 'Content-Type': 'application/json' } });
     await transport.request({ path: `${prefix}/project/KAN`, query: { expand: 'projectKeys' } });
     expect(fetch).toHaveBeenLastCalledWith(`https://api.atlassian.com${prefix}/project/KAN?expand=projectKeys`, expect.objectContaining({ method: 'GET', redirect: 'error' }));
+    await transport.request({ path: `${prefix}/issue/bulkfetch`, method: 'POST', body: { issueIdsOrKeys: ['10001'], fields: ['summary', 'project'] } });
+    expect(fetch).toHaveBeenLastCalledWith(`https://api.atlassian.com${prefix}/issue/bulkfetch`, expect.objectContaining({ method: 'POST', redirect: 'error', body: '{"issueIdsOrKeys":["10001"],"fields":["summary","project"]}' }));
   });
 
   it('refuses another tenant, absolute/provider links, unapproved endpoints and query selectors before fetching', async () => {
@@ -33,6 +35,8 @@ describe('bounded direct Jira Cloud transport', () => {
       { path: `${prefix}/issue/10001`, query: { expand: 'projectKeys' } },
       { path: `${prefix}/project/KAN`, query: { expand: 'projectKeys,lead' } },
       { path: `${prefix}/project/KAN`, query: { fields: 'summary' } },
+      { path: `${prefix}/issue/bulkfetch` },
+      { path: `${prefix}/issue/bulkfetch`, method: 'POST', query: { fields: 'summary' } },
       { path: `${prefix}/myself`, body: { connectionId: 'another' } }];
     for (const input of invalidRequests) await expect(transport.request(input)).rejects.toMatchObject({ code: 'invalid_request' });
     expect(fetch).not.toHaveBeenCalled();

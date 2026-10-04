@@ -10,6 +10,7 @@ import { copyJiraBindingV1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArra
 const INVENTORY_FIELDS = 'summary,project,created,status,assignee,duedate';
 const TEXT_FIELDS = `${INVENTORY_FIELDS},description`;
 const REQUEST_MAX_HANDLES = 512;
+const REVALIDATION_BATCH_SIZE = 50;
 
 interface ListCursor {
   readonly selection: string;
@@ -104,6 +105,27 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     // Exact reads fence stale search pages, moved tickets and retained handles.
     if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
     return parsed;
+  }
+
+  async function revalidateIssues(ids: readonly string[], origin: string, signal?: AbortSignal): Promise<void> {
+    for (let offset = 0; offset < ids.length; offset += REVALIDATION_BATCH_SIZE) {
+      const batch = ids.slice(offset, offset + REVALIDATION_BATCH_SIZE);
+      const page = jiraRecord(await transport.request({ path: `${pathPrefix}/issue/bulkfetch`, method: 'POST',
+        body: { issueIdsOrKeys: batch, fields: INVENTORY_FIELDS.split(',') }, signal }));
+      signal?.throwIfAborted();
+      // Bulk fetch applies current issue permissions. Missing issues must not
+      // be treated as a successful partial check; issueErrors are retriable failures.
+      if (jiraArray(page.issueErrors === undefined ? [] : page.issueErrors, batch.length).length > 0) jiraFailure('unavailable');
+      const expected = new Set(batch);
+      const returned = new Set<string>();
+      for (const raw of jiraArray(page.issues, batch.length)) {
+        const parsed = parseJiraIssueV1(raw, { cloudid, origin, inventory: true });
+        if (!expected.has(parsed.id) || returned.has(parsed.id)) jiraFailure('invalid_output');
+        if (pinnedProject !== undefined && parsed.project_id !== pinnedProject.id) jiraFailure('unauthorized');
+        returned.add(parsed.id);
+      }
+      if (returned.size !== expected.size) jiraFailure('not_found');
+    }
   }
 
   function remember(items: readonly ParsedJiraIssueV1[]): readonly PersonLiveEvidenceValueV1<PersonTicketCitationV1>[] {
@@ -217,7 +239,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
           ids.add(id);
         }
         // Historical citations remain valid evidence bytes only while this exact person can still see the ticket.
-        for (const id of ids) await issue(id, origin, true, input.signal);
+        await revalidateIssues([...ids], origin, input.signal);
         await verifyConnection(input.signal);
       }, input.signal);
     },

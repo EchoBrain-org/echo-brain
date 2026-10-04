@@ -275,7 +275,7 @@ function abort(): never { throw new DOMException("Ask cancelled", "AbortError");
 /** What the model is told the desk reads. Adding a scope kind is a compile error here. */
 function scopeText(scope: EvidenceDeskPortV2["scope"], liveTickets: boolean): string {
   switch (scope.kind) {
-    case "project": return liveTickets ? "one project: meetings and documents are limited to it; live tickets are limited to its saved Jira project mapping, if configured; Slack is not read" : "one project: meetings and documents are limited to it; Slack is not";
+    case "project": return liveTickets ? "one project: meetings and documents are limited to it; live tickets are limited to its saved tool project mapping, if configured; Slack is not read" : "one project: meetings and documents are limited to it; Slack is not";
     case "mine": return "only what the asker added: their own notes and uploaded documents, and meetings they approved; Slack and shared transcripts are not read";
     case "global": return "everything the asker can read";
     default: return unknownScope(scope);
@@ -432,8 +432,8 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
   const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
   const ticketGuidance = [
     "Live tickets (source \"ticket\") report the ticket's current title, description, owner, due date and status under the asker's connection. They are not approved meeting decisions. Distinguish their reported state from approved records and cite both when they disagree.",
-    "Search accepts source \"tickets\" to query only live tickets. For a named ticket, search with its exact key alone (for example {\"source\": \"tickets\", \"query\": \"ECHO-123\"}); preserve the hyphen and do not add words such as title or status to that lookup. Other ticket queries match all supplied keywords, not a single exact phrase.",
-    "Search includes available tickets. To browse them, use list with {\"source\": \"tickets\", optional \"since\", \"until\"}; it returns metadata only, so open an item by its request-owned id before relying on the body. Ticket dates are creation dates. Tickets are available in global scope and in project scope only when a lead has saved a Jira project mapping. Project tickets are already limited to that mapping by the server. Mine excludes tickets. For project status, list tickets first; the ECHO project name need not appear in ticket text. Never infer a project mapping or choose a tenant, account or connection.",
+    "Search also accepts source \"tickets\" to query only live tickets; omit source to search across available evidence.",
+    "To browse tickets, use list with {\"source\": \"tickets\", optional \"since\", \"until\"}; it returns metadata only, so open an item by its request-owned id before relying on the body. Ticket dates are creation dates. Tickets are available in global scope and in project scope only when a lead has saved a tool project mapping. Project tickets are already limited to that mapping by the server. Mine excludes tickets. Never infer a project mapping or choose a tenant, account or connection.",
   ].join("\n");
   const stepPrompt = tickets ? `${STEP_PROMPT}\n\n${ticketGuidance}` : STEP_PROMPT;
   const answerPrompt = tickets ? `${ANSWER_PROMPT}\n\n${ticketGuidance}` : ANSWER_PROMPT;
@@ -500,7 +500,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       let listsRun = 0;
       const lists = new Map<string, ListState>();
       let touch = 0;
-      const scope = scopeText(options.desk.scope, tickets) + (tickets && options.desk.ticket_available === false ? "; Jira tickets are unavailable in this scope for this asker. Do not call ticket tools; answer from available sources and report any missing Jira status." : "");
+      const scope = scopeText(options.desk.scope, tickets) + (tickets && options.desk.ticket_available === false ? "; Live tickets are unavailable in this scope for this asker. Do not call ticket tools; answer from available sources and report any missing ticket context." : "");
 
       const remaining = () => deadline - now();
       const assertLive = () => {
@@ -551,7 +551,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
         const source = readSource(args.source);
         if (args.source !== undefined && (source === undefined || (!tickets && source === 'ticket'))) return { tool: 'search', args, error: tickets ? 'source must be meetings, documents, slack or tickets; omit it to search all available sources' : 'source must be meetings, documents or slack; omit it to search all available sources' };
-        if (source === 'ticket' && options.desk.ticket_available === false) return { tool: 'search', args, error: 'Jira tickets are unavailable in this scope for this asker' };
+        if (source === 'ticket' && options.desk.ticket_available === false) return { tool: 'search', args, error: 'Live tickets are unavailable in this scope for this asker' };
         if (searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase())) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
         searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
         const result = await raceAbort(activeSignal, desk.search({ query, ...(source === undefined ? {} : { kinds: SEARCH_KINDS[source] }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));

@@ -242,7 +242,7 @@ export const STEP_PROMPT = [
   "",
   "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"meetings\" | \"documents\" | \"slack\"}",
   "  Purpose: search all available sources, or only source. Scope and permissions still apply.",
-  "  When to use: start with concrete names, codes, features or dates. Try different words while a need is open. Use open to read an item and list to browse a source.",
+  "  When to use: start with concrete names, codes, features or dates. For an exact identifier supplied by the asker or a result, search the identifier unchanged and on its own. Try different words while a need is open. Use open to read an item and list to browse a source.",
   "  Returns: up to 8 items with id, source, title, date and a short preview. \"full\": true means the preview is the whole text.",
   "  Limits: keyword matching, not meaning. Keep identifiers intact; try synonyms. Truncated means incomplete; refine or list. Repeats within one source return nothing new.",
   "  Related: open reads a result in full; list shows everything of one kind.",

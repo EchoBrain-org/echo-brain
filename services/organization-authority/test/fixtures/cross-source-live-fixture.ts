@@ -82,7 +82,9 @@ export function crossSourceLiveFixture(actor: { readonly organization_id: string
   const baseJiraFetch = fakeJiraCloudFetchV1();
   const jiraFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await baseJiraFetch(input, init);
-    if (!new URL(String(input)).pathname.endsWith('/issue/10001')) return response;
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/issue/bulkfetch')) return jiraPermitted ? response : Response.json({ issues: [], issueErrors: [] });
+    if (!path.endsWith('/issue/10001')) return response;
     if (!jiraPermitted) return Response.json({ errorMessages: ['Synthetic issue permission denied'] }, { status: 403 });
     const body = await response.json() as { fields: { summary: string; description: unknown } };
     body.fields.summary = 'Launchscope security review';

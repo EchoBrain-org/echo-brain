@@ -64,13 +64,25 @@ current user. Search results may lag, so every selected ticket is fetched by
 its immutable numeric issue id before release. List resolves a project by id
 or key through Jira, and verifies the returned tickets belong to that project.
 Revalidation fetches every previously released issue, including inventory and
-earlier text revisions, by id; a 401/403/404 or binding drift stops the request.
+earlier text revisions, by id in batches of at most 50 through Jira's
+[bulk issue read](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/#api-rest-api-3-issue-bulkfetch-post).
+Each batch must return every requested ID exactly once under the same person's
+current permissions; omitted, duplicated, unexpected or moved issues stop release.
+This avoids one credential lookup per ticket at every model and release fence.
+Credentials remain fresh before each Jira request; a 401/403/404 or binding drift
+stops the request, and Nango HTTP 429 remains `rate_limited` without automatic retry.
 It checks current visibility, not equality with the latest ticket text.
 ECHO membership, identity and exact grant authorization still belong to the
 shared authoritative authorization port. Display visibility is `only_me` and
 does not describe Jira's full audience or authorize sharing.
 
 ## Transport choice and Nango
+
+Ask uses the shared search/list/open contract and request-owned evidence handles.
+It does not choose Jira endpoints, author JQL, recognize Jira key formats or
+prescribe a provider-specific research order. This adapter owns query translation,
+payload decoding and permission-read batching. Exact identifiers pass through
+the shared planner unchanged, just as they do for other evidence sources.
 
 Choose direct HTTPS calls to `https://api.atlassian.com`, with a trusted,
 person/grant-bound authenticated-fetch port. Composition must select the

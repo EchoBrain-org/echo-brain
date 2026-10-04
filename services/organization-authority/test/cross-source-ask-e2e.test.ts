@@ -159,7 +159,10 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
     const jiraSearches = f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/search/jql'));
     expect(jiraSearches).toHaveLength(1);
     expect(JSON.parse(String(jiraSearches[0]![1]?.body))).toMatchObject({ jql: expect.stringContaining('project = 10000') });
-    expect(f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/issue/10001')).length).toBeGreaterThanOrEqual(2);
+    expect(f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/issue/10001')).length).toBeGreaterThanOrEqual(1);
+    const rechecks = f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/issue/bulkfetch'));
+    expect(rechecks.length).toBeGreaterThanOrEqual(2);
+    for (const [, request] of rechecks) expect(JSON.parse(String(request?.body)).issueIdsOrKeys).toEqual(['10001']);
     expect(f.live.slackCalls.some(call => call.method === 'conversations.history' && call.query.oldest === f.live.ts && call.query.latest === f.live.ts)).toBe(true);
     expect(f.live.slackCalls.length).toBeLessThanOrEqual(48);
     const auditRows = f.database.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').all() as { body_json: string }[];

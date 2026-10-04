@@ -63,7 +63,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   const audit = openAuthorityDatabase(join(state, 'authority.sqlite'), { fileMustExist: true });
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
     const prompt = JSON.parse(input.user_prompt) as { question: string; scope: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
-    if (prompt.scope.includes('Jira tickets are unavailable')) {
+    if (prompt.scope.includes('Live tickets are unavailable')) {
       if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [], not_found: ['Jira status is unavailable.'] };
       return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: prompt.last_results?.length ? 'not_found' : 'open', evidence: [] }], notes: '' }],
         actions: [{ tool: prompt.last_results?.length ? 'finish' : 'list', args: prompt.last_results?.length ? {} : { source: 'documents' } }] };
@@ -162,7 +162,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(validatePersonAnswerResponseV5(scoped.body)).toMatchObject({ scope: { kind: 'project', project_id }, outcome: 'answered', citations: [expect.objectContaining({ kind: 'ticket' })] });
     const search = jiraFetch.mock.calls.find(([url]) => String(url).endsWith('/search/jql'))!;
     expect(JSON.parse(search[1]!.body as string).jql).toContain('project = 10000 AND');
-    expect(JSON.parse(generate.mock.calls[0]![0].user_prompt).scope).toContain('saved Jira project mapping');
+    expect(JSON.parse(generate.mock.calls[0]![0].user_prompt).scope).toContain('saved tool project mapping');
     expect(events()).toEqual(expect.arrayContaining([
       expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'verified' }) }),
       expect.objectContaining({ event: 'succeeded', diagnostic: expect.objectContaining({ phase: 'http_request', result: 'answered', counts: expect.objectContaining({ ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 }) }) }),

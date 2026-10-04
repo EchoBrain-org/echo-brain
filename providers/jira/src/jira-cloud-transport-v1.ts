@@ -36,11 +36,12 @@ export function createJiraCloudTransportV1(authenticated: JiraCloudAuthenticated
       const method = input.method ?? 'GET';
       const suffix = input.path.startsWith(prefix) ? input.path.slice(prefix.length) : '';
       const resources = input.path === '/oauth/token/accessible-resources';
-      if (!(resources || /^(?:myself|project\/(?:[1-9][0-9]{0,19}|[A-Z][A-Z0-9_]{0,63})|issue\/[1-9][0-9]{0,19}|search\/jql)$/.test(suffix)) ||
-          (suffix === 'search/jql' ? method !== 'POST' : method !== 'GET') || (method === 'GET' && input.body !== undefined)) jiraFailure('invalid_request');
+      const postRead = suffix === 'search/jql' || suffix === 'issue/bulkfetch';
+      if (!(resources || /^(?:myself|project\/(?:[1-9][0-9]{0,19}|[A-Z][A-Z0-9_]{0,63})|issue\/(?:[1-9][0-9]{0,19}|bulkfetch)|search\/jql)$/.test(suffix)) ||
+          (postRead ? method !== 'POST' : method !== 'GET') || (method === 'GET' && input.body !== undefined)) jiraFailure('invalid_request');
       const url = new URL(input.path, 'https://api.atlassian.com');
       for (const [key, value] of Object.entries(input.query ?? {})) {
-        const issueFields = key === 'fields' && /^[a-zA-Z,]+$/.test(value) && suffix.startsWith('issue/');
+        const issueFields = key === 'fields' && /^[a-zA-Z,]+$/.test(value) && suffix.startsWith('issue/') && !postRead;
         const projectKeys = key === 'expand' && value === 'projectKeys' && suffix.startsWith('project/');
         if (!issueFields && !projectKeys) jiraFailure('invalid_request');
         url.searchParams.set(key, value);
