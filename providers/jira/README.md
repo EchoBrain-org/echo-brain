@@ -206,6 +206,10 @@ shared tool-command fragment. It uses the existing authenticated Person host;
 Nango, SQLite and Authority dependencies stay in the server provider. The selecting
 Authority composition mounts provider-owned connection routes through the generic
 HTTP application port. No Jira command or route dispatcher remains in shared core.
+When selected, it also contributes Jira to `person tools` and the desktop Tools
+screen alongside Slack. The entry reports only the signed-in Person's local
+connection status; listing tools makes no Jira or Nango request. Staging shows
+Jira as unavailable outside its initial-owner fence.
 
 The provider-owned SQLite file stores compact binding/attempt data and the latest
 project mapping setting. It retains only the latest attempt per Person tenure, including terminal status,

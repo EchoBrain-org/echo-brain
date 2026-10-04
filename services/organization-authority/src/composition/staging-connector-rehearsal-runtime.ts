@@ -375,6 +375,7 @@ export async function openStagingConnectorRehearsalService(
         ...(authorize_project === undefined ? {} : { authorize_project }),
         state_directory: config.state_directory,
         sessions: { authenticateAccess: input => requireOwner(input.access_token) },
+        catalog_available: access_token => isActiveInitialOwnerV1(fenceDatabase!, owner, sessions.authenticateAccess({ access_token })),
         configuration: { enabled: true, cloud_id: selected.profile.jira.cloud_id, project: selected.profile.jira.project,
           integration_id: selected.profile.jira.integration_key, nango_authorization: () => config.slack_nango.secret_key },
         seams: { ...dependencies.jira, database: sidecar.database },

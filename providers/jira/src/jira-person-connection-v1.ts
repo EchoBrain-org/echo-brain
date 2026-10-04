@@ -2,7 +2,7 @@ import { validateJiraProjectReadV1, validateJiraProjectSetV1, type JiraProjectMa
 import type { JiraProjectMappingStoreV1 } from './jira-project-mapping-store-v1.js';
 import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
-import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import type { OrganizationPersonToolV4, PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import { JiraConnectionStoreV1, type JiraConnectionAttemptFailureV1, type JiraConnectionAttemptV1, type JiraPersonV1, type JiraStoredConnectionV1 } from './jira-connection-store-v1.js';
@@ -109,6 +109,20 @@ export function createJiraPersonConnectionV1(options: {
     current(); options.store.complete(person, attempt, safeReference, cloud, verified.account_id, verified.origin);
   }
   return Object.freeze({
+    /** Catalog status is local to this Person; listing tools never reads Jira or refreshes consent. */
+    tool(input: { readonly access_token: string }): OrganizationPersonToolV4 {
+      const { person, requirePerson } = actor(input.access_token);
+      const stored = options.store.current(person);
+      if (stored?.active === true) options.store.requireCurrent(stored.binding);
+      requirePerson();
+      return Object.freeze({
+        tool_id: 'jira', display_name: 'Jira', availability: 'enabled',
+        personal_status: stored === undefined ? 'unlinked' : stored.active ? 'linked' : 'revoked',
+        external_scope_id: stored?.active === true ? stored.binding.external_scope_id : null,
+        external_subject_id: stored?.active === true ? stored.binding.external_subject_id : null,
+        organization_setup: null,
+      });
+    },
     projectRead(input: { readonly access_token: string; readonly request: unknown }): JiraProjectMappingV1 {
       const { person, requirePerson } = actor(input.access_token);
       const request = mappingInput(() => validateJiraProjectReadV1(input.request));

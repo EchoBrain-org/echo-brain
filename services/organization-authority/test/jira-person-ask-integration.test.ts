@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { validatePersonAnswerResponseV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
+import { validateOrganizationPersonToolsV4, validatePersonAnswerResponseV4, validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
 import { openAuthorityDatabase } from '@echo-brain/organization-authority-kernel/adapters/persistence/sqlite/open-authority-database';
 import { readPrivateAuthorityPersonSessionPkceKey } from '@echo-brain/organization-authority-kernel/adapters/security/private-file-credentials';
 import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
@@ -83,12 +83,18 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   const origin = `http://127.0.0.1:${runtime.address.port}`;
   const post = async (path: string, body: unknown, token = owner) => { const response = await fetch(`${origin}${path}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: response.status, body: await response.json() as Record<string, any> }; };
   let owner = '';
+  const tools = async (token = owner) => {
+    const response = await fetch(`${origin}/v4/person/tools`, { headers: { authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    return validateOrganizationPersonToolsV4(await response.json()).tools;
+  };
   try {
     const login_grant = (JSON.parse(readFileSync(invitation, 'utf8')) as { login_grant: string }).login_grant;
     const begun = await post('/v2/session/oidc/begin', { kind: 'identity_bootstrap', login_grant, loopback_handoff: { url: `http://127.0.0.1:39999/${'P'.repeat(43)}`, token: 'T'.repeat(43) } });
     expect(begun.status).toBe(201);
     const page = await (await fetch(`${origin}/v2/session/oidc/callback?state=${encodeURIComponent(attempt!.state)}&code=synthetic`)).text();
     owner = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
+    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', display_name: 'Jira', availability: 'enabled', personal_status: 'unlinked', external_subject_id: null })]));
     expect((await post('/v1/person/tools/jira/connect', { schema_version: 1 }, 'wrong-person-token')).status).toBe(401);
     const connected = await post('/v1/person/tools/jira/connect', { schema_version: 1 }); expect(connected.status).toBe(201);
     expect(jira.tags()).toMatchObject({ organization_id: initialized.organization_id, echo_membership: initialized.owner_membership_id });
@@ -100,6 +106,8 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect((await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt }, employee)).status).toBe(401);
     jira.finish(); // Browser consent is reconciled only by the server-bound attempt.
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete', failure_reason: null } });
+    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'linked', external_scope_id: CLOUD })]));
+    expect(await tools(employee)).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'unlinked', external_subject_id: null })]));
     const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should the ticket ship?' }); expect(response.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
@@ -146,5 +154,8 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const slackBegin = await post('/v2/organization/tools/slack/install/begin', { request_id: `osi_${randomUUID()}` }); expect(slackBegin.status).toBe(201);
     const slackStatus = await post('/v2/organization/tools/slack/install/status', { attempt_id: slackBegin.body.attempt_id }); expect(slackStatus).toMatchObject({ status: 200, body: { status: 'complete', result: { kind: 'created', workspace_id: 'TFIXTURE' } } });
     expect(verifySlack).toHaveBeenCalledWith('xoxb-synthetic-slack', undefined);
+    expect((await tools()).map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
+    expect((await post('/v1/person/tools/jira/disconnect', { schema_version: 1 })).status).toBe(200);
+    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'revoked', external_subject_id: null })]));
   } finally { await runtime.close(); audit.close(); }
 });

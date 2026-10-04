@@ -1,6 +1,6 @@
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
-import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import type { OrganizationPersonToolV4, PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 
@@ -13,6 +13,7 @@ export interface PersonTicketLiveApplicationV1 {
 export interface OpenedPersonTicketLiveRuntimeV1 {
   readonly application: PersonTicketLiveApplicationV1;
   readonly connection_http: ProviderHttpApplicationV1;
+  tools?(access_token: string): Promise<readonly OrganizationPersonToolV4[]>;
   close(): void;
 }
 export type PersonTicketLiveRuntimeFactoryV1 = (authentication: {

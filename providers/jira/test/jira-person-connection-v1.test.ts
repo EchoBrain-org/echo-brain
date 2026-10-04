@@ -80,17 +80,22 @@ describe('Nango-backed personal Jira connection', () => {
   it('reports only the current local binding without provider work, mutation or reconnect', async () => {
     const f = fixture(); try {
       expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: false });
+      expect(f.service.tool({ access_token: f.token })).toEqual({ tool_id: 'jira', display_name: 'Jira', availability: 'enabled', personal_status: 'unlinked', external_scope_id: null, external_subject_id: null, organization_setup: null });
       expect(f.nango.connect).not.toHaveBeenCalled(); expect(f.transport).not.toHaveBeenCalled();
       await f.connected(); const before = f.store.current(person);
       vi.mocked(f.nango.connect).mockClear(); vi.mocked(f.nango.connection).mockClear();
       vi.mocked(f.nango.find).mockClear(); vi.mocked(f.nango.disconnect).mockClear(); f.transport.mockClear();
       expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: true });
+      expect(f.service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'linked', external_scope_id: cloud, external_subject_id: 'synthetic-account' });
       expect(f.service.captureStatus({ access_token: 'synthetic-person-two' })).toEqual({ connected: false });
+      expect(f.service.tool({ access_token: 'synthetic-person-two' })).toMatchObject({ personal_status: 'unlinked', external_scope_id: null, external_subject_id: null });
       expect(f.store.current(person)).toEqual(before);
       f.store.revoke(person);
       expect(f.service.captureStatus({ access_token: f.token })).toEqual({ connected: false });
+      expect(f.service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'revoked', external_scope_id: null, external_subject_id: null });
       f.setActive(false);
       expect(() => f.service.captureStatus({ access_token: f.token })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
+      expect(() => f.service.tool({ access_token: f.token })).toThrow(expect.objectContaining({ code: 'unauthorized' }));
       for (const operation of Object.values(f.nango)) expect(operation).not.toHaveBeenCalled();
       expect(f.transport).not.toHaveBeenCalled();
     } finally { f.database.close(); }

@@ -283,7 +283,10 @@ export async function startOrganizationAuthorityApiRuntime(
     });
     const documents = new SqlitePersonDocumentRepositoryV1(database);
     const originalItems = new SqlitePersonOriginalItemsV1(database, sessions, metadata.organization_id);
-    const personTools = (token: string) => externalIdentity?.tools(token) ?? Promise.resolve([]);
+    const personTools = async (token: string) => [
+      ...await (externalIdentity?.tools(token) ?? Promise.resolve([])),
+      ...await (ticketLive?.tools?.(token) ?? Promise.resolve([])),
+    ];
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
       on_failure: dependencies.person_source_failure ?? (event => console.error(JSON.stringify(event))),
     });
