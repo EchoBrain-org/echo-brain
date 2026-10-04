@@ -118,11 +118,14 @@ not claim that the employee is currently online or has a live device session.
 
 Ask uses the agentic routes ([ADR-0022](../decisions/ADR-0022-agentic-ask-only.md));
 the earlier `/v1` and `/v2/person/ask` routes are retired. The default CLI Ask and
-desktop project/Mine Ask use `/v3/person/ask` with V4 answers. Desktop global Ask
+desktop Mine Ask use `/v3/person/ask` with V4 answers. Desktop global and project Ask
 selects `person ask --tickets`, using `/v4/person/ask` with V5 answers so the
 person's connected Jira account can contribute live evidence when enabled by
 the Authority. Ticket citations open directly in Jira; they are not retained
-originals. Jira project mapping is not supported. Ask keeps the
+originals. Project leads configure one Jira project from the project settings menu;
+the server validates it and bounds each project Ask to that stable Jira project ID
+under the asker’s own connection. Unmapped projects never fall back to global Jira.
+Ask keeps the
 [global/project Ask](../features/global-project-ask-v1.md) scope rules: global
 scope includes authorized originals and approved records; explicit project
 scope is restricted to readable associated context. Uploaded sources remain

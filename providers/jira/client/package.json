@@ -12,6 +12,10 @@
     "./person/jira-tool-provider": {
       "types": "./dist/person/jira-tool-provider.d.ts",
       "import": "./dist/person/jira-tool-provider.js"
+    },
+    "./organization-api/jira-project-mapping-v1": {
+      "types": "./dist/organization-api/jira-project-mapping-v1.d.ts",
+      "import": "./dist/organization-api/jira-project-mapping-v1.js"
     }
   },
   "files": [

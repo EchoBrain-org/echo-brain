@@ -372,6 +372,13 @@ export interface Expect {
   readonly membership_id: string;
 }
 
+/** Project configuration only; Jira evidence is read for each question. */
+export interface ProjectJiraMapping {
+  project_id: string;
+  revision: string | null;
+  mapping: { project_id: string; project_key: string } | null;
+}
+
 export interface HostMethods {
   'app.status': { params: Record<string, never>; result: AppStatus };
   'signin.begin': { params: { authority_url: string }; result: AppStatus };
@@ -436,6 +443,9 @@ export interface HostMethods {
   'account.signOut': { params: { expect: Expect }; result: AppStatus };
   /** Tools: the organization's tools and your connection to each, for the account on screen. */
   'account.tools': { params: { expect: Expect }; result: ConnectedTools };
+  /** Project members read the mapping; only leads can change it. */
+  'projects.jiraRead': { params: { expect: Expect; project_id: string }; result: ProjectJiraMapping };
+  'projects.jiraSet': { params: { expect: Expect; project_id: string; request_id: string; expected_revision: string | null; jira_project: string | null }; result: ProjectJiraMapping };
   /** Connect or Reconnect: opens the tool's page in the browser and returns at once with the attempt. */
   'tools.connect': { params: { expect: Expect; tool_id: string }; result: ToolAttempt };
   /** Reads a started connection; a status read is what completes it. */
@@ -483,7 +493,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
-  'employees.reissue', 'employees.revoke', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect',
+  'employees.reissue', 'employees.revoke', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openSlack', 'source.openTicket', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -492,7 +502,7 @@ export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
-  'employees.revoke', 'tools.disconnect',
+  'employees.revoke', 'tools.disconnect', 'projects.jiraSet',
 ]);
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);

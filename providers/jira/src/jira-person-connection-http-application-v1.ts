@@ -1,3 +1,4 @@
+import { PERSON_JIRA_PROJECT_READ_PATH_V1, PERSON_JIRA_PROJECT_SET_PATH_V1, validateJiraProjectReadV1, validateJiraProjectSetV1, validateJiraProjectMappingV1 } from '@echo-brain/provider-jira-client/organization-api/jira-project-mapping-v1';
 import {
   PERSON_JIRA_CANCEL_PATH_V1,
   PERSON_JIRA_CONNECT_PATH_V1,
@@ -16,7 +17,7 @@ import {
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { JiraPersonConnectionV1 } from './jira-person-connection-v1.js';
 
-export type JiraPersonConnectionHttpPortV1 = Pick<JiraPersonConnectionV1, 'connect' | 'status' | 'cancel' | 'disconnect'>;
+export type JiraPersonConnectionHttpPortV1 = Pick<JiraPersonConnectionV1, 'connect' | 'status' | 'cancel' | 'disconnect'> & Partial<Pick<JiraPersonConnectionV1, 'projectRead' | 'projectSet'>>;
 
 const ROUTES = Object.freeze([
   Object.freeze({ route_id: 'jira-connect', method: 'POST' as const, path: PERSON_JIRA_CONNECT_PATH_V1 }),
@@ -58,10 +59,25 @@ export function createJiraPersonConnectionHttpApplicationV1(
   connection: JiraPersonConnectionHttpPortV1,
 ): ProviderHttpApplicationV1 {
   return Object.freeze({
-    routes: ROUTES,
+    routes: Object.freeze([...ROUTES, ...(connection.projectRead === undefined || connection.projectSet === undefined ? [] : [
+      Object.freeze({ route_id: 'jira-project-read', method: 'POST' as const, path: PERSON_JIRA_PROJECT_READ_PATH_V1 }),
+      Object.freeze({ route_id: 'jira-project-set', method: 'POST' as const, path: PERSON_JIRA_PROJECT_SET_PATH_V1 }),
+    ])]),
     async accept(request: ProviderHttpRequestV1) {
       const access_token = token(request);
       switch (request.route_id) {
+        case 'jira-project-read':
+        case 'jira-project-set': {
+          if (connection.projectRead === undefined || connection.projectSet === undefined) throw new AuthorityOperationError('not_found', 'Jira project settings are unavailable');
+          let parsed;
+          try { parsed = request.route_id === 'jira-project-read' ? validateJiraProjectReadV1(json(request)) : validateJiraProjectSetV1(json(request)); }
+          catch { throw new AuthorityOperationError('invalid_request', 'Jira project request is invalid'); }
+          const result = validateJiraProjectMappingV1(request.route_id === 'jira-project-read'
+            ? connection.projectRead({ access_token, request: parsed })
+            : await connection.projectSet({ access_token, request: parsed, ...(request.signal === undefined ? {} : { signal: request.signal }) }));
+          if (result.project_id !== parsed.project_id) throw new AuthorityOperationError('invalid_output', 'Jira project response is invalid');
+          return Object.freeze({ status: 200 as const, body: result });
+        }
         case 'jira-connect': {
           command(request);
           return Object.freeze({ status: 201 as const, body: validatePersonJiraConnectV1(await connection.connect({ access_token, ...(request.signal === undefined ? {} : { signal: request.signal }) })) });

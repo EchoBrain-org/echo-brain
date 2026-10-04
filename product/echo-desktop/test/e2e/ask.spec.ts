@@ -77,7 +77,7 @@ test('follow-ups stack in a thread, newest at the bottom: earlier answers collap
   await expect(earlier.nth(4)).toHaveAttribute('aria-expanded', 'true');
   await expect(earlier.nth(4)).toContainText('We agreed to ship Apollo with annual plans first.');
   // Every follow-up asked the project, as the chip said.
-  const asks = run.calls().filter(call => call.path === '/v3/person/ask');
+  const asks = run.calls().filter(call => call.path === '/v4/person/ask');
   expect(asks.map(call => call.body?.project_id)).toEqual(Array(7).fill('prj_11111111-1111-4111-8111-111111111111'));
 
   // Back leaves the thread; the next question starts a new one.

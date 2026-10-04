@@ -40,8 +40,11 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   readonly expected_origin?: string;
   /** Optional trusted composition scope. Models cannot widen or replace it. */
   readonly project?: string;
+  /** Independent runtime upper bound, retained even when a mapping selects a project ID. */
+  readonly allowed_project?: string;
 }): Promise<PersonLiveEvidenceReaderV1<PersonTicketCitationV1>> {
   const fixedProject = options.project;
+  if (options.allowed_project !== undefined && !(JIRA_ID.test(options.allowed_project) || JIRA_PROJECT_KEY.test(options.allowed_project))) jiraFailure('invalid_request');
   if (fixedProject !== undefined && (typeof fixedProject !== 'string' || !(JIRA_ID.test(fixedProject) || JIRA_PROJECT_KEY.test(fixedProject)))) jiraFailure('invalid_request');
   const binding = copyJiraBindingV1(options.binding);
   const bindingDigest = canonicalSha256(binding);
@@ -79,6 +82,10 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       signal?.throwIfAborted();
       if (current.id !== fixedProject && current.key !== fixedProject) jiraFailure('invalid_output');
       if (pinnedProject !== undefined && current.id !== pinnedProject.id) jiraFailure('stale_access_state');
+      if (options.allowed_project !== undefined && current.id !== options.allowed_project && current.key !== options.allowed_project) {
+        const allowed = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${options.allowed_project}`, signal }), origin, apiPrefix);
+        if ((allowed.id !== options.allowed_project && allowed.key !== options.allowed_project) || allowed.id !== current.id) jiraFailure('unauthorized');
+      }
       pinnedProject = current;
     }
     return origin;

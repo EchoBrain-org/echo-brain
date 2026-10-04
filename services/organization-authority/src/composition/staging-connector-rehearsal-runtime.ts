@@ -1,3 +1,4 @@
+import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonAccessAuthorization } from '@echo-brain/organization-authority-kernel/application/ports/person-access-authorization';
@@ -368,9 +369,10 @@ export async function openStagingConnectorRehearsalService(
         } catch (_error) { unavailable(); } finally { captureInFlight = false; }
       },
     });
-    const openJira = (sessions: Parameters<NonNullable<OrganizationAuthorityServiceDependencies['person_http_runtime_factory_with_slack']>>[0]) => {
+    const openJira = (sessions: Parameters<NonNullable<OrganizationAuthorityServiceDependencies['person_http_runtime_factory_with_slack']>>[0], authorize_project?: PersonTicketProjectAuthorizationV1) => {
       authenticate = input => sessions.authenticateAccess(input);
       jira = openJiraPersonLiveRuntimeV1({
+        ...(authorize_project === undefined ? {} : { authorize_project }),
         state_directory: config.state_directory,
         sessions: { authenticateAccess: input => requireOwner(input.access_token) },
         configuration: { enabled: true, cloud_id: selected.profile.jira.cloud_id, project: selected.profile.jira.project,

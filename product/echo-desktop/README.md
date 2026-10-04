@@ -5,8 +5,7 @@ across macOS and Linux. Packages currently target macOS arm64 and Linux x64.
 Windows packaging is not implemented.
 
 Global Ask includes live Jira reads through the person's connected account and
-shows ticket citations that open directly in Jira. Project and Mine scopes keep
-their existing boundaries; Jira project mapping is separate work.
+shows ticket citations that open directly in Jira. Project Ask includes Jira only through a saved project mapping. Mine excludes Jira.
 
 ## Build
 
@@ -96,3 +95,9 @@ tray visibility, window focus, native file dialogs, drag-and-drop and browser
 sign-in on that desktop. Reopen ECHO through the desktop launcher if its tray or
 global shortcut is unavailable. Linux ARM64 and automatic desktop updates are
 outside this package target.
+
+
+Project leads can choose **Jira project** from the project menu to save or remove
+one Jira project mapping. Each asker connects their own Jira account in Tools.
+Project Ask uses the saved mapping for live ticket reads and citations; an unmapped
+project includes no Jira evidence. The setting retains only project coordinates.

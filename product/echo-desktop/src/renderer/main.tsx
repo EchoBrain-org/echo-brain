@@ -27,8 +27,8 @@ import {
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
 
 function sheetUp(): boolean {
-  const { compose, sheet } = getState();
-  return Boolean((compose && !compose.hidden) || sheet);
+  const { compose, sheet, projectSettings } = getState();
+  return Boolean((compose && !compose.hidden) || sheet || projectSettings?.jira);
 }
 
 /** The caret waits in the ask bar whenever the window comes forward, unless a sheet is up. */

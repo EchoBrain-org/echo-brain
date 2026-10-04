@@ -37,7 +37,7 @@ test('ask inside a project is scoped to it until the chip is cleared', async () 
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('statement-text')).toHaveText('We agreed to ship Apollo with annual plans first.');
   await expect(page.getByTestId('ask-field')).toHaveValue('');
-  const scoped = run.calls().filter(call => call.path === '/v3/person/ask');
+  const scoped = run.calls().filter(call => call.path === '/v4/person/ask');
   expect(scoped).toHaveLength(1);
   expect(scoped[0]!.body?.project_id).toBe('prj_11111111-1111-4111-8111-111111111111');
 
@@ -58,7 +58,7 @@ test('ask inside a project is scoped to it until the chip is cleared', async () 
   await expect(page.getByTestId('answer')).toBeVisible();
   const asks = run.calls().filter(call => /^\/v[34]\/person\/ask$/.test(call.path));
   expect(asks).toHaveLength(2);
-  expect(asks.map(call => call.path)).toEqual(['/v3/person/ask', '/v4/person/ask']);
+  expect(asks.map(call => call.path)).toEqual(['/v4/person/ask', '/v4/person/ask']);
   expect(asks[1]!.body && 'project_id' in asks[1]!.body).toBe(false);
 });
 

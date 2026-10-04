@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
-  Extraction, Failure, FileHandle, ItemRef, ListItem, ListScope, Match, Member, ProjectChange, ProjectSummary, Receipt, RecordItem, RecordRef,
+  Extraction, Failure, FileHandle, ItemRef, ListItem, ListScope, Match, Member, ProjectChange, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef,
   RecordSection, Result, SourceEvidence, ToolAttempt,
 } from '../shared/protocol.js';
 import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
@@ -334,8 +334,18 @@ export interface ChangeState {
   confirmDismiss: boolean;
 }
 
-/** A project-level operation. Its receipt, not a local optimistic update, settles it. */
+/** A project mapping is reloaded after an unconfirmed save. */
+export interface ProjectJiraSetting {
+  seq: number;
+  status: 'loading' | 'ready' | 'saving' | 'failed';
+  key: string;
+  value?: ProjectJiraMapping;
+  failure?: Failure;
+  writeFailed?: boolean;
+}
+
 export interface ProjectSettingsState {
+  jira?: ProjectJiraSetting;
   project: ProjectSummary;
   menu: boolean;
   menuOrigin: 'header' | 'sidebar';
@@ -1270,7 +1280,7 @@ function changed(done: ChangeState): void {
 /** A project settings operation is unsettled until its exact receipt arrives. */
 export function projectSettingsBlocked(current: State = state): boolean {
   const status = current.projectSettings?.write?.status;
-  return status === 'sending' || status === 'unknown';
+  return status === 'sending' || status === 'unknown' || current.projectSettings?.jira?.status === 'saving';
 }
 
 export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'header' | 'sidebar' = 'header'): void {
@@ -1279,7 +1289,7 @@ export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'head
       (menuOrigin === 'header' && (state.ask || state.reader)) || projectSettingsBlocked()) return;
   const shown = state.projectSettings;
   set({ projectSettings: shown?.project.project_id === project.project_id ? {
-    ...shown, menu: shown.menuOrigin !== menuOrigin || !shown.menu, menuOrigin, rename: null, confirm: null,
+    ...shown, jira: undefined, menu: shown.menuOrigin !== menuOrigin || !shown.menu, menuOrigin, rename: null, confirm: null,
   } : {
     project, menu: true, menuOrigin, rename: null, confirm: null, write: null,
   } });
@@ -1288,6 +1298,46 @@ export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'head
 export function closeProjectSettings(): void {
   const settings = state.projectSettings;
   if (settings && !projectSettingsBlocked()) set({ projectSettings: null });
+}
+
+/** Every load/save is scoped to this account, project and opening of the sheet. */
+export async function beginProjectJira(): Promise<void> {
+  const settings = state.projectSettings;
+  const account = expect();
+  if (!settings || !account || projectSettingsBlocked()) return;
+  const opening = ++seq;
+  set({ projectSettings: { ...settings, menu: false, rename: null, confirm: null, jira: { seq: opening, status: 'loading', key: '' } } });
+  const result = await rpc('projects.jiraRead', { expect: account, project_id: settings.project.project_id });
+  if (expect()?.authority !== account.authority || expect()?.membership_id !== account.membership_id || state.projectSettings?.jira?.seq !== opening) return;
+  const current = state.projectSettings;
+  set({ projectSettings: { ...current, jira: result.ok
+    ? { seq: opening, status: 'ready', key: result.value.mapping?.project_key ?? '', value: result.value }
+    : { seq: opening, status: 'failed', key: '', failure: result.failure } } });
+  if (!result.ok) accountLost(result.failure);
+}
+export function setProjectJira(key: string): void {
+  const settings = state.projectSettings;
+  if (settings?.jira?.status === 'ready' && settings.project.role === 'lead') set({ projectSettings: { ...settings, jira: { ...settings.jira, key: key.toUpperCase() } } });
+}
+export function projectJiraValid(setting: ProjectJiraSetting): boolean {
+  const key = setting.key.trim();
+  return setting.status === 'ready' && /^[A-Z][A-Z0-9_]{0,63}$/.test(key) && key !== setting.value?.mapping?.project_key;
+}
+export async function saveProjectJira(remove = false): Promise<void> {
+  const settings = state.projectSettings;
+  const jira = settings?.jira;
+  const account = expect();
+  if (!settings || !jira?.value || !account || settings.project.role !== 'lead' || jira.status !== 'ready' || (remove ? jira.value.mapping === null : !projectJiraValid(jira))) return;
+  set({ projectSettings: { ...settings, jira: { ...jira, status: 'saving' } } });
+  unresolvedChanged();
+  const result = await rpc('projects.jiraSet', { expect: account, project_id: settings.project.project_id, request_id: crypto.randomUUID(), expected_revision: jira.value.revision, jira_project: remove ? null : jira.key.trim() });
+  if (expect()?.authority !== account.authority || expect()?.membership_id !== account.membership_id || state.projectSettings?.jira?.seq !== jira.seq) return;
+  const current = state.projectSettings;
+  set({ projectSettings: { ...current, jira: result.ok
+    ? { seq: jira.seq, status: 'ready', key: result.value.mapping?.project_key ?? '', value: result.value }
+    : { ...jira, status: 'failed', failure: result.failure, writeFailed: true } } });
+  unresolvedChanged();
+  if (!result.ok) accountLost(result.failure);
 }
 
 export function beginProjectRename(): void {
@@ -1303,7 +1353,7 @@ export function setProjectRename(name: string): void {
 
 export function cancelProjectSettingsAction(): void {
   const settings = state.projectSettings;
-  if (settings && !projectSettingsBlocked()) set({ projectSettings: { ...settings, rename: null, confirm: null, menu: false } });
+  if (settings && !projectSettingsBlocked()) set({ projectSettings: { ...settings, rename: null, confirm: null, menu: false, jira: undefined } });
 }
 
 export function askProjectSetting(action: 'archive' | 'unarchive' | 'leave'): void {
@@ -2697,7 +2747,7 @@ export function openCompose(): void {
 export function openCapture(): void {
   const current = state.compose;
   // New project stays in front, as Capture would open under it. Files dropped on it go into its project.
-  if (state.sheet?.kind === 'new-project') return;
+  if (state.sheet?.kind === 'new-project' || state.projectSettings?.jira !== undefined) return;
   set({ toast: null });
   setCompose(current ? { ...current, hidden: false } : fresh(null));
 }

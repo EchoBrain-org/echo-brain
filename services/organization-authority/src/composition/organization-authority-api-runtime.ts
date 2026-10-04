@@ -1,3 +1,6 @@
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { validateProjectIdV1 } from '@echo-brain/organization-api';
+import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createPersonDocumentApplicationV1 } from '../application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../adapters/persistence/sqlite/document-v1.js';
 import { SqlitePersonTextSourceInboxV1 } from '../adapters/persistence/sqlite/person-text-source-v1.js';
@@ -201,7 +204,17 @@ export async function startOrganizationAuthorityApiRuntime(
       },
     );
     sessions.expireOidcLoginAttempts({ limit: 1000 });
-    ticketLive = dependencies.ticket_live_runtime_factory?.(sessions);
+    const projectRepository = new SqliteProjectContextRepositoryV1(database);
+    ticketLive = dependencies.ticket_live_runtime_factory?.(sessions, (access_token, project_id) => {
+      const person = sessions.authenticateAccess({ access_token });
+      const id = validateProjectIdV1(project_id);
+      return projectRepository.withReadTransaction(transaction => {
+        const snapshot = transaction.captureAuthorization(person, { operation: 'project_read_v2', project_id: id });
+        const grant = snapshot.grants.find(value => value.project_id === id);
+        if (grant === undefined) throw new AuthorityOperationError('unauthorized', 'Project access is unavailable');
+        return Object.freeze({ role: grant.role, authorization_sha256: canonicalSha256(grant) });
+      });
+    });
     slackLive = dependencies.slack_live_runtime_factory?.(sessions);
     personHttp = dependencies.person_http_runtime_factory?.(sessions);
     externalIdentity = dependencies.external_identity_runtime_bundle?.open({
@@ -228,7 +241,6 @@ export async function startOrganizationAuthorityApiRuntime(
     });
     const readAudit = new SqlitePersonRecordReadAuditV1(database);
     const transcriptGrants = new ApprovedMeetingTranscriptGrantReaderV1(recordDatabase);
-    const projectRepository = new SqliteProjectContextRepositoryV1(database);
     const captureProjects = createRecordProjectAuthorizationV1(projectRepository);
     const originals = new SqlitePersonOriginalContextRetrievalV1(
       database,

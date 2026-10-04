@@ -4,7 +4,7 @@
 import type {
   Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, CreatedProject, DocumentSummary,
   Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
-  ProjectChange, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
+  ProjectChange, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus,
 } from '../shared/protocol.js';
 import { slackPermalink, ticketPermalink } from '../shared/protocol.js';
@@ -783,4 +783,15 @@ export function noteTitle(body: string): string {
     title += character;
   }
   return title.trim();
+}
+
+/** The CLI validates provider coordinates; only the project key and opaque revision reach the UI. */
+export function projectJiraMappingView(raw: unknown, projectId: string): ProjectJiraMapping {
+  const value = object(unwrap(raw));
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !uuid.test(text(value.revision)))) throw new ViewError();
+  const selected = value.mapping === null ? null : object(value.mapping);
+  if (selected !== null && (value.revision === null || !/^[1-9][0-9]{0,19}$/.test(text(selected.project_id)) || !/^[A-Z][A-Z0-9_]{0,63}$/.test(text(selected.project_key)))) throw new ViewError();
+  return { project_id: projectId, revision: value.revision as string | null,
+    mapping: selected === null ? null : { project_id: text(selected.project_id), project_key: text(selected.project_key) } };
 }

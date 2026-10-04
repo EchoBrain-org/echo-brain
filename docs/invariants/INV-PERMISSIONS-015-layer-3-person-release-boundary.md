@@ -96,6 +96,11 @@ tool bodies and metadata remain request-local and never enter Layer 1 or Layer 2
 Every later model call and final response rechecks all released evidence, the
 membership tenure, session and grant. Disconnect, replacement consent, lost
 membership, changed permissions, audit failure or cancellation releases no answer.
+Project Jira reads MUST use a lead-configured mapping and the asker's own current
+connection. The exact ECHO project grant, mapping revision and stable Jira project
+ID narrow every read; moved tickets, mapping edits/removal and lost membership
+invalidate in-flight evidence. A runtime project fence cannot be widened by a
+mapping. The mapping stores configuration coordinates only, never tool content.
 Mine and unmapped ECHO projects exclude Jira. Runtime model-content capture is
 suppressed once live metadata or text enters a prompt; operational metrics remain.
 

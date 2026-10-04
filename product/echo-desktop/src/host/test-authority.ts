@@ -241,6 +241,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     for (const id of [...desktop.notes.map(saved => saved.context_id), LAUNCH_CHECKLIST, ...standups]) mineNotes.add(id);
   }
   /** Changes applied, by request id: a resend of the same one gets the same receipt, anything else under it conflicts. */
+  const jiraMappings = new Map<string, { revision: string | null; mapping: { cloud_id: string; project_id: string; project_key: string } | null }>();
+  let jiraMappingWrites = 0;
   const applied = new Map<string, { command: string; receipt: Record<string, unknown>; status: number }>();
   /** The organization's employees, as their owner lists them. */
   const employees = [
@@ -693,6 +695,21 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           operation: 'rename', received_at: NOW, state: 'applied' };
       });
     }
+    if (method === 'POST' && (path === '/v1/person/tools/jira/project/read' || path === '/v1/person/tools/jira/project/set')) {
+      const projectId = String(body?.project_id);
+      const role = roleOf(projectId, session.membership_id);
+      if (!role) return failure('not_found', 404);
+      const current = jiraMappings.get(projectId) ?? { revision: null, mapping: null };
+      if (path.endsWith('/read')) return json({ schema_version: 1, project_id: projectId, ...current });
+      if (role !== 'lead') return failure('unauthorized', 401);
+      jiraMappingWrites += 1;
+      if (mode === 'jira-project-slow') while (!existsSync(join(home, 'release-jira-setting'))) await new Promise(resolveLater => setTimeout(resolveLater, 25));
+      if ((mode === 'jira-project-conflict' && jiraMappingWrites === 1) || body?.expected_revision !== current.revision) return failure('conflict', 409);
+      const value = { revision: randomUUID(), mapping: body?.jira_project === null ? null : { cloud_id: JIRA_CLOUD, project_id: '10000', project_key: String(body?.jira_project) } };
+      jiraMappings.set(projectId, value);
+      if (mode === 'jira-project-reply-lost' && jiraMappingWrites === 1) return failure('unavailable', 503);
+      return json({ schema_version: 1, project_id: projectId, ...value });
+    }
     if (method === 'POST' && path === '/v1/person/projects/archive') {
       const projectId = String(body?.project_id);
       if (Object.keys(body ?? {}).sort().join(',') !== 'archived,kind,project_id,request_id,schema_version' || body?.schema_version !== 1 ||
@@ -931,7 +948,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const tickets = path === '/v4/person/ask';
       const answer = { ...desktop.answer, ...(tickets ? { schema_version: 5, kind: 'echo-clean-person-answer-v5' } : {}) };
       if (mode === 'ask-ticket') {
-        const included = tickets && scope.kind === 'global';
+        const included = tickets && (scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null));
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
           citations: included ? [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
             kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10007',
@@ -989,7 +1006,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'ask-project-empty' && scope.kind === 'project') {
         const offScope = question.startsWith('What is the weather');
         return json({
-          schema_version: 4, kind: 'echo-clean-person-answer-v4', scope, outcome: offScope ? 'off_scope' : 'not_found', citations: [],
+          schema_version: tickets ? 5 : 4, kind: tickets ? 'echo-clean-person-answer-v5' : 'echo-clean-person-answer-v4', scope, outcome: offScope ? 'off_scope' : 'not_found', citations: [],
           parts: [{ question, status: 'not_found', statements: [], gap: "I couldn't find this in the sources you can access." }],
         });
       }

@@ -199,7 +199,7 @@ export async function openOrganizationAuthorityService(
     ...(dependencies.person_http_runtime_factory_with_slack === undefined ? {} : {
       person_http_runtime_factory: ((sessions) => dependencies.person_http_runtime_factory_with_slack!(sessions, slack)) satisfies PersonHttpRuntimeFactory,
     }),
-    ...(jira_person_live === undefined ? {} : { ticket_live_runtime_factory: ((sessions) => openJiraPersonLiveRuntimeV1({ state_directory: sharedConfig.state_directory, sessions, configuration: jira_person_live, ...(dependencies.jira_person_live_seams === undefined ? {} : { seams: dependencies.jira_person_live_seams }) })) satisfies PersonTicketLiveRuntimeFactoryV1 }),
+    ...(jira_person_live === undefined ? {} : { ticket_live_runtime_factory: ((sessions, authorize_project) => openJiraPersonLiveRuntimeV1({ authorize_project, state_directory: sharedConfig.state_directory, sessions, configuration: jira_person_live, ...(dependencies.jira_person_live_seams === undefined ? {} : { seams: dependencies.jira_person_live_seams }) })) satisfies PersonTicketLiveRuntimeFactoryV1 }),
     record_approver: composeRecordApproverProjectorsV1([
       projectPrivateSlackBlockApprovalApproverV1,
       projectPrivateSlackBlockApprovalApproverV2,

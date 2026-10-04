@@ -129,6 +129,15 @@ describe('thin live ticket dispatcher', () => {
     await expect(desk.search({ query: 'launch', kinds: ['ticket'] })).rejects.toMatchObject({ code: 'unauthorized' });
     expect(f.ticket.search).not.toHaveBeenCalled(); expect(f.ticket.list).not.toHaveBeenCalled();
   });
+  it('admits a server-bound project ticket source only for that exact project and keeps Slack excluded', async () => {
+    const scope = { kind: 'project' as const, project_id: 'prj_00000000-0000-4000-8000-000000000001' as const };
+    const f = fixture(scope);
+    const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, undefined, scope.project_id);
+    await desk.list({ source: 'ticket' });
+    expect(f.ticket.list).toHaveBeenCalled();
+    expect(() => createPersonLiveEvidenceDeskV2(f.base, f.ticket, undefined, 'another-project')).toThrow(AuthorityOperationError);
+    expect(() => createPersonLiveEvidenceDeskV2(f.base, f.ticket, mixedFixture().slack, scope.project_id)).toThrow(AuthorityOperationError);
+  });
   it('does not forward live cursors or project/container selectors into other desk sources', async () => {
     const f = fixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket);
     await expect(desk.list({ source: 'ticket', channel: 'unsupported-project-map' })).rejects.toMatchObject({ code: 'unauthorized' });

@@ -1,3 +1,5 @@
+import { JiraProjectMappingStoreV1 } from '@echo-brain/provider-jira/jira-project-mapping-store-v1';
+import type { PersonTicketProjectAuthorizationV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
 import { createJiraPersonConnectionHttpApplicationV1 } from '@echo-brain/provider-jira/jira-person-connection-http-application-v1';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
@@ -37,6 +39,7 @@ export function openJiraPersonLiveRuntimeV1(options: {
   readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
   readonly configuration: JiraPersonLiveConfigurationV1;
   readonly seams?: JiraPersonLiveRuntimeSeamsV1;
+  readonly authorize_project?: PersonTicketProjectAuthorizationV1;
 }): OpenedJiraPersonLiveRuntimeV1 {
   if (options.configuration.enabled !== true) throw new Error('Jira live evidence is not enabled');
   const owned = options.seams?.database === undefined;
@@ -49,6 +52,8 @@ export function openJiraPersonLiveRuntimeV1(options: {
     const transport = options.seams?.fetch ?? fetch;
     const application = createJiraPersonConnectionV1({
       store: new JiraConnectionStoreV1(database),
+      project_mappings: new JiraProjectMappingStoreV1(database),
+      ...(options.authorize_project === undefined ? {} : { authorize_project: options.authorize_project }),
       nango: options.seams?.nango ?? createJiraNangoV1({ integration_id: options.configuration.integration_id, authorization: options.configuration.nango_authorization, fetch: transport }),
       cloud_id: options.configuration.cloud_id,
       ...(options.configuration.project === undefined ? {} : { project: options.configuration.project }),
