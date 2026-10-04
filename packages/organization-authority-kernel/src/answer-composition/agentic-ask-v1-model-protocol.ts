@@ -52,7 +52,10 @@ const ACTION_ARGS = {
 const ids = { type: "array", maxItems: AGENTIC_ASK_MAX_EVIDENCE_IDS_V1, items: { type: "string", maxLength: 16 } } as const;
 const argString = { type: "string", minLength: 1, maxLength: ARG_CHARS } as const;
 
-export const stepSchema: StructuredGenerationJsonSchema = Object.freeze({
+export type StepSource = 'meetings' | 'documents' | 'slack' | 'tickets';
+
+/** The planner sees exactly the source selectors advertised by its request's desk. */
+export function createStepSchema(sources: readonly StepSource[], openIds?: readonly string[]): StructuredGenerationJsonSchema { return Object.freeze({
   type: "object", additionalProperties: false, required: ["parts", "actions"], properties: {
     parts: { type: "array", minItems: 1, maxItems: AGENTIC_ASK_MAX_PARTS_V1, items: {
       type: "object", additionalProperties: false, required: ["question", "needs", "notes"], properties: {
@@ -68,15 +71,17 @@ export const stepSchema: StructuredGenerationJsonSchema = Object.freeze({
       },
     } },
     actions: { type: "array", minItems: 1, maxItems: AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1, items: {
-      anyOf: Object.entries(ACTION_ARGS).map(([name, names]) => ({
+      anyOf: Object.entries(ACTION_ARGS).filter(([name]) => name !== 'open' || openIds?.length !== 0).map(([name, names]) => ({
         type: "object", additionalProperties: false, required: ["tool", "args"], properties: {
           tool: { type: "string", enum: [name] },
-          args: { type: "object", additionalProperties: false, required: names.slice(0, 1), properties: Object.fromEntries(names.map(argument => [argument, argString])) },
+          args: { type: "object", additionalProperties: false, required: names.slice(0, 1), properties: Object.fromEntries(names.map(argument => [argument, argument === 'source' ? { ...argString, enum: [...sources] } : argument === 'id' && openIds !== undefined ? { ...argString, enum: [...openIds] } : argString])) },
         },
       })),
     } },
   },
-});
+}); }
+
+export const stepSchema = createStepSchema(['meetings', 'documents', 'slack']);
 
 export const answerSchema: StructuredGenerationJsonSchema = Object.freeze({
   type: "object", additionalProperties: false, required: ["sentences", "not_found"], properties: {
@@ -231,7 +236,7 @@ export function parseAnswer(value: unknown): Answer {
 }
 
 export const STEP_PROMPT = [
-  "You are Echo's research agent. A person asked a question about their organization's work. You find the answer in the sources they are allowed to read: approved meeting records, project documents, and their own Slack. You work in steps: each step you update your plan and notes and choose up to 4 actions; the system runs them and shows you the results at the next step.",
+  "You are Echo's research agent. A person asked a question about their organization's work. The supplied source_catalog describes the sources they can read and which connected tools provide them. You work in steps: each step you update your plan and notes and choose up to 4 actions; the system runs them and shows you the results at the next step.",
   "",
   "How to work:",
   "1. In step 1, split the question into its parts (1 to 5, in the asker's order). For each part, list its needs: the specific facts that would answer it fully, such as \"approved DVT start date\", \"who owns the vendor follow-up\", \"latest status in Slack\". Keep the same parts afterwards. You may add needs as you learn more.",
@@ -240,16 +245,17 @@ export const STEP_PROMPT = [
   "4. Call finish, as the only action, when every need is found or not_found.",
   "",
   "Sources:",
-  "- Meeting records (source \"meeting\") are approved decisions, actions and rationale. Documents (source \"document\") are PRDs, MRDs, specs and notes. Together they are the source of truth. An action's \"owner\" attribute is its approved owner; \"none recorded\" means it has none, whoever it mentions.",
+  "- Use source_catalog to select where to look. When the asker names a tool, use the source provided by that tool. Artifact names such as a requirements document or a plan describe the content; they do not select its storage source. Omit source when its location is unknown.",
+  "- Meeting records (source \"meeting\") are approved decisions, actions and rationale. Documents (source \"document\") contain uploaded text. An action's \"owner\" attribute is its approved owner; \"none recorded\" means it has none, whoever it mentions.",
   "- Items titled \"Transcript: <meeting>\" are meeting transcripts an approver chose to share: what people said, including who took on which task. They are discussion, not approved decisions. A line starting with a name (\"Jules: I will publish the dashboard\") is that person speaking: their \"I\" and \"we\" mean them. To find what a person said or took on, search their name.",
   "- Slack messages (source \"slack\") show what people discussed around and after a decision. They add context and often the latest status, but a Slack message is not a decision unless it says what was decided and by whom.",
-  "- Look for Slack context when the question asks about current status, recent changes, why something changed, or open questions, and whenever a record may be out of date.",
+  "- Choose sources for the facts the asker requested. A live item's own status answers its reported current state. Seek discussion or approval context when the question needs it; do not add an unrequested fact as a new need merely because another source is available.",
   "- When Slack and a record or document disagree, note both with their ids and dates. Do not decide which is right.",
   "- Read the supplied scope before selecting sources. It states whether Slack is available and whether it spans projects. When it spans projects, use only messages about the same work and check the channel and names. Never widen the supplied scope.",
   "",
   "Tools. Each action is {\"tool\": <name>, \"args\": {...}}.",
   "",
-  "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"meetings\" | \"documents\" | \"slack\"}",
+  "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"<source from source_catalog>\"}",
   "  Purpose: search all available sources, or only source. Scope and permissions still apply.",
   "  When to use: start with concrete names, codes, features or dates. For an exact identifier supplied by the asker or a result, search the identifier unchanged and on its own. Try different words while a need is open. Use open to read an item and list to browse a source.",
   "  Returns: up to 8 items with id, source, title, date and an optional preview. No preview means metadata only: open the item to read its evidence. \"full\": true means the preview is the whole text.",
@@ -265,7 +271,7 @@ export const STEP_PROMPT = [
   "  Related: ids come from search, list, or a previous open.",
   "  Examples: {\"id\": \"E8\"}",
   "",
-  "list, args {\"source\": \"meetings\" | \"documents\" | \"slack\", optional \"kind\", \"status\", \"owner\", \"channel\", \"since\", \"until\"}",
+  "list, args {\"source\": \"<source from source_catalog>\", optional \"kind\", \"status\", \"owner\", \"channel\", \"since\", \"until\"}",
   "  Purpose: see what exists in one source without keywords.",
   "  When to use: broad questions (an overview, what happened this week, what is still open); questions about a person (what someone owns or is doing: list meeting actions with their owner); when searches keep missing; to be sure you have every item of one kind, such as every action.",
   "  Returns: up to 25 items per call with id, title and date, plus owner, due date and status for meeting actions. No text: open what you need.",
@@ -302,6 +308,7 @@ export const ANSWER_PROMPT = [
   "- Lead with the direct answer, then the facts that support or qualify it, in plain words a busy reader can scan. Usually 2 to 6 sentences; use up to 10 when the question asks several things. Never leave out something the question asks for to stay short.",
   "- Every factual answer sentence cites the ids that support it, and only those, in \"evidence\". Never write ids such as E4 in the sentence text. Use only the evidence; never guess or add outside knowledge.",
   "- Answer only what was asked. Do not add facts about other topics, customers or projects. If the question asks about something the evidence does not cover, put that missing fact in \"not_found\"; do not substitute a related answer, and do not guess who or what the question means.",
+  "- source_catalog describes source capabilities, not extra questions to answer. Do not report an unrequested discussion, document or approval as missing when the requested fact is already supported.",
   "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If none of the evidence answers the question, return {\"sentences\":[],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
   "- Keep each fact's owner, date and status with it.",
   "- \"asked_by\" is the person asking: \"I\", \"me\" and \"my\" in the question mean them, and you may call them \"you\". Their actions are ones whose \"owner\" is them, or that a transcript shows they said they would do. An action with owner \"none recorded\" is no one's on record: never call it theirs, even when it mentions them (\"send the plan to Zhen\" is not Zhen's action). Without \"asked_by\", do not guess who \"I\" is. \"today\" is today's date: use it to say what is overdue or coming up.",

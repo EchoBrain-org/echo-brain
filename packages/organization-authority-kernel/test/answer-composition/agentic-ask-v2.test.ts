@@ -38,6 +38,7 @@ function fixture(options: {
   };
   const desk: EvidenceDeskPortV2 = {
     scope: { kind: 'global' },
+    live_sources: [{ source: 'ticket', tool_id: 'issue-fixture' }],
     search: vi.fn(async () => { throw new Error('unexpected search'); }),
     list: vi.fn(async () => release([metadata, uncitedMetadata])),
     open: vi.fn(async input => {
@@ -68,6 +69,42 @@ function fixture(options: {
 }
 
 describe('Agentic Ask V2 ticket release', () => {
+  it('advertises a connected source and its provider in one catalog used by the tool schemas', async () => {
+    const f = fixture();
+    await f.run();
+    for (const input of f.inputs) {
+      const catalog = JSON.parse(input.user_prompt).source_catalog;
+      expect(catalog).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: 'tickets', tool_id: 'issue-fixture' }),
+      ]));
+      expect(input.system_prompt).not.toContain('Documents (source "document") are PRDs, MRDs');
+      expect(input.system_prompt).not.toContain('Look for Slack context when the question asks about current status');
+      if (input.system_prompt.startsWith('You write')) continue;
+      const actions = (input.schema as { properties: { actions: { items: { anyOf: { properties: { tool: { enum: string[] }; args: { properties: { source?: { enum: string[] } } } } }[] } } } }).properties.actions.items.anyOf;
+      for (const name of ['search', 'list']) {
+        const action = actions.find((value: { properties: { tool: { enum: string[] } } }) => value.properties.tool.enum[0] === name);
+        expect(action?.properties.args.properties.source?.enum).toEqual(catalog.map((value: { source: string }) => value.source));
+      }
+    }
+  });
+
+  it('leaves unavailable and out-of-scope sources out of both the catalog and tool selectors', async () => {
+    const inputs: StructuredGenerationInput[] = [];
+    const empty = { items: [], truncated: false, receipt_digests: [] };
+    const desk: EvidenceDeskPortV2 = {
+      scope: { kind: 'project', project_id: 'prj_00000000-0000-4000-8000-000000000001' },
+      ticket_available: false, live_sources: [],
+      search: async () => empty, list: async () => empty, open: async () => empty, revalidate: async () => checked,
+    };
+    await createAgenticAskV2({ desk,
+      model: { generate: async input => { inputs.push(input); return { parts: [{ question: 'What exists?', needs: [], notes: '' }], actions: [{ tool: 'finish', args: {} }] }; } },
+      audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 },
+    }).answer({ question: 'What exists?' });
+    expect(JSON.parse(inputs[0]!.user_prompt).source_catalog.map((value: { source: string }) => value.source)).toEqual(['meetings', 'documents']);
+    expect(JSON.stringify(inputs[0]!.schema)).not.toContain('tickets');
+    expect(JSON.stringify(inputs[0]!.schema)).not.toContain('slack');
+  });
+
   it('uses the same research tools for a non-Jira ticket source without prescribing a provider or lookup order', async () => {
     const identifier = 'team/repo#42';
     const text = `${identifier}: Launch is Tuesday.`;

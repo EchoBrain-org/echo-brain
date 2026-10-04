@@ -39,6 +39,8 @@ export interface EvidenceDeskListInputV2 extends Omit<EvidenceDeskListInputV1, '
 export interface EvidenceDeskPortV2 extends Omit<EvidenceDeskPortV1, 'search' | 'open' | 'list'> {
   /** Request-local availability selected by server composition, without provider coordinates. */
   readonly ticket_available?: boolean;
+  /** Connected tool names let research choose a source without knowing provider implementation details. */
+  readonly live_sources?: readonly { readonly source: 'ticket' | 'slack'; readonly tool_id: string }[];
   search(input: Omit<EvidenceDeskSearchInputV1, 'kinds'> & { readonly kinds?: readonly EvidenceDeskKindV2[] }): Promise<EvidenceDeskResultV2>;
   open(input: EvidenceDeskOpenInputV1): Promise<EvidenceDeskResultV2>;
   list(input: EvidenceDeskListInputV2): Promise<EvidenceDeskResultV2>;

@@ -33,17 +33,18 @@ import {
   answerSchema,
   cleanId,
   cleanLine,
+  createStepSchema,
   normalizeQuery,
   parseAnswer,
   parseStep,
   repairPrompt,
-  stepSchema,
   type Answer,
   type NeedStatus,
   type Step,
   type StepAction,
   type StepArgs,
   type StepPart,
+  type StepSource,
 } from "./agentic-ask-v1-model-protocol.js";
 import { compactAndValidateAgenticAskResponseV1 } from "./agentic-ask-v1-response.js";
 
@@ -428,6 +429,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
   const now = options.now_ms ?? (() => performance.now());
   const today = options.today ?? (() => isoDay(new Date()));
   const askedBy = askerName(options.asker);
+  const sourceCatalog: readonly { readonly source: StepSource; readonly description: string; readonly tool_id?: string }[] = Object.freeze([
+    { source: 'meetings', description: 'Approved meeting records and admitted transcripts.' },
+    { source: 'documents', description: 'Uploaded document passages and notes.' },
+    ...(options.desk.scope.kind !== 'global' ? [] : [{ source: 'slack' as const, description: 'Live discussion messages.', tool_id: options.desk.live_sources?.find(source => source.source === 'slack')?.tool_id ?? 'slack' }]),
+    ...(!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine' ? [] : [{ source: 'tickets' as const, description: 'Live work items: discover summaries with search or list, then open selected items for their bodies and current state.', ...(options.desk.live_sources?.find(source => source.source === 'ticket') === undefined ? {} : { tool_id: options.desk.live_sources.find(source => source.source === 'ticket')!.tool_id }) }]),
+  ]);
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
   const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
   const ticketGuidance = [
@@ -812,11 +819,28 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           assertLive();
           // Leave room for the answer call and its possible repair.
           if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) break;
-          const header = { question: input.question, ...context(), scope, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), last_results: results, searches_done: [...searchesRun] };
+          const header = { question: input.question, ...context(), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), last_results: results, searches_done: [...searchesRun] };
           const pad = scratchpad(stepBudget - bytes(JSON.stringify(header)));
           const user = { ...header, opened: pad.opened, seen: pad.seen };
+          const openIds = [...entries.values()].map(entry => entry.short);
+          const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds);
           let step: Step;
-          try { step = await withRepair("step", stepPrompt, user, stepSchema, stepTimeout, parseStep); }
+          try {
+            step = await withRepair("step", stepPrompt, user, stepSchema, stepTimeout, value => {
+              const parsed = parseStep(value);
+              for (const action of parsed.actions) {
+                if (action.tool !== 'open') continue;
+                const id = action.args.id ?? '';
+                // Keep the existing normalization of a discovered title, but
+                // never advance research with an invented item reference.
+                if (entryOf(id) !== undefined || entryByTitle(id) !== undefined) continue;
+                throw new AgenticAskOutputErrorV1(openIds.length === 0
+                  ? 'open is unavailable: no items have been discovered. Use search or list first.'
+                  : `open requires a discovered id from your scratchpad, such as ${openIds.slice(0, 12).join(', ')}`);
+              }
+              return parsed;
+            });
+          }
           catch (error) {
             if (isAbort(error, input.signal) || deadlineExpired || !(error instanceof AgenticAskOutputErrorV1)) throw error;
             // A research step that cannot finish stops research; the answer uses what was found.
@@ -886,7 +910,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
           selectedTicketCount = evidence.filter(entry => entry.item.citation.kind === "ticket").length;
           const user = {
-            question: input.question, ...context(), scope,
+            question: input.question, ...context(), scope, source_catalog: sourceCatalog,
             research_plan: plan.map((part, index) => ({ part: index + 1, question: part.question, notes: part.notes, needs: part.needs.map(need => ({ need: need.need, status: need.status, suggested_evidence: need.evidence.filter(short => allowed.has(short)) })) })),
             evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
           };

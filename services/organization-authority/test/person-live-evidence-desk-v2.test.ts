@@ -27,6 +27,15 @@ function fixture(scope: EvidenceDeskPortV1['scope'] = { kind: 'global' }) {
   return { base, ticket, revokeBase: () => { current = false; } };
 }
 describe('thin live ticket dispatcher', () => {
+  it('describes only the live sources bound for this request using provider-neutral source kinds', () => {
+    const f = mixedFixture();
+    const ticket = { ...f.ticket, tool_id: 'issue-fixture' };
+    expect(createPersonLiveEvidenceDeskV2(f.base, ticket, f.slack)).toHaveProperty('live_sources', [
+      { source: 'ticket', tool_id: 'issue-fixture' }, { source: 'slack', tool_id: 'slack' },
+    ]);
+    expect(createPersonLiveEvidenceDeskV2(f.base)).toHaveProperty('live_sources', []);
+  });
+
   it('distinguishes an empty live lookup from a denied lookup without capturing query or provider content', async () => {
     const f = fixture();
     const events: CoreRuntimeObservationV1[] = [];

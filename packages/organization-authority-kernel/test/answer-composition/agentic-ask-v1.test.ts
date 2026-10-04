@@ -482,16 +482,37 @@ describe("agentic Ask: research loop", () => {
     expect(audit[0]).toMatchObject({ repairs: 1, fallbacks: 0, rounds: 3, model_calls: 5 });
   });
 
-  it("returns tool errors for unknown ids and invalid queries instead of failing", async () => {
+  it('repairs an invented open id before advancing research and only advertises discovered ids', async () => {
+    const metadata = listedItem('discovered');
+    const full = { ...metadata, text: 'Launch is Tuesday.' };
+    const d = desk({ list: () => [metadata], open: () => [full] });
     const script = scripted([
-      step([{}], [open("E99"), search("!!!")]),
+      step([{}], [open('E8')]),
+      step([{}], [{ tool: 'list', args: { source: 'meetings' } }]),
+      step([{}], [open('E1')]),
+      finish([found(['E1'])]),
+      answer([{ text: 'Launch is Tuesday.', evidence: ['E1'] }]),
+    ]);
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const result = await ask({ desk: d, model: script.model, audit }).answer({ question: 'When is launch?' });
+    expect(result.outcome).toBe('answered');
+    expect(script.inputs[1]!.system_prompt).toContain('no items have been discovered');
+    expect(script.prompt(1).step).toBe(1);
+    expect(JSON.stringify(script.inputs[0]!.schema)).not.toContain('"tool":{"type":"string","enum":["open"]}');
+    expect(JSON.stringify(script.inputs[2]!.schema)).toContain('"enum":["E1"]');
+    expect(d.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ item: metadata.id }));
+    expect(audit[0]).toMatchObject({ repairs: 1, fallbacks: 0, rounds: 3, model_calls: 5 });
+  });
+
+  it("returns tool errors for invalid queries instead of failing", async () => {
+    const script = scripted([
+      step([{}], [search("!!!")]),
       finish([missing()]),
       finish([missing()]),
     ]);
     const evidence = desk();
     await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
     expect(script.prompt(1).last_results).toEqual([
-      expect.objectContaining({ tool: "open", error: expect.stringContaining("unknown id") }),
       expect.objectContaining({ tool: "search", error: expect.stringContaining("keywords") }),
     ]);
     expect(evidence.open).not.toHaveBeenCalled();

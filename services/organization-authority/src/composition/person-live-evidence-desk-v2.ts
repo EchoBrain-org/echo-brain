@@ -31,6 +31,10 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
   return Object.freeze<EvidenceDeskPortV2>({
     scope: base.scope,
     ticket_available: ticket !== undefined,
+    live_sources: Object.freeze([
+      ...(ticket === undefined ? [] : [Object.freeze({ source: 'ticket' as const, tool_id: ticket.tool_id })]),
+      ...(slack === undefined ? [] : [Object.freeze({ source: 'slack' as const, tool_id: slack.tool_id })]),
+    ]),
     async search(input) {
       input.signal?.throwIfAborted();
       const maximum = input.limit ?? 8;
