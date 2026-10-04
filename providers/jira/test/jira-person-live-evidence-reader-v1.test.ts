@@ -63,6 +63,42 @@ function fixture() {
 }
 
 describe('person-bound Jira live reader through the shared audited wrapper', () => {
+  it.each(['KAN', '10000'])('keeps live reads in the same project after its configured key is renamed (%s)', async selection => {
+    const f = fixture();
+    f.state.project = { ...project(), projectKeys: ['KAN', 'ECHO'] };
+    const reader = await createJiraPersonLiveEvidenceReaderV1({ binding, transport: f.transport, project: selection, allowed_project: 'KAN' });
+    const result = await reader.list({ limit: 5 });
+    expect(result.items[0]).toMatchObject({ label: 'ECHO-1: Ship connector', citation: { ticket_id: '10001' } });
+    expect(f.request.mock.calls.find(([request]) => request.path === `${prefix}/search/jql`)![0].body?.jql).toBe('project = 10000 ORDER BY created DESC, id DESC');
+  });
+
+  it.each([undefined, [], ['OTHER'], 'KAN', ['KAN', 'invalid key'], ['KAN', '10000']])('rejects an unverified or malformed previous project key (%j)', async keys => {
+    const f = fixture(); f.state.project = { ...project(), ...(keys === undefined ? {} : { projectKeys: keys }) };
+    await expect(f.make('KAN')).rejects.toMatchObject({ code: 'invalid_output' });
+    expect(f.request.mock.calls.some(([request]) => request.path.endsWith('/search/jql'))).toBe(false);
+  });
+
+  it('does not let a renamed runtime project admit a different mapped project ID', async () => {
+    const f = fixture();
+    f.state.hook = request => {
+      if (request.path.endsWith('/project/KAN')) f.state.project = { ...project(), projectKeys: ['KAN', 'ECHO'] };
+      if (request.path.endsWith('/project/99999')) f.state.project = { id: '99999', key: 'OTHER', self: `${origin}/rest/api/3/project/99999`, projectKeys: ['OTHER'] };
+    };
+    await expect(createJiraPersonLiveEvidenceReaderV1({ binding, transport: f.transport, project: '99999', allowed_project: 'KAN' })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.request.mock.calls.some(([request]) => request.path.endsWith('/search/jql'))).toBe(false);
+  });
+
+  it('rechecks historical keys and supports them as scoped or unscoped list selectors', async () => {
+    const f = fixture(); f.state.project = { ...project(), projectKeys: ['KAN', 'ECHO'] };
+    const { source } = await f.make('10000');
+    await expect(source.list({ container: 'KAN' })).resolves.toMatchObject({ items: [{ label: 'ECHO-1: Ship connector' }] });
+    f.state.pages = [page()];
+    const unscoped = await f.make();
+    await expect(unscoped.source.list({ container: 'KAN' })).resolves.toMatchObject({ items: [{ label: 'ECHO-1: Ship connector' }] });
+    f.state.project = { ...project(), projectKeys: ['ECHO'] }; f.state.pages = [page()];
+    await expect(source.list({ container: 'KAN' })).rejects.toMatchObject({ code: 'invalid_output' });
+  });
+
   it('pins a trusted project for keyword/key search and inventory without a model-selected container', async () => {
     const f = fixture(); f.state.pages = [page(), page(), page()];
     const { source } = await f.make('ECHO');

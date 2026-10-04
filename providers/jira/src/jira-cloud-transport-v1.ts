@@ -40,7 +40,9 @@ export function createJiraCloudTransportV1(authenticated: JiraCloudAuthenticated
           (suffix === 'search/jql' ? method !== 'POST' : method !== 'GET') || (method === 'GET' && input.body !== undefined)) jiraFailure('invalid_request');
       const url = new URL(input.path, 'https://api.atlassian.com');
       for (const [key, value] of Object.entries(input.query ?? {})) {
-        if (key !== 'fields' || !/^[a-zA-Z,]+$/.test(value) || !suffix.startsWith('issue/')) jiraFailure('invalid_request');
+        const issueFields = key === 'fields' && /^[a-zA-Z,]+$/.test(value) && suffix.startsWith('issue/');
+        const projectKeys = key === 'expand' && value === 'projectKeys' && suffix.startsWith('project/');
+        if (!issueFields && !projectKeys) jiraFailure('invalid_request');
         url.searchParams.set(key, value);
       }
       const signal = input.signal === undefined ? AbortSignal.timeout(15_000) : AbortSignal.any([input.signal, AbortSignal.timeout(15_000)]);

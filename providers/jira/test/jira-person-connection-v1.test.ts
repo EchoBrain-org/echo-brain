@@ -16,7 +16,7 @@ const cloud = '00000000-0000-4000-8000-000000000007';
 const echoProject = 'prj_00000000-0000-4000-8000-000000000010';
 const site = 'https://echo-fixture.atlassian.net';
 const person = { organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'person-fixture', membership_id: 'mem_00000000-0000-4000-8000-000000000001' };
-function fixture(project?: string) {
+function fixture(project?: string, previousKeys: readonly string[] = []) {
   let now = Date.UTC(2026, 9, 1, 0, 0, 0);
   const database = new Database(':memory:'); const store = new JiraConnectionStoreV1(database, () => now);
   const mappings = new JiraProjectMappingStoreV1(database);
@@ -44,7 +44,7 @@ function fixture(project?: string) {
     let body: unknown;
     if (parsed.pathname === '/oauth/token/accessible-resources') body = [{ id: resourceCloud, url: resourceSite, scopes }];
     else if (parsed.pathname.endsWith('/myself')) body = { accountId: account, active: true, accountType: 'atlassian' };
-    else if (parsed.pathname.endsWith('/project/ECHO') || parsed.pathname.endsWith('/project/10000')) body = { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000` };
+    else if (parsed.pathname.endsWith('/project/ECHO') || parsed.pathname.endsWith('/project/10000') || previousKeys.some(key => parsed.pathname.endsWith(`/project/${key}`))) body = { id: '10000', key: 'ECHO', self: `${site}/rest/api/3/project/10000`, ...(parsed.searchParams.get('expand') === 'projectKeys' ? { projectKeys: [...previousKeys, 'ECHO'] } : {}) };
     else if (parsed.pathname.endsWith('/project/OTHER')) body = { id: '99999', key: 'OTHER', self: `${site}/rest/api/3/project/99999` };
     else if (parsed.pathname.endsWith('/search/jql')) body = { issues: [{ id: '10001' }], isLast: true };
     else if (parsed.pathname.endsWith('/issue/10001')) {
@@ -489,6 +489,17 @@ describe('ECHO project to Jira project setting', () => {
       expect(await source!.list({})).toHaveProperty('items');
     } finally { f.database.close(); }
   });
+  it.each(['KAN', 'ECHO', '10000'])('maps a renamed project through %s without changing the runtime fence', async selection => {
+    const f = fixture('KAN', ['KAN']); try {
+      await f.connected();
+      const saved = await f.service.projectSet({ access_token: f.token, request: command(null, selection) });
+      expect(saved.mapping).toEqual({ cloud_id: cloud, project_id: '10000', project_key: 'ECHO' });
+      const source = await f.service.source({ access_token: f.token, project_id: echoProject, audit: f.audit });
+      await expect(source!.list({})).resolves.toMatchObject({ items: [{ label: 'ECHO-1: Synthetic launch' }] });
+      await expect(f.service.projectSet({ access_token: f.token, request: command(saved.revision, 'OTHER') })).rejects.toMatchObject({ code: 'unauthorized' });
+      expect(read(f).mapping).toEqual(saved.mapping);
+    } finally { f.database.close(); }
+  });
   it('uses compare-and-set, replays only the latest exact command, and removes without Jira access', async () => {
     const f = fixture(); try {
       await f.connected(); const request = command();
@@ -508,7 +519,7 @@ describe('ECHO project to Jira project setting', () => {
     const f = fixture(); try {
       await f.connected();
       f.setHook(async url => {
-        if (!url.endsWith('/project/ECHO')) return;
+        if (!new URL(url).pathname.endsWith('/project/ECHO')) return;
         f.setHook(undefined);
         if (change === 'lead') f.setProjectRole('member');
         if (change === 'connection') f.store.revoke(person);

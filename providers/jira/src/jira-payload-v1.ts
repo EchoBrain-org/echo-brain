@@ -61,11 +61,17 @@ function jiraSelf(value: unknown, origin: string, apiPrefix: string, type: 'issu
   if (!candidates.includes(self)) jiraFailure('invalid_output');
 }
 
-export function parseJiraProject(value: unknown, origin: string, apiPrefix: string): { readonly id: string; readonly key: string } {
+export function parseJiraProject(value: unknown, origin: string, apiPrefix: string): { readonly id: string; readonly key: string; readonly keys: readonly string[] } {
   const p = jiraRecord(value);
   const id = jiraString(p.id, 20, JIRA_ID); const key = jiraString(p.key, 64, JIRA_PROJECT_KEY);
   jiraSelf(p.self, origin, apiPrefix, 'project', id, key);
-  return { id, key };
+  const keys = p.projectKeys === undefined ? [] : jiraArray(p.projectKeys, 256).map(value => jiraString(value, 64, JIRA_PROJECT_KEY));
+  return { id, key, keys: Object.freeze(keys) };
+}
+
+/** Historical keys are provider-verified aliases; project IDs still define the read boundary. */
+export function jiraProjectMatches(project: ReturnType<typeof parseJiraProject>, selection: string): boolean {
+  return project.id === selection || project.key === selection || project.keys.includes(selection);
 }
 
 /** Plain text extraction for the supported ADF subset; never hydrate cards, links or media. */

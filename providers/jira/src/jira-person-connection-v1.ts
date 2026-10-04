@@ -9,7 +9,7 @@ import { JiraConnectionStoreV1, type JiraConnectionAttemptFailureV1, type JiraCo
 import { createJiraCloudTransportV1, type JiraCloudAuthenticatedFetchV1, type JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
 import { createJiraPersonLiveEvidenceReaderV1 } from './jira-person-live-evidence-reader-v1.js';
 import type { JiraNangoV1 } from './jira-nango-v1.js';
-import { parseJiraProject, verifyJiraConnectionV1 } from './jira-payload-v1.js';
+import { jiraProjectMatches, parseJiraProject, verifyJiraConnectionV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_CLOUD_ID, jiraFailure, jiraString } from './jira-validation-v1.js';
 
 export interface JiraPersonAuthorizationV1 extends JiraPersonV1 { readonly authorization_sha256: Sha256Digest }
@@ -149,13 +149,13 @@ export function createJiraPersonConnectionV1(options: {
         const transport = createJiraCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), connectionCurrent));
         const { origin } = await verifyJiraConnectionV1(transport, { expected_origin: stored.site, signal: input.signal });
         const prefix = `https://api.atlassian.com/ex/jira/${cloud}`;
-        const readProject = async (id: string) => parseJiraProject(await transport.request({ path: `/ex/jira/${cloud}/rest/api/3/project/${id}`, signal: input.signal }), origin, prefix);
+        const readProject = async (id: string) => parseJiraProject(await transport.request({ path: `/ex/jira/${cloud}/rest/api/3/project/${id}`, query: { expand: 'projectKeys' }, signal: input.signal }), origin, prefix);
         const selected = await readProject(request.jira_project);
-        if (selected.id !== request.jira_project && selected.key !== request.jira_project) jiraFailure('invalid_output');
+        if (!jiraProjectMatches(selected, request.jira_project)) jiraFailure('invalid_output');
         // A configured rehearsal fence remains an upper bound on every mapping.
         if (project !== undefined) {
           const allowed = await readProject(project);
-          if ((allowed.id !== project && allowed.key !== project) || selected.id !== allowed.id) jiraFailure('unauthorized');
+          if (!jiraProjectMatches(allowed, project) || selected.id !== allowed.id) jiraFailure('unauthorized');
         }
         connectionCurrent();
         mapping = Object.freeze({ cloud_id: cloud, project_id: selected.id, project_key: selected.key });

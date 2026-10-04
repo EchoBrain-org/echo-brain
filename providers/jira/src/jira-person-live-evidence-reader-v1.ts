@@ -4,7 +4,7 @@ import { validatePersonTicketCitationV1, type PersonTicketCitationV1 } from '@ec
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
-import { parseJiraIssueV1, parseJiraProject, verifyJiraConnectionV1, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
+import { jiraProjectMatches, parseJiraIssueV1, parseJiraProject, verifyJiraConnectionV1, type ParsedJiraIssueV1 } from './jira-payload-v1.js';
 import { copyJiraBindingV1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 const INVENTORY_FIELDS = 'summary,project,created,status,assignee,duedate';
@@ -78,13 +78,13 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     const { origin } = await verifyJiraConnectionV1(transport, { signal, expected_origin: pinnedOrigin });
     pinnedOrigin = origin;
     if (fixedProject !== undefined) {
-      const current = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${fixedProject}`, signal }), origin, apiPrefix);
+      const current = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${fixedProject}`, query: { expand: 'projectKeys' }, signal }), origin, apiPrefix);
       signal?.throwIfAborted();
-      if (current.id !== fixedProject && current.key !== fixedProject) jiraFailure('invalid_output');
+      if (!jiraProjectMatches(current, fixedProject)) jiraFailure('invalid_output');
       if (pinnedProject !== undefined && current.id !== pinnedProject.id) jiraFailure('stale_access_state');
       if (options.allowed_project !== undefined && current.id !== options.allowed_project && current.key !== options.allowed_project) {
-        const allowed = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${options.allowed_project}`, signal }), origin, apiPrefix);
-        if ((allowed.id !== options.allowed_project && allowed.key !== options.allowed_project) || allowed.id !== current.id) jiraFailure('unauthorized');
+        const allowed = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${options.allowed_project}`, query: { expand: 'projectKeys' }, signal }), origin, apiPrefix);
+        if (!jiraProjectMatches(allowed, options.allowed_project) || allowed.id !== current.id) jiraFailure('unauthorized');
       }
       pinnedProject = current;
     }
@@ -172,7 +172,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     async list(input: PersonLiveEvidenceListInputV1): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       const maximum = Math.min(limit(input.limit), 20);
       if (input.container !== undefined && (typeof input.container !== 'string' || !(JIRA_ID.test(input.container) || JIRA_PROJECT_KEY.test(input.container)))) jiraFailure('invalid_request');
-      if (pinnedProject !== undefined && input.container !== undefined && input.container !== fixedProject && input.container !== pinnedProject.id && input.container !== pinnedProject.key) jiraFailure('unauthorized');
+      if (pinnedProject !== undefined && input.container !== undefined && input.container !== fixedProject && !jiraProjectMatches(pinnedProject, input.container)) jiraFailure('unauthorized');
       if (input.since !== undefined) jiraDay(input.since, 'invalid_request');
       if (input.until !== undefined) jiraDay(input.until, 'invalid_request');
       if (input.since !== undefined && input.until !== undefined && input.since > input.until) jiraFailure('invalid_request');
@@ -181,9 +181,9 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       if (input.cursor !== undefined && (cursor === undefined || cursor.selection !== selection)) jiraFailure('invalid_request');
       return safe(async () => {
         const origin = await verifyConnection(input.signal);
-        const project = pinnedProject ?? (input.container === undefined ? undefined : parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${input.container}`, signal: input.signal }), origin, apiPrefix));
+        const project = pinnedProject ?? (input.container === undefined ? undefined : parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${input.container}`, query: { expand: 'projectKeys' }, signal: input.signal }), origin, apiPrefix));
         input.signal?.throwIfAborted();
-        if (project !== undefined && input.container !== undefined && project.id !== input.container && project.key !== input.container) jiraFailure('invalid_output');
+        if (project !== undefined && input.container !== undefined && !jiraProjectMatches(project, input.container)) jiraFailure('invalid_output');
         if (cursor !== undefined && cursor.projectId !== project?.id) jiraFailure('stale_access_state');
         const jql = `${project === undefined ? 'created >= "1970-01-01"' : `project = ${project.id}`} ORDER BY created DESC, id DESC`;
         const page = await searchPage({ jql, maximum, origin, inventory: true, cursor, projectId: project?.id, signal: input.signal });
