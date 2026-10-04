@@ -579,6 +579,39 @@ subset of `document_items`. The evidence HTTP doors use the same desk spans.
 Model request and response content is captured per call under the content
 switch, except calls whose prompt carries live Slack or ticket text.
 
+#### Jira visibility in V4 Ask
+
+The V4 Person Ask route uses the existing `core_runtime` request trace. New
+metadata shares its `journey_id`; existing events and fields remain available.
+
+| Signal | How to read it |
+| --- | --- |
+| `evidence_connection`, `evidence_source: ticket` | `verified` means the request's Jira reader passed its fresh provider identity check, including the saved mapping in project scope. `unlinked`, `not_configured`, and `out_of_scope` mean no reader was selected. A successful `unavailable` event in project scope means no reader was selected; it does not distinguish a missing mapping from a missing personal connection. A failed event carries a finite failure category. This is not the UI's stored connected status. |
+| Live `evidence_search`, `evidence_list`, `evidence_open` | `evidence_source` distinguishes `ticket` from `slack`. `included_count` counts the items that provider operation returned, before mixed-source trimming. `empty` is a successful zero-result lookup; a failed lookup has its failure category and no result count. Queryless searches call `evidence_list`. |
+| Terminal `http_request` | `result` is the returned Ask outcome. `ticket_retrieved_items` counts distinct ticket handles returned to the Ask loop, including inventory; `ticket_context_items` counts tickets actually submitted to the answer model, without counting a repair twice; `ticket_citations` counts citations in the final response after its access fences. A failed or cancelled request has zero returned citations. |
+
+Only finite categories and counts are added. These live spans exclude provider
+payloads and errors from content capture even when development content capture
+is enabled. They do not record questions, search text, ticket text, ticket IDs,
+provider coordinates, or credentials. Repeated successful connection rechecks
+do not add separate live-source spans. Older releases have no Jira fields;
+their absence is not evidence that Jira was skipped or returned no data.
+Requests that fail before the Ask loop starts have no ticket summary counters.
+
+In Logs Insights, select the Authority log group and a bounded incident window.
+Replace the example journey ID with the request's ID. Parse `@message` explicitly
+so nested diagnostic fields do not depend on automatic field discovery:
+
+```text
+fields jsonParse(@message) as e
+| filter e.kind = "echo-authority-journey-stage-v1"
+| filter e.journey_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+| filter e.event != "started"
+| filter e.diagnostic.evidence_source = "ticket" or e.diagnostic.phase = "http_request"
+| sort e.sequence asc
+| display e.sequence, e.diagnostic.phase, e.event, e.diagnostic.result, e.elapsed_ms, e.diagnostic.counts.included_count, e.diagnostic.counts.ticket_retrieved_items, e.diagnostic.counts.ticket_context_items, e.diagnostic.counts.ticket_citations
+```
+
 #### Opt-in development content and transport completeness
 
 `ECHO_STAGING_JOURNEY_CONTENT_TELEMETRY_V1=true` extends Ask capture to meeting
