@@ -106,8 +106,14 @@ token refresh to the same immutable ECHO grant.
 request in `createAuditedPersonLiveEvidenceSourceV1`, because the reader alone
 is not a Layer 3 release endpoint.
 
-Search treats query text as a literal phrase (or an exact issue key), never
-caller-authored JQL. Open accepts only a handle minted by that reader. List
+Search matches all supplied literal keywords independently (or an exact issue
+key, case-insensitively), never caller-authored JQL. It accepts at most 32
+distinct keywords and preserves identifier punctuation through the Ask protocol. The
+provider compiles each keyword to an escaped literal text clause and joins
+them with `AND`; it does not require the words to form one adjacent phrase.
+Ask can select `source: "tickets"` for a targeted search, or omit the source to
+search all available evidence. Every selection keeps the current Person and
+project boundary. Open accepts only a handle minted by that reader. List
 accepts a Jira project key/id, or no project for the caller's visible inventory.
 Dates are inclusive UTC **creation** days, applied after exact reads; JQL date
 literals use the Jira account's timezone. A filtered page can be empty with an
@@ -128,7 +134,9 @@ or project coordinates, and are never followed.
 Text is the issue key, summary and supported ADF description. Formatting marks
 are not rendered; supported blocks include paragraphs, headings, lists,
 quotes, code, tables and panels, plus text, breaks, mentions, emoji and status.
-Unsupported nodes (including media/cards), malformed fields and control bytes
+URL-backed inline link cards contribute their URL as plain text; their target
+and metadata are never fetched. Unsupported nodes (including media and
+data-backed cards), malformed fields and control bytes
 fail closed. Comments, attachments, custom fields, email addresses and user ids
 are not released. Null description, assignee and due date are supported.
 Optional metadata is limited to assignee display name, status and due date.

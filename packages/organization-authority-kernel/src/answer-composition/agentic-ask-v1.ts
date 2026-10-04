@@ -343,6 +343,14 @@ const LIST_SOURCES: Readonly<Record<string, EvidenceDeskSourceV2>> = Object.free
   slack: "slack", messages: "slack", message: "slack",
   ticket: "ticket", tickets: "ticket",
 });
+const SEARCH_KINDS: Readonly<Record<EvidenceDeskSourceV2, readonly EvidenceDeskKindV2[]>> = Object.freeze({
+  meeting: ['decision', 'action', 'rationale'], document: ['note', 'document_passage'],
+  slack: ['slack_message'], ticket: ['ticket'],
+});
+function readSource(value: string | undefined): EvidenceDeskSourceV2 | undefined {
+  const key = value?.trim().toLowerCase();
+  return key !== undefined && Object.hasOwn(LIST_SOURCES, key) ? LIST_SOURCES[key] : undefined;
+}
 const MEETING_KINDS: Readonly<Record<string, EvidenceDeskKindV2>> = Object.freeze({
   decision: "decision", decisions: "decision", action: "action", actions: "action", task: "action", tasks: "action", rationale: "rationale", rationales: "rationale", reason: "rationale",
 });
@@ -366,7 +374,7 @@ function listDate(value: string, today: string): string | null {
 }
 type ListArgs = { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
 function normalizeListArgs(raw: StepArgs, today: string, tickets: boolean): ListArgs | { readonly error: string } {
-  const source = LIST_SOURCES[(raw.source ?? "").trim().toLowerCase()];
+  const source = readSource(raw.source);
   if (source === undefined || (!tickets && source === "ticket")) return { error: tickets ? "source must be \"meetings\", \"documents\", \"slack\" or \"tickets\"" : "source must be \"meetings\", \"documents\" or \"slack\"" };
   const notes: string[] = [];
   let kinds: EvidenceDeskKindV2[] | undefined;
@@ -424,6 +432,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
   const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
   const ticketGuidance = [
     "Live tickets (source \"ticket\") report the ticket's current title, description, owner, due date and status under the asker's connection. They are not approved meeting decisions. Distinguish their reported state from approved records and cite both when they disagree.",
+    "Search accepts source \"tickets\" to query only live tickets. For a named ticket, search with its exact key alone (for example {\"source\": \"tickets\", \"query\": \"ECHO-123\"}); preserve the hyphen and do not add words such as title or status to that lookup. Other ticket queries match all supplied keywords, not a single exact phrase.",
     "Search includes available tickets. To browse them, use list with {\"source\": \"tickets\", optional \"since\", \"until\"}; it returns metadata only, so open an item by its request-owned id before relying on the body. Ticket dates are creation dates. Tickets are available in global scope and in project scope only when a lead has saved a Jira project mapping. Project tickets are already limited to that mapping by the server. Mine excludes tickets. For project status, list tickets first; the ECHO project name need not appear in ticket text. Never infer a project mapping or choose a tenant, account or connection.",
   ].join("\n");
   const stepPrompt = tickets ? `${STEP_PROMPT}\n\n${ticketGuidance}` : STEP_PROMPT;
@@ -485,7 +494,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       const notice = new Set<string>();
       const entries = new Map<string, Entry>();
       const byShort = new Map<string, string>();
-      const searchesRun: string[] = [];
+      const searchesRun: { readonly query: string; readonly source?: EvidenceDeskSourceV2 }[] = [];
       let listsRun = 0;
       const lists = new Map<string, ListState>();
       let touch = 0;
@@ -537,14 +546,17 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       const search = async (args: StepArgs): Promise<ToolResult> => {
         const query = normalizeQuery(args.query);
         if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
-        if (searchesRun.includes(query.toLowerCase())) return { tool: "search", query, note: "already searched; results are in your scratchpad" };
-        searchesRun.push(query.toLowerCase());
-        const result = await raceAbort(activeSignal, desk.search({ query, limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
+        const source = readSource(args.source);
+        if (args.source !== undefined && (source === undefined || (!tickets && source === 'ticket'))) return { tool: 'search', args, error: tickets ? 'source must be meetings, documents, slack or tickets; omit it to search all available sources' : 'source must be meetings, documents or slack; omit it to search all available sources' };
+        if (source === 'ticket' && options.desk.ticket_available === false) return { tool: 'search', args, error: 'Jira tickets are unavailable in this scope for this asker' };
+        if (searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase())) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
+        searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
+        const result = await raceAbort(activeSignal, desk.search({ query, ...(source === undefined ? {} : { kinds: SEARCH_KINDS[source] }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
         observe(result);
         const found = result.items.filter(item => item.text !== undefined).map(item => register(item, true));
         for (const entry of found) entry.query = query;
         searchHits += found.length;
-        return { tool: "search", query, results: found.map(entry => listing(entry, true)), ...(found.length === 0 ? { note: "no matches" } : {}) };
+        return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => listing(entry, true)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
       };
       /** Models sometimes pass a title instead of an id; resolve it only when a seen title matches. */
       const entryByTitle = (raw: string): Entry | undefined => {

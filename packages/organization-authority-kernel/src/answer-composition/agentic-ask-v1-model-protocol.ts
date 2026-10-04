@@ -147,19 +147,10 @@ function args(name: StepTool, entry: Record<string, unknown>): StepArgs {
   return Object.freeze(result);
 }
 
-/** Normalizes a model-authored keyword query to the shared public query rules, or returns null. */
+/** Normalize presentation and validate bounds; interpretation belongs to the source. */
 export function normalizeQuery(value: unknown): string | null {
   const line = cleanLine(value, ARG_CHARS).replace(/^["'“”]+|["'“”]+$/gu, "").trim();
-  if (line.length === 0) return null;
-  const terms: string[] = [];
-  for (const term of line.match(/[\p{L}\p{N}]+/gu) ?? []) {
-    const lower = term.toLowerCase();
-    if (Buffer.byteLength(lower, "utf8") > 64) continue;
-    if (!terms.some(existing => existing.toLowerCase() === lower)) terms.push(term);
-    if (terms.length === 32) break;
-  }
-  const candidate = terms.join(" ");
-  try { return validatePersonQueryText(candidate); } catch { return null; }
+  try { return validatePersonQueryText(line); } catch { return null; }
 }
 
 function needs(value: unknown): readonly StepNeed[] {
@@ -249,11 +240,11 @@ export const STEP_PROMPT = [
   "",
   "Tools. Each action is {\"tool\": <name>, \"args\": {...}}.",
   "",
-  "search, args {\"query\": \"<2-8 keywords>\"}",
-  "  Purpose: find items about a topic across meetings, documents and Slack at once.",
-  "  When to use: your first move for any need with concrete words (names, product codes, features, dates). Search again with different words while a need is open. Not for reading an item (use open) or for everything of one kind (use list).",
+  "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"meetings\" | \"documents\" | \"slack\"}",
+  "  Purpose: search all available sources, or only source. Scope and permissions still apply.",
+  "  When to use: start with concrete names, codes, features or dates. Try different words while a need is open. Use open to read an item and list to browse a source.",
   "  Returns: up to 8 items with id, source, title, date and a short preview. \"full\": true means the preview is the whole text.",
-  "  Limits: it matches words, not meaning, so try synonyms, codes and people's names. Repeating a search returns nothing new.",
+  "  Limits: keyword matching, not meaning. Keep identifiers intact; try synonyms. Truncated means incomplete; refine or list. Repeats within one source return nothing new.",
   "  Related: open reads a result in full; list shows everything of one kind.",
   "  Examples: {\"query\": \"battery reserve\"}, {\"query\": \"DVT fixture owner\"}",
   "",

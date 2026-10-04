@@ -106,6 +106,37 @@ function slackItem(ts: string, text: string, options: { channel?: string; kind?:
 }
 
 describe("agentic Ask: research loop", () => {
+  it.each(['unknown', 'constructor', '__proto__', 'tickets'])('does not broaden an unsupported search source (%s)', async source => {
+    const evidence = desk();
+    const script = scripted([step([{}], [{ tool: 'search', args: { query: 'launch', source } }]), finish([missing()]), finish([missing()])]);
+    await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
+    expect(evidence.search).not.toHaveBeenCalled();
+    expect(script.prompt(1).last_results[0].error).toContain('source must be');
+  });
+
+  it("routes source-selected searches and does not deduplicate the same query across sources", async () => {
+    const evidence = desk({ search: () => [item('launch', 'Launch is approved for Tuesday.')] });
+    const script = scripted([
+      step([{}], [{ tool: 'search', args: { query: 'launch date', source: 'meetings' } }, { tool: 'search', args: { query: 'launch date', source: 'documents' } }]),
+      finish([found(['E1'])]),
+      answer([{ text: 'Launch is Tuesday.', evidence: ['E1'] }]),
+    ]);
+    await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
+    expect(evidence.search).toHaveBeenCalledTimes(2);
+    expect(evidence.search).toHaveBeenNthCalledWith(1, expect.objectContaining({ query: 'launch date', kinds: ['decision', 'action', 'rationale'] }));
+    expect(evidence.search).toHaveBeenNthCalledWith(2, expect.objectContaining({ query: 'launch date', kinds: ['note', 'document_passage'] }));
+  });
+
+  it('does not confuse query text with a source selector when deduplicating', async () => {
+    const evidence = desk();
+    const script = scripted([
+      step([{}], [{ tool: 'search', args: { query: 'document: launch' } }, { tool: 'search', args: { query: 'launch', source: 'documents' } }]),
+      finish([missing()]), finish([missing()]),
+    ]);
+    await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
+    expect(evidence.search).toHaveBeenCalledTimes(2);
+  });
+
   it("searches, finishes, writes one answer, and lays out one cited paragraph", async () => {
     const launch = item("launch", "Launch is approved for Tuesday.");
     const evidence = desk({ search: () => [launch] });

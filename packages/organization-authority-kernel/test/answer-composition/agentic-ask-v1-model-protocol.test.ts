@@ -105,10 +105,22 @@ describe("agentic Ask model protocol parity", () => {
     expect(["desk_abc", "E", "item 4", ""].map(cleanId)).toEqual([null, null, null, null]);
   });
 
-  it("turns a sentence or quoted phrase into a valid keyword query", () => {
+  it("validates bounded queries without rewriting their meaning", () => {
     expect(normalizeQuery("\"launch date\"")).toBe("launch date");
-    expect(normalizeQuery("What is the launch date, and who owns it?")).toBe("What is the launch date and who owns it");
-    expect(normalizeQuery(Array.from({ length: 40 }, (_, index) => `t${index}`).join(" "))!.split(" ")).toHaveLength(32);
+    expect(normalizeQuery("What is the launch date, and who owns it?")).toBe("What is the launch date, and who owns it?");
+    expect(normalizeQuery(Array.from({ length: 40 }, (_, index) => `t${index}`).join(" "))).toBeNull();
     expect(normalizeQuery("?!")).toBeNull();
+  });
+
+  it("preserves identifiers and punctuation for each provider to interpret", () => {
+    expect(normalizeQuery('"KAN-8"')).toBe('KAN-8');
+    expect(normalizeQuery('echo-123')).toBe('echo-123');
+    expect(normalizeQuery('HW_DVT-27 status')).toBe('HW_DVT-27 status');
+    expect(normalizeQuery('USB-C readiness')).toBe('USB-C readiness');
+    expect(normalizeQuery('org/repo#123')).toBe('org/repo#123');
+    expect(normalizeQuery('person@example.test')).toBe('person@example.test');
+    expect(normalizeQuery('C++ readiness')).toBe('C++ readiness');
+    expect(normalizeQuery('KAN-8 kan-8')).toBe('KAN-8 kan-8');
+    expect(normalizeQuery(Array.from({ length: 20 }, (_, i) => `HW${i}-${i}`).join(' '))).toBeNull();
   });
 });

@@ -239,6 +239,49 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(getter).not.toHaveBeenCalled();
   });
 
+  it('opens a ticket containing an inline link card without fetching the linked page', async () => {
+    const f = fixture();
+    const url = 'https://never-fetch.example.test/walkthrough';
+    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, description: {
+      type: 'doc', version: 1, content: [{ type: 'paragraph', content: [
+        { type: 'text', text: 'Read ' }, { type: 'inlineCard', attrs: { url } }, { type: 'text', text: ' before the gate.' },
+      ] }],
+    } } });
+    const { source } = await f.make();
+    const inventory = await source.list({ limit: 1 });
+    const opened = await source.open({ item: inventory.items[0]!.id });
+    const text = `ECHO-1: Ship connector\n\nRead ${url} before the gate.`;
+    expect(opened.items[0]).toMatchObject({ text, citation: { text_sha256: digest(text) } });
+    expect(f.request.mock.calls.every(([request]) => request.path === '/oauth/token/accessible-resources' ||
+      request.path === `${prefix}/myself` || request.path === `${prefix}/search/jql` || request.path === `${prefix}/issue/10001`)).toBe(true);
+    await source.revalidate({});
+  });
+
+  it.each(['ECHO-1', 'echo-1'])('uses exact issue-key search for %s', async query => {
+    const f = fixture(); const { source } = await f.make();
+    const result = await source.search({ query });
+    expect(result.items).toHaveLength(1);
+    expect(f.request.mock.calls.find(([request]) => request.path.endsWith('/search/jql'))![0].body?.jql)
+      .toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
+  });
+
+  it('compiles keyword search as independent terms within the pinned project', async () => {
+    const f = fixture(); const { source } = await f.make('ECHO');
+    await source.search({ query: 'launch connector' });
+    const request = f.request.mock.calls.find(([request]) => request.path.endsWith('/search/jql'))![0];
+    expect(request.body?.jql).toBe('project = 10000 AND (text ~ "\\\"launch\\\"" AND text ~ "\\\"connector\\\"") ORDER BY created DESC, id DESC');
+  });
+
+  it.each([{}, { url: 7 }, { url: 'https://example.test/\u0000' }, { url: 'https://example.test', data: {} }])('refuses malformed inline link cards (%j)', async attrs => {
+    const f = fixture();
+    f.state.tickets.set('10001', { ...ticket(), fields: { ...ticket().fields, description: {
+      type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'inlineCard', attrs }] }],
+    } } });
+    const { source } = await f.make();
+    await expect(source.search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+    expect(f.audit.record).not.toHaveBeenCalled();
+  });
+
   it('bounds NFC text by UTF-8 bytes before hashing, with aggregate releases accepted by the wrapper', async () => {
     const f = fixture();
     f.state.pages = [page(Array.from({ length: 5 }, (_, i) => String(10001 + i)))];
@@ -254,16 +297,24 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(65536);
   });
 
-  it('makes JQL a literal search phrase and keeps connection/grant selectors outside method arguments', async () => {
+  it('keeps query operators literal and connection/grant selectors outside method arguments', async () => {
     const f = fixture(); const { source, reader } = await f.make();
     await source.search({ query: 'hello" OR project = SECRET' });
     const request = f.request.mock.calls.find(([r]) => r.path.endsWith('/search/jql'))![0];
-    expect(request.body!.jql).toBe('text ~ "\\"hello\\\\\\" OR project = SECRET\\"" ORDER BY created DESC, id DESC');
+    const literals = ['"hello\\""', '"OR"', '"project"', '"="', '"SECRET"'];
+    expect(request.body!.jql).toBe(literals.map(value => `text ~ ${JSON.stringify(value)}`).join(' AND ') + ' ORDER BY created DESC, id DESC');
     expect(Object.isFrozen(reader.binding)).toBe(true);
     f.state.pages = [page()];
     await reader.search({ query: 'ECHO-1', limit: 1, ...{ person: 'another-person', cloudid: 'another-site', connectionId: 'another-connection' } });
     expect(f.request.mock.calls.filter(([r]) => r.path.endsWith('/search/jql')).at(-1)![0].body!.jql).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
     expect(f.request.mock.calls.every(([r]) => !r.path.includes('another'))).toBe(true);
+  });
+
+  it('counts repeated keywords once when compiling a bounded query', async () => {
+    const f = fixture(); const { source } = await f.make();
+    await source.search({ query: Array.from({ length: 40 }, (_, i) => i % 2 === 0 ? 'MRD' : 'mrd').join(' ') });
+    const request = f.request.mock.calls.find(([r]) => r.path.endsWith('/search/jql'))![0];
+    expect(request.body!.jql).toBe(`text ~ ${JSON.stringify('"mrd"')} ORDER BY created DESC, id DESC`);
   });
 
   it('lists metadata with opaque request-bound pagination and validates the project and date selection', async () => {

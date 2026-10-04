@@ -93,6 +93,15 @@ function jiraDescription(value: unknown): string {
     }
     if (type === 'hardBreak') return '\n';
     if (type === 'rule') return '\n';
+    if (type === 'inlineCard') {
+      const attrs = jiraRecord(node.attrs);
+      // Preserve the provider's URL as text; never fetch card metadata or its target.
+      if (attrs.data !== undefined || node.content !== undefined) jiraFailure('invalid_output');
+      const text = jiraString(attrs.url, 8192);
+      bytes += Buffer.byteLength(text, 'utf8');
+      if (bytes > 256 * 1024) jiraFailure('invalid_output');
+      return text;
+    }
     if (type === 'mention' || type === 'emoji' || type === 'status') {
       const attrs = jiraRecord(node.attrs);
       return jiraString(attrs.text ?? (type === 'emoji' ? attrs.shortName : undefined), 512);

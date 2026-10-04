@@ -24,11 +24,16 @@ function limit(value: number): number {
   return value;
 }
 
-/** A literal phrase, not caller-authored JQL or Lucene operators. */
+/** Shared keyword semantics, or an exact key. Never caller-authored JQL or Lucene operators. */
 function searchJql(query: string, projectId?: string): string {
   if (typeof query !== 'string' || query.trim() === '' || Buffer.byteLength(query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query)) jiraFailure('invalid_request');
-  const phrase = query.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&');
-  const expression = JIRA_TICKET_KEY.test(query) ? `key = ${JSON.stringify(query)}` : `text ~ ${JSON.stringify(`"${phrase}"`)}`;
+  const terms = [...new Map(query.trim().split(/\s+/u).map(term => [term.toLowerCase(), term])).values()];
+  if (terms.length > 32) jiraFailure('invalid_request');
+  const ticketKey = query.trim().toUpperCase();
+  const expression = JIRA_TICKET_KEY.test(ticketKey) ? `key = ${JSON.stringify(ticketKey)}` : terms.map(term => {
+    const literal = term.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&');
+    return `text ~ ${JSON.stringify(`"${literal}"`)}`;
+  }).join(' AND ');
   return `${projectId === undefined ? expression : `project = ${projectId} AND (${expression})`} ORDER BY created DESC, id DESC`;
 }
 

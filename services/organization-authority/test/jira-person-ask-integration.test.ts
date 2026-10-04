@@ -44,7 +44,14 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     async redeemAuthorizationCode() { return { kind: 'verified' as const, token: { issuer: OIDC.issuer, subject: `fixture-${loginEmail}`, audience: OIDC.client_id, nonce: attempt!.nonce, issued_at: Math.floor(Date.now() / 1000), claims: { email: loginEmail, email_verified: true } } }; },
   };
   const jira = fakeJiraNangoV1();
-  const jiraFetch = fakeJiraCloudFetchV1();
+  // Wrong key normalization or phrase semantics must produce an empty provider
+  // result, not the fixture ticket that used to hide every query error.
+  const matchingQueries = new Set([
+    'key = "ECHO-1" ORDER BY created DESC, id DESC',
+    'text ~ "\\\"Friday\\\"" AND text ~ "\\\"ship\\\"" ORDER BY created DESC, id DESC',
+    'project = 10000 AND (text ~ "\\\"ship\\\"") ORDER BY created DESC, id DESC',
+  ]);
+  const jiraFetch = fakeJiraCloudFetchV1({ matches_jql: jql => matchingQueries.has(jql) });
   let slackTags: Readonly<Record<string, string>> = {};
   const slackNango: NangoConnectionClientV1 = {
     createConnectSession: vi.fn(async input => { slackTags = input.tags; return { connect_link: 'https://connect.nango.dev/fixture-slack', expires_at: new Date(Date.now() + 60_000).toISOString() }; }),
@@ -67,7 +74,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
       expect(releases.length).toBeGreaterThan(0); // Ticket bytes reached this model only after durable release audit.
       return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [hit] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
     }
-    return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'search', args: { query: 'ship', kinds: ['ticket'] } }] };
+    return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'search', args: { query: prompt.question.includes('ECHO-1') ? 'ECHO-1' : prompt.question.includes('Friday') ? 'Friday ship' : 'ship', source: 'tickets' } }] };
   });
   const privateFile = (name: string, value: string) => { const path = join(root, name); writeFileSync(path, value, { mode: 0o600 }); return path; };
   const runtime = await openOrganizationAuthorityService({
@@ -108,7 +115,9 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: connected.body.attempt })).toMatchObject({ status: 200, body: { status: 'complete', failure_reason: null } });
     expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'linked', external_scope_id: CLOUD })]));
     expect(await tools(employee)).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'unlinked', external_subject_id: null })]));
-    const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should the ticket ship?' }); expect(response.status).toBe(200);
+    const response = await post('/v4/person/ask', { schema_version: 3, question: 'When should ECHO-1 ship?' }); expect(response.status).toBe(200);
+    const exactSearch = jiraFetch.mock.calls.find(([url]) => String(url).endsWith('/search/jql'))!;
+    expect(JSON.parse(exactSearch[1]!.body as string).jql).toBe('key = "ECHO-1" ORDER BY created DESC, id DESC');
     const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
     expect(() => validatePersonAnswerResponseV4(response.body)).toThrow();
@@ -116,6 +125,13 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const rows = audit.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').all() as { body_json: string }[];
     const releases = rows.map(row => JSON.parse(row.body_json)).filter(row => row.kind === 'echo-person-live-evidence-release-audit-v1'); expect(releases[0].citations[0]).toMatchObject({ coordinates: { object_id: '10001' }, text_sha256: cited.text_sha256 });
     for (const row of rows) { expect(row.body_json).not.toContain('Ship on Friday'); expect(row.body_json).not.toContain('synthetic-jira-oauth-bearer'); expect(row.body_json).not.toContain('jira_item_'); }
+    jiraFetch.mockClear(); generate.mockClear();
+    const keywords = await post('/v4/person/ask', { schema_version: 3, question: 'What does the ticket say about the Friday ship date?' });
+    expect(keywords.status).toBe(200);
+    expect(validatePersonAnswerResponseV5(keywords.body)).toMatchObject({ outcome: 'answered', citations: [expect.objectContaining({ kind: 'ticket' })] });
+    expect(jiraFetch.mock.calls.filter(([url]) => String(url).endsWith('/search/jql'))).toHaveLength(1);
+    const writerInput = generate.mock.calls.find(([input]) => (input.schema.properties as Record<string, unknown>).sentences !== undefined)![0];
+    expect(JSON.parse(writerInput.user_prompt).evidence[0].attributes).toEqual({ status: 'Open', owner: 'Fixture Owner' });
     // Real ECHO project grants select the provider-owned mapping; the model receives no Jira selector.
     const created = await post('/v1/person/projects', { schema_version: 1, kind: 'echo-project-create-v1', request_id: randomUUID(), name: 'Project A' });
     expect(created.status).toBe(201);
