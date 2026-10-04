@@ -188,7 +188,6 @@ it('refuses a Slack live-evidence factory under the staging diagnostic profile b
 it.each([
   { cloud_id: '00000000-0000-4000-8000-000000000002' },
   { integration_id: 'other-jira' },
-  { project: 'OTHER' },
 ])('refuses Jira Ask configuration outside the fixed staging profile (%j)', async mismatch => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
   const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);

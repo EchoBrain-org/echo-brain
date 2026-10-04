@@ -82,12 +82,13 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
   const selected = selection();
   let jiraAskEnabled = false;
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
+    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    const opened = prompt.opened?.[0]?.id;
+    if (opened !== undefined) return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [opened] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
     const hit = prompt.last_results?.[0]?.results?.[0]?.id;
-    return hit === undefined
-      ? { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'search', args: { query: 'ship', kinds: ['ticket'] } }] }
-      : { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [hit] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
+    return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }],
+      actions: [hit === undefined ? { tool: 'search', args: { query: 'ship', source: 'tickets' } } : { tool: 'open', args: { id: hit } }] };
   });
   const profile_sha256 = canonicalSha256(selected.profile);
   privateFile(join(root, 'private', 'staging-connector-rehearsal.json'), JSON.stringify(selected.profile));
@@ -206,7 +207,7 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     const catalog = await tools();
     expect(catalog.map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
     expect(catalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'enabled', personal_status: 'linked', external_scope_id: FIXTURE_CLOUD })]));
-    // A valid non-owner still gets the catalog, but cannot see or use the owner's Jira grant.
+    // Each Person can connect Jira, without seeing or using the owner's grant.
     const invited = await post('/v1/person/employees', { name: 'Fixture Employee', email: 'employee@example.test' });
     expect(invited.status).toBe(201);
     const redeem = seams.oidc_provider.redeemAuthorizationCode;
@@ -219,13 +220,31 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     const employee = (JSON.parse(Buffer.from(/name="session" value="([A-Za-z0-9_-]+)"/.exec(page)![1]!, 'base64url').toString('utf8')) as { access_token: string }).access_token;
     const employeeCatalog = await tools(employee);
     expect(employeeCatalog.map(tool => tool.tool_id).sort()).toEqual(['jira', 'slack']);
-    expect(employeeCatalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'unavailable', personal_status: 'unavailable', external_scope_id: null, external_subject_id: null })]));
-    expect((await post('/v1/person/tools/jira/connect', { schema_version: 1 }, employee)).status).toBe(503);
+    expect(employeeCatalog).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', availability: 'enabled', personal_status: 'unlinked', external_scope_id: null, external_subject_id: null })]));
+    const employeeConnect = await post('/v1/person/tools/jira/connect', { schema_version: 1 }, employee);
+    expect(employeeConnect.status).toBe(201);
+    seams.finishJira();
+    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: employeeConnect.body.attempt }, employee)).toMatchObject({ status: 200, body: { status: 'complete' } });
+    const globalReadStart = seams.jiraFetch.mock.calls.length;
+    const connections = vi.mocked(seams.jira_person_live_seams.nango.connection);
+    const ownerConnectionStart = connections.mock.calls.length;
     const answerResponse = await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'When should the ticket ship?' });
     expect(answerResponse.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(answerResponse.body);
     expect(answer.citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'ticket', citation: expect.objectContaining({ ticket_id: '10001' }) })]));
-    expect(generate).toHaveBeenCalledTimes(3);
+    const globalSearches = seams.jiraFetch.mock.calls.slice(globalReadStart).filter(([url]) => String(url).endsWith('/search/jql'));
+    expect(globalSearches).toHaveLength(1);
+    expect(JSON.parse(String(globalSearches[0]![1]?.body)).jql).not.toContain('project =');
+    expect(generate).toHaveBeenCalledTimes(4);
+    const ownerReferences = new Set(connections.mock.calls.slice(ownerConnectionStart).map(([reference]) => reference));
+    expect(ownerReferences.size).toBe(1);
+    const employeeConnectionStart = connections.mock.calls.length;
+    const employeeAnswer = await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'When should the ticket ship?' }, employee);
+    expect(employeeAnswer.status).toBe(200);
+    expect(validatePersonAnswerResponseV5(employeeAnswer.body).citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'ticket' })]));
+    const employeeReferences = new Set(connections.mock.calls.slice(employeeConnectionStart).map(([reference]) => reference));
+    expect(employeeReferences.size).toBe(1);
+    expect([...employeeReferences].some(reference => ownerReferences.has(reference))).toBe(false);
     expect(custodyCounts()).toEqual(custodyBeforeAsk);
     const control = new Database(join(manifest.state_directory, 'integrations.sqlite'));
     try { control.prepare("UPDATE organization_external_human_link_current SET current_status='revoked'").run(); } finally { control.close(); }

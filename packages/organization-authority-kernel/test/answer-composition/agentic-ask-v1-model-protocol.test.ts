@@ -19,9 +19,10 @@ function generator(seed: number) {
   const pick = <T>(values: readonly T[]): T => values[Math.floor(next() * values.length)]!;
   const strings = ["", " ", "x", " padded ", "trailing ", "line\nbreak", "tab\tinside", "Ünïcödé", "E1", "e2", "[E3]", "12", "日本語のテキスト", "a".repeat(40), " nbsp "];
   const value = (schema: Schema): unknown => {
+    if (schema.anyOf !== undefined) return value(pick(schema.anyOf as Schema[]));
     if (schema.enum !== undefined) return pick(schema.enum as unknown[]);
     if (schema.type === "string") {
-      let text = pick(strings);
+      let text = pick(strings.filter(value => value.length >= (schema.minLength ?? 0)));
       if (schema.maxLength !== undefined) text = [...text].slice(0, schema.maxLength).join("");
       return text;
     }
@@ -41,11 +42,37 @@ function generator(seed: number) {
 }
 
 describe("agentic Ask model protocol parity", () => {
-  it("never rejects a step the step schema permits, except an empty part question", () => {
+  it("binds each action's argument schema to the selected tool", () => {
+    const argumentsByTool: Record<string, readonly string[]> = {
+      search: ["query", "source"], open: ["id"],
+      list: ["source", "kind", "status", "owner", "channel", "since", "until"], finish: [],
+    };
     for (let seed = 1; seed <= 400; seed += 1) {
-      const value = generator(seed)(stepSchema) as { parts: { question: string }[] };
-      const emptyQuestion = value.parts.some(part => part.question.trim().replace(/[\s\p{Cc}]+/gu, "").length === 0);
-      if (emptyQuestion) expect(() => parseStep(value)).toThrow(AgenticAskOutputErrorV1);
+      const value = generator(seed)(stepSchema) as { actions: { tool: string; args: Record<string, unknown> }[] };
+      for (const action of value.actions) {
+        const allowed = argumentsByTool[action.tool]!;
+        if (allowed.length > 0) expect(action.args).toHaveProperty(allowed[0]!);
+        expect(Object.keys(action.args).every(name => allowed.includes(name))).toBe(true);
+      }
+    }
+  });
+
+  it.each([
+    ["open", { query: "E1" }, "id"],
+    ["search", { id: "E1" }, "query"],
+    ["list", { query: "documents" }, "source"],
+  ])("repairs a %s action that supplies another tool's argument", (tool, args, required) => {
+    expect(() => parseStep({ parts: [{ question: "q", needs: [], notes: "" }], actions: [{ tool, args }] }))
+      .toThrow(`${tool} requires args.${required}`);
+  });
+
+  it("never rejects a step the step schema permits, except blank required text", () => {
+    for (let seed = 1; seed <= 400; seed += 1) {
+      const value = generator(seed)(stepSchema) as { parts: { question: string }[]; actions: { tool: string; args: Record<string, string> }[] };
+      const empty = (text: string) => text.trim().replace(/[\s\p{Cc}]+/gu, "").length === 0;
+      const primary: Record<string, string> = { search: "query", open: "id", list: "source" };
+      const blankRequiredText = value.parts.some(part => empty(part.question)) || value.actions.some(action => action.tool !== "finish" && empty(action.args[primary[action.tool]!]!));
+      if (blankRequiredText) expect(() => parseStep(value)).toThrow(AgenticAskOutputErrorV1);
       else expect(() => parseStep(value)).not.toThrow();
     }
   });
@@ -73,11 +100,11 @@ describe("agentic Ask model protocol parity", () => {
 
   it("reads the A2 input field and bare strings as the tool's main argument, and browse as list", () => {
     const step = parseStep({ parts: [{ question: "q", needs: ["a fact"], notes: "" }], actions: [
-      { tool: "search", input: "fixture owner" }, { tool: "open", args: "E4" }, { tool: "browse", input: "" }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: 7 } },
+      { tool: "search", input: "fixture owner" }, { tool: "open", args: "E4" }, { tool: "browse", input: "meetings" }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: 7 } },
     ] });
     expect(step.parts[0]!.needs).toEqual([{ need: "a fact", status: "open", evidence: [] }]);
     expect(step.actions).toEqual([
-      { tool: "search", args: { query: "fixture owner" } }, { tool: "open", args: { id: "E4" } }, { tool: "list", args: {} }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: "7" } },
+      { tool: "search", args: { query: "fixture owner" } }, { tool: "open", args: { id: "E4" } }, { tool: "list", args: { source: "meetings" } }, { tool: "list", args: { source: "slack", channel: "#hw-dvt", since: "7" } },
     ]);
   });
 

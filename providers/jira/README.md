@@ -61,7 +61,9 @@ Source: [site access and API routing](https://developer.atlassian.com/cloud/jira
 
 Jira checks Browse Projects, issue security and app access policy under the
 current user. Search results may lag, so every selected ticket is fetched by
-its immutable numeric issue id before release. List resolves a project by id
+its immutable numeric issue id before release. Search and list release only
+summaries (title, status, owner and due date); open fetches a selected ticket's
+body through its request-owned handle. List resolves a project by id
 or key through Jira, and verifies the returned tickets belong to that project.
 Revalidation fetches every previously released issue, including inventory and
 earlier text revisions, by id in batches of at most 50 through Jira's
@@ -133,8 +135,8 @@ advancing continuation. This is a live walk, not a pinned Jira snapshot.
 Repeated issue ids or continuation tokens within a walk fail closed. There is
 no search continuation in the shared contract.
 
-To stay inside the shared 64 KiB result bound, full-text pages contain at most
-5 tickets and inventory pages at most 20, also respecting the requested limit
+To stay inside the shared 64 KiB result bound, search pages contain at most
+5 ticket summaries and list pages at most 20, also respecting the requested limit
 (1-50). Labels are NFC and at most 256 UTF-8 bytes; text is NFC and at most
 3,072 bytes, cut at code-point boundaries before hashing. `truncated` reports
 provider continuation or shortened text/labels. Inventory omits text and uses
@@ -230,8 +232,8 @@ Authority composition mounts provider-owned connection routes through the generi
 HTTP application port. No Jira command or route dispatcher remains in shared core.
 When selected, it also contributes Jira to `person tools` and the desktop Tools
 screen alongside Slack. The entry reports only the signed-in Person's local
-connection status; listing tools makes no Jira or Nango request. Staging shows
-Jira as unavailable outside its initial-owner fence.
+connection status; listing tools makes no Jira or Nango request. Each Person can
+connect their own account, including on staging.
 
 The provider-owned SQLite file stores compact binding/attempt data and the latest
 project mapping setting. It retains only the latest attempt per Person tenure, including terminal status,
@@ -246,8 +248,9 @@ Global Ask enables Jira under the asker's connection. Project Ask additionally
 requires a saved mapping set by a current ECHO project lead. The desktop project's
 **Jira project** setting verifies the key live and saves only the cloud ID, stable
 Jira project ID and key. Members can read the setting; leads can change or remove
-it. Each asker still needs their own connection. The configured runtime project,
-when present, remains an upper bound. Mine and unmapped projects exclude Jira and
+it. Each asker uses their own OAuth connection and Jira permissions. Global Ask
+has no additional project allowlist; project Ask applies the saved mapping before
+discovery and checks it again on open and revalidation. Mine and unmapped projects exclude Jira and
 never fall back to global Jira; explicit ticket inventory in an unsupported scope
 is refused. There is no persistent ticket-open API, sync or index. Jira capture
 is disabled, including in the staging rehearsal. See
@@ -271,12 +274,14 @@ permissions. The narrow optional startup inputs are `--jira-cloud-id` and
 retired Slack credential/configuration fields in this path.
 
 For the fixed staging connector profile, `ECHO_STAGING_JIRA_ASK_V1=true` selects
-its cloud ID, integration and bounded project. The EC2 Compose overlay supplies
-this flag only when the connector profile is selected. This reuses the existing
-owner connection sidecar across restart; do not reconnect or reset working state.
+its cloud ID and integration. The EC2 Compose overlay supplies this flag only when
+the connector profile is selected. Live Ask allows each Person's own connection;
+the rehearsal's owner and fixed-project restrictions apply only to its diagnostic
+reads. Existing connections in the sidecar survive restart; do not reconnect or
+reset working state.
 
 Live qualification must exercise actual consent, tag discovery, refreshed token
 reads, fresh-consent reconnect, disconnect/reconnect, denied/changed issue visibility,
 account/site mismatch and abort behavior. Synthetic fixtures prove implementation
 behavior only. Follow the operator playbook for deployment and account consent.
-Project mappings and polished connection UI remain deferred.
+Project mappings and the desktop connection UI use the same Person-bound path.

@@ -49,8 +49,6 @@ export function createJiraPersonConnectionV1(options: {
   readonly store: JiraConnectionStoreV1;
   readonly nango: JiraNangoV1;
   readonly cloud_id: string;
-  /** Trusted runtime scope, never selected by a Person request or the model. */
-  readonly project?: string;
   readonly fetch: typeof fetch;
   readonly project_mappings?: JiraProjectMappingStoreV1;
   /** Current exact ECHO project grant, supplied only by Authority composition. */
@@ -60,7 +58,6 @@ export function createJiraPersonConnectionV1(options: {
 }) {
   if (!JIRA_CLOUD_ID.test(options.cloud_id)) jiraFailure('invalid_request');
   const cloud = options.cloud_id;
-  const project = options.project;
   function actor(token: string) {
     const authorization = Object.freeze({ ...options.authenticate(token) });
     const person = Object.freeze({ organization_id: authorization.organization_id, principal_id: authorization.principal_id, membership_id: authorization.membership_id });
@@ -152,11 +149,6 @@ export function createJiraPersonConnectionV1(options: {
         const readProject = async (id: string) => parseJiraProject(await transport.request({ path: `/ex/jira/${cloud}/rest/api/3/project/${id}`, query: { expand: 'projectKeys' }, signal: input.signal }), origin, prefix);
         const selected = await readProject(request.jira_project);
         if (!jiraProjectMatches(selected, request.jira_project)) jiraFailure('invalid_output');
-        // A configured rehearsal fence remains an upper bound on every mapping.
-        if (project !== undefined) {
-          const allowed = await readProject(project);
-          if (!jiraProjectMatches(allowed, project) || selected.id !== allowed.id) jiraFailure('unauthorized');
-        }
         connectionCurrent();
         mapping = Object.freeze({ cloud_id: cloud, project_id: selected.id, project_key: selected.key });
       }
@@ -261,9 +253,9 @@ export function createJiraPersonConnectionV1(options: {
         requirePerson(); options.store.requireCurrent(stored.binding); access?.current();
         if (access !== undefined && access.store.read(person.organization_id, input.project_id!).revision !== mapped!.revision) jiraFailure('stale_access_state');
       };
-      const selectedProject = mapped?.mapping?.project_id ?? project;
+      const selectedProject = mapped?.mapping?.project_id;
       current();
-      const reader = await createJiraPersonLiveEvidenceReaderV1({ binding: stored.binding, transport: createJiraCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current)), expected_origin: stored.site, signal: input.signal, ...(selectedProject === undefined ? {} : { project: selectedProject }), ...(project === undefined ? {} : { allowed_project: project }) });
+      const reader = await createJiraPersonLiveEvidenceReaderV1({ binding: stored.binding, transport: createJiraCloudTransportV1(authenticated(stored.binding, stored.reference, tags(person, stored.attempt), current)), expected_origin: stored.site, signal: input.signal, ...(selectedProject === undefined ? {} : { project: selectedProject }) });
       current();
       return createAuditedPersonLiveEvidenceSourceV1({ actor: person, read_grant_sha256: stored.binding.read_grant_sha256, reader, audit: input.audit, authorization: { assertCurrent: current }, access: { tool_id: 'jira', external_scope_id: cloud, external_subject_id: stored.binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
     },

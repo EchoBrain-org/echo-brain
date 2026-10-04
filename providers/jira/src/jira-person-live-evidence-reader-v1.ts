@@ -46,11 +46,8 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
   readonly expected_origin?: string;
   /** Optional trusted composition scope. Models cannot widen or replace it. */
   readonly project?: string;
-  /** Independent runtime upper bound, retained even when a mapping selects a project ID. */
-  readonly allowed_project?: string;
 }): Promise<PersonLiveEvidenceReaderV1<PersonTicketCitationV1>> {
   const fixedProject = options.project;
-  if (options.allowed_project !== undefined && !(JIRA_ID.test(options.allowed_project) || JIRA_PROJECT_KEY.test(options.allowed_project))) jiraFailure('invalid_request');
   if (fixedProject !== undefined && (typeof fixedProject !== 'string' || !(JIRA_ID.test(fixedProject) || JIRA_PROJECT_KEY.test(fixedProject)))) jiraFailure('invalid_request');
   const binding = copyJiraBindingV1(options.binding);
   const bindingDigest = canonicalSha256(binding);
@@ -88,10 +85,6 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       signal?.throwIfAborted();
       if (!jiraProjectMatches(current, fixedProject)) jiraFailure('invalid_output');
       if (pinnedProject !== undefined && current.id !== pinnedProject.id) jiraFailure('stale_access_state');
-      if (options.allowed_project !== undefined && current.id !== options.allowed_project && current.key !== options.allowed_project) {
-        const allowed = parseJiraProject(await transport.request({ path: `${pathPrefix}/project/${options.allowed_project}`, query: { expand: 'projectKeys' }, signal }), origin, apiPrefix);
-        if (!jiraProjectMatches(allowed, options.allowed_project) || allowed.id !== current.id) jiraFailure('unauthorized');
-      }
       pinnedProject = current;
     }
     return origin;
@@ -180,7 +173,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       const jql = searchJql(input.query, pinnedProject?.id);
       return safe(async () => {
         const origin = await verifyConnection(input.signal);
-        const page = await searchPage({ jql, maximum, origin, inventory: false, projectId: pinnedProject?.id, signal: input.signal });
+        const page = await searchPage({ jql, maximum, origin, inventory: true, projectId: pinnedProject?.id, signal: input.signal });
         await verifyConnection(input.signal);
         return Object.freeze({ items: remember(page.selected), truncated: page.token !== undefined || page.selected.some(item => item.truncated) });
       }, input.signal);

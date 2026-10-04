@@ -73,8 +73,8 @@ it('selects the Slack live runtime for authenticated Ask without inventing a dis
 
 const DOCUMENT_TEXT = 'Launchscope document: the rollout starts with the pilot group.';
 const PRIVATE_DOCUMENT_TEXT = 'Launchscope private document DENIED-DOCUMENT-8137.';
-type PromptItem = { readonly id: string; readonly text?: string; readonly title?: string };
-type Prompt = { readonly question: string; readonly step?: number; readonly last_results?: readonly { readonly results?: readonly PromptItem[] }[]; readonly evidence?: readonly PromptItem[] };
+type PromptItem = { readonly id: string; readonly text?: string; readonly title?: string; readonly full?: boolean };
+type Prompt = { readonly question: string; readonly step?: number; readonly last_results?: readonly { readonly results?: readonly PromptItem[] }[]; readonly opened?: readonly PromptItem[]; readonly seen?: readonly PromptItem[]; readonly evidence?: readonly PromptItem[] };
 
 async function allSourceFixture() {
   const f = await fixture();
@@ -105,12 +105,14 @@ async function allSourceFixture() {
       beforeAnswerReturn?.();
       return { sentences: (prompt.evidence ?? []).map(item => ({ text: item.text!, evidence: [item.id] })), not_found: [] };
     }
-    const hits = prompt.last_results?.flatMap(result => result.results ?? []) ?? [];
+    const hits = prompt.opened?.length ? [...prompt.opened, ...(prompt.seen ?? [])] : prompt.last_results?.flatMap(result => result.results ?? []) ?? [];
     if (hits.length > 0) {
       const rows = database.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-live-evidence-release-audit-v1%'").all() as { body_json: string }[];
       // Every provider passage has crossed the real durable release boundary before the next model call.
       if (input.user_prompt.includes(JIRA_TEXT)) expect(rows.some(row => row.body_json.includes('"tool_id":"jira"'))).toBe(true);
       if (input.user_prompt.includes(SLACK_TEXT)) expect(rows.some(row => row.body_json.includes('"tool_id":"slack"'))).toBe(true);
+      const unopened = hits.filter(item => item.text === undefined && item.full !== true);
+      if (unopened.length > 0) return { parts: [{ question: prompt.question, needs: [{ need: 'cross-source launch status', status: 'open', evidence: [] }], notes: '' }], actions: unopened.slice(0, 4).map(item => ({ tool: 'open', args: { id: item.id } })) };
       return { parts: [{ question: prompt.question, needs: [{ need: 'cross-source launch status', status: 'found', evidence: hits.map(item => item.id) }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
     }
     return { parts: [{ question: prompt.question, needs: [{ need: 'cross-source launch status', status: prompt.step === 1 ? 'open' : 'not_found', evidence: [] }], notes: '' }], actions: prompt.step === 1 ? [{ tool: 'search', args: { query: 'Launchscope' } }] : [{ tool: 'finish', args: {} }] };
@@ -118,7 +120,7 @@ async function allSourceFixture() {
   const runtime = await startOrganizationAuthorityApiRuntime(f.config, {
     oidc_provider: f.oidc,
     ticket_live_runtime_factory: sessions => openJiraPersonLiveRuntimeV1({ state_directory: f.initialized.state_directory, sessions,
-      configuration: { enabled: true, cloud_id: FIXTURE_JIRA_CLOUD_V1, integration_id: 'jira', project: 'ECHO', nango_authorization: () => 'synthetic-only-nango-authorization' }, seams: { nango: live.jira.nango, fetch: live.jiraFetch } }),
+      configuration: { enabled: true, cloud_id: FIXTURE_JIRA_CLOUD_V1, integration_id: 'jira', nango_authorization: () => 'synthetic-only-nango-authorization' }, seams: { nango: live.jira.nango, fetch: live.jiraFetch } }),
     slack_live_runtime_factory: live.slackFactory,
     answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 25_000 } },
   });
@@ -155,10 +157,10 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
     expect(answer.citations.find(item => item.kind === 'ticket')?.citation).toMatchObject({ tool_id: 'jira', ticket_id: '10001', external_scope_id: FIXTURE_JIRA_CLOUD_V1, permalink: `${FIXTURE_JIRA_SITE_V1}/browse/ECHO-1` });
     expect(answer.citations.find(item => item.kind === 'slack_message')?.citation).toEqual({ kind: 'slack_message', team_id: SLACK_TEAM, channel_id: SLACK_CHANNEL, message_ts: f.live.ts, permalink: `https://crosssource.slack.com/archives/${SLACK_CHANNEL}/p${f.live.ts.replace('.', '')}`, text_sha256: sha256Digest(SLACK_TEXT) });
     for (const text of [f.seeded.approved_text, DOCUMENT_TEXT, JIRA_TEXT, SLACK_TEXT]) expect(f.prompts.join('\n')).toContain(text);
-    expect(f.generate).toHaveBeenCalledTimes(3);
+    expect(f.generate).toHaveBeenCalledTimes(4);
     const jiraSearches = f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/search/jql'));
     expect(jiraSearches).toHaveLength(1);
-    expect(JSON.parse(String(jiraSearches[0]![1]?.body))).toMatchObject({ jql: expect.stringContaining('project = 10000') });
+    expect(JSON.parse(String(jiraSearches[0]![1]?.body)).jql).not.toContain('project =');
     expect(f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/issue/10001')).length).toBeGreaterThanOrEqual(1);
     const rechecks = f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/issue/bulkfetch'));
     expect(rechecks.length).toBeGreaterThanOrEqual(2);
@@ -167,7 +169,7 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
     expect(f.live.slackCalls.length).toBeLessThanOrEqual(48);
     const auditRows = f.database.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').all() as { body_json: string }[];
     const terminal = auditRows.map(row => JSON.parse(row.body_json) as Record<string, unknown>).find(row => row.kind === 'echo-person-agentic-ask-audit-v1');
-    expect(terminal).toMatchObject({ outcome: 'answered', model_calls: 3, response_sha256: canonicalSha256(answer) });
+    expect(terminal).toMatchObject({ outcome: 'answered', model_calls: 4, response_sha256: canonicalSha256(answer) });
     for (const row of auditRows) for (const forbidden of [JIRA_TEXT, SLACK_TEXT, PRIVATE_DOCUMENT_TEXT, 'synthetic-jira-oauth-bearer']) expect(row.body_json).not.toContain(forbidden);
     const released = JSON.stringify(answer);
     expect(released).not.toContain(f.seeded.hidden_text); expect(released).not.toContain(PRIVATE_DOCUMENT_TEXT);
@@ -186,7 +188,7 @@ it('omits a disconnected Slack source without provider calls or fabricated Slack
     expect(hasRequiredSourceCoverage(answer)).toBe(false);
     expect(f.live.slackFetch).not.toHaveBeenCalled();
     expect(f.prompts.join('\n')).not.toContain(SLACK_TEXT);
-    expect(f.generate).toHaveBeenCalledTimes(3);
+    expect(f.generate).toHaveBeenCalledTimes(4);
   } finally { await f.close(); }
 });
 
@@ -224,7 +226,7 @@ it('suppresses the completed answer when Slack permission is revoked during its 
     f.beforeAnswerReturn(() => f.live.denySlack());
     const response = await f.ask();
     expect(response.status).toBe(401);
-    expect(f.generate).toHaveBeenCalledTimes(3);
+    expect(f.generate).toHaveBeenCalledTimes(4);
     expect(f.prompts.at(-1)).toContain(SLACK_TEXT); // The earlier authorized release reached the answer model.
     const released = JSON.stringify(response.body);
     for (const text of [SLACK_TEXT, JIRA_TEXT, DOCUMENT_TEXT, f.seeded.approved_text]) expect(released).not.toContain(text);
@@ -248,7 +250,7 @@ it('withholds an audited answer when Jira disconnects during the last awaited Sl
     expect(disconnected).toBe(true);
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({ error: { code: 'stale_access_state' } });
-    expect(f.generate).toHaveBeenCalledTimes(3);
+    expect(f.generate).toHaveBeenCalledTimes(4);
     expect(response.body).not.toHaveProperty('citations');
     const released = JSON.stringify(response.body);
     for (const text of [SLACK_TEXT, JIRA_TEXT, DOCUMENT_TEXT, f.seeded.approved_text]) expect(released).not.toContain(text);

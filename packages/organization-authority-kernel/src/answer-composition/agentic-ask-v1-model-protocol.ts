@@ -5,11 +5,11 @@ import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.
  * Model protocol for the multi-source Ask loop (RFC-0003).
  *
  * Two JSON shapes only: a research `step` and the final `answer`.
- * Parity rule: every value the JSON schema permits is accepted by the parser.
+ * Parity rule: schema-permitted values are accepted unless required text is blank.
  * Values a provider failed to hold to the schema (whitespace, over-long text,
- * id spelling, a string where args belong) are normalized, not rejected. Only
- * an unusable root shape is an error, and its message names the problem so the
- * repair prompt can say it.
+ * id spelling, a string where args belong) are normalized, not rejected. An
+ * unusable shape or missing required argument names the problem so the repair
+ * prompt can correct it before a tool runs.
  */
 export const AGENTIC_ASK_MAX_PARTS_V1 = 5;
 export const AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1 = 4;
@@ -42,9 +42,15 @@ export type Step = { readonly parts: readonly StepPart[]; readonly actions: read
 export type AnswerSentence = { readonly text: string; readonly evidence: readonly string[] };
 export type Answer = { readonly sentences: readonly AnswerSentence[]; readonly not_found: readonly string[] };
 
-const ARG_NAMES = ["query", "id", "source", "kind", "status", "owner", "channel", "since", "until"] as const;
+/** Each tool's first argument is required; finish has no arguments. */
+const ACTION_ARGS = {
+  search: ["query", "source"],
+  open: ["id"],
+  list: ["source", "kind", "status", "owner", "channel", "since", "until"],
+  finish: [],
+} as const satisfies Readonly<Record<StepTool, readonly (keyof StepArgs)[]>>;
 const ids = { type: "array", maxItems: AGENTIC_ASK_MAX_EVIDENCE_IDS_V1, items: { type: "string", maxLength: 16 } } as const;
-const argString = { type: "string", maxLength: ARG_CHARS } as const;
+const argString = { type: "string", minLength: 1, maxLength: ARG_CHARS } as const;
 
 export const stepSchema: StructuredGenerationJsonSchema = Object.freeze({
   type: "object", additionalProperties: false, required: ["parts", "actions"], properties: {
@@ -62,10 +68,12 @@ export const stepSchema: StructuredGenerationJsonSchema = Object.freeze({
       },
     } },
     actions: { type: "array", minItems: 1, maxItems: AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1, items: {
-      type: "object", additionalProperties: false, required: ["tool", "args"], properties: {
-        tool: { type: "string", enum: ["search", "open", "list", "finish"] },
-        args: { type: "object", additionalProperties: false, properties: Object.fromEntries(ARG_NAMES.map(name => [name, argString])) },
-      },
+      anyOf: Object.entries(ACTION_ARGS).map(([name, names]) => ({
+        type: "object", additionalProperties: false, required: ["tool", "args"], properties: {
+          tool: { type: "string", enum: [name] },
+          args: { type: "object", additionalProperties: false, required: names.slice(0, 1), properties: Object.fromEntries(names.map(argument => [argument, argString])) },
+        },
+      })),
     } },
   },
 });
@@ -129,9 +137,11 @@ function tool(value: unknown): StepTool | null {
 /** Args are an object of short strings. A bare string, or the A2 `input` field, is read as the tool's main argument. */
 function args(name: StepTool, entry: Record<string, unknown>): StepArgs {
   const result: Record<string, string> = {};
+  const names: readonly (keyof StepArgs)[] = ACTION_ARGS[name];
+  const primary = names[0];
   const raw = object(entry.args);
   if (raw !== null) {
-    for (const key of ARG_NAMES) {
+    for (const key of names) {
       const value = raw[key];
       const text = typeof value === "number" ? String(value) : cleanLine(value, ARG_CHARS);
       if (text.length > 0) result[key] = text;
@@ -140,10 +150,9 @@ function args(name: StepTool, entry: Record<string, unknown>): StepArgs {
   const bare = typeof entry.args === "string" ? entry.args : typeof entry.input === "string" ? entry.input : undefined;
   if (bare !== undefined) {
     const text = cleanLine(bare, ARG_CHARS);
-    if (text.length > 0 && name === "search" && result.query === undefined) result.query = text;
-    if (text.length > 0 && name === "open" && result.id === undefined) result.id = text;
-    if (text.length > 0 && name === "list" && result.source === undefined) result.source = text;
+    if (text.length > 0 && primary !== undefined && result[primary] === undefined) result[primary] = text;
   }
+  if (primary !== undefined && result[primary] === undefined) throw new AgenticAskOutputErrorV1(`${name} requires args.${primary} as a non-empty string`);
   return Object.freeze(result);
 }
 
@@ -243,7 +252,7 @@ export const STEP_PROMPT = [
   "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"meetings\" | \"documents\" | \"slack\"}",
   "  Purpose: search all available sources, or only source. Scope and permissions still apply.",
   "  When to use: start with concrete names, codes, features or dates. For an exact identifier supplied by the asker or a result, search the identifier unchanged and on its own. Try different words while a need is open. Use open to read an item and list to browse a source.",
-  "  Returns: up to 8 items with id, source, title, date and a short preview. \"full\": true means the preview is the whole text.",
+  "  Returns: up to 8 items with id, source, title, date and an optional preview. No preview means metadata only: open the item to read its evidence. \"full\": true means the preview is the whole text.",
   "  Limits: keyword matching, not meaning. Keep identifiers intact; try synonyms. Truncated means incomplete; refine or list. Repeats within one source return nothing new.",
   "  Related: open reads a result in full; list shows everything of one kind.",
   "  Examples: {\"query\": \"battery reserve\"}, {\"query\": \"DVT fixture owner\"}",

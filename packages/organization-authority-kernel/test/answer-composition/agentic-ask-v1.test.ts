@@ -106,6 +106,25 @@ function slackItem(ts: string, text: string, options: { channel?: string; kind?:
 }
 
 describe("agentic Ask: research loop", () => {
+  it.each(['before', 'after'] as const)('executes reads when finish appears %s open, even after a rejected finish', async order => {
+    const metadata = listedItem('launch');
+    const body = item('launch', 'The review approved launch on Tuesday.');
+    const complete: ActionSpec = { tool: 'finish' };
+    const script = scripted([
+      step([{}], [{ tool: 'list', args: { source: 'meetings' } }]),
+      finish([found(['E1'])]),
+      step([found(['E1'])], order === 'before' ? [complete, open('E1')] : [open('E1'), complete]),
+      finish([found(['E1'])]),
+      answer([{ text: 'The review approved launch on Tuesday.', evidence: ['E1'] }]),
+    ]);
+    const evidence = desk({ inventory: [metadata], open: () => [body] });
+    const result = await ask({ desk: evidence, model: script.model }).answer({ question: 'When is launch?' });
+    expect(evidence.open).toHaveBeenCalledOnce();
+    expect(script.prompt(3).opened).toEqual([expect.objectContaining({ id: 'E1', text: body.text })]);
+    expect(script.prompt(3).last_results).toEqual([expect.objectContaining({ tool: 'open', opened: ['E1'] })]);
+    expect(result.citations).toEqual([expect.objectContaining({ citation: body.citation })]);
+  });
+
   it.each(['unknown', 'constructor', '__proto__', 'tickets'])('does not broaden an unsupported search source (%s)', async source => {
     const evidence = desk();
     const script = scripted([step([{}], [{ tool: 'search', args: { query: 'launch', source } }]), finish([missing()]), finish([missing()])]);
@@ -421,6 +440,48 @@ describe("agentic Ask: research loop", () => {
     expect(result).toMatchObject({ outcome: "partial", parts: [{ status: "partial", gap: "Not found: launch owner." }] });
   });
 
+  it("keeps metadata-only search hits available for the planner to open", async () => {
+    const metadata = listedItem("launch");
+    const full = item("launch", "Launch is Tuesday.");
+    const d = desk({ search: () => [metadata], open: id => id === metadata.id ? [full] : [] });
+    const script = scripted([
+      step([{}], [search("launch")]),
+      (input: StructuredGenerationInput) => {
+        const hit = JSON.parse(input.user_prompt).last_results[0].results[0];
+        expect(hit).toMatchObject({ id: "E1", title: metadata.label });
+        expect(hit).not.toHaveProperty("preview");
+        return step([{}], [open(hit.id)]);
+      },
+      finish([found(["E1"])]),
+      answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
+    ]);
+    const result = await ask({ desk: d, model: script.model }).answer({ question: "When is launch?" });
+    expect(result).toMatchObject({ outcome: "answered", citations: [{ citation: full.citation }] });
+    expect(d.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ item: metadata.id }));
+  });
+
+  it("repairs an open action's wrong argument before executing or exhausting research", async () => {
+    const metadata = listedItem("launch");
+    const full = item("launch", "Launch is Tuesday.");
+    const d = desk({ inventory: [metadata], open: id => id === metadata.id ? [full] : [] });
+    const script = scripted([
+      step([{}], [{ tool: "list", args: { source: "meetings" } }]),
+      step([{}], [{ tool: "open", args: { query: "E1" } }]),
+      (input: StructuredGenerationInput) => {
+        expect(input.system_prompt).toContain("open requires args.id");
+        expect(JSON.parse(input.user_prompt).last_results[0].tool).toBe("list");
+        return step([{}], [open("E1")]);
+      },
+      finish([found(["E1"])]),
+      answer([{ text: "Launch is Tuesday.", evidence: ["E1"] }]),
+    ]);
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const result = await ask({ desk: d, model: script.model, audit }).answer({ question: "When is launch?" });
+    expect(result).toMatchObject({ outcome: "answered", citations: [{ citation: full.citation }] });
+    expect(d.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ item: metadata.id }));
+    expect(audit[0]).toMatchObject({ repairs: 1, fallbacks: 0, rounds: 3, model_calls: 5 });
+  });
+
   it("returns tool errors for unknown ids and invalid queries instead of failing", async () => {
     const script = scripted([
       step([{}], [open("E99"), search("!!!")]),
@@ -598,11 +659,15 @@ describe("agentic Ask: research loop", () => {
     ]);
     const evidence = desk({ search: () => passages, open: id => passages.filter(value => value.id === id) });
     await ask({ desk: evidence, model: script.model, context_tokens: 16_000 }).answer({ question: "When is launch?" });
-    // A small window cannot hold 12 opened passages of about 3 KB each; the rest shrink back to previews.
+    // A small window cannot hold 12 opened passages of about 3 KB each;
+    // other entries shrink to previews while there is remaining room.
     const shown = script.prompt(4).opened.length;
     expect(shown).toBeGreaterThan(0);
     expect(shown).toBeLessThan(12);
-    expect(script.prompt(4).seen.length).toBe(12 - shown);
+    expect(script.prompt(4).seen.length).toBeGreaterThan(0);
+    expect(script.prompt(4).seen.length).toBeLessThanOrEqual(12 - shown);
+    const shownIds = script.prompt(4).opened.map((entry: { id: string }) => entry.id);
+    expect(script.prompt(4).seen.every((entry: { id: string }) => !shownIds.includes(entry.id))).toBe(true);
   });
 });
 

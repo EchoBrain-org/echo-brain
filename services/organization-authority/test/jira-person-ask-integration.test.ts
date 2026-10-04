@@ -62,18 +62,20 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
   const verifySlack = vi.fn(async () => ({ team_id: 'TFIXTURE', enterprise_id: null, bot_user_id: 'UBOTFIXTURE', bot_id: 'BFIXTURE', app_id: 'AFIXTURE', granted_scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1, verification_evidence_sha256: canonicalSha256({ fixture: 'slack-identity' }) }));
   const audit = openAuthorityDatabase(join(state, 'authority.sqlite'), { fileMustExist: true });
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; scope: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
+    const prompt = JSON.parse(input.user_prompt) as { question: string; scope: string; last_results?: { results?: { id: string }[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
     if (prompt.scope.includes('Live tickets are unavailable')) {
       if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [], not_found: ['Jira status is unavailable.'] };
       return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: prompt.last_results?.length ? 'not_found' : 'open', evidence: [] }], notes: '' }],
         actions: [{ tool: prompt.last_results?.length ? 'finish' : 'list', args: prompt.last_results?.length ? {} : { source: 'documents' } }] };
     }
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
-    const hit = prompt.last_results?.[0]?.results?.[0]?.id;
+    const hit = prompt.opened?.[0]?.id ?? prompt.last_results?.[0]?.results?.[0]?.id;
     if (hit !== undefined) {
       const releases = audit.prepare("SELECT body_json FROM authority_person_read_decision_audit_v2 WHERE body_json LIKE '%echo-person-live-evidence-release-audit-v1%'").all();
-      expect(releases.length).toBeGreaterThan(0); // Ticket bytes reached this model only after durable release audit.
-      return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [hit] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
+      expect(releases.length).toBeGreaterThan(0); // Metadata and body each cross the durable release audit before the model.
+      return prompt.opened?.length
+        ? { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [hit] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }
+        : { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'open', args: { id: hit } }] };
     }
     return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'search', args: { query: prompt.question.includes('ECHO-1') ? 'ECHO-1' : prompt.question.includes('Friday') ? 'Friday ship' : 'ship', source: 'tickets' } }] };
   });
@@ -127,7 +129,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     const answer = validatePersonAnswerResponseV5(response.body); expect(answer.citations[0]).toMatchObject({ kind: 'ticket', citation: { ticket_id: '10001', external_scope_id: CLOUD, permalink: `${SITE}/browse/ECHO-1` } });
     const cited = answer.citations[0]!.citation; if (cited.kind !== 'ticket') throw new Error('Expected fixture ticket citation');
     expect(() => validatePersonAnswerResponseV4(response.body)).toThrow();
-    expect(generate).toHaveBeenCalledTimes(3);
+    expect(generate).toHaveBeenCalledTimes(4);
     const completed = events().find(event => event.diagnostic?.phase === 'http_request' && event.event === 'succeeded');
     expect(completed).toMatchObject({ diagnostic: { result: 'answered', counts: { ticket_retrieved_items: 1, ticket_context_items: 1, ticket_citations: 1 } } });
     expect(events()).toEqual(expect.arrayContaining([
@@ -136,7 +138,8 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     ]));
     for (const privateValue of ['When should ECHO-1 ship?', 'Ship on Friday', 'synthetic-jira-oauth-bearer', CLOUD, SITE, 'fixture-jira-account']) expect(telemetry.join('')).not.toContain(privateValue);
     const rows = audit.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').all() as { body_json: string }[];
-    const releases = rows.map(row => JSON.parse(row.body_json)).filter(row => row.kind === 'echo-person-live-evidence-release-audit-v1'); expect(releases[0].citations[0]).toMatchObject({ coordinates: { object_id: '10001' }, text_sha256: cited.text_sha256 });
+    const releases = rows.map(row => JSON.parse(row.body_json)).filter(row => row.kind === 'echo-person-live-evidence-release-audit-v1');
+    expect(releases.find(row => row.operation === 'open').citations[0]).toMatchObject({ coordinates: { object_id: '10001' }, text_sha256: cited.text_sha256 });
     for (const row of rows) { expect(row.body_json).not.toContain('Ship on Friday'); expect(row.body_json).not.toContain('synthetic-jira-oauth-bearer'); expect(row.body_json).not.toContain('jira_item_'); }
     jiraFetch.mockClear(); generate.mockClear();
     const keywords = await post('/v4/person/ask', { schema_version: 3, question: 'What does the ticket say about the Friday ship date?' });

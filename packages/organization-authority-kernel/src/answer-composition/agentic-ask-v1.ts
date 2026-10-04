@@ -433,6 +433,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
   const ticketGuidance = [
     "Live tickets (source \"ticket\") report the ticket's current title, description, owner, due date and status under the asker's connection. They are not approved meeting decisions. Distinguish their reported state from approved records and cite both when they disagree.",
     "Search also accepts source \"tickets\" to query only live tickets; omit source to search across available evidence.",
+    "Ticket search and list are discovery: use the returned summaries to choose relevant items, then open their request-owned ids before citing them. Search narrows discovery by keywords or an exact identifier; list browses the scoped collection in pages.",
     "To browse tickets, use list with {\"source\": \"tickets\", optional \"since\", \"until\"}; it returns metadata only, so open an item by its request-owned id before relying on the body. Ticket dates are creation dates. Tickets are available in global scope and in project scope only when a lead has saved a tool project mapping. Project tickets are already limited to that mapping by the server. Mine excludes tickets. Never infer a project mapping or choose a tenant, account or connection.",
   ].join("\n");
   const stepPrompt = tickets ? `${STEP_PROMPT}\n\n${ticketGuidance}` : STEP_PROMPT;
@@ -556,7 +557,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
         const result = await raceAbort(activeSignal, desk.search({ query, ...(source === undefined ? {} : { kinds: SEARCH_KINDS[source] }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
         observe(result);
-        const found = result.items.filter(item => item.text !== undefined).map(item => register(item, true));
+        const found = result.items.map(item => register(item, true));
         for (const entry of found) entry.query = query;
         searchHits += found.length;
         return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => listing(entry, true)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
@@ -823,8 +824,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           }
           steps += 1;
           merge(step.parts);
-          const finish = step.actions.length === 0 || step.actions.some(action => action.tool === "finish");
-          if (finish) {
+          // A planner can batch finish with reads. Complete those reads and let
+          // the next step observe them before evaluating a finish-only step.
+          const reads = step.actions.filter(action => action.tool !== "finish");
+          if (reads.length === 0) {
             const problems: string[] = [];
             for (const [index, part] of plan.entries()) {
               for (const need of part.needs) {
@@ -845,7 +848,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           }
           const before = { entries: entries.size, opened: [...entries.values()].filter(entry => entry.opened).length };
           results = [];
-          for (const action of step.actions) {
+          for (const action of reads) {
             assertLive();
             results.push(await run(action));
           }

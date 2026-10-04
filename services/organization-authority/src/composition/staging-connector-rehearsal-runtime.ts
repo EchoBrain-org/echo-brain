@@ -191,8 +191,7 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
   if (config.authority_url !== STAGING_AUTHORITY_ORIGIN_V1 || selection.authority_host !== authority.host ||
       selection.authority_host !== 'authority-staging.echobrain.org' || (config.slack_nango.base_url !== undefined && config.slack_nango.base_url !== 'https://api.nango.dev') ||
       (config.jira_person_live !== undefined && (config.jira_person_live.enabled !== true ||
-        config.jira_person_live.cloud_id !== profile.jira.cloud_id || config.jira_person_live.integration_id !== profile.jira.integration_key ||
-        (config.jira_person_live.project !== undefined && config.jira_person_live.project !== profile.jira.project))) ||
+        config.jira_person_live.cloud_id !== profile.jira.cloud_id || config.jira_person_live.integration_id !== profile.jira.integration_key)) ||
       config.staging_synthetic_meetings_directory !== undefined || config.staging_synthetic_owner_email !== undefined ||
       dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.api?.slack_live_runtime_factory !== undefined ||
       dependencies.person_http_runtime_factory_with_slack !== undefined ||
@@ -204,7 +203,7 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
 
 /**
  * Staging-only, owner-bound capture and live-read surface. Explicit Jira Ask
- * selection reuses the profile-bound connection and its fixed project.
+ * reuses the profile-bound connection, with its own Person/project scope.
  */
 export async function openStagingConnectorRehearsalService(
   config: OrganizationAuthorityServiceConfig,
@@ -371,12 +370,13 @@ export async function openStagingConnectorRehearsalService(
     });
     const openJira = (sessions: Parameters<NonNullable<OrganizationAuthorityServiceDependencies['person_http_runtime_factory_with_slack']>>[0], authorize_project?: PersonTicketProjectAuthorizationV1) => {
       authenticate = input => sessions.authenticateAccess(input);
+      // The rehearsal's owner/project restrictions apply to its diagnostics.
+      // Live Ask authenticates each Person and uses their own Jira connection.
       jira = openJiraPersonLiveRuntimeV1({
         ...(authorize_project === undefined ? {} : { authorize_project }),
         state_directory: config.state_directory,
-        sessions: { authenticateAccess: input => requireOwner(input.access_token) },
-        catalog_available: access_token => isActiveInitialOwnerV1(fenceDatabase!, owner, sessions.authenticateAccess({ access_token })),
-        configuration: { enabled: true, cloud_id: selected.profile.jira.cloud_id, project: selected.profile.jira.project,
+        sessions: jiraAsk === undefined ? { authenticateAccess: input => requireOwner(input.access_token) } : sessions,
+        configuration: { enabled: true, cloud_id: selected.profile.jira.cloud_id,
           integration_id: selected.profile.jira.integration_key, nango_authorization: () => config.slack_nango.secret_key },
         seams: { ...dependencies.jira, database: sidecar.database },
       });

@@ -18,8 +18,6 @@ export const JIRA_PERSON_LIVE_RELEASE_APPROVED_V1 = true;
 export interface JiraPersonLiveConfigurationV1 {
   readonly enabled: true;
   readonly cloud_id: string;
-  /** Optional fixed project selected by trusted runtime composition. */
-  readonly project?: string;
   readonly integration_id: string;
   readonly nango_authorization: () => string;
 }
@@ -42,8 +40,6 @@ export function openJiraPersonLiveRuntimeV1(options: {
   readonly configuration: JiraPersonLiveConfigurationV1;
   readonly seams?: JiraPersonLiveRuntimeSeamsV1;
   readonly authorize_project?: PersonTicketProjectAuthorizationV1;
-  /** Selecting runtime may hide grant state from people outside its rollout fence. */
-  readonly catalog_available?: (access_token: string) => boolean;
 }): OpenedJiraPersonLiveRuntimeV1 {
   if (options.configuration.enabled !== true) throw new Error('Jira live evidence is not enabled');
   const owned = options.seams?.database === undefined;
@@ -60,7 +56,6 @@ export function openJiraPersonLiveRuntimeV1(options: {
       ...(options.authorize_project === undefined ? {} : { authorize_project: options.authorize_project }),
       nango: options.seams?.nango ?? createJiraNangoV1({ integration_id: options.configuration.integration_id, authorization: options.configuration.nango_authorization, fetch: transport }),
       cloud_id: options.configuration.cloud_id,
-      ...(options.configuration.project === undefined ? {} : { project: options.configuration.project }),
       fetch: transport,
       authenticate(access_token) {
         const authorization = options.sessions.authenticateAccess({ access_token });
@@ -82,10 +77,6 @@ export function openJiraPersonLiveRuntimeV1(options: {
     return Object.freeze({
       application, connection_http: createJiraPersonConnectionHttpApplicationV1(application),
       async tools(access_token: string): Promise<readonly OrganizationPersonToolV4[]> {
-        if (options.catalog_available?.(access_token) === false) return Object.freeze([Object.freeze({
-          tool_id: 'jira', display_name: 'Jira', availability: 'unavailable', personal_status: 'unavailable',
-          external_scope_id: null, external_subject_id: null, organization_setup: null,
-        })]);
         return Object.freeze([application.tool({ access_token })]);
       },
       close() { if (owned) database.close(); },
