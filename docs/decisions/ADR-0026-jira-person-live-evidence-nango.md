@@ -10,8 +10,8 @@ component_ids:
   - CMP-ORGANIZATION-AUTHORITY
   - CMP-PERSON-CLIENT
 created_at: 2026-10-01
-reviewed_at: 2026-10-03
-reviewed_ref: 254d5ddcbdbc1c7881e7a4ba541f5383ab19af59
+reviewed_at: 2026-10-04
+reviewed_ref: 999b6297b7b5de53e5e6fe6144a65cceab45047c
 supersedes: []
 superseded_by: []
 updates:
@@ -126,9 +126,12 @@ The accepted boundary includes Nango credential custody, minimized read-decision
 audits and exact membership fences. Ordinary runtime selection requires both
 `--jira-cloud-id` and `--jira-nango-integration`. Staging may instead select
 `ECHO_STAGING_JIRA_ASK_V1=true` with its validated connector profile. That path reuses
-the initial owner's existing profile-bound grant and fixed Jira project; it does
-not create a second connection store or require a profile rewrite or state reset.
-The EC2 runtime profile selects this switch only when a connector profile exists.
+the existing connection sidecar and supports each Person's own grant. Global Ask
+has no additional project allowlist or initial-owner restriction. Project Ask
+applies its saved mapping before discovery and checks it on open and revalidation.
+The fixed-project and initial-owner restrictions remain on the separate rehearsal
+diagnostic. This requires no second connection store, profile rewrite or state
+reset. The EC2 runtime profile selects this switch only when a connector profile exists.
 
 A human configures the Nango Jira integration/OAuth application, allowed callback
 and scopes, server cloud ID and runtime credential injection. Reuse a working

@@ -44,8 +44,9 @@ to a wider search. Mine excludes Jira, and project scope excludes live Slack.
 The mapping is provider configuration in the existing Jira sidecar; it requires
 no Authority schema reset. A saved stable Jira project ID bounds searches and exact
 reads even if the Jira key changes. Concurrent edits conflict, and the app reloads
-the setting after an unconfirmed save. The existing staging profile's fixed Jira
-project remains the maximum allowed scope.
+the setting after an unconfirmed save. Global Ask can discover tickets across all
+projects visible to the asker's connected Jira account. Project Ask applies the
+saved mapping before discovery; there is no additional staging project allowlist.
 
 The equivalent CLI is `person tools project --tool jira --echo-project <id>`.
 A write also supplies `--jira-project <key>` (or `--clear`),

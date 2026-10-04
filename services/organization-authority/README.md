@@ -116,9 +116,10 @@ the release-matched Person client to sign in and run the ordinary shared
 connection commands when a connection is absent: `person tools setup --tool slack`,
 `person tools connect --tool slack`, and `person tools connect --tool jira`.
 With this profile selected, Slack setup also asks for public-channel read
-permissions on the same app; human Slack consent is still required. The staging
-profile admits Jira connection commands only for its initial owner. Granola
-continues to use the host's direct organization credential.
+permissions on the same app; human Slack consent is still required. Without live
+Jira Ask enabled, the diagnostic profile admits Jira connection commands only for
+its initial owner. Enabling live Jira Ask lets each Person connect their own
+account. Granola continues to use the host's direct organization credential.
 
 After `npm run build`, the owner Mac can run:
 
@@ -173,14 +174,15 @@ captures; it does not delete existing retained rows or deploy itself.
 
 The EC2 Compose overlay additionally selects `ECHO_STAGING_JIRA_ASK_V1=true`
 when the fixed connector profile is present. The CLI validates that profile and
-reuses its initial-owner Jira grant for global Ask, bounded to the configured Jira
-project. The profile digest and sidecar remain unchanged. Without that switch,
-the diagnostic-only behavior remains available. Explicit Jira flags must match
-the selected profile; other sites, integrations and projects fail before startup.
+reuses the existing connection sidecar for each Person's own Jira grant. Global
+Ask follows that person's Jira permissions across the connected site, without a
+fixed-project or initial-owner restriction. The profile digest and sidecar remain
+unchanged. Without that switch, the diagnostic-only behavior remains available.
+Explicit Jira flags must match the selected profile's site and integration.
 ECHO project Ask requires a lead-configured Jira mapping and the asker's own
-connection. Its mapped Jira project must also fit the profile's fixed project;
-the setting cannot widen the staging fence. Mine and unmapped projects exclude
-Jira.
+connection. The mapping filters discovery before tickets are read and remains
+checked on open and revalidation. The rehearsal's fixed project applies only to
+its diagnostic reads. Mine and unmapped projects exclude Jira.
 
 ## Initial-owner setup internals
 
