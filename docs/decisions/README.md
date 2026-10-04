@@ -47,7 +47,7 @@ separately.
 | [ADR-0023](ADR-0023-reader-scoped-upload-releases.md) | Reader-scoped upload audiences and uploader-only request IDs | accepted |
 | [ADR-0024](ADR-0024-person-list-open-and-mine-scope.md) | Person list, open by ref, and the mine scope | accepted |
 | [ADR-0025](ADR-0025-nango-holds-slack-connection-credentials.md) | Nango holds Slack connection credentials | accepted |
-| [ADR-0026](ADR-0026-jira-person-live-evidence-nango.md) | Person-bound Jira live evidence with Nango custody | proposed |
+| [ADR-0026](ADR-0026-jira-person-live-evidence-nango.md) | Person-bound Jira live evidence with Nango custody | accepted |
 | [ADR-0027](ADR-0027-rebind-lost-nango-slack-connection.md) | Rebind a lost Nango Slack connection under the same credential handle | proposed |
 | [ADR-0028](ADR-0028-broadened-layer-1-source-captures.md) | Layer 1 holds the people directory, signed record log and source captures | proposed |
 | [ADR-0029](ADR-0029-capture-and-derive-foundation.md) | Project-scoped capture and exact derivation inputs | proposed |

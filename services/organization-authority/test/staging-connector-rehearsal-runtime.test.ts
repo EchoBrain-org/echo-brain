@@ -185,6 +185,22 @@ it('refuses a Slack live-evidence factory under the staging diagnostic profile b
   expect(existsSync(join(root, 'staging-connector-rehearsal-v1'))).toBe(false);
 });
 
+it.each([
+  { cloud_id: '00000000-0000-4000-8000-000000000002' },
+  { integration_id: 'other-jira' },
+  { project: 'OTHER' },
+])('refuses Jira Ask configuration outside the fixed staging profile (%j)', async mismatch => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
+  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  const base = config(stateDirectory) as Parameters<typeof openStagingConnectorRehearsalService>[0];
+  await expect(openStagingConnectorRehearsalService({ ...base, jira_person_live: {
+    enabled: true, cloud_id: selection().profile.jira.cloud_id, integration_id: 'jira',
+    nango_authorization: () => 'not-a-live-secret', ...mismatch,
+  } }, selection())).rejects.toThrow('Staging connector rehearsal selection is invalid');
+  expect(state.apps).toEqual([]);
+  expect(existsSync(join(root, 'staging-connector-rehearsal-v1'))).toBe(false);
+});
+
 it('binds a staging-only owner surface to a lineage/profile sidecar and returns content-free receipts', async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
   const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);

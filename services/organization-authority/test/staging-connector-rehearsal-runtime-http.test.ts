@@ -12,6 +12,8 @@ import { STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/stagin
 import { readOrganizationAuthoritySetupManifest } from '../src/composition/organization-authority-setup-cli.js';
 import { readPersonOidcConfiguration } from '../src/composition/organization-authority-person-administration-cli.js';
 import { PERSON_ANSWER_PATH_V4 } from '@echo-brain/organization-api';
+import { validatePersonAnswerResponseV5 } from '@echo-brain/organization-api';
+import type { StructuredGenerationInput } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-kernel/composition/staging-authority-environment-v1';
 import { FIXTURE_CLOUD, FIXTURE_EMAIL, configuration, connectSlackAndLinkOwner, port, prepare, privateFile, providerSeams, signInOwner } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
 import { SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
@@ -28,7 +30,7 @@ function selection() {
   } };
 }
 
-it('serves owner-bound Jira connection and retained Granola capture and live-only Jira and Slack reads through staging HTTP across restart', async () => {
+it('retains Granola, refuses tool capture, and reuses the owner Jira grant for live Ask across restart', async () => {
   const root = join(realpathSync(tmpdir()), `echo-staging-connector-${randomUUID()}`); roots.push(root);
   prepare(root);
   const config = configuration(root);
@@ -78,14 +80,26 @@ it('serves owner-bound Jira connection and retained Granola capture and live-onl
     throw new Error(`unexpected remote endpoint ${url.origin}`);
   });
   const selected = selection();
+  let jiraAskEnabled = false;
+  const generate = vi.fn(async (input: StructuredGenerationInput) => {
+    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; evidence?: { id: string }[] };
+    if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    const hit = prompt.last_results?.[0]?.results?.[0]?.id;
+    return hit === undefined
+      ? { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'open', evidence: [] }], notes: '' }], actions: [{ tool: 'search', args: { query: 'ship', kinds: ['ticket'] } }] }
+      : { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [hit] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
+  });
   const profile_sha256 = canonicalSha256(selected.profile);
   privateFile(join(root, 'private', 'staging-connector-rehearsal.json'), JSON.stringify(selected.profile));
   const open = async () => openStagingConnectorRehearsalService({
     state_directory: manifest.state_directory, authority_url: STAGING_AUTHORITY_ORIGIN_V1, host: '127.0.0.1', port: await port(), worker_interval_ms: 60_000,
     oidc: oidc.configuration, client_authentication: { method: 'none' }, pkce_key_file: manifest.pkce_key_file,
     slack_nango: { secret_key: readPrivateAuthorityCredential(`file:${config.nango.secret_key_file}`), integration_key: 'slack' },
+    ...(jiraAskEnabled ? { jira_person_live: { enabled: true as const, cloud_id: FIXTURE_CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' } } : {}),
     granola_credential_file: manifest.granola_credential_file, granola_owner_email_file: manifest.granola_owner_email_file, openrouter_credential_file: manifest.llm_credential_file,
-  }, selected, { api: { oidc_provider: seams.oidc_provider }, slack: seams.slack, jira: seams.jira_person_live_seams });
+  }, selected, { api: { oidc_provider: seams.oidc_provider,
+    ...(jiraAskEnabled ? { answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } } : {}),
+  }, slack: seams.slack, jira: seams.jira_person_live_seams });
   let runtime = await open();
   let owner = '';
   let jiraAttempt = '';
@@ -174,6 +188,19 @@ it('serves owner-bound Jira connection and retained Granola capture and live-onl
       expect(sources).toEqual([{ adapter_id: 'granola-context-capture' }]);
     } finally { retained.close(); }
     expect((await post(PERSON_ANSWER_PATH_V4, { question: 'fixture' })).status).toBe(503);
+    granolaVisible = false;
+    await runtime.close();
+    jiraAskEnabled = true;
+    runtime = await open();
+    // Enabling Ask reuses the existing consent in the same profile-bound sidecar.
+    expect(await post('/v1/person/tools/jira/status', { schema_version: 1, attempt: jiraAttempt })).toMatchObject({ status: 200, body: { status: 'complete' } });
+    const custodyBeforeAsk = custodyCounts();
+    const answerResponse = await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'When should the ticket ship?' });
+    expect(answerResponse.status).toBe(200);
+    const answer = validatePersonAnswerResponseV5(answerResponse.body);
+    expect(answer.citations).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'ticket', citation: expect.objectContaining({ ticket_id: '10001' }) })]));
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(custodyCounts()).toEqual(custodyBeforeAsk);
     const control = new Database(join(manifest.state_directory, 'integrations.sqlite'));
     try { control.prepare("UPDATE organization_external_human_link_current SET current_status='revoked'").run(); } finally { control.close(); }
     const readsBeforeRevoked = slackReads.length;

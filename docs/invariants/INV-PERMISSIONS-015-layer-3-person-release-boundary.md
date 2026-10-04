@@ -8,8 +8,8 @@ component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-08-22
-reviewed_at: 2026-10-02
-reviewed_ref: 30f8e999dadca97a2a653e5fec12a1ad4107deac
+reviewed_at: 2026-10-03
+reviewed_ref: 254d5ddcbdbc1c7881e7a4ba541f5383ab19af59
 decision_ids:
   - ADR-0006
   - ADR-0007
@@ -20,9 +20,10 @@ decision_ids:
   - ADR-0022
   - ADR-0023
   - ADR-0024
+  - ADR-0026
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, and the Layer 4 request-local release and citation boundary
+enforcement_scope: Current-Person Layer 1 listing and Layer 2 exact-generation search release with project audiences and associations, the ADR-0010 related-atom projection boundary, explicit ADR-0017 transcript reads, the ADR-0024 Person list and open-by-reference paths and the mine scope of list and Ask, the ADR-0026 person-bound Jira live evidence path, and the Layer 4 request-local release and citation boundary
 ---
 
 # INV-PERMISSIONS-015: Layer 3 is the sole Authority content-release boundary
@@ -86,9 +87,17 @@ all released items and metadata, including the upcoming model input, before
 each model call and final response. Malformed output permits one repair within
 the hard budget and then a deterministic cited-evidence fallback. Unknown or
 out-of-part citations never establish support. Authorization, audit, snapshot
-and cancellation failures release no answer. The ADR-0026 ticket path
-(`POST /v4/person/ask`) is outside this enforcement scope until ADR-0026 is
-accepted.
+and cancellation failures release no answer.
+
+ADR-0026 extends this boundary to Jira live evidence on `POST /v4/person/ask`.
+The provider reads as the authenticated Person's current Jira grant. Audits commit
+only coordinates, digests and authorization commitments before releasing evidence;
+tool bodies and metadata remain request-local and never enter Layer 1 or Layer 2.
+Every later model call and final response rechecks all released evidence, the
+membership tenure, session and grant. Disconnect, replacement consent, lost
+membership, changed permissions, audit failure or cancellation releases no answer.
+Mine and unmapped ECHO projects exclude Jira. Runtime model-content capture is
+suppressed once live metadata or text enters a prompt; operational metrics remain.
 
 For ADR-0015, original-context storage remains behind a Layer 3 release port.
 Both original and approved-record citations bind the exact released evidence.
@@ -141,6 +150,9 @@ bounded Layer 3 adjacency, bounded Layer 4 calls, one request snapshot,
 request-local citation subsets, list and open allowlists, mine and project
 subsets of global, cursor binding, and answer-audit rows. The source boundary
 keeps the Layer 4 root narrow and rejects direct lower-layer imports.
+The Jira connection, audited live-reader, Agentic Ask V2 and staging HTTP suites
+also cover stale grants, revocation at the terminal audit, unsupported scopes,
+content-free logging, unchanged capture tables and reuse across restart.
 Enforcement remains partial until an exact deployed artifact completes the
 two-Person live rehearsal. Any new release path requires an accepted ADR,
 explicit enforcement expansion, and negative disclosure tests.

@@ -218,19 +218,17 @@ Only global Ask enables Jira. Mine excludes it. ECHO project scopes have no mapp
 in this slice and never fall back to global Jira; explicit ticket inventory in an
 unsupported scope is refused. There is no Jira addition to Person list/mine,
 connector catalog, settings UI or persistent ticket-open API, and no sync or
-index. Context capture exists only as the opt-in rehearsal intake.
+index. Jira capture is disabled, including in the staging rehearsal.
 
 ## Remaining human inputs and live qualification
 
-[ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md) awaits
-founder acceptance of Nango custody and the new Person release path. Acceptance
-must extend INV-PERMISSIONS-015 and review the startup gate before enablement.
-The new selecting module owns `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=false`;
-startup refuses Jira flags while that gate is closed. Fixtures supply the optional
-configuration directly and use synthetic transport. Modern Slack Nango wiring is
-preserved and exercised with Jira in the same Authority composition proof.
+[ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md) accepts
+Nango custody and the person-bound live release path, now covered by
+INV-PERMISSIONS-015. `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=true` opens the code gate;
+runtime selection remains explicit. Modern Slack Nango wiring is preserved and
+exercised with Jira in the same Authority composition proof.
 
-After acceptance, configure the Nango Cloud Jira integration and distributable
+Configure the Nango Cloud Jira integration and distributable
 Atlassian OAuth application, callback, classic read scopes, allowed origin and one
 server cloud ID. Supply the existing runtime Nango key through the reviewed custody
 mechanism, with Connect-session write, connection list/read-credentials/delete
@@ -238,8 +236,13 @@ permissions. The narrow optional startup inputs are `--jira-cloud-id` and
 `--jira-nango-integration` alongside modern Nango configuration; there are no
 retired Slack credential/configuration fields in this path.
 
+For the fixed staging connector profile, `ECHO_STAGING_JIRA_ASK_V1=true` selects
+its cloud ID, integration and bounded project. The EC2 Compose overlay supplies
+this flag only when the connector profile is selected. This reuses the existing
+owner connection sidecar across restart; do not reconnect or reset working state.
+
 Live qualification must exercise actual consent, tag discovery, refreshed token
 reads, fresh-consent reconnect, disconnect/reconnect, denied/changed issue visibility,
 account/site mismatch and abort behavior. Synthetic fixtures prove implementation
-behavior only. Real credentials, account connections, AWS and deployment remain
-outside this task. Project mappings and polished connection UI remain deferred.
+behavior only. Follow the operator playbook for deployment and account consent.
+Project mappings and polished connection UI remain deferred.

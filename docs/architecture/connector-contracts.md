@@ -153,9 +153,10 @@ and ticket fixtures; they do not call either service.
 
 Ticket evidence reaches Ask through Evidence Desk V2 and `PersonAnswerResponseV5`
 at `POST /v4/person/ask`, with the durable live-read audit. The Authority mounts
-that route only when a Jira ticket-live runtime is selected; the production CLI
-keeps Jira behind `JIRA_PERSON_LIVE_RELEASE_APPROVED_V1=false` while
-[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is proposed.
+that route only when a Jira ticket-live runtime is selected.
+[ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted;
+the CLI requires explicit Jira configuration. The staging switch instead reuses
+the fixed profile's existing owner grant and bounded project, without tool capture.
 Jira is the only live reader. The Slack reader port, `PersonSlackReaderV1`, has
 no implementation, and read status is not exposed to clients.
 

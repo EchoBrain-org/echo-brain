@@ -320,7 +320,8 @@ The explicit staging profile mounts bounded Granola capture and explicitly
 requested zero-model tool read verification.
 The existing meeting approval path remains the production path; a later startup
 profile must select a single owner for each source cursor, rather than polling
-the same source through both paths. Jira remains production-disabled. Slack bot
+the same source through both paths. Jira live Ask requires the explicit
+ADR-0026 runtime selection described below. Slack bot
 approval history is not a personal content read grant.
 
 Malformed or oversized provider items fail the bounded pull without returning a
@@ -335,10 +336,13 @@ Tool capture, change history, retained Slack snapshots and tool retention rules
 are outside the current Layer 1 scope. The existing tool capture adapters remain
 dormant library code. The rehearsal cannot select their storage paths.
 
-This cleanup changes no graph projection, enrichment, Evidence Desk, retrieval,
-Ask, release audit or Ask response schema. Jira Ask activation, project mapping
-and per-person Slack tokens remain separate work. The normal production Jira
-gate and merged capture/derive foundations are unchanged.
+The capture cleanup changes no graph projection, enrichment, Evidence Desk,
+retrieval, release audit or Ask response schema. The accepted ADR-0026 follow-up
+opens the Jira code gate and selects global live Ask on staging with
+`ECHO_STAGING_JIRA_ASK_V1=true`. It reuses the fixed profile and existing owner
+connection. The EC2 overlay enables the switch only when that profile is present.
+Project mapping and per-person Slack tokens remain separate work. The merged
+capture/derive foundations stay dormant.
 
 ## Granola provider research, verified 2026-10-01
 
