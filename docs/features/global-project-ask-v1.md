@@ -109,21 +109,39 @@ evidence still requires current access when opened.
 - Raw meeting snapshots, meetings approved with transcript sharing off, and
   pending/rejected approvals are not exposed merely because they exist in the
   shared source tables.
-- Transcript search scores every shared transcript the asker may read on each
-  query. That is sized for the current number of approved meetings, not for a
-  large archive.
+- Original-context search computes query-local corpus statistics over every
+  readable packet of the selected source kinds, including shared transcript
+  packets. This is sized for the current retained-original and approved-meeting
+  volumes, not for a large archive.
 - Ask is the agentic loop of
   [ADR-0022](../decisions/ADR-0022-agentic-ask-only.md): at most 10 research
   steps and 24 model calls within 90 s. Live model answer quality and latency
   remain separate checks.
-- Original search matches whole terms, omitting a closed English function-word
-  list, and ranks by the number of distinct matched terms, then recency and
-  stable source/ordinal tie-breaks. One search returns at most three passages
-  per document. This is not BM25, semantic matching, or exhaustive document
-  inspection. Single-word ties can favor newer incidental matches; broad
-  questions and synonyms can still miss evidence. Scoring scans eligible
-  retained rows; large-corpus latency still needs measurement. No index or
-  migration is added.
+- Original search matches whole Unicode terms, omitting a closed English
+  function-word list while preserving uppercase acronyms, and ranks stable
+  citable packets with Okapi BM25 (`k1 = 1.2`, `b = 0.75`). Statistics include
+  only the complete current readable scope and selected source kinds. Positive
+  scores tie-break by recency, source, extraction ordinal and packet ordinal.
+  The diversity cap is three ranked packets per document; packet-level counting
+  is necessary because distinct relevant windows can come from one long
+  extracted passage. This remains lexical matching: synonyms and conceptual
+  paraphrases can still miss evidence.
+- BM25 is migration-free and scans eligible note, extracted-document and
+  shared-transcript text at query time. Packet text is analyzed once per query;
+  lightweight document scan rows avoid retaining repeated immutable
+  representations, but runtime and transient memory still scale linearly with
+  readable packets and their text. The synthetic production-path proof uses
+  106 extracted passages (beyond the former 100-candidate window), verifies the
+  late rare packet is returned and citable, and completes as part of the focused
+  test suite. This is correctness evidence, not a large-archive capacity claim;
+  a future index would need reader/scope-safe statistics and invalidation rather
+  than silently imposing a scan cap. No index or migration is added here.
+  A development run measured the search call alone for the existing
+  640-passage, approximately 1.97 MiB document: 171.3 ms and an observed heap
+  increase of approximately 4.1 MB. Upload and extraction were excluded.
+  This single-run observation is neither a peak-memory measurement nor a
+  capacity or service-level guarantee; tests assert correctness and bounded
+  SQL result bytes rather than wall-time thresholds.
 - Ask does not request decision/action extraction or publish approvals. The
   requested-only analysis policy remains unchanged.
 - Professional role/title/team metadata and Undo of completed uploads or
