@@ -141,8 +141,8 @@ function deferred<T>() {
 }
 
 const pageSources = [
-  { source_id: 'knowledge-a', selector: 'handbook', kind: 'page' as const, description: 'Company handbook pages.' },
-  { source_id: 'knowledge-b', selector: 'runbooks', kind: 'page' as const, description: 'Operational runbook pages.' },
+  { source_id: 'knowledge-a', selector: 'handbook', kind: 'page' as const, description: 'Company handbook pages.', metadata_only_list: false },
+  { source_id: 'knowledge-b', selector: 'runbooks', kind: 'page' as const, description: 'Operational runbook pages.', metadata_only_list: false },
 ];
 function releasedPage(source: string, id: string): EvidenceDeskItemV2 {
   const body = `Private ${source} evidence.\n${id} establishes the EVT date.`;
