@@ -408,7 +408,7 @@ export class SlackOrganizationSetupWorkflowV1 {
     catch { return false; }
   }
 
-  /** The pending app, else the connected Nango app (a reconnect). */
+  /** The connected Nango app wins; a pending app is only for the first install. */
   private installCredential(): FoundSlackAppCredentialsV1 {
     const active = this.activeNangoBundle();
     const pending = findPendingSlackAppCredentialsV1(this.options.secrets);
@@ -417,7 +417,7 @@ export class SlackOrganizationSetupWorkflowV1 {
       this.options.secrets.remove(pending.reference);
       return active;
     }
-    const credential = pending ?? active;
+    const credential = active ?? pending;
     if (credential === undefined) throw new AuthorityOperationError("conflict", "Slack app is not set up");
     return credential;
   }

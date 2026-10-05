@@ -635,6 +635,42 @@ describe("Slack organization setup workflow v1", () => {
     expect(workflow.organizationSetup()).toBe("connected");
   });
 
+  it.each(["reconnect", "rebind"] as const)("keeps the active app authoritative during %s with an unrelated pending app", async (mode) => {
+    const f = setup();
+    const before = await f.connect();
+    seedWaitingCard(f.database);
+    const frozen = () => [
+      readActiveSlackConnectionV1(f.database),
+      f.database.prepare("SELECT * FROM organization_private_approval_pending_contracts_v2").all(),
+      f.database.prepare("SELECT * FROM organization_external_human_link_current").all(),
+    ];
+    const snapshot = frozen();
+    const bundle = findSlackAppCredentialsByReferenceSha256V1(f.secrets, before.state.credential_reference_sha256);
+    const orphan = serializeSlackAppCredentialsV1({ kind: "echo-slack-app-credentials-v1", ...EXISTING_APP, nango_connection_id: null });
+    const orphanReference = f.secrets.create(orphan);
+    if (mode === "rebind") f.connections.delete("nango-conn-1");
+
+    await expect(f.workflow.setup(SETUP_REQUEST, "owner")).resolves.toMatchObject({ app_id: "A0APP1", organization_setup: "connected" });
+    expect(f.manifest.updateApp).toHaveBeenLastCalledWith(expect.objectContaining({ app_id: "A0APP1" }));
+    const begun = await f.workflow.beginInstall({ ...BEGIN_REQUEST, request_id: `osi_${uuid(2)}` }, "owner");
+    const session = mode === "reconnect" ? f.nango.createReconnectSession : f.nango.createConnectSession;
+    expect(session).toHaveBeenLastCalledWith(expect.objectContaining({ client_id: "1234.5678", client_secret: CLIENT_SECRET }));
+    if (mode === "reconnect") {
+      expect(f.nango.createConnectSession).toHaveBeenCalledOnce();
+      finishReconnectFor(f);
+    } else {
+      expect(f.nango.createReconnectSession).not.toHaveBeenCalled();
+      f.finishConnect({ connection_id: "nango-conn-2" });
+    }
+    await expect(f.workflow.installStatus({ attempt_id: begun.attempt_id }, "owner")).resolves.toMatchObject({ status: "complete", result: { kind: "reconnected" } });
+    expect(frozen()).toEqual(snapshot);
+    expect(findSlackAppCredentialsByReferenceSha256V1(f.secrets, before.state.credential_reference_sha256)).toEqual({
+      ...bundle, credentials: { ...bundle.credentials, nango_connection_id: mode === "reconnect" ? "nango-conn-1" : "nango-conn-2" },
+    });
+    expect(f.secrets.read(orphanReference)).toBe(orphan);
+    expect(f.manifest.createApp).toHaveBeenCalledOnce();
+  });
+
   it("refuses a reconnect that lands in a different team, then reconnects to the original one with the same state hash", async () => {
     const f = setup();
     const { workflow, database } = f;
