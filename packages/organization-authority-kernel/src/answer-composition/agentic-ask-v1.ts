@@ -444,7 +444,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
     ...(!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine' ? [] : (options.desk.live_sources ?? []).filter(source => source.source === 'ticket').map(source => ({ source: 'tickets' as const, description: 'Live work items: discover summaries with search or list, then open selected items for their bodies and current state.', tool_id: source.tool_id }))),
   ]);
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
-  const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
+  const context = (day: string) => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: day });
   const ticketGuidance = [
     "Live tickets (source \"ticket\") report the ticket's current title, description, owner, due date and status under the asker's connection. They are not approved meeting decisions. Distinguish their reported state from approved records and cite both when they disagree.",
     "Search also accepts source \"tickets\" to query only live tickets; omit source to search across available evidence.",
@@ -459,6 +459,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
     async answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4 | PersonAnswerResponseV5> {
       if (questionText(input.question) === null) throw new AgenticAskOutputErrorV1("question is invalid");
       const startedAt = now();
+      const requestDay = today();
       const deadline = startedAt + AGENTIC_ASK_DEADLINE_MS_V1;
       const terminalAbort = new AbortController();
       const activeSignal = input.signal === undefined ? terminalAbort.signal : AbortSignal.any([input.signal, terminalAbort.signal]);
@@ -629,7 +630,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         return admit === undefined ? apply() : admit(apply);
       };
       const list = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
-        const normalized = normalizeListArgs(args, today(), tickets);
+        const normalized = normalizeListArgs(args, requestDay, tickets);
         if ("error" in normalized) return { tool: "list", args, error: normalized.error };
         const { notes, status, owner, ...request } = normalized;
         const key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
@@ -739,7 +740,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         const tasks = actions.map((action, index) => {
           let key: string | undefined;
           if (action.tool === 'list') {
-            const normalized = normalizeListArgs(action.args, today(), tickets);
+            const normalized = normalizeListArgs(action.args, requestDay, tickets);
             if (!('error' in normalized)) {
               const { notes: _notes, status, owner, ...request } = normalized;
               key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
@@ -970,7 +971,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           assertLive();
           // Leave room for the answer call and its possible repair.
           if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) break;
-          const header = { question: input.question, ...context(), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
+          const header = { question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
           const pad = scratchpad(stepBudget - bytes(JSON.stringify({ ...header, opened: [], seen: [] })));
           researchPromptEntries = pad.read;
           const user = { ...header, opened: pad.opened, seen: pad.seen };
@@ -1070,7 +1071,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
           selectedTicketCount = evidence.filter(entry => entry.item.citation.kind === "ticket").length;
           const user = {
-            question: input.question, ...context(), scope, source_catalog: sourceCatalog,
+            question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog,
             // Working hypotheses are not user requirements or evidence. The
             // writer assesses the original question against released text.
             evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),

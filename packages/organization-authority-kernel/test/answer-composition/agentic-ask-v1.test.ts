@@ -123,18 +123,22 @@ describe("agentic Ask: research loop", () => {
     });
     const script = scripted([
       step([{}], [
-        { tool: 'list', args: { source: 'meetings' } },
-        { tool: 'list', args: { source: 'documents' } },
-        { tool: 'list', args: { source: 'meetings' } },
+        { tool: 'list', args: { source: 'meetings', since: '7d' } },
+        { tool: 'list', args: { source: 'documents', since: '7d' } },
+        { tool: 'list', args: { source: 'meetings', since: '7d' } },
       ]),
       finish([found(['E1', 'E2', 'E3'])]),
       answer([{ text: 'All three records found.', evidence: ['E1', 'E2', 'E3'] }]),
     ]);
-    const pending = ask({ desk: evidence, model: script.model }).answer({ question: 'Which records exist?' });
+    const today = vi.fn().mockReturnValueOnce('2026-10-05').mockReturnValue('2026-10-06');
+    const pending = createAgenticAskV1({ desk: evidence, model: script.model, generation, audit: { append: () => undefined }, today }).answer({ question: 'Which records exist?' });
     try {
       await vi.waitFor(() => expect(calls.map(call => call.source)).toEqual(['meeting', 'document']), { timeout: 500, interval: 5 });
     } finally { releaseMeeting(); }
     await expect(pending).resolves.toMatchObject({ outcome: 'answered' });
+    expect(today).toHaveBeenCalledOnce();
+    expect(new Set(calls.map(call => call.since)).size).toBe(1);
+    expect(script.inputs.every(input => JSON.parse(input.user_prompt).today === '2026-10-05')).toBe(true);
     expect(calls.map(call => [call.source, call.cursor])).toEqual([['meeting', undefined], ['document', undefined], ['meeting', 'next-page']]);
     expect(script.prompt(1).last_results.map((value: { items: { id: string; title: string }[] }) => value.items.map(entry => [entry.id, entry.title])))
       .toEqual([[['E1', 'Meeting first']], [['E2', 'Meeting document']], [['E3', 'Meeting second']]]);
