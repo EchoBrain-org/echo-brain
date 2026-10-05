@@ -84,6 +84,8 @@ export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 8;
 export const AGENTIC_ASK_LIST_PAGE_V1 = 25;
 export const AGENTIC_ASK_LIST_FETCH_V1 = 50;
 export const AGENTIC_ASK_PREVIEW_CHARS_V1 = 240;
+/** Complete released packets admitted directly from search/list; larger bodies require open. */
+export const AGENTIC_ASK_PASSAGE_BYTES_V1 = 3 * 1024;
 /** Context items an `open` may admit beyond its anchor (a Slack thread returns up to 20 replies). */
 export const AGENTIC_ASK_OPEN_EXTRA_ITEMS_V1 = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
@@ -203,6 +205,8 @@ type Entry = {
   query?: string;
 };
 type ToolResult = Readonly<Record<string, unknown>>;
+/** A completed desk read waits here until earlier planned reads have updated state. */
+type OrderedAdmission = (apply: () => ToolResult) => Promise<ToolResult>;
 /** Code-owned plan state. A need leaves the plan only by being marked found or not_found. */
 type NeedState = { readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
 type PartState = { readonly question: string; notes: string; readonly needs: NeedState[] };
@@ -471,11 +475,17 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           options.on_stage(Object.freeze({ failure_class: null, http_status: null, generation_usage: null, retrieval: null, ...event, elapsed_ms: Math.max(0, Math.round(event.elapsed_ms)) }));
         } catch { /* observation only */ }
       };
-      /** Desk calls are timed so the journey can split research into desk and model time. */
+      /** Research desk time is wall time: overlapping reads occupy one interval. */
+      let activeResearchDeskCalls = 0;
+      let researchDeskStartedAt = 0;
       const timed = <T>(operation: () => Promise<T>): Promise<T> => {
-        const started = now();
-        const settle = () => { if (phase === "research") deskMs += Math.max(0, now() - started); };
-        return operation().then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
+        const research = phase === "research";
+        if (research && activeResearchDeskCalls++ === 0) researchDeskStartedAt = now();
+        const settle = () => {
+          if (!research || --activeResearchDeskCalls !== 0) return;
+          deskMs += Math.max(0, now() - researchDeskStartedAt);
+        };
+        return Promise.resolve().then(() => { assertLive(); return operation(); }).then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
       };
       const desk: EvidenceDeskPortV2 = Object.freeze({
         scope: options.desk.scope,
@@ -532,17 +542,16 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         for (const receipt of result.receipt_digests) if (!receipts.includes(receipt)) receipts.push(receipt);
       };
       /** Registers an item and returns its entry. Text only ever upgrades an entry. */
-      const register = (item: EvidenceDeskItemV2, fullIfShort: boolean): Entry => {
+      const register = (item: EvidenceDeskItemV2): Entry => {
         const existing = entries.get(item.id);
         touch += 1;
         if (existing !== undefined) {
           if (item.text !== undefined && existing.item.text === undefined) { existing.item = item; evidenceNovelty += 1; }
-          if (fullIfShort && existing.item.text !== undefined && existing.item.text.length <= AGENTIC_ASK_PREVIEW_CHARS_V1) existing.full = true;
           existing.touched = touch;
           return existing;
         }
         const short = `E${entries.size + 1}`;
-        const entry: Entry = { short, item, full: fullIfShort && item.text !== undefined && item.text.length <= AGENTIC_ASK_PREVIEW_CHARS_V1, opened: false, touched: touch };
+        const entry: Entry = { short, item, full: false, opened: false, touched: touch };
         evidenceNovelty += 1;
         entries.set(item.id, entry); byShort.set(short, item.id);
         return entry;
@@ -557,13 +566,11 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at }),
         ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
       });
-      const listing = (entry: Entry, withPreview: boolean): Record<string, unknown> => ({
-        ...describe(entry),
-        ...(withPreview && entry.item.text !== undefined ? { preview: entry.full ? preview(entry.item.text) : queryPreview(entry.item.text, entry.query), full: entry.full } : {}),
-      });
+      // Tool results carry discovery metadata. Bodies appear once, in the budgeted scratchpad.
+      const listing = (entry: Entry): Record<string, unknown> => describe(entry);
 
       // ---- tools ---------------------------------------------------------
-      const search = async (args: StepArgs): Promise<ToolResult> => {
+      const search = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
         const query = normalizeQuery(args.query);
         if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
         const source = readSource(args.source);
@@ -571,14 +578,17 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         if (source === 'ticket' && options.desk.ticket_available === false) return { tool: 'search', args, error: 'Live tickets are unavailable in this scope for this asker' };
         if (searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase())) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
         searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
-        const result = await raceAbort(activeSignal, desk.search({ query, ...(source === undefined ? {} : { kinds: SEARCH_KINDS[source] }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
-        observe(result);
-        researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete: !result.truncated && result.notice === undefined });
-        retrievalProgress += 1;
-        const found = result.items.map(item => register(item, true));
-        for (const entry of found) entry.query = query;
-        searchHits += found.length;
-        return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => listing(entry, true)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
+        const result = await raceAbort(signal, desk.search({ query, ...(source === undefined ? {} : { kinds: SEARCH_KINDS[source] }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal }));
+        const apply = () => {
+          observe(result);
+          researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete: !result.truncated && result.notice === undefined });
+          retrievalProgress += 1;
+          const found = result.items.map(item => register(item));
+          for (const entry of found) entry.query = query;
+          searchHits += found.length;
+          return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => listing(entry)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
+        };
+        return admit === undefined ? apply() : admit(apply);
       };
       /** Models sometimes pass a title instead of an id; resolve it only when a seen title matches. */
       const entryByTitle = (raw: string): Entry | undefined => {
@@ -590,32 +600,35 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         });
         return matches.find(entry => !entry.opened) ?? matches[0];
       };
-      const open = async (args: StepArgs): Promise<ToolResult> => {
+      const open = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
         const raw = args.id ?? "";
         const entry = entryOf(raw) ?? entryByTitle(raw);
         if (entry === undefined) return { tool: "open", args, error: "unknown id; pass an id such as E4 from your scratchpad" };
         let result: EvidenceDeskResultV2;
-        try { result = await raceAbort(activeSignal, desk.open({ item: entry.item.id, neighbours: AGENTIC_ASK_OPEN_NEIGHBOURS_V1, signal: activeSignal })); }
+        try { result = await raceAbort(signal, desk.open({ item: entry.item.id, neighbours: AGENTIC_ASK_OPEN_NEIGHBOURS_V1, signal })); }
         catch (error) {
           const refusal = toolRefusal(error);
           if (refusal === null) throw error;
           return { tool: "open", id: entry.short, error: refusal };
         }
-        observe(result);
-        const anchor = result.items.find(item => item.id === entry.item.id && item.text !== undefined);
-        const others = result.items.filter(item => item.id !== entry.item.id && item.text !== undefined);
-        const admitted: Entry[] = [];
-        let used = 0;
-        for (const item of anchor === undefined ? others : [anchor, ...others]) {
-          if (admitted.length > AGENTIC_ASK_OPEN_EXTRA_ITEMS_V1 || (admitted.length > 0 && used + bytes(item.text) > AGENTIC_ASK_OPEN_BYTES_V1)) break;
-          const opened = register(item, false);
-          if (!opened.full || !opened.opened) { retrievalProgress += 1; evidenceNovelty += 1; }
-          opened.full = true; opened.opened = true; used += bytes(item.text);
-          admitted.push(opened);
-        }
-        return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+        const apply = () => {
+          observe(result);
+          const anchor = result.items.find(item => item.id === entry.item.id && item.text !== undefined);
+          const others = result.items.filter(item => item.id !== entry.item.id && item.text !== undefined);
+          const admitted: Entry[] = [];
+          let used = 0;
+          for (const item of anchor === undefined ? others : [anchor, ...others]) {
+            if (admitted.length > AGENTIC_ASK_OPEN_EXTRA_ITEMS_V1 || (admitted.length > 0 && used + bytes(item.text) > AGENTIC_ASK_OPEN_BYTES_V1)) break;
+            const opened = register(item);
+            if (!opened.full || !opened.opened) { retrievalProgress += 1; evidenceNovelty += 1; }
+            opened.opened = true; used += bytes(item.text);
+            admitted.push(opened);
+          }
+          return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+        };
+        return admit === undefined ? apply() : admit(apply);
       };
-      const list = async (args: StepArgs): Promise<ToolResult> => {
+      const list = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
         const normalized = normalizeListArgs(args, today(), tickets);
         if ("error" in normalized) return { tool: "list", args, error: normalized.error };
         const { notes, status, owner, ...request } = normalized;
@@ -630,47 +643,129 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           state = { args: stateArgs, items: [], cursor: undefined, fetched: false, shown: 0, truncated: false, available: true };
           lists.set(key, state);
         }
+        const currentState = state;
+        let result: EvidenceDeskResultV2 | undefined;
         const before = { cursor: state.cursor, shown: state.shown, fetched: state.fetched };
         if (state.shown >= state.items.length && (!state.fetched || state.cursor !== undefined)) {
-          const deskInput: EvidenceDeskListInputV2 = { ...request, limit: AGENTIC_ASK_LIST_FETCH_V1, ...(state.cursor === undefined ? {} : { cursor: state.cursor }), signal: activeSignal };
-          let result: EvidenceDeskResultV2;
-          try { result = await raceAbort(activeSignal, desk.list(deskInput)); }
+          const deskInput: EvidenceDeskListInputV2 = { ...request, limit: AGENTIC_ASK_LIST_FETCH_V1, ...(state.cursor === undefined ? {} : { cursor: state.cursor }), signal };
+          try { result = await raceAbort(signal, desk.list(deskInput)); }
           catch (error) {
             const refusal = toolRefusal(error);
             if (refusal === null) throw error;
             return { tool: "list", args, error: refusal };
           }
-          observe(result);
-          state.available = state.available && result.notice === undefined;
-          if (!state.fetched || result.next_cursor !== state.cursor) retrievalProgress += 1;
-          state.fetched = true; state.cursor = result.next_cursor; state.truncated = result.truncated;
-          // A status filter applies only where an item records a status; approved actions usually record owner and
-          // due date but not completion, so an item without a status is kept (never silently dropped as "not open").
-          const statusOf = (item: EvidenceDeskItemV2) => item.attributes?.status === undefined ? null : statusGroup(item.attributes.status);
-          const wanted = owner?.toLowerCase().split(/\s+/u).filter(Boolean) ?? [];
-          const ownerMatches = (item: EvidenceDeskItemV2) => {
-            const recorded = item.attributes?.owner?.toLowerCase();
-            return recorded !== undefined && wanted.every(part => recorded.includes(part));
-          };
-          state.items.push(...result.items.filter(item => (status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item))));
-          if (status !== undefined && result.items.some(item => item.attributes?.status === undefined)) state.note = "some items do not record open or done; they are included";
-          if (owner !== undefined && state.items.length === 0 && result.items.length > 0) state.note = `no listed item records ${owner} as owner; owners shown are exact names from the records`;
         }
-        const page = state.items.slice(state.shown, state.shown + AGENTIC_ASK_LIST_PAGE_V1).map(item => register(item, true));
-        state.shown += page.length;
-        if (page.length > 0) retrievalProgress += 1;
-        const more = state.shown < state.items.length || state.cursor !== undefined;
-        const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
-          request.channel === undefined && request.since === undefined && request.until === undefined;
-        if (unfiltered && state.available && !more && !state.truncated && state.items.length === 0) exhaustivelyEmptySources.add(request.source);
-        if (!before.fetched || before.shown !== state.shown || before.cursor !== state.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: state.available && !more && !state.truncated });
-        const allNotes = [...notes, ...(state.note === undefined ? [] : [state.note]), ...(page.length === 0 ? ["nothing more to list"] : []), ...(!more && state.truncated ? ["more items exist than list can show; use search"] : [])];
-        return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => listing(entry, entry.item.text !== undefined)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
+        const apply = () => {
+          if (result !== undefined) {
+            observe(result);
+            currentState.available = currentState.available && result.notice === undefined;
+            if (!currentState.fetched || result.next_cursor !== currentState.cursor) retrievalProgress += 1;
+            currentState.fetched = true; currentState.cursor = result.next_cursor; currentState.truncated = result.truncated;
+            // A status filter applies only where an item records a status; approved actions usually record owner and
+            // due date but not completion, so an item without a status is kept (never silently dropped as "not open").
+            const statusOf = (item: EvidenceDeskItemV2) => item.attributes?.status === undefined ? null : statusGroup(item.attributes.status);
+            const wanted = owner?.toLowerCase().split(/\s+/u).filter(Boolean) ?? [];
+            const ownerMatches = (item: EvidenceDeskItemV2) => {
+              const recorded = item.attributes?.owner?.toLowerCase();
+              return recorded !== undefined && wanted.every(part => recorded.includes(part));
+            };
+            currentState.items.push(...result.items.filter(item => (status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item))));
+            if (status !== undefined && result.items.some(item => item.attributes?.status === undefined)) currentState.note = "some items do not record open or done; they are included";
+            if (owner !== undefined && currentState.items.length === 0 && result.items.length > 0) currentState.note = `no listed item records ${owner} as owner; owners shown are exact names from the records`;
+          }
+
+          const page = currentState.items.slice(currentState.shown, currentState.shown + AGENTIC_ASK_LIST_PAGE_V1).map(item => register(item));
+          currentState.shown += page.length;
+          if (page.length > 0) retrievalProgress += 1;
+          const more = currentState.shown < currentState.items.length || currentState.cursor !== undefined;
+          const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
+            request.channel === undefined && request.since === undefined && request.until === undefined;
+          if (unfiltered && currentState.available && !more && !currentState.truncated && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
+          if (!before.fetched || before.shown !== currentState.shown || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: currentState.available && !more && !currentState.truncated });
+          const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...(page.length === 0 ? ["nothing more to list"] : []), ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : [])];
+          return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => listing(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
+        };
+        return admit === undefined ? apply() : admit(apply);
       };
-      const run = async (action: StepAction): Promise<ToolResult> => {
-        if (action.tool === "search") return search(action.args);
-        if (action.tool === "open") return open(action.args);
-        return list(action.args);
+      const run = async (action: StepAction, admit?: OrderedAdmission, signal?: AbortSignal): Promise<ToolResult> => {
+        if (action.tool === "search") return search(action.args, admit, signal);
+        if (action.tool === "open") return open(action.args, admit, signal);
+        return list(action.args, admit, signal);
+      };
+      /**
+       * Reads planned together have no model-visible dependency. Start their
+       * I/O together, then apply completed results in plan order so evidence
+       * ids, receipts and the next prompt stay deterministic. Only repeated
+       * lists with the same normalized selection depend on an earlier read.
+       */
+      const runReads = async (actions: readonly StepAction[]): Promise<readonly ToolResult[]> => {
+        const batchAbort = new AbortController();
+        const signal = AbortSignal.any([activeSignal, batchAbort.signal]);
+        let next = 0;
+        let stopped = false;
+        let failure: unknown;
+        const pending = new Map<number, { readonly apply: () => ToolResult; readonly resolve: (value: ToolResult) => void; readonly reject: (reason: unknown) => void }>();
+        const skipped = new Set<number>();
+        const advance = () => {
+          while (!stopped) {
+            const entry = pending.get(next);
+            if (entry === undefined) {
+              if (!skipped.delete(next)) return;
+              next += 1;
+              continue;
+            }
+            pending.delete(next); next += 1;
+            try { signal.throwIfAborted(); assertLive(); entry.resolve(entry.apply()); } catch (error) { stopped = true; failure = error; batchAbort.abort(error); entry.reject(error); }
+          }
+          for (const entry of pending.values()) entry.reject(failure);
+          pending.clear();
+        };
+        const admit = (index: number): OrderedAdmission => apply => new Promise<ToolResult>((resolve, reject) => {
+          if (stopped) { reject(failure); return; }
+          pending.set(index, { apply, resolve, reject });
+          advance();
+        });
+        const skip = (index: number) => {
+          if (stopped || index < next) return;
+          skipped.add(index); advance();
+        };
+        const fail = (error: unknown) => {
+          if (stopped) return;
+          stopped = true; failure = error; batchAbort.abort(error);
+          for (const entry of pending.values()) entry.reject(error);
+          pending.clear();
+        };
+        const listTasks = new Map<string, Promise<ToolResult>>();
+        const tasks = actions.map((action, index) => {
+          let key: string | undefined;
+          if (action.tool === 'list') {
+            const normalized = normalizeListArgs(action.args, today(), tickets);
+            if (!('error' in normalized)) {
+              const { notes: _notes, status, owner, ...request } = normalized;
+              key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
+            }
+          }
+          const previous = key === undefined ? undefined : listTasks.get(key);
+          const task = (async () => {
+            try {
+              if (previous !== undefined) await previous;
+              signal.throwIfAborted(); assertLive();
+              const value = await run(action, admit(index), signal);
+              skip(index);
+              return value;
+            } catch (error) {
+              fail(error);
+              throw error;
+            }
+          })();
+          if (key !== undefined) listTasks.set(key, task);
+          return task;
+        });
+        const settled = await Promise.allSettled(tasks);
+        if (stopped) throw failure;
+        const rejection = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+        if (rejection !== undefined) throw rejection.reason;
+        return Object.freeze(settled.map(result => (result as PromiseFulfilledResult<ToolResult>).value));
       };
 
       // ---- plan (parts and needs) -------------------------------------------
@@ -711,30 +806,40 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       // ---- scratchpad ------------------------------------------------------
       const citable = (short: string): boolean => entryOf(short)?.full === true;
       const citedShorts = () => new Set(plan.flatMap(part => part.needs.flatMap(need => need.evidence)).filter(citable));
-      /** Opened full text first (cited, then most recent), then previews of everything else, within the context budget. */
+      let researchPromptEntries: readonly Entry[] = [];
+      /** Exact released bodies first when opened or packet-sized; previews are always explicitly incomplete. */
       const scratchpad = (budget: number) => {
         const cited = citedShorts();
         const openedEntries = [...entries.values()].filter(entry => entry.opened && entry.item.text !== undefined)
           .sort((left, right) => Number(cited.has(right.short)) - Number(cited.has(left.short)) || right.touched - left.touched);
-        const shown: Record<string, unknown>[] = []; const shownIds = new Set<string>(); let used = 0;
+        const shown: Record<string, unknown>[] = []; const shownIds = new Set<string>(); const read: Entry[] = []; let used = 0;
         for (const entry of openedEntries) {
-          const cost = bytes(entry.item.text) + 200;
+          const value = { ...describe(entry), text: entry.item.text };
+          const cost = bytes(JSON.stringify(value)) + 1;
           if (used + cost > budget) continue;
           used += cost; shownIds.add(entry.short);
-          shown.push({ ...describe(entry), text: entry.item.text });
+          shown.push(value); read.push(entry);
         }
         const seen: Record<string, unknown>[] = [];
         const rest = [...entries.values()].filter(entry => !shownIds.has(entry.short))
           .sort((left, right) => Number(cited.has(right.short)) - Number(cited.has(left.short)) || right.touched - left.touched);
         for (const entry of rest) {
           if (seen.length >= MAX_SEEN_ENTRIES) break;
-          const value = listing(entry, true);
-          const cost = bytes(JSON.stringify(value));
-          if (used + cost > budget) break;
+          const text = entry.item.text;
+          let value: Record<string, unknown> = text !== undefined && bytes(text) <= AGENTIC_ASK_PASSAGE_BYTES_V1
+            ? { ...describe(entry), text, full: true }
+            : { ...describe(entry), ...(text === undefined ? {} : { preview: queryPreview(text, entry.query), full: false }) };
+          let cost = bytes(JSON.stringify(value)) + 1;
+          if (used + cost > budget && text !== undefined) {
+            value = { ...describe(entry), preview: queryPreview(text, entry.query), full: false };
+            cost = bytes(JSON.stringify(value)) + 1;
+          }
+          if (used + cost > budget) continue;
+          if (value.full === true) read.push(entry);
           used += cost; seen.push(value);
         }
         seen.sort((left, right) => Number(String(left.id).slice(1)) - Number(String(right.id).slice(1)));
-        return { opened: shown, seen };
+        return { opened: shown, seen, read };
       };
       const liveInPrompt = () => [...entries.values()].some(entry => ["slack_message", "ticket"].includes(entry.item.citation.kind));
 
@@ -756,6 +861,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         calls += 1;
         if (recovery) repairs += 1;
         const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: OUTPUT_TOKENS[role], timeout_ms: Math.max(1, Math.floor(Math.min(options.generation.timeout_ms, timeoutMs, remaining()))), signal: activeSignal });
+        // Only an admitted research call makes a complete body read. Retrieval,
+        // opening, and scratchpad construction alone cannot satisfy a need.
+        if (role === 'step') for (const entry of researchPromptEntries) {
+          if (!entry.full) evidenceNovelty += 1;
+          entry.full = true;
+        }
         invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));
         // Live-provider evidence must never reach runtime content capture.
         const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -846,7 +957,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
               observe(opened);
               const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
               if (exact === undefined || used + bytes(exact.text) > stepBudget / 2) continue;
-              const entry = register(exact, false); entry.full = true; entry.opened = true; used += bytes(exact.text);
+              const entry = register(exact); entry.opened = true; used += bytes(exact.text);
             }
           }
         }
@@ -860,10 +971,11 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           // Leave room for the answer call and its possible repair.
           if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) break;
           const header = { question: input.question, ...context(), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
-          const pad = scratchpad(stepBudget - bytes(JSON.stringify(header)));
+          const pad = scratchpad(stepBudget - bytes(JSON.stringify({ ...header, opened: [], seen: [] })));
+          researchPromptEntries = pad.read;
           const user = { ...header, opened: pad.opened, seen: pad.seen };
           const openIds = [...entries.values()].map(entry => entry.short);
-          const finishAvailable = researchObservations.length > 0 || [...entries.values()].some(entry => entry.full);
+          const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
           const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable);
           let step: Step;
           try {
@@ -915,11 +1027,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           }
           const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
           const before = hadCitableEvidence ? evidenceNovelty : retrievalProgress;
-          results = [];
-          for (const action of reads) {
-            assertLive();
-            results.push(await run(action));
-          }
+          results = [...await runReads(reads)];
           const catalogIsExhaustivelyEmpty = entries.size === 0 && sourceCatalog.length > 0 && sourceCatalog.every(source => {
             const normalized = readSource(source.source);
             return normalized !== undefined && exhaustivelyEmptySources.has(normalized);
