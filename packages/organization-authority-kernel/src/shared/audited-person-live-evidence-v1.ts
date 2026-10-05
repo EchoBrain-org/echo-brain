@@ -74,6 +74,12 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
   const stored = new Map<string, { readonly handle: string; readonly citation: C }>();
   const released = new Map<string, C>();
   const cursors = new Map<string, { readonly provider: string; readonly selection: string }>();
+  // Audit is asynchronous. Reserve request-owned identifiers before it starts
+  // so concurrent releases cannot each admit themselves against the same stale
+  // capacity snapshot.
+  const reservedStored = new Map<string, number>();
+  const reservedReleased = new Map<string, number>();
+  let reservedCursors = 0;
   let cursorSequence = 0;
   const requestId = randomBytes(16).toString('hex');
   const current = (signal?: AbortSignal): void => {
@@ -153,8 +159,28 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     const prepared = page.items.map(prepare);
     const ids = prepared.map(value => `live_${canonicalSha256({ request_id: requestId, binding, kind: value.citation.kind, coordinates: value.coordinates }).slice(7)}`);
     if (new Set(ids).size !== ids.length) invalidOutput();
-    if (new Set([...released.keys(), ...prepared.map(value => canonicalSha256(value.citation))]).size > 512 ||
-        new Set([...stored.keys(), ...ids]).size > 512 || cursors.size >= 512) invalidOutput();
+    const citationKeys = prepared.map(value => canonicalSha256(value.citation));
+    const reserve = () => {
+      if (new Set([...released.keys(), ...reservedReleased.keys(), ...citationKeys]).size > 512 ||
+          new Set([...stored.keys(), ...reservedStored.keys(), ...ids]).size > 512 ||
+          cursors.size + reservedCursors >= 512) invalidOutput();
+      const heldStored = ids.filter(id => !stored.has(id));
+      const heldReleased = citationKeys.filter(key => !released.has(key));
+      for (const id of heldStored) reservedStored.set(id, (reservedStored.get(id) ?? 0) + 1);
+      for (const key of heldReleased) reservedReleased.set(key, (reservedReleased.get(key) ?? 0) + 1);
+      if (nextCursor !== undefined) reservedCursors += 1;
+      return () => {
+        for (const id of heldStored) {
+          const remaining = reservedStored.get(id)! - 1;
+          if (remaining === 0) reservedStored.delete(id); else reservedStored.set(id, remaining);
+        }
+        for (const key of heldReleased) {
+          const remaining = reservedReleased.get(key)! - 1;
+          if (remaining === 0) reservedReleased.delete(key); else reservedReleased.set(key, remaining);
+        }
+        if (nextCursor !== undefined) reservedCursors -= 1;
+      };
+    };
     const nextProviderCursor = page.next_cursor;
     const truncated = page.truncated || nextProviderCursor !== undefined;
     const nextCursor = nextProviderCursor === undefined ? undefined : `live_cursor_${requestId}_${++cursorSequence}`;
@@ -169,18 +195,23 @@ export function createAuditedPersonLiveEvidenceSourceV1<C extends PersonLiveEvid
     });
     if (canonicalJsonBytes(withReceipt(`sha256:${'0'.repeat(64)}`)).byteLength > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1) invalidOutput();
     current(signal);
-    const receipt = await safeCall(() => audit.record(Object.freeze({ schema_version: 1, binding, operation, coordinates: Object.freeze(prepared.map(value => value.coordinates)), value_digests: Object.freeze(prepared.map(({ handle: _handle, coordinates: _coordinates, ...value }) => canonicalSha256(value))), citations: Object.freeze(prepared.map(value => value.citation)) })), signal);
-    if (typeof receipt !== 'string' || !DIGEST.test(receipt)) throw new AuthorityOperationError('unavailable', 'Live evidence release receipt is invalid');
-    current(signal);
-    const result = withReceipt(receipt);
-    // All audited citations remain tracked, including overwritten inventory
-    // items and pages later omitted by a composing desk's result limit.
-    for (let i = 0; i < prepared.length; i += 1) {
-      stored.set(ids[i]!, { handle: prepared[i]!.handle, citation: prepared[i]!.citation });
-      released.set(canonicalSha256(prepared[i]!.citation), prepared[i]!.citation);
+    const releaseReservation = reserve();
+    try {
+      const receipt = await safeCall(() => audit.record(Object.freeze({ schema_version: 1, binding, operation, coordinates: Object.freeze(prepared.map(value => value.coordinates)), value_digests: Object.freeze(prepared.map(({ handle: _handle, coordinates: _coordinates, ...value }) => canonicalSha256(value))), citations: Object.freeze(prepared.map(value => value.citation)) })), signal);
+      if (typeof receipt !== 'string' || !DIGEST.test(receipt)) throw new AuthorityOperationError('unavailable', 'Live evidence release receipt is invalid');
+      current(signal);
+      const result = withReceipt(receipt);
+      // All audited citations remain tracked, including overwritten inventory
+      // items and pages later omitted by a composing desk's result limit.
+      for (let i = 0; i < prepared.length; i += 1) {
+        stored.set(ids[i]!, { handle: prepared[i]!.handle, citation: prepared[i]!.citation });
+        released.set(citationKeys[i]!, prepared[i]!.citation);
+      }
+      if (nextCursor !== undefined) cursors.set(nextCursor, { provider: nextProviderCursor!, selection: selection! });
+      return result;
+    } finally {
+      releaseReservation();
     }
-    if (nextCursor !== undefined) cursors.set(nextCursor, { provider: nextProviderCursor!, selection: selection! });
-    return result;
   };
 
   return Object.freeze({

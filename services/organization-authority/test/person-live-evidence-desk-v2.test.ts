@@ -19,7 +19,7 @@ function mixedFixture() {
   const messages: PersonLiveEvidenceItemV1<PersonSlackMessageCitationV1>[] = [1, 2, 3].map(index => ({ id: `slack-${index}`, kind: 'slack_message', label: '#launch', text: `Launch message ${index}`, visibility: 'team', receipt_sha256: receipt('slack'), citation: { kind: 'slack_message', team_id: 'T0001', channel_id: 'C0001', message_ts: `1790966400.00000${index}`, permalink: `https://fixture.slack.com/archives/C0001/p179096640000000${index}`, text_sha256: receipt(`slack-${index}`) } }));
   const pages: PersonLiveEvidenceItemV1<PersonPageCitationV1>[] = [1, 2].map(index => ({ id: `page-${index}`, kind: 'page', label: `Launch plan section ${index}`, text: `Launch plan section ${index}`, visibility: 'only_me', receipt_sha256: receipt('knowledge'), citation: { kind: 'page', tool_id: 'knowledge', external_scope_id: 'site-one', page_id: 'launch-plan', section_id: `s${index}`, version: '7', permalink: `https://knowledge.example.test/wiki/pages/viewpage.action?pageId=${index}`, text_sha256: receipt(`page-${index}`) } }));
   vi.mocked(f.base.search).mockResolvedValue({ items: local, truncated: false, receipt_digests: [receipt('local')] });
-  return { ...f, local, ticket: live('jira', tickets), page: live('knowledge', pages), slack: live('slack', messages) };
+  return { ...f, local, tickets, messages, pages, ticket: live('jira', tickets), page: live('knowledge', pages), slack: live('slack', messages) };
 }
 function fixture(scope: EvidenceDeskPortV1['scope'] = { kind: 'global' }) {
   let current = true;
@@ -78,6 +78,53 @@ describe('thin live ticket dispatcher', () => {
     expect(f.page.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'page-1' }));
     expect(f.ticket.search).not.toHaveBeenCalled();
     expect(f.slack.search).not.toHaveBeenCalled();
+  });
+  it('starts independent local, Jira and Slack lookups together and merges reverse completions in source order', async () => {
+    const f = mixedFixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, f.slack);
+    const deferred = <T,>() => {
+      let resolve!: (value: T) => void;
+      return { promise: new Promise<T>(done => { resolve = done; }), resolve };
+    };
+    const local = deferred<Awaited<ReturnType<EvidenceDeskPortV1['search']>>>();
+    const ticket = deferred<Awaited<ReturnType<typeof f.ticket.search>>>();
+    const slack = deferred<Awaited<ReturnType<typeof f.slack.search>>>();
+    vi.mocked(f.base.search).mockImplementation(() => local.promise);
+    vi.mocked(f.ticket.search).mockImplementation(() => ticket.promise);
+    vi.mocked(f.slack.search).mockImplementation(() => slack.promise);
+
+    const search = desk.search({ query: 'launch', limit: 6 });
+    await vi.waitFor(() => {
+      expect(f.base.search).toHaveBeenCalledTimes(1);
+      expect(f.ticket.search).toHaveBeenCalledTimes(1);
+      expect(f.slack.search).toHaveBeenCalledTimes(1);
+    });
+    slack.resolve({ items: f.messages, truncated: false, receipt_digests: [receipt('slack')] });
+    ticket.resolve({ items: f.tickets, truncated: false, receipt_digests: [receipt('jira')] });
+    local.resolve({ items: f.local, truncated: false, receipt_digests: [receipt('local')] });
+
+    expect((await search).items.map(item => item.id)).toEqual(['local-1', 'ticket-1', 'slack-1', 'local-2', 'ticket-2', 'slack-2']);
+  });
+  it('fans a queryless inventory search out to independent live lists', async () => {
+    const f = mixedFixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, f.slack);
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const started: string[] = [];
+    vi.mocked(f.base.search).mockImplementation(async () => { started.push('local'); await pending; return { items: f.local, truncated: false, receipt_digests: [receipt('local')] }; });
+    vi.mocked(f.ticket.list).mockImplementation(async () => { started.push('ticket'); await pending; return { items: f.tickets, truncated: false, receipt_digests: [receipt('jira')] }; });
+    vi.mocked(f.slack.list).mockImplementation(async () => { started.push('slack'); await pending; return { items: f.messages, truncated: false, receipt_digests: [receipt('slack')] }; });
+
+    const search = desk.search({ limit: 3 });
+    await vi.waitFor(() => expect(started).toEqual(['local', 'ticket', 'slack']));
+    release();
+    expect((await search).items.map(item => item.id)).toEqual(['local-1', 'ticket-1', 'slack-1']);
+  });
+  it('fails the whole fanout when one concurrent source is denied', async () => {
+    const f = mixedFixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, f.slack);
+    vi.mocked(f.slack.search).mockRejectedValueOnce(new AuthorityOperationError('unauthorized', 'Fixture Slack access revoked'));
+    await expect(desk.search({ query: 'launch' })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.base.search).toHaveBeenCalledTimes(1);
+    expect(f.ticket.search).toHaveBeenCalledTimes(1);
+    expect(f.slack.search).toHaveBeenCalledTimes(1);
   });
   it('observes actual list and open calls once without changing provider routing or results', async () => {
     const f = mixedFixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, f.slack);
@@ -173,7 +220,7 @@ describe('thin live ticket dispatcher', () => {
     const late = new AbortController();
     vi.mocked(f.ticket.search).mockImplementation(async () => { late.abort(); return empty; });
     await expect(desk.search({ query: 'launch', signal: late.signal })).rejects.toMatchObject({ name: 'AbortError' });
-    expect(f.slack.search).not.toHaveBeenCalled();
+    expect(f.slack.search).toHaveBeenCalledTimes(1);
   });
   it('rechecks local grants/snapshot after provider visibility awaits, suppressing mixed evidence after drift', async () => {
     const f = fixture(); vi.mocked(f.ticket.revalidate).mockImplementation(async () => { f.revokeBase(); });
@@ -212,6 +259,49 @@ describe('thin live ticket dispatcher', () => {
 describe('registered live source dispatch', () => {
   const registration = (source: PersonLiveEvidenceSourceV1, source_id: string, scope: RegisteredPersonLiveEvidenceSourceV2['scope'] = { kind: 'global' }): RegisteredPersonLiveEvidenceSourceV2 => ({
     source, scope, descriptor: { source_id, selector: source_id, kind: 'page', description: `Pages from ${source_id}`, metadata_only_list: true, tool_id: source.tool_id },
+  });
+  it.each(['search', 'list'] as const)('runs %s concurrently across local, ticket and two page providers without changing ownership', async method => {
+    const f = mixedFixture();
+    const secondItems = f.pages.map(item => ({ ...item, id: `second-${item.id}`, citation: { ...item.citation, tool_id: 'other-knowledge' } }));
+    const second = live('other-knowledge', secondItems);
+    const ticket = registration(f.ticket, 'issues');
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [
+      { ...ticket, descriptor: { ...ticket.descriptor, kind: 'ticket' } },
+      registration(f.page, 'knowledge-one'), registration(second, 'knowledge-two'),
+    ]);
+    const started: string[] = [];
+    const releases: (() => void)[] = [];
+    const gate = (id: string) => {
+      const pending = new Promise<void>(resolve => { releases.push(resolve); });
+      return async () => { started.push(id); await pending; };
+    };
+    const local = gate('local');
+    vi.mocked(f.base.search).mockImplementation(async () => {
+      await local(); return { items: f.local, truncated: false, receipt_digests: [receipt('local')] };
+    });
+    const plans: { id: string; source: PersonLiveEvidenceSourceV1; items: readonly PersonLiveEvidenceItemV1[] }[] = [
+      { id: 'issues', source: f.ticket, items: f.tickets },
+      { id: 'knowledge-one', source: f.page, items: f.pages },
+      { id: 'knowledge-two', source: second, items: secondItems },
+    ];
+    for (const { id, source, items } of plans) {
+      const wait = gate(id);
+      vi.mocked(source[method]).mockImplementation(async () => {
+        await wait(); return { items, truncated: false, receipt_digests: [receipt(id)] };
+      });
+    }
+    const search = desk.search({ ...(method === 'search' ? { query: 'launch' } : {}), limit: 8 });
+    try {
+      await vi.waitFor(() => expect(started).toEqual(['local', 'issues', 'knowledge-one', 'knowledge-two']));
+    } finally {
+      for (const release of releases.reverse()) release();
+    }
+    const result = await search;
+    expect(result.items.map(item => item.id)).toEqual(['local-1', 'ticket-1', 'page-1', 'second-page-1', 'local-2', 'ticket-2', 'page-2', 'second-page-2']);
+    expect(result.items.filter(item => item.kind === 'page').map(item => item.source_id)).toEqual(['knowledge-one', 'knowledge-two', 'knowledge-one', 'knowledge-two']);
+    await desk.open({ item: 'page-1' }); await desk.open({ item: 'second-page-1' });
+    expect(f.page.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'page-1' }));
+    expect(second.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'second-page-1' }));
   });
   it('lists, searches and opens two same-kind providers by their own source identities', async () => {
     const f = mixedFixture();

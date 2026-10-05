@@ -216,10 +216,17 @@ returns, limits, related tools and examples.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `search` | `query`: 2–8 keywords | ≤ 8 mixed items with previews |
+| `search` | `query`: 2–8 keywords | ≤ 8 mixed item references; bounded complete passages in the scratchpad |
 | `open` | `id`, or a title already shown | Full text plus context, and linked ids |
 | `list` | `source`, plus named optional filters: `kind`, `status`, `owner`, `channel`, `since`, `until` | 25 titles per page; repeating the call returns the next page |
 | `finish` | none | Accepted, or the reason once |
+
+A research step can request up to four reads. Independent search, open, and
+list I/O runs concurrently; code admits results in action order so evidence
+ids and the next prompt remain deterministic. Repeated lists with the same
+normalized filters wait for the previous page's state. A terminal failure
+aborts sibling reads and preserves the original error. Retrieval timing
+measures the union of overlapping desk-call intervals, not their sum.
 
 **Filters for `list`.** They are named fields that the model fills in from
 the question.
@@ -270,11 +277,17 @@ the question.
 
 **Scratchpad.**
 
-- It holds the notes per part, the full text of opened items, and one-line
-  previews of everything else seen.
-- A search hit's preview is the 240-character window where that search's
-  words cluster, not only the item's head, so a long transcript or document
-  shows why it matched. With no word in the text, it is the head.
+- It holds the notes per part, full opened text, and complete released search
+  or list packets up to 3 KiB when they fit the remaining prompt budget.
+  Packet text preserves line breaks and is marked `full: true`; it may be
+  one passage rather than an entire document or conversation. Tool results
+  carry references and metadata so bodies appear only once.
+- Larger or budget-excluded bodies use an explicitly incomplete 240-character
+  preview where the query words cluster. Metadata-only and incomplete items
+  still require `open` before research can rely on them. Only complete text
+  actually admitted to a research model call counts as read.
+- Prompt admission charges serialized JSON bytes, including escaping and
+  metadata, rather than estimating cost from raw body length.
 - The budget is the model's context window, from the generation profile,
   minus the prompt, an output reserve and a 10% margin.
 - On overflow, the oldest opened items that no need cites shrink back to

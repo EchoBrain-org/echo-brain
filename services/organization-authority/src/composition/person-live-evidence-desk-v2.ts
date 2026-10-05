@@ -74,21 +74,21 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       const liveKinds = new Set([...sources.values()].map(value => value.descriptor.kind));
       const localKinds = selectedId === 'meeting' ? ['decision', 'action', 'rationale'] as const : selectedId === 'document' ? ['note', 'document_passage'] as const : selectedId === 'slack' ? ['slack_message'] as const : undefined;
       const kinds = (requestedKinds ?? localKinds)?.filter((kind): kind is EvidenceDeskKindV1 => kind !== 'ticket' && kind !== 'page' && !liveKinds.has(kind as 'slack_message')) ?? (liveKinds.has('slack_message') ? LOCAL_KINDS : undefined);
-      const pages: { readonly source: Source; readonly result: EvidenceDeskResultV2 }[] = [];
+      const page = (source: Source, operation: () => Promise<EvidenceDeskResultV2>) =>
+        Promise.resolve().then(operation).then(result => ({ source, result }));
+      const lookups: Promise<{ readonly source: Source; readonly result: EvidenceDeskResultV2 }>[] = [];
       if (selectedSource === undefined && kinds?.length !== 0) {
-        const result = await base.search({ ...request, ...(kinds === undefined ? {} : { kinds }) });
-        input.signal?.throwIfAborted();
-        pages.push({ source: base, result });
+        lookups.push(page(base, () => base.search({ ...request, ...(kinds === undefined ? {} : { kinds }) })));
       }
       for (const registration of selectedSource === undefined ? (localSource ? [] : sources.values()) : [selectedSource]) {
         const { source, descriptor } = registration;
         if (requestedKinds !== undefined && !requestedKinds.includes(descriptor.kind)) continue;
-        const result = input.query === undefined
-          ? await lookup('evidence_list', registration, () => source.list({ limit: Math.min(maximum, 20), signal: input.signal }))
-          : await lookup('evidence_search', registration, () => source.search({ query: input.query!, limit: Math.min(maximum, 5), signal: input.signal }));
-        input.signal?.throwIfAborted();
-        pages.push({ source: registration, result });
+        lookups.push(page(registration, () => input.query === undefined
+          ? lookup('evidence_list', registration, () => source.list({ limit: Math.min(maximum, 20), signal: input.signal }))
+          : lookup('evidence_search', registration, () => source.search({ query: input.query!, limit: Math.min(maximum, 5), signal: input.signal }))));
       }
+      const pages = await Promise.all(lookups);
+      input.signal?.throwIfAborted();
       if (pages.length === 1 && pages[0]!.source === base) return remember(pages[0]!.result, base);
       // Take one item from each nonempty source before taking any second
       // item. One full provider page cannot hide matching evidence from another source.

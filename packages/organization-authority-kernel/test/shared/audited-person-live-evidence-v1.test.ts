@@ -229,6 +229,65 @@ describe('shared audited live evidence source V1', () => {
     expect(f.audit.record).not.toHaveBeenCalled();
   });
 
+  it('reserves request capacity across releases waiting for their audits', async () => {
+    const f = fixture('tickets', page([]));
+    const source = f.make();
+    vi.mocked(f.reader.search).mockImplementation(async input => page(Array.from({ length: 50 }, (_, index) =>
+      ticket(`Evidence for ${input.query} ${index}`, `ECHO-${input.query}-${index}`),
+    )));
+    let releaseAudit!: () => void;
+    const auditPending = new Promise<void>(resolve => { releaseAudit = resolve; });
+    f.audit.record.mockImplementation(async release => {
+      f.releases.push(release);
+      await auditPending;
+      return canonicalSha256(release);
+    });
+
+    const reads = Array.from({ length: 11 }, (_, index) => source.search({ query: `batch-${index}`, limit: 50 }));
+    await vi.waitFor(() => expect(f.reader.search).toHaveBeenCalledTimes(11));
+    releaseAudit();
+    const outcomes = await Promise.allSettled(reads);
+
+    expect(outcomes.filter(value => value.status === 'fulfilled')).toHaveLength(10);
+    expect(outcomes.filter(value => value.status === 'rejected')).toHaveLength(1);
+    expect(f.audit.record).toHaveBeenCalledTimes(10);
+  });
+
+  it('keeps a shared reservation until its last pending audit settles', async () => {
+    const f = fixture('tickets', page([]));
+    const source = f.make();
+    vi.mocked(f.reader.search).mockImplementation(async input => {
+      if (input.query === 'shared') return page([ticket('Shared evidence', 'ECHO-SHARED')]);
+      const count = input.query === 'fill-final' ? 12 : input.query === 'recovered' ? 11 : 50;
+      return page(Array.from({ length: count }, (_, index) => ticket(`Evidence ${input.query} ${index}`, `ECHO-${input.query}-${index}`)));
+    });
+    let failFirstAudit!: () => void;
+    let finishSecondAudit!: () => void;
+    const firstAudit = new Promise<void>(resolve => { failFirstAudit = resolve; });
+    const secondAudit = new Promise<void>(resolve => { finishSecondAudit = resolve; });
+    let audits = 0;
+    f.audit.record.mockImplementation(async release => {
+      f.releases.push(release);
+      audits += 1;
+      if (audits === 1) { await firstAudit; throw new Error('audit failed'); }
+      if (audits === 2) await secondAudit;
+      return canonicalSha256(release);
+    });
+
+    const first = source.search({ query: 'shared' });
+    const second = source.search({ query: 'shared' });
+    await vi.waitFor(() => expect(f.audit.record).toHaveBeenCalledTimes(2));
+    failFirstAudit();
+    await expect(first).rejects.toMatchObject({ code: 'unavailable' });
+
+    for (let index = 0; index < 10; index += 1) await source.search({ query: `fill-${index}`, limit: 50 });
+    await expect(source.search({ query: 'fill-final', limit: 12 })).rejects.toMatchObject({ code: 'invalid_output' });
+    finishSecondAudit();
+    await expect(second).resolves.toMatchObject({ items: [expect.objectContaining({ label: 'ECHO-SHARED' })] });
+    const recovered = await source.search({ query: 'recovered', limit: 11 });
+    expect(recovered.items).toHaveLength(11);
+  });
+
   it('retains immutable release bytes while an asynchronous audit is pending', async () => {
     const mutable = { ...ticket(), attributes: { status: 'In progress' } };
     const f = fixture('tickets', page([mutable]));

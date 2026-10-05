@@ -108,6 +108,114 @@ function slackItem(ts: string, text: string, options: { channel?: string; kind?:
 }
 
 describe("agentic Ask: research loop", () => {
+  it('overlaps independent inventories while advancing repeated list cursors in order', async () => {
+    let releaseMeeting!: () => void;
+    const meetingGate = new Promise<void>(resolve => { releaseMeeting = resolve; });
+    const calls: EvidenceDeskListInputV1[] = [];
+    const evidence = desk();
+    evidence.list.mockImplementation(async (request: EvidenceDeskListInputV1) => {
+      calls.push(request);
+      if (request.source === 'meeting' && request.cursor === undefined) {
+        await meetingGate;
+        return { items: [item('first')], truncated: false, receipt_digests: [], next_cursor: 'next-page' };
+      }
+      return { items: [item(request.source === 'meeting' ? 'second' : 'document')], truncated: false, receipt_digests: [] };
+    });
+    const script = scripted([
+      step([{}], [
+        { tool: 'list', args: { source: 'meetings', since: '7d' } },
+        { tool: 'list', args: { source: 'documents', since: '7d' } },
+        { tool: 'list', args: { source: 'meetings', since: '7d' } },
+      ]),
+      finish([found(['E1', 'E2', 'E3'])]),
+      answer([{ text: 'All three records found.', evidence: ['E1', 'E2', 'E3'] }]),
+    ]);
+    const today = vi.fn().mockReturnValueOnce('2026-10-05').mockReturnValue('2026-10-06');
+    const pending = createAgenticAskV1({ desk: evidence, model: script.model, generation, audit: { append: () => undefined }, today }).answer({ question: 'Which records exist?' });
+    try {
+      await vi.waitFor(() => expect(calls.map(call => call.source)).toEqual(['meeting', 'document']), { timeout: 500, interval: 5 });
+    } finally { releaseMeeting(); }
+    await expect(pending).resolves.toMatchObject({ outcome: 'answered' });
+    expect(today).toHaveBeenCalledOnce();
+    expect(new Set(calls.map(call => call.since)).size).toBe(1);
+    expect(script.inputs.every(input => JSON.parse(input.user_prompt).today === '2026-10-05')).toBe(true);
+    expect(calls.map(call => [call.source, call.cursor])).toEqual([['meeting', undefined], ['document', undefined], ['meeting', 'next-page']]);
+    expect(script.prompt(1).last_results.map((value: { items: { id: string; title: string }[] }) => value.items.map(entry => [entry.id, entry.title])))
+      .toEqual([[['E1', 'Meeting first']], [['E2', 'Meeting document']], [['E3', 'Meeting second']]]);
+  });
+
+  it('admits complete multiline search packets without an extra open or duplicate prompt bodies', async () => {
+    const text = `Design review\n${'Background line.\n'.repeat(40)}Jules: I will publish the dashboard on Friday.\nZhen: Agreed.`;
+    const passage = item('packet', text, { kind: 'document_passage' });
+    const evidence = desk({ search: () => [passage] });
+    const script = scripted([
+      step([{}], [search('dashboard')]),
+      (input: StructuredGenerationInput) => {
+        const prompt = JSON.parse(input.user_prompt);
+        expect(prompt.seen).toEqual([expect.objectContaining({ id: 'E1', text, full: true })]);
+        expect(prompt.last_results[0].results[0]).not.toHaveProperty('text');
+        expect(prompt.last_results[0].results[0]).not.toHaveProperty('preview');
+        expect(input.user_prompt.split(JSON.stringify(text)).length - 1).toBe(1);
+        return finish([found(['E1'])]);
+      },
+      answer([{ text: 'Jules will publish the dashboard on Friday.', evidence: ['E1'] }]),
+    ]);
+    const result = await ask({ desk: evidence, model: script.model }).answer({ question: 'When will Jules publish?' });
+    expect(evidence.open).not.toHaveBeenCalled();
+    expect(script.inputs).toHaveLength(3);
+    expect(result.outcome).toBe('answered');
+  });
+
+  it('does not accept a packet omitted by the prompt budget as read evidence', async () => {
+    const packets = Array.from({ length: 8 }, (_, index) => item(`packet-${index}`, `${index}\n${'"quoted" \\ line\n'.repeat(175)}`, { kind: 'document_passage' }));
+    const script = scripted([
+      step([{}], [search('quoted')]),
+      (input: StructuredGenerationInput) => {
+        const prompt = JSON.parse(input.user_prompt);
+        expect(Buffer.byteLength(input.user_prompt)).toBeLessThanOrEqual(agenticAskContextBudgetBytesV1(4_096, input.system_prompt, input.max_output_tokens));
+        expect(prompt.seen.some((entry: { id: string; full?: boolean }) => entry.id === 'E1' && entry.full === true)).toBe(false);
+        return finish([found(['E1'])]);
+      },
+      (input: StructuredGenerationInput) => {
+        expect(JSON.parse(input.user_prompt).validation_error).toContain('cites no item whose full text you have read');
+        return finish([found(['E1'])]);
+      },
+      answer([], ['launch date']),
+    ]);
+    await ask({ desk: desk({ search: () => packets }), model: script.model, context_tokens: 4_096 }).answer({ question: 'When is launch?' });
+  });
+
+  it('does not mark short text read when the research time budget prevents prompt admission', async () => {
+    let clock = 0;
+    const evidence = desk({ search: () => { clock = 60_001; return [item('launch', 'Launch is Tuesday.')]; } });
+    const script = scripted([step([{}], [search('launch')]), { wrong: true }, { still: 'wrong' }]);
+    const result = await ask({ desk: evidence, model: script.model, now: () => clock }).answer({ question: 'When is launch?' });
+    expect(script.inputs).toHaveLength(3);
+    expect(script.prompt(1)).toHaveProperty('evidence');
+    expect(result.citations).toEqual([]);
+    expect(result.parts[0]).not.toHaveProperty('records');
+  });
+
+  it('does not accept opened text that never fits a research prompt as read evidence', async () => {
+    const metadata = listedItem('huge');
+    const body = item('huge', 'A very large original body.\n'.repeat(2_000));
+    const script = scripted([
+      step([{}], [{ tool: 'list', args: { source: 'meetings' } }]),
+      step([{}], [open('E1')]),
+      finish([found(['E1'])]),
+      (input: StructuredGenerationInput) => {
+        const prompt = JSON.parse(input.user_prompt);
+        expect(prompt.opened).toEqual([]);
+        expect(prompt.seen[0]).toMatchObject({ id: 'E1', full: false });
+        expect(prompt.validation_error).toContain('cites no item whose full text you have read');
+        return finish([found(['E1'])]);
+      },
+    ]);
+    const result = await ask({ desk: desk({ list: () => [metadata], open: () => [body] }), model: script.model, context_tokens: 4_096 }).answer({ question: 'When is launch?' });
+    expect(result.citations).toEqual([]);
+    expect(result.parts[0]).not.toHaveProperty('records');
+  });
+
   it.each(['before', 'after'] as const)('executes reads when finish appears %s open, even after a rejected finish', async order => {
     const metadata = listedItem('launch');
     const body = item('launch', 'The review approved launch on Tuesday.');
@@ -192,7 +300,7 @@ describe("agentic Ask: research loop", () => {
       expect(input.user_prompt).not.toContain(launch.id);
       expect(input.user_prompt).not.toContain(launch.citation.kind === "approved_record" ? launch.citation.atom_id : "");
     }
-    expect(script.prompt(1).last_results[0].results[0]).toMatchObject({ id: "E1", source: "meeting", preview: "Launch is approved for Tuesday.", full: true });
+    expect(script.prompt(1).seen[0]).toMatchObject({ id: "E1", source: "meeting", text: "Launch is approved for Tuesday.", full: true });
     expect(script.prompt(1).plan).toEqual([{ part: 1, question: "When is launch?", notes: "", needs: [{ need: "launch date", status: "open", evidence: [] }] }]);
   });
 
@@ -282,8 +390,8 @@ describe("agentic Ask: research loop", () => {
     ]);
   });
 
-  it("keeps long search hits as previews until opened, and refuses to cite unread text", async () => {
-    const long = item("long", `${"Context. ".repeat(60)}Owner is Colin.`);
+  it("keeps oversized search hits as previews until opened, and refuses to cite unread text", async () => {
+    const long = item("long", `${"Context. ".repeat(400)}Owner is Colin.`);
     const script = scripted([
       step([{ needs: [{ need: "owner" }] }], [search("owner")]),
       finish([found(["E1"], "owner")]),
@@ -292,7 +400,7 @@ describe("agentic Ask: research loop", () => {
       answer([{ text: "Colin owns it.", evidence: ["E1"] }]),
     ]);
     const result = await ask({ desk: desk({ search: () => [long], open: () => [long] }), model: script.model }).answer({ question: "Who owns it?" });
-    expect(script.prompt(1).last_results[0].results[0].full).toBe(false);
+    expect(script.prompt(1).seen[0].full).toBe(false);
     expect(script.prompt(2).validation_error).toContain("cites no item whose full text you have read");
     expect(result.outcome).toBe("answered");
   });
@@ -313,7 +421,7 @@ describe("agentic Ask: research loop", () => {
     ]);
     const result = await ask({ desk: evidence, model: script.model }).answer({ question });
     expect(evidence.open).not.toHaveBeenCalled();
-    expect(script.prompt(1).last_results[0].results.slice(0, 2).map((value: { full: boolean }) => value.full)).toEqual([false, false]);
+    expect(script.prompt(1).seen.slice(0, 2).map((value: { full: boolean }) => value.full)).toEqual([true, true]);
     expect(script.prompt(2).evidence).toEqual([
       expect.objectContaining({ id: "E3", text: unrelated.text }),
       expect.objectContaining({ id: "E2", text: hardware.text }),
@@ -406,8 +514,8 @@ describe("agentic Ask: research loop", () => {
   });
 
   it("previews a long search hit where the query matched, not only its head", async () => {
-    const transcript = item("transcript", `Transcript: Calibration\n${"Anika: We reviewed the pilot numbers. ".repeat(12)}Jules: I will publish the dashboard by September 11.\n\nZhen: Thanks.`, { kind: "note", label: "Transcript: Calibration" });
-    const unmatched = item("unmatched", `${"Nothing relevant here at all. ".repeat(12)}The end.`);
+    const transcript = item("transcript", `Transcript: Calibration\n${"Anika: We reviewed the pilot numbers. ".repeat(100)}Jules: I will publish the dashboard by September 11.\n\nZhen: Thanks.`, { kind: "note", label: "Transcript: Calibration" });
+    const unmatched = item("unmatched", `${"Nothing relevant here at all. ".repeat(120)}The end.`);
     const script = scripted([
       step([{ needs: [{ need: "what Jules took on" }] }], [search("Jules dashboard")]),
       finish([missing()]),
@@ -415,7 +523,7 @@ describe("agentic Ask: research loop", () => {
       answer([{ text: "Jules said they would publish the dashboard by September 11.", evidence: ["E1"] }]),
     ]);
     await ask({ desk: desk({ search: () => [transcript, unmatched] }), model: script.model }).answer({ question: "What is Jules working on?" });
-    const [hit, other] = script.prompt(1).last_results[0].results;
+    const [hit, other] = script.prompt(1).seen;
     expect(hit.full).toBe(false);
     // It starts at a whole word, with some lead before the match.
     expect(transcript.text).toContain(` ${hit.preview.slice(1, 30)}`);
@@ -799,7 +907,7 @@ describe("agentic Ask: research loop", () => {
       ]),
     ]);
     const result = await ask({ desk: desk({ search: () => [record, slack] }), model: script.model }).answer({ question: "Is DVT on track?" });
-    expect(script.prompt(1).last_results[0].results[1]).toMatchObject({ id: "E2", source: "slack", kind: "slack_message", date: "2026-09-26", full: true });
+    expect(script.prompt(1).seen[1]).toMatchObject({ id: "E2", source: "slack", kind: "slack_message", date: "2026-09-26", text: slack.text, full: true });
     expect(validatePersonAnswerResponseV4(result)).toEqual(result);
     expect(result.citations[1]).toMatchObject({ kind: "slack_message", citation: { kind: "slack_message", channel_id: "C0001" }, visibility: "only_me" });
     expect(result.parts[0]!.statements.map(value => value.private)).toEqual([false, true]);
@@ -901,7 +1009,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
   const unavailable = () => Object.assign(new Error("OpenRouter request failed"), { diagnostic: { failure_class: "adapter_timeout" } });
 
   it("does not dump unopened search passages when the writer fails or call that completed absence", async () => {
-    const passage = item("unread", "Potentially relevant launch background. ".repeat(20), { kind: "document_passage" });
+    const passage = item("unread", "Potentially relevant launch background. ".repeat(100), { kind: "document_passage" });
     const script = scripted([
       step([{}], [search("launch"), search("launch date")]),
       finish([missing()]),
@@ -1026,7 +1134,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
       (input.schema.properties as Readonly<Record<string, unknown>>)?.sentences !== undefined
         ? { wrong: true }
         : step([{}], [search(`launch ${++queries}`)])) };
-    const evidence = desk({ search: query => [item(query, "Unread background. ".repeat(100))] });
+    const evidence = desk({ search: query => [item(query, "Unread background. ".repeat(200))] });
     const result = await ask({ desk: evidence, model }).answer({ question: "When is launch?" });
     expect(result.parts[0]!.gap).toContain("couldn't complete the search");
     expect(result.citations).toEqual([]);

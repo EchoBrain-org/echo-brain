@@ -3,7 +3,7 @@ import { validatePersonAnswerResponseV6 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV3 } from '../../src/answer-composition/agentic-ask-v1.js';
 import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
-import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
+import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from '../../src/shared/evidence-desk-v2.js';
 import { captureCoreRuntimeContentV1, observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
 
 const checked = { checked_at: '2026-10-05T00:00:00.000Z' };
@@ -132,4 +132,90 @@ it('plans two registered page providers without a provider-specific selector or 
   expect(answer.citations.map(value => value.citation.kind === 'page' ? value.citation.tool_id : undefined)).toEqual(['knowledge-a', 'knowledge-b']);
   expect(JSON.parse(prompts[0]!.user_prompt).source_catalog.map((value: { source: string }) => value.source)).toEqual(['meetings', 'documents', 'handbook', 'runbooks']);
   expect(desk.list).toHaveBeenCalledOnce(); expect(desk.search).toHaveBeenCalledOnce(); expect(desk.open).toHaveBeenCalledTimes(2);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+const pageSources = [
+  { source_id: 'knowledge-a', selector: 'handbook', kind: 'page' as const, description: 'Company handbook pages.' },
+  { source_id: 'knowledge-b', selector: 'runbooks', kind: 'page' as const, description: 'Operational runbook pages.' },
+];
+function releasedPage(source: string, id: string): EvidenceDeskItemV2 {
+  const body = `Private ${source} evidence.\n${id} establishes the EVT date.`;
+  return { ...inventory, id, source_id: source, text: body,
+    citation: { ...citation(body), tool_id: source, page_id: id } };
+}
+const pageResult = (item: EvidenceDeskItemV2): EvidenceDeskResultV2 => ({ items: [item], truncated: false, receipt_digests: [item.receipt_sha256] });
+const comparisonParts = (evidence: readonly string[] = []) => [{ question: 'Compare the plans.', notes: '', needs: [{ need: 'Both plans', status: evidence.length === 0 ? 'open' : 'found', evidence }] }];
+const fixtureGeneration = { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 };
+
+it('concurrently reads same-kind registered sources and admits exact passages without capturing live content', async () => {
+  const first = deferred<EvidenceDeskResultV2>(); const second = deferred<EvidenceDeskResultV2>();
+  const firstItem = releasedPage('knowledge-a', 'page-a'); const secondItem = releasedPage('knowledge-b', 'page-b');
+  const desk: EvidenceDeskPortV2 = {
+    scope: { kind: 'global' }, live_sources: pageSources,
+    search: vi.fn(input => { expect(input.kinds).toEqual(['page']); return input.source === 'knowledge-a' ? first.promise : second.promise; }),
+    list: vi.fn(), open: vi.fn(), revalidate: vi.fn(async () => checked),
+  };
+  const replies = [
+    { parts: comparisonParts(), actions: [{ tool: 'search', args: { source: 'handbook', query: 'EVT' } }, { tool: 'search', args: { source: 'runbooks', query: 'EVT' } }] },
+    { parts: comparisonParts(['E1', 'E2']), actions: [{ tool: 'finish', args: {} }] },
+    { sentences: [{ text: 'Both plans establish the EVT date.', evidence: ['E1', 'E2'] }], not_found: [] },
+  ];
+  const prompts: StructuredGenerationInput[] = []; const capture = vi.fn();
+  const ask = createAgenticAskV3({ desk, audit: { append: () => undefined }, generation: fixtureGeneration,
+    model: { generate: async input => { prompts.push(input); captureCoreRuntimeContentV1('model_request', input.user_prompt); return replies.shift()!; } } });
+  const pending = observeCoreRuntimeV1('ask_request', () => ask.answer({ question: 'Compare the plans.' }), { observer: () => undefined, content_observer: capture });
+  await vi.waitFor(() => expect(desk.search).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(desk.search).mock.calls.map(([input]) => input.source)).toEqual(['knowledge-a', 'knowledge-b']);
+  second.resolve(pageResult(secondItem)); first.resolve(pageResult(firstItem));
+  const response = await pending;
+  expect(validatePersonAnswerResponseV6(response)).toMatchObject({ outcome: 'answered', citations: [{ citation: firstItem.citation }, { citation: secondItem.citation }] });
+  const research = JSON.parse(prompts[1]!.user_prompt);
+  expect(research.seen).toEqual([
+    expect.objectContaining({ id: 'E1', source: 'handbook', text: firstItem.text, full: true }),
+    expect.objectContaining({ id: 'E2', source: 'runbooks', text: secondItem.text, full: true }),
+  ]);
+  expect(research.last_results.every((result: { results: Record<string, unknown>[] }) => result.results.every(item => !('text' in item) && !('preview' in item)))).toBe(true);
+  expect(desk.open).not.toHaveBeenCalled();
+  expect(capture).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(capture.mock.calls)).not.toContain('Private knowledge-');
+});
+
+it('serializes equivalent registered-source cursors while another source lists concurrently on one request day', async () => {
+  const first = deferred<EvidenceDeskResultV2>(); const other = deferred<EvidenceDeskResultV2>();
+  const desk: EvidenceDeskPortV2 = {
+    scope: { kind: 'global' }, live_sources: pageSources,
+    search: vi.fn(), open: vi.fn(), revalidate: vi.fn(async () => checked),
+    list: vi.fn(input => {
+      expect(input.since).toBe('2026-09-28');
+      if (input.source === 'knowledge-b') return other.promise;
+      return input.cursor === undefined ? first.promise : Promise.resolve(pageResult(releasedPage('knowledge-a', 'page-a2')));
+    }),
+  };
+  const replies = [
+    { parts: comparisonParts(), actions: [
+      { tool: 'list', args: { source: 'handbook', since: '7d' } },
+      { tool: 'list', args: { source: 'knowledge-a', since: '2026-09-28' } },
+      { tool: 'list', args: { source: 'runbooks', since: '7d' } },
+    ] },
+    { parts: comparisonParts(['E1', 'E2', 'E3']), actions: [{ tool: 'finish', args: {} }] },
+    { sentences: [{ text: 'The plans establish the EVT date.', evidence: ['E1', 'E2', 'E3'] }], not_found: [] },
+  ];
+  const today = vi.fn().mockReturnValueOnce('2026-10-05').mockReturnValue('2026-10-06');
+  const pending = createAgenticAskV3({ desk, today, audit: { append: () => undefined }, generation: fixtureGeneration,
+    model: { generate: async () => replies.shift()! } }).answer({ question: 'Compare the plans.' });
+  await vi.waitFor(() => expect(desk.list).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(desk.list).mock.calls.map(([input]) => input.source)).toEqual(['knowledge-a', 'knowledge-b']);
+  other.resolve(pageResult(releasedPage('knowledge-b', 'page-b')));
+  first.resolve({ ...pageResult(releasedPage('knowledge-a', 'page-a1')), next_cursor: 'next-a' });
+  const response = await pending;
+  expect(response).toMatchObject({ schema_version: 6, outcome: 'answered' });
+  expect(response.citations.map(value => value.citation.kind === 'page' ? value.citation.page_id : undefined)).toEqual(['page-a1', 'page-a2', 'page-b']);
+  expect(desk.list).toHaveBeenNthCalledWith(3, expect.objectContaining({ source: 'knowledge-a', cursor: 'next-a', since: '2026-09-28' }));
+  expect(today).toHaveBeenCalledOnce();
 });
