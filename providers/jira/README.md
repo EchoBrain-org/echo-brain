@@ -1,15 +1,14 @@
 # Jira provider
 
-The package has three roles for one Jira Cloud site:
+The package has two roles for one Jira Cloud site:
 
 - **Person connection lifecycle:** Nango-managed 3LO grants behind the shared
   `person tools` commands.
 - **Request-scoped live reader:** `PersonLiveEvidenceReaderV1<PersonTicketCitationV1>`
   for the ticket-capable Ask path.
-- **Opt-in context source:** `JiraContextSourceV1` maps one fixed project's
-  tickets into the shared capture intake. It is request-only by default; an
-  explicit Authority binding may retain pointers only. See the
-  [connector/context integration](../../docs/product/2026-10-01-connector-context-integration-v1.md).
+
+Ticket content is never captured or stored. ECHO reads tickets live at question
+time and keeps only the read audit.
 
 [ADR-0026](../../docs/decisions/ADR-0026-jira-person-live-evidence-nango.md)
 remains proposed; production startup is disabled pending acceptance. No live

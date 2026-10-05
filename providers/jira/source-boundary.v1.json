@@ -10,7 +10,6 @@
     "providers/jira/src/jira-person-connection-v1.ts",
     "providers/jira/src/jira-connection-store-v1.ts",
     "providers/jira/src/jira-nango-v1.ts",
-    "providers/jira/src/jira-context-source-v1.ts",
     "providers/jira/src/jira-person-connection-http-application-v1.ts"
   ],
   "owned_source_paths": [
@@ -63,17 +62,15 @@
         "export": "createJiraPersonLiveEvidenceReaderV1"
       },
       {
-        "name": "Jira context source",
-        "path": "providers/jira/src/jira-context-source-v1.ts",
-        "export": "createJiraContextSourceV1"
-      },
-      {
         "name": "Jira person connection HTTP application",
         "path": "providers/jira/src/jira-person-connection-http-application-v1.ts",
         "export": "createJiraPersonConnectionHttpApplicationV1"
       }
     ],
     "compatibility_entrypoints": [],
-    "retired_source_paths": []
+    "retired_source_paths": [
+      "providers/jira/src/jira-context-source-v1.ts",
+      "providers/jira/src/jira-context-payload-v1.ts"
+    ]
   }
 }
