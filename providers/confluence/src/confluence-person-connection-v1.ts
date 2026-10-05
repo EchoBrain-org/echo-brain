@@ -1,4 +1,5 @@
 import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
+import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import { validateConfluenceProjectReadV1, validateConfluenceProjectSetV1, validateConfluenceProjectMappingsV1, validateConfluenceSpacesPageV1, type ConfluenceProjectMappingV1, type ConfluenceProjectMappingsV1, type ConfluenceSpacesPageV1 } from '@echo-brain/provider-confluence-client/organization-api/confluence-project-mapping-v1';
 import { randomUUID } from 'node:crypto';
 import type { ConfluenceProjectMappingStoreV1 } from './confluence-project-mapping-store-v1.js';
@@ -22,7 +23,7 @@ export function createConfluencePersonConnectionV1(options: {
   readonly fetch: typeof fetch;
   readonly project_mappings?: ConfluenceProjectMappingStoreV1;
   /** Current exact ECHO project grant, supplied only by Authority composition. */
-  readonly authorize_project?: (access_token: string, project_id: string) => Readonly<{ role: 'lead' | 'member'; authorization_sha256: Sha256Digest }>;
+  readonly authorize_project?: PersonProjectAuthorizationV1;
   /** Existing ECHO session resolver, including current exact membership and session checks. */
   readonly authenticate: (access_token: string) => ConfluencePersonAuthorizationV1;
 }) {
@@ -33,17 +34,7 @@ export function createConfluencePersonConnectionV1(options: {
   const { actor, tags, authenticated } = shared;
   /** Request-local picker cursors, fenced to both person tenure and live grant. */
   const space_cursors = new Map<string, Readonly<{ person_sha256: Sha256Digest; grant_sha256: Sha256Digest; provider_cursor?: string }>>();
-  function projectAccess(token: string, projectId: string, lead = false) {
-    if (options.project_mappings === undefined || options.authorize_project === undefined) confluenceFailure('unavailable');
-    const before = options.authorize_project(token, projectId);
-    if (lead && before.role !== 'lead') confluenceFailure('unauthorized');
-    return { store: options.project_mappings, current: () => {
-      if (canonicalSha256(options.authorize_project!(token, projectId)) !== canonicalSha256(before)) confluenceFailure('stale_access_state');
-    } };
-  }
-  function mappingInput<T>(validate: () => T): T {
-    try { return validate(); } catch { confluenceFailure('invalid_request'); }
-  }
+  const { projectAccess, mappingInput } = createPersonProjectMappingAccessV1(CONFLUENCE_PERSON_PROVIDER_V1, options);
   function parseProviderCursor(raw: unknown): string | undefined {
     if (raw === undefined || raw === null) return undefined;
     const value = confluenceString(raw, 4096);
@@ -126,11 +117,8 @@ export function createConfluencePersonConnectionV1(options: {
       const current = () => { requirePerson(); access.current(); input.signal?.throwIfAborted(); };
       current();
       const command = canonicalSha256({ person, request });
-      const replay = access.store.replay(person.organization_id, request.project_id, command);
+      const replay = access.store.prepare(person.organization_id, request.project_id, request.expected_revision, command);
       if (replay !== undefined) return replay;
-      if (access.store.read(person.organization_id, request.project_id).revision !== request.expected_revision) {
-        throw new AuthorityOperationError('conflict', 'Confluence project setting changed; reload it');
-      }
       let mapping: ConfluenceProjectMappingV1['mapping'] = null;
       if (request.space_ids !== null) {
         const stored = options.store.current(person);

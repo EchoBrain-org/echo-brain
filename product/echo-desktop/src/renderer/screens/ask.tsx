@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import type { Answer, AnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
+import type { Answer, AnswerSource, ExternalAnswerSource, AnswerStatement, ApprovedRecord, Match, RecordItem } from '../../shared/protocol.js';
 import { askText, queryTerms } from '../../shared/query.js';
-import { documentName, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
+import { documentName, externalSourceProvider, passageBlocks, statementGroups, type Inline, type SourceGroup } from '../answer.js';
 import { marked, meetingTime, snippet, when } from '../format.js';
 import { message } from '../messages.js';
 import {
   answerGroups, answerSources, ask, askEverywhere, cancelAsk, chipName, chooseSource, closeSources, copyAnswer, earlierTurns, foundNothingInProject,
-  matchesShown, openCompose, openMatch, openPageSource, openSlackSource, openTicketSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, widenScope,
+  matchesShown, openCompose, openMatch, openExternalSource, pageCovered, retryEvidence, retryRecord, searchAgain, setBarText, submitBar, widenScope,
   type AskTurn, type SourcesState, type State,
 } from '../store.js';
 import { Close, Doc, Hash, Lock, Meeting, Plus, Up } from './icons.js';
@@ -104,7 +104,7 @@ export function Bar({ state }: { state: State }) {
 /** What a source is called: a meeting's title once its record is read, a file's name as a person says it. */
 function sourceName(source: AnswerSource, sources: SourcesState | null): string {
   if (source.kind === 'original') return documentName(source.label).name;
-  if (source.kind === 'slack' || source.kind === 'ticket' || source.kind === 'page') return source.label;
+  if ('permalink' in source) return source.label;
   const read = sources?.records[source.record.record_sha256];
   return read && !read.loading && 'value' in read ? read.value.title ?? UNTITLED : source.label;
 }
@@ -381,33 +381,13 @@ export function RecordDetail({ record, headed = true }: { record: ApprovedRecord
   );
 }
 
-function SlackSource({ source, index }: { source: Extract<AnswerSource, { kind: 'slack' }>; index: number }) {
+function ExternalSource({ source, index, provider }: { source: ExternalAnswerSource; index: number; provider: string }) {
   const [failed, setFailed] = useState(false);
   return <div class="source-detail">
     <h2>{source.label}</h2>
-    <button type="button" class="link-button" data-testid="open-slack-source" title={source.permalink}
-      onClick={async () => { setFailed(false); setFailed(!(await openSlackSource(index))); }}>Open in Slack</button>
-    {failed && <div class="error">Slack could not be opened. Try again.</div>}
-  </div>;
-}
-
-function TicketSource({ source, index }: { source: Extract<AnswerSource, { kind: 'ticket' }>; index: number }) {
-  const [failed, setFailed] = useState(false);
-  return <div class="source-detail">
-    <h2>{source.label}</h2>
-    <button type="button" class="link-button" data-testid="open-ticket-source" title={source.permalink}
-      onClick={async () => { setFailed(false); setFailed(!(await openTicketSource(index))); }}>Open ticket</button>
-    {failed && <div class="error">The ticket could not be opened. Try again.</div>}
-  </div>;
-}
-
-function PageSource({ source, index }: { source: Extract<AnswerSource, { kind: 'page' }>; index: number }) {
-  const [failed, setFailed] = useState(false);
-  return <div class="source-detail">
-    <h2>{source.label}</h2>
-    <button type="button" class="link-button" data-testid="open-page-source" title={source.permalink}
-      onClick={async () => { setFailed(false); setFailed(!(await openPageSource(index))); }}>Open in Confluence</button>
-    {failed && <div class="error">The page could not be opened. Try again.</div>}
+    <button type="button" class="link-button" data-testid={`open-${source.kind}-source`} title={source.permalink}
+      onClick={async () => { setFailed(false); setFailed(!(await openExternalSource(index))); }}>Open in {provider}</button>
+    {failed && <div class="error">The source could not be opened. Try again.</div>}
   </div>;
 }
 
@@ -482,12 +462,8 @@ export function SourcePane({ state }: { state: State }) {
           {read.failure.retryable && <button type="button" class="link-button" onClick={retryRecord}>Try again</button>}
         </div>
       ) : <RecordDetail record={read.value} />;
-  } else if (source.kind === 'slack') {
-    body = <SlackSource key={source.permalink} source={source} index={group.indexes[0]!} />;
-  } else if (source.kind === 'ticket') {
-    body = <TicketSource key={source.permalink} source={source} index={group.indexes[0]!} />;
-  } else if (source.kind === 'page') {
-    body = <PageSource key={source.permalink} source={source} index={group.indexes[0]!} />;
+  } else if ('permalink' in source) {
+    body = <ExternalSource key={`${source.tool_id}:${source.permalink}`} source={source} index={group.indexes[0]!} provider={externalSourceProvider(source, state.tools?.items)} />;
   } else {
     body = <OriginalSource state={state} group={group} source={source} />;
   }
@@ -496,7 +472,7 @@ export function SourcePane({ state }: { state: State }) {
       <div class="pane-head">
         <div class="pane-kind">
           <span class="marker on">{open + 1}</span>
-          <span class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : source.kind === 'slack' ? 'Slack message' : source.kind === 'ticket' ? 'Ticket' : source.kind === 'page' ? 'Confluence page' : 'Original source'}</span>
+          <span class="section-label">{source.kind === 'record' ? 'Meeting · Approved record' : 'permalink' in source ? `${externalSourceProvider(source, state.tools?.items)} · ${source.kind === 'slack' ? 'Message' : source.kind === 'ticket' ? 'Ticket' : 'Page'}` : 'Original source'}</span>
         </div>
         <button type="button" class="icon-button" aria-label="Close sources" data-testid="source-close" onClick={closeSources}><Close /></button>
       </div>

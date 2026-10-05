@@ -18,6 +18,10 @@ provider API -> server adapter -> processing contracts <- processing cycle
 - `packages/organization-processing/src/core/` imports no adapters,
   vendor SDKs, Authority composition, or persistence implementation.
 - `providers/<provider>/src/` implements typed core ports and owns provider transport.
+- `providers/shared/` is the registered `@echo-brain/provider-runtime` adapter
+  library. Concrete providers may depend on it; it cannot depend on concrete
+  providers or Authority composition, and provider-neutral core packages cannot
+  import it. Shared Atlassian helpers remain at this adapter boundary.
 - `packages/organization-processing/src/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1.ts`
   owns production processing state in SQLite.
 - `packages/organization-processing/src/admitted-meeting-processing/` owns the serialized bounded server cycle.
@@ -36,8 +40,8 @@ live in their provider workspaces; cross-workspace source and artifact checks li
 
 Context sources share the versioned `SourceAdapterV1` and
 `SourceAdmissionStoreV1` ports. Person uploads and meeting sources admit through
-`pullAndAdmitSourceBatchV1()` before their domain-specific processing; opt-in
-connector captures pass through the Authority's own context intake gate:
+`pullAndAdmitSourceBatchV1()` before their domain-specific processing. Tool Ask
+uses the separate request-only live-read path described below.
 
 ```text
 Person HTTP upload -> durable Authority inbox -> PersonSourceAdapterV1 --+
@@ -52,15 +56,17 @@ meeting provider -> MeetingSourceAdapter -> MeetingSourceBridgeV1 ------+
                            /                    \
             document extraction/index       meeting decision workflow
 
-provider context source (Granola, Jira, Slack)
+Granola meeting rehearsal
   -> SourceAdapterV1<ContextCaptureContentV1>.pull()
   -> createContextSourceIntakeV1() -> intakeContextBatchV1()
-       retained:     SqliteContextCaptureStoreV1 (a SourceAdmissionStoreV1)
-       request_only: request memory only, never stored
+  -> SqliteContextCaptureStoreV1 (a SourceAdmissionStoreV1)
 ```
 
-Captured context feeds no processing, retrieval or Ask stage; see
-[connector contracts](connector-contracts.md).
+The staging connector rehearsal captures only Granola meeting content. Its
+Jira and Slack checks verify live reads without retaining their payloads.
+Legacy capture contracts remain compiled but do not supply tool Ask; captured
+context feeds no processing, retrieval or Ask stage. See
+[connector contracts](connector-contracts.md) for that separate contract.
 
 Person submission pushes into an edge inbox; core ingestion pulls from the
 server-owned inbox. The source adapter does not need a contributor's computer
@@ -208,10 +214,8 @@ request-bound Person read capability. Global Ask reads tickets visible through
 the asker's own Jira connection; project Ask additionally requires the saved
 ECHO-to-Jira project mapping, and Mine excludes Jira. Jira data is read live for
 the request and does not enter source admission or canonical meeting
-processing. The opt-in
-[context capture](../product/2026-10-01-connector-context-integration-v1.md)
-modules are composed only by the local rehearsal runner and the versioned
-staging selections.
+processing. The staging rehearsal keeps Jira and Slack verification request-only;
+its retained capture selection is Granola meeting content.
 
 Confluence follows the same personal live-read boundary through its own
 provider and selecting runtime. Global Ask discovers pages visible to the
@@ -250,12 +254,82 @@ or, when they hold active project memberships, **Projects** to bind
 releases the exact retained transcript to that audience. The selected policy is
 frozen with the approved record; rejection creates no record.
 
+## Shared connector capabilities
+
+Sharing follows capabilities, so a provider reuses only the layers it needs:
+
+| Shared layer | Current consumers | Provider-owned behavior |
+| --- | --- | --- |
+| Bounded JSON/UTF-8 reads, byte limits, abort/deadline handling and response cleanup | Jira, Confluence, Slack setup clients, Granola API client, Nango broker | URLs, HTTP/media-type policy, error meanings, retries and provider payloads |
+| Personal Nango connection lifecycle, binding store, connection HTTP/client contracts | Jira and Confluence | OAuth scopes, resource/account verification and API permissions |
+| Project mapping store and current project-grant fence | Jira and Confluence | Mapping shape, project/space discovery and visibility checks |
+| Native Atlassian Document Format text normalization | Jira and Confluence | Requested representation, unsupported-content policy and evidence section identity |
+| Registered live-source dispatch and Ask catalog | Jira, Confluence and explicitly bound Slack reads | Reader implementation and declared scope/capabilities |
+
+The shared server mechanisms live in
+[`providers/shared`](../../providers/shared/src/); common Person connection
+contracts and client helpers remain in `packages/organization-api`. The bounded HTTP helper
+handles stalled fetches/streams even if they ignore cancellation; wrappers keep
+their existing status, size and empty-body policies. The common ADF normalizer
+reads provider-native JSON, bounds depth/nodes/text and never fetches embedded
+links or media. Confluence reports omitted unsupported content as incomplete.
+
+Nango manages the OAuth flow and credential refresh; the person completes
+provider consent. The shared personal connection
+code creates Connect sessions and obtains credentials from Nango, then binds the
+verified external account to the exact ECHO person, membership and local grant.
+This path uses Nango for authentication only: it defines no content sync,
+action or cache. ECHO persists connection references, grant/configuration state
+and audit coordinates/digests; live ticket, page and message bodies remain in
+request memory. Project mappings narrow discovery and never confer access.
+
+Authority composition registers `PersonLiveConnectorDefinitionV1` entries with a
+stable source ID, selector, content kind, description, list capabilities,
+permitted scopes, minimum response version and runtime factory. The request
+route binds each available source to the asker and exact project before
+`createRegisteredPersonLiveEvidenceDeskV2` dispatches reads. Two providers may
+both supply `page` content: their independent IDs/selectors determine which
+source receives list/search, and issued handles determine which source receives
+open. The planner's catalog and closed selector schema come from these entries;
+adding a provider with an existing content kind needs no planner branch.
+Revalidation checks every released source, then all local grants synchronously.
+Older construction inputs translate into this same dispatch path, while older
+answer versions retain their strict citation contracts.
+
+Granola remains a meeting intake adapter with durable admission and decision
+processing. It shares bounded HTTP mechanics; its cursor, custody and processing
+contracts remain distinct from personal live reads. Slack's organization app,
+private approval cards and human action records likewise retain their own
+lifecycle. A Slack Person read requires a separately authorized binding; an
+organization approval installation alone grants no such access. This refactor
+does not migrate Slack approval onboarding onto the Jira/Confluence personal
+Nango lifecycle.
+
 ## Extension rule
 
 A new integration begins as a typed capability, not a generic plugin. It keeps
 vendor types behind its adapter boundary, declares identity and failure
 semantics, supplies deterministic fakes, and passes capability-level tests.
 The processing core must still compile and test when that adapter is absent.
+
+For a new live connector:
+
+1. Choose an existing evidence kind/citation contract, or introduce an explicit
+   response version for a genuinely new kind. Implement the provider's bounded
+   discovery, open and visibility revalidation behind `PersonLiveEvidenceReaderV1`.
+2. Reuse bounded HTTP and, for compatible OAuth2 bearer connections, the shared
+   Nango lifecycle. Supply provider validation and account/resource verification.
+   Declare a fixed `storage_namespace` in the compiled provider descriptor.
+   The shared stores validate that SQL identifier and keep a stable selection;
+   request fields and Nango integration IDs never choose tables. Adding a
+   connector does not extend a provider union or SQL registry in the shared engine.
+3. Register its live definition and expose its Person tools/settings through the
+   existing client and desktop composition. Add provider-specific mapping/picker
+   semantics only when project scope needs them. Declare package/source-boundary
+   and deployment dependencies; keep server adapter code out of the Person client.
+4. Test permission loss, scope isolation, stale grants, pagination and same-kind
+   coexistence with deterministic fakes. Qualify actual consent/read behavior
+   through the operator lane before claiming the live integration is ready.
 
 Provider semantics terminate at the edge. Adding a provider may add an adapter,
 selecting composition, provider-owned persistence, onboarding, and tests, but

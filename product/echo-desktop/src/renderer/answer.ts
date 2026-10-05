@@ -1,4 +1,4 @@
-import type { AnswerSource } from '../shared/protocol.js';
+import type { AnswerSource, ConnectedTool, ExternalAnswerSource } from '../shared/protocol.js';
 
 /**
  * One source as an answer shows it: a document, a meeting's approved record,
@@ -14,7 +14,7 @@ export interface SourceGroup {
 function groupKey(source: AnswerSource): string {
   if (source.kind === 'record') return `record:${source.record.record_sha256}`;
   if (source.kind === 'original') return `original:${source.ref.source_id}`;
-  return `${source.kind}:${source.permalink}`;
+  return `${source.kind}:${source.tool_id}:${source.permalink}`;
 }
 
 /** An answer's sources, in the order it first cites them. */
@@ -117,4 +117,10 @@ export function passageBlocks(text: string, label: string): Block[] {
   }
   flush();
   return blocks;
+}
+
+/** Use the server's tool label when loaded; otherwise show its identity, never infer from the citation kind. */
+export function externalSourceProvider(source: ExternalAnswerSource, tools?: readonly ConnectedTool[] | null): string {
+  return tools?.find(tool => tool.tool_id === source.tool_id)?.name ??
+    source.tool_id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }

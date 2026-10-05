@@ -32,8 +32,8 @@ import type { PrivateSlackApprovalCardPosterV1 } from "@echo-brain/provider-slac
 import { assertStagingSyntheticMeetingSourceSelectionV1 } from "./staging/staging-synthetic-meeting-source-selection-v1.js";
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveConfigurationV1, type JiraPersonLiveRuntimeSeamsV1 } from './jira-person-live-runtime-v1.js';
 import { openConfluencePersonLiveRuntimeV1, type ConfluencePersonLiveConfigurationV1, type ConfluencePersonLiveRuntimeSeamsV1 } from './confluence-person-live-runtime-v1.js';
-import type { PersonTicketLiveRuntimeFactoryV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
-import type { PersonPageLiveRuntimeFactoryV1 } from '../application/ports/person-page-live-runtime-v1.js';
+import type { PersonLiveConnectorDefinitionV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import { JIRA_LIVE_CONNECTOR_V1, CONFLUENCE_LIVE_CONNECTOR_V1 } from './person-live-connector-registry-v1.js';
 import type { OrganizationAuthorityApiRuntimeDependencies } from './organization-authority-api-runtime.js';
 import type { SlackContextCaptureRuntimePortsV1 } from './slack-context-capture-runtime-v1.js';
 
@@ -206,8 +206,19 @@ export async function openOrganizationAuthorityService(
     ...(dependencies.person_http_runtime_factory_with_slack === undefined ? {} : {
       person_http_runtime_factory: ((sessions) => dependencies.person_http_runtime_factory_with_slack!(sessions, slack)) satisfies PersonHttpRuntimeFactory,
     }),
-    ...(jira_person_live === undefined ? {} : { ticket_live_runtime_factory: ((sessions, authorize_project) => openJiraPersonLiveRuntimeV1({ authorize_project, state_directory: sharedConfig.state_directory, sessions, configuration: jira_person_live, ...(dependencies.jira_person_live_seams === undefined ? {} : { seams: dependencies.jira_person_live_seams }) })) satisfies PersonTicketLiveRuntimeFactoryV1 }),
-    ...(confluence_person_live === undefined ? {} : { page_live_runtime_factory: ((sessions, authorize_project) => openConfluencePersonLiveRuntimeV1({ authorize_project, state_directory: sharedConfig.state_directory, sessions, configuration: confluence_person_live, ...(dependencies.confluence_person_live_seams === undefined ? {} : { seams: dependencies.confluence_person_live_seams }) })) satisfies PersonPageLiveRuntimeFactoryV1 }),
+    live_connectors: [
+      ...(dependencies.api?.live_connectors ?? []),
+      ...(jira_person_live === undefined ? [] : [{ ...JIRA_LIVE_CONNECTOR_V1,
+        open: ((sessions, authorize_project) => openJiraPersonLiveRuntimeV1({ authorize_project, state_directory: sharedConfig.state_directory, sessions,
+          configuration: jira_person_live, ...(dependencies.jira_person_live_seams === undefined ? {} : { seams: dependencies.jira_person_live_seams }),
+        })) satisfies PersonLiveConnectorDefinitionV1['open'],
+      }]),
+      ...(confluence_person_live === undefined ? [] : [{ ...CONFLUENCE_LIVE_CONNECTOR_V1,
+        open: ((sessions, authorize_project) => openConfluencePersonLiveRuntimeV1({ authorize_project, state_directory: sharedConfig.state_directory, sessions,
+          configuration: confluence_person_live, ...(dependencies.confluence_person_live_seams === undefined ? {} : { seams: dependencies.confluence_person_live_seams }),
+        })) satisfies PersonLiveConnectorDefinitionV1['open'],
+      }]),
+    ],
     record_approver: composeRecordApproverProjectorsV1([
       projectPrivateSlackBlockApprovalApproverV1,
       projectPrivateSlackBlockApprovalApproverV2,

@@ -13,6 +13,7 @@ import { bootstrapOrganizationAuthorityState } from '../src/composition/organiza
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
 import { openJiraPersonLiveRuntimeV1 } from '../src/composition/jira-person-live-runtime-v1.js';
+import type { PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
 import { port } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
@@ -68,6 +69,62 @@ it('selects the Slack live runtime for authenticated Ask without inventing a dis
     expect(source).toHaveBeenCalledTimes(1);
     expect(await response.json()).toMatchObject({ citations: [] });
   } finally { await runtime.close(); }
+  expect(close).toHaveBeenCalledTimes(1);
+});
+
+it('registers two page connectors through one lifecycle, catalog, HTTP and versioned Ask path', async () => {
+  const f = await fixture();
+  const calls = ['handbook', 'runbooks'].map(source_id => ({ source_id, source: vi.fn(async () => undefined), tools: vi.fn(async () => []), close: vi.fn() }));
+  const live_connectors: PersonLiveConnectorDefinitionV1[] = calls.map(call => ({
+    descriptor: { source_id: call.source_id, selector: call.source_id, kind: 'page', tool_id: call.source_id, description: `Live ${call.source_id} pages`, metadata_only_list: true },
+    scopes: ['global', 'project'], minimum_response_version: 6,
+    open: authentication => ({ application: { source: call.source }, tools: call.tools, close: call.close,
+      connection_http: { routes: [{ route_id: call.source_id, method: 'POST', path: `/v1/person/tools/${call.source_id}/probe` }],
+        async accept(request) {
+          authentication.authenticateAccess({ access_token: request.headers.authorization!.slice('Bearer '.length) });
+          return { status: 200, body: { tool_id: call.source_id } };
+        },
+      },
+    }),
+  }));
+  const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
+  const runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors,
+    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } },
+  });
+  try {
+    const origin = `http://127.0.0.1:${runtime.address.port}`;
+    const token = await f.login(origin);
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+    expect((await fetch(`${origin}/v4/person/tools`, { headers })).status).toBe(200);
+    for (const call of calls) {
+      expect(call.tools).toHaveBeenCalledWith(token);
+      const response = await fetch(`${origin}/v1/person/tools/${call.source_id}/probe`, { method: 'POST', headers, body: '{}' });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ tool_id: call.source_id });
+    }
+    // Page-only registration cannot expose page citations through the older ticket response.
+    const ask = (version: number) => fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
+    expect((await ask(4)).status).toBe(503);
+    expect(calls.every(call => call.source.mock.calls.length === 0)).toBe(true);
+    const answer = await ask(5);
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toMatchObject({ schema_version: 6 });
+    for (const call of calls) expect(call.source).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ access_token: token }));
+  } finally { await runtime.close(); }
+  for (const call of calls) expect(call.close).toHaveBeenCalledTimes(1);
+});
+
+it('closes already opened connectors if a later registered connector fails to start', async () => {
+  const f = await fixture();
+  const close = vi.fn();
+  const definition = (source_id: string): Omit<PersonLiveConnectorDefinitionV1, 'open'> => ({
+    descriptor: { source_id, selector: source_id, kind: 'page', description: 'Live pages', metadata_only_list: true },
+    scopes: ['global'], minimum_response_version: 6,
+  });
+  await expect(startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors: [
+    { ...definition('first'), open: () => ({ application: { source: async () => undefined }, close }) },
+    { ...definition('second'), open: () => { throw new Error('connector startup failed'); } },
+  ] })).rejects.toThrow('connector startup failed');
   expect(close).toHaveBeenCalledTimes(1);
 });
 

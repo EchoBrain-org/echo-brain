@@ -18,6 +18,7 @@ import type {
 } from "./structured-generation-v1.js";
 import {
   evidenceDeskSourceV2,
+  liveSourceDescriptorV2,
   type EvidenceDeskItemV2,
   type EvidenceDeskKindV2,
   type EvidenceDeskListInputV2,
@@ -277,10 +278,10 @@ function toolRefusal(error: unknown): string | null {
 }
 function abort(): never { throw new DOMException("Ask cancelled", "AbortError"); }
 /** What the model is told the desk reads. Adding a scope kind is a compile error here. */
-function scopeText(scope: EvidenceDeskPortV2["scope"], liveTickets: boolean): string {
+function scopeText(scope: EvidenceDeskPortV2["scope"]): string {
   switch (scope.kind) {
-    case "project": return liveTickets ? "one project: meetings and documents are limited to it; live tickets are limited to its saved tool project mapping, if configured; Slack is not read" : "one project: meetings and documents are limited to it; Slack is not";
-    case "mine": return "only what the asker added: their own notes and uploaded documents, and meetings they approved; Slack and shared transcripts are not read";
+    case "project": return "one project: meetings and documents are limited to it; live sources are limited to their saved project mappings. Only sources in source_catalog are available";
+    case "mine": return "only what the asker added: their own notes and uploaded documents, and meetings they approved; shared live sources and shared transcripts are not read";
     case "global": return "everything the asker can read";
     default: return unknownScope(scope);
   }
@@ -348,16 +349,15 @@ const LIST_SOURCES: Readonly<Record<string, EvidenceDeskSourceV2>> = Object.free
   ticket: "ticket", tickets: "ticket",
   page: "page", pages: "page", knowledge: "page", wiki: "page",
 });
-const SEARCH_KINDS: Readonly<Record<EvidenceDeskSourceV2, readonly EvidenceDeskKindV2[]>> = Object.freeze({
-  meeting: ['decision', 'action', 'rationale'], document: ['note', 'document_passage'],
-  slack: ['slack_message'], ticket: ['ticket'], page: ['page'],
-});
-const SOURCE_SELECTOR: Readonly<Record<EvidenceDeskSourceV2, StepSource>> = Object.freeze({
-  meeting: 'meetings', document: 'documents', slack: 'slack', ticket: 'tickets', page: 'pages',
-});
-function readSource(value: string | undefined): EvidenceDeskSourceV2 | undefined {
-  const key = value?.trim().toLowerCase();
-  return key !== undefined && Object.hasOwn(LIST_SOURCES, key) ? LIST_SOURCES[key] : undefined;
+interface ResearchSource {
+  readonly source_id: string;
+  readonly selector: string;
+  readonly kinds: readonly EvidenceDeskKindV2[];
+  readonly description: string;
+  readonly metadata_only_list?: boolean;
+  readonly tool_id?: string;
+  readonly requires_channel?: boolean;
+  readonly default_since_days?: number;
 }
 const MEETING_KINDS: Readonly<Record<string, EvidenceDeskKindV2>> = Object.freeze({
   decision: "decision", decisions: "decision", action: "action", actions: "action", task: "action", tasks: "action", rationale: "rationale", rationales: "rationale", reason: "rationale",
@@ -381,9 +381,10 @@ function listDate(value: string, today: string): string | null {
   return isoDay(base);
 }
 type ListArgs = { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
-function normalizeListArgs(raw: StepArgs, today: string, tickets: boolean, pages: boolean): ListArgs | { readonly error: string } {
+function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<string, ResearchSource>, readSource: (value: string | undefined) => string | undefined): ListArgs | { readonly error: string } {
   const source = readSource(raw.source);
-  if (source === undefined || (!tickets && source === "ticket") || (!pages && source === "page")) return { error: pages ? "source must be \"meetings\", \"documents\", \"slack\", \"tickets\" or \"pages\"" : tickets ? "source must be \"meetings\", \"documents\", \"slack\" or \"tickets\"" : "source must be \"meetings\", \"documents\" or \"slack\"" };
+  if (source === undefined) return { error: `source must be ${[...sources.values()].map(value => value.selector).join(", ")}` };
+  const descriptor = sources.get(source)!;
   const notes: string[] = [];
   let kinds: EvidenceDeskKindV2[] | undefined;
   if (raw.kind !== undefined) {
@@ -409,15 +410,15 @@ function normalizeListArgs(raw: StepArgs, today: string, tickets: boolean, pages
   let channel: string | undefined;
   if (raw.channel !== undefined) {
     const name = raw.channel.trim().replace(/^#/u, "").trim();
-    if (source !== "slack") notes.push("channel applies to slack only; ignored");
-    else if (name.length === 0 || name.length > 80) return { error: "channel must be a Slack channel name such as \"hw-dvt\"" };
+    if (!descriptor.requires_channel) notes.push("channel is unsupported by this source; ignored");
+    else if (name.length === 0 || name.length > 80) return { error: "channel must be a channel name such as \"hw-dvt\"" };
     else channel = name;
   }
-  if (source === "slack" && channel === undefined) return { error: "slack needs a channel, such as {\"source\": \"slack\", \"channel\": \"hw-dvt\"}" };
+  if (descriptor.requires_channel && channel === undefined) return { error: `${descriptor.selector} needs a channel, such as ${JSON.stringify({ source: descriptor.selector, channel: "hw-dvt" })}` };
   const since = raw.since === undefined ? undefined : listDate(raw.since, today);
   const until = raw.until === undefined ? undefined : listDate(raw.until, today);
   if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21 or an age like 7d or 2w" };
-  const defaultSince = source === "slack" && since === undefined ? listDate("14d", today)! : since ?? undefined;
+  const defaultSince = descriptor.default_since_days !== undefined && since === undefined ? listDate(`${descriptor.default_since_days}d`, today)! : since ?? undefined;
   return {
     source, notes,
     ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(channel === undefined ? {} : { channel }),
@@ -441,31 +442,38 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
   const now = options.now_ms ?? (() => performance.now());
   const today = options.today ?? (() => isoDay(new Date()));
   const askedBy = askerName(options.asker);
-  const liveCatalog = (options.desk.live_sources ?? []).flatMap(source => {
-    if (source.source === 'ticket' && (!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine')) return [];
-    if (source.source === 'page' && (responseVersion !== 6 || options.desk.scope.kind === 'mine')) return [];
-    const fallback = source.source === 'ticket'
-      ? { selector: 'tickets' as const, description: 'Live work items: discover summaries with search or list, then open selected items for their bodies and current state.', metadata_only_list: true }
-      : source.source === 'page'
-        ? { selector: 'pages' as const, description: 'Live knowledge pages: discover pages, then open selected pages and continuation handles for their current text.', metadata_only_list: true }
-        : { selector: 'slack' as const, description: 'Live discussion messages.', metadata_only_list: false };
-    return [Object.freeze({ source: source.selector ?? fallback.selector, description: source.description ?? fallback.description, metadata_only_list: source.metadata_only_list ?? fallback.metadata_only_list, ...(source.tool_id === undefined ? {} : { tool_id: source.tool_id }) })];
+  const liveCatalog: ResearchSource[] = (options.desk.live_sources ?? []).flatMap(value => {
+    const descriptor = liveSourceDescriptorV2(value);
+    // Citation compatibility belongs to the response version, never a provider name.
+    if (descriptor.kind === 'ticket' && (!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine')) return [];
+    if (descriptor.kind === 'page' && (responseVersion !== 6 || options.desk.scope.kind === 'mine')) return [];
+    return [{ ...descriptor, kinds: [descriptor.kind] }];
   });
-  const sourceCatalog: readonly { readonly source: StepSource; readonly description: string; readonly metadata_only_list?: boolean; readonly tool_id?: string }[] = Object.freeze([
-    { source: 'meetings', description: 'Approved meeting records and admitted transcripts.' },
-    { source: 'documents', description: 'Uploaded document passages and notes.' },
+  const researchSources: readonly ResearchSource[] = Object.freeze([
+    { source_id: 'meeting', selector: 'meetings', kinds: ['decision', 'action', 'rationale'], description: 'Approved meeting records and admitted transcripts.' },
+    { source_id: 'document', selector: 'documents', kinds: ['note', 'document_passage'], description: 'Uploaded document passages and notes.' },
     ...liveCatalog,
   ]);
+  const sourcesById = new Map(researchSources.map(source => [source.source_id, source]));
+  const sourceCatalog: readonly { readonly source: StepSource; readonly description: string; readonly metadata_only_list?: boolean; readonly tool_id?: string; readonly requires_channel?: boolean; readonly default_since_days?: number }[] = Object.freeze(researchSources.map(({ source_id: _id, kinds: _kinds, selector, ...descriptor }) => Object.freeze({ ...descriptor, source: selector })));
+  const readSource = (value: string | undefined): string | undefined => {
+    const key = value?.trim().toLowerCase();
+    if (key === undefined) return undefined;
+    const exact = researchSources.find(source => source.selector === key || source.source_id === key);
+    if (exact !== undefined) return exact.source_id;
+    // Older model aliases are accepted only when their target remains uniquely advertised.
+    const alias = LIST_SOURCES[key];
+    if (alias === undefined) return undefined;
+    if (sourcesById.has(alias)) return alias;
+    const kind = alias === 'slack' ? 'slack_message' : alias;
+    const compatible = researchSources.filter(source => source.kinds.length === 1 && source.kinds[0] === kind);
+    return compatible.length === 1 ? compatible[0]!.source_id : undefined;
+  };
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
   const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
-  const ticketGuidance = [
-    "Live tickets (source \"ticket\") report the ticket's current title, description, owner, due date and status under the asker's connection. They are not approved meeting decisions. Distinguish their reported state from approved records and cite both when they disagree.",
-    "Search also accepts source \"tickets\" to query only live tickets; omit source to search across available evidence.",
-    "Ticket search and list are discovery: use the returned summaries to choose relevant items, then open their request-owned ids before citing them. Search narrows discovery by keywords or an exact identifier; list browses the scoped collection in pages.",
-    "To browse tickets, use list with {\"source\": \"tickets\", optional \"since\", \"until\"}; it returns metadata only, so open an item by its request-owned id before relying on the body. Ticket dates are creation dates. Tickets are available in global scope and in project scope only when a lead has saved a tool project mapping. Project tickets are already limited to that mapping by the server. Mine excludes tickets. Never infer a project mapping or choose a tenant, account or connection.",
-  ].join("\n");
-  const stepPrompt = tickets ? `${STEP_PROMPT}\n\n${ticketGuidance}` : STEP_PROMPT;
-  const answerPrompt = tickets ? `${ANSWER_PROMPT}\n\n${ticketGuidance}` : ANSWER_PROMPT;
+  const liveGuidance = "Live sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only search/list discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.";
+  const stepPrompt = liveCatalog.length === 0 ? STEP_PROMPT : `${STEP_PROMPT}\n\n${liveGuidance}`;
+  const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance}`;
   const stepBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, stepPrompt, OUTPUT_TOKENS.step);
   const answerBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, answerPrompt, OUTPUT_TOKENS.answer);
   return Object.freeze({
@@ -533,7 +541,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
       let evidenceNovelty = 0;
       const lists = new Map<string, ListState>();
       let touch = 0;
-      const scope = scopeText(options.desk.scope, tickets) + (tickets && !sourceCatalog.some(source => source.source === 'tickets') ? "; Live tickets are unavailable in this scope for this asker. Do not call ticket tools; answer from available sources and report any missing ticket context." : "");
+      const scope = scopeText(options.desk.scope);
 
       const remaining = () => deadline - now();
       const assertLive = () => {
@@ -570,7 +578,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         return deskId === undefined ? undefined : entries.get(deskId);
       };
       const describe = (entry: Entry): Record<string, unknown> => ({
-        id: entry.short, source: evidenceDeskSourceV2(entry.item), kind: entry.item.kind, title: entry.item.label,
+        id: entry.short, source: entry.item.source_id === undefined ? evidenceDeskSourceV2(entry.item) : sourcesById.get(entry.item.source_id)?.selector ?? entry.item.source_id, kind: entry.item.kind, title: entry.item.label,
         ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at }),
         ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
       });
@@ -584,11 +592,10 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         const query = normalizeQuery(args.query);
         if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
         const source = readSource(args.source);
-        if (args.source !== undefined && (source === undefined || (!tickets && source === 'ticket') || (responseVersion !== 6 && source === 'page'))) return { tool: 'search', args, error: responseVersion === 6 ? 'source must be meetings, documents, slack, tickets or pages; omit it to search all available sources' : tickets ? 'source must be meetings, documents, slack or tickets; omit it to search all available sources' : 'source must be meetings, documents or slack; omit it to search all available sources' };
-        if (source === 'ticket' && options.desk.ticket_available === false) return { tool: 'search', args, error: 'Live tickets are unavailable in this scope for this asker' };
+        if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
         if (searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase())) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
         searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
-        const result = await raceAbort(activeSignal, desk.search({ query, ...(source === undefined ? {} : { kinds: SEARCH_KINDS[source] }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
+        const result = await raceAbort(activeSignal, desk.search({ query, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
         observe(result);
         researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete: !result.truncated && result.notice === undefined });
         retrievalProgress += 1;
@@ -640,14 +647,14 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => listing(value, false)) }), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
       };
       const list = async (args: StepArgs): Promise<ToolResult> => {
-        const normalized = normalizeListArgs(args, today(), tickets, responseVersion === 6);
+        const normalized = normalizeListArgs(args, today(), sourcesById, readSource);
         if ("error" in normalized) return { tool: "list", args, error: normalized.error };
         const { notes, status, owner, ...request } = normalized;
         const key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
         let state = lists.get(key);
         if (state === undefined) {
           const stateArgs: StepArgs = Object.freeze({
-            source: SOURCE_SELECTOR[request.source], ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
+            source: sourcesById.get(request.source)!.selector, ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
             ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }),
             ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
           });

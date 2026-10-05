@@ -54,6 +54,26 @@ test('global Ask reads Jira live and opens its ticket citation', async () => {
   expect(recordReads()).toHaveLength(0);
 });
 
+for (const [tool, label] of [['notion', 'Notion'], ['knowledge-base', 'Knowledge Base']]) {
+  test(`a ${tool} page uses its own provider label and the shared external opener`, async () => {
+    run = await launch(`ask-page-${tool}`);
+    const { page, app } = run;
+    const permalink = `https://${tool}.example.test/pages/12345?view=current`;
+    await app.evaluate(({ shell }) => {
+      (globalThis as { openedSources?: string[] }).openedSources = [];
+      shell.openExternal = async url => { (globalThis as { openedSources?: string[] }).openedSources!.push(url); };
+    });
+    await askFromHome(page, 'When does the launch begin?');
+    await page.getByTestId('citation').click();
+    const pane = page.getByTestId('source-pane');
+    await expect(pane).toContainText(`${label} · Page`);
+    await expect(pane).not.toContainText('Confluence');
+    await pane.getByRole('button', { name: `Open in ${label}` }).click();
+    await expect.poll(() => app.evaluate(() => (globalThis as { openedSources?: string[] }).openedSources)).toEqual([permalink]);
+    expect(evidenceReads()).toHaveLength(0);
+  });
+}
+
 test('follow-ups stack in a thread, newest at the bottom: earlier answers collapse, five at most, and Back leaves the thread', async () => {
   run = await launch();
   const { page } = run;
@@ -290,7 +310,7 @@ test('a Slack citation survives the client and IPC, keeps its label, and opens o
   await expect(page.getByTestId('citation')).toHaveText(['1', '2', '3']);
   await page.getByTestId('citation').nth(2).click();
   const pane = page.getByTestId('source-pane');
-  await expect(pane).toContainText('Slack message');
+  await expect(pane).toContainText('Slack · Message');
   await expect(pane.locator('h2')).toHaveText('#launch · Maya');
   await expect(pane.getByTestId('open-slack-source')).toHaveAttribute('title', permalink);
   expect(evidenceReads()).toHaveLength(0);

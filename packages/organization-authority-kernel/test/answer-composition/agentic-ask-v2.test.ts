@@ -186,9 +186,9 @@ describe('Agentic Ask V2 ticket release', () => {
       expect(input.user_prompt).not.toContain('request-private-ticket');
       expect(input.user_prompt).not.toContain('atlassian.net');
       expect(input.user_prompt).not.toContain('10001');
-      expect(input.system_prompt).toContain('"source": "tickets"');
-      expect(input.system_prompt).toContain('project scope only when a lead has saved a tool project mapping');
-      expect(input.system_prompt).toContain('Mine excludes tickets');
+      expect(JSON.parse(input.user_prompt).source_catalog).toEqual(expect.arrayContaining([expect.objectContaining({ source: "tickets", metadata_only_list: true })]));
+      expect(input.system_prompt).toContain("Use each source's selector and capabilities from source_catalog");
+      expect(input.system_prompt).toContain("The server already applies scope and permissions");
     }
     expect(f.auditEntries[0]).toMatchObject({ outcome: 'answered', model_calls: 4, citation_count: 1, receipt_digests: [metadata.receipt_sha256, uncitedMetadata.receipt_sha256, opened.receipt_sha256], response_sha256: canonicalSha256(answer) });
     expect(JSON.stringify(f.auditEntries)).not.toContain(body);

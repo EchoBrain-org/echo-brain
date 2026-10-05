@@ -1,6 +1,9 @@
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { PersonProviderV1 } from './person-provider-v1.js';
 
+// Product-specific resource/account rules belong to this Atlassian family adapter.
+type AtlassianPersonProviderV1 = PersonProviderV1 & { readonly id: 'jira' | 'confluence' };
+
 export interface AtlassianConnectionCheckInputV1 {
   readonly signal?: AbortSignal;
   readonly expected_origin?: string;
@@ -11,7 +14,7 @@ const REQUIRED_SCOPES = Object.freeze({
   confluence: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user'],
 });
 
-export function atlassianSiteOriginV1(provider: PersonProviderV1, value: unknown): string {
+export function atlassianSiteOriginV1(provider: AtlassianPersonProviderV1, value: unknown): string {
   const raw = provider.string(value, provider.id === 'jira' ? 256 : 2048);
   let url: URL;
   try { url = new URL(raw); } catch { provider.failure('invalid_output'); }
@@ -21,7 +24,7 @@ export function atlassianSiteOriginV1(provider: PersonProviderV1, value: unknown
 }
 
 /** Bind the exact product resource/site and current Atlassian account before releasing context. */
-export async function verifyAtlassianConnectionV1(provider: PersonProviderV1, transport: {
+export async function verifyAtlassianConnectionV1(provider: AtlassianPersonProviderV1, transport: {
   readonly binding: PersonConnectorReadBindingV1;
   request(input: { readonly path: string; readonly signal?: AbortSignal }): Promise<unknown>;
 }, input: AtlassianConnectionCheckInputV1 = {}): Promise<{ readonly origin: string; readonly account_id: string }> {

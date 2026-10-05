@@ -1,63 +1,77 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeConfluencePageStorageV1 } from '../src/confluence-page-text-v1.js';
+import { normalizeConfluencePageDocumentV1 } from '../src/confluence-page-text-v1.js';
 
-describe('Confluence storage page text', () => {
-  it('preserves headings, gate table relationships, lists, links and Unicode entities', () => {
-    const result = normalizeConfluencePageStorageV1('<h1>ECHO PRD</h1><p>Ready &amp; reviewed &#x1F680; &#8212; next</p><table><tr><th>Gate</th><th>Status</th></tr><tr><td>EVT</td><td>Blocked</td></tr></table><ul><li>Connect Jira</li><li><a href="https://example.test/?x=1&amp;y=2" title="a &gt; b">Read Confluence</a></li></ul>');
-    const text = result.sections.join('');
-    expect(text).toContain('Ready & reviewed 🚀 — next');
-    expect(text).toContain('| Gate | Status');
-    expect(text).toContain('| EVT | Blocked');
-    expect(text).toContain('• Connect Jira');
-    expect(text).toContain('• Read Confluence');
+const text = (value: string) => ({ type: 'text', text: value });
+const paragraph = (value: string) => ({ type: 'paragraph', content: [text(value)] });
+const document = (...content: unknown[]) => JSON.stringify({ type: 'doc', version: 1, content });
+
+describe('Confluence native ADF page text', () => {
+  it('preserves headings, gate table relationships, lists, links and Unicode', () => {
+    const result = normalizeConfluencePageDocumentV1(document(
+      { type: 'heading', attrs: { level: 1 }, content: [text('ECHO PRD')] },
+      paragraph('Ready & reviewed 🚀 — next'),
+      { type: 'table', content: [
+        { type: 'tableRow', content: ['Gate', 'Status'].map(value => ({ type: 'tableHeader', content: [paragraph(value)] })) },
+        { type: 'tableRow', content: ['EVT', 'Blocked'].map(value => ({ type: 'tableCell', content: [paragraph(value)] })) },
+      ] },
+      { type: 'bulletList', content: ['Connect Jira', 'Read Confluence'].map(value => ({ type: 'listItem', content: [paragraph(value)] })) },
+      { type: 'paragraph', content: [{ ...text('Linked requirements'), marks: [{ type: 'link', attrs: { href: 'https://untrusted.invalid/never-fetch' } }] }] },
+    ));
+    const rendered = result.sections.join('');
+    for (const value of ['Ready & reviewed 🚀 — next', '| Gate | Status', '| EVT | Blocked', '• Connect Jira', '• Read Confluence', 'Linked requirements']) expect(rendered).toContain(value);
     expect(result.incomplete).toBe(false);
   });
 
-  it('retains safe text macro bodies and omits opaque embeds without exposing their parameters', () => {
-    const result = normalizeConfluencePageStorageV1('<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">javascript</ac:parameter><ac:plain-text-body><![CDATA[if (a < b) return "ready";]]></ac:plain-text-body></ac:structured-macro><ac:structured-macro ac:name="jira"><ac:parameter ac:name="secret">UNRELEASED-PARAMETER</ac:parameter><ac:rich-text-body><p>UNREAD-EMBED</p></ac:rich-text-body></ac:structured-macro><p>Visible after embed</p><ac:image><ri:attachment ri:filename="image.png" /></ac:image>');
-    const text = result.sections.join('');
-    expect(text).toContain('if (a < b) return "ready";');
-    expect(text).toContain('Visible after embed');
-    expect(text).toContain('[Unsupported embedded content omitted.]');
-    expect(text).not.toContain('UNRELEASED-PARAMETER');
-    expect(text).not.toContain('UNREAD-EMBED');
+  it('preserves native code and expand content while explicitly omitting opaque legacy macros and media', () => {
+    const code = '  if ready:\n    ship()\n\n  stop()';
+    const result = normalizeConfluencePageDocumentV1(document(
+      { type: 'codeBlock', attrs: { language: 'javascript' }, content: [text(code)] },
+      { type: 'expand', attrs: { title: 'Gate notes' }, content: [paragraph('Visible after embed')] },
+      { type: 'bodiedExtension', attrs: { extensionKey: 'legacy-macro', parameters: { secret: 'UNRELEASED-PARAMETER' } }, content: [paragraph('UNREAD-EMBED')] },
+      { type: 'mediaSingle', content: [{ type: 'media', attrs: { url: 'https://untrusted.invalid/never-fetch' } }] },
+    ));
+    const rendered = result.sections.join('');
+    for (const value of [code, 'Gate notes', 'Visible after embed', '[Unsupported embedded content omitted.]']) expect(rendered).toContain(value);
+    for (const value of ['UNRELEASED-PARAMETER', 'UNREAD-EMBED', 'https://untrusted.invalid']) expect(rendered).not.toContain(value);
     expect(result.incomplete).toBe(true);
   });
 
   it('keeps every character of a long MRD reachable in bounded Unicode sections', () => {
     const raw = `MRD start\n${'Requirement 🚀 e\u0301. '.repeat(1600)}\nPVT acceptance at the end`;
-    const result = normalizeConfluencePageStorageV1(`<pre>${raw}</pre>`);
+    const result = normalizeConfluencePageDocumentV1(document({ type: 'codeBlock', content: [text(raw)] }));
     expect(result.sections.length).toBeGreaterThan(10);
     expect(result.sections.join('')).toBe(raw.normalize('NFC'));
-    for (const section of result.sections) {
-      expect(Buffer.byteLength(section, 'utf8')).toBeLessThanOrEqual(3072);
-      expect(section).not.toContain('\uFFFD');
-    }
+    for (const section of result.sections) { expect(Buffer.byteLength(section, 'utf8')).toBeLessThanOrEqual(3072); expect(section).not.toContain('\uFFFD'); }
     expect(result.sections.at(-1)).toContain('PVT acceptance at the end');
   });
 
-  it('does not let tags inside quoted attributes or CDATA alter the parser structure', () => {
-    expect(normalizeConfluencePageStorageV1('<p title="a > b and <ignored>">Visible</p><ac:plain-text-body><![CDATA[<tag>text &amp;</tag>]]></ac:plain-text-body>').sections.join('')).toBe('Visible\n\n<tag>text &amp;</tag>');
-  });
-
-  it('preserves meaningful code indentation and marks self-closing opaque macros incomplete', () => {
-    const result = normalizeConfluencePageStorageV1('<ac:plain-text-body><![CDATA[  if ready:\n    ship()\n\n  stop()]]></ac:plain-text-body><ac:structured-macro ac:name="external-data" />');
-    expect(result.sections.join('')).toContain('  if ready:\n    ship()\n\n  stop()');
-    expect(result.sections.join('')).toContain('[Unsupported embedded content omitted.]');
-    expect(result.incomplete).toBe(true);
-  });
-
-  it('preserves Confluence date and task macros used in gate checklists', () => {
-    const result = normalizeConfluencePageStorageV1('<p>EVT due <time datetime="2026-10-05" /></p><ac:task-list><ac:task><ac:task-id>123456789</ac:task-id><ac:task-uuid>task-uuid</ac:task-uuid><ac:task-status>incomplete</ac:task-status><ac:task-body>Approve the gate</ac:task-body></ac:task></ac:task-list>');
-    expect(result.sections.join('')).toContain('EVT due 2026-10-05');
-    expect(result.sections.join('')).toContain('incomplete');
-    expect(result.sections.join('')).toContain('Approve the gate');
-    expect(result.sections.join('')).not.toContain('123456789');
-    expect(result.sections.join('')).not.toContain('task-uuid');
+  it('preserves dates and task states without exposing internal task identifiers', () => {
+    const result = normalizeConfluencePageDocumentV1(document(
+      { type: 'paragraph', content: [text('EVT due '), { type: 'date', attrs: { timestamp: String(Date.parse('2026-10-05T00:00:00Z')) } }] },
+      { type: 'taskList', attrs: { localId: 'list-private' }, content: [
+        { type: 'taskItem', attrs: { localId: 'task-private', state: 'TODO' }, content: [text('Approve the gate')] },
+        { type: 'taskItem', attrs: { state: 'DONE' }, content: [text('Read the PRD')] },
+      ] },
+    ));
+    const rendered = result.sections.join('');
+    for (const value of ['EVT due 2026-10-05', '[ ] Approve the gate', '[x] Read the PRD']) expect(rendered).toContain(value);
+    expect(rendered).not.toContain('private');
     expect(result.incomplete).toBe(false);
   });
 
-  it.each(['<!DOCTYPE root [<!ENTITY x SYSTEM "file:///private/data">]><p>&x;</p>', '<p>unfinished', '<p></div>', '<p>&#0;</p>', '<p>\ud800</p>', '<p>&#x85;</p>', '<p>\u0085</p>', '<p>'.repeat(65) + '</p>'.repeat(65), 'x'.repeat(1024 * 1024 + 1)])('rejects malformed or excessive storage without external expansion', html => {
-    expect(() => normalizeConfluencePageStorageV1(html)).toThrow();
+  it.each(['<p>not ADF</p>', JSON.stringify({ type: 'doc', version: 2, content: [] }),
+    document(text('\u0000')), document(text('\ud800')), document(text('\u0085')),
+    document({ type: 'text', text: 'bad', content: [] }), document({ type: 'taskItem', attrs: { state: 'unknown' } }),
+    document({ type: 'date', attrs: { timestamp: 'invalid' } }), 'x'.repeat(1024 * 1024 + 1),
+  ])('rejects malformed or excessive native documents', value => {
+    expect(() => normalizeConfluencePageDocumentV1(value)).toThrow();
+  });
+
+  it('bounds nesting, node count and total released text independently', () => {
+    let nested: unknown = paragraph('Too deep');
+    for (let depth = 0; depth < 65; depth++) nested = { type: 'panel', content: [nested] };
+    for (const value of [document(nested), document(...Array.from({ length: 50_001 }, () => ({ type: 'hardBreak' }))), document(text('x'.repeat(512 * 1024 + 1)))]) {
+      expect(() => normalizeConfluencePageDocumentV1(value)).toThrow();
+    }
   });
 });

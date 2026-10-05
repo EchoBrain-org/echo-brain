@@ -4,7 +4,7 @@ import { validatePersonPageCitationV1, type PersonPageCitationV1 } from '@echo-b
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { ConfluenceCloudTransportV1 } from './confluence-cloud-transport-v1.js';
-import { normalizeConfluencePageStorageV1 } from './confluence-page-text-v1.js';
+import { normalizeConfluencePageDocumentV1 } from './confluence-page-text-v1.js';
 import { verifyConfluenceConnectionV1 } from './confluence-payload-v1.js';
 import { confluenceArray, confluenceFailure, confluenceRecord, confluenceString, copyConfluenceBindingV1 } from './confluence-validation-v1.js';
 
@@ -15,7 +15,7 @@ const MAX_REQUESTS = 160;
 const LIST_STATUSES = Object.freeze(['current', 'archived', 'deleted', 'trashed']);
 const STATUSES = Object.freeze([...LIST_STATUSES, 'draft', 'historical']);
 const EMPTY_DIGEST = textDigest('');
-type Page = Readonly<{ id: string; space_id: string; title: string; version: string; status: string; occurred_at?: string; storage?: string }>;
+type Page = Readonly<{ id: string; space_id: string; title: string; version: string; status: string; occurred_at?: string; document?: string }>;
 type Item = Readonly<{ page: Page; section: string; offset: number; text?: string }>;
 type Cursor = Readonly<{ selection: string; path: string; query: Readonly<Record<string, string | readonly string[]>>; token: string }>;
 
@@ -43,16 +43,16 @@ function metadata(raw: unknown, body = false): Page {
     if (typeof occurred !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(occurred) || !Number.isFinite(Date.parse(occurred))) confluenceFailure('invalid_output');
     occurred_at = new Date(occurred).toISOString().slice(0, 10);
   }
-  let storage: string | undefined;
+  let document: string | undefined;
   if (body) {
-    const representation = confluenceRecord(confluenceRecord(record.body).storage);
-    if (representation.representation !== undefined && representation.representation !== 'storage') confluenceFailure('invalid_output');
+    const representation = confluenceRecord(confluenceRecord(record.body).atlas_doc_format);
+    if (representation.representation !== undefined && representation.representation !== 'atlas_doc_format') confluenceFailure('invalid_output');
     if (typeof representation.value !== 'string') confluenceFailure('invalid_output');
-    storage = representation.value;
+    document = representation.value;
   }
   return Object.freeze({ id: confluenceString(record.id, 20, ID), space_id: confluenceString(record.spaceId, 20, ID),
     title: confluenceString(record.title, 1024), version: String(number), status,
-    ...(occurred_at === undefined ? {} : { occurred_at }), ...(storage === undefined ? {} : { storage }) });
+    ...(occurred_at === undefined ? {} : { occurred_at }), ...(document === undefined ? {} : { document }) });
 }
 function samePage(left: Page, right: Page): boolean {
   return left.id === right.id && left.space_id === right.space_id && left.version === right.version && left.title === right.title && left.status === right.status && left.occurred_at === right.occurred_at;
@@ -98,7 +98,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
   function inScope(page: Page): void { if (selected !== undefined && !selected.includes(page.space_id)) confluenceFailure('unauthorized'); }
   function permalink(page: Page): string { return `${origin}/wiki/pages/viewpage.action?pageId=${page.id}`; }
   async function exact(id: string, body: boolean, status?: string, signal?: AbortSignal): Promise<Page> {
-    const page = metadata(await transport.request({ path: `/api/v2/pages/${id}`, query: { ...(body ? { 'body-format': 'storage' } : {}), ...(status === undefined ? {} : { status }) }, signal }), body);
+    const page = metadata(await transport.request({ path: `/api/v2/pages/${id}`, query: { ...(body ? { 'body-format': 'atlas_doc_format' } : {}), ...(status === undefined ? {} : { status }) }, signal }), body);
     if (page.id !== id) confluenceFailure('invalid_output');
     inScope(page);
     return page;
@@ -115,7 +115,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       permalink: permalink(item.page), text_sha256: item.text === undefined ? EMPTY_DIGEST : textDigest(item.text) });
     const handle = `confluence_item_${randomUUID()}`;
     // Page bodies are never needed in a handle or audit. Keep only the released section in request memory.
-    const { storage: _storage, ...page } = item.page;
+    const { document: _document, ...page } = item.page;
     const saved: Item = Object.freeze({ ...item, page: Object.freeze(page) });
     handles.set(handle, saved);
     issued.set(canonicalSha256(citation), saved);
@@ -245,7 +245,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       await verify(input.signal);
       const page = await exact(item.page.id, true, item.page.status, input.signal);
       if (!samePage(page, item.page)) confluenceFailure('stale_access_state');
-      const normalized = normalizeConfluencePageStorageV1(page.storage!);
+      const normalized = normalizeConfluencePageDocumentV1(page.document!);
       const texts = normalized.sections;
       if (item.offset >= texts.length) confluenceFailure('stale_access_state');
       if (item.text !== undefined && textDigest(texts[item.offset]!) !== textDigest(item.text)) confluenceFailure('stale_access_state');
@@ -276,7 +276,7 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
       await parallel([...grouped.values()], async items => {
         const needsBody = items.some(item => item.text !== undefined);
         const page = await exact(items[0]!.page.id, needsBody, items[0]!.page.status, input.signal);
-        const normalized = needsBody ? normalizeConfluencePageStorageV1(page.storage!) : undefined;
+        const normalized = needsBody ? normalizeConfluencePageDocumentV1(page.document!) : undefined;
         for (const item of items) {
           if (!samePage(item.page, page)) confluenceFailure('stale_access_state');
           if (item.text !== undefined && (normalized?.sections[item.offset] === undefined || textDigest(normalized.sections[item.offset]!) !== textDigest(item.text))) confluenceFailure('stale_access_state');

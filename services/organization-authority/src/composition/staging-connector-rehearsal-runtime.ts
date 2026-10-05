@@ -34,6 +34,7 @@ import {
 } from './staging-connector-rehearsal-protocol.js';
 import { isActiveInitialOwnerV1, openConnectorRehearsalCaptureV1, type OpenedConnectorRehearsalCaptureV1 } from './connector-rehearsal-capture-v1.js';
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveRuntimeSeamsV1, type OpenedJiraPersonLiveRuntimeV1 } from './jira-person-live-runtime-v1.js';
+import { JIRA_LIVE_CONNECTOR_V1 } from './person-live-connector-registry-v1.js';
 import {
   openOrganizationAuthorityService,
   type OrganizationAuthorityServiceConfig,
@@ -193,7 +194,8 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
       (config.jira_person_live !== undefined && (config.jira_person_live.enabled !== true ||
         config.jira_person_live.cloud_id !== profile.jira.cloud_id || config.jira_person_live.integration_id !== profile.jira.integration_key)) ||
       config.staging_synthetic_meetings_directory !== undefined || config.staging_synthetic_owner_email !== undefined ||
-      dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.api?.slack_live_runtime_factory !== undefined ||
+      dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.api?.page_live_runtime_factory !== undefined || dependencies.api?.slack_live_runtime_factory !== undefined ||
+      (dependencies.api?.live_connectors?.length ?? 0) !== 0 ||
       dependencies.person_http_runtime_factory_with_slack !== undefined ||
       config.slack_public_channel_context !== undefined) {
     throw new Error('Staging connector rehearsal selection is invalid');
@@ -407,7 +409,7 @@ export async function openStagingConnectorRehearsalService(
     };
     runtime = await openOrganizationAuthorityService({ ...serviceConfig, slack_public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 }, {
       ...dependencies,
-      api: { ...dependencies.api, ...(jiraAsk === undefined ? {} : { ticket_live_runtime_factory: openJira }) },
+      api: { ...dependencies.api, ...(jiraAsk === undefined ? {} : { live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: openJira }] }) },
       person_http_runtime_factory_with_slack: personFactory,
       processing_adapter_overrides: granola === undefined ? dependencies.processing_adapter_overrides : {
         ...dependencies.processing_adapter_overrides,

@@ -32,6 +32,18 @@
     "./person-connection-http-application-v1": {
       "types": "./dist/person-connection-http-application-v1.d.ts",
       "import": "./dist/person-connection-http-application-v1.js"
+    },
+    "./bounded-json-response-v1": {
+      "types": "./dist/bounded-json-response-v1.d.ts",
+      "import": "./dist/bounded-json-response-v1.js"
+    },
+    "./atlassian-document-text-v1": {
+      "types": "./dist/atlassian-document-text-v1.d.ts",
+      "import": "./dist/atlassian-document-text-v1.js"
+    },
+    "./person-project-mapping-v1": {
+      "types": "./dist/person-project-mapping-v1.d.ts",
+      "import": "./dist/person-project-mapping-v1.js"
     }
   },
   "files": [

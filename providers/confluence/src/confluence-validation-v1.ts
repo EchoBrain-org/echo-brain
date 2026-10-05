@@ -13,6 +13,7 @@ export function bindingEqual(left: PersonConnectorReadBindingV1,right: PersonCon
 export const CONFLUENCE_PERSON_PROVIDER_V1 = Object.freeze({
   nango_provider_id: 'confluence',
   id: 'confluence' as const,
+  storage_namespace: 'confluence',
   display_name: 'Confluence',
   scope_id_pattern: CONFLUENCE_CLOUD_ID,
   oauth_scopes: 'offline_access read:page:confluence read:space:confluence search:confluence read:confluence-user',

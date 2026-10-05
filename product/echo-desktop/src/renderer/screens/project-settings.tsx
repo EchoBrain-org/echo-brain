@@ -1,3 +1,4 @@
+import type { ComponentChildren } from 'preact';
 import { createPortal } from 'preact/compat';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { ProjectSummary } from '../../shared/protocol.js';
@@ -5,7 +6,7 @@ import { message } from '../messages.js';
 import {
   beginProjectJira, setProjectJira, saveProjectJira, projectJiraValid, beginProjectConfluence, toggleProjectConfluenceSpace, moreProjectConfluenceSpaces, saveProjectConfluence,
   askProjectSetting, beginProjectRename, cancelProjectSettingsAction, closeProjectSettings, confirmProjectSetting, dismissProjectSetting,
-  keepProjectSetting, projectRenameValid, projectSettingsBlocked, retryProjectSetting, setProjectRename, toggleProjectSettings, type State, type ProjectSettingsState,
+  keepProjectSetting, projectRenameValid, projectSettingsBlocked, retryProjectSetting, setProjectRename, toggleProjectSettings, type State, type ProjectSettingsState, type ProjectToolSetting,
 } from '../store.js';
 import { trapTab } from './compose.js';
 import { Ellipsis } from './icons.js';
@@ -88,63 +89,79 @@ function ProjectMenu({ settings, anchor }: { settings: ProjectSettingsState; anc
   );
 }
 
+/** Both collection editors share focus, dismissal, write-state and conflict handling. */
+function ProjectMappingDialog({ settings, setting, tool, title, loading, canSave, retry, focus, reload, save, children }: {
+  settings: ProjectSettingsState;
+  setting: ProjectToolSetting<{ mapping: unknown | null }>;
+  tool: string; title: string; loading: string; canSave: boolean; retry?: boolean;
+  focus?: () => void; reload: () => Promise<unknown>; save: (remove?: boolean) => Promise<void>;
+  children: ComponentChildren;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const done = useRef<HTMLButtonElement>(null);
+  const lead = settings.project.role === 'lead';
+  useEffect(() => { if (setting.status === 'ready' && lead && focus) focus(); else done.current?.focus(); }, [setting.status, lead]);
+  return <div class="overlay" onClick={cancelProjectSettingsAction}>
+    <div class="sheet confirm project-setting-sheet" role="dialog" aria-labelledby={`${tool}-mapping-title`} ref={box}
+      onClick={event => event.stopPropagation()} onKeyDown={event => {
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelProjectSettingsAction(); }
+        else trapTab(event, box.current);
+      }}>
+      <h2 id={`${tool}-mapping-title`}>{title}</h2>
+      {setting.status === 'loading' && <p role="status">{loading}</p>}
+      {children}
+      {setting.status === 'saving' && <p role="status">Checking access and saving…</p>}
+      {setting.failure && <p class="error" data-testid={`project-${tool}-error`}>{setting.failure.code === 'conflict'
+        ? 'This setting changed. Reload it before editing.' : setting.writeFailed
+          ? 'The change could not be confirmed. Reload the setting before editing again.' : message(setting.failure)}</p>}
+      <div class="choices">
+        <button ref={done} type="button" class="plain-button" disabled={setting.status === 'saving'} onClick={cancelProjectSettingsAction}>Done</button>
+        {(setting.status === 'failed' || retry) && <button type="button" class="plain-button" onClick={() => void reload()}>Reload setting</button>}
+        {lead && setting.value?.mapping != null && <button type="button" class="plain-button" data-testid={`project-${tool}-remove`} disabled={setting.status !== 'ready'} onClick={() => void save(true)}>Remove mapping</button>}
+        {lead && setting.value && <button type="button" class="plain-button" data-testid={`project-${tool}-save`} disabled={setting.status !== 'ready' || !canSave} onClick={() => void save()}>Save</button>}
+      </div>
+    </div>
+  </div>;
+}
+
 function JiraProject({ state }: { state: State }) {
   const settings = state.projectSettings!;
   const jira = settings.jira!;
-  const box = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLInputElement>(null);
-  const done = useRef<HTMLButtonElement>(null);
   const lead = settings.project.role === 'lead';
-  const busy = jira.status === 'loading' || jira.status === 'saving';
-  useEffect(() => { if (jira.status === 'ready' && lead) field.current?.focus(); else done.current?.focus(); }, [jira.status, lead]);
-  return (
-    <div class="overlay" onClick={cancelProjectSettingsAction}>
-      <div class="sheet confirm project-setting-sheet" role="dialog" aria-labelledby="jira-project-title" ref={box}
-        onClick={event => event.stopPropagation()} onKeyDown={event => {
-          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelProjectSettingsAction(); }
-          else trapTab(event, box.current);
-        }}>
-        <h2 id="jira-project-title">Jira project</h2>
-        <p>Questions in {settings.project.name} read this Jira project live, using each person’s connected Jira account.</p>
-        {jira.status === 'loading' && <p role="status">Loading setting…</p>}
-        {jira.value && <>
-          <p data-testid="project-jira-current">{jira.value.mapping ? `Mapped to ${jira.value.mapping.project_key}` : 'No Jira project mapped'}</p>
-          {lead ? <label class="jira-project-field">Jira project key
-            <input ref={field} class="field" data-testid="project-jira-input" aria-label="Jira project key" maxLength={64} placeholder="e.g. KAN"
-              value={jira.key} disabled={jira.status !== 'ready'} onInput={event => setProjectJira((event.target as HTMLInputElement).value)}
-              onKeyDown={event => { if (event.key === 'Enter' && projectJiraValid(jira)) { event.preventDefault(); void saveProjectJira(); } }} />
-          </label> : <p>A project lead can change this setting.</p>}
-          {lead && <p>Connect your Jira account in Tools before saving.</p>}
-        </>}
-        {jira.status === 'saving' && <p role="status">Checking Jira and saving…</p>}
-        {jira.failure && <p class="error" data-testid="project-jira-error">{jira.failure.code === 'conflict' ? 'This setting changed. Reload it before editing.' : jira.writeFailed ? 'The change could not be confirmed. Reload the setting before editing again.' : message(jira.failure)}</p>}
-        <div class="choices">
-          <button ref={done} type="button" class="plain-button" disabled={jira.status === 'saving'} onClick={cancelProjectSettingsAction}>Done</button>
-          {jira.status === 'failed' && <button type="button" class="plain-button" onClick={() => void beginProjectJira()}>Reload setting</button>}
-          {lead && jira.value?.mapping && <button type="button" class="plain-button" data-testid="project-jira-remove" disabled={jira.status !== 'ready'} onClick={() => void saveProjectJira(true)}>Remove mapping</button>}
-          {lead && jira.value && <button type="button" class="plain-button" data-testid="project-jira-save" disabled={busy || !projectJiraValid(jira)} onClick={() => void saveProjectJira()}>Save</button>}
-        </div>
-      </div>
-    </div>
-  );
+  return <ProjectMappingDialog settings={settings} setting={jira} tool="jira" title="Jira project" loading="Loading setting…"
+    canSave={projectJiraValid(jira)} focus={() => field.current?.focus()} reload={beginProjectJira} save={saveProjectJira}>
+    <p>Questions in {settings.project.name} read this Jira project live, using each person’s connected Jira account.</p>
+    {jira.value && <>
+      <p data-testid="project-jira-current">{jira.value.mapping ? `Mapped to ${jira.value.mapping.project_key}` : 'No Jira project mapped'}</p>
+      {lead ? <label class="jira-project-field">Jira project key
+        <input ref={field} class="field" data-testid="project-jira-input" aria-label="Jira project key" maxLength={64} placeholder="e.g. KAN"
+          value={jira.key} disabled={jira.status !== 'ready'} onInput={event => setProjectJira((event.target as HTMLInputElement).value)}
+          onKeyDown={event => { if (event.key === 'Enter' && projectJiraValid(jira)) { event.preventDefault(); void saveProjectJira(); } }} />
+      </label> : <p>A project lead can change this setting.</p>}
+      {lead && <p>Connect your Jira account in Tools before saving.</p>}
+    </>}
+  </ProjectMappingDialog>;
 }
 
 function ConfluenceSpaces({ state }: { state: State }) {
-  const settings = state.projectSettings!; const confluence = settings.confluence!; const box = useRef<HTMLDivElement>(null); const done = useRef<HTMLButtonElement>(null);
-  const lead = settings.project.role === 'lead'; const busy = confluence.status === 'loading' || confluence.status === 'saving';
-  useEffect(() => { done.current?.focus(); }, [confluence.status]);
-  return <div class="overlay" onClick={cancelProjectSettingsAction}><div class="sheet confirm project-setting-sheet" role="dialog" aria-labelledby="confluence-spaces-title" ref={box} onClick={event => event.stopPropagation()} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); cancelProjectSettingsAction(); } else trapTab(event, box.current); }}>
-    <h2 id="confluence-spaces-title">Confluence spaces</h2><p>Questions in {settings.project.name} read these spaces live, using each person’s connected Confluence account.</p>
-    {confluence.status === 'loading' && <p role="status">Loading accessible spaces…</p>}
-    {confluence.value && <><p data-testid="project-confluence-current">{confluence.value.mapping ? `${confluence.value.mapping.space_ids.length} space${confluence.value.mapping.space_ids.length === 1 ? '' : 's'} mapped` : 'No Confluence spaces mapped'}</p>
-      {lead ? <div data-testid="project-confluence-spaces">{confluence.spaces.map(space => <label key={space.id}><input type="checkbox" checked={confluence.selected.includes(space.id)} disabled={confluence.status !== 'ready'} onChange={() => toggleProjectConfluenceSpace(space.id)} /> {space.name} ({space.key})</label>)}</div> : <p>A project lead can change this setting.</p>}
+  const settings = state.projectSettings!;
+  const confluence = settings.confluence!;
+  const lead = settings.project.role === 'lead';
+  return <ProjectMappingDialog settings={settings} setting={confluence} tool="confluence" title="Confluence spaces" loading="Loading accessible spaces…"
+    canSave={confluence.pickerFailure === undefined && confluence.selected.length > 0} retry={confluence.pickerFailure !== undefined}
+    reload={beginProjectConfluence} save={saveProjectConfluence}>
+    <p>Questions in {settings.project.name} read these spaces live, using each person’s connected Confluence account.</p>
+    {confluence.value && <>
+      <p data-testid="project-confluence-current">{confluence.value.mapping ? `${confluence.value.mapping.space_ids.length} space${confluence.value.mapping.space_ids.length === 1 ? '' : 's'} mapped` : 'No Confluence spaces mapped'}</p>
+      {lead ? <div data-testid="project-confluence-spaces">{confluence.spaces.map(space => <label key={space.id}>
+        <input type="checkbox" checked={confluence.selected.includes(space.id)} disabled={confluence.status !== 'ready'} onChange={() => toggleProjectConfluenceSpace(space.id)} /> {space.name} ({space.key})
+      </label>)}</div> : <p>A project lead can change this setting.</p>}
       {lead && <p>Connect your Confluence account in Tools before saving.</p>}
       {confluence.next !== null && <button type="button" class="plain-button" data-testid="project-confluence-more" disabled={confluence.loadingMore || confluence.status !== 'ready'} onClick={() => void moreProjectConfluenceSpaces()}>{confluence.loadingMore ? 'Loading…' : 'Load more spaces'}</button>}
     </>}
-    {confluence.failure && <p class="error" data-testid="project-confluence-error">{confluence.failure.code === 'conflict' ? 'This setting changed. Reload it before editing.' : confluence.writeFailed ? 'The change could not be confirmed. Reload the setting before editing again.' : message(confluence.failure)}</p>}
     {confluence.pickerFailure && <p class="error" data-testid="project-confluence-picker-error">Could not load accessible spaces. {message(confluence.pickerFailure)}</p>}
-    <div class="choices"><button ref={done} type="button" class="plain-button" disabled={busy} onClick={cancelProjectSettingsAction}>Done</button>{(confluence.status === 'failed' || confluence.pickerFailure) && <button type="button" class="plain-button" onClick={() => void beginProjectConfluence()}>Reload setting</button>}{lead && confluence.value?.mapping && <button type="button" class="plain-button" data-testid="project-confluence-remove" disabled={confluence.status !== 'ready'} onClick={() => void saveProjectConfluence(true)}>Remove mapping</button>}{lead && confluence.value && <button type="button" class="plain-button" data-testid="project-confluence-save" disabled={confluence.status !== 'ready' || confluence.pickerFailure !== undefined || confluence.selected.length === 0} onClick={() => void saveProjectConfluence()}>Save</button>}</div>
-  </div></div>;
+  </ProjectMappingDialog>;
 }
 
 function Rename({ state }: { state: State }) {

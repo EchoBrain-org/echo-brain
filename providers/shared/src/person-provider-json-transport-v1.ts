@@ -1,3 +1,4 @@
+import { abortableProviderOperationV1, BoundedJsonResponseErrorV1, disposeProviderResponseV1, readBoundedJsonResponseV1 } from './bounded-json-response-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -9,29 +10,6 @@ export interface PersonProviderAuthenticatedFetchV1 {
 }
 export const PERSON_PROVIDER_RESPONSE_MAX_BYTES_V1 = 1024 * 1024;
 const SAFE_ERRORS = new Set(['invalid_request', 'invalid_output', 'unauthorized', 'not_found', 'stale_access_state', 'unavailable', 'rate_limited']);
-
-/** Bound even a broken fetch/stream implementation that ignores its AbortSignal. */
-function abortable<T>(operation: () => Promise<T>, signal: AbortSignal, discard?: (value: T) => void): Promise<T> {
-  signal.throwIfAborted();
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason);
-    signal.addEventListener('abort', abort, { once: true });
-    const done = () => signal.removeEventListener('abort', abort);
-    try {
-      operation().then(value => {
-        done();
-        if (signal.aborted) { discard?.(value); reject(signal.reason); }
-        else resolve(value);
-      }, error => { done(); reject(error); });
-    } catch (error) { done(); reject(error); }
-  });
-}
-
-function dispose(response: Response | undefined): void {
-  if (response?.body !== undefined && response.body !== null && !response.body.locked) {
-    try { void response.body.cancel().catch(() => {}); } catch { /* disposal cannot extend the deadline */ }
-  }
-}
 
 /** The product owns endpoint/selector validation; this owns the bounded authenticated JSON exchange. */
 export function createPersonProviderJsonTransportV1<Input extends { readonly signal?: AbortSignal }>(
@@ -56,11 +34,11 @@ export function createPersonProviderJsonTransportV1<Input extends { readonly sig
       let response: Response | undefined;
       try {
         current();
-        response = await abortable(() => fetchAuthenticated(selected.url.href, {
+        response = await abortableProviderOperationV1(() => fetchAuthenticated(selected.url.href, {
           method: selected.method ?? 'GET', redirect: 'error', signal,
           headers: { Accept: 'application/json', ...(selected.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
           ...(selected.body === undefined ? {} : { body: JSON.stringify(selected.body) }),
-        }), signal, dispose);
+        }), signal, disposeProviderResponseV1);
         signal.throwIfAborted();
         if (response.redirected || response.url !== '' && response.url !== selected.url.href) failure('invalid_output');
         if (response.status !== 200) {
@@ -70,36 +48,16 @@ export function createPersonProviderJsonTransportV1<Input extends { readonly sig
           failure('unavailable');
         }
         if (!/^application\/(?:json|[a-z0-9.+-]+\+json)(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) failure('invalid_output');
-        const length = response.headers.get('content-length');
-        if (length !== null && (!/^\d+$/.test(length) || Number(length) > PERSON_PROVIDER_RESPONSE_MAX_BYTES_V1)) failure('invalid_output');
-        if (response.body === null) failure('invalid_output');
-        const reader = response.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let total = 0;
-        try {
-          while (true) {
-            const chunk = await abortable(() => reader.read(), signal);
-            signal.throwIfAborted();
-            if (chunk.done) break;
-            total += chunk.value.byteLength;
-            if (total > PERSON_PROVIDER_RESPONSE_MAX_BYTES_V1) failure('invalid_output');
-            chunks.push(chunk.value);
-          }
-          let result: unknown;
-          try { result = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
-          catch { failure('invalid_output'); }
-          signal.throwIfAborted();
-          current();
-          return result;
-        } finally {
-          try { void reader.cancel().catch(() => {}); } catch { /* disposal cannot expose provider errors */ }
-          reader.releaseLock();
-        }
+        const result = await readBoundedJsonResponseV1(response, { maxBytes: PERSON_PROVIDER_RESPONSE_MAX_BYTES_V1, signal });
+        signal.throwIfAborted();
+        current();
+        return result;
       } catch (error) {
         input.signal?.throwIfAborted();
+        if (error instanceof BoundedJsonResponseErrorV1 && error.code !== 'transport') failure('invalid_output');
         if (error instanceof AuthorityOperationError && SAFE_ERRORS.has(error.code)) failure(error.code as Parameters<typeof failure>[0]);
         failure('unavailable');
-      } finally { dispose(response); }
+      } finally { disposeProviderResponseV1(response); }
     },
   });
 }

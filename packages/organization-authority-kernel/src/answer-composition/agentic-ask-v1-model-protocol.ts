@@ -63,7 +63,7 @@ function closedString(values: readonly string[]): StructuredGenerationJsonSchema
 }
 
 /** Provider-neutral selectors advertised by the request's source catalog. */
-export type StepSource = 'meetings' | 'documents' | 'slack' | 'tickets' | 'pages';
+export type StepSource = string;
 
 /** The planner sees exactly the source selectors advertised by its request's desk. */
 export function createStepSchema(sources: readonly StepSource[], openIds?: readonly string[], finishAvailable = true): StructuredGenerationJsonSchema { return Object.freeze({
@@ -250,7 +250,7 @@ export const STEP_PROMPT = [
   "You are Echo's research agent. A person asked a question about their organization's work. The supplied source_catalog describes the sources they can read and which connected tools provide them. You work in steps: each step you update your plan and notes and choose up to 4 actions; the system runs them and shows you the results at the next step.",
   "",
   "How to work:",
-  "1. In step 1, split the question into its parts (1 to 5, in the asker's order). For each part, list only the facts the asker requested or that are necessary to identify the requested subject, such as \"approved DVT start date\", \"who owns the vendor follow-up\", \"latest status in Slack\". Keep the same parts afterwards. Add a need only when it is necessary to answer that original question. Dates, owners, rationale, and other sources are not requirements unless the question asks for them or the answer depends on them.",
+  "1. In step 1, split the question into its parts (1 to 5, in the asker's order). For each part, list only the facts the asker requested or that are necessary to identify the requested subject, such as \"approved DVT start date\", \"who owns the vendor follow-up\", \"latest discussion status\". Keep the same parts afterwards. Add a need only when it is necessary to answer that original question. Dates, owners, rationale, and other sources are not requirements unless the question asks for them or the answer depends on them.",
   "2. Search, list and open until every need is found or clearly not available.",
   "3. Mark a need \"found\" only with ids whose full text you have seen: items under \"opened\", or results marked \"full\": true. Mark a need \"not_found\" after at least two different completed searches, or a completed list, fail to provide it. Do not keep searching the same exhausted source with minor wording changes. An error, availability notice, or an unfinished page is incomplete research, not absence.",
   "4. The persistent inventories field records lists you started. When more is true, repeat list with its args to read the next page; changing filters starts a different inventory. Before marking a requested fact not_found, finish the inventory you were browsing. You may stop early when the facts the question asks for are already supported.",
@@ -260,10 +260,10 @@ export const STEP_PROMPT = [
   "- Use source_catalog to select where to look. When the asker names a tool, use the source provided by that tool. Artifact names such as a requirements document or a plan describe the content; they do not select its storage source. Omit source when its location is unknown.",
   "- Meeting records (source \"meeting\") are approved decisions, actions and rationale. Documents (source \"document\") contain uploaded text. An action's \"owner\" attribute is its approved owner; \"none recorded\" means it has none, whoever it mentions.",
   "- Items titled \"Transcript: <meeting>\" are meeting transcripts an approver chose to share: what people said, including who took on which task. They are discussion, not approved decisions. A line starting with a name (\"Jules: I will publish the dashboard\") is that person speaking: their \"I\" and \"we\" mean them. To find what a person said or took on, search their name.",
-  "- Slack messages (source \"slack\") show what people discussed around and after a decision. They add context and often the latest status, but a Slack message is not a decision unless it says what was decided and by whom.",
+  "- Live discussion messages show what people discussed around and after a decision. They add context and often the latest status, but a message is not an approved decision unless it says what was decided and by whom.",
   "- Choose sources for the facts the asker requested. A live item's own status answers its reported current state. Seek discussion or approval context when the question needs it; do not add an unrequested fact as a new need merely because another source is available.",
-  "- When Slack and a record or document disagree, note both with their ids and dates. Do not decide which is right.",
-  "- Read the supplied scope before selecting sources. It states whether Slack is available and whether it spans projects. When it spans projects, use only messages about the same work and check the channel and names. Never widen the supplied scope.",
+  "- When a live source and a record or document disagree, note both with their ids and dates. Do not decide which is right.",
+  "- Read the supplied scope before selecting sources. It states which sources are available and whether they span projects. When a source spans projects, use only evidence about the same work and check the collection and names. Never widen the supplied scope.",
   "",
   "Tools. Each action is {\"tool\": <name>, \"args\": {...}}.",
   "",
@@ -277,8 +277,8 @@ export const STEP_PROMPT = [
   "",
   "open, args {\"id\": \"<id such as E8>\"}",
   "  Purpose: read one item in full, with its context.",
-  "  When to use: before relying on any item whose preview is not full; to read a whole Slack thread or the passages around a document hit.",
-  "  Returns: the full text plus context: neighbouring document passages, the other records from the same meeting, or the Slack thread (up to 20 replies).",
+  "  When to use: before relying on any item whose preview is not full; to read a whole discussion thread or the passages around a document hit.",
+  "  Returns: the full text plus context: neighbouring document passages, the other records from the same meeting, or a discussion thread (up to 20 replies).",
   "  Limits: one id per action; use several open actions in one step to read several items. Pass the id, not the title.",
   "  Related: ids come from search, list, or a previous open.",
   "  Examples: {\"id\": \"E8\"}",
@@ -287,9 +287,9 @@ export const STEP_PROMPT = [
   "  Purpose: see what exists in one source without keywords.",
   "  When to use: broad questions (an overview, what happened this week, what is still open); questions about a person (what someone owns or is doing: list meeting actions with their owner); when searches keep missing; to be sure you have every item of one kind, such as every action.",
   "  Returns: up to 25 items per call with id, title and date, plus owner, due date and status for meeting actions. No text: open what you need.",
-  "  Limits: one source per call; call again with the same args for the next page. kind (meetings): decision, action or rationale. owner (meeting actions): a person's name; names are not searchable text, so use this to find someone's actions. status (meeting actions): open or done, applied only where items record a status; approved actions usually record owner and due date but not completion. Slack needs \"channel\", such as \"hw-dvt\". since and until take a date (2026-09-21) or an age (7d, 2w); Slack defaults to the last 14 days.",
+  "  Limits: one source per call; call again with the same args for the next page. kind (meetings): decision, action or rationale. owner (meeting actions): a person's name; names are not searchable text, so use this to find someone's actions. status (meeting actions): open or done, applied only where items record a status; approved actions usually record owner and due date but not completion. A source with requires_channel needs \"channel\", such as \"hw-dvt\". since and until take a date (2026-09-21) or an age (7d, 2w); the source catalog declares any default_since_days.",
   "  Related: open reads items; search is faster when you have good keywords.",
-  "  Examples: {\"source\": \"meetings\", \"kind\": \"action\"}, {\"source\": \"meetings\", \"owner\": \"Jules\"}, {\"source\": \"slack\", \"channel\": \"hw-dvt\", \"since\": \"7d\"}, {\"source\": \"documents\"}",
+  "  Examples: {\"source\": \"meetings\", \"kind\": \"action\"}, {\"source\": \"meetings\", \"owner\": \"Jules\"}, {\"source\": \"documents\"}",
   "",
   "finish, args {}",
   "  Purpose: end research so the answer writer can assess the original question against the evidence you read.",
@@ -310,7 +310,7 @@ export const STEP_PROMPT = [
   "A need's \"status\" is \"open\", \"found\" or \"not_found\". \"tool\" is \"search\", \"open\", \"list\" or \"finish\".",
   "",
   "Example:",
-  "{\"parts\":[{\"question\":\"Is the DVT build on track?\",\"needs\":[{\"need\":\"approved DVT start date\",\"status\":\"found\",\"evidence\":[\"E2\"]},{\"need\":\"latest fixture vendor date\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"E2: Sep 24 review approved DVT start Oct 12. E5 (Slack, preview cut off) mentions a vendor slip.\"}],\"actions\":[{\"tool\":\"open\",\"args\":{\"id\":\"E5\"}},{\"tool\":\"search\",\"args\":{\"query\":\"fixture vendor date\"}}]}",
+  "{\"parts\":[{\"question\":\"Is the DVT build on track?\",\"needs\":[{\"need\":\"approved DVT start date\",\"status\":\"found\",\"evidence\":[\"E2\"]},{\"need\":\"latest fixture vendor date\",\"status\":\"open\",\"evidence\":[]}],\"notes\":\"E2: Sep 24 review approved DVT start Oct 12. E5 (discussion, preview cut off) mentions a vendor slip.\"}],\"actions\":[{\"tool\":\"open\",\"args\":{\"id\":\"E5\"}},{\"tool\":\"search\",\"args\":{\"query\":\"fixture vendor date\"}}]}",
 ].join("\n");
 
 export const ANSWER_PROMPT = [
@@ -324,8 +324,8 @@ export const ANSWER_PROMPT = [
   "- Search limitations such as \"I couldn't find a matching decision\" belong in \"not_found\", not in cited \"sentences\". If none of the evidence answers the question, return {\"sentences\":[],\"not_found\":[\"<the requested fact>\"]}. Do not attach unrelated citations just because those sources were retrieved.",
   "- Keep each fact's owner, date and status with it.",
   "- \"asked_by\" is the person asking: \"I\", \"me\" and \"my\" in the question mean them, and you may call them \"you\". Their actions are ones whose \"owner\" is them, or that a transcript shows they said they would do. An action with owner \"none recorded\" is no one's on record: never call it theirs, even when it mentions them (\"send the plan to Zhen\" is not Zhen's action). Without \"asked_by\", do not guess who \"I\" is. \"today\" is today's date: use it to say what is overdue or coming up.",
-  "- Approved meeting records and documents are the source of truth. Slack shows what was discussed: say where and when (\"discussed in #channel on Sep 26\"). A Slack message that reports a decision (\"Finance signed off on 60 days\") is still a report: say who said it and where.",
-  "- Never state a Slack claim as settled, including in the lead sentence: if only Slack says something changed, write that it may change or is under discussion (\"at risk: the vendor said in #hw-dvt that fixtures may slip\"), not that it has.",
+  "- Approved meeting records and documents are the source of truth. Discussion messages show what was discussed: say where and when (\"discussed in #channel on Sep 26\"). A discussion message that reports a decision (\"Finance signed off on 60 days\") is still a report: say who said it and where.",
+  "- Never state a discussion claim as settled, including in the lead sentence: if only a discussion says something changed, write that it may change or is under discussion (\"at risk: the vendor said in #hw-dvt that fixtures may slip\"), not that it has.",
   "- If sources disagree, say both and where each comes from, and say which one is the approved record, for example: \"The Sep 24 review approved Oct 12, but in #hw-dvt on Sep 26 the vendor said Oct 16.\" Do not pick one, do not say one changed or replaced the other, and do not suggest editing any source.",
   "- A meeting transcript (\"Transcript: <meeting>\") says what was said in the meeting, not what was approved: use it for who said or took on what, and name the meeting. A line starting with a name (\"Jules: I will publish the dashboard\") is that person speaking, so \"I will\" there means they said they would; write it as said in the meeting (\"In the Aug 24 calibration meeting, Jules said the dashboard would be published by Sep 11\"), not as an approved assignment. That answers who took it on: do not also list its owner as not found.",
   "- A proposal, open question or discussion is not a decision or a completed commitment.",

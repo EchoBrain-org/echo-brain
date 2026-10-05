@@ -203,12 +203,16 @@ export interface RecordRef {
 }
 
 /** What an answer is based on: an approved record, an original, or live evidence. */
+export interface ExternalAnswerSource {
+  readonly kind: 'slack' | 'ticket' | 'page';
+  readonly tool_id: string;
+  readonly label: string;
+  readonly permalink: string;
+}
 export type AnswerSource =
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef }
   | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef }
-  | { readonly kind: 'slack'; readonly label: string; readonly permalink: string }
-  | { readonly kind: 'ticket'; readonly label: string; readonly permalink: string }
-  | { readonly kind: 'page'; readonly label: string; readonly permalink: string };
+  | ExternalAnswerSource;
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
 export interface AnswerStatement {
@@ -469,11 +473,13 @@ export interface HostMethods {
 }
 
 export interface MainMethods {
+  /** Opens a validated external citation using its evidence kind's link policy. */
+  'source.openExternal': { params: { kind: ExternalAnswerSource['kind']; permalink: string }; result: null };
   /** Opens one cited Slack message in the system browser; only Slack message permalinks are allowed. */
   'source.openSlack': { params: { permalink: string }; result: null };
   /** Opens a validated ticket display link; the provider owns tenant validation. */
   'source.openTicket': { params: { permalink: string }; result: null };
-  /** Opens a verified live Confluence page in the system browser. */
+  /** Compatibility adapter for a live page's validated provider link. */
   'source.openPage': { params: { permalink: string }; result: null };
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
   /** Add files…, in New project: up to 20 documents at once. */
@@ -511,7 +517,7 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'employees.reissue', 'employees.revoke', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'source.openSlack', 'source.openTicket', 'source.openPage', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
+  'source.openExternal', 'source.openSlack', 'source.openTicket', 'source.openPage', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
   'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show',
 ];
 /** Host methods that change what the Authority stores. */
@@ -574,23 +580,23 @@ export function slackPermalink(raw: unknown): string | null {
     ? raw : null;
 }
 
-/** A live page display link has no credentials or fragment. */
-export function pagePermalink(raw: unknown): string | null {
-  if (typeof raw !== 'string' || raw.length > 2048 || /[\s\\\p{Cc}]/u.test(raw)) return null;
-  try {
-    const url = new URL(raw);
-    return url.protocol === 'https:' && url.hostname !== '' && url.username === '' && url.password === '' && url.hash === '' && url.href === raw ? raw : null;
-  } catch { return null; }
-}
-
-/** A ticket display link has no embedded authorization or redirect parameters. */
-export function ticketPermalink(raw: unknown): string | null {
+/** The provider validated tenant and identity; this display boundary constrains URL safety. */
+function webPermalink(raw: unknown, allowQuery: boolean): string | null {
   if (typeof raw !== 'string' || raw.length > 2048 || /[\s\\\p{Cc}]/u.test(raw)) return null;
   try {
     const url = new URL(raw);
     return url.protocol === 'https:' && url.hostname !== '' && url.username === '' && url.password === '' &&
-      url.search === '' && url.hash === '' && url.href === raw ? raw : null;
+      (allowQuery || url.search === '') && url.hash === '' && url.href === raw ? raw : null;
   } catch { return null; }
+}
+
+/** Page identifiers can be carried in the provider's query string. */
+export const pagePermalink = (raw: unknown): string | null => webPermalink(raw, true);
+/** A ticket display link has no embedded authorization or redirect parameters. */
+export const ticketPermalink = (raw: unknown): string | null => webPermalink(raw, false);
+
+export function externalSourcePermalink(kind: unknown, raw: unknown): string | null {
+  return kind === 'slack' ? slackPermalink(raw) : kind === 'ticket' ? ticketPermalink(raw) : kind === 'page' ? pagePermalink(raw) : null;
 }
 
 /** Parameters larger than this are refused at the broker. */

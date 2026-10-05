@@ -282,7 +282,7 @@ test('a lead maps accessible Confluence spaces, loads another page, asks with a 
   expect(run.calls().filter(call => call.path === '/v5/person/ask').at(-1)?.body).toMatchObject({ project_id: APOLLO });
   await page.getByTestId('citation').click();
   const pane = page.getByTestId('source-pane');
-  await expect(pane).toContainText('Confluence page');
+  await expect(pane).toContainText('Confluence · Page');
   await expect(pane.getByTestId('open-page-source')).toHaveAttribute('title', permalink);
   await pane.getByTestId('open-page-source').click();
   await expect.poll(opened).toEqual([permalink]);

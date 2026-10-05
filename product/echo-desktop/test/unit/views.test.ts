@@ -14,6 +14,18 @@ const { joinRecord } = await import('../../src/renderer/store.js');
 const sha = (digit: string) => `sha256:${digit.repeat(64)}`;
 
 describe('view models copy only what the renderer may see', () => {
+  it.each(['confluence', 'notion', 'knowledge-base'])('preserves %s page identity without provider coordinates', tool_id => {
+    const permalink = 'https://wiki.example.test/pages/view?pageId=12345';
+    const source = (tool: unknown) => ({ schema_version: 6, kind: 'echo-clean-person-answer-v6', outcome: 'answered',
+      citations: [{ kind: 'page', label: 'Launch plan', visibility: 'only_me', citation: { kind: 'page', tool_id: tool,
+        external_scope_id: 'private-tenant', page_id: '12345', section_id: 'one', version: '7', permalink, text_sha256: sha('a') } }],
+      parts: [{ question: 'When?', status: 'answered', statements: [{ text: 'Tuesday.', citation_indexes: [0], private: true }] }],
+    });
+    const answer = answerView({ ok: true, result: source(tool_id) }, { kind: 'global' });
+    expect(answer.sources).toEqual([{ kind: 'page', tool_id, label: 'Launch plan', permalink }]);
+    expect(JSON.stringify(answer)).not.toContain('private-tenant');
+    expect(() => answerView({ ok: true, result: source('invalid tool id') }, { kind: 'global' })).toThrow(ViewError);
+  });
   it('displays ticket citations only in V5 and retains only the direct ticket link', () => {
     const permalink = 'https://example.atlassian.net/browse/ECHO-7';
     const reply = (link: unknown, version = 5) => ({ ok: true, result: { schema_version: version, kind: `echo-clean-person-answer-v${version}`,
@@ -23,7 +35,7 @@ describe('view models copy only what the renderer may see', () => {
       } }], parts: [{ question: 'Which ticket?', status: 'answered', statements: [{ text: 'ECHO-7 covers launch.', citation_indexes: [0], private: true }] }],
     } });
     const answer = answerView(reply(permalink), { kind: 'global' });
-    expect(answer.sources).toEqual([{ kind: 'ticket', label: 'ECHO-7 · Jira launch', permalink }]);
+    expect(answer.sources).toEqual([{ kind: 'ticket', tool_id: 'jira', label: 'ECHO-7 · Jira launch', permalink }]);
     expect(JSON.stringify(answer)).not.toContain('private-tenant');
     expect(() => answerView(reply(permalink, 4), { kind: 'global' })).toThrow(ViewError);
     for (const link of ['javascript:alert(1)', 'https://user:password@example.test/ticket/7', 'https://example.test/ticket/7?token=secret',
@@ -129,7 +141,7 @@ describe('view models copy only what the renderer may see', () => {
       parts: [{ question: 'What changed?', status: 'answered', statements: [{ text: 'The launch is ready.', citation_indexes: [0], private: true }] }],
     });
     const answer = answerView({ ok: true, result: reply(permalink) }, { kind: 'global' });
-    expect(answer.sources).toEqual([{ kind: 'slack', label: '#launch · Maya', permalink }]);
+    expect(answer.sources).toEqual([{ kind: 'slack', tool_id: 'slack', label: '#launch · Maya', permalink }]);
     expect(answer.parts[0]?.statements[0]).toEqual({ text: 'The launch is ready.', citation_indexes: [0], private: true });
     for (const url of ['javascript:alert(1)', 'https://acme.slack.com.evil.test/archives/C01ABCDEF/p1758873600000100',
       'https://user:password@acme.slack.com/archives/C01ABCDEF/p1758873600000100', null]) {

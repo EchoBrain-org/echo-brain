@@ -1,3 +1,5 @@
+import { abortableProviderOperationV1, BoundedJsonResponseErrorV1, disposeProviderResponseV1, readBoundedJsonResponseV1 } from '@echo-brain/provider-runtime/bounded-json-response-v1';
+
 export const GRANOLA_API_BASE_URL = "https://public-api.granola.ai/v1";
 const DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS = 15_000;
 // Granola caps page_size at 30; values above 30 return HTTP 400.
@@ -99,64 +101,6 @@ export class GranolaApiError extends Error {
 class GranolaResponseTooLargeError extends GranolaApiError {
   constructor() {
     super("Granola API response exceeded the byte bound", "api_failed");
-  }
-}
-
-async function cancelResponseBody(response: Response | undefined): Promise<void> {
-  if (response?.body !== null && response?.body !== undefined && !response.body.locked) {
-    await response.body.cancel().catch(() => undefined);
-  }
-}
-
-/** Reads exact bytes so a false or absent Content-Length cannot bypass the cap. */
-async function boundedJson(
-  response: Response,
-  maximumBytes: number,
-  signal: AbortSignal,
-): Promise<unknown> {
-  const declaredLength = response.headers.get("content-length");
-  if (declaredLength !== null) {
-    if (!/^(?:0|[1-9][0-9]*)$/.test(declaredLength)) {
-      await cancelResponseBody(response);
-      throw new GranolaResponseTooLargeError();
-    }
-    const declaredBytes = Number(declaredLength);
-    if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maximumBytes) {
-      await cancelResponseBody(response);
-      throw new GranolaResponseTooLargeError();
-    }
-  }
-  const body = response.body;
-  if (body === null) throw new Error("Granola API response was empty");
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  const abort = () => { void reader.cancel().catch(() => undefined); };
-  signal.addEventListener("abort", abort, { once: true });
-  try {
-    for (;;) {
-      if (signal.aborted) throw new Error("Request aborted");
-      const part = await reader.read();
-      if (signal.aborted) throw new Error("Request aborted");
-      if (part.done) break;
-      bytes += part.value.byteLength;
-      if (bytes > maximumBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw new GranolaResponseTooLargeError();
-      }
-      chunks.push(part.value);
-    }
-    const joined = new Uint8Array(bytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      joined.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(joined)) as unknown;
-  } finally {
-    signal.removeEventListener("abort", abort);
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
   }
 }
 
@@ -313,14 +257,14 @@ export class HttpGranolaApiClient implements GranolaApiClient {
     const fetchImpl = this.opts.fetchImpl ?? fetch;
     let response: Response | undefined;
     try {
-      response = await fetchImpl(url, {
+      response = await abortableProviderOperationV1(() => fetchImpl(url, {
         redirect: "error",
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           Accept: "application/json",
         },
         signal: controller.signal,
-      });
+      }), controller.signal, disposeProviderResponseV1);
       if (controller.signal.aborted) throw new Error("Request aborted");
       if (!response.ok) {
         const retryAfterMs = parseRetryAfterMs(
@@ -347,11 +291,11 @@ export class HttpGranolaApiClient implements GranolaApiClient {
           response.status,
         );
       }
-      const value = await boundedJson(
-        response,
-        GRANOLA_JSON_RESPONSE_MAX_BYTES,
-        controller.signal,
-      );
+      const value = await readBoundedJsonResponseV1(response, {
+        maxBytes: GRANOLA_JSON_RESPONSE_MAX_BYTES,
+        signal: controller.signal,
+        contentLength: 'canonical',
+      });
       if (controller.signal.aborted) throw new Error("Request aborted");
       return value;
     } catch (err) {
@@ -363,10 +307,11 @@ export class HttpGranolaApiClient implements GranolaApiClient {
           "timeout",
         );
       }
+      if (err instanceof BoundedJsonResponseErrorV1 && err.code === 'oversized') throw new GranolaResponseTooLargeError();
       if (err instanceof GranolaApiError) throw err;
       throw new GranolaApiError("Granola API request failed", "api_failed");
     } finally {
-      await cancelResponseBody(response);
+      disposeProviderResponseV1(response);
       clearTimeout(timeout);
       parentSignal?.removeEventListener("abort", onParentAbort);
     }

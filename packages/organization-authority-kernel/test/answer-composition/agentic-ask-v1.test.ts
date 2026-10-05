@@ -805,16 +805,17 @@ describe("agentic Ask: research loop", () => {
     expect(result.parts[0]!.statements.map(value => value.private)).toEqual([false, true]);
   });
 
-  it("tells the model when the scope is one project and Slack is not limited to it", async () => {
+  it("tells the model that project scope and available live sources come from server composition", async () => {
     const script = scripted([finish([missing()]), finish([missing()])]);
     await ask({ desk: desk({ scope: { kind: "project", project_id: "prj_00000000-0000-4000-8000-000000000002" } as EvidenceDeskPortV1["scope"] }), model: script.model }).answer({ question: "When is launch?" });
-    expect(script.prompt(0).scope).toContain("Slack is not");
+    expect(script.prompt(0).scope).toContain("live sources are limited to their saved project mappings");
+    expect(script.prompt(0).scope).toContain("Only sources in source_catalog are available");
   });
 
-  it("tells the model a mine scope reads only what the asker added, never Slack or shared transcripts (ADR-0024)", async () => {
+  it("tells the model a mine scope reads only what the asker added, never shared live sources or shared transcripts (ADR-0024)", async () => {
     const script = scripted([finish([missing()]), finish([missing()])]);
     const result = await ask({ desk: desk({ scope: { kind: "mine" } }), model: script.model }).answer({ question: "What did I decide?" });
-    expect(script.prompt(0).scope).toBe("only what the asker added: their own notes and uploaded documents, and meetings they approved; Slack and shared transcripts are not read");
+    expect(script.prompt(0).scope).toBe("only what the asker added: their own notes and uploaded documents, and meetings they approved; shared live sources and shared transcripts are not read");
     expect(result.scope).toEqual({ kind: "mine" });
     const global = scripted([finish([missing()]), finish([missing()])]);
     await ask({ desk: desk({}), model: global.model }).answer({ question: "What did I decide?" });

@@ -7,7 +7,7 @@ import type {
   ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus,
 } from '../shared/protocol.js';
-import { pagePermalink, slackPermalink, ticketPermalink } from '../shared/protocol.js';
+import { externalSourcePermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
 
@@ -394,20 +394,14 @@ function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = fals
     return { kind: 'record', label: label || fallback, record };
   }
   if (citation.kind === 'source_revision') return { kind: 'original', label: label || fallback, ref: sourceRef(citation) };
-  if (citation.kind === 'slack_message') {
-    const permalink = slackPermalink(citation.permalink);
-    if (permalink === null) throw new ViewError();
-    return { kind: 'slack', label: label || fallback, permalink };
-  }
-  if (tickets && item.kind === 'ticket' && citation.kind === 'ticket') {
-    const permalink = ticketPermalink(citation.permalink);
-    if (permalink === null) throw new ViewError();
-    return { kind: 'ticket', label: label || fallback, permalink };
-  }
-  if (pages && item.kind === 'page' && citation.kind === 'page') {
-    const permalink = pagePermalink(citation.permalink);
-    if (permalink === null) throw new ViewError();
-    return { kind: 'page', label: label || fallback, permalink };
+  const kind = citation.kind === 'slack_message' ? 'slack'
+    : tickets && item.kind === 'ticket' && citation.kind === 'ticket' ? 'ticket'
+    : pages && item.kind === 'page' && citation.kind === 'page' ? 'page' : null;
+  if (kind !== null) {
+    const permalink = externalSourcePermalink(kind, citation.permalink);
+    const tool_id = kind === 'slack' ? 'slack' : citation.tool_id;
+    if (permalink === null || typeof tool_id !== 'string' || !TOOL_ID.test(tool_id)) throw new ViewError();
+    return { kind, tool_id, label: label || fallback, permalink };
   }
   throw new ViewError();
 }

@@ -1,3 +1,5 @@
+import { abortableProviderOperationV1, BoundedJsonResponseErrorV1, disposeProviderResponseV1, readBoundedJsonResponseV1 } from '@echo-brain/provider-runtime/bounded-json-response-v1';
+
 /**
  * Provider-neutral transport shared by every Slack setup client that needs a
  * bounded, timed-out JSON fetch: `redirect: "error"`, a combined timeout +
@@ -44,41 +46,6 @@ export interface BoundedJsonFetchInputV1 {
   readonly maxBytes: number;
 }
 
-async function readBoundedBytes(
-  response: Response,
-  maxBytes: number,
-): Promise<Uint8Array> {
-  if (response.body === null) return new Uint8Array(0);
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    for (;;) {
-      const read = await reader.read().catch(() => {
-        throw new BoundedJsonFetchErrorV1("transport", "The response stream failed");
-      });
-      if (read.done) break;
-      totalBytes += read.value.byteLength;
-      if (totalBytes > maxBytes) {
-        try {
-          await reader.cancel();
-        } catch {}
-        throw new BoundedJsonFetchErrorV1("oversized", "The response is oversized");
-      }
-      chunks.push(read.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
 /**
  * Fetches `input.url`, enforcing `redirect: "error"`, a timeout of
  * `input.timeoutMs` combined with an optional caller `input.signal` through
@@ -97,45 +64,24 @@ export async function boundedJsonFetchV1(
     input.signal === undefined
       ? deadline
       : AbortSignal.any([input.signal, deadline]);
-  let response: Response;
+  let response: Response | undefined;
   try {
-    response = await input.fetch(input.url, {
+    response = await abortableProviderOperationV1(() => input.fetch(input.url, {
       ...input.init,
       redirect: "error",
       signal: combined,
-    });
-  } catch {
-    throw new BoundedJsonFetchErrorV1("transport", "The request is unavailable");
-  }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    return Object.freeze({
-      status: response.status,
-      ok: false,
-      headers: response.headers,
-      json: undefined,
-    });
-  }
-  const declared = response.headers.get("content-length");
-  if (
-    declared !== null &&
-    (!/^\d+$/.test(declared) || Number(declared) > input.maxBytes)
-  ) {
-    throw new BoundedJsonFetchErrorV1("oversized", "The response is oversized");
-  }
-  const bytes = await readBoundedBytes(response, input.maxBytes);
-  let json: unknown;
-  if (bytes.byteLength > 0) {
-    try {
-      json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
-    } catch {
-      throw new BoundedJsonFetchErrorV1("invalid_json", "The response is not valid JSON");
+    }), combined, disposeProviderResponseV1);
+    if (!response.ok) {
+      return Object.freeze({ status: response.status, ok: false, headers: response.headers, json: undefined });
     }
+    const json = await readBoundedJsonResponseV1(response, { maxBytes: input.maxBytes, signal: combined, emptyBody: 'undefined' });
+    return Object.freeze({ status: response.status, ok: true, headers: response.headers, json });
+  } catch (error) {
+    if (error instanceof BoundedJsonResponseErrorV1) {
+      throw new BoundedJsonFetchErrorV1(error.code, error.message);
+    }
+    throw new BoundedJsonFetchErrorV1("transport", "The request is unavailable");
+  } finally {
+    disposeProviderResponseV1(response);
   }
-  return Object.freeze({
-    status: response.status,
-    ok: true,
-    headers: response.headers,
-    json,
-  });
 }

@@ -1,3 +1,4 @@
+import { normalizeAtlassianDocumentTextV1 } from '@echo-brain/provider-runtime/atlassian-document-text-v1';
 import { atlassianSiteOriginV1, verifyAtlassianConnectionV1, type AtlassianConnectionCheckInputV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import { createHash } from 'node:crypto';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
@@ -33,52 +34,6 @@ export function jiraProjectMatches(project: ReturnType<typeof parseJiraProject>,
   return project.id === selection || project.key === selection || project.keys.includes(selection);
 }
 
-/** Plain text extraction for the supported ADF subset; never hydrate cards, links or media. */
-function jiraDescription(value: unknown): string {
-  if (value === null) return '';
-  const doc = jiraRecord(value);
-  if (doc.type !== 'doc' || doc.version !== 1) jiraFailure('invalid_output');
-  let nodes = 0; let bytes = 0;
-  const blocks = new Set(['doc', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'taskList', 'codeBlock', 'table', 'tableRow', 'tableCell', 'tableHeader', 'panel']);
-  function walk(value: unknown, depth: number): string {
-    if (++nodes > 4096 || depth > 32) jiraFailure('invalid_output');
-    const node = jiraRecord(value); const type = jiraString(node.type, 64);
-    if (type === 'text') {
-      if (typeof node.text !== 'string') jiraFailure('invalid_output');
-      bytes += Buffer.byteLength(node.text, 'utf8');
-      if (bytes > 256 * 1024 || node.content !== undefined) jiraFailure('invalid_output');
-      if (node.marks !== undefined) for (const mark of jiraArray(node.marks, 32)) jiraString(jiraRecord(mark).type, 64);
-      return node.text;
-    }
-    if (type === 'hardBreak') return '\n';
-    if (type === 'rule') return '\n';
-    if (type === 'inlineCard') {
-      const attrs = jiraRecord(node.attrs);
-      // Preserve the provider's URL as text; never fetch card metadata or its target.
-      if (attrs.data !== undefined || node.content !== undefined) jiraFailure('invalid_output');
-      const text = jiraString(attrs.url, 8192);
-      bytes += Buffer.byteLength(text, 'utf8');
-      if (bytes > 256 * 1024) jiraFailure('invalid_output');
-      return text;
-    }
-    if (type === 'mention' || type === 'emoji' || type === 'status') {
-      const attrs = jiraRecord(node.attrs);
-      return jiraString(attrs.text ?? (type === 'emoji' ? attrs.shortName : undefined), 512);
-    }
-    if (type === 'taskItem') {
-      const state = jiraRecord(node.attrs).state;
-      // Checklist completion is evidence, distinct from the issue's workflow status.
-      if (state !== 'TODO' && state !== 'DONE') jiraFailure('invalid_output');
-      const text = jiraArray(node.content ?? [], 4096).map(child => walk(child, depth + 1)).join('');
-      return `[${state === 'DONE' ? 'x' : ' '}] ${text}\n`;
-    }
-    if (!blocks.has(type)) jiraFailure('invalid_output');
-    const content = jiraArray(type === 'doc' ? node.content : node.content ?? [], 4096);
-    const text = content.map(child => walk(child, depth + 1)).join('');
-    return type === 'doc' ? text : `${text}\n`;
-  }
-  return walk(doc, 0).trim();
-}
 
 export interface ParsedJiraIssueV1 {
   readonly id: string;
@@ -107,7 +62,7 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   const status = jiraString(jiraRecord(fields.status).name, 128);
   const owner = fields.assignee === null ? undefined : jiraString(jiraRecord(fields.assignee).displayName, 128);
   const due_at = fields.duedate === null ? undefined : jiraDay(fields.duedate);
-  const content = input.inventory ? undefined : jiraBoundText(`${key}: ${fields.summary}\n\n${jiraDescription(fields.description)}`.trim(), 3072);
+  const content = input.inventory ? undefined : jiraBoundText(`${key}: ${fields.summary}\n\n${(fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1).text.trim())}`.trim(), 3072);
   const citation: PersonTicketCitationV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: input.cloudid,
     ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: jiraTextDigest(content?.text ?? '') });
   return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(),

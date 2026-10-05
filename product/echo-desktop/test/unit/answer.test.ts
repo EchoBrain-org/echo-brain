@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerSource } from '../../src/shared/protocol.js';
-import { documentName, passageBlocks, sourceGroups, statementGroups } from '../../src/renderer/answer.js';
+import { documentName, externalSourceProvider, passageBlocks, sourceGroups, statementGroups } from '../../src/renderer/answer.js';
 
 const digest = (digit: string) => `sha256:${digit.repeat(64)}`;
 const original = (source: string, anchor: string, label = 'SCOUT-Hardware-Review-v0.1.md'): AnswerSource => ({
@@ -10,11 +10,20 @@ const original = (source: string, anchor: string, label = 'SCOUT-Hardware-Review
 const record = (digit: string): AnswerSource => ({
   kind: 'record', label: 'Approved record 1', record: { record_sha256: digest(digit), policy_id: 'organization-member-readable-person-v2' },
 });
-const slack = (ts: string): AnswerSource => ({ kind: 'slack', label: '#launch · Maya', permalink: `https://acme.slack.com/archives/C01ABCDEF/p${ts}` });
+const slack = (ts: string): AnswerSource => ({ kind: 'slack', tool_id: 'slack', label: '#launch · Maya', permalink: `https://acme.slack.com/archives/C01ABCDEF/p${ts}` });
 
 describe('an answer cites sources, not passages', () => {
+  it('keeps external source identity in grouping and uses the actual tool label', () => {
+    const source = { kind: 'page' as const, tool_id: 'notion', label: 'Launch', permalink: 'https://wiki.example.test/launch' };
+    expect(externalSourceProvider(source)).toBe('Notion');
+    expect(externalSourceProvider({ ...source, tool_id: 'knowledge-base' })).toBe('Knowledge Base');
+    expect(externalSourceProvider(source, [{ tool_id: 'notion', name: 'Product Wiki', status: 'linked' }])).toBe('Product Wiki');
+    expect(sourceGroups([source, { ...source, tool_id: 'confluence' }, { ...source }])).toEqual([
+      { kind: 'page', indexes: [0, 2] }, { kind: 'page', indexes: [1] },
+    ]);
+  });
   it('groups repeated ticket citations by link while keeping Slack sources distinct', () => {
-    const ticket: AnswerSource = { kind: 'ticket', label: 'ECHO-7', permalink: 'https://example.test/tickets/7' };
+    const ticket: AnswerSource = { kind: 'ticket', tool_id: 'jira', label: 'ECHO-7', permalink: 'https://example.test/tickets/7' };
     expect(sourceGroups([ticket, slack('1758873600000100'), { ...ticket, label: 'ECHO-7 updated title' }])).toEqual([
       { kind: 'ticket', indexes: [0, 2] }, { kind: 'slack', indexes: [1] },
     ]);

@@ -5,6 +5,9 @@ import { JiraConnectionStoreV1 } from '../../jira/src/jira-connection-store-v1.j
 import { ConfluenceConnectionStoreV1 } from '../../confluence/src/confluence-connection-store-v1.js';
 import { JIRA_PERSON_PROVIDER_V1 } from '../../jira/src/jira-validation-v1.js';
 import { createPersonConnectionLifecycleV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
+import { PersonConnectionStoreV1 } from '@echo-brain/provider-runtime/person-connection-store-v1';
+import { PersonProjectMappingStoreV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
+import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 
 const person = { organization_id: 'org-fixture', principal_id: 'person-fixture', membership_id: 'membership-fixture' };
 const cloud = '00000000-0000-4000-8000-000000000007';
@@ -52,6 +55,53 @@ describe('shared Atlassian custody with separate product identities', () => {
       const fetch = vi.fn();
       expect(() => createPersonConnectionLifecycleV1({ provider: JIRA_PERSON_PROVIDER_V1, store: confluence, scope_id: cloud, nango: {} as never, fetch, authenticate: vi.fn(), verify: vi.fn() })).toThrow(expect.objectContaining({ code: 'invalid_request' }));
       expect(fetch).not.toHaveBeenCalled();
+    } finally { database.close(); }
+  });
+});
+
+describe('provider registration without shared engine branches', () => {
+  type Mapping = { schema_version: 1; project_id: string; revision: string | null; mapping: null };
+  const validateMapping = (value: unknown): Mapping => value as Mapping;
+  function descriptor() {
+    return { ...JIRA_PERSON_PROVIDER_V1, id: 'notebook', display_name: 'Notebook', storage_namespace: 'notebook_store',
+      copyBinding(binding: PersonConnectorReadBindingV1) {
+        if (binding.tool_id !== 'notebook') JIRA_PERSON_PROVIDER_V1.failure('unauthorized');
+        return Object.freeze({ ...binding });
+      },
+    };
+  }
+
+  it('runs a third provider in both stores with a stable namespace and unchanged grant identity formula', () => {
+    const database = new Database(':memory:');
+    try {
+      const provider = descriptor();
+      const connections = new PersonConnectionStoreV1(database, provider);
+      const mappings = new PersonProjectMappingStoreV1(database, provider, validateMapping);
+      // Configuration objects cannot retarget a constructed store or its grant identity.
+      provider.id = 'changed'; provider.storage_namespace = 'changed'; provider.display_name = 'Changed';
+      const attempt = connections.begin(person);
+      const grant = connections.complete(person, attempt.attempt, 'reference-fixture', cloud, 'account-fixture', site);
+      expect(grant.binding.tool_id).toBe('notebook');
+      expect(grant.binding.read_grant_sha256).toBe(canonicalSha256({ kind: 'echo-notebook-person-read-grant-v1', ...person,
+        cloud, account: 'account-fixture', reference: grant.reference, version: grant.version }));
+      expect(connections.requireCurrent(grant.binding)).toEqual(grant);
+      expect(mappings.provider).toBe('notebook');
+      const saved = mappings.set(person.organization_id, 'project-fixture', null, 'command-fixture', null);
+      expect(mappings.read(person.organization_id, 'project-fixture')).toEqual(saved);
+      expect(() => mappings.set(person.organization_id, 'project-fixture', null, 'different-command', null)).toThrow('Notebook project setting changed');
+      expect(database.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()).toEqual([
+        { name: 'notebook_store_person_attempt_v1' }, { name: 'notebook_store_person_binding_v1' }, { name: 'notebook_store_project_mapping_v1' },
+      ]);
+    } finally { database.close(); }
+  });
+
+  it.each(['', 'with-hyphen', 'UPPER', 'x; DROP TABLE authority', 'a'.repeat(65)])('rejects an invalid SQL namespace before creating either store (%s)', storage_namespace => {
+    const database = new Database(':memory:');
+    try {
+      const provider = { ...descriptor(), storage_namespace };
+      expect(() => new PersonConnectionStoreV1(database, provider)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+      expect(() => new PersonProjectMappingStoreV1(database, provider, validateMapping)).toThrow(expect.objectContaining({ code: 'invalid_request' }));
+      expect(database.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([]);
     } finally { database.close(); }
   });
 });

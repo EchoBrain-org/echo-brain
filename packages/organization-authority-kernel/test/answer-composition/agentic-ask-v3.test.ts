@@ -101,3 +101,35 @@ describe('Agentic Ask V3 live pages', () => {
     expect(afterFirstOpen.last_results.at(-1)).toMatchObject({ tool: 'open', opened: ['E2'], results: [expect.objectContaining({ id: 'E3', title: next.label })] });
   });
 });
+
+
+it('plans two registered page providers without a provider-specific selector or routing branch', async () => {
+  const descriptors = [
+    { source_id: 'knowledge-a', selector: 'handbook', kind: 'page' as const, description: 'Company handbook pages.', metadata_only_list: true },
+    { source_id: 'knowledge-b', selector: 'runbooks', kind: 'page' as const, description: 'Operational runbook pages.', metadata_only_list: true },
+  ];
+  const items = descriptors.map((descriptor, index): EvidenceDeskItemV2 => ({ ...inventory, id: descriptor.source_id, source_id: descriptor.source_id, label: descriptor.description,
+    citation: { ...citation(''), tool_id: descriptor.source_id, page_id: `page-${index}` },
+  }));
+  const result = (item: EvidenceDeskItemV2) => ({ items: [item], truncated: false, receipt_digests: [item.receipt_sha256] });
+  const desk: EvidenceDeskPortV2 = {
+    scope: { kind: 'global' }, live_sources: descriptors,
+    list: vi.fn(async input => { expect(input.source).toBe('knowledge-a'); return result(items[0]!); }),
+    search: vi.fn(async input => { expect(input.source).toBe('knowledge-b'); expect(input.kinds).toEqual(['page']); return result(items[1]!); }),
+    open: vi.fn(async input => { const item = items.find(value => value.id === input.item)!; if (item.citation.kind !== 'page') throw new Error('Expected a page fixture'); return result({ ...item, text, citation: { ...item.citation, text_sha256: sha256Digest(text) } }); }),
+    revalidate: vi.fn(async () => checked),
+  };
+  const part = (status: 'open' | 'found') => [{ question: 'Compare the two plans.', notes: '', needs: [{ need: 'Both plans', status, evidence: status === 'found' ? ['E1', 'E2'] : [] }] }];
+  const replies = [
+    { parts: part('open'), actions: [{ tool: 'list', args: { source: 'handbook' } }, { tool: 'search', args: { source: 'runbooks', query: 'launch plan' } }] },
+    { parts: part('open'), actions: [{ tool: 'open', args: { id: 'E1' } }, { tool: 'open', args: { id: 'E2' } }] },
+    { parts: part('found'), actions: [{ tool: 'finish', args: {} }] },
+    { sentences: [{ text: 'Both plans say EVT begins Tuesday.', evidence: ['E1', 'E2'] }], not_found: [] },
+  ];
+  const prompts: StructuredGenerationInput[] = [];
+  const answer = await createAgenticAskV3({ desk, model: { generate: async input => { prompts.push(input); return replies.shift()!; } }, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } }).answer({ question: 'Compare the two plans.' });
+  expect(answer).toMatchObject({ schema_version: 6, outcome: 'answered' });
+  expect(answer.citations.map(value => value.citation.kind === 'page' ? value.citation.tool_id : undefined)).toEqual(['knowledge-a', 'knowledge-b']);
+  expect(JSON.parse(prompts[0]!.user_prompt).source_catalog.map((value: { source: string }) => value.source)).toEqual(['meetings', 'documents', 'handbook', 'runbooks']);
+  expect(desk.list).toHaveBeenCalledOnce(); expect(desk.search).toHaveBeenCalledOnce(); expect(desk.open).toHaveBeenCalledTimes(2);
+});

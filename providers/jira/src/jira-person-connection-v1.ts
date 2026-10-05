@@ -1,8 +1,8 @@
 import { createPersonConnectionLifecycleV1, type PersonConnectionAuthorizationV1 } from '@echo-brain/provider-runtime/person-connection-lifecycle-v1';
+import { createPersonProjectMappingAccessV1, type PersonProjectAuthorizationV1 } from '@echo-brain/provider-runtime/person-project-mapping-v1';
 import { validateJiraProjectReadV1, validateJiraProjectSetV1, type JiraProjectMappingV1 } from '@echo-brain/provider-jira-client/organization-api/jira-project-mapping-v1';
 import type { JiraProjectMappingStoreV1 } from './jira-project-mapping-store-v1.js';
-import { canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
-import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonLiveEvidenceAuditV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -31,7 +31,7 @@ export function createJiraPersonConnectionV1(options: {
   readonly fetch: typeof fetch;
   readonly project_mappings?: JiraProjectMappingStoreV1;
   /** Current exact ECHO project grant, supplied only by Authority composition. */
-  readonly authorize_project?: (access_token: string, project_id: string) => Readonly<{ role: 'lead' | 'member'; authorization_sha256: Sha256Digest }>;
+  readonly authorize_project?: PersonProjectAuthorizationV1;
   /** Existing ECHO session resolver, including current exact membership and session checks. */
   readonly authenticate: (access_token: string) => JiraPersonAuthorizationV1;
 }) {
@@ -40,17 +40,7 @@ export function createJiraPersonConnectionV1(options: {
     verify: (authenticated, input) => verifyJiraConnectionV1(createJiraCloudTransportV1(authenticated), input),
   });
   const { actor, tags, authenticated } = shared;
-  function projectAccess(token: string, projectId: string, lead = false) {
-    if (options.project_mappings === undefined || options.authorize_project === undefined) jiraFailure('unavailable');
-    const before = options.authorize_project(token, projectId);
-    if (lead && before.role !== 'lead') jiraFailure('unauthorized');
-    return { store: options.project_mappings, current: () => {
-      if (canonicalSha256(options.authorize_project!(token, projectId)) !== canonicalSha256(before)) jiraFailure('stale_access_state');
-    } };
-  }
-  function mappingInput<T>(validate: () => T): T {
-    try { return validate(); } catch { jiraFailure('invalid_request'); }
-  }
+  const { projectAccess, mappingInput } = createPersonProjectMappingAccessV1(JIRA_PERSON_PROVIDER_V1, options);
   return Object.freeze({
     ...shared.application,
     projectRead(input: { readonly access_token: string; readonly request: unknown }): JiraProjectMappingV1 {
@@ -68,9 +58,8 @@ export function createJiraPersonConnectionV1(options: {
       const current = () => { requirePerson(); access.current(); input.signal?.throwIfAborted(); };
       current();
       const command = canonicalSha256({ person, request });
-      const replay = access.store.replay(person.organization_id, request.project_id, command);
+      const replay = access.store.prepare(person.organization_id, request.project_id, request.expected_revision, command);
       if (replay !== undefined) return replay;
-      if (access.store.read(person.organization_id, request.project_id).revision !== request.expected_revision) throw new AuthorityOperationError('conflict', 'Jira project setting changed; reload it');
       let mapping: JiraProjectMappingV1['mapping'] = null;
       if (request.jira_project !== null) {
         const stored = options.store.current(person);

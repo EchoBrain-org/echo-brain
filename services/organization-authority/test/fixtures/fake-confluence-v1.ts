@@ -26,12 +26,12 @@ export function fakeConfluenceNangoV1() {
   return { nango, tags: () => tags, finish: () => { connections.set(pending, { tags, access_token: ACCESS_TOKEN }); } };
 }
 
-/** Fake Cloud responses for a single space and an HTML-backed page. */
+/** Fake Cloud responses for a single space and an native ADF page. */
 export function fakeConfluenceCloudFetchV1() {
   const page = {
     id: '100', spaceId: '123', title: 'ECHO MRD', status: 'current', version: { number: 7 },
     _links: { base: FIXTURE_CONFLUENCE_SITE_V1, webui: '/wiki/spaces/ECHO/pages/100/ECHO+MRD' },
-    body: { storage: { value: '<h1>ECHO MRD</h1><p>The release decision is to start EVT after PRD approval.</p>' } },
+    body: { atlas_doc_format: { representation: 'atlas_doc_format', value: JSON.stringify({ type: 'doc', version: 1, content: [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'ECHO MRD' }] }, { type: 'paragraph', content: [{ type: 'text', text: 'The release decision is to start EVT after PRD approval.' }] }] }) } },
   };
   return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = new URL(String(input));

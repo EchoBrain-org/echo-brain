@@ -14,16 +14,17 @@ const API_PREFIX = `/ex/confluence/${CLOUD}/wiki`;
 const SCOPES = ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user'];
 const binding: PersonConnectorReadBindingV1 = Object.freeze({ organization_id: 'synthetic-org', principal_id: 'synthetic-person', membership_id: 'synthetic-member',
   tool_id: 'confluence', external_scope_id: CLOUD, external_subject_id: 'synthetic-account', read_grant_sha256: canonicalSha256({ synthetic_grant: 1 }) });
+const document = (text: string) => JSON.stringify({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
 const emptyHash = `sha256:${createHash('sha256').update('').digest('hex')}`;
-type Page = { id: string; spaceId: string; title: string; status: string; version: number; storage: string; createdAt: string };
+type Page = { id: string; spaceId: string; title: string; status: string; version: number; document: string; createdAt: string };
 type Call = { path: string; query: URLSearchParams };
 const page = (overrides: Partial<Page> = {}): Page => ({ id: '123', spaceId: '42', title: 'ECHO product requirements', status: 'current', version: 3,
-  storage: '<h1>EVT requirements</h1><p>The gate requires meeting, ticket, and document context.</p>', createdAt: '2026-10-05T12:00:00Z', ...overrides });
+  document: document('EVT requirements\nThe gate requires meeting, ticket, and document context.'), createdAt: '2026-10-05T12:00:00Z', ...overrides });
 function metadata(value: Page, body = false) {
   return { id: value.id, spaceId: value.spaceId, title: value.title, status: value.status, version: { number: value.version, createdAt: value.createdAt },
     // Citation URLs must come from the verified site plus stable ID, not provider-controlled links.
     _links: { webui: 'https://untrusted.invalid/never-follow', base: 'https://untrusted.invalid' },
-    ...(body ? { body: { storage: { value: value.storage, representation: 'storage' } } } : {}) };
+    ...(body ? { body: { atlas_doc_format: { value: value.document, representation: 'atlas_doc_format' } } } : {}) };
 }
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 
@@ -49,14 +50,14 @@ async function fixture(options: { selected?: readonly string[]; pages?: Page[] }
       return response({ results: [...state.pages.values()].filter(value => selected === undefined || selected.includes(value.spaceId)).map(value => metadata(value)) });
     }
     if (path === '/rest/api/search') return response({ results: state.searchIds.map(id => ({ content: { id, type: 'page', title: 'Untrusted v1 search title',
-      body: { storage: { value: 'Search body must not become evidence' } }, version: { number: 999 } }, excerpt: 'Search excerpt must not become evidence' })),
+      body: { document: { value: 'Search body must not become evidence' } }, version: { number: 999 } }, excerpt: 'Search excerpt must not become evidence' })),
       ...(state.searchNext === undefined ? {} : { _links: { next: state.searchNext } }) });
     const space = /^\/api\/v2\/spaces\/(\d+)$/.exec(path);
     if (space !== null) return state.keys.has(space[1]!) ? response({ id: space[1], key: state.keys.get(space[1]!) }) : response({}, 404);
     const exact = /^\/api\/v2\/pages\/(\d+)$/.exec(path);
     if (exact !== null) {
       const value = state.pages.get(exact[1]!);
-      return value === undefined ? response({}, 404) : response(metadata(value, call.query.get('body-format') === 'storage'));
+      return value === undefined ? response({}, 404) : response(metadata(value, call.query.get('body-format') === 'atlas_doc_format'));
     }
     throw new Error(`Unexpected synthetic endpoint: ${path}`);
   });
@@ -68,7 +69,7 @@ async function fixture(options: { selected?: readonly string[]; pages?: Page[] }
     authorization: { assertCurrent() { if (!state.authorizationCurrent) throw new AuthorityOperationError('unauthorized', 'synthetic membership revoked'); } },
     audit: { async record(event) { if (state.rejectAudit) throw new Error('synthetic audit refused'); audits.push(event); return canonicalSha256(event); } },
     access: { tool_id: 'confluence', external_scope_id: CLOUD, external_subject_id: 'synthetic-account', identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] } });
-  return { source, reader, state, calls, audits, fetch, bodyCalls: () => calls.filter(call => call.query.get('body-format') === 'storage') };
+  return { source, reader, state, calls, audits, fetch, bodyCalls: () => calls.filter(call => call.query.get('body-format') === 'atlas_doc_format') };
 }
 
 // Every operation below crosses the production audited release boundary; raw
@@ -134,7 +135,7 @@ describe('Confluence live reader through the audited evidence source', () => {
 
   it('opens and continues a long page in bounded, audited sections without skipping or repeating text', async () => {
     const text = 'EVT decision 😊 remains open. '.repeat(700);
-    const f = await fixture({ pages: [page({ storage: `<p>${text}</p>` })] });
+    const f = await fixture({ pages: [page({ document: document(text) })] });
     const found = await f.source.list({});
     let item = found.items[0]!.id;
     let combined = '';
@@ -181,7 +182,7 @@ describe('Confluence live reader through the audited evidence source', () => {
     await f.source.open({ item: found.items[0]!.id });
     let code = 'stale_access_state';
     if (change === 'version') f.state.pages.get('123')!.version += 1;
-    if (change === 'hash') f.state.pages.get('123')!.storage = '<p>Different content at the same version must fail closed.</p>';
+    if (change === 'hash') f.state.pages.get('123')!.document = document('Different content at the same version must fail closed.');
     if (change === 'permission') { f.state.denied.add('/api/v2/pages/123'); code = 'unauthorized'; }
     if (change === 'moved_space') { f.state.pages.get('123')!.spaceId = '999'; code = 'unauthorized'; }
     if (change === 'account') { f.state.account = 'another-account'; code = 'unauthorized'; }
@@ -248,7 +249,7 @@ describe('Confluence live reader through the audited evidence source', () => {
   });
 
   it('marks unsupported embeds incomplete while preserving readable page context and never following embedded URLs', async () => {
-    const f = await fixture({ pages: [page({ storage: '<h1>EVT gate</h1><p>Owner approval is required.</p><ac:structured-macro ac:name="jira"><ac:parameter ac:name="url">https://untrusted.invalid/private</ac:parameter></ac:structured-macro><p>Review next week.</p>' })] });
+    const f = await fixture({ pages: [page({ document: JSON.stringify({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'EVT gate\nOwner approval is required.' }] }, { type: 'extension', attrs: { extensionKey: 'jira', parameters: { url: 'https://untrusted.invalid/private' } } }, { type: 'paragraph', content: [{ type: 'text', text: 'Review next week.' }] }] }) })] });
     const found = await f.source.list({});
     const opened = await f.source.open({ item: found.items[0]!.id });
     expect(opened.truncated).toBe(false);

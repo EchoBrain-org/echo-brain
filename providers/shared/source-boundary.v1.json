@@ -13,7 +13,10 @@
     "providers/shared/src/person-provider-v1.ts",
     "providers/shared/src/person-provider-json-transport-v1.ts",
     "providers/shared/src/atlassian-connection-verification-v1.ts",
-    "providers/shared/src/person-connection-http-application-v1.ts"
+    "providers/shared/src/person-connection-http-application-v1.ts",
+    "providers/shared/src/bounded-json-response-v1.ts",
+    "providers/shared/src/atlassian-document-text-v1.ts",
+    "providers/shared/src/person-project-mapping-v1.ts"
   ],
   "owned_source_paths": [
     "providers/shared/src/**"

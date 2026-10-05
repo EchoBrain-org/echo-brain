@@ -68,6 +68,7 @@ export function jiraDay(value: unknown, code: 'invalid_output' | 'invalid_reques
 export const JIRA_PERSON_PROVIDER_V1 = Object.freeze({
   nango_provider_id: 'jira',
   id: 'jira' as const,
+  storage_namespace: 'jira',
   display_name: 'Jira',
   scope_id_pattern: JIRA_CLOUD_ID,
   oauth_scopes: 'offline_access read:jira-work read:jira-user',

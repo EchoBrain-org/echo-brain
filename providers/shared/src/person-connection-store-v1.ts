@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import type { PersonConnectorReadBindingV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import type { PersonProviderV1 } from './person-provider-v1.js';
+import { personProviderStorageNamespaceV1, type PersonProviderV1 } from './person-provider-v1.js';
 
 export type PersonConnectionAttemptStatusV1 = 'pending' | 'complete' | 'cancelled' | 'expired' | 'failed';
 export type PersonConnectionAttemptFailureV1 = 'provider_rejected' | 'provider_unavailable' | 'account_mismatch';
@@ -18,13 +18,15 @@ interface AttemptBody extends Omit<PersonConnectionAttemptV1, 'attempt'> { reado
 
 /** Provider-owned database; immutable Authority SQL baselines are not modified. No credentials or evidence. */
 export class PersonConnectionStoreV1 {
-  private readonly bindingTable: 'jira_person_binding_v1' | 'confluence_person_binding_v1';
-  private readonly attemptTable: 'jira_person_attempt_v1' | 'confluence_person_attempt_v1';
+  readonly provider: PersonProviderV1;
+  private readonly bindingTable: string;
+  private readonly attemptTable: string;
 
-  constructor(private readonly db: Database.Database, readonly provider: PersonProviderV1, private readonly now: () => number = Date.now) {
-    if (provider.id !== 'jira' && provider.id !== 'confluence') provider.failure('invalid_request');
-    this.bindingTable = provider.id === 'jira' ? 'jira_person_binding_v1' : 'confluence_person_binding_v1';
-    this.attemptTable = provider.id === 'jira' ? 'jira_person_attempt_v1' : 'confluence_person_attempt_v1';
+  constructor(private readonly db: Database.Database, provider: PersonProviderV1, private readonly now: () => number = Date.now) {
+    this.provider = Object.freeze({ ...provider });
+    const namespace = personProviderStorageNamespaceV1(this.provider.storage_namespace);
+    this.bindingTable = `${namespace}_person_binding_v1`;
+    this.attemptTable = `${namespace}_person_attempt_v1`;
     db.exec(`CREATE TABLE IF NOT EXISTS ${this.bindingTable} (person_key TEXT PRIMARY KEY, reference TEXT UNIQUE NOT NULL, body_json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS ${this.attemptTable} (attempt TEXT PRIMARY KEY, person_key TEXT UNIQUE NOT NULL, body_json TEXT NOT NULL);`);
   }

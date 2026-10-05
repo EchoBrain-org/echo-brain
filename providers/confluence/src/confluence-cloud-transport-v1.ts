@@ -72,7 +72,7 @@ function requestUrl(cloud: string, input: ConfluenceCloudRequestV1): URL {
     }
     if (!stringQuery(value, key === 'cql' || key === 'cursor' ? 4096 : 128)) confluenceFailure('invalid_request');
     if (key === 'limit' && (!/^[1-9][0-9]{0,2}$/.test(value) || Number(value) > 250) ||
-        key === 'body-format' && value !== 'storage' || key === 'expand' && value !== 'content' ||
+        key === 'body-format' && value !== 'atlas_doc_format' || key === 'expand' && value !== 'content' ||
         key === 'includeArchivedSpaces' && value !== 'true' && value !== 'false') confluenceFailure('invalid_request');
     url.searchParams.set(key, value);
   }

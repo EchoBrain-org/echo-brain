@@ -1,3 +1,4 @@
+import { abortableProviderOperationV1, disposeProviderResponseV1, readBoundedJsonResponseV1 } from './bounded-json-response-v1.js';
 import type { PersonProviderV1 } from './person-provider-v1.js';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 
@@ -20,7 +21,7 @@ export function createNangoPersonConnectionV1(options: { readonly provider: Pick
     let response: Response | undefined;
     try {
       const url = `https://api.nango.dev${path}`;
-      response = await options.fetch(url, { method, redirect: 'error', signal: combined, headers: { Authorization: `Bearer ${options.authorization()}`, Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      response = await abortableProviderOperationV1(() => options.fetch(url, { method, redirect: 'error', signal: combined, headers: { Authorization: `Bearer ${options.authorization()}`, Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), combined, disposeProviderResponseV1);
       if (response.redirected || (response.url !== '' && response.url !== url)) failure('unavailable');
       if (response.status === 429) failure('rate_limited');
       if (method === 'DELETE' && response.status === 404) return undefined;
@@ -30,26 +31,18 @@ export function createNangoPersonConnectionV1(options: { readonly provider: Pick
       if (!response.ok && !missingDeletion) failure('unavailable');
       if (method === 'DELETE' && !missingDeletion) return undefined;
       if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) failure('unavailable');
-      const reader = response.body?.getReader();
-      if (reader === undefined) failure('unavailable');
-      const chunks: Uint8Array[] = []; let bytes = 0;
-      const abort = () => { void reader.cancel().catch(() => {}); };
-      combined.addEventListener('abort', abort, { once: true });
-      try {
-        for (;;) { combined.throwIfAborted(); const part = await reader.read(); combined.throwIfAborted(); if (part.done) break; bytes += part.value.byteLength; if (bytes > 128 * 1024) failure('unavailable'); chunks.push(part.value); }
-        const result: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
-        if (missingDeletion) {
-          if (record(record(result).error).code !== 'unknown_connection') failure('unavailable');
-          return undefined;
-        }
-        return result;
-      } finally { combined.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
+      const result = await readBoundedJsonResponseV1(response, { maxBytes: 128 * 1024, signal: combined, contentLength: 'ignore' });
+      if (missingDeletion) {
+        if (record(record(result).error).code !== 'unknown_connection') failure('unavailable');
+        return undefined;
+      }
+      return result;
     } catch (error) {
       signal?.throwIfAborted();
       if (error instanceof AuthorityOperationError && error.code === 'rate_limited') failure('rate_limited');
       failure('unavailable');
     }
-    finally { if (response?.body !== null && response?.body !== undefined && !response.body.locked) await response.body.cancel().catch(() => {}); }
+    finally { disposeProviderResponseV1(response); }
   }
   const path = (reference: string) => `/connections/${encodeURIComponent(string(reference, 512))}?provider_config_key=${encodeURIComponent(integration)}`;
   return Object.freeze<NangoPersonConnectionV1>({

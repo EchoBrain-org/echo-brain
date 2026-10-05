@@ -1011,12 +1011,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
             : [], ...(included ? {} : { gap: 'No accessible Jira ticket was found.' }) }],
         });
       }
-      if (mode === 'ask-confluence') {
-        const included = live && (scope.kind === 'global' || (scope.kind === 'project' && confluenceMappings.get(scope.project_id!)?.mapping != null));
+      const pageTool = mode === 'ask-confluence' ? 'confluence' : mode.startsWith('ask-page-') ? mode.slice(9) : undefined;
+      if (pageTool !== undefined) {
+        const included = live && (scope.kind === 'global' || (pageTool === 'confluence' && scope.kind === 'project' && confluenceMappings.get(scope.project_id!)?.mapping != null));
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
           citations: included ? [{ kind: 'page', label: 'EVT readiness · ECHO product', visibility: 'only_me', citation: {
-            kind: 'page', tool_id: 'confluence', external_scope_id: CONFLUENCE_CLOUD, page_id: '12345', section_id: 'evt-readiness', version: '7',
-            permalink: 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345', text_sha256: sha('EVT readiness'),
+            kind: 'page', tool_id: pageTool, external_scope_id: CONFLUENCE_CLOUD, page_id: '12345', section_id: 'evt-readiness', version: '7',
+            permalink: pageTool === 'confluence' ? 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345' : `https://${pageTool}.example.test/pages/12345?view=current`, text_sha256: sha('EVT readiness'),
           } }] : [],
           parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
             ? [{ text: 'The Confluence EVT readiness page is current.', citation_indexes: [0], private: true }]
@@ -1070,7 +1071,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'ask-project-empty' && scope.kind === 'project') {
         const offScope = question.startsWith('What is the weather');
         return json({
-          schema_version: tickets ? 5 : 4, kind: tickets ? 'echo-clean-person-answer-v5' : 'echo-clean-person-answer-v4', scope, outcome: offScope ? 'off_scope' : 'not_found', citations: [],
+          schema_version: answer.schema_version, kind: answer.kind, scope, outcome: offScope ? 'off_scope' : 'not_found', citations: [],
           parts: [{ question, status: 'not_found', statements: [], gap: "I couldn't find this in the sources you can access." }],
         });
       }
