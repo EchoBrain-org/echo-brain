@@ -36,14 +36,6 @@ describe('thin live ticket dispatcher', () => {
     expect(createPersonLiveEvidenceDeskV2(f.base)).toHaveProperty('live_sources', []);
   });
 
-  it('keeps a request-bound V1 Slack capability when no V2 Slack reader replaces it', () => {
-    const f = fixture();
-    const base = { ...f.base, live_sources: [{ source: 'slack' as const }] };
-    expect(createPersonLiveEvidenceDeskV2(base, f.ticket)).toHaveProperty('live_sources', [
-      { source: 'ticket', tool_id: 'jira' }, { source: 'slack' },
-    ]);
-  });
-
   it('distinguishes an empty live lookup from a denied lookup without capturing query or provider content', async () => {
     const f = fixture();
     const events: CoreRuntimeObservationV1[] = [];
@@ -191,7 +183,6 @@ describe('thin live ticket dispatcher', () => {
     expect(f.ticket.list).toHaveBeenCalled();
     expect(() => createPersonLiveEvidenceDeskV2(f.base, f.ticket, undefined, 'another-project')).toThrow(AuthorityOperationError);
     expect(() => createPersonLiveEvidenceDeskV2(f.base, f.ticket, mixedFixture().slack, scope.project_id)).toThrow(AuthorityOperationError);
-    expect(() => createPersonLiveEvidenceDeskV2({ ...f.base, live_sources: [{ source: 'slack' }] }, f.ticket, undefined, scope.project_id)).toThrow(AuthorityOperationError);
   });
   it('does not forward live cursors or project/container selectors into other desk sources', async () => {
     const f = fixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket);

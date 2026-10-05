@@ -212,7 +212,6 @@ async function disclosureWorld() {
       return { parts: [{ question: prompt.question, needs: [{ need: "what I added", status: "found", evidence: opened.slice(0, 12) }], notes: "" }], actions: [{ tool: "finish", args: {} }] };
     },
   };
-  const slackAskers: { readonly principal_id: string; readonly membership_id: string }[] = [];
   const server = createOrganizationAuthorityHttpServer({
     descriptor: {} as never, sessions: {} as never, oidc_provider: {} as never, expected_issuer: "https://issuer.example",
     person_list: createPersonListRouteV1({
@@ -224,7 +223,6 @@ async function disclosureWorld() {
       sessions: sessions as never, originals, records, model: everything,
       generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
       audit: new SqlitePersonAgenticAskAuditV1(w.authority), small_scope_shortcut: true,
-      slack_for: (asker) => { slackAskers.push(asker); return undefined; },
     }),
   });
   server.listen(0, "127.0.0.1");
@@ -275,7 +273,7 @@ async function disclosureWorld() {
     .map((row) => JSON.parse(row.body_json) as Record<string, unknown>).filter((body) => body.kind === "echo-person-original-item-release-audit-v1");
   const meeting = (name: string) => `meeting:${w.digest(name)}`;
   const ask = async (token: Token, request: Readonly<Record<string, unknown>> = {}) => post(PERSON_ANSWER_PATH_V3, token, { schema_version: 3, question: "What did I add?", ...request });
-  return { w, refs, requestIds, list, open, walk, listed, refsOf, openAll, ask, admitNotes, slackAskers, bodies, pageAudits, originalAudits, meeting, storeCalls, hooks, grantReads };
+  return { w, refs, requestIds, list, open, walk, listed, refsOf, openAll, ask, admitNotes, bodies, pageAudits, originalAudits, meeting, storeCalls, hooks, grantReads };
 }
 
 type World = Awaited<ReturnType<typeof disclosureWorld>>;
@@ -547,9 +545,8 @@ describe("person list and open negative disclosure (ADR-0024)", () => {
       }
       for (const ref of teammates) expect({ token, ref, cited: refs.includes(ref) }).toEqual({ token, ref, cited: false });
     }
-    // EMP_A may read r4's shared transcript globally; mine never reads it, nor any Slack.
+    // EMP_A may read r4's shared transcript globally; mine never reads it.
     expect((await f.openAll("emp_a", `transcript:${f.w.digest("r4")}`)).length).toBeGreaterThan(0);
-    expect(f.slackAskers).toEqual([]);
     for (const token of ["owner", "emp_a"] as const) {
       expect(await f.ask(token, { mine: true, project_id: SHARED })).toEqual({ status: 400, text: '{"error":{"code":"invalid_request","message":"request failed"}}' });
     }

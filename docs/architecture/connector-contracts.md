@@ -157,8 +157,8 @@ that route only when a Jira ticket-live runtime is selected.
 [ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md) is accepted;
 the CLI requires explicit Jira configuration. The staging switch instead reuses
 the fixed profile's existing owner grant and bounded project, without tool capture.
-Jira is the only live reader. The Slack reader port, `PersonSlackReaderV1`, has
-no implementation, and read status is not exposed to clients.
+Jira is the only live reader. No live Slack reader is composed, the V3 desk
+reads no Slack, and read status is not exposed to clients.
 
 The dispatcher must preserve [ADR-0024](../decisions/ADR-0024-person-list-open-and-mine-scope.md)
 scope rules: `mine` excludes live external reads. Provider selection and

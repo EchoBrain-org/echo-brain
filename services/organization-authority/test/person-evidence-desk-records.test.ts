@@ -22,7 +22,6 @@ import type { PersonAccessAuthorization } from '@echo-brain/organization-authori
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV3 } from '@echo-brain/organization-api';
-import type { PersonSlackMessageV1, PersonSlackReaderV1, PersonSlackReleaseV1 } from '../src/application/ports/person-slack-reader-v1.js';
 import { SqlitePersonRecordReadAuditV1 } from '../src/adapters/persistence/sqlite/person-record-read-audit-v1.js';
 import type { PersonOriginalContextEvidenceDeskPortV1 } from '../src/application/ports/person-original-context-retrieval-v1.js';
 import { createPersonEvidenceDeskV1 } from '../src/composition/person-evidence-desk-v1.js';
@@ -132,7 +131,7 @@ async function fixture(options: { readonly active?: boolean; readonly corrupt?: 
     sessions, authority, record, audit: new SqlitePersonRecordReadAuditV1(authority), expand_related_atoms: expandReadableSearchRelatedAtomsV1,
     ...(options.corrupt ? { search_generation: () => { throw new Error('corrupt readable index'); } } : {}),
   });
-  const makeDesk = (slack?: Parameters<typeof createPersonEvidenceDeskV1>[0]['slack'], now_ms?: () => number) => createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: route, ...(slack === undefined ? {} : { slack }), ...(now_ms === undefined ? {} : { now_ms }) });
+  const makeDesk = () => createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: emptyOriginals(), records: route });
   return { authority, record, route, recordAtom, makeDesk, revoke: () => { revoked = true; }, close: () => { record.close(); authority.close(); } };
 }
 
@@ -294,116 +293,25 @@ describe('Person evidence desk over the real approved-record route', () => {
   });
 });
 
-function slackMessage(ts: string, text: string, options: Partial<PersonSlackMessageV1> = {}): PersonSlackMessageV1 {
-  return { team_id: 'T0001', channel_id: 'C0001', channel_name: 'hw-dvt', channel_kind: 'public_channel', message_ts: ts, author: 'Priya', text, permalink: `https://acme.slack.com/archives/C0001/p${ts.replace('.', '')}`, ...options };
-}
-
-function fakeSlack(input: { search?: readonly PersonSlackMessageV1[] | Error; thread?: readonly PersonSlackMessageV1[]; history?: { found: boolean; messages: readonly PersonSlackMessageV1[]; next_cursor?: string }; check?: () => void } = {}) {
-  const releases: PersonSlackReleaseV1[] = [];
-  const reader: PersonSlackReaderV1 & { [K in keyof PersonSlackReaderV1]: ReturnType<typeof vi.fn> } = {
-    search: vi.fn(async () => { if (input.search instanceof Error) throw input.search; return input.search ?? []; }),
-    thread: vi.fn(async () => ({ messages: input.thread ?? [], truncated: false })),
-    history: vi.fn(async () => input.history ?? { found: true, messages: [] }),
-    check: vi.fn(async () => { input.check?.(); }),
-  } as never;
-  const audit = { record: vi.fn((release: PersonSlackReleaseV1) => { releases.push(release); return canonicalSha256({ slack_release: releases.length }); }) };
-  return { reader, audit, releases, slack: { reader, audit } };
-}
-
-describe('Person evidence desk: live Slack (RFC-0003)', () => {
-  it('advertises Slack only when this request owns a live Slack reader', async () => {
-    const value = await fixture();
-    try {
-      expect(value.makeDesk()).not.toHaveProperty('live_sources');
-      expect(value.makeDesk(fakeSlack().slack)).toHaveProperty('live_sources', [{ source: 'slack' }]);
-    } finally { value.close(); }
-  });
-
-  it('searches Slack beside Echo, labels and scopes each message, and audits digests only', async () => {
-    const value = await fixture();
-    try {
-      const thread = Array.from({ length: 5 }, (_, index) => slackMessage(`1758873600.00010${index}`, `Fixture thread message ${index}`, { thread_ts: '1758873600.000100' }));
-      const dm = slackMessage('1758877200.000200', 'Vendor says fixtures may slip to Oct 16.', { channel_id: 'D0002', channel_name: 'Dana', channel_kind: 'im', permalink: 'https://acme.slack.com/archives/D0002/p1758877200000200' });
-      const slack = fakeSlack({ search: [...thread, dm] });
-      const desk = value.makeDesk(slack.slack);
-      const searched = await desk.search({ query: 'Decision', limit: 8 });
-      const slackItems = searched.items.filter(item => item.kind === 'slack_message');
-      // At most three messages from one thread, interleaved after Echo's own results.
-      expect(slackItems.filter(item => item.citation.kind === 'slack_message' && item.citation.channel_id === 'C0001')).toHaveLength(3);
-      expect(searched.items[0]!.kind).toBe('decision');
-      const direct = slackItems.find(item => item.citation.kind === 'slack_message' && item.citation.channel_id === 'D0002');
-      expect(direct).toMatchObject({ label: 'DM with Dana · Priya · 2025-09-26', visibility: 'only_me', occurred_at: '2025-09-26', text: dm.text, citation: { kind: 'slack_message', team_id: 'T0001', message_ts: dm.message_ts, permalink: dm.permalink } });
-      expect(slackItems[0]).toMatchObject({ visibility: 'team', label: expect.stringMatching(/^#hw-dvt · Priya · /u) });
-      expect(slack.releases).toHaveLength(1);
-      expect(JSON.stringify(slack.releases)).not.toContain('Vendor says');
-      expect(slack.releases[0]!.messages).toHaveLength(4);
-      expect(searched.receipt_digests).toContain(canonicalSha256({ slack_release: 1 }));
-      expect(slackItems.every(item => item.receipt_sha256 === canonicalSha256({ slack_release: 1 }))).toBe(true);
-    } finally { value.close(); }
-  });
-
-  it('keeps answering from Echo when Slack search fails, with a notice', async () => {
-    const value = await fixture();
-    try {
-      const slack = fakeSlack({ search: new Error('rate limited') });
-      const searched = await value.makeDesk(slack.slack).search({ query: 'Decision', limit: 8 });
-      expect(searched.items.some(item => item.kind === 'decision')).toBe(true);
-      expect(searched.notice).toContain('Slack could not be searched');
-    } finally { value.close(); }
-  });
-
-  it('opens a Slack message as its thread, anchor first, and audits the thread release', async () => {
-    const value = await fixture();
-    try {
-      const parent = slackMessage('1758873600.000100', 'Can we start DVT with 2 of 4 fixtures?', { thread_ts: '1758873600.000100', reply_count: 1 });
-      const reply = slackMessage('1758873700.000100', 'Only if QA signs off.', { thread_ts: '1758873600.000100', author: 'Marco' });
-      const slack = fakeSlack({ search: [reply], thread: [parent, reply] });
-      const desk = value.makeDesk(slack.slack);
-      const hit = (await desk.search({ query: 'Decision', limit: 8 })).items.find(item => item.kind === 'slack_message')!;
-      const opened = await desk.open({ item: hit.id });
-      expect(slack.reader.thread).toHaveBeenCalledWith(expect.objectContaining({ channel_id: 'C0001', thread_ts: '1758873600.000100', limit: 21 }));
-      expect(opened.items.map(item => item.text)).toEqual(['Only if QA signs off.', 'Can we start DVT with 2 of 4 fixtures?']);
-      expect(opened.items[1]!.label).toContain('#hw-dvt · Priya');
-      expect(slack.releases.map(release => release.operation)).toEqual(['search', 'thread']);
-    } finally { value.close(); }
-  });
-
-  it('lists a Slack channel by name within dates, and refuses a channel the asker cannot see', async () => {
-    const value = await fixture();
-    try {
-      const slack = fakeSlack({ history: { found: true, messages: [slackMessage('1758873600.000100', 'Status: fixtures on track.')], next_cursor: 'next' } });
-      const desk = value.makeDesk(slack.slack);
-      const listed = await desk.list({ source: 'slack', channel: 'hw-dvt', since: '2025-09-20', until: '2025-09-27', limit: 50 });
-      expect(slack.reader.history).toHaveBeenCalledWith(expect.objectContaining({ channel: 'hw-dvt', oldest: `${Date.parse('2025-09-20T00:00:00Z') / 1000}.000000`, latest: `${Date.parse('2025-09-27T00:00:00Z') / 1000 + 86_399}.000000`, limit: 50 }));
-      expect(listed).toMatchObject({ next_cursor: 'next', items: [{ kind: 'slack_message', text: 'Status: fixtures on track.' }] });
-      const hidden = fakeSlack({ history: { found: false, messages: [] } });
-      await expect(value.makeDesk(hidden.slack).list({ source: 'slack', channel: 'secret' })).rejects.toMatchObject({ code: 'invalid_request' });
-    } finally { value.close(); }
-  });
-
+describe('Person evidence desk: one source at a time', () => {
   it('lists meeting records without text, one source only', async () => {
     const value = await fixture();
     try {
       const listed = await value.makeDesk().list({ source: 'meeting', kinds: ['decision'] });
       expect(listed.items).toEqual([expect.objectContaining({ kind: 'decision', label: 'Approved meeting' })]);
       expect(listed.items[0]).not.toHaveProperty('text');
-      expect((await value.makeDesk().list({ source: 'slack', channel: 'hw-dvt' })).items).toEqual([]);
     } finally { value.close(); }
   });
 
-  it('checks the Slack connection before model calls once Slack was read, at most every 30 s', async () => {
+  it('reads no Slack: a Slack-only search or list returns nothing, with no Slack receipt', async () => {
     const value = await fixture();
     try {
-      let clock = 0; let revoked = false;
-      const slack = fakeSlack({ search: [slackMessage('1758873600.000100', 'hello')], check: () => { if (revoked) throw new AuthorityOperationError('unauthorized', 'Slack disconnected'); } });
-      const desk = value.makeDesk(slack.slack, () => clock);
-      await desk.revalidate({});
-      expect(slack.reader.check).not.toHaveBeenCalled();
-      await desk.search({ query: 'Decision', limit: 8 });
-      await desk.revalidate({}); clock = 10_000; await desk.revalidate({});
-      expect(slack.reader.check).toHaveBeenCalledTimes(1);
-      clock = 40_000; revoked = true;
-      await expect(desk.revalidate({})).rejects.toThrow('Slack disconnected');
+      const desk = value.makeDesk();
+      const searched = await desk.search({ query: 'Decision', kinds: ['slack_message'], limit: 8 });
+      expect(searched.items).toEqual([]);
+      expect(searched.notice).toBeUndefined();
+      const listed = await desk.list({ source: 'slack', channel: 'hw-dvt' });
+      expect(listed).toMatchObject({ items: [], truncated: false });
     } finally { value.close(); }
   });
 });
@@ -496,7 +404,7 @@ describe('Person evidence desk: mine (ADR-0024)', () => {
 });
 
 describe('Person evidence desk: refs (ADR-0024)', () => {
-  it('gives record items their meeting ref, keeps each original item\'s store ref, and gives Slack items none', async () => {
+  it('gives record items their meeting ref and keeps each original item\'s store ref', async () => {
     const value = await fixture();
     try {
       const originals = emptyOriginals();
@@ -511,14 +419,12 @@ describe('Person evidence desk: refs (ADR-0024)', () => {
         }],
         truncated: false,
       };
-      const slack = fakeSlack({ search: [slackMessage('1758873600.000100', 'Decision in Slack')] });
-      const desk = createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: { ...originals, deskSearch: () => release }, records: value.route, slack: slack.slack });
+      const desk = createPersonEvidenceDeskV1({ access_token: 'token', scope: { kind: 'global' }, originals: { ...originals, deskSearch: () => release }, records: value.route });
       const meeting = `meeting:${value.recordAtom.record_sha256}`;
       const searched = await desk.search({ query: 'Decision', limit: 10 });
       expect(searched.items.map((item) => [item.citation.kind, item.ref])).toEqual([
-        ['source_revision', ref], ['approved_record', meeting], ['slack_message', undefined],
+        ['source_revision', ref], ['approved_record', meeting],
       ]);
-      expect(searched.items.find((item) => item.kind === 'slack_message')).not.toHaveProperty('ref');
       // Inventory items, opened items and fresh citation opens carry the same ref.
       const inventoryDesk = value.makeDesk();
       const listed = (await inventoryDesk.search({ limit: 10 })).items.find((item) => item.citation.kind === 'approved_record')!;
