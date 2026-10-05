@@ -1,7 +1,7 @@
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
-import type { PersonToolProviderV1, PersonToolVerbContextV1 } from '@echo-brain/organization-api';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, type PersonToolProviderV1, type PersonToolVerbContextV1 } from '@echo-brain/organization-api';
 import { readSecretLine, runPersonClientCli } from '../../src/product/person-client/commands.js';
 
 /** Standard input as a terminal (raw mode recorded) or a pipe, and a captured standard error. */
@@ -21,7 +21,7 @@ describe('neutral Person tool extension boundary', () => {
     for (const path of ['https://outside.example/read', '//outside.example/read', '/\\outside.example/read']) {
       await expect(transport.getJson({ path, validate_response: value => value, maximum_response_bytes: 100 })).rejects.toThrow('Authority');
     }
-    for (const maximum_response_bytes of [0, Infinity, 65537]) {
+    for (const maximum_response_bytes of [0, Infinity, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 + 1]) {
       await expect(transport.getJson({ path: '/v3/tools/mail', validate_response: value => value, maximum_response_bytes })).rejects.toThrow('bounds');
     }
     await expect(transport.json({ path: '/v3/tools/mail', body: {}, validate_request: value => value, validate_response: value => value, timeout_ms: 75001 })).rejects.toThrow('bounds');

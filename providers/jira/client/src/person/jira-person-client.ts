@@ -1,5 +1,5 @@
 import { PERSON_JIRA_PROJECT_READ_PATH_V1, PERSON_JIRA_PROJECT_SET_PATH_V1, validateJiraProjectReadV1, validateJiraProjectSetV1, validateJiraProjectMappingV1, type JiraProjectSetV1, type JiraProjectMappingV1 } from '../organization-api/jira-project-mapping-v1.js';
-import { PersonToolConnectionClientV1, type PersonToolHostV1 } from "@echo-brain/organization-api";
+import { PersonToolConnectionClientV1, PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, type PersonToolHostV1 } from "@echo-brain/organization-api";
 import {
   PERSON_JIRA_CONNECT_PATH_V1,
   PERSON_JIRA_STATUS_PATH_V1,
@@ -8,7 +8,6 @@ import {
 } from "../organization-api/jira-person-connection-v1.js";
 
 const JIRA_TOOL_TIMEOUT_MS = 75_000;
-const JIRA_TOOL_MAXIMUM_RESPONSE_BYTES = 8_192;
 
 export class JiraPersonClientV1 extends PersonToolConnectionClientV1 {
   constructor(host: PersonToolHostV1) {
@@ -31,7 +30,7 @@ export class JiraPersonClientV1 extends PersonToolConnectionClientV1 {
       const result = validateJiraProjectMappingV1(value);
       if (result.project_id !== body.project_id) throw new Error('Jira project response did not match the requested project');
       return result;
-    }, maximum_response_bytes: JIRA_TOOL_MAXIMUM_RESPONSE_BYTES, timeout_ms: JIRA_TOOL_TIMEOUT_MS }));
+    }, maximum_response_bytes: PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, timeout_ms: JIRA_TOOL_TIMEOUT_MS }));
   }
 
 }

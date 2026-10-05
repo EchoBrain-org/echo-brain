@@ -87,6 +87,7 @@ import {
   validatePersonOpenRequestV1,
 } from "@echo-brain/organization-api";
 import type { PersonListHttpApplicationV1 } from "./person-list-http-application-v1.js";
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
@@ -301,6 +302,7 @@ function providerResponse(response: ServerResponse, result: ProviderHttpResponse
     contentType = "text/html; charset=utf-8";
   } else {
     if (result.content_type !== undefined) throw new Error("invalid provider response content type");
+    maximum = PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1;
     bytes = Buffer.from(JSON.stringify(result.body), "utf8");
     contentType = "application/json; charset=utf-8";
   }

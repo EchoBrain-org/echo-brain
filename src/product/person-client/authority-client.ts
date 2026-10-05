@@ -86,6 +86,7 @@ import {
   type PersonUpdateSubmitV3, type PersonUploadSearchV3,
 } from '@echo-brain/organization-api';
 import { canonicalJson } from "@echo-brain/federation-protocol";
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isCanonicalPersonEmail, isExpectedPersonEmail, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -1450,7 +1451,7 @@ export class PersonAuthorityClient {
       }
     };
     const assertBounds = (bytes: number, timeout = this.timeoutMs): void => {
-      if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > MAXIMUM_ORDINARY_RESPONSE_BYTES ||
+      if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 ||
           !Number.isSafeInteger(timeout) || timeout < 1 || timeout > 75_000) {
         throw new Error('Person tool transport bounds are invalid');
       }

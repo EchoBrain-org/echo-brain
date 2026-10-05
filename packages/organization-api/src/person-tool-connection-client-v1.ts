@@ -1,5 +1,6 @@
 import {
   PersonToolOutcomeErrorV1,
+  PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1,
   type PersonToolHostV1,
   type PersonToolProviderV1,
   type PersonToolVerbContextV1,
@@ -26,7 +27,7 @@ export class PersonToolConnectionClientV1 {
   ) {}
 
   connect(): Promise<PersonToolConnectV1> {
-    return this.command(this.routes.connect, value => validatePersonToolConnectV1(value, this.display_name));
+    return this.command(this.routes.connect, value => validatePersonToolConnectV1(value, this.display_name), PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1);
   }
   status(attempt: string): Promise<PersonToolAttemptStatusV1> { return this.attempt(this.routes.status, attempt); }
   cancel(attempt: string): Promise<PersonToolAttemptStatusV1> { return this.attempt(this.routes.cancel, attempt); }
@@ -34,11 +35,11 @@ export class PersonToolConnectionClientV1 {
     return this.command(this.routes.disconnect, value => validatePersonToolStateV1(value, false, this.display_name));
   }
 
-  private command<T>(path: string, validate_response: (value: unknown) => T): Promise<T> {
+  private command<T>(path: string, validate_response: (value: unknown) => T, maximum_response_bytes = PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1): Promise<T> {
     const validate_request = (value: unknown) => validatePersonToolCommandV1(value, this.display_name);
     return this.host.withToolSession(session => session.transport.json({
       path, body: validate_request({ schema_version: 1 }), validate_request, validate_response,
-      maximum_response_bytes: 8_192, timeout_ms: 75_000,
+      maximum_response_bytes, timeout_ms: 75_000,
     }));
   }
   private attempt(path: string, attempt: string): Promise<PersonToolAttemptStatusV1> {
@@ -50,7 +51,7 @@ export class PersonToolConnectionClientV1 {
         if (response.attempt !== attempt) throw new Error(`${this.display_name} attempt response did not match the requested attempt`);
         return response;
       },
-      maximum_response_bytes: 8_192, timeout_ms: 75_000,
+      maximum_response_bytes: PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1, timeout_ms: 75_000,
     }));
   }
 }
