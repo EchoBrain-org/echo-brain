@@ -163,8 +163,8 @@ function App() {
       {pane && <SourcePane state={state} />}
       {state.compose && !state.compose.hidden && <Compose state={state} />}
       {!state.concealed && <ProjectSettings state={state} />}
-      {sheet?.kind === 'tool-connect' ? <ToolConnect sheet={sheet} />
-        : sheet?.kind === 'tool-manage' ? <ToolManage sheet={sheet} />
+      {sheet?.kind === 'tool-connect' ? !state.concealed && <ToolConnect sheet={sheet} />
+        : sheet?.kind === 'tool-manage' ? !state.concealed && <ToolManage sheet={sheet} />
         : sheet?.kind === 'people' ? !state.concealed && <People state={state} sheet={sheet} />
         : sheet?.kind === 'new-project' ? <NewProject state={state} sheet={sheet} />
         : sheet && <ConfirmSignOut state={state} sheet={sheet} />}

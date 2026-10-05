@@ -76,9 +76,14 @@ test('a connection the tool refuses says why in the app’s words, and Try again
 
 test('Cancel, or Escape, cancels a waiting connection so a late approval binds nothing', async () => {
   run = await launch('tools-waiting');
-  const { page } = run;
+  const { page, app } = run;
   await page.getByTestId('sidebar-tools').click();
   await page.locator('[data-tool="jira"]').getByTestId('tool-connect').click();
+  await expect(page.getByTestId('tool-connect-waiting')).toBeVisible();
+  await emit(app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await expect(page.getByTestId('tool-connect-sheet')).toHaveCount(0);
+  await emit(app, 'echo-test:resume');
   await expect(page.getByTestId('tool-connect-waiting')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('tool-connect-sheet')).toHaveCount(0);
@@ -89,12 +94,17 @@ test('Cancel, or Escape, cancels a waiting connection so a late approval binds n
 
 test('a stopped connection needs attention and reconnects; Manage disconnects only your own', async () => {
   run = await launch('tools-revoked');
-  const { page } = run;
+  const { page, app } = run;
   await page.getByTestId('sidebar-tools').click();
   const attention = page.getByRole('region', { name: 'Needs attention' }).getByTestId('tool-row');
   await expect(attention).toHaveText(['JJiraConnection stopped. Reconnect to keep using it.Reconnect']);
 
   await page.locator('[data-tool="slack"]').getByTestId('tool-manage').click();
+  await expect(page.getByTestId('tool-manage-sheet')).toContainText('Disconnecting removes only your own Slack connection');
+  await emit(app, 'echo-test:conceal');
+  await expect(page.getByTestId('concealed')).toBeVisible();
+  await expect(page.getByTestId('tool-manage-sheet')).toHaveCount(0);
+  await emit(app, 'echo-test:resume');
   await expect(page.getByTestId('tool-manage-sheet')).toContainText('Disconnecting removes only your own Slack connection');
   await page.getByTestId('tool-disconnect').click();
   await expect(page.getByTestId('toast')).toHaveText('Slack disconnected');
