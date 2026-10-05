@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, type CoreRuntimeCountsV1, type CoreRuntimePhaseV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -14,8 +13,7 @@ import {
   type EvidenceDeskOpenInputV1,
   type EvidenceDeskScopeV1,
 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
-import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, type PersonOpenRefV1 } from "@echo-brain/organization-api";
-import type { PersonSlackMessageV1, PersonSlackReaderV1, PersonSlackReleaseAuditV1, PersonSlackReleaseV1 } from "../application/ports/person-slack-reader-v1.js";
+import type { PersonOpenRefV1 } from "@echo-brain/organization-api";
 import type { PersonAnswerCitationV3 } from "@echo-brain/organization-api";
 import type {
   OriginalContextDeskReleaseV1,
@@ -36,10 +34,6 @@ export interface CreatePersonEvidenceDeskV1Options {
   readonly scope: PersonAskScopeV2;
   readonly originals: PersonOriginalContextEvidenceDeskPortV1;
   readonly records: PersonEvidenceDeskRecordsV1;
-  /** The asker's own live Slack reads and their release audit (RFC-0003). Absent when Slack is not connected. */
-  readonly slack?: { readonly reader: PersonSlackReaderV1; readonly audit: PersonSlackReleaseAuditV1 };
-  /** Milliseconds clock for the Slack connection-check cache; tests pin it. */
-  readonly now_ms?: () => number;
 }
 
 /**
@@ -65,14 +59,8 @@ function observedDeskCall<T extends EvidenceDeskResultV1>(phase: CoreRuntimePhas
   });
 }
 
-/** A Slack connection check stays valid this long (RFC-0003). */
-export const PERSON_EVIDENCE_DESK_SLACK_CHECK_MS_V1 = 30_000;
-const SLACK_PER_THREAD = 3;
-const SLACK_THREAD_REPLIES = 20;
-
 type Stored = Readonly<{
   item: EvidenceDeskItemV1;
-  slack?: PersonSlackMessageV1;
   original?: OriginalContextDeskReleaseV1;
   record?: PersonRecordSearchBatchReleaseV1;
   record_anchor?: { readonly atom_id: Sha256Digest; readonly record_sha256: Sha256Digest; readonly record_position: number; readonly envelope_sha256: Sha256Digest; readonly atom_order: number; readonly audience_project_count: number; readonly item_kind: "decision" | "action" | "rationale"; readonly text: string; readonly policy_id: "restricted-reviewer-person-v2" | "organization-member-readable-person-v2" | "project-members-readable-person-v1" };
@@ -116,56 +104,6 @@ function itemId(citation: EvidenceDeskCitationV1): string {
   return `desk_${canonicalSha256(citation).slice(7)}`;
 }
 
-function textSha256(text: string): Sha256Digest {
-  return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}` as Sha256Digest;
-}
-
-/** Desk text is bounded like every released passage; a longer Slack message is cut at a character boundary. */
-function boundedText(text: string): string {
-  if (Buffer.byteLength(text, "utf8") <= PERSON_EVIDENCE_TEXT_MAX_BYTES_V1) return text;
-  let result = "";
-  for (const character of text) {
-    if (Buffer.byteLength(result + character, "utf8") > PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 - 3) break;
-    result += character;
-  }
-  return `${result}…`;
-}
-
-function slackDay(ts: string): string {
-  return new Date(Math.floor(Number(ts) * 1000)).toISOString().slice(0, 10);
-}
-
-function slackLabel(message: PersonSlackMessageV1): string {
-  const day = slackDay(message.message_ts);
-  const reply = message.thread_ts !== undefined && message.thread_ts !== message.message_ts ? " (reply)" : "";
-  const where = message.channel_kind === "im" ? `DM with ${message.channel_name}` : message.channel_kind === "mpim" ? `Group DM ${message.channel_name}` : `#${message.channel_name}`;
-  return `${where} · ${message.author} · ${day}${reply}`.slice(0, 900);
-}
-
-function slackCitation(message: PersonSlackMessageV1, text: string): EvidenceDeskCitationV1 {
-  return Object.freeze({
-    kind: "slack_message", team_id: message.team_id, channel_id: message.channel_id, message_ts: message.message_ts,
-    ...(message.thread_ts === undefined ? {} : { thread_ts: message.thread_ts }),
-    permalink: message.permalink, text_sha256: textSha256(text),
-  }) as EvidenceDeskCitationV1;
-}
-
-function interleave<T>(...lists: readonly (readonly T[])[]): readonly T[] {
-  const result: T[] = [];
-  for (let index = 0; index < Math.max(0, ...lists.map((list) => list.length)); index += 1) {
-    for (const list of lists) if (list[index] !== undefined) result.push(list[index]!);
-  }
-  return result;
-}
-
-/** YYYY-MM-DD to a Slack timestamp bound (start or end of that UTC day). */
-function slackBound(day: string | undefined, end: boolean): string | undefined {
-  if (day === undefined) return undefined;
-  const ms = Date.parse(`${day}T00:00:00Z`);
-  if (Number.isNaN(ms)) throw new AuthorityOperationError("invalid_request", "list dates must be YYYY-MM-DD");
-  return `${Math.floor(ms / 1000) + (end ? 86_399 : 0)}.000000`;
-}
-
 function unavailableAtStart(error: unknown): boolean {
   return error instanceof PersonRecordSearchIndexLagV1;
 }
@@ -196,49 +134,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
   let initializationFailure: unknown;
   let initializationReceipts: Sha256Digest[] = [];
   let latestRecordTruncated = false;
-  const now = options.now_ms ?? (() => Date.now());
-  let slackReleased = false;
-  let slackCheckedAt: number | undefined;
-
-  /** Audits a Slack release before its bytes leave the desk, then stores the items for this request only. */
-  const slackItems = (operation: PersonSlackReleaseV1["operation"], messages: readonly PersonSlackMessageV1[]): { items: readonly EvidenceDeskItemV1[]; receipt: Sha256Digest } | null => {
-    if (options.slack === undefined || messages.length === 0) return null;
-    const prepared = messages.map((message) => {
-      const text = boundedText(message.text.normalize("NFC"));
-      return { message, text, citation: slackCitation(message, text) };
-    }).filter((value) => value.text.trim().length > 0);
-    if (prepared.length === 0) return null;
-    const receipt = options.slack.audit.record(Object.freeze({
-      operation,
-      messages: Object.freeze(prepared.map((value) => Object.freeze({ team_id: value.message.team_id, channel_id: value.message.channel_id, message_ts: value.message.message_ts, permalink: value.message.permalink, text_sha256: textSha256(value.text) }))),
-    }));
-    slackReleased = true;
-    const items = prepared.map((value) => save(Object.freeze({
-      id: itemId(value.citation), citation: value.citation, kind: "slack_message" as EvidenceDeskKindV1, text: value.text,
-      label: slackLabel(value.message), visibility: value.message.channel_kind === "public_channel" ? "team" : "only_me",
-      occurred_at: slackDay(value.message.message_ts), receipt_sha256: receipt,
-    }) as EvidenceDeskItemV1, { slack: value.message }));
-    return { items, receipt };
-  };
-  const slackSearch = async (query: string, signal?: AbortSignal): Promise<{ items: readonly EvidenceDeskItemV1[]; receipts: readonly Sha256Digest[]; notice?: string }> => {
-    if (options.slack === undefined) return { items: [], receipts: [] };
-    let messages: readonly PersonSlackMessageV1[];
-    try { messages = await options.slack.reader.search({ query, limit: 20, ...(signal === undefined ? {} : { signal }) }); }
-    catch (error) {
-      if (signal?.aborted) throw error;
-      // Slack never fails the request: Echo sources still answer.
-      return { items: [], receipts: [], notice: "Slack could not be searched just now." };
-    }
-    const perThread = new Map<string, number>();
-    const kept = messages.filter((message) => {
-      const key = `${message.channel_id}:${message.thread_ts ?? message.message_ts}`;
-      const count = perThread.get(key) ?? 0;
-      perThread.set(key, count + 1);
-      return count < SLACK_PER_THREAD;
-    });
-    const released = slackItems("search", kept);
-    return released === null ? { items: [], receipts: [] } : { items: released.items, receipts: [released.receipt] };
-  };
 
   const save = (item: EvidenceDeskItemV1, release: Omit<Stored, "item">): EvidenceDeskItemV1 => {
     const existing = stored.get(item.id);
@@ -328,38 +223,18 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     }
     latestRecordTruncated = false;
     const sourceKinds = input.kinds?.filter((kind): kind is "note" | "document_passage" => kind === "note" || kind === "document_passage");
-    const slackWanted = input.kinds === undefined || input.kinds.includes("slack_message");
-    // Slack is read live in parallel; the Echo reads below are synchronous and audited first.
-    const slack = slackWanted ? slackSearch(input.query, input.signal) : Promise.resolve({ items: [] as readonly EvidenceDeskItemV1[], receipts: [] as readonly Sha256Digest[] });
     const released = options.originals.deskSearch({ access_token: options.access_token, scope: options.scope, query: input.query, limit, ...(sourceKinds === undefined ? {} : { kinds: sourceKinds }) });
     const beforeRecords = recordReleases.length;
     const echoItems = [originals(released), searchRecords(input.query, input.kinds)].map((list) => list.filter((item) => input.kinds === undefined || input.kinds.includes(item.kind)));
-    const slackResult = await slack;
-    input.signal?.throwIfAborted();
-    const items = interleave(echoItems[0]!, echoItems[1]!, slackResult.items);
-    const base = result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256), ...slackResult.receipts]);
-    const slackNotice: string | undefined = (slackResult as { readonly notice?: string }).notice;
-    return slackNotice === undefined ? base : Object.freeze({ ...base, notice: base.notice === undefined ? slackNotice : `${base.notice} ${slackNotice}` });
+    const items = balanced(echoItems[0]!, echoItems[1]!);
+    return result(items.slice(0, limit), released.truncated || latestRecordTruncated || items.length > limit, [released.receipt, ...recordReleases.slice(beforeRecords).map((entry) => entry.record_read_audit_row_sha256)]);
   };
   const list = async (input: EvidenceDeskListInputV1): Promise<EvidenceDeskResultV1> => {
     input.signal?.throwIfAborted();
     initialize();
     const limit = Math.min(50, Math.max(1, input.limit ?? 50));
-    if (input.source === "slack") {
-      if (options.slack === undefined) return result([], false, []);
-      if (input.channel === undefined) throw new AuthorityOperationError("invalid_request", "slack needs a channel");
-      const oldest = slackBound(input.since, false); const latest = slackBound(input.until, true);
-      let history: Awaited<ReturnType<PersonSlackReaderV1["history"]>>;
-      try { history = await options.slack.reader.history({ channel: input.channel, limit, ...(oldest === undefined ? {} : { oldest }), ...(latest === undefined ? {} : { latest }), ...(input.cursor === undefined ? {} : { cursor: input.cursor }), ...(input.signal === undefined ? {} : { signal: input.signal }) }); }
-      catch (error) {
-        if (input.signal?.aborted) throw error;
-        return Object.freeze({ ...result([], false, []), notice: "Slack could not be read just now." });
-      }
-      if (!history.found) throw new AuthorityOperationError("invalid_request", `no Slack channel named "${input.channel.slice(0, 80)}" that you can see`);
-      const released = slackItems("history", history.messages);
-      const base = result(released?.items ?? [], history.next_cursor !== undefined, released === null ? [] : [released.receipt]);
-      return history.next_cursor === undefined ? base : Object.freeze({ ...base, next_cursor: history.next_cursor });
-    }
+    // This desk reads no Slack. A live Slack source, when one is bound, is a separate desk source.
+    if (input.source === "slack") return result([], false, []);
     // Meetings and documents: the existing inventory reads, one source each. Items carry no text.
     if (input.source === "meeting") {
       if (recordsUnavailableAtStart) return result([], false, []);
@@ -381,18 +256,6 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     initialize();
     const value = stored.get(input.item);
     if (value === undefined) throw new AuthorityOperationError("not_found", "evidence item is not available");
-    if (value.item.citation.kind === "slack_message") {
-      const message = value.slack;
-      if (message === undefined || options.slack === undefined) throw new AuthorityOperationError("unavailable", "Slack evidence is unavailable");
-      const threadTs = message.thread_ts ?? ((message.reply_count ?? 0) > 0 ? message.message_ts : undefined);
-      if (threadTs === undefined) return result([value.item], false, [value.item.receipt_sha256]);
-      const thread = await options.slack.reader.thread({ channel_id: message.channel_id, thread_ts: threadTs, limit: SLACK_THREAD_REPLIES + 1, ...(input.signal === undefined ? {} : { signal: input.signal }) });
-      const released = slackItems("thread", thread.messages);
-      if (released === null) return result([value.item], false, [value.item.receipt_sha256]);
-      // The opened message leads, then the thread in order.
-      const anchor = released.items.find((item) => item.id === value.item.id) ?? value.item;
-      return result([anchor, ...released.items.filter((item) => item.id !== anchor.id)], thread.truncated, [released.receipt]);
-    }
     if (value.item.citation.kind === "source_revision") {
       const release = options.originals.deskOpen({ access_token: options.access_token, scope: options.scope, citation: value.item.citation, ...(input.neighbours === undefined ? {} : { neighbours: input.neighbours }) });
       return result(originals(release), release.truncated, [release.receipt]);
@@ -419,16 +282,10 @@ export function createPersonEvidenceDeskV1(options: CreatePersonEvidenceDeskV1Op
     let checkedAt: string | undefined = initialize();
     for (const release of originalReleases) checkedAt = options.originals.revalidateDeskRelease({ access_token: options.access_token, release }).checked_at;
     for (const release of recordReleases) checkedAt = options.records.revalidateBatchRelease({ access_token: options.access_token, release }).checked_at;
-    if (slackReleased && options.slack !== undefined && (slackCheckedAt === undefined || now() - slackCheckedAt >= PERSON_EVIDENCE_DESK_SLACK_CHECK_MS_V1)) {
-      // A revoked or disconnected Slack connection stops the request before Slack text reaches another model call.
-      await options.slack.reader.check({ ...(input.signal === undefined ? {} : { signal: input.signal }) });
-      slackCheckedAt = now();
-    }
     return Object.freeze({ checked_at: checkedAt });
   };
   return Object.freeze({
     scope: publicScope(options.scope),
-    ...(options.slack === undefined ? {} : { live_sources: Object.freeze([Object.freeze({ source: 'slack' as const })]) }),
     search: (input: EvidenceDeskSearchInputV1) => observedDeskCall("evidence_search", () => search(input)),
     open: (input: EvidenceDeskOpenInputV1) => observedDeskCall("evidence_open", () => open(input)),
     list: (input: EvidenceDeskListInputV1) => observedDeskCall("evidence_list", () => list(input)),

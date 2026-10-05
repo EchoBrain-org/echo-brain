@@ -162,16 +162,15 @@ function mineFixture() {
       ? { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "open", evidence: [] }], notes: "" }], actions: [{ tool: "search", args: { query: "launch" } }] }
       : { parts: [{ question: prompt.question, needs: [{ need: "launch day", status: "found", evidence: [hit] }], notes: "" }], actions: [{ tool: "finish", args: {} }] };
   });
-  const slack_for = vi.fn(() => undefined);
   const route = createPersonAnswerV3Route({
     authority_id: "authority_fixture", organization_id: "organization_fixture", state_lineage_id: "lineage_fixture",
     sessions: { authenticateAccess: () => ({ principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker" }) } as never,
     originals: originals as unknown as PersonOriginalContextEvidenceDeskPortV1, records: records as unknown as PersonEvidenceDeskRecordsV1,
     model: { generate }, generation: { generation_adapter_id: "fixture", planner_model: "fixture", answer_model: "fixture", timeout_ms: 25_000 },
-    audit: { forRequest: () => ({ append: vi.fn() }) } as never, slack_for,
+    audit: { forRequest: () => ({ append: vi.fn() }) } as never,
   });
   // The desk cites an original with its display label.
-  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, slack_for, route };
+  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, route };
 }
 
 async function post(url: string, path: string, body: unknown): Promise<{ readonly status: number; readonly body: Record<string, unknown> }> {
@@ -180,7 +179,7 @@ async function post(url: string, path: string, body: unknown): Promise<{ readonl
 }
 
 describe("Ask with mine, and citation refs (ADR-0024)", () => {
-  it("builds a mine desk for every store, never reads Slack, echoes mine, and cites with a ref", async () => {
+  it("builds a mine desk for every store, echoes mine, and cites with a ref", async () => {
     const f = mineFixture();
     const value = await server({ application: f.route });
     try {
@@ -189,7 +188,6 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
       const validated = validatePersonAnswerResponseV4(answer.body);
       expect(validated.scope).toEqual({ kind: "mine" });
       expect(validated.citations).toEqual([{ citation: f.cited, kind: "note", label: "My launch note", visibility: "only_me", ref: f.note.ref }]);
-      expect(f.slack_for).not.toHaveBeenCalled();
       expect(f.scopes.length).toBeGreaterThan(1);
       for (const scope of f.scopes) expect(scope).toEqual({ kind: "mine" });
       expect(f.records.initializeDesk).toHaveBeenCalledTimes(1);
@@ -200,10 +198,9 @@ describe("Ask with mine, and citation refs (ADR-0024)", () => {
         expect(JSON.parse(input.user_prompt).scope).toContain("only what the asker added");
         expect(input.user_prompt).not.toContain(f.note.ref!);
       }
-      // Without mine, the same asker's Ask is global and binds live Slack to them.
+      // Without mine, the same asker's Ask is global.
       f.scopes.length = 0;
       expect((await post(value.url, PERSON_ANSWER_PATH_V3, { schema_version: 3, question: "What did I decide?" })).body.scope).toEqual({ kind: "global" });
-      expect(f.slack_for).toHaveBeenCalledWith({ principal_id: "prn_asker", membership_id: "mem_asker" });
       for (const scope of f.scopes) expect(scope).toEqual({ kind: "global" });
     } finally { await value.close(); }
   });

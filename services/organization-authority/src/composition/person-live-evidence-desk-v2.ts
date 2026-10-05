@@ -10,10 +10,7 @@ const LOCAL_KINDS: readonly EvidenceDeskKindV1[] = ['decision', 'action', 'ratio
 
 /** A request-owned dispatcher. Server composition selects live sources; models select only read tools. */
 export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?: PersonLiveEvidenceSourceV1, slack?: PersonLiveEvidenceSourceV1<PersonSlackMessageCitationV1>, ticketProjectId?: string): EvidenceDeskPortV2 {
-  // A V1 desk may already own the request's Slack reader. Preserve that
-  // explicit capability only in the V2 scope where Slack is supported.
-  const inheritedSlack = slack === undefined ? base.live_sources?.filter(source => source.source === 'slack') ?? [] : [];
-  if (((slack !== undefined || inheritedSlack.length !== 0) && base.scope.kind !== 'global') || (ticket !== undefined && base.scope.kind !== 'global' && !(base.scope.kind === 'project' && base.scope.project_id === ticketProjectId))) throw new AuthorityOperationError('unauthorized', 'Live source is unsupported in this scope');
+  if ((slack !== undefined && base.scope.kind !== 'global') || (ticket !== undefined && base.scope.kind !== 'global' && !(base.scope.kind === 'project' && base.scope.project_id === ticketProjectId))) throw new AuthorityOperationError('unauthorized', 'Live source is unsupported in this scope');
   type Source = EvidenceDeskPortV1 | PersonLiveEvidenceSourceV1;
   const issued = new Map<string, Source>();
   const lookup = (phase: 'evidence_search' | 'evidence_list' | 'evidence_open', source: Source, operation: () => Promise<EvidenceDeskResultV2>) =>
@@ -37,7 +34,6 @@ export function createPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV1, ticket?
     live_sources: Object.freeze([
       ...(ticket === undefined ? [] : [Object.freeze({ source: 'ticket' as const, tool_id: ticket.tool_id })]),
       ...(slack === undefined ? [] : [Object.freeze({ source: 'slack' as const, tool_id: slack.tool_id })]),
-      ...inheritedSlack,
     ]),
     async search(input) {
       input.signal?.throwIfAborted();
