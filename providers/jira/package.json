@@ -21,10 +21,6 @@
       "types": "./dist/jira-nango-v1.d.ts",
       "import": "./dist/jira-nango-v1.js"
     },
-    "./jira-context-source-v1": {
-      "types": "./dist/jira-context-source-v1.d.ts",
-      "import": "./dist/jira-context-source-v1.js"
-    },
     "./jira-person-connection-http-application-v1": {
       "types": "./dist/jira-person-connection-http-application-v1.d.ts",
       "import": "./dist/jira-person-connection-http-application-v1.js"

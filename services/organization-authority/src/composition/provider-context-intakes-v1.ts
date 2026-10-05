@@ -3,9 +3,6 @@ import {
   GRANOLA_CONTEXT_CAPTURE_ADAPTER_ID, GRANOLA_CONTEXT_CAPTURE_ADAPTER_VERSION, createGranolaContextSourceV1,
 } from '@echo-brain/provider-granola/context/granola-context-source-v1';
 import {
-  JIRA_CONTEXT_CAPTURE_ADAPTER_ID, JIRA_CONTEXT_CAPTURE_ADAPTER_VERSION, createJiraContextSourceV1, type JiraContextSourceOptionsV1,
-} from '@echo-brain/provider-jira/jira-context-source-v1';
-import {
   createContextSourceIntakeV1, type ContextSourceIntakeOptionsV1, type ContextSourceIntakeV1,
 } from './context-source-intake-v1.js';
 
@@ -30,27 +27,5 @@ export function createGranolaContextIntakeV1(input: AuthorityBinding & {
     authority: input.authority,
     require_read_current: input.require_read_current,
     retention: input.retention,
-  });
-}
-
-/** Jira defaults to request-only; retained captures require an explicit pointer-only Authority binding. */
-export function createJiraContextIntakeV1(input: AuthorityBinding &
-  Pick<JiraContextSourceOptionsV1, 'transport' | 'project' | 'representation' | 'now'> & {
-    readonly source_instance_id: string;
-    readonly retention?: ContextSourceIntakeOptionsV1['retention'];
-  }): ContextSourceIntakeV1 {
-  if (input.transport.binding.organization_id !== input.organization_id) throw new Error('Jira context source differs from its configured organization');
-  const retention: ContextSourceIntakeOptionsV1['retention'] = input.retention ?? { disposition: 'request_only' };
-  if (retention.disposition === 'retained' && input.representation !== 'pointer') throw new Error('Jira retained context requires pointer representation');
-  const identity = Object.freeze({
-    kind: 'source' as const, adapter_id: JIRA_CONTEXT_CAPTURE_ADAPTER_ID, instance_id: input.source_instance_id, version: JIRA_CONTEXT_CAPTURE_ADAPTER_VERSION,
-  });
-  const source = createJiraContextSourceV1({
-    transport: input.transport, project: input.project, instance_id: input.source_instance_id,
-    representation: input.representation, ...(input.now === undefined ? {} : { now: input.now }),
-  });
-  return createContextSourceIntakeV1({
-    source, identity, organization_id: input.organization_id, authority: input.authority,
-    require_read_current: input.require_read_current, retention,
   });
 }
