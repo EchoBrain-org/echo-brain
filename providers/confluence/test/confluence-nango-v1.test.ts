@@ -12,7 +12,7 @@ it('starts a lowercase Confluence Nango connection with exactly the live-read sc
   await expect(nango.connect(tags)).resolves.toEqual({ link: 'https://connect.nango.dev/fixture-consent' });
   expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string)).toEqual({
     tags, allowed_integrations: [integration], integrations_config_defaults: {
-      [integration]: { connection_config: { oauth_scopes_override: 'offline_access read:page:confluence read:space:confluence search:confluence read:confluence-user' } },
+      [integration]: { connection_config: { oauth_scopes_override: 'offline_access read:page:confluence read:space:confluence read:content-details:confluence' } },
     },
   });
   fetch.mockResolvedValueOnce(json(connection));

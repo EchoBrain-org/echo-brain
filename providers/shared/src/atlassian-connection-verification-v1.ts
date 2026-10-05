@@ -10,8 +10,14 @@ export interface AtlassianConnectionCheckInputV1 {
   readonly require_account?: (account_id: string) => void;
 }
 const REQUIRED_SCOPES = Object.freeze({
-  jira: ['read:jira-work', 'read:jira-user'],
-  confluence: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user'],
+  jira: [['read:jira-work'], ['read:jira-user']],
+  confluence: [
+    ['read:page:confluence'],
+    ['read:space:confluence'],
+    // Atlassian documents classic OR granular scopes for these v1 endpoints.
+    ['search:confluence', 'read:content-details:confluence'],
+    ['read:confluence-user', 'read:content-details:confluence'],
+  ],
 });
 
 export function atlassianSiteOriginV1(provider: AtlassianPersonProviderV1, value: unknown): string {
@@ -44,7 +50,7 @@ export async function verifyAtlassianConnectionV1(provider: AtlassianPersonProvi
   if (matches.length !== 1) provider.failure('unauthorized');
   const selected = matches[0]!;
   const scopes = selected.scopes as readonly string[];
-  if (!REQUIRED_SCOPES[provider.id].every(scope => scopes.includes(scope))) provider.failure('unauthorized');
+  if (!REQUIRED_SCOPES[provider.id].every(alternatives => alternatives.some(scope => scopes.includes(scope)))) provider.failure('unauthorized');
   const origin = atlassianSiteOriginV1(provider, selected.url);
   if (input.expected_origin !== undefined && input.expected_origin !== origin) provider.failure('stale_access_state');
   const path = provider.id === 'jira' ? `/ex/jira/${cloud}/rest/api/3/myself` : '/rest/api/user/current';

@@ -16,7 +16,7 @@ export const CONFLUENCE_PERSON_PROVIDER_V1 = Object.freeze({
   storage_namespace: 'confluence',
   display_name: 'Confluence',
   scope_id_pattern: CONFLUENCE_CLOUD_ID,
-  oauth_scopes: 'offline_access read:page:confluence read:space:confluence search:confluence read:confluence-user',
+  oauth_scopes: 'offline_access read:page:confluence read:space:confluence read:content-details:confluence',
   credential_origin: 'https://api.atlassian.com',
   credential_paths: (cloudId: string) => ['/oauth/token/accessible-resources', `/ex/confluence/${cloudId}/wiki/api/v2/`, `/ex/confluence/${cloudId}/wiki/rest/api/`],
   failure: confluenceFailure,

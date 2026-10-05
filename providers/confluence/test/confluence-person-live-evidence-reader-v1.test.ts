@@ -28,7 +28,7 @@ function metadata(value: Page, body = false) {
 }
 const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 
-async function fixture(options: { selected?: readonly string[]; pages?: Page[] } = {}) {
+async function fixture(options: { selected?: readonly string[]; pages?: Page[]; scopes?: readonly string[] } = {}) {
   const calls: Call[] = [];
   const audits: PersonLiveEvidenceReleaseV1<PersonPageCitationV1>[] = [];
   const state: {
@@ -42,7 +42,7 @@ async function fixture(options: { selected?: readonly string[]; pages?: Page[] }
     const call = { path, query: new URLSearchParams(url.searchParams) };
     calls.push(call);
     if (state.denied.has(path)) return response({ private: 'provider denial must not escape' }, 403);
-    if (path === '/oauth/token/accessible-resources') return response([{ id: CLOUD, url: state.site, scopes: SCOPES }]);
+    if (path === '/oauth/token/accessible-resources') return response([{ id: CLOUD, url: state.site, scopes: options.scopes ?? SCOPES }]);
     if (path === '/rest/api/user/current') return response({ accountId: state.account, type: 'known', accountType: 'atlassian' });
     if (path === '/api/v2/pages') {
       if (state.list !== undefined) return response(state.list(call));
@@ -75,6 +75,21 @@ async function fixture(options: { selected?: readonly string[]; pages?: Page[] }
 // Every operation below crosses the production audited release boundary; raw
 // reader outputs alone would miss citation, coordinate, digest and size defects.
 describe('Confluence live reader through the audited evidence source', () => {
+  it('lists, searches, opens, and revalidates a mapped page with the minimal granular resource grant', async () => {
+    const f = await fixture({ selected: ['42'], scopes: ['read:page:confluence', 'read:space:confluence', 'read:content-details:confluence'] });
+    const listed = await f.source.list({ limit: 20 });
+    expect(listed.items.map(item => item.citation.page_id)).toEqual(['123']);
+    expect(f.calls.find(call => call.path === '/api/v2/pages')!.query.get('space-id')).toBe('42');
+    const found = await f.source.search({ query: 'EVT requirements' });
+    expect(f.calls.find(call => call.path === '/rest/api/search')!.query.get('cql')).toBe('type = page AND text ~ "EVT requirements" AND space IN ("ECHO")');
+    const opened = await f.source.open({ item: found.items[0]!.id });
+    expect(opened.items.map(item => item.text).join('')).toBe('EVT requirements\nThe gate requires meeting, ticket, and document context.');
+    const reads = f.bodyCalls().length;
+    await f.source.revalidate({});
+    expect(f.bodyCalls()).toHaveLength(reads + 1);
+    expect(JSON.stringify(f.audits)).not.toContain('The gate requires');
+  });
+
   it('discovers global metadata without body reads or an ECHO space allowlist', async () => {
     const f = await fixture({ pages: [page(), page({ id: '124', spaceId: '999', title: 'A different accessible space', status: 'archived' })] });
     const result = await f.source.list({ limit: 20 });
