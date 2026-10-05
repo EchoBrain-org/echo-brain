@@ -44,23 +44,29 @@ function questionQuery(question) {
 }
 
 /**
- * One deterministic research step: search the question once, finish on the
- * first result whose full text was shown, otherwise finish as not found (the
- * loop asks once more before it accepts that). It reads only the current
- * prompt: no corpus map, response fixture or caller-controlled citation.
+ * One deterministic research loop: search the question once, finish on the
+ * first result whose full text was shown, otherwise complete a meeting
+ * inventory read before reporting no result. It reads only the current prompt:
+ * no corpus map, response fixture or caller-controlled citation.
  */
 function stepResponse(userPrompt) {
   const prompt = parseJson(userPrompt);
   const question = prompt?.question;
   if (typeof question !== "string") throw new Error("deterministic agent did not receive a question");
   const part = (status, evidence = []) => ({ question, needs: [{ need: "the answer", status, evidence }], notes: "" });
-  const seen = (Array.isArray(prompt.last_results) ? prompt.last_results : []).flatMap((result) => Array.isArray(record(result)?.results) ? result.results : []);
+  const lastResults = Array.isArray(prompt.last_results) ? prompt.last_results : [];
+  const seen = lastResults.flatMap((result) => Array.isArray(record(result)?.results) ? result.results : []);
   const full = seen.find((item) => record(item)?.full === true && typeof item.id === "string");
   if (full !== undefined) return Object.freeze({ parts: [part("found", [full.id])], actions: [{ tool: "finish", args: {} }] });
   if (prompt.step === 1) {
     const query = questionQuery(question);
     if (query.length > 0) return Object.freeze({ parts: [part("open")], actions: [{ tool: "search", args: { query } }] });
   }
+  const completedMeetingList = lastResults.some((result) => {
+    const value = record(result);
+    return value?.tool === "list" && Array.isArray(value.items) && value.more === false;
+  });
+  if (!completedMeetingList) return Object.freeze({ parts: [part("open")], actions: [{ tool: "list", args: { source: "meetings" } }] });
   return Object.freeze({ parts: [part("not_found")], actions: [{ tool: "finish", args: {} }] });
 }
 
