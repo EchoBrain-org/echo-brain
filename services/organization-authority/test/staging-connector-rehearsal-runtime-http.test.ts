@@ -82,8 +82,9 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
   const selected = selection();
   let jiraAskEnabled = false;
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: { id: string }[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
+    const prompt = JSON.parse(input.user_prompt) as { question: string; source_catalog?: { tool_id?: string }[]; last_results?: { results?: { id: string }[] }[]; opened?: { id: string }[]; evidence?: { id: string }[] };
     if ((input.schema.properties as Record<string, unknown>).sentences !== undefined) return { sentences: [{ text: 'The ticket says ship on Friday.', evidence: [prompt.evidence![0]!.id] }], not_found: [] };
+    if (!prompt.source_catalog?.some(source => source.tool_id === 'jira')) return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
     const opened = prompt.opened?.[0]?.id;
     if (opened !== undefined) return { parts: [{ question: prompt.question, needs: [{ need: 'ship day', status: 'found', evidence: [opened] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] };
     const hit = prompt.last_results?.[0]?.results?.[0]?.id;
@@ -99,7 +100,7 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     ...(jiraAskEnabled ? { jira_person_live: { enabled: true as const, cloud_id: FIXTURE_CLOUD, integration_id: 'jira', nango_authorization: () => 'synthetic-nango-key-0000000000000000' } } : {}),
     granola_credential_file: manifest.granola_credential_file, granola_owner_email_file: manifest.granola_owner_email_file, openrouter_credential_file: manifest.llm_credential_file,
   }, selected, { api: { oidc_provider: seams.oidc_provider,
-    ...(jiraAskEnabled ? { answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } } } : {}),
+    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 25_000 } },
   }, slack: seams.slack, jira: seams.jira_person_live_seams });
   let runtime = await open();
   let owner = '';
@@ -191,7 +192,10 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
       const sources = retained.prepare('SELECT adapter_id FROM authority_sources_v1').all();
       expect(sources).toEqual([{ adapter_id: 'granola-context-capture' }]);
     } finally { retained.close(); }
-    expect((await post(PERSON_ANSWER_PATH_V4, { question: 'fixture' })).status).toBe(503);
+    // Local Ask remains available before Jira Ask is selected, without reading Jira.
+    const jiraBeforeLocalAsk = seams.jiraFetch.mock.calls.length;
+    expect(await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'fixture' })).toMatchObject({ status: 200, body: { schema_version: 5, citations: [] } });
+    expect(seams.jiraFetch).toHaveBeenCalledTimes(jiraBeforeLocalAsk);
     granolaVisible = false;
     await runtime.close();
     jiraAskEnabled = true;
@@ -228,6 +232,7 @@ it('retains Granola, refuses tool capture, and reuses the owner Jira grant for l
     const globalReadStart = seams.jiraFetch.mock.calls.length;
     const connections = vi.mocked(seams.jira_person_live_seams.nango.connection);
     const ownerConnectionStart = connections.mock.calls.length;
+    generate.mockClear();
     const answerResponse = await post(PERSON_ANSWER_PATH_V4, { schema_version: 3, question: 'When should the ticket ship?' });
     expect(answerResponse.status).toBe(200);
     const answer = validatePersonAnswerResponseV5(answerResponse.body);
