@@ -2,7 +2,9 @@ import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerResponseV6 } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
 import { createAgenticAskV3 } from '../../src/answer-composition/agentic-ask-v1.js';
+import type { StructuredGenerationInput } from '../../src/answer-composition/structured-generation-v1.js';
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from '../../src/shared/evidence-desk-v2.js';
+import { captureCoreRuntimeContentV1, observeCoreRuntimeV1 } from '../../src/shared/core-runtime-observation-v1.js';
 
 const checked = { checked_at: '2026-10-05T00:00:00.000Z' };
 const text = 'The approved launch plan says EVT begins Tuesday.';
@@ -11,6 +13,35 @@ const inventory: EvidenceDeskItemV2 = Object.freeze({ id: 'opaque-page-section',
 const opened: EvidenceDeskItemV2 = Object.freeze({ ...inventory, text, receipt_sha256: canonicalSha256('page-open'), citation: citation(text) });
 
 describe('Agentic Ask V3 live pages', () => {
+  it('suppresses runtime content capture after page-only inventory or text enters a prompt', async () => {
+    const desk: EvidenceDeskPortV2 = {
+      scope: { kind: 'global' }, ticket_available: false,
+      live_sources: [{ source: 'page', selector: 'pages', metadata_only_list: true, tool_id: 'knowledge' }],
+      search: vi.fn(async () => ({ items: [inventory], truncated: false, receipt_digests: [inventory.receipt_sha256] })),
+      list: vi.fn(async () => ({ items: [inventory], truncated: false, receipt_digests: [inventory.receipt_sha256] })),
+      open: vi.fn(async () => ({ items: [opened], truncated: false, receipt_digests: [opened.receipt_sha256] })),
+      revalidate: vi.fn(async () => checked),
+    };
+    const replies = [
+      { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'open', evidence: [] }] }], actions: [{ tool: 'list', args: { source: 'pages' } }] },
+      { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'open', evidence: [] }] }], actions: [{ tool: 'open', args: { id: 'E1' } }] },
+      { parts: [{ question: 'When does EVT start?', notes: '', needs: [{ need: 'EVT date', status: 'found', evidence: ['E1'] }] }], actions: [{ tool: 'finish', args: {} }] },
+      { sentences: [{ text: 'EVT begins Tuesday.', evidence: ['E1'] }], not_found: [] },
+    ];
+    const capture = vi.fn();
+    const generate = vi.fn(async (input: StructuredGenerationInput) => {
+      captureCoreRuntimeContentV1('model_request', input.user_prompt);
+      return replies.shift()!;
+    });
+    const ask = createAgenticAskV3({ desk, model: { generate }, audit: { append: () => undefined }, generation: { generation_adapter_id: 'fixture', planner_model: 'fixture', answer_model: 'fixture', timeout_ms: 30_000 } });
+    await observeCoreRuntimeV1('ask_request', () => ask.answer({ question: 'When does EVT start?' }), { observer: () => undefined, content_observer: capture });
+    expect(generate).toHaveBeenCalledTimes(4);
+    // Only the initial question-only planner call may reach content capture.
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(capture.mock.calls)).not.toContain(inventory.label);
+    expect(JSON.stringify(capture.mock.calls)).not.toContain(text);
+  });
+
   it('discovers metadata then opens a request-owned page section and emits only V6', async () => {
     const desk: EvidenceDeskPortV2 = {
       scope: { kind: 'global' }, ticket_available: false,

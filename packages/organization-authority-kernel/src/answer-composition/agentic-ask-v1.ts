@@ -27,6 +27,7 @@ import {
 } from "../shared/evidence-desk-v2.js";
 import type { EvidenceDeskPortV1 } from "../shared/evidence-desk-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
+import { isRetainedPersonEvidenceCitationV1 } from '../shared/person-evidence-provenance-v1.js';
 import {
   ANSWER_PROMPT,
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
@@ -759,7 +760,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersio
         seen.sort((left, right) => Number(String(left.id).slice(1)) - Number(String(right.id).slice(1)));
         return { opened: shown, seen };
       };
-      const liveInPrompt = () => [...entries.values()].some(entry => ["slack_message", "ticket"].includes(entry.item.citation.kind));
+      const liveInPrompt = () => [...entries.values()].some(entry => !isRetainedPersonEvidenceCitationV1(entry.item.citation));
 
       // ---- model calls -----------------------------------------------------
       let generationStopped = false;
