@@ -2,8 +2,7 @@ import { canonicalSha256 } from "@echo-brain/organization-control-plane/canonica
 import type { NangoSlackConnectionV1 } from "../adapters/nango/nango-connection-client-v1.js";
 import { buildOrganizationToolConnectionContractV2, buildOrganizationToolConnectionStateV2, type OrganizationToolConnectionContractV2, type OrganizationToolConnectionStateV2 } from "../application/organization-tool-connection-contracts-v2.js";
 import { findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, type SlackAppCredentialsV1 } from "../application/slack-app-credentials-v1.js";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, slackPrivateAppBotScopesV1, type SlackPublicChannelContextCapabilityV1, type OrganizationSecretReference, type OrganizationSecretStore, type VerifiedSlackConnection } from "../application/slack-integration-contracts.js";
-import { slackConnectionVerificationEvidenceSha256V1 } from "../application/slack-connection-verification-evidence-v1.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, type OrganizationSecretReference, type OrganizationSecretStore, type VerifiedSlackConnection } from "../application/slack-integration-contracts.js";
 import { assertSlackConnectionMetadataV1, insertActiveSlackConnectionV1, readActiveSlackConnectionV1, slackNangoAppPublicConfigurationSha256V1, type StoredSlackConnectionV1 } from "./sqlite-slack-active-connection-v1.js";
 import type Database from "better-sqlite3";
 
@@ -59,7 +58,6 @@ export interface ActivateNangoSlackConnectionInputV1 {
   readonly now: () => string;
   readonly new_connection_id: () => string;
   readonly signal?: AbortSignal;
-  readonly public_channel_context?: SlackPublicChannelContextCapabilityV1;
 }
 
 export type ActivatedNangoSlackConnectionV1 = {
@@ -77,11 +75,9 @@ async function verifyInstall(
   input: ActivateNangoSlackConnectionInputV1,
 ): Promise<VerifiedSlackConnection> {
   const { nango } = input;
-  const requestedScopes = slackPrivateAppBotScopesV1(input.public_channel_context);
-  // The original approval profile accepts granted supersets. This is needed
-  // when rolling back from an optional capability whose Slack grant remains.
-  const grantsRequested = (scopes: readonly string[]) => input.public_channel_context === undefined
-    ? requestedScopes.every((scope) => scopes.includes(scope)) : exactScopes(scopes, requestedScopes);
+  // A granted superset is accepted: Slack keeps scopes an earlier manifest
+  // requested until the app is uninstalled, and the bot never uses them.
+  const grantsRequested = (scopes: readonly string[]) => SLACK_PRIVATE_APP_BOT_SCOPES_V1.every((scope) => scopes.includes(scope));
   // The Nango parser already refuses an Enterprise Grid org-wide install.
   if (nango.app_id !== input.credential.credentials.app_id) {
     throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
@@ -99,9 +95,6 @@ async function verifyInstall(
   }
   if (!grantsRequested(verified.granted_scopes)) {
     throw new SlackConnectionRefusedErrorV1("permissions_missing");
-  }
-  if (input.public_channel_context !== undefined && verified.verification_evidence_sha256 !== slackConnectionVerificationEvidenceSha256V1(verified)) {
-    throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
   }
   return verified;
 }
@@ -143,22 +136,15 @@ function stateVerificationEvidenceSha256(verified: VerifiedSlackConnection): `sh
 }
 
 /**
- * Optional channel scopes may extend the original approval proof, without
- * rewriting the state frozen by outstanding cards. Every historical fact
- * must still reproduce exactly when projecting only the two added scopes.
+ * A rebind must reproduce the stored verification exactly, so the state
+ * frozen by outstanding cards stays true without being rewritten.
  */
 function preservesStoredVerification(
   active: StoredSlackConnectionV1,
   verified: VerifiedSlackConnection,
-  capability: SlackPublicChannelContextCapabilityV1 | undefined,
 ): boolean {
-  if (exactScopes(observedScopes(verified), active.state.observed_granted_scopes) &&
-      stateVerificationEvidenceSha256(verified) === active.state.verification_evidence_sha256) return true;
-  if (capability === undefined || !exactScopes(active.state.observed_granted_scopes, SLACK_PRIVATE_APP_BOT_SCOPES_V1) ||
-      !exactScopes(verified.granted_scopes, slackPrivateAppBotScopesV1(capability)) ||
-      verified.verification_evidence_sha256 !== slackConnectionVerificationEvidenceSha256V1(verified)) return false;
-  const originalProof = slackConnectionVerificationEvidenceSha256V1({ ...verified, granted_scopes: active.state.observed_granted_scopes });
-  return stateVerificationEvidenceSha256({ ...verified, verification_evidence_sha256: originalProof }) === active.state.verification_evidence_sha256;
+  return exactScopes(observedScopes(verified), active.state.observed_granted_scopes) &&
+    stateVerificationEvidenceSha256(verified) === active.state.verification_evidence_sha256;
 }
 
 /**
@@ -182,8 +168,7 @@ export async function activateNangoSlackConnectionV1(
     if (!namesActiveNangoConnection(before, input)) {
       throw new SlackConnectionRefusedErrorV1("already_connected");
     }
-    if (!sameProviderIdentity(before.connection, verified) ||
-        (input.public_channel_context !== undefined && !preservesStoredVerification(before, verified, input.public_channel_context))) {
+    if (!sameProviderIdentity(before.connection, verified)) {
       throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
     }
     return Object.freeze({
@@ -271,9 +256,8 @@ export interface RebindNangoSlackConnectionInputV1 extends ActivateNangoSlackCon
  * Points the active connection's credential bundle at a new Nango connection
  * after Nango lost the one it named; the caller proves that loss again after
  * Slack verification and immediately before this synchronous write. The new
- * install must reproduce the stored verification evidence and scopes, or
- * prove the explicitly configured two-scope extension through the canonical
- * historical projection above. It remains the same app, workspace and bot.
+ * install must reproduce the stored verification evidence and scopes
+ * exactly. It remains the same app, workspace and bot.
  * The bundle must still hold the begin's
  * app credentials and the lost id, and only that id changes, under the same
  * handle. The state row is untouched: the state hash and every outstanding
@@ -296,7 +280,7 @@ export async function rebindNangoSlackConnectionV1(
       }
       if (
         !sameProviderIdentity(active.connection, verified) ||
-        !preservesStoredVerification(active, verified, input.public_channel_context)
+        !preservesStoredVerification(active, verified)
       ) {
         throw new SlackConnectionRefusedErrorV1("workspace_mismatch");
       }

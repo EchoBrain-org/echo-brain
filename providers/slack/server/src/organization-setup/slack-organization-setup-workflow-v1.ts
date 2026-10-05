@@ -22,7 +22,7 @@ import { buildEchoSlackAppManifestV1, SlackAppManifestProviderErrorV1, type Slac
 import { SlackIdentityProviderErrorV1 } from "../organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { findPendingSlackAppCredentialsV1, findSlackAppCredentialsByReferenceSha256V1, serializeSlackAppCredentialsV1, SLACK_APP_CREDENTIALS_KIND_V1, type FoundSlackAppCredentialsV1 } from "../organization-control-plane/application/slack-app-credentials-v1.js";
 import type { SlackConnectionHealthV1 } from "../organization-control-plane/application/slack-connection-health-v1.js";
-import { SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, slackPrivateAppBotScopesV1, type SlackPublicChannelContextCapabilityV1 } from "../organization-control-plane/application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1 } from "../organization-control-plane/application/slack-integration-contracts.js";
 import { readActiveSlackConnectionV1 } from "../organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { activateNangoSlackConnectionV1, rebindNangoSlackConnectionV1, SlackConnectionConflictError, SlackConnectionRefusedErrorV1, type SlackConnectionVerifierV1 } from "../organization-control-plane/persistence/sqlite-slack-nango-connection-coordinator-v1.js";
 
@@ -35,8 +35,6 @@ export interface SlackOrganizationSetupOptionsV1 {
   readonly authority_url: string;
   readonly nango: { readonly client: NangoConnectionClientV1; readonly callback_url: string };
   readonly manifest_provider: SlackAppManifestProviderV1;
-  /** Optional provider permission extension selected only by an Authority intake profile. */
-  readonly public_channel_context?: SlackPublicChannelContextCapabilityV1;
 }
 
 export interface SlackOrganizationSetupWorkflowOptionsV1 extends SlackOrganizationSetupOptionsV1 {
@@ -163,17 +161,12 @@ function statusResponse(state: InstallState): OrganizationSlackInstallStatusResp
 export class SlackOrganizationSetupWorkflowV1 {
   private readonly attempts = new Map<string, InstallAttempt>();
   private readonly manifest: Readonly<Record<string, unknown>>;
-  private readonly requestedScopes: readonly string[];
-  private readonly publicChannelContext: SlackPublicChannelContextCapabilityV1 | undefined;
   /** One setup, credential change, install begin or install check at a time. */
   private busy = false;
   private checking: string | null = null;
 
   constructor(private readonly options: SlackOrganizationSetupWorkflowOptionsV1) {
-    this.requestedScopes = slackPrivateAppBotScopesV1(options.public_channel_context);
-    this.publicChannelContext = options.public_channel_context === undefined ? undefined : SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1;
-    this.manifest = buildEchoSlackAppManifestV1({ authority_url: options.authority_url, nango_callback_url: options.nango.callback_url,
-      public_channel_context: this.publicChannelContext });
+    this.manifest = buildEchoSlackAppManifestV1({ authority_url: options.authority_url, nango_callback_url: options.nango.callback_url });
   }
 
   /** Creates or updates the ECHO app; explicit adoption replaces only pending setup. */
@@ -241,7 +234,7 @@ export class SlackOrganizationSetupWorkflowV1 {
       const credential = this.installCredential();
       const attemptId = `ssi_${randomUUID()}`;
       const tags = Object.freeze({ echo_organization_id: this.options.organization_id, echo_membership_id: session.membership_id, echo_attempt_id: attemptId });
-      const client = { client_id: credential.credentials.client_id, client_secret: credential.credentials.client_secret, scopes: this.requestedScopes };
+      const client = { client_id: credential.credentials.client_id, client_secret: credential.credentials.client_secret, scopes: SLACK_PRIVATE_APP_BOT_SCOPES_V1 };
       const nango = this.options.nango.client;
       const connectionId = credential.credentials.nango_connection_id;
       let reconnect: InstallAttempt["reconnect"] = null;
@@ -303,7 +296,7 @@ export class SlackOrganizationSetupWorkflowV1 {
       const activation = {
         database: this.options.database, secrets: this.options.secrets, verifier,
         authority_id: this.options.authority_id, organization_id: this.options.organization_id, state_lineage_id: this.options.state_lineage_id,
-        credential, nango: connection, public_channel_context: this.publicChannelContext,
+        credential, nango: connection,
         now: () => this.now(), new_connection_id: this.options.new_connection_id ?? (() => `con_${randomUUID()}`),
       };
       const activated = attempt.rebind === null
@@ -418,9 +411,6 @@ export class SlackOrganizationSetupWorkflowV1 {
   /** The pending app, else the connected Nango app (a reconnect). */
   private installCredential(): FoundSlackAppCredentialsV1 {
     const active = this.activeNangoBundle();
-    // A capability upgrade always targets the app that setup() updated.
-    // A stray pending app cannot redirect it into a second Nango connection.
-    if (active !== undefined && this.publicChannelContext !== undefined) return active;
     const pending = findPendingSlackAppCredentialsV1(this.options.secrets);
     if (pending !== undefined && active !== undefined && pending.credentials.app_id === active.credentials.app_id) {
       // A stray pending copy of the connected app must not start a second connection for it.

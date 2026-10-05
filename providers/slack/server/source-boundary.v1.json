@@ -180,7 +180,14 @@
       "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-connection-coordinator-v1.ts",
       "providers/slack/server/src/organization-control-plane/persistence/sqlite-slack-bot-token-reader-v1.ts",
       "providers/slack/server/src/setup/slack-browser-oauth-configuration-v1.ts",
-      "providers/slack/server/src/slack-private-credentials-v1.ts"
+      "providers/slack/server/src/slack-private-credentials-v1.ts",
+      "providers/slack/server/src/context/slack-channel-live-evidence-reader-v1.ts",
+      "providers/slack/server/src/context/slack-context-current-identity-v1.ts",
+      "providers/slack/server/src/context/slack-context-payload-v1.ts",
+      "providers/slack/server/src/context/slack-context-source-v1.ts",
+      "providers/slack/server/src/context/slack-context-transport-v1.ts",
+      "providers/slack/server/src/context/slack-context-validation-v1.ts",
+      "providers/slack/server/src/organization-control-plane/application/slack-public-channel-context-capability-v1.ts"
     ]
   }
 }

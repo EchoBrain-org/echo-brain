@@ -27,19 +27,19 @@ describe('closed staging connector protocol', () => {
       action: 'capture', qualified: false, tool, receipt })).toThrow('value is invalid');
   });
 
-  it('accepts only fixed-scope Slack and Jira read verification without caller-selected content or budgets', () => {
-    for (const tool of ['slack', 'jira'] as const) {
+  it('accepts only fixed-scope Jira read verification without caller-selected content or budgets', () => {
+    for (const tool of ['jira'] as const) {
       const request = { ...binding, action: 'verify-read', tool };
       expect(validateStagingConnectorRehearsalRequestV2(request)).toEqual(request);
       for (const extra of [{ limit: 2 }, { channel_id: 'COTHER' }, { project: 'PRIVATE' }, { query: 'private text' }]) {
         expect(() => validateStagingConnectorRehearsalRequestV2({ ...request, ...extra })).toThrow('value is invalid');
       }
     }
-    expect(() => validateStagingConnectorRehearsalRequestV2({ ...binding, action: 'verify-read', tool: 'granola' })).toThrow('value is invalid');
+    for (const tool of ['granola', 'slack']) expect(() => validateStagingConnectorRehearsalRequestV2({ ...binding, action: 'verify-read', tool })).toThrow('value is invalid');
   });
 
   it('returns only finite read diagnostics or digests of positive bounded text, never provider content', () => {
-    const response = { ...binding, kind: 'echo-staging-connector-rehearsal-receipt-v2', action: 'verify-read', qualified: false, tool: 'slack',
+    const response = { ...binding, kind: 'echo-staging-connector-rehearsal-receipt-v2', action: 'verify-read', qualified: false, tool: 'jira',
       result: { status: 'verified', source_coordinate_sha256: digest, text_sha256: digest, text_bytes: 42 } };
     expect(validateStagingConnectorRehearsalResponseV2(response)).toEqual(response);
     const refused = { ...response, result: { status: 'refused', phase: 'connection', reason: 'connection_absent' } };
