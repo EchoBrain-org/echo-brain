@@ -118,15 +118,15 @@ describe('staging connector rehearsal wrapper', () => {
     install(home);
     const accepted = { schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2',
       release_id: 'clean-v1-fixture-release', profile_sha256: canonicalSha256(configured), action: 'verify-read', qualified: false,
-      tool: 'slack', result: { status: 'verified', source_coordinate_sha256: canonicalSha256('coordinate'), text_sha256: canonicalSha256('text'), text_bytes: 42 } };
-    const input = { action: 'verify-read' as const, release_id: accepted.release_id, profile_path: profilePath, person_home: home, tool: 'slack' as const };
+      tool: 'jira', result: { status: 'verified', source_coordinate_sha256: canonicalSha256('coordinate'), text_sha256: canonicalSha256('text'), text_bytes: 42 } };
+    const input = { action: 'verify-read' as const, release_id: accepted.release_id, profile_path: profilePath, person_home: home, tool: 'jira' as const };
     for (const remote of [accepted, { ...accepted, result: { status: 'refused', phase: 'inventory', reason: 'empty' } }]) {
       let reads = 0;
       assert.deepEqual(await runStagingConnectorRehearsal(input, { fetch: async (target, init) => {
         if (url(target).pathname === '/v1/authority-descriptor') return Response.json(descriptor());
         reads += 1;
         assert.deepEqual(JSON.parse(String(init?.body)), { schema_version: 2, release_id: accepted.release_id,
-          profile_sha256: accepted.profile_sha256, action: 'verify-read', tool: 'slack' });
+          profile_sha256: accepted.profile_sha256, action: 'verify-read', tool: 'jira' });
         return Response.json(remote);
       } }), remote);
       assert.equal(reads, 1);
@@ -134,7 +134,7 @@ describe('staging connector rehearsal wrapper', () => {
     for (const remote of [
       { ...accepted, release_id: 'clean-v1-other-release' },
       { ...accepted, profile_sha256: canonicalSha256('other') },
-      { ...accepted, tool: 'jira' },
+      { ...accepted, tool: 'slack' },
       { ...accepted, result: { ...accepted.result, text: 'private provider body' } },
       undefined,
     ]) {
@@ -158,7 +158,8 @@ describe('staging connector rehearsal wrapper', () => {
     for (const tool of ['jira', 'slack'] as const) {
       let calls = 0;
       await assert.rejects(runStagingConnectorRehearsal({ action: 'capture', release_id: 'clean-v1-fixture-release',
-        profile_path: profilePath, person_home: home, tool, limit: 1 }, {
+        // Slack is outside the typed input on purpose: the wrapper must refuse it at run time too.
+        profile_path: profilePath, person_home: home, tool: tool as never, limit: 1 }, {
         fetch: async () => { calls += 1; return Response.json({}); },
       }), /Staging connector rehearsal failed/);
       assert.equal(calls, 0);

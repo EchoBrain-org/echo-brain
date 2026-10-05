@@ -38,8 +38,7 @@ references, and approved-record policy projectors.
 The Jira live runtime (`jira-person-live-runtime-v1.ts`) and the opt-in
 [context capture integration](../product/2026-10-01-connector-context-integration-v1.md)
 add the selecting modules `provider-context-intakes-v1.ts`,
-`connector-rehearsal-capture-v1.ts`, `slack-context-capture-runtime-v1.ts`, and
-the staging connector rehearsal runtime. Jira constructs a reader from the
+`connector-rehearsal-capture-v1.ts`, and the staging connector rehearsal runtime. Jira constructs a reader from the
 asker's current connection and permissions: global scope has no additional
 project allowlist, project scope requires its saved mapping, and Mine excludes
 Jira. Its provider data is request-only and is never admitted into canonical

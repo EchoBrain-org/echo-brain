@@ -171,21 +171,14 @@ const SLACK_SCOPE_RE = /^[a-z][a-z0-9:_-]{0,127}$/;
 const SLACK_IDENTITY_REQUIRED_SCOPE = "users:read";
 const SLACK_DIRECT_MESSAGE_OPEN_REQUIRED_SCOPE = "im:write";
 
+/** The bot reads only its own DMs, to reconcile card delivery; never a channel. */
 function requiredSlackHistoryScope(channel: string): string {
-  switch (channel[0]) {
-    case "C":
-      return "channels:history";
-    case "D":
-      return "im:history";
-    case "G":
-      return "groups:history";
-    default:
-      throw new SlackApiError(
-        "invalid",
-        "Slack conversations.history requires a supported conversation kind",
-        false,
-      );
-  }
+  if (channel.startsWith("D")) return "im:history";
+  throw new SlackApiError(
+    "invalid",
+    "Slack conversations.history reads only the bot's own direct messages",
+    false,
+  );
 }
 
 function requiredSlackId(

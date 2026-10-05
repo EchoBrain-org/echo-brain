@@ -4,7 +4,7 @@ import {
   BoundedJsonFetchErrorV1,
   boundedJsonFetchV1,
 } from "../../../shared/bounded-json-fetch-v1.js";
-import { SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1, slackPrivateAppBotScopesV1, type SlackPublicChannelContextCapabilityV1 } from "../../application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 } from "../../application/slack-integration-contracts.js";
 
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const TIMEOUT_MS = 15_000;
@@ -41,7 +41,6 @@ function validateRecipeUrl(value: string, allowPath: boolean): URL {
 export function buildEchoSlackAppManifestV1(input: {
   readonly authority_url: string;
   readonly nango_callback_url: string;
-  readonly public_channel_context?: SlackPublicChannelContextCapabilityV1;
 }): Readonly<Record<string, unknown>> {
   const authorityUrl = validateRecipeUrl(input.authority_url, false);
   validateRecipeUrl(input.nango_callback_url, true);
@@ -61,7 +60,7 @@ export function buildEchoSlackAppManifestV1(input: {
         input.nango_callback_url,
         `${authorityOrigin}${ORGANIZATION_API_PERSON_SLACK_BROWSER_LINK_CALLBACK_PATH}`,
       ]),
-      scopes: Object.freeze({ bot: slackPrivateAppBotScopesV1(input.public_channel_context), user: SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 }),
+      scopes: Object.freeze({ bot: SLACK_PRIVATE_APP_BOT_SCOPES_V1, user: SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 }),
     }),
     settings: Object.freeze({
       interactivity: Object.freeze({

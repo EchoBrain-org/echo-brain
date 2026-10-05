@@ -3,7 +3,7 @@ export interface StagingConnectorRehearsalInput {
   readonly release_id: string;
   readonly profile_path: string;
   readonly person_home?: string;
-  readonly tool?: 'granola' | 'jira' | 'slack'; // capture: granola; verify-read: jira or slack
+  readonly tool?: 'granola' | 'jira'; // capture: granola; verify-read: jira
   readonly limit?: number;
 }
 

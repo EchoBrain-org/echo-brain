@@ -126,6 +126,7 @@
       }
     ],
     "retired_source_paths": [
+      "services/organization-authority/src/composition/slack-context-capture-runtime-v1.ts",
       "services/organization-authority/src/application/ports/runtime-ports.ts",
       "services/organization-authority/src/adapters/runtime/system-runtime-ports.ts",
       "services/organization-authority/src/composition/granola-admitted-meeting-source-cursor-policy-v1.ts",

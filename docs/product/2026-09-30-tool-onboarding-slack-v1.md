@@ -3,15 +3,14 @@
 Status: **historical** (revision 3, 2026-09-30). Phase 1 shipped in #251
 (`1d7e72b`), with the reconnect fix in #258 (`9bce5c1`). Phase 2, the desktop
 setup and connect experience, is not built. The phase-0 spike in section 7 was
-never recorded (ADR-0027, Spike-sensitive). The staging connector rehearsal can
-also request `channels:read` and `channels:history` beyond the four scopes in
-section 5.1 (ADR-0027 proposed extension).
+never recorded (ADR-0027, Spike-sensitive). The bot is delivery-only and asks
+for exactly the four scopes in section 5.1.
 
 Current records, which win where this doc disagrees:
 - [ADR-0025](../decisions/ADR-0025-nango-holds-slack-connection-credentials.md):
   custody, options, migration and evidence;
 - [ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md) (proposed):
-  rebind and the optional public-channel scopes;
+  rebind (exact-only);
 - [organization control plane](../architecture/organization-control-plane.md):
   Slack connection onboarding gate and Person Slack identity link;
 - [shared connector contracts](../architecture/connector-contracts.md): the

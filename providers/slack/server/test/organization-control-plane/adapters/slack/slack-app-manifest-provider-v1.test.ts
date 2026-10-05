@@ -4,7 +4,7 @@ import {
   SlackAppManifestProviderErrorV1,
   SlackWebAppManifestProviderV1,
 } from "../../../../src/organization-control-plane/adapters/slack/slack-app-manifest-provider-v1.js";
-import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, type SlackPublicChannelContextCapabilityV1 } from "../../../../src/organization-control-plane/application/slack-integration-contracts.js";
+import { SLACK_PRIVATE_APP_BOT_SCOPES_V1, SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1 } from "../../../../src/organization-control-plane/application/slack-integration-contracts.js";
 
 const AUTHORITY_URL = "https://authority.example";
 const NANGO_CALLBACK_URL = "https://api.nango.dev/oauth/callback";
@@ -74,23 +74,6 @@ describe("SLACK_PRIVATE_APP_SIGN_IN_SCOPES_V1", () => {
 });
 
 describe("buildEchoSlackAppManifestV1", () => {
-  it("adds only public-channel read scopes when Authority explicitly selects the versioned capability", () => {
-    const manifest = buildEchoSlackAppManifestV1({ authority_url: AUTHORITY_URL, nango_callback_url: NANGO_CALLBACK_URL,
-      public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 });
-    expect(manifest).toEqual({ ...EXPECTED_MANIFEST, oauth_config: { ...EXPECTED_MANIFEST.oauth_config,
-      scopes: { bot: SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1, user: ["openid", "profile"] } } });
-    expect(SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1).toEqual(["channels:history", "channels:read", "chat:write", "im:history", "im:write", "users:read"]);
-    expect(Object.isFrozen(SLACK_PUBLIC_CHANNEL_CONTEXT_BOT_SCOPES_V1)).toBe(true);
-  });
-
-  it("rejects unversioned, unknown or widened capability configuration", () => {
-    for (const capability of [true, {}, { ...SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, schema_version: 2 },
-      { ...SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1, scopes: ["groups:history"] }]) {
-      expect(() => buildEchoSlackAppManifestV1({ authority_url: AUTHORITY_URL, nango_callback_url: NANGO_CALLBACK_URL,
-        public_channel_context: capability as SlackPublicChannelContextCapabilityV1 })).toThrow("Slack public-channel context capability is invalid");
-    }
-  });
-
   it("builds the exact ECHO Slack app manifest", () => {
     expect(
       buildEchoSlackAppManifestV1({

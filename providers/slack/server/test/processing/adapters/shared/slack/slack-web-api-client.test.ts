@@ -98,14 +98,14 @@ describe("SlackWebApiClient conversations.history recovery", () => {
                   response_metadata: { next_cursor: "" },
                 },
           ),
-          { headers: { "x-oauth-scopes": "channels:history" } },
+          { headers: { "x-oauth-scopes": "im:history" } },
         );
       },
     });
 
     await expect(
       client.channelHistory({
-        channel: "C123",
+        channel: "D123",
         oldest: "1724292304.000000",
         latest: "1724292904.000000",
       }),
@@ -133,17 +133,29 @@ describe("SlackWebApiClient conversations.history recovery", () => {
           messages: [],
           response_metadata: { next_cursor: "" },
         }),
-        { headers: { "x-oauth-scopes": "channels:history" } },
+        { headers: { "x-oauth-scopes": "im:history" } },
       ),
     });
 
     await expect(
       client.channelHistory({
-        channel: "C123",
+        channel: "D123",
         oldest: "1724292304.000000",
         latest: "1724292904.000000",
       }),
     ).rejects.toMatchObject({ code: "invalid", retryable: false });
+  });
+
+  it("never reads a public or private channel's history", async () => {
+    let requests = 0;
+    const client = new SlackWebApiClient("test-token", {
+      fetchImpl: async () => { requests += 1; return new Response("{}"); },
+    });
+    for (const channel of ["C123", "G123"]) {
+      await expect(client.channelHistory({ channel, oldest: "1724292304.000000", latest: "1724292904.000000" }))
+        .rejects.toMatchObject({ code: "invalid", retryable: false });
+    }
+    expect(requests).toBe(0);
   });
 
   it("accepts im:history for direct-message recovery", async () => {

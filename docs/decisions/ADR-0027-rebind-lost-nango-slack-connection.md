@@ -92,29 +92,21 @@ message about a different app.
   and survives a rebind; that is safe only because the proof requires the
   same bot.
 
-### Proposed optional public-channel capability extension
+### Retired public-channel capability
 
-The [staging V2 capture design](../product/2026-10-01-connector-context-integration-v1.md#optional-slack-public-channel-read-capability)
-adds an explicit provider-owned setup capability for the baseline bot scopes
-plus exactly `channels:read` and `channels:history`. It preserves the frozen
-baseline connection contract and state used by existing cards and person
-links. This is a source implementation proposal; it does not change this ADR's
-acceptance or provider-qualification status.
+An earlier revision of this proposal let staging select an optional six-scope
+capability (`channels:read` and `channels:history` beside the four bot scopes)
+and let reconnect and rebind project that live proof onto the stored baseline.
+It was removed when the Slack bot became delivery-only: the bot reads no
+channel, and reading Slack for Ask belongs to each person's own grant.
 
-The ordinary exact-proof rule above remains the default. With this capability
-selected, reconnect and rebind may instead project an independently verified
-live six-scope proof to the historical baseline. The helper must first
-reconstruct the canonical live `auth.test` and `bots.info` proof and require
-equality with the provider evidence. It then projects only the scope list and
-requires equality with the stored baseline proof. Workspace, enterprise, app,
-bot and bot user must still match. Missing scopes, unknown extra scopes and an
-unverified evidence digest cannot use this exception. Rebind still proves the
-old Nango ID absent and applies the existing owner and local state fences.
-
-Channel intake must separately prove the read capability; the historical
-connection contract only proves the approval capability. A cached baseline
-token may therefore continue to serve approval delivery while channel capture
-waits for a token with the read scopes. Capture must fail closed in that case.
+Rebind is exact-only. A token installed while the capability was selected may
+still hold the two channel scopes until the app is reinstalled from scratch.
+Install and reconnect accept that granted superset; a rebind must reproduce
+the stored scopes and verification evidence exactly. A connection whose
+granted scopes differ from its stored proof, including a staging lineage
+created before the bot became delivery-only, recovers only through a fresh
+rehearsal.
 
 Consequences:
 

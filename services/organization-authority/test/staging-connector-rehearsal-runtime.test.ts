@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
   jira: 0,
   demoteDuringCapture: false,
   reads: [] as string[],
-  readMode: 'normal' as 'normal' | 'revoke' | 'demote' | 'stall',
+  readMode: 'normal' as 'normal' | 'revoke' | 'demote' | 'stall' | 'empty',
   grantRevoked: false,
   ownerRevoked: false,
 }));
@@ -44,29 +44,32 @@ vi.mock('../src/composition/connector-rehearsal-capture-v1.js', async importOrig
     close() {},
   }),
 }));
-vi.mock('../src/composition/jira-person-live-runtime-v1.js', () => ({
-  openJiraPersonLiveRuntimeV1: () => ({
-    application: {},
+vi.mock('../src/composition/jira-person-live-runtime-v1.js', async () => {
+  const { AuthorityOperationError } = await import('@echo-brain/organization-authority-kernel/domain/errors');
+  return { openJiraPersonLiveRuntimeV1: () => ({
+    application: {
+      captureStatus: () => ({ connected: true }),
+      async captureConnection() {
+        return { require_current() { if (state.grantRevoked) throw new AuthorityOperationError('stale_access_state', 'private grant details'); },
+          transport: { binding: { external_scope_id: 'cloud-fixture' }, async request() { throw new Error('the mocked reader makes no provider requests'); } } };
+      },
+    },
     connection_http: { routes: [{ route_id: 'jira-connect', method: 'POST', path: '/v1/person/tools/jira/connect' }], async accept() { state.jira += 1; return { status: 201, body: { ok: true } }; } },
     close() {},
-  }),
-}));
-vi.mock('../src/composition/slack-context-capture-runtime-v1.js', async () => {
+  }) };
+});
+vi.mock('@echo-brain/provider-jira/jira-person-live-evidence-reader-v1', async () => {
   const { createHash } = await import('node:crypto');
-  const { AuthorityOperationError } = await import('@echo-brain/organization-authority-kernel/domain/errors');
-  class SlackContextCapturePreparationErrorV1 extends Error {}
-  const text = 'Request-only synthetic Slack text';
-  const citation = { kind: 'slack_message', team_id: 'TFIXTURE', channel_id: 'C01234567', message_ts: '1790966400.123456',
-    permalink: 'https://fixture.slack.com/archives/C01234567/p1790966400123456', text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}` };
-  const item = { citation, handle: 'exact-one', label: 'fixture message', visibility: 'team' };
-  return { SlackContextCapturePreparationErrorV1, openSlackContextCaptureRuntimeV1: () => ({
-    async create_reader() {
-      return { require_current() { if (state.grantRevoked) throw new AuthorityOperationError('stale_access_state', 'private grant details'); }, reader: {
-        validateCitation: () => ({ citation, tool_id: 'slack', external_scope_id: 'TFIXTURE', coordinates: { object_id: citation.message_ts, container_id: citation.channel_id } }),
+  const text = 'Request-only synthetic ticket text';
+  const citation = { kind: 'ticket', tool_id: 'jira', ticket_id: '10001', external_scope_id: 'cloud-fixture',
+    permalink: 'https://fixture.atlassian.net/browse/ECHO-1', text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}` };
+  const item = { citation, handle: 'exact-one', label: 'fixture ticket', visibility: 'team' };
+  return { createJiraPersonLiveEvidenceReaderV1: async () => ({
+        validateCitation: () => ({ citation, tool_id: 'jira', external_scope_id: 'cloud-fixture', coordinates: { object_id: citation.ticket_id } }),
         async list(input: { limit: number; signal: AbortSignal }) {
           state.reads.push('list'); expect(input.limit).toBe(1); expect(input.signal).toBeInstanceOf(AbortSignal);
           if (state.readMode === 'stall') return new Promise(() => {});
-          return { items: [item], truncated: false };
+          return { items: state.readMode === 'empty' ? [] : [item], truncated: false };
         },
         async open(input: { handle: string; limit: number }) {
           state.reads.push('open'); expect(input.handle).toBe('exact-one'); expect(input.limit).toBe(1);
@@ -77,19 +80,17 @@ vi.mock('../src/composition/slack-context-capture-runtime-v1.js', async () => {
           if (state.readMode === 'revoke') state.grantRevoked = true;
           if (state.readMode === 'demote') state.ownerRevoked = true;
         },
-      } };
-    }, close() {},
   }) };
 });
 vi.mock('../src/composition/organization-authority-composition-root.js', () => ({
-  async openOrganizationAuthorityService(_config: unknown, dependencies: { person_http_runtime_factory_with_slack: (sessions: unknown, slack: unknown) => { applications: typeof state.apps } }) {
-    state.apps = dependencies.person_http_runtime_factory_with_slack({
+  async openOrganizationAuthorityService(_config: unknown, dependencies: { api: { person_http_runtime_factory: (sessions: unknown) => { applications: typeof state.apps } } }) {
+    state.apps = dependencies.api.person_http_runtime_factory({
       authenticateAccess({ access_token }: { access_token: string }) {
         return access_token === 'owner' && !state.ownerRevoked && !(state.demoteDuringCapture && state.captures > 0)
           ? { organization_id: 'org_fixture', principal_id: 'prn_fixture', membership_id: 'mem_fixture', membership_type: 'owner', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' }
           : { organization_id: 'org_fixture', principal_id: 'prn_other', membership_id: 'mem_other', membership_type: 'member', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' };
       },
-    }, {}).applications;
+    }).applications;
     return { processing: 'active', address: {}, runExclusive: <T>(operation: (signal: AbortSignal) => Promise<T>) => operation(new AbortController().signal), async drain() {}, async close() {} };
   },
 }));
@@ -128,7 +129,7 @@ async function readFixture() {
   const selected = selection(); const opened = await openStagingConnectorRehearsalService(config(directory), selected);
   const application = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
   const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
-  const input = request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'slack' });
+  const input = request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira' });
   return { opened, application, input };
 }
 
@@ -139,8 +140,17 @@ it.each(['revoke', 'demote'] as const)('withholds read success when %s happens d
     expect(result).toMatchObject({ status: 200, body: { qualified: false, result: { status: 'refused', phase: 'final_fence' } } });
     expect(state.reads).toEqual(['list', 'open', 'revalidate']);
     expect(state.captures).toBe(0);
-    expect(JSON.stringify(result)).not.toContain('Request-only synthetic Slack text');
+    expect(JSON.stringify(result)).not.toContain('Request-only synthetic ticket text');
     expect(JSON.stringify(result)).not.toContain('private grant details');
+  } finally { await fixture.opened.close(); }
+});
+
+it('refuses an empty inventory without opening anything', async () => {
+  const fixture = await readFixture(); state.readMode = 'empty';
+  try {
+    await expect(fixture.application.accept(fixture.input))
+      .resolves.toMatchObject({ status: 200, body: { result: { status: 'refused', phase: 'inventory', reason: 'empty' } } });
+    expect(state.reads).toEqual(['list']);
   } finally { await fixture.opened.close(); }
 });
 

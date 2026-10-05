@@ -38,10 +38,10 @@ provider may impose a lower bound. Returned cursors are caller-owned and are
 returned only after successful admission of the batch. Cancellation and identity
 drift prevent admission. A read grant never implies a retention grant.
 
-The Granola and dormant Jira capture factories in
+The Granola capture factory in
 [`provider-context-intakes-v1.ts`](../../services/organization-authority/src/composition/provider-context-intakes-v1.ts)
-and the dormant [Slack source adapter](../../providers/slack/server/src/context/slack-context-source-v1.ts)
-provide these library mappings. The
+provides this library mapping; the Jira and Slack capture adapters were
+removed because tools are read live, never stored. The
 [rehearsal capture](../../services/organization-authority/src/composition/connector-rehearsal-capture-v1.ts)
 constructs only Granola intake:
 
@@ -49,7 +49,6 @@ constructs only Granola intake:
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Granola | Reuses the one configured meeting adapter. Selected normalized summaries, notes and transcripts become a bounded exact snapshot. A source start time produces a meeting payload; otherwise a plain-text note payload. Participant refs remain opaque.               | Explicit retained policy with synchronous transaction fence, or request-only                                                                     |
 | Jira    | Uses the existing person-bound transport and fixed configured project. Preserves ticket key, status, labels, provider update time, optional priority and opaque assignee account reference. Body is omitted for a pointer.                                          | Request-only by default. An explicit Authority binding may retain pointers only through the shared SQLite admission fence; excerpts are refused. |
-| Slack   | A pointer-only adapter maps one fixed authorized channel's message coordinates, selected metadata and a Slack-provided permalink. The staging runtime uses the separate live reader.                                                                               | No active capture or retention binding.                                                                                                           |
 
 Granola still uses its existing organization API credential directly. This
 integration does not add another setup, Nango sync or background poller. Jira
@@ -69,9 +68,7 @@ The Authority integration tests compose actual provider implementations with
 fake provider responses, then use the shared intake and real SQLite:
 
 - [Granola integration](../../services/organization-authority/test/granola-context-source-intake-v1.test.ts): actual meeting adapter over a fake Granola API client; one configured pull, retained captures, immutable replay/change and configured-instance refusal.
-- [Slack provider adapter](../../providers/slack/server/test/context/slack-context-source-v1.test.ts) and [transport](../../providers/slack/server/test/context/slack-context-transport-v1.test.ts): fake Slack API responses exercise fixed-channel pointer mapping, grant fences, bounded paging and provider-response validation. They do not compose an Authority intake or prove configured Slack scopes.
-- [Slack live read runtime](../../services/organization-authority/test/slack-context-capture-runtime-v1.test.ts): real Authority and provider SQLite state, fresh scope proof, current owner/link fences and transient text reads without source admission, using synthetic provider responses.
-- [Staging runtime HTTP](../../services/organization-authority/test/staging-connector-rehearsal-runtime-http.test.ts): the fixed profile's request binding, owner-bound Jira connection across restart, retained Granola, live Jira and Slack reads, and rejection of tool capture before provider I/O or custody writes.
+- [Staging runtime HTTP](../../services/organization-authority/test/staging-connector-rehearsal-runtime-http.test.ts): the fixed profile's request binding, owner-bound Jira connection across restart, retained Granola, live Jira reads, no Slack read at all, and rejection of tool capture before provider I/O or custody writes.
 - [Intake composition](../../services/organization-authority/test/context-source-intake-v1.test.ts): provider-byte ownership across async checks, concurrent pull exclusion, retry cursor ownership, cancellation and identity drift.
 
 These are local source proofs. They are not provider-live, artifact, deployment
@@ -104,19 +101,18 @@ release receipts. Mine and unmapped project scopes never expand to these live
 sources. `person records --query` still searches approved records; request-local
 Jira and Slack search belongs to the Ask evidence path.
 
-The new Slack provider reader is limited to one explicitly authorized public
-channel and a bounded recent-history window. It keeps text in request memory,
-checks current channel visibility and exact message digests, and reports
-truncation rather than claiming workspace-wide coverage. It does not implement
-the separate Person-wide user-token reader. Jira can be constrained to the
-configured project, including exact reads and final citation revalidation.
+The test's Slack source is an in-memory reader that exercises the same audited
+release, revocation and final-revalidation fences. No production Slack reader
+exists: the Slack bot only delivers approvals, and reading Slack for Ask will
+use each Person's own grant. Jira can be constrained to the configured project,
+including exact reads and final citation revalidation.
 
 These source tests do not activate new permissions on the current V2 staging
 profile. That profile still rejects generic live-reader injection and permits
 capture only for Granola. The separately invoked `verify-read` diagnostic
 described below permits one transient, zero-model read, not a live Ask grant.
 A live cross-source qualification must be
-separately authorized for the exact release, owner, Jira project, Slack channel,
+separately authorized for the exact release, owner, Jira project,
 request-only model release and spending bounds. It must require nonempty reads,
 cross-source search, and a cited answer through these same paths. The ordinary
 synthetic approval canary alone does not establish that qualification.
@@ -187,28 +183,27 @@ automatic convergence.
 ## Staging connector rehearsal
 
 Under the current tools-are-read-live scope, capture is available only for
-Granola meetings and notes. Jira and Slack support `verify-read` only; their
-capture requests are refused before provider I/O. The capture-core work is
+Granola meetings and notes. Jira supports `verify-read` only; Jira and Slack
+capture requests are refused before provider I/O, and the Slack bot reads
+nothing. The capture-core work is
 parked, and the merged capture/derive foundations remain unused by this path.
 
 The selected live-test target is the existing staging Authority. One versioned
 opt-in profile reuses its HTTPS origin, Google sign-in and owner session. The
 profile is embedded in the existing nonsecret onboarding input, installed
 privately by the host wrapper at a fixed path, and selected only on the exact
-staging origin. It is fixed for the life of a rehearsal; another Jira project or
-Slack channel needs a fresh rehearsal.
+staging origin. It is fixed for the life of a rehearsal; another Jira project
+needs a fresh rehearsal.
 
 The closed, nonsecret profile has `schema_version: 2`, kind
 `echo-staging-connector-rehearsal-profile-v2`, capture policy
 `initial-owner-granola-retained-jira-pointer-slack-pointer-v2`, the fixed Jira
 `cloud_id`, `integration_key` and `project`, and one Slack `channel_id`. The
-historical policy identifier is preserved solely for profile/sidecar digest
-compatibility; it no longer authorizes tool capture. No profile rewrite or
-reset is needed for this removal. The profile accepts no credentials, arbitrary
-endpoints, message bodies or caller-selected
-owner. The selected channel must be a public channel; the provider verifies both
-its C-prefixed coordinate and Slack's explicit `is_private: false` response
-before accepting messages. The earlier request-only V1 profile and its
+historical policy identifier and the Slack `channel_id` are preserved solely
+for profile/sidecar digest compatibility; neither authorizes capture or a read,
+and the channel is never read. No profile rewrite or reset is needed for these
+removals. The profile accepts no credentials, arbitrary endpoints, message
+bodies or caller-selected owner. The earlier request-only V1 profile and its
 predecessor-anchored V2 rebind are retired: the wrapper refuses them at prepare,
 and the Authority and runner refuse them at startup.
 
@@ -235,13 +230,12 @@ The separate `verify-read` action explicitly authorizes a bounded, request-local
 diagnostic under that same owner and fixed profile. It checks the local connection
 before provider work, lists one item, opens only its issued handle, and revalidates
 provider access and the current local grant before returning success. Its single
-15-second deadline, Jira 25-request cap and Slack reader's 48-request cap apply
+15-second deadline and Jira 25-request cap apply
 without pagination or retries. No body enters custody, an audit, a model or the
 receipt. The receipt contains only a source-coordinate hash, text hash and
 positive UTF-8 byte count up to 3 KiB, or an allowlisted refusal phase and reason.
 Jira's normalized issue text includes its key and summary, so this does not prove
-a nonempty description. Slack reads one nonempty message from the selected public
-channel's last seven days. Empty results refuse. This action preserves the V2
+a nonempty description. Empty results refuse. This action preserves the V2
 profile/hash and existing connection bindings; it does not enable generic live-reader injection,
 search, Evidence Desk or Ask.
 
@@ -250,11 +244,9 @@ Its separate owner-scoped capture policy permits retained snapshots; this test
 never moves the legacy meeting cursor. Ordinary polling remains the cursor
 owner, so an observation may legitimately contain zero items.
 
-Jira and Slack bindings come from verified connections. Jira uses the initial
-owner's existing connection and current grant. Slack derives workspace, app and
-bot identity from the active organization connection and requires the owner's
-active Slack person link. A working bot token or Nango tag does not grant
-custody. Current membership, connection and grant checks apply around live
+Jira bindings come from verified connections: Jira uses the initial owner's
+existing connection and current grant. A working token or Nango tag does not
+grant custody. Current membership, connection and grant checks apply around live
 provider reads. Tool pointers, metadata, bodies and change histories never
 enter the rehearsal capture store. The removed capture paths are not replaced
 with request-only capture; the existing live reader handles verification.
@@ -284,33 +276,16 @@ matching Person client and reviewed host tooling must first be deployed through
 the existing operator lane. Every receipt remains `qualified: false`; successful
 captures are evidence for those observations, not blanket provider acceptance.
 
-### Optional Slack public-channel read capability
+### Retired Slack public-channel read capability
 
-Only the staging selection enables the provider-owned
-`echo-slack-public-channel-context-capability-v1` setup option. The existing
-`person tools setup --tool slack` workflow creates or updates the same Slack app
-and asks for the baseline four bot scopes plus exactly `channels:read` and
-`channels:history`. Human Slack consent is still required. Both Nango and Slack
-must prove the granted scopes. No second app, setup command or shared-server
-Slack-specific route is introduced.
-
-Outstanding cards and person links bind the historical connection state. That
-state and its four-scope contract stay unchanged. Under the explicit capability
-only, a provider-owned proof helper first reconstructs the actual live
-`auth.test` and `bots.info` evidence and requires it to equal the provider's
-reported proof. If the live scopes are exactly the baseline plus the two read
-scopes, the helper may project that verified proof onto the historical baseline
-and must reproduce the stored digest. It still requires the same workspace,
-enterprise, app, bot and bot user. Unknown extra scopes, missing baseline scopes
-or arbitrary evidence digests are refused. Baseline connections without the
-capability keep their exact-proof path.
-
-This explicit extension also applies to lost-Nango-connection rebind while
-retaining its old-ID absence check and synchronous local fences. It does not
-accept [ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md),
-which remains proposed. Channel reads separately prove the read capability
-before use; preserved approval state is not evidence that channel consent has
-completed.
+Staging once selected an optional provider-owned setup capability that asked
+for `channels:read` and `channels:history` beside the four bot scopes, so the
+bot could read one public channel. It was removed when the bot became
+delivery-only. Slack setup now asks only for the four delivery scopes, and
+rebind is exact-only
+([ADR-0027](../decisions/ADR-0027-rebind-lost-nango-slack-connection.md)). A bot
+token installed earlier may keep the two channel scopes until the app is
+reinstalled from scratch; nothing uses them.
 
 ## Boundaries before activation
 

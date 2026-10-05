@@ -165,7 +165,7 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
     const rechecks = f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/issue/bulkfetch'));
     expect(rechecks.length).toBeGreaterThanOrEqual(2);
     for (const [, request] of rechecks) expect(JSON.parse(String(request?.body)).issueIdsOrKeys).toEqual(['10001']);
-    expect(f.live.slackCalls.some(call => call.method === 'conversations.history' && call.query.oldest === f.live.ts && call.query.latest === f.live.ts)).toBe(true);
+    expect(f.live.slackCalls.some(call => call.method === 'revalidate')).toBe(true);
     expect(f.live.slackCalls.length).toBeLessThanOrEqual(48);
     const auditRows = f.database.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').all() as { body_json: string }[];
     const terminal = auditRows.map(row => JSON.parse(row.body_json) as Record<string, unknown>).find(row => row.kind === 'echo-person-agentic-ask-audit-v1');
@@ -186,7 +186,7 @@ it('omits a disconnected Slack source without provider calls or fabricated Slack
     const answer = validatePersonAnswerResponseV5(response.body);
     expect(answer.citations.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'ticket']);
     expect(hasRequiredSourceCoverage(answer)).toBe(false);
-    expect(f.live.slackFetch).not.toHaveBeenCalled();
+    expect(f.live.slackRead).not.toHaveBeenCalled();
     expect(f.prompts.join('\n')).not.toContain(SLACK_TEXT);
     expect(f.generate).toHaveBeenCalledTimes(4);
   } finally { await f.close(); }
@@ -197,11 +197,11 @@ it('refuses unauthenticated Ask and revoked Slack reads without releasing provid
   try {
     const jiraBefore = f.live.jiraFetch.mock.calls.length;
     expect((await f.post('/v4/person/ask', { schema_version: 3, question: 'Launchscope' }, 'invalid-person-session')).status).toBe(401);
-    expect(f.live.jiraFetch).toHaveBeenCalledTimes(jiraBefore); expect(f.live.slackFetch).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
+    expect(f.live.jiraFetch).toHaveBeenCalledTimes(jiraBefore); expect(f.live.slackRead).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
     f.live.denySlack();
     const denied = await f.ask();
     expect(denied.status).toBe(401);
-    expect(f.live.slackFetch).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
+    expect(f.live.slackRead).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
     expect(JSON.stringify(denied.body)).not.toContain(SLACK_TEXT);
   } finally { await f.close(); }
 });
