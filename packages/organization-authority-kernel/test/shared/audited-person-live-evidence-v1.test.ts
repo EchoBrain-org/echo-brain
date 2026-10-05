@@ -221,7 +221,7 @@ describe('shared audited live evidence source V1', () => {
   it('reserves request capacity across releases waiting for their audits', async () => {
     const f = fixture('tickets', page([]));
     const source = f.make();
-    f.reader.search.mockImplementation(async input => page(Array.from({ length: 50 }, (_, index) =>
+    vi.mocked(f.reader.search).mockImplementation(async input => page(Array.from({ length: 50 }, (_, index) =>
       ticket(`Evidence for ${input.query} ${index}`, `ECHO-${input.query}-${index}`),
     )));
     let releaseAudit!: () => void;
@@ -245,7 +245,7 @@ describe('shared audited live evidence source V1', () => {
   it('keeps a shared reservation until its last pending audit settles', async () => {
     const f = fixture('tickets', page([]));
     const source = f.make();
-    f.reader.search.mockImplementation(async input => {
+    vi.mocked(f.reader.search).mockImplementation(async input => {
       if (input.query === 'shared') return page([ticket('Shared evidence', 'ECHO-SHARED')]);
       const count = input.query === 'fill-final' ? 12 : input.query === 'recovered' ? 11 : 50;
       return page(Array.from({ length: count }, (_, index) => ticket(`Evidence ${input.query} ${index}`, `ECHO-${input.query}-${index}`)));

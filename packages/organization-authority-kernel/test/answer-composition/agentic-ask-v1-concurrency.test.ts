@@ -108,7 +108,7 @@ describe('agentic Ask concurrent reads', () => {
     let calls = 0;
     const desk: EvidenceDeskPortV1 = {
       scope: { kind: 'global' }, live_sources: [],
-      search: vi.fn((input: { query?: string }) => {
+      search: vi.fn(() => {
         calls += 1;
         if (calls === 2) { bothEntered.resolve(); throw denied; }
         // Deliberately ignore input.signal: raceAbort must still stop this read.

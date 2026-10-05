@@ -70,8 +70,8 @@ describe('thin live ticket dispatcher', () => {
       return { promise: new Promise<T>(done => { resolve = done; }), resolve };
     };
     const local = deferred<Awaited<ReturnType<EvidenceDeskPortV1['search']>>>();
-    const ticket = deferred<Awaited<ReturnType<PersonLiveEvidenceSourceV1['search']>>>();
-    const slack = deferred<Awaited<ReturnType<PersonLiveEvidenceSourceV1['search']>>>();
+    const ticket = deferred<Awaited<ReturnType<typeof f.ticket.search>>>();
+    const slack = deferred<Awaited<ReturnType<typeof f.slack.search>>>();
     vi.mocked(f.base.search).mockImplementation(() => local.promise);
     vi.mocked(f.ticket.search).mockImplementation(() => ticket.promise);
     vi.mocked(f.slack.search).mockImplementation(() => slack.promise);
