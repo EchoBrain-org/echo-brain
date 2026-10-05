@@ -1,0 +1,65 @@
+{
+  "name": "@echo-brain/provider-runtime",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./person-connection-store-v1": {
+      "types": "./dist/person-connection-store-v1.d.ts",
+      "import": "./dist/person-connection-store-v1.js"
+    },
+    "./nango-person-connection-v1": {
+      "types": "./dist/nango-person-connection-v1.d.ts",
+      "import": "./dist/nango-person-connection-v1.js"
+    },
+    "./person-connection-lifecycle-v1": {
+      "types": "./dist/person-connection-lifecycle-v1.d.ts",
+      "import": "./dist/person-connection-lifecycle-v1.js"
+    },
+    "./person-provider-v1": {
+      "types": "./dist/person-provider-v1.d.ts",
+      "import": "./dist/person-provider-v1.js"
+    },
+    "./person-provider-json-transport-v1": {
+      "types": "./dist/person-provider-json-transport-v1.d.ts",
+      "import": "./dist/person-provider-json-transport-v1.js"
+    },
+    "./atlassian-connection-verification-v1": {
+      "types": "./dist/atlassian-connection-verification-v1.d.ts",
+      "import": "./dist/atlassian-connection-verification-v1.js"
+    },
+    "./person-connection-http-application-v1": {
+      "types": "./dist/person-connection-http-application-v1.d.ts",
+      "import": "./dist/person-connection-http-application-v1.js"
+    },
+    "./bounded-json-response-v1": {
+      "types": "./dist/bounded-json-response-v1.d.ts",
+      "import": "./dist/bounded-json-response-v1.js"
+    },
+    "./atlassian-document-text-v1": {
+      "types": "./dist/atlassian-document-text-v1.d.ts",
+      "import": "./dist/atlassian-document-text-v1.js"
+    },
+    "./person-project-mapping-v1": {
+      "types": "./dist/person-project-mapping-v1.d.ts",
+      "import": "./dist/person-project-mapping-v1.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0",
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0"
+  }
+}

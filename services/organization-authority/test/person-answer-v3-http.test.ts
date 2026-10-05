@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
   PERSON_ANSWER_PATH_V3,
+  PERSON_ANSWER_PATH_V5,
+  PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
@@ -20,13 +22,15 @@ import { createPersonAnswerV3Route } from "../src/composition/person-answer-v3-r
 import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "../src/composition/person-record-search-route.js";
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV3HttpApplication } from "../src/presentation/person-answer-v3-http-application.js";
+import type { PersonAnswerV5HttpApplication } from "../src/presentation/person-answer-v5-http-application.js";
 
-async function server(input: { readonly application?: PersonAnswerV3HttpApplication }) {
+async function server(input: { readonly application?: PersonAnswerV3HttpApplication; readonly live_application?: PersonAnswerV5HttpApplication }) {
   const sessions = { authenticateAccess: vi.fn(() => ({})) };
   const instance = createOrganizationAuthorityHttpServer({
     descriptor: {} as never, sessions: sessions as never, oidc_provider: {} as never,
     expected_issuer: "https://issuer.example",
     ...(input.application === undefined ? {} : { person_answer_v3: input.application }),
+    ...(input.live_application === undefined ? {} : { person_answer_v5: input.live_application }),
   });
   instance.listen(0, "127.0.0.1");
   await once(instance, "listening");
@@ -40,6 +44,27 @@ async function server(input: { readonly application?: PersonAnswerV3HttpApplicat
 }
 
 describe("Agentic Ask HTTP capability gate", () => {
+  it('marks matched V5 provider errors so clients cannot mistake them for an unsupported route', async () => {
+    const ask = vi.fn(async () => { throw new AuthorityOperationError('not_found', 'Provider resource unavailable'); });
+    const value = await server({ live_application: { ask } });
+    try {
+      const post = (path: string, body: unknown) => fetch(`${value.url}${path}`, {
+        method: 'POST', headers: { authorization: 'Bearer token', 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const failed = await post(PERSON_ANSWER_PATH_V5, { schema_version: 3, question: 'What changed?' });
+      expect(failed.status).toBe(404);
+      expect(failed.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('5');
+      await expect(failed.json()).resolves.toEqual({ error: { code: 'not_found', message: 'request failed' } });
+      const invalid = await post(PERSON_ANSWER_PATH_V5, {});
+      expect(invalid.status).toBe(400);
+      expect(invalid.headers.get(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe('5');
+      const absent = await post('/v0/person/ask', { schema_version: 3, question: 'What changed?' });
+      expect(absent.status).toBe(404);
+      expect(absent.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5)).toBe(false);
+      expect(ask).toHaveBeenCalledTimes(1);
+    } finally { await value.close(); }
+  });
+
   it("returns the existing unavailable response when Ask asks the client to try again", async () => {
     const ask = vi.fn(async () => { throw new AuthorityOperationError("unavailable", "Ask deadline exhausted"); });
     const value = await server({ application: { ask, searchEvidence: vi.fn(), openEvidence: vi.fn() } });

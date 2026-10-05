@@ -5,11 +5,13 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   apps: [] as readonly { readonly routes: readonly { readonly route_id: string; readonly path: string }[]; accept(input: unknown): Promise<unknown> }[],
+  config: undefined as unknown,
+  api: undefined as unknown,
   captures: 0,
   jira: 0,
   demoteDuringCapture: false,
   reads: [] as string[],
-  readMode: 'normal' as 'normal' | 'revoke' | 'demote' | 'stall',
+  readMode: 'normal' as 'normal' | 'revoke' | 'demote' | 'stall' | 'empty',
   grantRevoked: false,
   ownerRevoked: false,
 }));
@@ -44,29 +46,32 @@ vi.mock('../src/composition/connector-rehearsal-capture-v1.js', async importOrig
     close() {},
   }),
 }));
-vi.mock('../src/composition/jira-person-live-runtime-v1.js', () => ({
-  openJiraPersonLiveRuntimeV1: () => ({
-    application: {},
+vi.mock('../src/composition/jira-person-live-runtime-v1.js', async () => {
+  const { AuthorityOperationError } = await import('@echo-brain/organization-authority-kernel/domain/errors');
+  return { openJiraPersonLiveRuntimeV1: () => ({
+    application: {
+      captureStatus: () => ({ connected: true }),
+      async captureConnection() {
+        return { require_current() { if (state.grantRevoked) throw new AuthorityOperationError('stale_access_state', 'private grant details'); },
+          transport: { binding: { external_scope_id: 'cloud-fixture' }, async request() { throw new Error('the mocked reader makes no provider requests'); } } };
+      },
+    },
     connection_http: { routes: [{ route_id: 'jira-connect', method: 'POST', path: '/v1/person/tools/jira/connect' }], async accept() { state.jira += 1; return { status: 201, body: { ok: true } }; } },
     close() {},
-  }),
-}));
-vi.mock('../src/composition/slack-context-capture-runtime-v1.js', async () => {
+  }) };
+});
+vi.mock('@echo-brain/provider-jira/jira-person-live-evidence-reader-v1', async () => {
   const { createHash } = await import('node:crypto');
-  const { AuthorityOperationError } = await import('@echo-brain/organization-authority-kernel/domain/errors');
-  class SlackContextCapturePreparationErrorV1 extends Error {}
-  const text = 'Request-only synthetic Slack text';
-  const citation = { kind: 'slack_message', team_id: 'TFIXTURE', channel_id: 'C01234567', message_ts: '1790966400.123456',
-    permalink: 'https://fixture.slack.com/archives/C01234567/p1790966400123456', text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}` };
-  const item = { citation, handle: 'exact-one', label: 'fixture message', visibility: 'team' };
-  return { SlackContextCapturePreparationErrorV1, openSlackContextCaptureRuntimeV1: () => ({
-    async create_reader() {
-      return { require_current() { if (state.grantRevoked) throw new AuthorityOperationError('stale_access_state', 'private grant details'); }, reader: {
-        validateCitation: () => ({ citation, tool_id: 'slack', external_scope_id: 'TFIXTURE', coordinates: { object_id: citation.message_ts, container_id: citation.channel_id } }),
+  const text = 'Request-only synthetic ticket text';
+  const citation = { kind: 'ticket', tool_id: 'jira', ticket_id: '10001', external_scope_id: 'cloud-fixture',
+    permalink: 'https://fixture.atlassian.net/browse/ECHO-1', text_sha256: `sha256:${createHash('sha256').update(text).digest('hex')}` };
+  const item = { citation, handle: 'exact-one', label: 'fixture ticket', visibility: 'team' };
+  return { createJiraPersonLiveEvidenceReaderV1: async () => ({
+        validateCitation: () => ({ citation, tool_id: 'jira', external_scope_id: 'cloud-fixture', coordinates: { object_id: citation.ticket_id } }),
         async list(input: { limit: number; signal: AbortSignal }) {
           state.reads.push('list'); expect(input.limit).toBe(1); expect(input.signal).toBeInstanceOf(AbortSignal);
           if (state.readMode === 'stall') return new Promise(() => {});
-          return { items: [item], truncated: false };
+          return { items: state.readMode === 'empty' ? [] : [item], truncated: false };
         },
         async open(input: { handle: string; limit: number }) {
           state.reads.push('open'); expect(input.handle).toBe('exact-one'); expect(input.limit).toBe(1);
@@ -77,28 +82,29 @@ vi.mock('../src/composition/slack-context-capture-runtime-v1.js', async () => {
           if (state.readMode === 'revoke') state.grantRevoked = true;
           if (state.readMode === 'demote') state.ownerRevoked = true;
         },
-      } };
-    }, close() {},
   }) };
 });
 vi.mock('../src/composition/organization-authority-composition-root.js', () => ({
-  async openOrganizationAuthorityService(_config: unknown, dependencies: { person_http_runtime_factory_with_slack: (sessions: unknown, slack: unknown) => { applications: typeof state.apps } }) {
-    state.apps = dependencies.person_http_runtime_factory_with_slack({
+  async openOrganizationAuthorityService(config: unknown, dependencies: { api: { person_http_runtime_factory: (sessions: unknown) => { applications: typeof state.apps } } }) {
+    state.config = config;
+    state.api = dependencies.api;
+    state.apps = dependencies.api.person_http_runtime_factory({
       authenticateAccess({ access_token }: { access_token: string }) {
         return access_token === 'owner' && !state.ownerRevoked && !(state.demoteDuringCapture && state.captures > 0)
           ? { organization_id: 'org_fixture', principal_id: 'prn_fixture', membership_id: 'mem_fixture', membership_type: 'owner', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' }
           : { organization_id: 'org_fixture', principal_id: 'prn_other', membership_id: 'mem_other', membership_type: 'member', access_credential_sha256: 'access', person_state_sha256: 'person', session_state_sha256: 'session' };
       },
-    }, {}).applications;
+    }).applications;
     return { processing: 'active', address: {}, runExclusive: <T>(operation: (signal: AbortSignal) => Promise<T>) => operation(new AbortController().signal), async drain() {}, async close() {} };
   },
 }));
 
 import { openStagingConnectorRehearsalService } from '../src/composition/staging-connector-rehearsal-runtime.js';
+import { JIRA_LIVE_CONNECTOR_V1 } from '../src/composition/person-live-connector-registry-v1.js';
 import { STAGING_CONNECTOR_REHEARSAL_PATH_V1, STAGING_CONNECTOR_REHEARSAL_POLICY_V2 } from '../src/composition/staging-connector-rehearsal-protocol.js';
 
 const roots: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.captures = 0; state.jira = 0; state.demoteDuringCapture = false;
+afterEach(() => { vi.restoreAllMocks(); state.apps = []; state.config = undefined; state.api = undefined; state.captures = 0; state.jira = 0; state.demoteDuringCapture = false;
   state.reads = []; state.readMode = 'normal'; state.grantRevoked = false; state.ownerRevoked = false;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -128,7 +134,7 @@ async function readFixture() {
   const selected = selection(); const opened = await openStagingConnectorRehearsalService(config(directory), selected);
   const application = state.apps.find(app => app.routes.some(route => route.path === STAGING_CONNECTOR_REHEARSAL_PATH_V1))!;
   const profile_sha256 = (await import('@echo-brain/federation-protocol')).canonicalSha256(selected.profile);
-  const input = request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'slack' });
+  const input = request('staging-connector-rehearsal', 'owner', { schema_version: 2, release_id: selected.release_id, profile_sha256, action: 'verify-read', tool: 'jira' });
   return { opened, application, input };
 }
 
@@ -139,8 +145,17 @@ it.each(['revoke', 'demote'] as const)('withholds read success when %s happens d
     expect(result).toMatchObject({ status: 200, body: { qualified: false, result: { status: 'refused', phase: 'final_fence' } } });
     expect(state.reads).toEqual(['list', 'open', 'revalidate']);
     expect(state.captures).toBe(0);
-    expect(JSON.stringify(result)).not.toContain('Request-only synthetic Slack text');
+    expect(JSON.stringify(result)).not.toContain('Request-only synthetic ticket text');
     expect(JSON.stringify(result)).not.toContain('private grant details');
+  } finally { await fixture.opened.close(); }
+});
+
+it('refuses an empty inventory without opening anything', async () => {
+  const fixture = await readFixture(); state.readMode = 'empty';
+  try {
+    await expect(fixture.application.accept(fixture.input))
+      .resolves.toMatchObject({ status: 200, body: { result: { status: 'refused', phase: 'inventory', reason: 'empty' } } });
+    expect(state.reads).toEqual(['list']);
   } finally { await fixture.opened.close(); }
 });
 
@@ -171,18 +186,34 @@ it('returns a finite refusal for an already-aborted read without starting provid
   } finally { await fixture.opened.close(); }
 });
 
-it('refuses a Slack live-evidence factory under the staging diagnostic profile before opening state', async () => {
+it.each(['ticket_live_runtime_factory', 'page_live_runtime_factory', 'slack_live_runtime_factory', 'live_connectors', 'person_http_runtime_factory'] as const)('refuses %s under the staging diagnostic profile before opening state', async key => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
   const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
-  const factory = vi.fn(() => ({ application: { async source() { return undefined; } }, close() {} }));
+  const factory = vi.fn(() => ({ application: { async source() { return undefined; } },
+    connection_http: { routes: [], async accept() { return { status: 200 as const, body: {} }; } }, close() {},
+  }));
   const result = await openStagingConnectorRehearsalService(config(stateDirectory), selection(), {
-    api: { slack_live_runtime_factory: factory },
+    api: key === 'live_connectors' ? { live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: factory }] } : { [key]: factory },
   }).then(async opened => { await opened.close(); return 'opened'; }, (error: unknown) => error);
   expect(result).toBeInstanceOf(Error);
   expect((result as Error).message).toBe('Staging connector rehearsal selection is invalid');
   expect(factory).not.toHaveBeenCalled();
   expect(state.apps).toEqual([]);
   expect(existsSync(join(root, 'staging-connector-rehearsal-v1'))).toBe(false);
+});
+
+it('registers profile-bound Jira Ask and forwards Confluence alongside the fixed Jira rehearsal', async () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'staging-connector-')); roots.push(root);
+  const stateDirectory = join(root, 'state'); mkdirSync(stateDirectory);
+  const confluence = { enabled: true as const, cloud_id: '11111111-1111-4111-8111-111111111111', integration_id: 'confluence', nango_authorization: () => 'not-a-live-secret' };
+  const base = config(stateDirectory) as Parameters<typeof openStagingConnectorRehearsalService>[0];
+  const jira = { enabled: true as const, cloud_id: selection().profile.jira.cloud_id, integration_id: 'jira', nango_authorization: () => 'not-a-live-secret' };
+  const opened = await openStagingConnectorRehearsalService({ ...base, jira_person_live: jira, confluence_person_live: confluence }, selection());
+  try {
+    expect(state.config).toMatchObject({ confluence_person_live: { enabled: true, cloud_id: confluence.cloud_id, integration_id: confluence.integration_id } });
+    expect(state.config).not.toHaveProperty('jira_person_live');
+    expect(state.api).toEqual({ person_http_runtime_factory: expect.any(Function), live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: expect.any(Function) }] });
+  } finally { await opened.close(); }
 });
 
 it.each([

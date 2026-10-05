@@ -21,6 +21,7 @@
     "ownership_version": 1,
     "provider_roots": [
       "providers/anthropic",
+      "providers/confluence",
       "providers/granola",
       "providers/jira",
       "providers/ollama",
@@ -28,6 +29,9 @@
       "providers/openrouter",
       "providers/slack",
       "providers/synthetic-demo"
+    ],
+    "shared_provider_roots": [
+      "providers/shared"
     ],
     "bootstrap_entrypoints": [
       "services/organization-authority/src/clean-live-main.ts",
@@ -44,10 +48,10 @@
       "src/product/person-client/main.ts",
       "src/product/person-client/composition.ts",
       "services/organization-authority/src/composition/jira-person-live-runtime-v1.ts",
+      "services/organization-authority/src/composition/confluence-person-live-runtime-v1.ts",
       "services/organization-authority/src/composition/provider-context-intakes-v1.ts",
       "services/organization-authority/src/composition/connector-rehearsal-capture-v1.ts",
-      "services/organization-authority/src/composition/staging-connector-rehearsal-runtime.ts",
-      "services/organization-authority/src/composition/slack-context-capture-runtime-v1.ts"
+      "services/organization-authority/src/composition/staging-connector-rehearsal-runtime.ts"
     ],
     "source_assemblies": [
       "deploy/organization-authority/journey-explorer-assembly.v1.json"

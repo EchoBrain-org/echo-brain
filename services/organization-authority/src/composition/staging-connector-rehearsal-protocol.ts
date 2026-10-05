@@ -1,7 +1,7 @@
 /** Closed staging-only protocol. Receipts never contain provider credentials or source text. */
 export const STAGING_CONNECTOR_REHEARSAL_PATH_V1 = '/v1/staging/connector-rehearsal';
 // Historical profile identifier: preserve its digest and sidecar binding. It no longer
-// authorizes Jira or Slack capture; tools support verify-read only.
+// authorizes Jira or Slack capture; only Jira supports verify-read.
 export const STAGING_CONNECTOR_REHEARSAL_POLICY_V2 = 'initial-owner-granola-retained-jira-pointer-slack-pointer-v2';
 
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
@@ -13,7 +13,10 @@ export interface StagingConnectorRehearsalProfileV2 {
   readonly kind: 'echo-staging-connector-rehearsal-profile-v2';
   readonly capture_policy: typeof STAGING_CONNECTOR_REHEARSAL_POLICY_V2;
   readonly jira: { readonly cloud_id: string; readonly integration_key: string; readonly project: string };
-  /** The sole public Slack channel selected by host-owned nonsecret configuration. */
+  /**
+   * Historical and inert: the bot no longer reads Slack. The field stays so the
+   * profile bytes, digest and sidecar binding are unchanged.
+   */
   readonly slack: { readonly channel_id: string };
 }
 
@@ -25,7 +28,7 @@ interface BindingV2 {
 export type StagingConnectorRehearsalRequestV2 = BindingV2 & (
   | { readonly action: 'status' }
   | { readonly action: 'capture'; readonly tool: 'granola'; readonly limit: number }
-  | { readonly action: 'verify-read'; readonly tool: 'jira' | 'slack' }
+  | { readonly action: 'verify-read'; readonly tool: 'jira' }
 );
 export const STAGING_CONNECTOR_READ_PHASES_V1 = ['local_authorization', 'connection', 'provider_verification', 'inventory', 'open', 'final_fence'] as const;
 export const STAGING_CONNECTOR_READ_REASONS_V1 = ['connection_absent', 'identity_unlinked', 'unauthorized', 'stale_access_state', 'not_found', 'invalid_output', 'rate_limited', 'unavailable', 'cancelled', 'deadline_exceeded', 'empty', 'quota_exceeded'] as const;
@@ -54,7 +57,7 @@ export type StagingConnectorRehearsalResponseV2 = BindingV2 & {
 } & (
   | { readonly action: 'status'; readonly processing: 'active' | 'idle_until_finalize'; readonly granola_available: boolean }
   | { readonly action: 'capture'; readonly tool: 'granola'; readonly receipt: StagingConnectorCaptureReceiptV2 }
-  | { readonly action: 'verify-read'; readonly tool: 'jira' | 'slack'; readonly result: StagingConnectorReadResultV1 }
+  | { readonly action: 'verify-read'; readonly tool: 'jira'; readonly result: StagingConnectorReadResultV1 }
 );
 
 function invalid(): never { throw new Error('Staging connector rehearsal value is invalid'); }
@@ -108,7 +111,7 @@ export function validateStagingConnectorRehearsalRequestV2(value: unknown): Stag
         (request.limit as number) < 1 || (request.limit as number) > 5) invalid();
   } else if (request.action === 'verify-read') {
     keys(request, ['schema_version', 'release_id', 'profile_sha256', 'action', 'tool']);
-    if (!['jira', 'slack'].includes(request.tool as string)) invalid();
+    if (request.tool !== 'jira') invalid();
   } else invalid();
   return Object.freeze({ ...request }) as unknown as StagingConnectorRehearsalRequestV2;
 }
@@ -152,7 +155,7 @@ export function validateStagingConnectorRehearsalResponseV2(value: unknown): Sta
   }
   if (response.action === 'verify-read') {
     keys(response, [...common, 'tool', 'result']);
-    if (!['jira', 'slack'].includes(response.tool as string)) invalid();
+    if (response.tool !== 'jira') invalid();
     const result = record(response.result);
     if (result.status === 'verified') {
       keys(result, ['status', 'source_coordinate_sha256', 'text_sha256', 'text_bytes']);

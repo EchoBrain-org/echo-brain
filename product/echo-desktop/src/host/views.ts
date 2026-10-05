@@ -4,10 +4,10 @@
 import type {
   Account, Answer, AnswerPart, AnswerSource, AnswerStatement, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTools, CreatedProject, DocumentSummary,
   Employee, Employees, Extraction, Failure, InvitationSaved, ItemRef, ListItem, ListPage, ListScope, Match, Matches, Member, MemberPage, Opened,
-  ProjectChange, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
+  ProjectChange, ProjectConfluenceMapping, ConfluenceSpacesPage, ProjectJiraMapping, ProjectPage, ProjectSettingsReceipt, ProjectSummary, Receipt, RecordItem, RecordPolicy, RecordRef, RecordSection, SourceEvidence, SourceRef, TextChunk,
   ToolAttempt, ToolAttemptStatus, Visibility, WriteStatus,
 } from '../shared/protocol.js';
-import { slackPermalink, ticketPermalink } from '../shared/protocol.js';
+import { externalSourcePermalink } from '../shared/protocol.js';
 
 type Json = Record<string, unknown>;
 
@@ -365,8 +365,9 @@ export function isRecordRef(value: unknown): value is RecordRef {
 export function answerView(raw: unknown, scope: AskScope): Answer {
   const value = object(unwrap(raw));
   const tickets = value.schema_version === 5 && value.kind === 'echo-clean-person-answer-v5';
-  if (!tickets && (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4')) throw new ViewError();
-  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`, tickets));
+  const pages = value.schema_version === 6 && value.kind === 'echo-clean-person-answer-v6';
+  if (!tickets && !pages && (value.schema_version !== 4 || value.kind !== 'echo-clean-person-answer-v4')) throw new ViewError();
+  const sources = list(value.citations).map((entry, index) => v4Source(entry, `Evidence ${index + 1}`, tickets || pages, pages));
   const direct = value.direct === undefined ? undefined : v4Statement(value.direct, sources.length);
   const parts = list(value.parts).map(part => v4Part(part, sources.length));
   if (parts.length === 0) throw new ViewError();
@@ -383,7 +384,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
     ...(assumption === undefined ? {} : { assumption }), ...(notice === undefined ? {} : { notice }) };
 }
 
-function v4Source(raw: unknown, fallback: string, tickets: boolean): AnswerSource {
+function v4Source(raw: unknown, fallback: string, tickets: boolean, pages = false): AnswerSource {
   const item = object(raw);
   const citation = object(item.citation);
   const label = text(item.label);
@@ -393,15 +394,14 @@ function v4Source(raw: unknown, fallback: string, tickets: boolean): AnswerSourc
     return { kind: 'record', label: label || fallback, record };
   }
   if (citation.kind === 'source_revision') return { kind: 'original', label: label || fallback, ref: sourceRef(citation) };
-  if (citation.kind === 'slack_message') {
-    const permalink = slackPermalink(citation.permalink);
-    if (permalink === null) throw new ViewError();
-    return { kind: 'slack', label: label || fallback, permalink };
-  }
-  if (tickets && item.kind === 'ticket' && citation.kind === 'ticket') {
-    const permalink = ticketPermalink(citation.permalink);
-    if (permalink === null) throw new ViewError();
-    return { kind: 'ticket', label: label || fallback, permalink };
+  const kind = citation.kind === 'slack_message' ? 'slack'
+    : tickets && item.kind === 'ticket' && citation.kind === 'ticket' ? 'ticket'
+    : pages && item.kind === 'page' && citation.kind === 'page' ? 'page' : null;
+  if (kind !== null) {
+    const permalink = externalSourcePermalink(kind, citation.permalink);
+    const tool_id = kind === 'slack' ? 'slack' : citation.tool_id;
+    if (permalink === null || typeof tool_id !== 'string' || !TOOL_ID.test(tool_id)) throw new ViewError();
+    return { kind, tool_id, label: label || fallback, permalink };
   }
   throw new ViewError();
 }
@@ -794,4 +794,17 @@ export function projectJiraMappingView(raw: unknown, projectId: string): Project
   if (selected !== null && (value.revision === null || !/^[1-9][0-9]{0,19}$/.test(text(selected.project_id)) || !/^[A-Z][A-Z0-9_]{0,63}$/.test(text(selected.project_key)))) throw new ViewError();
   return { project_id: projectId, revision: value.revision as string | null,
     mapping: selected === null ? null : { project_id: text(selected.project_id), project_key: text(selected.project_key) } };
+}
+
+export function projectConfluenceMappingView(raw: unknown, projectId: string): ProjectConfluenceMapping {
+  const value = object(unwrap(raw)); const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (value.schema_version !== 1 || value.project_id !== projectId || (value.revision !== null && !uuid.test(text(value.revision)))) throw new ViewError();
+  const mapping = value.mapping === null ? null : object(value.mapping);
+  if (mapping !== null && (value.revision === null || !Array.isArray(mapping.space_ids) || mapping.space_ids.length < 1 || mapping.space_ids.length > 20 || !mapping.space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)))) throw new ViewError();
+  return { project_id: projectId, revision: value.revision as string | null, mapping: mapping === null ? null : { space_ids: [...(mapping.space_ids as string[])] } };
+}
+export function confluenceSpacesView(raw: unknown): ConfluenceSpacesPage {
+  const value = object(unwrap(raw)); if (value.schema_version !== 1 || !Array.isArray(value.items) || value.items.length > 20 || (value.next_cursor !== null && (typeof value.next_cursor !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value.next_cursor)))) throw new ViewError();
+  const items = value.items.map(raw => { const item = object(raw); if (!/^[1-9][0-9]{0,19}$/.test(text(item.id))) throw new ViewError(); return { id: item.id as string, key: text(item.key), name: text(item.name) }; });
+  if (new Set(items.map(item => item.id)).size !== items.length) throw new ViewError(); return { items, next_cursor: value.next_cursor as string | null };
 }

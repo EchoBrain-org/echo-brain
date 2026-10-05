@@ -5,15 +5,32 @@
     "rootDir": ".",
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["*.ts"],
+  "include": [
+    "*.ts"
+  ],
   "exclude": [],
   "references": [
-    { "path": "../../../packages/federation-protocol" },
-    { "path": "../../../packages/organization-protocol" },
-    { "path": "../../../packages/organization-api" },
-    { "path": "../../../providers/slack/client" },
-    { "path": "../../../providers/jira/client" }
+    {
+      "path": "../../../packages/federation-protocol"
+    },
+    {
+      "path": "../../../packages/organization-protocol"
+    },
+    {
+      "path": "../../../packages/organization-api"
+    },
+    {
+      "path": "../../../providers/slack/client"
+    },
+    {
+      "path": "../../../providers/jira/client"
+    },
+    {
+      "path": "../../../providers/confluence/client"
+    }
   ]
 }

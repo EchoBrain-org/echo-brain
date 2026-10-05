@@ -1,3 +1,10 @@
+/** Single mapping, attempt status and disconnect responses are small closed records. */
+export const PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1 = 8 * 1024;
+/** Consent permits a 4,096-code-unit URL, at up to six JSON bytes per code unit. */
+export const PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1 = 32 * 1024;
+/** Finite JSON envelope for bounded tool metadata collections; also the transport ceiling. */
+export const PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 = 128 * 1024;
+
 /** Authenticated, bounded Authority transport supplied to a Person tool fragment. */
 export interface PersonToolJsonRequestV1<T> {
   readonly path: string;

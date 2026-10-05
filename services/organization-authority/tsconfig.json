@@ -5,22 +5,55 @@
     "rootDir": "src",
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts"
+  ],
   "references": [
-    { "path": "../../packages/federation-protocol" },
-    { "path": "../../packages/organization-protocol" },
-    { "path": "../../packages/organization-api" },
-    { "path": "../../packages/organization-control-plane" },
-    { "path": "../../packages/organization-record" },
-    { "path": "../../packages/organization-retrieval" },
-    { "path": "../../packages/organization-authority-kernel" },
-    { "path": "../../packages/organization-processing" },
-    { "path": "../../providers/openrouter" },
-    { "path": "../../providers/slack/server" },
-    { "path": "../../providers/granola" },
-    { "path": "../../providers/jira" },
-    { "path": "../../providers/synthetic-demo" }
+    {
+      "path": "../../packages/federation-protocol"
+    },
+    {
+      "path": "../../packages/organization-protocol"
+    },
+    {
+      "path": "../../packages/organization-api"
+    },
+    {
+      "path": "../../packages/organization-control-plane"
+    },
+    {
+      "path": "../../packages/organization-record"
+    },
+    {
+      "path": "../../packages/organization-retrieval"
+    },
+    {
+      "path": "../../packages/organization-authority-kernel"
+    },
+    {
+      "path": "../../packages/organization-processing"
+    },
+    {
+      "path": "../../providers/openrouter"
+    },
+    {
+      "path": "../../providers/slack/server"
+    },
+    {
+      "path": "../../providers/granola"
+    },
+    {
+      "path": "../../providers/jira"
+    },
+    {
+      "path": "../../providers/confluence"
+    },
+    {
+      "path": "../../providers/synthetic-demo"
+    }
   ]
 }

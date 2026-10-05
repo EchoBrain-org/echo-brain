@@ -1,6 +1,6 @@
 # Project settings V1
 
-The project title menu provides Jira project, Rename, Archive/Unarchive, and Leave. Existing
+The project title menu provides Jira project, Confluence spaces, Rename, Archive/Unarchive, and Leave. Existing
 People controls continue to manage membership and Lead/Member roles.
 
 Only leads can rename or archive a project. Any member may leave unless they
@@ -53,3 +53,28 @@ A write also supplies `--jira-project <key>` (or `--clear`),
 `--mapping-revision <revision>` (`none` for a new setting), and a fresh UUID in
 `--mapping-request <uuid>`. See [ADR-0026](../decisions/ADR-0026-jira-person-live-evidence-nango.md)
 for the connection, scope and persistence contract.
+
+## Confluence space mapping
+
+Open a project's menu and choose **Confluence spaces**. A lead can select up to
+20 spaces by name and key from their connected account, load more spaces, and
+save or remove the setting. Members can read the saved setting without connecting
+Confluence. Removing a setting does not require a working provider connection.
+If a save conflicts or its response is lost, reload the setting before another
+write; reloading never repeats the write.
+
+The setting retains stable numeric space IDs on the configured Confluence Cloud
+site. Space renames preserve the mapping. Project Ask lists within those spaces
+under the asker's own connection, then opens selected pages. It never widens an
+unmapped project to global Confluence. Global Ask lists pages the connected
+person can access, including personal spaces, without an ECHO space allowlist.
+Mine excludes live tools. Page text stays request-local and citations open the
+original Confluence page.
+
+The CLI equivalent is `person tools project --tool confluence --echo-project <id>`.
+Use `--spaces` without `--echo-project` to list visible spaces, then
+`--space-cursor <cursor>` with `--spaces` to continue. A mapping write supplies
+`--space-ids <comma-separated-ids>` (or `--clear`), `--mapping-revision <revision>`
+(`none` for a new setting), and `--mapping-request <fresh-uuid>`.
+See the [Confluence provider](../../providers/confluence/README.md) for connection
+and content support.

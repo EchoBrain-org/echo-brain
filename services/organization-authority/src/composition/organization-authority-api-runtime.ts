@@ -48,8 +48,9 @@ import { verifyAuthorityStateLineage } from "@echo-brain/organization-authority-
 import { createPersonMeetingTranscriptReadRouteV1, createPersonSourceEvidenceRouteV1 } from "./person-source-evidence-route.js";
 import { createPersonAnswerV3Route } from "./person-answer-v3-route.js";
 import { createPersonAnswerV4Route } from './person-answer-v4-route.js';
-import type { PersonTicketLiveRuntimeFactoryV1, OpenedPersonTicketLiveRuntimeV1 } from '../application/ports/person-ticket-live-runtime-v1.js';
-import type { PersonSlackLiveRuntimeFactoryV1, OpenedPersonSlackLiveRuntimeV1 } from '../application/ports/person-slack-live-runtime-v1.js';
+import { createPersonAnswerV5Route } from './person-answer-v5-route.js';
+import type { PersonLiveConnectorDefinitionV1, OpenedPersonLiveConnectorV1, PersonLiveConnectorSourceV1 } from '../application/ports/person-context-live-runtime-v1.js';
+import { personLiveConnectorDefinitionsV1, type LegacyPersonLiveConnectorsV1 } from './person-live-connector-registry-v1.js';
 import { SqlitePersonAgenticAskAuditV1 } from "../adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonOriginalItemsV1 } from "../adapters/persistence/sqlite/person-original-items-v1.js";
@@ -80,16 +81,14 @@ export interface OrganizationAuthorityApiRuntimeConfig {
   readonly pkce_sealing_key: Uint8Array;
 }
 
-export interface OrganizationAuthorityApiRuntimeDependencies {
+export interface OrganizationAuthorityApiRuntimeDependencies extends LegacyPersonLiveConnectorsV1 {
   /** Selected HTTP capabilities independent of ticket retrieval or Ask. The selecting root owns their lifecycle. */
   readonly person_http_runtime_factory?: (authentication: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>) => {
     readonly applications: readonly ProviderHttpApplicationV1[];
     close(): void;
   };
-  /** Absent by default. The selecting root owns provider construction and release approval. */
-  readonly ticket_live_runtime_factory?: PersonTicketLiveRuntimeFactoryV1;
-  /** Explicitly selected read scope. Organization bot possession alone never selects this capability. */
-  readonly slack_live_runtime_factory?: PersonSlackLiveRuntimeFactoryV1;
+  /** Selected capabilities; adding a provider does not add a runtime or Ask slot. */
+  readonly live_connectors?: readonly PersonLiveConnectorDefinitionV1[];
   /** Server-only agentic Ask experiment: open the whole readable scope first when it is small. */
   readonly agentic_ask_v1_small_scope_shortcut?: boolean;
   /** Historical record protocol projection, independent of live ingress. */
@@ -152,6 +151,7 @@ export async function startOrganizationAuthorityApiRuntime(
       "Person OIDC redirect URI must match the public Authority callback",
     );
   }
+  const connectorDefinitions = personLiveConnectorDefinitionsV1(dependencies);
   const lineage = verifyOrganizationAuthorityApiLineage(config.state_directory);
   // Do not contact an OIDC provider merely to bind the local API runtime.
   // Discovery is deferred until the initial owner begins an OIDC login.
@@ -173,8 +173,7 @@ export async function startOrganizationAuthorityApiRuntime(
   let externalIdentity:
     | OpenedPersonExternalIdentityRuntimeV1
     | undefined;
-  let ticketLive: OpenedPersonTicketLiveRuntimeV1 | undefined;
-  let slackLive: OpenedPersonSlackLiveRuntimeV1 | undefined;
+  const liveConnectors: { readonly definition: PersonLiveConnectorDefinitionV1; readonly runtime: OpenedPersonLiveConnectorV1 }[] = [];
   let personHttp: ReturnType<NonNullable<OrganizationAuthorityApiRuntimeDependencies['person_http_runtime_factory']>> | undefined;
   try {
     recordDatabase = openOrganizationRecordDatabase(
@@ -205,7 +204,7 @@ export async function startOrganizationAuthorityApiRuntime(
     );
     sessions.expireOidcLoginAttempts({ limit: 1000 });
     const projectRepository = new SqliteProjectContextRepositoryV1(database);
-    ticketLive = dependencies.ticket_live_runtime_factory?.(sessions, (access_token, project_id) => {
+    const authorizeLiveProject = (access_token: string, project_id: string) => {
       const person = sessions.authenticateAccess({ access_token });
       const id = validateProjectIdV1(project_id);
       return projectRepository.withReadTransaction(transaction => {
@@ -214,8 +213,14 @@ export async function startOrganizationAuthorityApiRuntime(
         if (grant === undefined) throw new AuthorityOperationError('unauthorized', 'Project access is unavailable');
         return Object.freeze({ role: grant.role, authorization_sha256: canonicalSha256(grant) });
       });
-    });
-    slackLive = dependencies.slack_live_runtime_factory?.(sessions);
+    };
+    for (const definition of connectorDefinitions) {
+      liveConnectors.push({ definition, runtime: definition.open(sessions, authorizeLiveProject) });
+    }
+    const liveSources: readonly PersonLiveConnectorSourceV1[] = liveConnectors.map(({ definition, runtime }) => ({
+      descriptor: definition.descriptor, scopes: definition.scopes, minimum_response_version: definition.minimum_response_version,
+      application: runtime.application,
+    }));
     personHttp = dependencies.person_http_runtime_factory?.(sessions);
     externalIdentity = dependencies.external_identity_runtime_bundle?.open({
       state_directory: config.state_directory,
@@ -285,11 +290,20 @@ export async function startOrganizationAuthorityApiRuntime(
     const originalItems = new SqlitePersonOriginalItemsV1(database, sessions, metadata.organization_id);
     const personTools = async (token: string) => [
       ...await (externalIdentity?.tools(token) ?? Promise.resolve([])),
-      ...await (ticketLive?.tools?.(token) ?? Promise.resolve([])),
+      ...(await Promise.all(liveConnectors.map(({ runtime }) => runtime.tools?.(token) ?? []))).flat(),
     ];
     documentWorker = startPersonDocumentProcessingV1(documents,new SqlitePersonTextSourceInboxV1(database),{
       on_failure: dependencies.person_source_failure ?? (event => console.error(JSON.stringify(event))),
     });
+    const answerOptions = dependencies.answer_composition_generation === undefined ? undefined : {
+      authority_id: metadata.authority_id, organization_id: metadata.organization_id, state_lineage_id: lineage.root.state_lineage_id,
+      sessions, originals, records: recordSearch,
+      memberships: { membership: (id: string) => repository.read(transaction => transaction.membership(id)) },
+      model: dependencies.answer_composition_generation.structured_output,
+      generation: dependencies.answer_composition_generation.generation,
+      audit: new SqlitePersonAgenticAskAuditV1(database),
+      ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
+    };
     let closing = false;
     const server = createOrganizationAuthorityHttpServer({
       is_closing: () => closing,
@@ -313,7 +327,7 @@ export async function startOrganizationAuthorityApiRuntime(
       }),
       person_record_search: recordSearch,
       person_tool_connections: [
-        ...(ticketLive === undefined ? [] : [ticketLive.connection_http]),
+        ...liveConnectors.flatMap(({ runtime }) => runtime.connection_http === undefined ? [] : [runtime.connection_http]),
         ...(personHttp?.applications ?? []),
       ],
       person_meeting_transcript: createPersonMeetingTranscriptReadRouteV1({ originals }),
@@ -329,43 +343,15 @@ export async function startOrganizationAuthorityApiRuntime(
         transcripts: originals,
       }),
       // Agentic Ask is the only Ask (ADR-0022); it needs the bound answer model.
-      ...(dependencies.answer_composition_generation === undefined
-        ? {}
-        : {
-            person_answer_v3: createPersonAnswerV3Route({
-              authority_id: metadata.authority_id,
-              organization_id: metadata.organization_id,
-              state_lineage_id: lineage.root.state_lineage_id,
-              sessions,
-              originals,
-              records: recordSearch,
-              memberships: {
-                membership: (id) => repository.read((transaction) => transaction.membership(id)),
-              },
-              model: dependencies.answer_composition_generation.structured_output,
-              generation: dependencies.answer_composition_generation.generation,
-              audit: new SqlitePersonAgenticAskAuditV1(database),
-              ...(dependencies.ask_journey_telemetry === undefined ? {} : { ask_journey_telemetry: dependencies.ask_journey_telemetry }),
-              ...(dependencies.agentic_ask_v1_small_scope_shortcut === true
-                ? { small_scope_shortcut: true }
-                : {}),
-            }),
-            ...(ticketLive === undefined && slackLive === undefined ? {} : {
-              person_answer_v4: createPersonAnswerV4Route({
-                authority_id: metadata.authority_id,
-                organization_id: metadata.organization_id,
-                state_lineage_id: lineage.root.state_lineage_id,
-                sessions, originals, records: recordSearch,
-                memberships: { membership: (id) => repository.read((transaction) => transaction.membership(id)) },
-                model: dependencies.answer_composition_generation.structured_output,
-                generation: dependencies.answer_composition_generation.generation,
-                audit: new SqlitePersonAgenticAskAuditV1(database),
-                ...(ticketLive === undefined ? {} : { ticket_for: (input: Parameters<OpenedPersonTicketLiveRuntimeV1['application']['source']>[0]) => ticketLive!.application.source(input) }),
-                ...(slackLive === undefined ? {} : { slack_live_for: (input: Parameters<OpenedPersonSlackLiveRuntimeV1['application']['source']>[0]) => slackLive!.application.source(input) }),
-                ...(dependencies.agentic_ask_v1_small_scope_shortcut === true ? { small_scope_shortcut: true } : {}),
-              }),
-            }),
-          }),
+      ...(answerOptions === undefined ? {} : {
+        person_answer_v3: createPersonAnswerV3Route({ ...answerOptions,
+          ...(dependencies.ask_journey_telemetry === undefined ? {} : { ask_journey_telemetry: dependencies.ask_journey_telemetry }),
+        }),
+        // A response version is available with the model even when no external
+        // source is configured. The request catalog still contains local context.
+        person_answer_v4: createPersonAnswerV4Route({ ...answerOptions, live_sources: liveSources }),
+        person_answer_v5: createPersonAnswerV5Route({ ...answerOptions, live_sources: liveSources }),
+      }),
       person_documents: createPersonDocumentApplicationV1({
         authenticate: accessToken => sessions.authenticateAccess({ access_token: accessToken }),
         repository: documents,
@@ -419,8 +405,7 @@ export async function startOrganizationAuthorityApiRuntime(
       close: async () => {
         stopAcceptingRequests();
         await Promise.all([serverClosed, documentWorker?.close()]);
-        ticketLive?.close();
-        slackLive?.close();
+        for (const { runtime } of [...liveConnectors].reverse()) runtime.close();
         personHttp?.close();
         externalIdentity?.close();
         recordDatabase?.close();
@@ -429,8 +414,7 @@ export async function startOrganizationAuthorityApiRuntime(
     };
   } catch (error) {
     await documentWorker?.close();
-    ticketLive?.close();
-    slackLive?.close();
+    for (const { runtime } of [...liveConnectors].reverse()) runtime.close();
     personHttp?.close();
     externalIdentity?.close();
     recordDatabase?.close();

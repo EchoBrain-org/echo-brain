@@ -62,6 +62,8 @@ import {
 import {
   PERSON_ANSWER_PATH_V3,
   PERSON_ANSWER_PATH_V4,
+  PERSON_ANSWER_PATH_V5,
+  PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
@@ -77,6 +79,7 @@ import {
 import type { PersonMeetingTranscriptHttpApplicationV1, PersonSourceEvidenceHttpApplicationV1 } from "./person-source-evidence-http-application.js";
 import type { PersonAnswerV3HttpApplication } from "./person-answer-v3-http-application.js";
 import type { PersonAnswerV4HttpApplication } from "./person-answer-v4-http-application.js";
+import type { PersonAnswerV5HttpApplication } from "./person-answer-v5-http-application.js";
 import {
   PERSON_LIST_PATH_V1,
   PERSON_OPEN_PATH_V1,
@@ -84,6 +87,7 @@ import {
   validatePersonOpenRequestV1,
 } from "@echo-brain/organization-api";
 import type { PersonListHttpApplicationV1 } from "./person-list-http-application-v1.js";
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
@@ -111,6 +115,7 @@ const ORGANIZATION_AUTHORITY_HTTP_ROUTES = new Set<string>([
   `POST ${PERSON_RECORD_SEARCH_PATH_V1}`,
   `POST ${PERSON_ANSWER_PATH_V3}`,
   `POST ${PERSON_ANSWER_PATH_V4}`,
+  `POST ${PERSON_ANSWER_PATH_V5}`,
   `POST ${PERSON_EVIDENCE_SEARCH_PATH_V1}`,
   `POST ${PERSON_EVIDENCE_OPEN_PATH_V1}`,
   `GET ${PERSON_CAPABILITIES_PATH_V1}`,
@@ -154,6 +159,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   readonly person_answer_v3?: PersonAnswerV3HttpApplication;
   /** Optional ticket-capable Ask, selected with its provider runtime. */
   readonly person_answer_v4?: PersonAnswerV4HttpApplication;
+  /** Optional page-capable Ask. It preserves the V3/V4 routes for installed clients. */
+  readonly person_answer_v5?: PersonAnswerV5HttpApplication;
   /** Provider-owned account connection routes, selected by the composition root. */
   readonly person_tool_connections?: readonly ProviderHttpApplicationV1[];
   /** Opening a cited original; it needs no answer model. */
@@ -295,6 +302,7 @@ function providerResponse(response: ServerResponse, result: ProviderHttpResponse
     contentType = "text/html; charset=utf-8";
   } else {
     if (result.content_type !== undefined) throw new Error("invalid provider response content type");
+    maximum = PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1;
     bytes = Buffer.from(JSON.stringify(result.body), "utf8");
     contentType = "application/json; charset=utf-8";
   }
@@ -730,6 +738,7 @@ export function createOrganizationAuthorityHttpServer(
   );
   const personReadPosts: ReadonlyMap<string, PersonPostHandler> = new Map([
     [PERSON_ANSWER_PATH_V4, personCancellablePost(options.person_answer_v4, validatePersonAnswerRequestV3, (application, input) => application.ask(input))],
+    [PERSON_ANSWER_PATH_V5, personCancellablePost(options.person_answer_v5, validatePersonAnswerRequestV3, (application, input) => application.ask(input))],
     [PERSON_EVIDENCE_SEARCH_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceSearchRequestV1, (application, input) => application.searchEvidence(input))],
     [PERSON_EVIDENCE_OPEN_PATH_V1, personCancellablePost(options.person_answer_v3, validatePersonEvidenceOpenRequestV1, (application, input) => application.openEvidence(input))],
     [PERSON_SOURCE_EVIDENCE_PATH_V1, personSourcePost(options.person_source_evidence, validatePersonSourceEvidenceReadRequestV1, (application, input) => application.readSource(input))],
@@ -1089,7 +1098,12 @@ export function createOrganizationAuthorityHttpServer(
       }
       if (method === "POST" && url.search === "") {
         const personRead = personReadPosts.get(url.pathname);
-        if (personRead !== undefined) { await personRead(request, response); return; }
+        if (personRead !== undefined) {
+          // Distinguish a provider's not-found from an older server with no V5
+          // route. Set this before body validation or application execution.
+          if (url.pathname === PERSON_ANSWER_PATH_V5) response.setHeader(PERSON_ANSWER_ROUTE_HEADER_V5, '5');
+          await personRead(request, response); return;
+        }
       }
       fail(response, 404, "not_found");
     } catch (error) {

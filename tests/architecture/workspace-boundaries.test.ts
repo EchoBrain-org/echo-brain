@@ -382,6 +382,7 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-record",
         "@echo-brain/organization-retrieval",
+        "@echo-brain/provider-confluence",
         "@echo-brain/provider-granola",
         "@echo-brain/provider-jira",
         "@echo-brain/provider-openrouter",
@@ -399,6 +400,7 @@ describe("workspace source boundaries", () => {
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
         "@echo-brain/organization-protocol",
+        "@echo-brain/provider-confluence-client",
         "@echo-brain/provider-jira-client",
         "@echo-brain/provider-slack-client"
       ],
@@ -443,6 +445,7 @@ describe("workspace source boundaries", () => {
         "@echo-brain/organization-processing",
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-record",
+        "@echo-brain/provider-runtime",
         "@echo-brain/provider-slack-client"
       ],
       "@echo-brain/provider-slack-client": [
@@ -452,14 +455,32 @@ describe("workspace source boundaries", () => {
       "@echo-brain/provider-granola": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-authority-kernel",
-        "@echo-brain/organization-processing"
+        "@echo-brain/organization-processing",
+        "@echo-brain/provider-runtime"
+      ],
+      "@echo-brain/provider-runtime": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel"
+      ],
+      "@echo-brain/provider-confluence": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel",
+        "@echo-brain/provider-confluence-client",
+        "@echo-brain/provider-runtime"
+      ],
+      "@echo-brain/provider-confluence-client": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
       ],
       "@echo-brain/provider-jira": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
         "@echo-brain/organization-authority-kernel",
         "@echo-brain/organization-processing",
-        "@echo-brain/provider-jira-client"
+        "@echo-brain/provider-jira-client",
+        "@echo-brain/provider-runtime"
       ],
       "@echo-brain/provider-jira-client": [
         "@echo-brain/federation-protocol",

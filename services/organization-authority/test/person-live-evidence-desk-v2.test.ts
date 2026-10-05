@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
+import type { PersonPageCitationV1, PersonSlackMessageCitationV1, PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from '@echo-brain/organization-authority-kernel/shared/evidence-desk-v1';
 import type { PersonLiveEvidenceCitationV1, PersonLiveEvidenceItemV1, PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
-import { createPersonLiveEvidenceDeskV2 } from '../src/composition/person-live-evidence-desk-v2.js';
+import { createPersonLiveEvidenceDeskV2, createRegisteredPersonLiveEvidenceDeskV2, type RegisteredPersonLiveEvidenceSourceV2 } from '../src/composition/person-live-evidence-desk-v2.js';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 const empty = { items: [], truncated: false, receipt_digests: [] };
 const receipt = (source: string) => canonicalSha256({ source });
@@ -17,8 +17,9 @@ function mixedFixture() {
   const local: EvidenceDeskItemV1[] = [1, 2].map(index => ({ id: `local-${index}`, kind: 'note', label: 'Approved Granola transcript', text: `Launch transcript ${index}`, visibility: 'team', receipt_sha256: receipt('local'), citation: { kind: 'source_revision', source_id: `source:${'1'.repeat(64)}`, revision_id: 'revision-1', source_sha256: receipt('source'), representation_sha256: receipt('representation'), anchor_sha256: receipt(`anchor-${index}`) } }));
   const tickets: PersonLiveEvidenceItemV1<PersonTicketCitationV1>[] = [1, 2, 3].map(index => ({ id: `ticket-${index}`, kind: 'ticket', label: `ECHO-${index}`, text: `Launch ticket ${index}`, visibility: 'only_me', receipt_sha256: receipt('jira'), citation: { kind: 'ticket', tool_id: 'jira', external_scope_id: '11111111-1111-4111-8111-111111111111', ticket_id: String(index), permalink: `https://fixture.atlassian.net/browse/ECHO-${index}`, text_sha256: receipt(`ticket-${index}`) } }));
   const messages: PersonLiveEvidenceItemV1<PersonSlackMessageCitationV1>[] = [1, 2, 3].map(index => ({ id: `slack-${index}`, kind: 'slack_message', label: '#launch', text: `Launch message ${index}`, visibility: 'team', receipt_sha256: receipt('slack'), citation: { kind: 'slack_message', team_id: 'T0001', channel_id: 'C0001', message_ts: `1790966400.00000${index}`, permalink: `https://fixture.slack.com/archives/C0001/p179096640000000${index}`, text_sha256: receipt(`slack-${index}`) } }));
+  const pages: PersonLiveEvidenceItemV1<PersonPageCitationV1>[] = [1, 2].map(index => ({ id: `page-${index}`, kind: 'page', label: `Launch plan section ${index}`, text: `Launch plan section ${index}`, visibility: 'only_me', receipt_sha256: receipt('knowledge'), citation: { kind: 'page', tool_id: 'knowledge', external_scope_id: 'site-one', page_id: 'launch-plan', section_id: `s${index}`, version: '7', permalink: `https://knowledge.example.test/wiki/pages/viewpage.action?pageId=${index}`, text_sha256: receipt(`page-${index}`) } }));
   vi.mocked(f.base.search).mockResolvedValue({ items: local, truncated: false, receipt_digests: [receipt('local')] });
-  return { ...f, local, ticket: live('jira', tickets), slack: live('slack', messages) };
+  return { ...f, local, tickets, messages, pages, ticket: live('jira', tickets), page: live('knowledge', pages), slack: live('slack', messages) };
 }
 function fixture(scope: EvidenceDeskPortV1['scope'] = { kind: 'global' }) {
   let current = true;
@@ -31,7 +32,8 @@ describe('thin live ticket dispatcher', () => {
     const f = mixedFixture();
     const ticket = { ...f.ticket, tool_id: 'issue-fixture' };
     expect(createPersonLiveEvidenceDeskV2(f.base, ticket, f.slack)).toHaveProperty('live_sources', [
-      { source: 'ticket', tool_id: 'issue-fixture' }, { source: 'slack', tool_id: 'slack' },
+      { source_id: 'ticket', kind: 'ticket', selector: 'tickets', description: expect.any(String), metadata_only_list: true, tool_id: 'issue-fixture' },
+      { source_id: 'slack', kind: 'slack_message', selector: 'slack', description: expect.any(String), metadata_only_list: false, tool_id: 'slack', requires_channel: true, default_since_days: 14 },
     ]);
     expect(createPersonLiveEvidenceDeskV2(f.base)).toHaveProperty('live_sources', []);
   });
@@ -62,6 +64,67 @@ describe('thin live ticket dispatcher', () => {
     expect(result.truncated).toBe(true);
     expect(result.receipt_digests).toEqual([receipt('local'), receipt('jira'), receipt('slack')]);
     expect(f.base.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'launch', kinds: ['decision', 'action', 'rationale', 'note', 'document_passage'] }));
+  });
+  it('routes provider-neutral page sections through opaque request ids and publishes only their descriptor', async () => {
+    const f = mixedFixture();
+    const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, f.slack, undefined, f.page);
+    expect(desk.live_sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_id: 'page', kind: 'page', selector: 'pages', metadata_only_list: true, tool_id: 'knowledge' }),
+    ]));
+    const result = await desk.search({ query: 'launch', kinds: ['page'], limit: 2 });
+    expect(result.items.map(item => item.id)).toEqual(['page-1', 'page-2']);
+    await desk.open({ item: 'page-1' });
+    expect(f.page.search).toHaveBeenCalledWith(expect.objectContaining({ query: 'launch' }));
+    expect(f.page.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'page-1' }));
+    expect(f.ticket.search).not.toHaveBeenCalled();
+    expect(f.slack.search).not.toHaveBeenCalled();
+  });
+  it('starts independent local, Jira and Slack lookups together and merges reverse completions in source order', async () => {
+    const f = mixedFixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, f.slack);
+    const deferred = <T,>() => {
+      let resolve!: (value: T) => void;
+      return { promise: new Promise<T>(done => { resolve = done; }), resolve };
+    };
+    const local = deferred<Awaited<ReturnType<EvidenceDeskPortV1['search']>>>();
+    const ticket = deferred<Awaited<ReturnType<typeof f.ticket.search>>>();
+    const slack = deferred<Awaited<ReturnType<typeof f.slack.search>>>();
+    vi.mocked(f.base.search).mockImplementation(() => local.promise);
+    vi.mocked(f.ticket.search).mockImplementation(() => ticket.promise);
+    vi.mocked(f.slack.search).mockImplementation(() => slack.promise);
+
+    const search = desk.search({ query: 'launch', limit: 6 });
+    await vi.waitFor(() => {
+      expect(f.base.search).toHaveBeenCalledTimes(1);
+      expect(f.ticket.search).toHaveBeenCalledTimes(1);
+      expect(f.slack.search).toHaveBeenCalledTimes(1);
+    });
+    slack.resolve({ items: f.messages, truncated: false, receipt_digests: [receipt('slack')] });
+    ticket.resolve({ items: f.tickets, truncated: false, receipt_digests: [receipt('jira')] });
+    local.resolve({ items: f.local, truncated: false, receipt_digests: [receipt('local')] });
+
+    expect((await search).items.map(item => item.id)).toEqual(['local-1', 'ticket-1', 'slack-1', 'local-2', 'ticket-2', 'slack-2']);
+  });
+  it('fans a queryless inventory search out to independent live lists', async () => {
+    const f = mixedFixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, f.slack);
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const started: string[] = [];
+    vi.mocked(f.base.search).mockImplementation(async () => { started.push('local'); await pending; return { items: f.local, truncated: false, receipt_digests: [receipt('local')] }; });
+    vi.mocked(f.ticket.list).mockImplementation(async () => { started.push('ticket'); await pending; return { items: f.tickets, truncated: false, receipt_digests: [receipt('jira')] }; });
+    vi.mocked(f.slack.list).mockImplementation(async () => { started.push('slack'); await pending; return { items: f.messages, truncated: false, receipt_digests: [receipt('slack')] }; });
+
+    const search = desk.search({ limit: 3 });
+    await vi.waitFor(() => expect(started).toEqual(['local', 'ticket', 'slack']));
+    release();
+    expect((await search).items.map(item => item.id)).toEqual(['local-1', 'ticket-1', 'slack-1']);
+  });
+  it('fails the whole fanout when one concurrent source is denied', async () => {
+    const f = mixedFixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, f.slack);
+    vi.mocked(f.slack.search).mockRejectedValueOnce(new AuthorityOperationError('unauthorized', 'Fixture Slack access revoked'));
+    await expect(desk.search({ query: 'launch' })).rejects.toMatchObject({ code: 'unauthorized' });
+    expect(f.base.search).toHaveBeenCalledTimes(1);
+    expect(f.ticket.search).toHaveBeenCalledTimes(1);
+    expect(f.slack.search).toHaveBeenCalledTimes(1);
   });
   it('observes actual list and open calls once without changing provider routing or results', async () => {
     const f = mixedFixture(); const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, f.slack);
@@ -157,7 +220,7 @@ describe('thin live ticket dispatcher', () => {
     const late = new AbortController();
     vi.mocked(f.ticket.search).mockImplementation(async () => { late.abort(); return empty; });
     await expect(desk.search({ query: 'launch', signal: late.signal })).rejects.toMatchObject({ name: 'AbortError' });
-    expect(f.slack.search).not.toHaveBeenCalled();
+    expect(f.slack.search).toHaveBeenCalledTimes(1);
   });
   it('rechecks local grants/snapshot after provider visibility awaits, suppressing mixed evidence after drift', async () => {
     const f = fixture(); vi.mocked(f.ticket.revalidate).mockImplementation(async () => { f.revokeBase(); });
@@ -178,7 +241,7 @@ describe('thin live ticket dispatcher', () => {
     const scope = { kind: 'project' as const, project_id: 'prj_00000000-0000-4000-8000-000000000001' as const };
     const f = fixture(scope);
     const desk = createPersonLiveEvidenceDeskV2(f.base, f.ticket, undefined, scope.project_id);
-    expect(desk.live_sources).toEqual([{ source: 'ticket', tool_id: 'jira' }]);
+    expect(desk.live_sources).toEqual([{ source_id: 'ticket', kind: 'ticket', selector: 'tickets', description: expect.any(String), metadata_only_list: true, tool_id: 'jira' }]);
     await desk.list({ source: 'ticket' });
     expect(f.ticket.list).toHaveBeenCalled();
     expect(() => createPersonLiveEvidenceDeskV2(f.base, f.ticket, undefined, 'another-project')).toThrow(AuthorityOperationError);
@@ -189,5 +252,104 @@ describe('thin live ticket dispatcher', () => {
     await expect(desk.list({ source: 'ticket', channel: 'unsupported-project-map' })).rejects.toMatchObject({ code: 'unauthorized' });
     await expect(desk.list({ source: 'document', kinds: ['ticket'] })).rejects.toMatchObject({ code: 'unauthorized' });
     expect(f.ticket.list).not.toHaveBeenCalled(); expect(f.base.list).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('registered live source dispatch', () => {
+  const registration = (source: PersonLiveEvidenceSourceV1, source_id: string, scope: RegisteredPersonLiveEvidenceSourceV2['scope'] = { kind: 'global' }): RegisteredPersonLiveEvidenceSourceV2 => ({
+    source, scope, descriptor: { source_id, selector: source_id, kind: 'page', description: `Pages from ${source_id}`, metadata_only_list: true, tool_id: source.tool_id },
+  });
+  it.each(['search', 'list'] as const)('runs %s concurrently across local, ticket and two page providers without changing ownership', async method => {
+    const f = mixedFixture();
+    const secondItems = f.pages.map(item => ({ ...item, id: `second-${item.id}`, citation: { ...item.citation, tool_id: 'other-knowledge' } }));
+    const second = live('other-knowledge', secondItems);
+    const ticket = registration(f.ticket, 'issues');
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [
+      { ...ticket, descriptor: { ...ticket.descriptor, kind: 'ticket' } },
+      registration(f.page, 'knowledge-one'), registration(second, 'knowledge-two'),
+    ]);
+    const started: string[] = [];
+    const releases: (() => void)[] = [];
+    const gate = (id: string) => {
+      const pending = new Promise<void>(resolve => { releases.push(resolve); });
+      return async () => { started.push(id); await pending; };
+    };
+    const local = gate('local');
+    vi.mocked(f.base.search).mockImplementation(async () => {
+      await local(); return { items: f.local, truncated: false, receipt_digests: [receipt('local')] };
+    });
+    const plans: { id: string; source: PersonLiveEvidenceSourceV1; items: readonly PersonLiveEvidenceItemV1[] }[] = [
+      { id: 'issues', source: f.ticket, items: f.tickets },
+      { id: 'knowledge-one', source: f.page, items: f.pages },
+      { id: 'knowledge-two', source: second, items: secondItems },
+    ];
+    for (const { id, source, items } of plans) {
+      const wait = gate(id);
+      vi.mocked(source[method]).mockImplementation(async () => {
+        await wait(); return { items, truncated: false, receipt_digests: [receipt(id)] };
+      });
+    }
+    const search = desk.search({ ...(method === 'search' ? { query: 'launch' } : {}), limit: 8 });
+    try {
+      await vi.waitFor(() => expect(started).toEqual(['local', 'issues', 'knowledge-one', 'knowledge-two']));
+    } finally {
+      for (const release of releases.reverse()) release();
+    }
+    const result = await search;
+    expect(result.items.map(item => item.id)).toEqual(['local-1', 'ticket-1', 'page-1', 'second-page-1', 'local-2', 'ticket-2', 'page-2', 'second-page-2']);
+    expect(result.items.filter(item => item.kind === 'page').map(item => item.source_id)).toEqual(['knowledge-one', 'knowledge-two', 'knowledge-one', 'knowledge-two']);
+    await desk.open({ item: 'page-1' }); await desk.open({ item: 'second-page-1' });
+    expect(f.page.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'page-1' }));
+    expect(second.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'second-page-1' }));
+  });
+  it('lists, searches and opens two same-kind providers by their own source identities', async () => {
+    const f = mixedFixture();
+    const secondItems = (await f.page.list({})).items.map(item => ({ ...item, id: `second-${item.id}`, citation: { ...item.citation, tool_id: 'other-knowledge' } }));
+    const second = live('other-knowledge', secondItems);
+    vi.mocked(f.page.list).mockClear();
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [registration(f.page, 'knowledge-one'), registration(second, 'knowledge-two')]);
+    expect(desk.live_sources?.map(value => 'source_id' in value ? value.source_id : undefined)).toEqual(['knowledge-one', 'knowledge-two']);
+    const one = await desk.list({ source: 'knowledge-one' });
+    expect(one.items[0]).toMatchObject({ id: 'page-1', source_id: 'knowledge-one' });
+    expect(second.list).not.toHaveBeenCalled();
+    const two = await desk.search({ query: 'launch', source: 'knowledge-two', kinds: ['page'] });
+    expect(two.items[0]).toMatchObject({ id: 'second-page-1', source_id: 'knowledge-two' });
+    expect(f.page.search).not.toHaveBeenCalled(); expect(f.base.search).not.toHaveBeenCalled();
+    await desk.open({ item: 'page-1' }); await desk.open({ item: 'second-page-1' });
+    expect(f.page.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'page-1' }));
+    expect(second.open).toHaveBeenCalledWith(expect.objectContaining({ item: 'second-page-1' }));
+    const both = await desk.search({ kinds: ['page'], limit: 4 });
+    expect(both.items.map(item => item.source_id)).toEqual(['knowledge-one', 'knowledge-two', 'knowledge-one', 'knowledge-two']);
+    await expect(desk.list({ source: 'unregistered' })).rejects.toMatchObject({ code: 'unauthorized' });
+    await expect(desk.open({ item: 'unissued' })).rejects.toMatchObject({ code: 'not_found' });
+  });
+  it('pins the exact project and rechecks every same-kind source grant after provider awaits', async () => {
+    const scope = { kind: 'project' as const, project_id: 'prj_00000000-0000-4000-8000-000000000001' as const };
+    const f = mixedFixture(); const base = { ...f.base, scope };
+    const second = live('other-knowledge', []);
+    expect(() => createRegisteredPersonLiveEvidenceDeskV2(base, [registration(f.page, 'knowledge-one')])).toThrow(AuthorityOperationError);
+    expect(() => createRegisteredPersonLiveEvidenceDeskV2(base, [registration(f.page, 'knowledge-one', { kind: 'project', project_id: 'another-project' })])).toThrow(AuthorityOperationError);
+    let revoked = false;
+    vi.mocked(second.revalidate).mockImplementation(async () => { revoked = true; });
+    vi.mocked(f.page.assertCurrent).mockImplementation(() => { if (revoked) throw new AuthorityOperationError('stale_access_state', 'Membership changed'); });
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(base, [registration(f.page, 'knowledge-one', scope), registration(second, 'knowledge-two', scope)]);
+    await expect(desk.revalidate({})).rejects.toMatchObject({ code: 'stale_access_state' });
+    expect(f.page.revalidate).toHaveBeenCalledOnce(); expect(second.revalidate).toHaveBeenCalledOnce();
+  });
+  it('refuses ambiguous registration and cross-source handle ownership', async () => {
+    const f = mixedFixture();
+    const first = registration(f.page, 'knowledge-one');
+    expect(() => createRegisteredPersonLiveEvidenceDeskV2(f.base, [first, first])).toThrow(AuthorityOperationError);
+    expect(() => createRegisteredPersonLiveEvidenceDeskV2(f.base, [{ ...first, descriptor: { ...first.descriptor, tool_id: 'different-provider' } }])).toThrow(AuthorityOperationError);
+    expect(() => createRegisteredPersonLiveEvidenceDeskV2(f.base, [{ ...first, descriptor: { ...first.descriptor, source_id: 'meetings' } }])).toThrow(AuthorityOperationError);
+    expect(() => createRegisteredPersonLiveEvidenceDeskV2(f.base, [first, { ...first, descriptor: { ...first.descriptor, source_id: 'knowledge-two' } }])).toThrow(AuthorityOperationError);
+    const other = live('other-knowledge', (await f.page.list({})).items);
+    const desk = createRegisteredPersonLiveEvidenceDeskV2(f.base, [first, registration(other, 'knowledge-two')]);
+    await desk.list({ source: 'knowledge-one' });
+    await expect(desk.list({ source: 'knowledge-two' })).rejects.toMatchObject({ code: 'unavailable' });
+    expect(other.open).not.toHaveBeenCalled();
+    const wrongKind = createRegisteredPersonLiveEvidenceDeskV2(f.base, [{ ...first, descriptor: { ...first.descriptor, kind: 'ticket' } }]);
+    await expect(wrongKind.list({ source: first.descriptor.source_id })).rejects.toMatchObject({ code: 'invalid_output' });
   });
 });

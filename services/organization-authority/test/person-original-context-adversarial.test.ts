@@ -229,6 +229,49 @@ describe("adversarial original-context retrieval", () => {
     expect(texts(result)[0]).toContain("PRD-14");
   });
 
+  it("uses scoped packet BM25 and searches beyond the former top-100 overlap window", () => {
+    const f = fixture();
+    const rare = f.uploadChunks("Large ranked proof", [
+      ...Array.from({ length: 105 }, (_, index) => `common appears incidentally in passage ${index}`),
+      "rareterm rareterm rareterm establishes the controlling requirement",
+    ]);
+    const result = f.retrieval.deskSearch({
+      access_token: "member", scope: { kind: "global" }, query: "common rareterm", limit: 10,
+    });
+    expect(result.items[0]?.citation.document_id).toBe(rare);
+    expect(result.items[0]?.text).toContain("rareterm rareterm rareterm");
+    const atom = result.release.released_atoms[0]!;
+    const reopened = f.retrieval.deskOpen({ access_token: "member", scope: { kind: "global" }, citation: citationOf(atom) });
+    expect(reopened.items[0]?.text).toContain("rareterm rareterm rareterm");
+  });
+
+  it("keeps deterministic packet ties and the three-per-document diversity cap", () => {
+    const f = fixture();
+    const documentId = f.uploadChunks("Diversity", Array.from({ length: 5 }, () => "stabletie"));
+    f.upload("Second source", "stabletie");
+    const first = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "stabletie", limit: 10 });
+    const second = f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "stabletie", limit: 10 });
+    expect(first.items.map(item => item.citation.anchor_sha256)).toEqual(second.items.map(item => item.citation.anchor_sha256));
+    expect(first.items.filter(item => item.citation.document_id === documentId)).toHaveLength(3);
+    expect(first.items).toHaveLength(4);
+  });
+
+  it("does not let unreadable or off-project packets alter readable BM25 statistics", () => {
+    const f = fixture();
+    f.upload("Readable rare", "scopecommon scoperare scoperare");
+    f.upload("Readable common", "scopecommon incidental");
+    const input = { access_token: "member", scope: { kind: "project" as const, project_id: PROJECT_ALPHA }, query: "scopecommon scoperare" };
+    // Add equivalent readable project evidence first, then snapshot its ranking.
+    f.upload("Alpha rare", "scopecommon scoperare scoperare", { project_id: PROJECT_ALPHA });
+    f.upload("Alpha common", "scopecommon incidental", { project_id: PROJECT_ALPHA });
+    const before = f.retrieval.deskSearch(input).items.map(item => item.citation.anchor_sha256);
+    for (let index = 0; index < 8; index += 1) {
+      f.upload(`Private ${index}`, "scoperare", { audience: { kind: "only_me" }, project_id: PROJECT_ALPHA });
+      f.upload(`Other project ${index}`, "scopecommon scoperare", { project_id: PROJECT_BETA });
+    }
+    expect(f.retrieval.deskSearch(input).items.map(item => item.citation.anchor_sha256)).toEqual(before);
+  });
+
   it("keeps archived-project evidence and its citation readable until the member grant is removed", async () => {
     const f = fixture();
     f.upload("Archive evidence", "archive-ask-marker remains valid after project archive", { audience: { kind: "project", project_id: PROJECT_ALPHA }, project_id: PROJECT_ALPHA });

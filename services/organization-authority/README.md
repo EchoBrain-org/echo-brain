@@ -115,8 +115,8 @@ Save an exact copy of that profile object as a local nonsecret JSON file. Use
 the release-matched Person client to sign in and run the ordinary shared
 connection commands when a connection is absent: `person tools setup --tool slack`,
 `person tools connect --tool slack`, and `person tools connect --tool jira`.
-With this profile selected, Slack setup also asks for public-channel read
-permissions on the same app; human Slack consent is still required. Without live
+Slack setup asks only for the bot's four delivery scopes; human Slack consent
+is still required. Without live
 Jira Ask enabled, the diagnostic profile admits Jira connection commands only for
 its initial owner. Enabling live Jira Ask lets each Person connect their own
 account. Granola continues to use the host's direct organization credential.
@@ -132,9 +132,6 @@ npm run authority:staging-connector-rehearsal -- capture \
 npm run authority:staging-connector-rehearsal -- verify-read \
   --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
   --tool jira
-npm run authority:staging-connector-rehearsal -- verify-read \
-  --release-id clean-v1-your-release --profile /absolute/staging-connector-profile.json \
-  --tool slack
 ```
 
 The runner uses the installed Person session in the current user's home. That
@@ -146,7 +143,8 @@ response may follow an already-committed observation.
 `verify-read` is a separate, manually selected read proof: one inventory item,
 one exact open, and final provider and local authorization checks within 15
 seconds. It follows no cursor, retries nothing, calls no model, and retains no
-body. Slack selects from the fixed public channel's last seven days. Jira reads
+body. Only Jira supports it: the Slack bot delivers approvals and reads no
+channel. Jira reads
 normalized issue text (key, summary and available description); it does not
 claim a nonempty description. A verified receipt contains only source-coordinate
 and text hashes plus a positive UTF-8 byte count, bounded to 3 KiB. Empty results
@@ -158,8 +156,8 @@ before initiating a new consent flow, which can replace an existing connection.
 Receipts contain hashes and counts, never source contents, cursors, provider
 account IDs or credentials. A zero-item receipt is not a successful content
 capture. Only Granola supports capture; its receipts report retained admission
-or duplicate under the separate owner policy. Jira and Slack support live
-`verify-read`: capture requests are rejected before provider I/O, and no
+or duplicate under the separate owner policy. Jira supports live
+`verify-read`. Jira and Slack capture requests are rejected before provider I/O, and no
 tool pointers, metadata or bodies enter Layer 1. Ordinary Granola polling owns the cursor and
 continues running. Slack approval tests use the existing synthetic release
 canary and human approval, with separate evidence. The diagnostic profile alone
@@ -183,6 +181,18 @@ ECHO project Ask requires a lead-configured Jira mapping and the asker's own
 connection. The mapping filters discovery before tickets are read and remains
 checked on open and revalidation. The rehearsal's fixed project applies only to
 its diagnostic reads. Mine and unmapped projects exclude Jira.
+
+The same EC2 overlay selects `ECHO_STAGING_CONFLUENCE_ASK_V1=true` when the
+fixed connector profile is present. Confluence uses only that profile's
+Atlassian Cloud ID, with a separately configured Nango Cloud integration named
+`confluence`. It uses each Person's own Confluence grant and no Jira project or
+Slack channel restriction. Global Ask follows the person's Confluence access;
+project Ask filters discovery through the project's Confluence space mapping.
+Conflicting explicit Confluence flags refuse startup. Without the staging switch
+or both explicit Confluence flags, the Confluence source remains unconfigured.
+Configure the `confluence` integration and its documented OAuth scopes before
+staging the release, then connect Confluence through Tools with browser consent.
+No existing Jira connection or fixed profile needs to be rewritten.
 
 ## Initial-owner setup internals
 

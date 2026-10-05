@@ -1,0 +1,16 @@
+{
+  "name": "@echo-brain/provider-confluence-client",
+  "version": "0.0.0-dev.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    "./organization-api/confluence-person-connection-v1": { "types": "./dist/organization-api/confluence-person-connection-v1.d.ts", "import": "./dist/organization-api/confluence-person-connection-v1.js" },
+    "./organization-api/confluence-project-mapping-v1": { "types": "./dist/organization-api/confluence-project-mapping-v1.d.ts", "import": "./dist/organization-api/confluence-project-mapping-v1.js" },
+    "./person/confluence-tool-provider": { "types": "./dist/person/confluence-tool-provider.d.ts", "import": "./dist/person/confluence-tool-provider.js" }
+  },
+  "files": ["dist/**/*.js", "dist/**/*.js.map", "dist/**/*.d.ts", "dist/**/*.d.ts.map"],
+  "scripts": { "build": "tsc -b", "clean": "rm -rf dist" },
+  "dependencies": { "@echo-brain/federation-protocol": "0.0.0-dev.0", "@echo-brain/organization-api": "0.0.0-dev.0" },
+  "engines": { "node": "22.22.1", "npm": "10.9.4" }
+}

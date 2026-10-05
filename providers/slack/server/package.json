@@ -9,22 +9,6 @@
       "types": "./dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.d.ts",
       "import": "./dist/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js"
     },
-    "./context/slack-channel-live-evidence-reader-v1": {
-      "types": "./dist/context/slack-channel-live-evidence-reader-v1.d.ts",
-      "import": "./dist/context/slack-channel-live-evidence-reader-v1.js"
-    },
-    "./organization-control-plane/application/slack-public-channel-context-capability-v1": {
-      "types": "./dist/organization-control-plane/application/slack-public-channel-context-capability-v1.d.ts",
-      "import": "./dist/organization-control-plane/application/slack-public-channel-context-capability-v1.js"
-    },
-    "./context/slack-context-source-v1": {
-      "types": "./dist/context/slack-context-source-v1.d.ts",
-      "import": "./dist/context/slack-context-source-v1.js"
-    },
-    "./context/slack-context-transport-v1": {
-      "types": "./dist/context/slack-context-transport-v1.d.ts",
-      "import": "./dist/context/slack-context-transport-v1.js"
-    },
     "./organization-protocol/private-slack-block-approval-record-input-v1": {
       "types": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.d.ts",
       "import": "./dist/organization-protocol/private-slack-block-approval-record-input-v1.js"
@@ -101,10 +85,6 @@
     "./setup/initial-owner-slack-setup-v1": {
       "types": "./dist/setup/initial-owner-slack-setup-v1.d.ts",
       "import": "./dist/setup/initial-owner-slack-setup-v1.js"
-    },
-    "./context/slack-context-current-identity-v1": {
-      "types": "./dist/context/slack-context-current-identity-v1.d.ts",
-      "import": "./dist/context/slack-context-current-identity-v1.js"
     }
   },
   "files": [
@@ -119,16 +99,17 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@echo-brain/organization-control-plane": "0.0.0-dev.0",
-    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
-    "@echo-brain/provider-slack-client": "0.0.0-dev.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0",
+    "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
+    "@echo-brain/organization-control-plane": "0.0.0-dev.0",
     "@echo-brain/organization-processing": "0.0.0-dev.0",
     "@echo-brain/organization-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-record": "0.0.0-dev.0",
+    "@echo-brain/provider-runtime": "0.0.0-dev.0",
+    "@echo-brain/provider-slack-client": "0.0.0-dev.0",
     "better-sqlite3": "12.10.0",
-    "openid-client": "6.8.4",
-    "@echo-brain/organization-api": "0.0.0-dev.0"
+    "openid-client": "6.8.4"
   },
   "engines": {
     "node": "22.22.1",

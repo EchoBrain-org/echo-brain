@@ -298,6 +298,22 @@ describe("authority offline recovery verifier", () => {
     expect((await run(second)).status).toBe(1);
   });
 
+  it("refuses a restored Confluence grant store without qualifying or changing its contents", async () => {
+    const cleanData = await writeFixture();
+    const store = join(cleanData, "state", "confluence-person-connections.sqlite");
+    const synthetic = "synthetic stale Confluence connection metadata must not be reused";
+    writeFileSync(store, synthetic, { mode: 0o600 });
+    const before = lstatSync(store);
+
+    const result = await run(cleanData);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("authority offline recovery verification failed\n");
+    expect(readFileSync(store, "utf8")).toBe(synthetic);
+    expect(lstatSync(store).mtimeMs).toBe(before.mtimeMs);
+  });
+
   it("refuses a state SQLite symlink before lineage or SQLite inspection", async () => {
     const cleanData = await writeFixture();
     const database = join(cleanData, "state", "authority.sqlite");

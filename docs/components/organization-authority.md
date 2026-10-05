@@ -85,6 +85,7 @@ under
 The rest of the closure is the shared `federation-protocol`,
 `organization-protocol` and `organization-api` contracts plus the composed
 providers: `providers/granola`, `providers/jira`, `providers/jira/client`,
+`providers/confluence`, `providers/confluence/client`,
 `providers/openrouter`, `providers/synthetic-demo`, `providers/slack/server`
 and `providers/slack/client`. Only `organization-authority` is a process entry
 point; the others are libraries linked into the Authority runtime. The

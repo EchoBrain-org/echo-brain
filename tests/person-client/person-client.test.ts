@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import type { OrganizationPersonSessionV2, PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_ROUTE_HEADER_V5, type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -145,6 +145,19 @@ const RECORD_CITATION = {
   citation: { kind: "approved_record", atom_id: `sha256:${"c".repeat(64)}`, record_sha256: `sha256:${"b".repeat(64)}`, policy_id: "organization-member-readable-person-v2" },
   kind: "decision", label: "Pricing review", visibility: "team",
 };
+
+/** A valid V6 live-source answer with a Confluence page citation. */
+function v6PageAnswer(input: { readonly scope?: unknown } = {}) {
+  return {
+    schema_version: 6, kind: 'echo-clean-person-answer-v6', scope: input.scope ?? { kind: 'global' }, outcome: 'answered',
+    citations: [{
+      citation: { kind: 'page', tool_id: 'confluence', external_scope_id: '11111111-2222-4333-8444-555555555555', page_id: '12345', section_id: 'evt-readiness', version: '7',
+        permalink: 'https://example.atlassian.net/wiki/spaces/ECHO/pages/12345/EVT-readiness', text_sha256: `sha256:${'a'.repeat(64)}` },
+      kind: 'page', label: 'EVT readiness', visibility: 'team',
+    }],
+    parts: [{ question: 'Question', status: 'answered', statements: [{ text: 'EVT is ready.', citation_indexes: [0], private: false }] }],
+  };
+}
 
 async function withHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-")));
@@ -820,6 +833,93 @@ describe("Person client", () => {
       await client.installSession('https://authority.example', ROTATED_SESSION);
       await expect(client.ask('What changed?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v4', direct: { citation_indexes: [0] } });
       expect(sawV3).toBe(true);
+    });
+  });
+
+  it('uses V5 for --live, preserves the project scope, and validates V6 page citations', async () => {
+    await withHome(async home => {
+      const projectId = 'prj_00000000-0000-4000-8000-000000000019' as `prj_${string}`;
+      const client = fixtureClient(home, async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+        expect(path).toBe('/v5/person/ask');
+        expect(JSON.parse(String(init?.body))).toEqual({ schema_version: 3, question: 'Are we ready for EVT?', project_id: projectId });
+        return json(v6PageAnswer({ scope: { kind: 'project', project_id: projectId } }));
+      });
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await expect(client.askWithLiveSources('Are we ready for EVT?', projectId)).resolves.toMatchObject({
+        kind: 'echo-clean-person-answer-v6', scope: { kind: 'project', project_id: projectId }, citations: [{ kind: 'page', citation: { tool_id: 'confluence', page_id: '12345' } }],
+      });
+    });
+  });
+
+  it('falls back from --live only for an unsupported V5 route, never an Authority error', async () => {
+    await withHome(async home => {
+      const paths: string[] = [];
+      const client = fixtureClient(home, async input => {
+        const path = new URL(String(input)).pathname; paths.push(path);
+        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+        if (path === '/v5/person/ask') return json({ error: { code: 'not_found', message: 'route absent' } }, 404);
+        if (path === '/v4/person/ask') return json({ ...v4Answer({ citations: [RECORD_CITATION] }), kind: 'echo-clean-person-answer-v5', schema_version: 5 });
+        throw new Error(`unexpected path ${path}`);
+      });
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await expect(client.askWithLiveSources('What is current?')).resolves.toMatchObject({ kind: 'echo-clean-person-answer-v5' });
+      expect(paths).toEqual(['/v1/authority-descriptor', '/v5/person/ask', '/v4/person/ask']);
+    });
+    await withHome(async home => {
+      const paths: string[] = [];
+      const client = fixtureClient(home, async input => {
+        const path = new URL(String(input)).pathname; paths.push(path);
+        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+        return json({ error: { code: 'unauthorized', message: 'not permitted' } }, 401);
+      });
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code: 'unauthorized', status: 401 });
+      expect(paths).toEqual(['/v1/authority-descriptor', '/v5/person/ask']);
+    });
+  });
+
+  it.each([
+    { name: 'a matched-route provider 404', marker: '5', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
+    { name: 'an unknown route marker', marker: 'future', body: { error: { code: 'not_found', message: 'request failed' } }, code: 'not_found' },
+    { name: 'a malformed unmarked 404', marker: undefined, body: { unsupported: true }, code: 'invalid_response' },
+    { name: 'an unmarked 404 with another error code', marker: undefined, body: { error: { code: 'unavailable', message: 'request failed' } }, code: 'unavailable' },
+  ])('does not replay live Ask without pages after $name', async ({ marker, body, code }) => {
+    await withHome(async home => {
+      const paths: string[] = [];
+      const client = fixtureClient(home, async input => {
+        const path = new URL(String(input)).pathname; paths.push(path);
+        if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+        expect(path).toBe('/v5/person/ask');
+        const response = json(body, 404);
+        if (marker !== undefined) response.headers.set(PERSON_ANSWER_ROUTE_HEADER_V5, marker);
+        return response;
+      });
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await expect(client.askWithLiveSources('What is current?')).rejects.toMatchObject({ code, status: 404 });
+      expect(paths).toEqual(['/v1/authority-descriptor', '/v5/person/ask']);
+    });
+  });
+
+  it('routes the CLI --live flag to V5 and refuses it with --tickets before transport', async () => {
+    await withHome(async home => {
+      await installFixtureSession(home);
+      const result = await runCli(['ask', '--question', 'Are we ready for EVT?', '--live'], {
+        home_directory: home, now: () => NOW,
+        fetch: async (input) => {
+          const path = new URL(String(input)).pathname;
+          if (path === '/v1/authority-descriptor') return json({ authority_descriptor: authorityDescriptor() });
+          expect(path).toBe('/v5/person/ask'); return json(v6PageAnswer());
+        },
+      });
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, result: { kind: 'echo-clean-person-answer-v6' } });
+      let called = false;
+      const rejected = await runCli(['ask', '--question', 'Are we ready for EVT?', '--live', '--tickets'], {
+        home_directory: home, now: () => NOW, fetch: async () => { called = true; throw new Error('must not call'); },
+      });
+      expect(rejected.code).toBe(1); expect(called).toBe(false); expect(JSON.parse(rejected.stderr)).toMatchObject({ ok: false, action: 'ask' });
     });
   });
 

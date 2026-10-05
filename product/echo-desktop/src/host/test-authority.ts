@@ -63,7 +63,7 @@ const OPEN_ATOMS_BYTES = 32 * 1024;
 const ATOM_PART_BYTES = 3 * 1024;
 
 /** The modes where Ari has added notes, uploads and approved meetings of their own; `mine-empty` has none yet. */
-const MINE_MODES = new Set(['mine', 'owner-mine', 'mine-empty', 'mine-fails-once', 'mine-meetings-held', 'mine-unauthorized']);
+const MINE_MODES = new Set(['mine', 'owner-mine', 'mine-empty', 'mine-fails-once', 'mine-meetings-held', 'mine-unauthorized', 'mine-live-missing', 'mine-live-unavailable']);
 const PRICING_REVIEW = `sha256:${'7'.repeat(64)}`;
 const BEACON_KICKOFF = `sha256:${'8'.repeat(64)}`;
 const PRICING_MEMO = `doc_${'9'.repeat(64)}`;
@@ -85,6 +85,8 @@ interface Store {
 
 const JIRA_CLOUD = '11111111-2222-4333-8444-555555555555';
 const JIRA_CONNECT_LINK = 'https://connect.nango.example/jira';
+const CONFLUENCE_CLOUD = '22222222-3333-4444-8555-666666666666';
+const CONFLUENCE_CONNECT_LINK = 'https://connect.nango.example/confluence';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -242,7 +244,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   }
   /** Changes applied, by request id: a resend of the same one gets the same receipt, anything else under it conflicts. */
   const jiraMappings = new Map<string, { revision: string | null; mapping: { cloud_id: string; project_id: string; project_key: string } | null }>();
+  const confluenceMappings = new Map<string, { revision: string | null; mapping: { cloud_id: string; space_ids: string[] } | null }>();
+  if (mode === 'confluence-member-read') confluenceMappings.set(desktop.projects[1]!.project_id, { revision: '00000000-0000-4000-8000-000000000071', mapping: { cloud_id: CONFLUENCE_CLOUD, space_ids: ['100'] } });
+  if (mode === 'confluence-spaces-unavailable') confluenceMappings.set(desktop.projects[0]!.project_id, { revision: '00000000-0000-4000-8000-000000000072', mapping: { cloud_id: CONFLUENCE_CLOUD, space_ids: ['100'] } });
   let jiraMappingWrites = 0;
+  let confluenceMappingWrites = 0;
   const applied = new Map<string, { command: string; receipt: Record<string, unknown>; status: number }>();
   /** The organization's employees, as their owner lists them. */
   const employees = [
@@ -276,7 +282,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // posts the new session to the loopback receiver the sign-in began with.
   const openAuthorizationUrl = (address: string): boolean => {
     // A tool's consent page: the person is "in the browser" until the attempt's reads settle it.
-    if (address === JIRA_CONNECT_LINK) return true;
+    if (address === JIRA_CONNECT_LINK || address === CONFLUENCE_CONNECT_LINK) return true;
     const url = new URL(address);
     const state = url.searchParams.get('state') ?? '';
     const handoff = url.origin === IDENTITY_PROVIDER ? handoffs.get(state) : undefined;
@@ -428,7 +434,9 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
   // Your connections to the organization's tools, as Tools changes them.
   let slackLinked = true;
   let jiraLinked = false;
+  let confluenceLinked = false;
   let jiraAttempt: { attempt: string; expires_at: string; status: string; failure_reason: string | null; reads: number } | null = null;
+  let confluenceAttempt: { attempt: string; expires_at: string; status: string; failure_reason: string | null; reads: number } | null = null;
 
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input instanceof Request ? input.url : input));
@@ -473,6 +481,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         tools: [
           slackLinked ? tool('slack', 'Slack', 'linked', 'T0123ABCD', 'U0123ABCD') : tool('slack', 'Slack', 'unlinked', 'T0123ABCD', null),
           tool('jira', 'Jira', jiraLinked ? 'linked' : mode === 'tools-revoked' ? 'revoked' : 'unlinked', JIRA_CLOUD, jiraLinked ? 'atlassian-account-1' : null),
+          tool('confluence', 'Confluence', confluenceLinked ? 'linked' : 'unlinked', CONFLUENCE_CLOUD, confluenceLinked ? 'atlassian-account-1' : null),
           { tool_id: 'granola', display_name: 'Granola', availability: 'unavailable', personal_status: 'unavailable',
             external_scope_id: null, external_subject_id: null, organization_setup: null },
         ],
@@ -498,6 +507,26 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     if (method === 'POST' && path === '/v1/person/tools/jira/disconnect') {
       jiraLinked = false;
+      return json({ schema_version: 1, connected: false });
+    }
+    // Confluence follows the same person-scoped browser lifecycle as Jira.
+    if (method === 'POST' && path === '/v1/person/tools/confluence/connect') {
+      if (JSON.stringify(body) !== '{"schema_version":1}') return failure('invalid_request', 400);
+      confluenceAttempt = { attempt: randomUUID(), expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), status: 'pending', failure_reason: null, reads: 0 };
+      return json({ schema_version: 1, attempt: confluenceAttempt.attempt, connect_link: CONFLUENCE_CONNECT_LINK, expires_at: confluenceAttempt.expires_at });
+    }
+    if (method === 'POST' && (path === '/v1/person/tools/confluence/status' || path === '/v1/person/tools/confluence/cancel')) {
+      if (!confluenceAttempt || body?.attempt !== confluenceAttempt.attempt) return failure('not_found', 404);
+      if (path.endsWith('/cancel')) {
+        if (confluenceAttempt.status === 'pending') confluenceAttempt.status = 'cancelled';
+      } else if (confluenceAttempt.status === 'pending' && ++confluenceAttempt.reads >= 2) {
+        confluenceAttempt.status = 'complete'; confluenceLinked = true;
+      }
+      const { attempt, expires_at, status, failure_reason } = confluenceAttempt;
+      return json({ schema_version: 1, attempt, expires_at, status, failure_reason });
+    }
+    if (method === 'POST' && path === '/v1/person/tools/confluence/disconnect') {
+      confluenceLinked = false;
       return json({ schema_version: 1, connected: false });
     }
     if (method === 'POST' && path === '/v2/person/external-identities/slack/disconnect') {
@@ -708,6 +737,28 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const value = { revision: randomUUID(), mapping: body?.jira_project === null ? null : { cloud_id: JIRA_CLOUD, project_id: '10000', project_key: String(body?.jira_project) } };
       jiraMappings.set(projectId, value);
       if (mode === 'jira-project-reply-lost' && jiraMappingWrites === 1) return failure('unavailable', 503);
+      return json({ schema_version: 1, project_id: projectId, ...value });
+    }
+    if (method === 'POST' && path === '/v1/person/tools/confluence/spaces/list') {
+      if (mode === 'confluence-spaces-unavailable') return failure('unavailable', 503);
+      if (body?.schema_version !== 1 || (body?.cursor !== undefined && body?.cursor !== 'next-spaces')) return failure('invalid_request', 400);
+      return json(body?.cursor === 'next-spaces'
+        ? { schema_version: 1, items: [{ id: '300', key: 'ENG', name: 'Engineering' }], next_cursor: null }
+        : { schema_version: 1, items: [{ id: '100', key: 'ECHO', name: 'ECHO product' }, { id: '200', key: 'OPS', name: 'Operations' }], next_cursor: 'next-spaces' });
+    }
+    if (method === 'POST' && (path === '/v1/person/tools/confluence/project/read' || path === '/v1/person/tools/confluence/project/set')) {
+      const projectId = String(body?.project_id); const role = roleOf(projectId, session.membership_id);
+      if (!role) return failure('not_found', 404);
+      const current = confluenceMappings.get(projectId) ?? { revision: null, mapping: null };
+      if (path.endsWith('/read')) return json({ schema_version: 1, project_id: projectId, ...current });
+      if (role !== 'lead' || body?.schema_version !== 1 || typeof body?.request_id !== 'string') return failure('unauthorized', 401);
+      confluenceMappingWrites += 1;
+      if ((mode === 'confluence-project-conflict' && confluenceMappingWrites === 1) || body?.expected_revision !== current.revision) return failure('conflict', 409);
+      const space_ids = body?.space_ids;
+      if (space_ids !== null && (!Array.isArray(space_ids) || space_ids.length < 1 || space_ids.length > 20 || !space_ids.every(id => typeof id === 'string' && /^[1-9][0-9]{0,19}$/.test(id)))) return failure('invalid_request', 400);
+      const value = { revision: randomUUID(), mapping: space_ids === null ? null : { cloud_id: CONFLUENCE_CLOUD, space_ids } };
+      confluenceMappings.set(projectId, value);
+      if (mode === 'confluence-project-reply-lost' && confluenceMappingWrites === 1) return failure('unavailable', 503);
       return json({ schema_version: 1, project_id: projectId, ...value });
     }
     if (method === 'POST' && path === '/v1/person/projects/archive') {
@@ -932,7 +983,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         extraction_detail: null, extractor: null, extracted_text_bytes: 0,
       });
     }
-    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask')) {
+    if (method === 'POST' && (path === '/v3/person/ask' || path === '/v4/person/ask' || path === '/v5/person/ask')) {
+      // Older accepted servers and unconfigured live connectors must not
+      // prevent Mine from reading the ordinary retained-context Ask route.
+      if (path !== '/v3/person/ask') {
+        if (mode === 'mine-live-missing') return failure('not_found', 404);
+        if (mode === 'mine-live-unavailable') return failure('unavailable', 503);
+      }
       let request: ReturnType<Contract['validatePersonAnswerRequestV3']>;
       try {
         request = (await contract()).validatePersonAnswerRequestV3(body);
@@ -946,9 +1003,10 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : request.mine ? { kind: 'mine' } : { kind: 'global' };
       const question = request.question;
       const tickets = path === '/v4/person/ask';
-      const answer = { ...desktop.answer, ...(tickets ? { schema_version: 5, kind: 'echo-clean-person-answer-v5' } : {}) };
+      const live = path === '/v5/person/ask';
+      const answer = { ...desktop.answer, ...(live ? { schema_version: 6, kind: 'echo-clean-person-answer-v6' } : tickets ? { schema_version: 5, kind: 'echo-clean-person-answer-v5' } : {}) };
       if (mode === 'ask-ticket') {
-        const included = tickets && (scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null));
+        const included = (tickets || live) && (scope.kind === 'global' || (scope.kind === 'project' && jiraMappings.get(scope.project_id!)?.mapping != null));
         return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
           citations: included ? [{ kind: 'ticket', label: 'ECHO-7 · Jira launch', visibility: 'only_me', citation: {
             kind: 'ticket', tool_id: 'jira', external_scope_id: JIRA_CLOUD, ticket_id: '10007',
@@ -957,6 +1015,19 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
             ? [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }]
             : [], ...(included ? {} : { gap: 'No accessible Jira ticket was found.' }) }],
+        });
+      }
+      const pageTool = mode === 'ask-confluence' ? 'confluence' : mode.startsWith('ask-page-') ? mode.slice(9) : undefined;
+      if (pageTool !== undefined) {
+        const included = live && (scope.kind === 'global' || (pageTool === 'confluence' && scope.kind === 'project' && confluenceMappings.get(scope.project_id!)?.mapping != null));
+        return json({ ...answer, scope, outcome: included ? 'answered' : 'not_found',
+          citations: included ? [{ kind: 'page', label: 'EVT readiness · ECHO product', visibility: 'only_me', citation: {
+            kind: 'page', tool_id: pageTool, external_scope_id: CONFLUENCE_CLOUD, page_id: '12345', section_id: 'evt-readiness', version: '7',
+            permalink: pageTool === 'confluence' ? 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=12345' : `https://${pageTool}.example.test/pages/12345?view=current`, text_sha256: sha('EVT readiness'),
+          } }] : [],
+          parts: [{ question, status: included ? 'answered' : 'not_found', statements: included
+            ? [{ text: 'The Confluence EVT readiness page is current.', citation_indexes: [0], private: true }]
+            : [], ...(included ? {} : { gap: 'No accessible Confluence page was found.' }) }],
         });
       }
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
@@ -1006,7 +1077,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       if (mode === 'ask-project-empty' && scope.kind === 'project') {
         const offScope = question.startsWith('What is the weather');
         return json({
-          schema_version: tickets ? 5 : 4, kind: tickets ? 'echo-clean-person-answer-v5' : 'echo-clean-person-answer-v4', scope, outcome: offScope ? 'off_scope' : 'not_found', citations: [],
+          schema_version: answer.schema_version, kind: answer.kind, scope, outcome: offScope ? 'off_scope' : 'not_found', citations: [],
           parts: [{ question, status: 'not_found', statements: [], gap: "I couldn't find this in the sources you can access." }],
         });
       }

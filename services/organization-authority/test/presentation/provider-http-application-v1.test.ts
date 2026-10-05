@@ -290,7 +290,7 @@ describe("provider identity and approval HTTP transport V1", () => {
   });
 
   it.each([
-    { name: "JSON UTF-8 bytes", response: { status: 200, body: "é".repeat(32 * 1024) } },
+    { name: "JSON UTF-8 bytes", response: { status: 200, body: "é".repeat(64 * 1024) } },
     { name: "HTML UTF-8 bytes", response: { status: 200, body: "é".repeat(8193), content_type: "text/html" } },
     { name: "raw bytes", response: { status: 200, raw_body: new Uint8Array(64 * 1024 + 1), content_type: "application/octet-stream" } },
     { name: "untyped nonempty bytes", response: { status: 200, raw_body: new Uint8Array([65]) } },

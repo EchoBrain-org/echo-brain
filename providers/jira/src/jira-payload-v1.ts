@@ -1,57 +1,17 @@
+import { normalizeAtlassianDocumentTextV1 } from '@echo-brain/provider-runtime/atlassian-document-text-v1';
+import { atlassianSiteOriginV1, verifyAtlassianConnectionV1, type AtlassianConnectionCheckInputV1 } from '@echo-brain/provider-runtime/atlassian-connection-verification-v1';
 import { createHash } from 'node:crypto';
 import type { PersonTicketCitationV1 } from '@echo-brain/organization-api';
 import type { PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { JiraCloudTransportV1 } from './jira-cloud-transport-v1.js';
-import { JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraBoundText, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
+import { JIRA_PERSON_PROVIDER_V1, JIRA_ID, JIRA_PROJECT_KEY, JIRA_TICKET_KEY, jiraArray, jiraBoundText, jiraDay, jiraFailure, jiraRecord, jiraString } from './jira-validation-v1.js';
 
 export const jiraTextDigest = (text: string): `sha256:${string}` => `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`;
 
-export function jiraSiteOrigin(value: unknown): string {
-  const raw = jiraString(value, 256);
-  let url: URL;
-  try { url = new URL(raw); } catch { jiraFailure('invalid_output'); }
-  if (url.protocol !== 'https:' || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$/.test(url.hostname) ||
-      url.username !== '' || url.password !== '' || url.port !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '' ||
-      (raw !== url.origin && raw !== `${url.origin}/`)) jiraFailure('invalid_output');
-  return url.origin;
-}
+export function jiraSiteOrigin(value: unknown): string { return atlassianSiteOriginV1(JIRA_PERSON_PROVIDER_V1, value); }
 
-/**
- * The one connection check: exactly one Jira resource for the bound cloudid
- * with both read scopes, its site, then the Atlassian account. The account
- * check (by default, the bound subject) runs before the account-state check.
- */
-export async function verifyJiraConnectionV1(transport: JiraCloudTransportV1, input: {
-  readonly signal?: AbortSignal;
-  readonly expected_origin?: string;
-  readonly require_account?: (account_id: string) => void;
-} = {}): Promise<{ readonly origin: string; readonly account_id: string }> {
-  const { signal } = input;
-  const { external_scope_id: cloudid, external_subject_id: subject } = transport.binding;
-  signal?.throwIfAborted();
-  const resources = jiraArray(await transport.request({ path: '/oauth/token/accessible-resources', signal }), 256);
-  signal?.throwIfAborted();
-  const matches: Record<string, unknown>[] = [];
-  for (const raw of resources) {
-    const resource = jiraRecord(raw);
-    jiraString(resource.id, 256);
-    const scopes = jiraArray(resource.scopes, 256).map(scope => jiraString(scope, 128));
-    // A cloudid may also identify a Confluence resource. Never choose the first resource.
-    if (resource.id === cloudid && scopes.some(scope => scope.endsWith(':jira') || scope.includes(':jira-'))) matches.push(resource);
-  }
-  if (matches.length !== 1) jiraFailure('unauthorized');
-  const selected = matches[0]!;
-  const scopes = selected.scopes as readonly string[];
-  if (!['read:jira-work', 'read:jira-user'].every(scope => scopes.includes(scope))) jiraFailure('unauthorized');
-  const origin = jiraSiteOrigin(selected.url);
-  if (input.expected_origin !== undefined && input.expected_origin !== origin) jiraFailure('stale_access_state');
-  const myself = jiraRecord(await transport.request({ path: `/ex/jira/${cloudid}/rest/api/3/myself`, signal }));
-  signal?.throwIfAborted();
-  const account_id = jiraString(myself.accountId);
-  if (input.require_account !== undefined) input.require_account(account_id);
-  else if (account_id !== subject) jiraFailure('unauthorized');
-  if (myself.active !== true || myself.accountType !== 'atlassian') jiraFailure('unauthorized');
-  return { origin, account_id };
+export function verifyJiraConnectionV1(transport: JiraCloudTransportV1, input: AtlassianConnectionCheckInputV1 = {}) {
+  return verifyAtlassianConnectionV1(JIRA_PERSON_PROVIDER_V1, transport, input);
 }
 
 /** Validate Jira's returned self link, but never use it as a fetch target. */
@@ -74,52 +34,6 @@ export function jiraProjectMatches(project: ReturnType<typeof parseJiraProject>,
   return project.id === selection || project.key === selection || project.keys.includes(selection);
 }
 
-/** Plain text extraction for the supported ADF subset; never hydrate cards, links or media. */
-function jiraDescription(value: unknown): string {
-  if (value === null) return '';
-  const doc = jiraRecord(value);
-  if (doc.type !== 'doc' || doc.version !== 1) jiraFailure('invalid_output');
-  let nodes = 0; let bytes = 0;
-  const blocks = new Set(['doc', 'paragraph', 'heading', 'blockquote', 'bulletList', 'orderedList', 'listItem', 'taskList', 'codeBlock', 'table', 'tableRow', 'tableCell', 'tableHeader', 'panel']);
-  function walk(value: unknown, depth: number): string {
-    if (++nodes > 4096 || depth > 32) jiraFailure('invalid_output');
-    const node = jiraRecord(value); const type = jiraString(node.type, 64);
-    if (type === 'text') {
-      if (typeof node.text !== 'string') jiraFailure('invalid_output');
-      bytes += Buffer.byteLength(node.text, 'utf8');
-      if (bytes > 256 * 1024 || node.content !== undefined) jiraFailure('invalid_output');
-      if (node.marks !== undefined) for (const mark of jiraArray(node.marks, 32)) jiraString(jiraRecord(mark).type, 64);
-      return node.text;
-    }
-    if (type === 'hardBreak') return '\n';
-    if (type === 'rule') return '\n';
-    if (type === 'inlineCard') {
-      const attrs = jiraRecord(node.attrs);
-      // Preserve the provider's URL as text; never fetch card metadata or its target.
-      if (attrs.data !== undefined || node.content !== undefined) jiraFailure('invalid_output');
-      const text = jiraString(attrs.url, 8192);
-      bytes += Buffer.byteLength(text, 'utf8');
-      if (bytes > 256 * 1024) jiraFailure('invalid_output');
-      return text;
-    }
-    if (type === 'mention' || type === 'emoji' || type === 'status') {
-      const attrs = jiraRecord(node.attrs);
-      return jiraString(attrs.text ?? (type === 'emoji' ? attrs.shortName : undefined), 512);
-    }
-    if (type === 'taskItem') {
-      const state = jiraRecord(node.attrs).state;
-      // Checklist completion is evidence, distinct from the issue's workflow status.
-      if (state !== 'TODO' && state !== 'DONE') jiraFailure('invalid_output');
-      const text = jiraArray(node.content ?? [], 4096).map(child => walk(child, depth + 1)).join('');
-      return `[${state === 'DONE' ? 'x' : ' '}] ${text}\n`;
-    }
-    if (!blocks.has(type)) jiraFailure('invalid_output');
-    const content = jiraArray(type === 'doc' ? node.content : node.content ?? [], 4096);
-    const text = content.map(child => walk(child, depth + 1)).join('');
-    return type === 'doc' ? text : `${text}\n`;
-  }
-  return walk(doc, 0).trim();
-}
 
 export interface ParsedJiraIssueV1 {
   readonly id: string;
@@ -148,7 +62,7 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   const status = jiraString(jiraRecord(fields.status).name, 128);
   const owner = fields.assignee === null ? undefined : jiraString(jiraRecord(fields.assignee).displayName, 128);
   const due_at = fields.duedate === null ? undefined : jiraDay(fields.duedate);
-  const content = input.inventory ? undefined : jiraBoundText(`${key}: ${fields.summary}\n\n${jiraDescription(fields.description)}`.trim(), 3072);
+  const content = input.inventory ? undefined : jiraBoundText(`${key}: ${fields.summary}\n\n${(fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1).text.trim())}`.trim(), 3072);
   const citation: PersonTicketCitationV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: input.cloudid,
     ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: jiraTextDigest(content?.text ?? '') });
   return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(),

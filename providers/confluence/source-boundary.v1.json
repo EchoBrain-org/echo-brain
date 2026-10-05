@@ -1,0 +1,25 @@
+{
+  "boundary_version":1,
+  "kind":"echo-workspace-source-boundary",
+  "name":"@echo-brain/provider-confluence",
+  "workspace":true,
+  "boundary_root":"providers/confluence",
+  "source_root":"providers/confluence/src",
+  "package_json":"providers/confluence/package.json",
+  "entry_points":[
+    "providers/confluence/src/confluence-person-live-evidence-reader-v1.ts",
+    "providers/confluence/src/confluence-person-connection-v1.ts",
+    "providers/confluence/src/confluence-connection-store-v1.ts",
+    "providers/confluence/src/confluence-nango-v1.ts",
+    "providers/confluence/src/confluence-project-mapping-store-v1.ts",
+    "providers/confluence/src/confluence-person-connection-http-application-v1.ts"
+  ],
+  "owned_source_paths":["providers/confluence/src/**"],
+  "allowed_internal_paths":["providers/confluence/src/**"],
+  "allowed_workspace_packages":["@echo-brain/federation-protocol","@echo-brain/organization-api","@echo-brain/organization-authority-kernel","@echo-brain/provider-runtime","@echo-brain/provider-confluence-client"],
+  "allowed_external_packages":["better-sqlite3"],
+  "allowed_node_builtins":["crypto"],
+  "runtime_assets":[],
+  "layer_rules":[{"name":"provider-confluence-implementation","from":"providers/confluence/src/**","allowed_imports":["providers/confluence/src/**"],"allowed_workspace_packages":["@echo-brain/federation-protocol","@echo-brain/organization-api","@echo-brain/organization-authority-kernel","@echo-brain/provider-runtime","@echo-brain/provider-confluence-client"],"allowed_external_packages":["better-sqlite3"],"allowed_node_builtins":["crypto"]}],
+  "component_index_contract":{"canonical_components":[{"name":"Confluence person live evidence reader","path":"providers/confluence/src/confluence-person-live-evidence-reader-v1.ts","export":"createConfluencePersonLiveEvidenceReaderV1"},{"name":"Confluence person connection HTTP application","path":"providers/confluence/src/confluence-person-connection-http-application-v1.ts","export":"createConfluencePersonConnectionHttpApplicationV1"}],"compatibility_entrypoints":[],"retired_source_paths":[]}
+}

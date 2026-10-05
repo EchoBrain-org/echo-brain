@@ -13,6 +13,7 @@ import { bootstrapOrganizationAuthorityState } from '../src/composition/organiza
 import { initializePersonSessionCredentials, issuePersonOnboardingInvitation } from '../src/composition/person-onboarding-service.js';
 import { startOrganizationAuthorityApiRuntime } from '../src/composition/organization-authority-api-runtime.js';
 import { openJiraPersonLiveRuntimeV1 } from '../src/composition/jira-person-live-runtime-v1.js';
+import type { PersonLiveConnectorDefinitionV1 } from '../src/application/ports/person-context-live-runtime-v1.js';
 import { createPersonDocumentApplicationV1 } from '../src/application/document-v1.js';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
 import { port } from './fixtures/connector-rehearsal-runtime-fixture-v1.js';
@@ -68,6 +69,82 @@ it('selects the Slack live runtime for authenticated Ask without inventing a dis
     expect(source).toHaveBeenCalledTimes(1);
     expect(await response.json()).toMatchObject({ citations: [] });
   } finally { await runtime.close(); }
+  expect(close).toHaveBeenCalledTimes(1);
+});
+
+it('registers two page connectors through one lifecycle, catalog, HTTP and versioned Ask path', async () => {
+  const f = await fixture();
+  const calls = ['handbook', 'runbooks'].map(source_id => ({ source_id, source: vi.fn(async () => undefined), tools: vi.fn(async () => []), close: vi.fn() }));
+  const live_connectors: PersonLiveConnectorDefinitionV1[] = calls.map(call => ({
+    descriptor: { source_id: call.source_id, selector: call.source_id, kind: 'page', tool_id: call.source_id, description: `Live ${call.source_id} pages`, metadata_only_list: true },
+    scopes: ['global', 'project'], minimum_response_version: 6,
+    open: authentication => ({ application: { source: call.source }, tools: call.tools, close: call.close,
+      connection_http: { routes: [{ route_id: call.source_id, method: 'POST', path: `/v1/person/tools/${call.source_id}/probe` }],
+        async accept(request) {
+          authentication.authenticateAccess({ access_token: request.headers.authorization!.slice('Bearer '.length) });
+          return { status: 200, body: { tool_id: call.source_id } };
+        },
+      },
+    }),
+  }));
+  const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
+  const runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors,
+    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } },
+  });
+  try {
+    const origin = `http://127.0.0.1:${runtime.address.port}`;
+    const token = await f.login(origin);
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+    expect((await fetch(`${origin}/v4/person/tools`, { headers })).status).toBe(200);
+    for (const call of calls) {
+      expect(call.tools).toHaveBeenCalledWith(token);
+      const response = await fetch(`${origin}/v1/person/tools/${call.source_id}/probe`, { method: 'POST', headers, body: '{}' });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ tool_id: call.source_id });
+    }
+    // Page-only registration cannot expose page citations through the older ticket response.
+    const ask = (version: number) => fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers, body: JSON.stringify({ schema_version: 3, question: 'What changed?' }) });
+    const legacy = await ask(4);
+    expect(legacy.status).toBe(200);
+    expect(await legacy.json()).toMatchObject({ schema_version: 5, citations: [] });
+    expect(calls.every(call => call.source.mock.calls.length === 0)).toBe(true);
+    const answer = await ask(5);
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toMatchObject({ schema_version: 6 });
+    for (const call of calls) expect(call.source).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ access_token: token }));
+  } finally { await runtime.close(); }
+  for (const call of calls) expect(call.close).toHaveBeenCalledTimes(1);
+});
+
+it.each([{ version: 4, schema: 5, mine: false }, { version: 4, schema: 5, mine: true }, { version: 5, schema: 6, mine: false }, { version: 5, schema: 6, mine: true }])('serves V$version Ask with no live connectors (mine=$mine)', async ({ version, schema, mine }) => {
+  const f = await fixture();
+  const generate = vi.fn(async () => ({ parts: [{ question: 'What changed?', needs: [{ need: 'changes', status: 'not_found', evidence: [] }], notes: '' }], actions: [{ tool: 'finish', args: {} }] }));
+  const runtime = await startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc,
+    answer_composition_generation: { structured_output: { generate }, generation: { generation_adapter_id: 'synthetic', planner_model: 'synthetic', answer_model: 'synthetic', timeout_ms: 1000 } },
+  });
+  try {
+    const origin = `http://127.0.0.1:${runtime.address.port}`;
+    const token = await f.login(origin);
+    const response = await fetch(`${origin}/v${version}/person/ask`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ schema_version: 3, question: 'What changed?', ...(mine ? { mine: true } : {}) }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ schema_version: schema, scope: { kind: mine ? 'mine' : 'global' }, citations: [] });
+    expect(generate).toHaveBeenCalled();
+  } finally { await runtime.close(); }
+});
+
+it('closes already opened connectors if a later registered connector fails to start', async () => {
+  const f = await fixture();
+  const close = vi.fn();
+  const definition = (source_id: string): Omit<PersonLiveConnectorDefinitionV1, 'open'> => ({
+    descriptor: { source_id, selector: source_id, kind: 'page', description: 'Live pages', metadata_only_list: true },
+    scopes: ['global'], minimum_response_version: 6,
+  });
+  await expect(startOrganizationAuthorityApiRuntime(f.config, { oidc_provider: f.oidc, live_connectors: [
+    { ...definition('first'), open: () => ({ application: { source: async () => undefined }, close }) },
+    { ...definition('second'), open: () => { throw new Error('connector startup failed'); } },
+  ] })).rejects.toThrow('connector startup failed');
   expect(close).toHaveBeenCalledTimes(1);
 });
 
@@ -165,7 +242,7 @@ it('answers one authenticated HTTP question from approved Granola records, a doc
     const rechecks = f.live.jiraFetch.mock.calls.filter(([url]) => new URL(String(url)).pathname.endsWith('/issue/bulkfetch'));
     expect(rechecks.length).toBeGreaterThanOrEqual(2);
     for (const [, request] of rechecks) expect(JSON.parse(String(request?.body)).issueIdsOrKeys).toEqual(['10001']);
-    expect(f.live.slackCalls.some(call => call.method === 'conversations.history' && call.query.oldest === f.live.ts && call.query.latest === f.live.ts)).toBe(true);
+    expect(f.live.slackCalls.some(call => call.method === 'revalidate')).toBe(true);
     expect(f.live.slackCalls.length).toBeLessThanOrEqual(48);
     const auditRows = f.database.prepare('SELECT body_json FROM authority_person_read_decision_audit_v2').all() as { body_json: string }[];
     const terminal = auditRows.map(row => JSON.parse(row.body_json) as Record<string, unknown>).find(row => row.kind === 'echo-person-agentic-ask-audit-v1');
@@ -186,7 +263,7 @@ it('omits a disconnected Slack source without provider calls or fabricated Slack
     const answer = validatePersonAnswerResponseV5(response.body);
     expect(answer.citations.map(item => item.kind).sort()).toEqual(['decision', 'document_passage', 'ticket']);
     expect(hasRequiredSourceCoverage(answer)).toBe(false);
-    expect(f.live.slackFetch).not.toHaveBeenCalled();
+    expect(f.live.slackRead).not.toHaveBeenCalled();
     expect(f.prompts.join('\n')).not.toContain(SLACK_TEXT);
     expect(f.generate).toHaveBeenCalledTimes(4);
   } finally { await f.close(); }
@@ -197,11 +274,11 @@ it('refuses unauthenticated Ask and revoked Slack reads without releasing provid
   try {
     const jiraBefore = f.live.jiraFetch.mock.calls.length;
     expect((await f.post('/v4/person/ask', { schema_version: 3, question: 'Launchscope' }, 'invalid-person-session')).status).toBe(401);
-    expect(f.live.jiraFetch).toHaveBeenCalledTimes(jiraBefore); expect(f.live.slackFetch).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
+    expect(f.live.jiraFetch).toHaveBeenCalledTimes(jiraBefore); expect(f.live.slackRead).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
     f.live.denySlack();
     const denied = await f.ask();
     expect(denied.status).toBe(401);
-    expect(f.live.slackFetch).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
+    expect(f.live.slackRead).not.toHaveBeenCalled(); expect(f.generate).not.toHaveBeenCalled();
     expect(JSON.stringify(denied.body)).not.toContain(SLACK_TEXT);
   } finally { await f.close(); }
 });

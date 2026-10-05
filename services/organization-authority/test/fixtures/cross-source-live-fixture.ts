@@ -1,9 +1,10 @@
-import { expect, vi } from 'vitest';
+import { vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
-import { createSlackContextTransportV1 } from '@echo-brain/provider-slack-server/context/slack-context-transport-v1';
-import { createSlackChannelLiveEvidenceReaderV1 } from '@echo-brain/provider-slack-server/context/slack-channel-live-evidence-reader-v1';
+import type { PersonSlackMessageCitationV1 } from '@echo-brain/organization-api';
+import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
+import { createHash } from 'node:crypto';
 import type { PersonSlackLiveRuntimeFactoryV1 } from '../../src/application/ports/person-slack-live-runtime-v1.js';
 import { fakeJiraCloudFetchV1, fakeJiraNangoV1 } from './fake-jira-v1.js';
 
@@ -12,7 +13,7 @@ export const JIRA_TEXT = 'Launchscope Jira ticket: ship after the security revie
 export const SLACK_TEAM = 'TCROSSSOURCE';
 export const SLACK_CHANNEL = 'CCROSSSOURCE';
 
-/** Fake provider wire responses, exercised through the real Slack and Jira readers. */
+/** An in-memory Slack reader beside fake Jira wire responses exercised through the real Jira reader. */
 export function crossSourceLiveFixture(actor: { readonly organization_id: string; readonly owner_principal_id: string; readonly owner_membership_id: string }) {
   const now = new Date();
   const ts = `${Math.floor(now.getTime() / 1000) - 60}.000001`;
@@ -24,33 +25,11 @@ export function crossSourceLiveFixture(actor: { readonly organization_id: string
   let revokeAfterRead = false;
   let jiraPermitted = true;
   let beforeSlackResponse: (() => Promise<void>) | undefined;
-  const calls: { method: string; query: Readonly<Record<string, string>> }[] = [];
-  const slackFetch = vi.fn(async (url: string, init: RequestInit) => {
-    const target = new URL(url);
-    expect(target.origin).toBe('https://slack.com');
-    expect(init.redirect).toBe('error');
-    const method = target.pathname.split('/').at(-1)!;
-    const query = Object.fromEntries(target.searchParams.entries());
-    calls.push({ method, query });
+  const calls: { method: string }[] = [];
+  /** Every Slack reader call, so tests can prove a refused source was never read. */
+  const slackRead = vi.fn(async (method: string) => {
+    calls.push({ method });
     await beforeSlackResponse?.();
-    if (method === 'auth.test') return Response.json({ ok: true, team_id: SLACK_TEAM, user_id: 'UBOTCROSS', url: 'https://crosssource.slack.com/' });
-    if (method === 'conversations.info') {
-      expect(query.channel).toBe(SLACK_CHANNEL);
-      return Response.json({ ok: true, channel: { id: SLACK_CHANNEL, name: 'launchscope', is_member: true, is_private: false, is_im: false, is_mpim: false, context_team_id: SLACK_TEAM } });
-    }
-    if (method === 'conversations.history') {
-      expect(query.channel).toBe(SLACK_CHANNEL);
-      expect(Number(query.limit)).toBeLessThanOrEqual(15);
-      if (revokeAfterRead) slackPermitted = false;
-      const selected = messages.filter(message => (query.oldest === undefined || Number(message.ts) >= Number(query.oldest)) && (query.latest === undefined || Number(message.ts) <= Number(query.latest))).slice(0, Number(query.limit));
-      return Response.json({ ok: true, messages: selected, has_more: false, response_metadata: { next_cursor: '' } });
-    }
-    if (method === 'chat.getPermalink') {
-      expect(query.channel).toBe(SLACK_CHANNEL);
-      expect(messages.some(message => message.ts === query.message_ts)).toBe(true);
-      return Response.json({ ok: true, channel: SLACK_CHANNEL, permalink: `https://crosssource.slack.com/archives/${SLACK_CHANNEL}/p${query.message_ts!.replace('.', '')}` });
-    }
-    throw new Error('Unexpected synthetic Slack endpoint');
   });
   const slackFactory: PersonSlackLiveRuntimeFactoryV1 = sessions => ({
     application: {
@@ -67,10 +46,7 @@ export function crossSourceLiveFixture(actor: { readonly organization_id: string
         const binding = { organization_id: actor.organization_id, principal_id: person.principal_id, membership_id: person.membership_id,
           tool_id: 'slack', external_scope_id: SLACK_TEAM, external_subject_id: 'UHUMANCROSS',
           read_grant_sha256: canonicalSha256({ fixture: 'explicit-fixed-public-channel-policy', channel: SLACK_CHANNEL, membership: person.membership_id }) };
-        const reader = createSlackChannelLiveEvidenceReaderV1({
-          transport: createSlackContextTransportV1({ binding, fetch: slackFetch }),
-          team_id: SLACK_TEAM, channel_id: SLACK_CHANNEL, expected_bot_user_id: 'UBOTCROSS', now: () => now,
-        });
+        const reader = inMemorySlackReader(binding, messages, slackRead, () => { if (revokeAfterRead) slackPermitted = false; });
         return createAuditedPersonLiveEvidenceSourceV1({ actor: binding, read_grant_sha256: binding.read_grant_sha256,
           access: { tool_id: 'slack', external_scope_id: SLACK_TEAM, external_subject_id: binding.external_subject_id, identity_status: 'linked', read_status: 'connected', read_capabilities: ['live_evidence'] },
           authorization: { assertCurrent: requireCurrent }, reader, audit: input.audit });
@@ -91,8 +67,59 @@ export function crossSourceLiveFixture(actor: { readonly organization_id: string
     body.fields.description = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: JIRA_TEXT }] }] };
     return Response.json(body);
   });
-  return { slackFactory, slackFetch, slackCalls: calls, ts, jira, jiraFetch,
+  return { slackFactory, slackRead, slackCalls: calls, ts, jira, jiraFetch,
     beforeSlackResponse(callback: () => Promise<void>) { beforeSlackResponse = callback; },
     disconnectSlack() { slackGranted = false; }, denySlack() { slackPermitted = false; },
     revokeSlackDuringRead() { revokeAfterRead = true; }, denyJira() { jiraPermitted = false; } };
+}
+
+type SlackFixtureMessage = { readonly ts: string; readonly user: string; readonly text: string };
+
+/** A fixed public channel's messages: at most two released per call, inventory without text, exact re-checks on revalidate. */
+function inMemorySlackReader(
+  binding: PersonConnectorReadBindingV1, messages: readonly SlackFixtureMessage[],
+  read: (method: string) => Promise<void>, afterProviderRead: () => void,
+): PersonLiveEvidenceReaderV1<PersonSlackMessageCitationV1> {
+  const citation = (message: SlackFixtureMessage): PersonSlackMessageCitationV1 => Object.freeze({
+    kind: 'slack_message', team_id: SLACK_TEAM, channel_id: SLACK_CHANNEL, message_ts: message.ts,
+    permalink: `https://crosssource.slack.com/archives/${SLACK_CHANNEL}/p${message.ts.replace('.', '')}`,
+    text_sha256: `sha256:${createHash('sha256').update(message.text, 'utf8').digest('hex')}`,
+  });
+  const issued = new Map<string, SlackFixtureMessage>();
+  const value = (message: SlackFixtureMessage, text: boolean): PersonLiveEvidenceValueV1<PersonSlackMessageCitationV1> => {
+    issued.set(canonicalSha256(citation(message)), message);
+    return Object.freeze({ citation: citation(message), handle: `slack_handle_${message.ts}`, label: '#launchscope', visibility: 'team',
+      occurred_at: new Date(Number(message.ts.split('.')[0]) * 1000).toISOString().slice(0, 10), ...(text ? { text: message.text } : {}) });
+  };
+  return Object.freeze({
+    binding,
+    validateCitation(raw: unknown) {
+      const message = issued.get(canonicalSha256(raw));
+      if (message === undefined) throw new AuthorityOperationError('unauthorized', 'Slack citation was not issued by this request');
+      return Object.freeze({ citation: citation(message), tool_id: 'slack', external_scope_id: SLACK_TEAM, coordinates: Object.freeze({ object_id: message.ts, container_id: SLACK_CHANNEL }) });
+    },
+    async search(input: { readonly query: string; readonly limit: number }) {
+      await read('search');
+      const terms = input.query.toLowerCase().split(/\s+/u);
+      const found = messages.filter(message => terms.every(term => message.text.toLowerCase().includes(term))).slice(0, Math.min(input.limit, 2));
+      afterProviderRead();
+      return Object.freeze({ items: Object.freeze(found.map(message => value(message, true))), truncated: true });
+    },
+    async list(input: { readonly limit: number }) {
+      await read('list');
+      afterProviderRead();
+      return Object.freeze({ items: Object.freeze(messages.slice(0, Math.min(input.limit, 2)).map(message => value(message, false))), truncated: false });
+    },
+    async open(input: { readonly handle: string }) {
+      await read('open');
+      const message = messages.find(candidate => `slack_handle_${candidate.ts}` === input.handle);
+      if (message === undefined) throw new AuthorityOperationError('not_found', 'Slack item is not available');
+      afterProviderRead();
+      return Object.freeze({ items: Object.freeze([value(message, true)]), truncated: false });
+    },
+    async revalidate(input: { readonly citations: readonly PersonSlackMessageCitationV1[] }) {
+      await read('revalidate');
+      for (const cited of input.citations) if (!issued.has(canonicalSha256(cited))) throw new AuthorityOperationError('unauthorized', 'Slack citation is no longer visible');
+    },
+  });
 }

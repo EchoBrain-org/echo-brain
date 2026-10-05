@@ -23,7 +23,7 @@ const slackCitation = (value: unknown): PersonSlackMessageCitationV1 => {
   if ((value as { readonly kind?: unknown } | null)?.kind !== 'slack_message') throw new Error('Slack citation kind is invalid');
   return value as PersonSlackMessageCitationV1;
 };
-const page = <C extends PersonLiveEvidenceCitationV1>(items: readonly PersonLiveEvidenceValueV1<C>[], next_cursor?: string): PersonLiveEvidencePageV1<C> => ({ items, truncated: false, ...(next_cursor === undefined ? {} : { next_cursor }) });
+const page = <C extends PersonLiveEvidenceCitationV1>(items: readonly PersonLiveEvidenceValueV1<C>[], next_cursor?: string, notice?: string): PersonLiveEvidencePageV1<C> => ({ items, truncated: false, ...(next_cursor === undefined ? {} : { next_cursor }), ...(notice === undefined ? {} : { notice }) });
 
 function fixture<C extends PersonLiveEvidenceCitationV1>(tool_id: string, initial: PersonLiveEvidencePageV1<C>) {
   let selected = initial;
@@ -157,6 +157,17 @@ describe('shared audited live evidence source V1', () => {
     await expect(source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
   });
 
+  it('releases a bounded adapter notice with evidence without retaining it in the audit', async () => {
+    const f = fixture('tickets', page([ticket()], undefined, 'Some live content could not be represented as text.'));
+    const result = await f.make().search({ query: 'ship' });
+    expect(result.notice).toBe('Some live content could not be represented as text.');
+    expect(JSON.stringify(f.releases)).not.toContain('could not be represented');
+    for (const notice of ['', ' leading', 'trailing ', 'line\nbreak', 'x'.repeat(1025)]) {
+      f.select(page([ticket()], undefined, notice));
+      await expect(f.make().search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
+    }
+  });
+
   it('commits empty releases without exposing the query or provider cursor and scopes continuations to their list', async () => {
     const f = fixture('tickets', page<PersonTicketCitationV1>([], 'private-provider-cursor'));
     const source = f.make();
@@ -216,6 +227,65 @@ describe('shared audited live evidence source V1', () => {
     await expect(f.make().search({ query: 'ship' })).rejects.toMatchObject({ code: 'invalid_output' });
     expect(getter).not.toHaveBeenCalled();
     expect(f.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('reserves request capacity across releases waiting for their audits', async () => {
+    const f = fixture('tickets', page([]));
+    const source = f.make();
+    vi.mocked(f.reader.search).mockImplementation(async input => page(Array.from({ length: 50 }, (_, index) =>
+      ticket(`Evidence for ${input.query} ${index}`, `ECHO-${input.query}-${index}`),
+    )));
+    let releaseAudit!: () => void;
+    const auditPending = new Promise<void>(resolve => { releaseAudit = resolve; });
+    f.audit.record.mockImplementation(async release => {
+      f.releases.push(release);
+      await auditPending;
+      return canonicalSha256(release);
+    });
+
+    const reads = Array.from({ length: 11 }, (_, index) => source.search({ query: `batch-${index}`, limit: 50 }));
+    await vi.waitFor(() => expect(f.reader.search).toHaveBeenCalledTimes(11));
+    releaseAudit();
+    const outcomes = await Promise.allSettled(reads);
+
+    expect(outcomes.filter(value => value.status === 'fulfilled')).toHaveLength(10);
+    expect(outcomes.filter(value => value.status === 'rejected')).toHaveLength(1);
+    expect(f.audit.record).toHaveBeenCalledTimes(10);
+  });
+
+  it('keeps a shared reservation until its last pending audit settles', async () => {
+    const f = fixture('tickets', page([]));
+    const source = f.make();
+    vi.mocked(f.reader.search).mockImplementation(async input => {
+      if (input.query === 'shared') return page([ticket('Shared evidence', 'ECHO-SHARED')]);
+      const count = input.query === 'fill-final' ? 12 : input.query === 'recovered' ? 11 : 50;
+      return page(Array.from({ length: count }, (_, index) => ticket(`Evidence ${input.query} ${index}`, `ECHO-${input.query}-${index}`)));
+    });
+    let failFirstAudit!: () => void;
+    let finishSecondAudit!: () => void;
+    const firstAudit = new Promise<void>(resolve => { failFirstAudit = resolve; });
+    const secondAudit = new Promise<void>(resolve => { finishSecondAudit = resolve; });
+    let audits = 0;
+    f.audit.record.mockImplementation(async release => {
+      f.releases.push(release);
+      audits += 1;
+      if (audits === 1) { await firstAudit; throw new Error('audit failed'); }
+      if (audits === 2) await secondAudit;
+      return canonicalSha256(release);
+    });
+
+    const first = source.search({ query: 'shared' });
+    const second = source.search({ query: 'shared' });
+    await vi.waitFor(() => expect(f.audit.record).toHaveBeenCalledTimes(2));
+    failFirstAudit();
+    await expect(first).rejects.toMatchObject({ code: 'unavailable' });
+
+    for (let index = 0; index < 10; index += 1) await source.search({ query: `fill-${index}`, limit: 50 });
+    await expect(source.search({ query: 'fill-final', limit: 12 })).rejects.toMatchObject({ code: 'invalid_output' });
+    finishSecondAudit();
+    await expect(second).resolves.toMatchObject({ items: [expect.objectContaining({ label: 'ECHO-SHARED' })] });
+    const recovered = await source.search({ query: 'recovered', limit: 11 });
+    expect(recovered.items).toHaveLength(11);
   });
 
   it('retains immutable release bytes while an asynchronous audit is pending', async () => {

@@ -57,7 +57,7 @@ test('in a project the bar shows its matches as you type, a match reads in place
   await field.press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(field).toHaveValue('');
-  const asks = run.calls().filter(call => call.path === '/v4/person/ask');
+  const asks = run.calls().filter(call => call.path === '/v5/person/ask');
   expect(asks.map(call => call.body?.question)).toEqual(['ship']);
   expect(asks[0]!.body && 'project_id' in asks[0]!.body).toBe(false);
 });

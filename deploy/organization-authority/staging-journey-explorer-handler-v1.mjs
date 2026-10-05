@@ -411,7 +411,7 @@ function diagnosticDetail(value) {
     if (!uuid(input.operation_id) || !uuid(input.span_id) || (input.parent_span_id !== null && !uuid(input.parent_span_id)) ||
       !CORE_PHASES.has(input.phase) || !CORE_PHASES.has(input.purpose) || typeof input.root !== "boolean" ||
       !Array.isArray(input.linked_journey_ids) || input.linked_journey_ids.length > 1000 || input.linked_journey_ids.some((id) => !uuid(id)) ||
-      (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "slack") ||
+      (input.evidence_source !== undefined && input.evidence_source !== "ticket" && input.evidence_source !== "slack" && input.evidence_source !== "page") ||
       (input.result !== null && !CORE_RESULTS.has(input.result)) || (input.generation !== null && !/^sha256:[0-9a-f]{64}$/.test(input.generation))) return null;
     const counts = {};
     for (const key of CORE_COUNTS) {

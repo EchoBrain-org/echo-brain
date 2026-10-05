@@ -200,8 +200,9 @@ test('a meeting opened from Mine is its approved record: More reads the rest, an
   await expect(page.getByTestId('title')).toHaveText('Mine');
 });
 
-test('Mine\'s bar only asks what you added, and a cited original is read under all you may read', async () => {
-  run = await launch('mine');
+for (const mode of ['mine', 'mine-live-missing', 'mine-live-unavailable'])
+test(`Mine's bar asks only what you added through ordinary Ask (${mode})`, async () => {
+  run = await launch(mode);
   const { page } = run;
   const field = page.getByTestId('ask-field');
   await page.getByTestId('sidebar-mine').click();
@@ -216,8 +217,10 @@ test('Mine\'s bar only asks what you added, and a cited original is read under a
   await field.press('Enter');
   await expect(page.getByTestId('answer')).toBeVisible();
   await expect(page.locator('.asked')).toHaveText('Mine');
-  const asks = run.calls().filter(call => call.path === '/v3/person/ask');
-  expect(asks.map(call => call.body)).toEqual([{ schema_version: 3, question: 'pricing', mine: true }]);
+  const asks = run.calls().filter(call => /^\/v[345]\/person\/ask$/.test(call.path));
+  expect(asks.map(call => ({ path: call.path, body: call.body }))).toEqual([
+    { path: '/v3/person/ask', body: { schema_version: 3, question: 'pricing', mine: true } },
+  ]);
   await page.getByTestId('citation').nth(1).click();
   await expect(page.getByTestId('evidence-text')).toHaveText('We agreed to ship.');
   expect(run.calls().find(call => call.path === '/v2/person/ask/source')?.body?.scope).toEqual({ kind: 'global' });

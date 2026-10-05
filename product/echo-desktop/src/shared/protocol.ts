@@ -203,11 +203,16 @@ export interface RecordRef {
 }
 
 /** What an answer is based on: an approved record, an original, or live evidence. */
+export interface ExternalAnswerSource {
+  readonly kind: 'slack' | 'ticket' | 'page';
+  readonly tool_id: string;
+  readonly label: string;
+  readonly permalink: string;
+}
 export type AnswerSource =
   | { readonly kind: 'record'; readonly label: string; readonly record: RecordRef }
   | { readonly kind: 'original'; readonly label: string; readonly ref: SourceRef }
-  | { readonly kind: 'slack'; readonly label: string; readonly permalink: string }
-  | { readonly kind: 'ticket'; readonly label: string; readonly permalink: string };
+  | ExternalAnswerSource;
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */
 export interface AnswerStatement {
@@ -379,6 +384,15 @@ export interface ProjectJiraMapping {
   mapping: { project_id: string; project_key: string } | null;
 }
 
+/** Project configuration only; Confluence pages are read live under each person's grant. */
+export interface ConfluenceSpace { id: string; key: string; name: string }
+export interface ProjectConfluenceMapping {
+  project_id: string;
+  revision: string | null;
+  mapping: { space_ids: readonly string[] } | null;
+}
+export interface ConfluenceSpacesPage { items: readonly ConfluenceSpace[]; next_cursor: string | null }
+
 export interface HostMethods {
   'app.status': { params: Record<string, never>; result: AppStatus };
   'signin.begin': { params: { authority_url: string }; result: AppStatus };
@@ -446,6 +460,9 @@ export interface HostMethods {
   /** Project members read the mapping; only leads can change it. */
   'projects.jiraRead': { params: { expect: Expect; project_id: string }; result: ProjectJiraMapping };
   'projects.jiraSet': { params: { expect: Expect; project_id: string; request_id: string; expected_revision: string | null; jira_project: string | null }; result: ProjectJiraMapping };
+  'projects.confluenceRead': { params: { expect: Expect; project_id: string }; result: ProjectConfluenceMapping };
+  'projects.confluenceSet': { params: { expect: Expect; project_id: string; request_id: string; expected_revision: string | null; space_ids: readonly string[] | null }; result: ProjectConfluenceMapping };
+  'projects.confluenceSpaces': { params: { expect: Expect; cursor?: string }; result: ConfluenceSpacesPage };
   /** Connect or Reconnect: opens the tool's page in the browser and returns at once with the attempt. */
   'tools.connect': { params: { expect: Expect; tool_id: string }; result: ToolAttempt };
   /** Reads a started connection; a status read is what completes it. */
@@ -456,10 +473,14 @@ export interface HostMethods {
 }
 
 export interface MainMethods {
+  /** Opens a validated external citation using its evidence kind's link policy. */
+  'source.openExternal': { params: { kind: ExternalAnswerSource['kind']; permalink: string }; result: null };
   /** Opens one cited Slack message in the system browser; only Slack message permalinks are allowed. */
   'source.openSlack': { params: { permalink: string }; result: null };
   /** Opens a validated ticket display link; the provider owns tenant validation. */
   'source.openTicket': { params: { permalink: string }; result: null };
+  /** Compatibility adapter for a live page's validated provider link. */
+  'source.openPage': { params: { permalink: string }; result: null };
   'dialog.openDocument': { params: Record<string, never>; result: FileHandle | null };
   /** Add files…, in New project: up to 20 documents at once. */
   'dialog.openDocuments': { params: Record<string, never>; result: ChosenFiles };
@@ -493,16 +514,16 @@ export const HOST_METHODS: readonly HostMethodName[] = [
   'notes.submit', 'documents.upload', 'ask.run', 'ask.cancel', 'ask.source', 'ask.record', 'writes.status', 'documents.retry', 'documents.abandon',
   'account.signOut', 'account.tools', 'search.run', 'documents.save', 'projects.read',
   'projects.members', 'projects.directory', 'people.directory', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.list', 'employees.invite',
-  'employees.reissue', 'employees.revoke', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet',
+  'employees.reissue', 'employees.revoke', 'tools.connect', 'tools.status', 'tools.cancel', 'tools.disconnect', 'projects.jiraRead', 'projects.jiraSet', 'projects.confluenceRead', 'projects.confluenceSet', 'projects.confluenceSpaces',
 ];
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
-  'source.openSlack', 'source.openTicket', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
+  'source.openExternal', 'source.openSlack', 'source.openTicket', 'source.openPage', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
   'dialog.saveDocument', 'dialog.openDocuments', 'dialog.saveInvitation', 'invitation.show',
 ];
 /** Host methods that change what the Authority stores. */
 export const WRITE_METHODS: ReadonlySet<string> = new Set<HostMethodName>([
   'notes.submit', 'documents.upload', 'documents.retry', 'projects.change', 'projects.create', 'projects.rename', 'projects.archive', 'projects.leave', 'employees.invite', 'employees.reissue',
-  'employees.revoke', 'tools.disconnect', 'projects.jiraSet',
+  'employees.revoke', 'tools.disconnect', 'projects.jiraSet', 'projects.confluenceSet',
 ]);
 /** Host methods whose reply is the account status: main keeps the Account menu current from them. */
 export const STATUS_METHODS: ReadonlySet<string> = new Set<HostMethodName>(['app.status', 'signin.begin', 'signin.invitation', 'account.signOut']);
@@ -559,14 +580,23 @@ export function slackPermalink(raw: unknown): string | null {
     ? raw : null;
 }
 
-/** A ticket display link has no embedded authorization or redirect parameters. */
-export function ticketPermalink(raw: unknown): string | null {
+/** The provider validated tenant and identity; this display boundary constrains URL safety. */
+function webPermalink(raw: unknown, allowQuery: boolean): string | null {
   if (typeof raw !== 'string' || raw.length > 2048 || /[\s\\\p{Cc}]/u.test(raw)) return null;
   try {
     const url = new URL(raw);
     return url.protocol === 'https:' && url.hostname !== '' && url.username === '' && url.password === '' &&
-      url.search === '' && url.hash === '' && url.href === raw ? raw : null;
+      (allowQuery || url.search === '') && url.hash === '' && url.href === raw ? raw : null;
   } catch { return null; }
+}
+
+/** Page identifiers can be carried in the provider's query string. */
+export const pagePermalink = (raw: unknown): string | null => webPermalink(raw, true);
+/** A ticket display link has no embedded authorization or redirect parameters. */
+export const ticketPermalink = (raw: unknown): string | null => webPermalink(raw, false);
+
+export function externalSourcePermalink(kind: unknown, raw: unknown): string | null {
+  return kind === 'slack' ? slackPermalink(raw) : kind === 'ticket' ? ticketPermalink(raw) : kind === 'page' ? pagePermalink(raw) : null;
 }
 
 /** Parameters larger than this are refused at the broker. */

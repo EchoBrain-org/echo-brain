@@ -6,6 +6,8 @@ import {
   type PersonAnswerResponseV4,
   type PersonAnswerResponseV5,
   validatePersonAnswerResponseV5,
+  type PersonAnswerResponseV6,
+  validatePersonAnswerResponseV6,
   type PersonAnswerStatementV4,
 } from "@echo-brain/organization-api";
 import { AgenticAskOutputErrorV1 } from "./agentic-ask-v1-model-protocol.js";
@@ -15,7 +17,8 @@ type AnswerItem = PersonAnswerStatementV4 | PersonAnswerEvidenceFallbackV4;
 /** Removes whole least-priority evidence records until the versioned packet fits. */
 export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerResponseV4): PersonAnswerResponseV4;
 export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerResponseV5): PersonAnswerResponseV5;
-export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerResponseV4 | PersonAnswerResponseV5): PersonAnswerResponseV4 | PersonAnswerResponseV5 {
+export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerResponseV6): PersonAnswerResponseV6;
+export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6): PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6 {
   let candidate = result;
   while (canonicalJsonBytes(candidate).byteLength > PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) {
     const parts: Array<{ question: string; status: PersonAnswerResponseV4["parts"][number]["status"]; statements: PersonAnswerStatementV4[]; gap?: string; records?: PersonAnswerEvidenceFallbackV4[] }> = candidate.parts.map(part => ({ question: part.question, status: part.status, statements: [...part.statements], ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.records === undefined ? {} : { records: [...part.records] }) }));
@@ -47,7 +50,7 @@ export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerRespo
       remap.set(index, remap.size); return true;
     });
     const remapItem = <T extends AnswerItem>(item: T): T => Object.freeze({ ...item, citation_indexes: Object.freeze(item.citation_indexes.map(index => remap.get(index)).filter((index): index is number => index !== undefined)) }) as T;
-    candidate = Object.freeze({ schema_version: candidate.schema_version, kind: candidate.kind, scope: candidate.scope, outcome, citations: Object.freeze(citations), parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(remapItem)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(remapItem)) }) }))), ...(candidate.assumption === undefined ? {} : { assumption: candidate.assumption }), ...(candidate.notice === undefined ? {} : { notice: candidate.notice }) }) as PersonAnswerResponseV4 | PersonAnswerResponseV5;
+    candidate = Object.freeze({ schema_version: candidate.schema_version, kind: candidate.kind, scope: candidate.scope, outcome, citations: Object.freeze(citations), parts: Object.freeze(parts.map(part => Object.freeze({ question: part.question, status: part.status, statements: Object.freeze(part.statements.map(remapItem)), ...(part.gap === undefined ? {} : { gap: part.gap }), ...(part.records === undefined ? {} : { records: Object.freeze(part.records.map(remapItem)) }) }))), ...(candidate.assumption === undefined ? {} : { assumption: candidate.assumption }), ...(candidate.notice === undefined ? {} : { notice: candidate.notice }) }) as PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6;
   }
-  return candidate.schema_version === 5 ? validatePersonAnswerResponseV5(candidate) : validatePersonAnswerResponseV4(candidate);
+  return candidate.schema_version === 6 ? validatePersonAnswerResponseV6(candidate) : candidate.schema_version === 5 ? validatePersonAnswerResponseV5(candidate) : validatePersonAnswerResponseV4(candidate);
 }

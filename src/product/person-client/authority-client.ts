@@ -5,6 +5,8 @@ import { PersonQueryInputError, validatePersonQueryText } from "@echo-brain/orga
 import {
   PERSON_ANSWER_PATH_V3,
   PERSON_ANSWER_PATH_V4,
+  PERSON_ANSWER_PATH_V5,
+  PERSON_ANSWER_ROUTE_HEADER_V5,
   PERSON_CAPABILITIES_PATH_V1,
   PERSON_EVIDENCE_SEARCH_PATH_V1,
   PERSON_EVIDENCE_OPEN_PATH_V1,
@@ -22,6 +24,7 @@ import {
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV4,
   validatePersonAnswerResponseV5,
+  validatePersonAnswerResponseV6,
   validatePersonCapabilitiesV1,
   validatePersonEvidenceSearchRequestV1,
   validatePersonEvidenceOpenRequestV1,
@@ -33,6 +36,7 @@ import {
   type PersonAnswerCitationV3 as OrganizationPersonAnswerCitationV3,
   type PersonAnswerResponseV4 as OrganizationPersonAnswerV4,
   type PersonAnswerResponseV5 as OrganizationPersonAnswerV5,
+  type PersonAnswerResponseV6 as OrganizationPersonAnswerV6,
   type PersonCapabilitiesV1,
   type PersonEvidenceSearchRequestV1,
   type PersonEvidenceOpenRequestV1,
@@ -82,6 +86,7 @@ import {
   type PersonUpdateSubmitV3, type PersonUploadSearchV3,
 } from '@echo-brain/organization-api';
 import { canonicalJson } from "@echo-brain/federation-protocol";
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH, ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, isCanonicalPersonEmail, isExpectedPersonEmail, isOrganizationApiValidationError, validateOrganizationApiError, validateOrganizationAuthorityDescriptorResponse, validateOrganizationPersonOidcBeginRequest, validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2, type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -147,6 +152,7 @@ export type PersonAnswerCitationV3 = OrganizationPersonAnswerCitationV3;
 export type PersonAnswerV4 = OrganizationPersonAnswerV4;
 /** Explicit ticket-capable Ask; the ordinary Ask response remains strict V4. */
 export type PersonAnswerV5 = OrganizationPersonAnswerV5;
+export type PersonAnswerV6 = OrganizationPersonAnswerV6;
 export type PersonAnswer = PersonAnswerV4;
 export type PersonEvidenceSearchV1 = PersonEvidenceSearchRequestV1;
 export type PersonEvidenceOpenV1 = PersonEvidenceOpenRequestV1;
@@ -159,16 +165,19 @@ export type PersonOpenV1 = PersonOpenResponseV1;
 export class PersonAuthorityClientError extends Error {
   /** The request never left this machine: no connection was made. */
   readonly unsent: boolean;
+  /** A matched live Ask route must never be mistaken for an older server. */
+  readonly routeMatched: boolean;
 
   constructor(
     public readonly code: string,
     public readonly status: number | null,
     message: string,
-    options: { readonly unsent?: boolean } = {},
+    options: { readonly unsent?: boolean; readonly routeMatched?: boolean } = {},
   ) {
     super(message);
     this.name = "PersonAuthorityClientError";
     this.unsent = options.unsent === true;
+    this.routeMatched = options.routeMatched === true;
   }
 }
 
@@ -713,6 +722,7 @@ export class PersonAuthorityClient {
         code,
         response.status,
         "Person Authority rejected the request",
+        { routeMatched: response.headers.has(PERSON_ANSWER_ROUTE_HEADER_V5) },
       );
     }
     if (expectedStatus !== undefined && response.status !== expectedStatus) {
@@ -1332,6 +1342,19 @@ export class PersonAuthorityClient {
     return response;
   }
 
+  async askV5(accessToken: string, question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV6> {
+    const request = validatePersonAnswerRequestV3({ schema_version: 3, question,
+      ...(typeof scope === 'string' ? { project_id: scope } : scope?.mine === true ? { mine: true } : {}) });
+    const response = await this.json({ path: PERSON_ANSWER_PATH_V5, body: request,
+      validate_request: validatePersonAnswerRequestV3, validate_response: validatePersonAnswerResponseV6,
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
+    const expectedScope = scope === undefined ? { kind: 'global' } : typeof scope === 'string' ? { kind: 'project', project_id: scope } : { kind: 'mine' };
+    if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
+      throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
+    }
+    return response;
+  }
+
   async evidenceSearch(accessToken: string, value: PersonEvidenceSearchV1, signal?: AbortSignal): Promise<PersonEvidenceDeskV1> {
     const request = validatePersonEvidenceSearchRequestV1(value);
     const response = await this.json({ path: PERSON_EVIDENCE_SEARCH_PATH_V1, body: request,
@@ -1428,7 +1451,7 @@ export class PersonAuthorityClient {
       }
     };
     const assertBounds = (bytes: number, timeout = this.timeoutMs): void => {
-      if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > MAXIMUM_ORDINARY_RESPONSE_BYTES ||
+      if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 ||
           !Number.isSafeInteger(timeout) || timeout < 1 || timeout > 75_000) {
         throw new Error('Person tool transport bounds are invalid');
       }

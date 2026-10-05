@@ -38,8 +38,7 @@ references, and approved-record policy projectors.
 The Jira live runtime (`jira-person-live-runtime-v1.ts`) and the opt-in
 [context capture integration](../product/2026-10-01-connector-context-integration-v1.md)
 add the selecting modules `provider-context-intakes-v1.ts`,
-`connector-rehearsal-capture-v1.ts`, `slack-context-capture-runtime-v1.ts`, and
-the staging connector rehearsal runtime. Jira constructs a reader from the
+`connector-rehearsal-capture-v1.ts`, and the staging connector rehearsal runtime. Jira constructs a reader from the
 asker's current connection and permissions: global scope has no additional
 project allowlist, project scope requires its saved mapping, and Mine excludes
 Jira. Its provider data is request-only and is never admitted into canonical
@@ -51,6 +50,15 @@ production source or scheduler, preserve ordinary processing and its cursor
 ownership, and keep rehearsal sidecars out of canonical Authority storage.
 They do not widen ordinary production behavior, canonical connection contracts,
 signed bytes or SQL baselines.
+
+Confluence uses a separate person-bound live reader and connection, with the
+same global permission ceiling and project mapping rule. Its page citations
+identify external page sections rather than claiming an ECHO-retained source
+revision. The shared evidence desk may select the generic live-page capability;
+it must not generate Confluence CQL, interpret page bodies, or choose provider
+hosts. Connection state and project settings do not authorize retaining page
+content. Adding live-page support requires an explicit new answer response
+version; existing ticket, Slack, and retained-document codecs remain strict.
 
 This invariant is about external-capability providers. The current local
 platform still deliberately selects SQLite, file-backed keys, Node crypto and

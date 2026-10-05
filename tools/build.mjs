@@ -19,6 +19,7 @@ const personClientWorkspaces = [
   ['packages', 'organization-api'],
   ['providers', 'slack', 'client'],
   ['providers', 'jira', 'client'],
+  ['providers', 'confluence', 'client'],
   ['src', 'product', 'person-client'],
 ];
 

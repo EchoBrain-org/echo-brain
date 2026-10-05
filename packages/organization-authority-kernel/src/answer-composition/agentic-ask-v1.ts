@@ -2,6 +2,7 @@ import { askResearchCompletionProblemsV1, type AskResearchObservationV1 } from '
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type {
   PersonAnswerResponseV5,
+  PersonAnswerResponseV6,
   PersonAnswerPartV4,
   PersonAnswerResponseV4,
 } from "@echo-brain/organization-api";
@@ -17,6 +18,7 @@ import type {
 } from "./structured-generation-v1.js";
 import {
   evidenceDeskSourceV2,
+  liveSourceDescriptorV2,
   type EvidenceDeskItemV2,
   type EvidenceDeskKindV2,
   type EvidenceDeskListInputV2,
@@ -26,6 +28,7 @@ import {
 } from "../shared/evidence-desk-v2.js";
 import type { EvidenceDeskPortV1 } from "../shared/evidence-desk-v1.js";
 import { annotateCoreRuntimeV1, observeCoreRuntimeV1, withoutCoreRuntimeContentV1 } from "../shared/core-runtime-observation-v1.js";
+import { isRetainedPersonEvidenceCitationV1 } from '../shared/person-evidence-provenance-v1.js';
 import {
   ANSWER_PROMPT,
   AGENTIC_ASK_MAX_NEEDS_PER_PART_V1,
@@ -84,6 +87,8 @@ export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 8;
 export const AGENTIC_ASK_LIST_PAGE_V1 = 25;
 export const AGENTIC_ASK_LIST_FETCH_V1 = 50;
 export const AGENTIC_ASK_PREVIEW_CHARS_V1 = 240;
+/** Complete released packets admitted directly from search/list; larger bodies require open. */
+export const AGENTIC_ASK_PASSAGE_BYTES_V1 = 3 * 1024;
 /** Context items an `open` may admit beyond its anchor (a Slack thread returns up to 20 replies). */
 export const AGENTIC_ASK_OPEN_EXTRA_ITEMS_V1 = 20;
 /** Document passages on each side of an opened passage (desk maximum). */
@@ -203,6 +208,8 @@ type Entry = {
   query?: string;
 };
 type ToolResult = Readonly<Record<string, unknown>>;
+/** A completed desk read waits here until earlier planned reads have updated state. */
+type OrderedAdmission = (apply: () => ToolResult) => Promise<ToolResult>;
 /** Code-owned plan state. A need leaves the plan only by being marked found or not_found. */
 type NeedState = { readonly need: string; status: NeedStatus; evidence: readonly string[]; readonly observations_before: number };
 type PartState = { readonly question: string; notes: string; readonly needs: NeedState[] };
@@ -275,10 +282,10 @@ function toolRefusal(error: unknown): string | null {
 }
 function abort(): never { throw new DOMException("Ask cancelled", "AbortError"); }
 /** What the model is told the desk reads. Adding a scope kind is a compile error here. */
-function scopeText(scope: EvidenceDeskPortV2["scope"], liveTickets: boolean): string {
+function scopeText(scope: EvidenceDeskPortV2["scope"]): string {
   switch (scope.kind) {
-    case "project": return liveTickets ? "one project: meetings and documents are limited to it; live tickets are limited to its saved tool project mapping, if configured; Slack is not read" : "one project: meetings and documents are limited to it; Slack is not";
-    case "mine": return "only what the asker added: their own notes and uploaded documents, and meetings they approved; Slack and shared transcripts are not read";
+    case "project": return "one project: meetings and documents are limited to it; live sources are limited to their saved project mappings. Only sources in source_catalog are available";
+    case "mine": return "only what the asker added: their own notes and uploaded documents, and meetings they approved; shared live sources and shared transcripts are not read";
     case "global": return "everything the asker can read";
     default: return unknownScope(scope);
   }
@@ -344,17 +351,17 @@ const LIST_SOURCES: Readonly<Record<string, EvidenceDeskSourceV2>> = Object.free
   document: "document", documents: "document", doc: "document", docs: "document", file: "document", files: "document",
   slack: "slack", messages: "slack", message: "slack",
   ticket: "ticket", tickets: "ticket",
+  page: "page", pages: "page", knowledge: "page", wiki: "page",
 });
-const SEARCH_KINDS: Readonly<Record<EvidenceDeskSourceV2, readonly EvidenceDeskKindV2[]>> = Object.freeze({
-  meeting: ['decision', 'action', 'rationale'], document: ['note', 'document_passage'],
-  slack: ['slack_message'], ticket: ['ticket'],
-});
-const SOURCE_SELECTOR: Readonly<Record<EvidenceDeskSourceV2, StepSource>> = Object.freeze({
-  meeting: 'meetings', document: 'documents', slack: 'slack', ticket: 'tickets',
-});
-function readSource(value: string | undefined): EvidenceDeskSourceV2 | undefined {
-  const key = value?.trim().toLowerCase();
-  return key !== undefined && Object.hasOwn(LIST_SOURCES, key) ? LIST_SOURCES[key] : undefined;
+interface ResearchSource {
+  readonly source_id: string;
+  readonly selector: string;
+  readonly kinds: readonly EvidenceDeskKindV2[];
+  readonly description: string;
+  readonly metadata_only_list?: boolean;
+  readonly tool_id?: string;
+  readonly requires_channel?: boolean;
+  readonly default_since_days?: number;
 }
 const MEETING_KINDS: Readonly<Record<string, EvidenceDeskKindV2>> = Object.freeze({
   decision: "decision", decisions: "decision", action: "action", actions: "action", task: "action", tasks: "action", rationale: "rationale", rationales: "rationale", reason: "rationale",
@@ -378,9 +385,10 @@ function listDate(value: string, today: string): string | null {
   return isoDay(base);
 }
 type ListArgs = { readonly source: EvidenceDeskSourceV2; readonly kinds?: readonly EvidenceDeskKindV2[]; readonly status?: "open" | "done"; readonly owner?: string; readonly channel?: string; readonly since?: string; readonly until?: string; readonly notes: readonly string[] };
-function normalizeListArgs(raw: StepArgs, today: string, tickets: boolean): ListArgs | { readonly error: string } {
+function normalizeListArgs(raw: StepArgs, today: string, sources: ReadonlyMap<string, ResearchSource>, readSource: (value: string | undefined) => string | undefined): ListArgs | { readonly error: string } {
   const source = readSource(raw.source);
-  if (source === undefined || (!tickets && source === "ticket")) return { error: tickets ? "source must be \"meetings\", \"documents\", \"slack\" or \"tickets\"" : "source must be \"meetings\", \"documents\" or \"slack\"" };
+  if (source === undefined) return { error: `source must be ${[...sources.values()].map(value => value.selector).join(", ")}` };
+  const descriptor = sources.get(source)!;
   const notes: string[] = [];
   let kinds: EvidenceDeskKindV2[] | undefined;
   if (raw.kind !== undefined) {
@@ -406,15 +414,15 @@ function normalizeListArgs(raw: StepArgs, today: string, tickets: boolean): List
   let channel: string | undefined;
   if (raw.channel !== undefined) {
     const name = raw.channel.trim().replace(/^#/u, "").trim();
-    if (source !== "slack") notes.push("channel applies to slack only; ignored");
-    else if (name.length === 0 || name.length > 80) return { error: "channel must be a Slack channel name such as \"hw-dvt\"" };
+    if (!descriptor.requires_channel) notes.push("channel is unsupported by this source; ignored");
+    else if (name.length === 0 || name.length > 80) return { error: "channel must be a channel name such as \"hw-dvt\"" };
     else channel = name;
   }
-  if (source === "slack" && channel === undefined) return { error: "slack needs a channel, such as {\"source\": \"slack\", \"channel\": \"hw-dvt\"}" };
+  if (descriptor.requires_channel && channel === undefined) return { error: `${descriptor.selector} needs a channel, such as ${JSON.stringify({ source: descriptor.selector, channel: "hw-dvt" })}` };
   const since = raw.since === undefined ? undefined : listDate(raw.since, today);
   const until = raw.until === undefined ? undefined : listDate(raw.until, today);
   if ((raw.since !== undefined && since === null) || (raw.until !== undefined && until === null)) return { error: "since and until take a date like 2026-09-21 or an age like 7d or 2w" };
-  const defaultSince = source === "slack" && since === undefined ? listDate("14d", today)! : since ?? undefined;
+  const defaultSince = descriptor.default_since_days !== undefined && since === undefined ? listDate(`${descriptor.default_since_days}d`, today)! : since ?? undefined;
   return {
     source, notes,
     ...(kinds === undefined ? {} : { kinds }), ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }), ...(channel === undefined ? {} : { channel }),
@@ -424,37 +432,59 @@ function normalizeListArgs(raw: StepArgs, today: string, tickets: boolean): List
 
 export interface CreateAgenticAskV2Options extends Omit<CreateAgenticAskV1Options, 'desk'> { readonly desk: EvidenceDeskPortV2 }
 export function createAgenticAskV1(options: CreateAgenticAskV1Options) {
-  return createAgenticAskCore(options, false) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4> };
+  return createAgenticAskCore(options as CreateAgenticAskV2Options, 4) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4> };
 }
 export function createAgenticAskV2(options: CreateAgenticAskV2Options) {
-  return createAgenticAskCore(options, true) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV5> };
+  return createAgenticAskCore(options, 5) as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV5> };
 }
-function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boolean) {
+/** V3 core keeps V5 strict and emits V6 only when a live page source is selected. */
+export function createAgenticAskV3(options: CreateAgenticAskV2Options) {
+  return createAgenticAskCore(options, 6) as unknown as { answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV6> };
+}
+function createAgenticAskCore(options: CreateAgenticAskV2Options, responseVersion: 4 | 5 | 6) {
+  const tickets = responseVersion >= 5;
   const now = options.now_ms ?? (() => performance.now());
   const today = options.today ?? (() => isoDay(new Date()));
   const askedBy = askerName(options.asker);
-  const sourceCatalog: readonly { readonly source: StepSource; readonly description: string; readonly tool_id?: string }[] = Object.freeze([
-    { source: 'meetings', description: 'Approved meeting records and admitted transcripts.' },
-    { source: 'documents', description: 'Uploaded document passages and notes.' },
-    ...((options.desk.live_sources ?? []).filter(source => source.source === 'slack').map(source => ({ source: 'slack' as const, description: 'Live discussion messages.', ...(source.tool_id === undefined ? {} : { tool_id: source.tool_id }) }))),
-    ...(!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine' ? [] : (options.desk.live_sources ?? []).filter(source => source.source === 'ticket').map(source => ({ source: 'tickets' as const, description: 'Live work items: discover summaries with search or list, then open selected items for their bodies and current state.', tool_id: source.tool_id }))),
+  const liveCatalog: ResearchSource[] = (options.desk.live_sources ?? []).flatMap(value => {
+    const descriptor = liveSourceDescriptorV2(value);
+    // Citation compatibility belongs to the response version, never a provider name.
+    if (descriptor.kind === 'ticket' && (!tickets || options.desk.ticket_available === false || options.desk.scope.kind === 'mine')) return [];
+    if (descriptor.kind === 'page' && (responseVersion !== 6 || options.desk.scope.kind === 'mine')) return [];
+    return [{ ...descriptor, kinds: [descriptor.kind] }];
+  });
+  const researchSources: readonly ResearchSource[] = Object.freeze([
+    { source_id: 'meeting', selector: 'meetings', kinds: ['decision', 'action', 'rationale'], description: 'Approved meeting records and admitted transcripts.' },
+    { source_id: 'document', selector: 'documents', kinds: ['note', 'document_passage'], description: 'Uploaded document passages and notes.' },
+    ...liveCatalog,
   ]);
+  const sourcesById = new Map(researchSources.map(source => [source.source_id, source]));
+  const sourceCatalog: readonly { readonly source: StepSource; readonly description: string; readonly metadata_only_list?: boolean; readonly tool_id?: string; readonly requires_channel?: boolean; readonly default_since_days?: number }[] = Object.freeze(researchSources.map(({ source_id: _id, kinds: _kinds, selector, ...descriptor }) => Object.freeze({ ...descriptor, source: selector })));
+  const readSource = (value: string | undefined): string | undefined => {
+    const key = value?.trim().toLowerCase();
+    if (key === undefined) return undefined;
+    const exact = researchSources.find(source => source.selector === key || source.source_id === key);
+    if (exact !== undefined) return exact.source_id;
+    // Older model aliases are accepted only when their target remains uniquely advertised.
+    const alias = LIST_SOURCES[key];
+    if (alias === undefined) return undefined;
+    if (sourcesById.has(alias)) return alias;
+    const kind = alias === 'slack' ? 'slack_message' : alias;
+    const compatible = researchSources.filter(source => source.kinds.length === 1 && source.kinds[0] === kind);
+    return compatible.length === 1 ? compatible[0]!.source_id : undefined;
+  };
   /** Who is asking and today's date: context for "my", "this week" and "overdue". */
-  const context = () => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: today() });
-  const ticketGuidance = [
-    "Live tickets (source \"ticket\") report the ticket's current title, description, owner, due date and status under the asker's connection. They are not approved meeting decisions. Distinguish their reported state from approved records and cite both when they disagree.",
-    "Search also accepts source \"tickets\" to query only live tickets; omit source to search across available evidence.",
-    "Ticket search and list are discovery: use the returned summaries to choose relevant items, then open their request-owned ids before citing them. Search narrows discovery by keywords or an exact identifier; list browses the scoped collection in pages.",
-    "To browse tickets, use list with {\"source\": \"tickets\", optional \"since\", \"until\"}; it returns metadata only, so open an item by its request-owned id before relying on the body. Ticket dates are creation dates. Tickets are available in global scope and in project scope only when a lead has saved a tool project mapping. Project tickets are already limited to that mapping by the server. Mine excludes tickets. Never infer a project mapping or choose a tenant, account or connection.",
-  ].join("\n");
-  const stepPrompt = tickets ? `${STEP_PROMPT}\n\n${ticketGuidance}` : STEP_PROMPT;
-  const answerPrompt = tickets ? `${ANSWER_PROMPT}\n\n${ticketGuidance}` : ANSWER_PROMPT;
+  const context = (day: string) => ({ ...(askedBy === undefined ? {} : { asked_by: askedBy }), today: day });
+  const liveGuidance = "Live sources report current tool context under the asker's connection. They are not approved meeting records. Use each source's selector and capabilities from source_catalog. Metadata-only search/list discovers items; open their request-owned ids before relying on their bodies. The server already applies scope and permissions. Never choose a tenant, account, connection or project mapping.";
+  const stepPrompt = liveCatalog.length === 0 ? STEP_PROMPT : `${STEP_PROMPT}\n\n${liveGuidance}`;
+  const answerPrompt = liveCatalog.length === 0 ? ANSWER_PROMPT : `${ANSWER_PROMPT}\n\n${liveGuidance}`;
   const stepBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, stepPrompt, OUTPUT_TOKENS.step);
   const answerBudget = agenticAskContextBudgetBytesV1(options.generation.context_tokens, answerPrompt, OUTPUT_TOKENS.answer);
   return Object.freeze({
-    async answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4 | PersonAnswerResponseV5> {
+    async answer(input: { readonly question: string; readonly signal?: AbortSignal }): Promise<PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6> {
       if (questionText(input.question) === null) throw new AgenticAskOutputErrorV1("question is invalid");
       const startedAt = now();
+      const requestDay = today();
       const deadline = startedAt + AGENTIC_ASK_DEADLINE_MS_V1;
       const terminalAbort = new AbortController();
       const activeSignal = input.signal === undefined ? terminalAbort.signal : AbortSignal.any([input.signal, terminalAbort.signal]);
@@ -471,11 +501,17 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           options.on_stage(Object.freeze({ failure_class: null, http_status: null, generation_usage: null, retrieval: null, ...event, elapsed_ms: Math.max(0, Math.round(event.elapsed_ms)) }));
         } catch { /* observation only */ }
       };
-      /** Desk calls are timed so the journey can split research into desk and model time. */
+      /** Research desk time is wall time: overlapping reads occupy one interval. */
+      let activeResearchDeskCalls = 0;
+      let researchDeskStartedAt = 0;
       const timed = <T>(operation: () => Promise<T>): Promise<T> => {
-        const started = now();
-        const settle = () => { if (phase === "research") deskMs += Math.max(0, now() - started); };
-        return operation().then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
+        const research = phase === "research";
+        if (research && activeResearchDeskCalls++ === 0) researchDeskStartedAt = now();
+        const settle = () => {
+          if (!research || --activeResearchDeskCalls !== 0) return;
+          deskMs += Math.max(0, now() - researchDeskStartedAt);
+        };
+        return Promise.resolve().then(() => { assertLive(); return operation(); }).then(value => { settle(); return value; }, (error: unknown) => { settle(); throw error; });
       };
       const desk: EvidenceDeskPortV2 = Object.freeze({
         scope: options.desk.scope,
@@ -516,7 +552,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       let evidenceNovelty = 0;
       const lists = new Map<string, ListState>();
       let touch = 0;
-      const scope = scopeText(options.desk.scope, tickets) + (tickets && !sourceCatalog.some(source => source.source === 'tickets') ? "; Live tickets are unavailable in this scope for this asker. Do not call ticket tools; answer from available sources and report any missing ticket context." : "");
+      const scope = scopeText(options.desk.scope);
 
       const remaining = () => deadline - now();
       const assertLive = () => {
@@ -532,17 +568,16 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         for (const receipt of result.receipt_digests) if (!receipts.includes(receipt)) receipts.push(receipt);
       };
       /** Registers an item and returns its entry. Text only ever upgrades an entry. */
-      const register = (item: EvidenceDeskItemV2, fullIfShort: boolean): Entry => {
+      const register = (item: EvidenceDeskItemV2): Entry => {
         const existing = entries.get(item.id);
         touch += 1;
         if (existing !== undefined) {
           if (item.text !== undefined && existing.item.text === undefined) { existing.item = item; evidenceNovelty += 1; }
-          if (fullIfShort && existing.item.text !== undefined && existing.item.text.length <= AGENTIC_ASK_PREVIEW_CHARS_V1) existing.full = true;
           existing.touched = touch;
           return existing;
         }
         const short = `E${entries.size + 1}`;
-        const entry: Entry = { short, item, full: fullIfShort && item.text !== undefined && item.text.length <= AGENTIC_ASK_PREVIEW_CHARS_V1, opened: false, touched: touch };
+        const entry: Entry = { short, item, full: false, opened: false, touched: touch };
         evidenceNovelty += 1;
         entries.set(item.id, entry); byShort.set(short, item.id);
         return entry;
@@ -553,32 +588,32 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         return deskId === undefined ? undefined : entries.get(deskId);
       };
       const describe = (entry: Entry): Record<string, unknown> => ({
-        id: entry.short, source: evidenceDeskSourceV2(entry.item), kind: entry.item.kind, title: entry.item.label,
+        id: entry.short, source: entry.item.source_id === undefined ? evidenceDeskSourceV2(entry.item) : sourcesById.get(entry.item.source_id)?.selector ?? entry.item.source_id, kind: entry.item.kind, title: entry.item.label,
         ...(entry.item.occurred_at === undefined ? {} : { date: entry.item.occurred_at }),
         ...(attributesOf(entry.item) === undefined ? {} : { attributes: attributesOf(entry.item) }),
       });
-      const listing = (entry: Entry, withPreview: boolean): Record<string, unknown> => ({
-        ...describe(entry),
-        ...(withPreview && entry.item.text !== undefined ? { preview: entry.full ? preview(entry.item.text) : queryPreview(entry.item.text, entry.query), full: entry.full } : {}),
-      });
+      // Tool results carry discovery metadata. Bodies appear once, in the budgeted scratchpad.
+      const listing = (entry: Entry): Record<string, unknown> => describe(entry);
 
       // ---- tools ---------------------------------------------------------
-      const search = async (args: StepArgs): Promise<ToolResult> => {
+      const search = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
         const query = normalizeQuery(args.query);
         if (query === null) return { tool: "search", args, error: "query must be 1 to 32 keywords" };
         const source = readSource(args.source);
-        if (args.source !== undefined && (source === undefined || (!tickets && source === 'ticket'))) return { tool: 'search', args, error: tickets ? 'source must be meetings, documents, slack or tickets; omit it to search all available sources' : 'source must be meetings, documents or slack; omit it to search all available sources' };
-        if (source === 'ticket' && options.desk.ticket_available === false) return { tool: 'search', args, error: 'Live tickets are unavailable in this scope for this asker' };
+        if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
         if (searchesRun.some(previous => previous.source === source && previous.query.toLowerCase() === query.toLowerCase())) return { tool: "search", query, ...(source === undefined ? {} : { source }), note: "already searched; results are in your scratchpad" };
         searchesRun.push({ query, ...(source === undefined ? {} : { source }) });
-        const result = await raceAbort(activeSignal, desk.search({ query, ...(source === undefined ? {} : { kinds: SEARCH_KINDS[source] }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal: activeSignal }));
-        observe(result);
-        researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete: !result.truncated && result.notice === undefined });
-        retrievalProgress += 1;
-        const found = result.items.map(item => register(item, true));
-        for (const entry of found) entry.query = query;
-        searchHits += found.length;
-        return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => listing(entry, true)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
+        const result = await raceAbort(signal, desk.search({ query, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: AGENTIC_ASK_SEARCH_LIMIT_V1, signal }));
+        const apply = () => {
+          observe(result);
+          researchObservations.push({ operation: 'search', fingerprint: JSON.stringify({ query: query.toLowerCase(), source: source ?? null }), complete: !result.truncated && result.notice === undefined });
+          retrievalProgress += 1;
+          const found = result.items.map(item => register(item));
+          for (const entry of found) entry.query = query;
+          searchHits += found.length;
+          return { tool: "search", query, ...(source === undefined ? {} : { source }), results: found.map(entry => listing(entry)), ...(found.length === 0 ? { note: "no matches" } : {}), ...(result.truncated ? { truncated: true } : {}), ...(result.notice === undefined ? {} : { notice: result.notice }) };
+        };
+        return admit === undefined ? apply() : admit(apply);
       };
       /** Models sometimes pass a title instead of an id; resolve it only when a seen title matches. */
       const entryByTitle = (raw: string): Entry | undefined => {
@@ -590,87 +625,177 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         });
         return matches.find(entry => !entry.opened) ?? matches[0];
       };
-      const open = async (args: StepArgs): Promise<ToolResult> => {
+      const open = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
         const raw = args.id ?? "";
         const entry = entryOf(raw) ?? entryByTitle(raw);
         if (entry === undefined) return { tool: "open", args, error: "unknown id; pass an id such as E4 from your scratchpad" };
         let result: EvidenceDeskResultV2;
-        try { result = await raceAbort(activeSignal, desk.open({ item: entry.item.id, neighbours: AGENTIC_ASK_OPEN_NEIGHBOURS_V1, signal: activeSignal })); }
+        try { result = await raceAbort(signal, desk.open({ item: entry.item.id, neighbours: AGENTIC_ASK_OPEN_NEIGHBOURS_V1, signal })); }
         catch (error) {
           const refusal = toolRefusal(error);
           if (refusal === null) throw error;
           return { tool: "open", id: entry.short, error: refusal };
         }
-        observe(result);
-        const anchor = result.items.find(item => item.id === entry.item.id && item.text !== undefined);
-        const others = result.items.filter(item => item.id !== entry.item.id && item.text !== undefined);
-        const admitted: Entry[] = [];
-        let used = 0;
-        for (const item of anchor === undefined ? others : [anchor, ...others]) {
-          if (admitted.length > AGENTIC_ASK_OPEN_EXTRA_ITEMS_V1 || (admitted.length > 0 && used + bytes(item.text) > AGENTIC_ASK_OPEN_BYTES_V1)) break;
-          const opened = register(item, false);
-          if (!opened.full || !opened.opened) { retrievalProgress += 1; evidenceNovelty += 1; }
-          opened.full = true; opened.opened = true; used += bytes(item.text);
-          admitted.push(opened);
-        }
-        return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+        const apply = () => {
+          observe(result);
+          const anchor = result.items.find(item => item.id === entry.item.id && item.text !== undefined);
+          const others = result.items.filter(item => item.id !== entry.item.id && item.text !== undefined);
+          const admitted: Entry[] = [];
+          let used = 0;
+          for (const item of anchor === undefined ? others : [anchor, ...others]) {
+            if (admitted.length > AGENTIC_ASK_OPEN_EXTRA_ITEMS_V1 || (admitted.length > 0 && used + bytes(item.text) > AGENTIC_ASK_OPEN_BYTES_V1)) break;
+            const opened = register(item);
+            if (!opened.full || !opened.opened) { retrievalProgress += 1; evidenceNovelty += 1; }
+            opened.opened = true; used += bytes(item.text);
+            admitted.push(opened);
+          }
+          // Open may also release continuation metadata. Register it beside
+          // the bounded text, without treating the continuation as read evidence.
+          const metadata = result.items
+            .filter(item => item.text === undefined && item.id !== entry.item.id)
+            .map(item => register(item));
+          return { tool: "open", id: entry.short, opened: admitted.map(value => value.short), ...(metadata.length === 0 ? {} : { results: metadata.map(value => listing(value)) }), ...(result.truncated ? { truncated: true } : {}), ...(admitted.length === 0 ? { note: "no readable text" } : {}) };
+        };
+        return admit === undefined ? apply() : admit(apply);
       };
-      const list = async (args: StepArgs): Promise<ToolResult> => {
-        const normalized = normalizeListArgs(args, today(), tickets);
+      const list = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
+        const normalized = normalizeListArgs(args, requestDay, sourcesById, readSource);
         if ("error" in normalized) return { tool: "list", args, error: normalized.error };
         const { notes, status, owner, ...request } = normalized;
         const key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
         let state = lists.get(key);
         if (state === undefined) {
           const stateArgs: StepArgs = Object.freeze({
-            source: SOURCE_SELECTOR[request.source], ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
+            source: sourcesById.get(request.source)!.selector, ...(request.kinds?.[0] === undefined ? {} : { kind: request.kinds[0] }),
             ...(status === undefined ? {} : { status }), ...(owner === undefined ? {} : { owner }),
             ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), ...(request.until === undefined ? {} : { until: request.until }),
           });
           state = { args: stateArgs, items: [], cursor: undefined, fetched: false, shown: 0, truncated: false, available: true };
           lists.set(key, state);
         }
+        const currentState = state;
+        let result: EvidenceDeskResultV2 | undefined;
         const before = { cursor: state.cursor, shown: state.shown, fetched: state.fetched };
         if (state.shown >= state.items.length && (!state.fetched || state.cursor !== undefined)) {
-          const deskInput: EvidenceDeskListInputV2 = { ...request, limit: AGENTIC_ASK_LIST_FETCH_V1, ...(state.cursor === undefined ? {} : { cursor: state.cursor }), signal: activeSignal };
-          let result: EvidenceDeskResultV2;
-          try { result = await raceAbort(activeSignal, desk.list(deskInput)); }
+          const deskInput: EvidenceDeskListInputV2 = { ...request, limit: AGENTIC_ASK_LIST_FETCH_V1, ...(state.cursor === undefined ? {} : { cursor: state.cursor }), signal };
+          try { result = await raceAbort(signal, desk.list(deskInput)); }
           catch (error) {
             const refusal = toolRefusal(error);
             if (refusal === null) throw error;
             return { tool: "list", args, error: refusal };
           }
-          observe(result);
-          state.available = state.available && result.notice === undefined;
-          if (!state.fetched || result.next_cursor !== state.cursor) retrievalProgress += 1;
-          state.fetched = true; state.cursor = result.next_cursor; state.truncated = result.truncated;
-          // A status filter applies only where an item records a status; approved actions usually record owner and
-          // due date but not completion, so an item without a status is kept (never silently dropped as "not open").
-          const statusOf = (item: EvidenceDeskItemV2) => item.attributes?.status === undefined ? null : statusGroup(item.attributes.status);
-          const wanted = owner?.toLowerCase().split(/\s+/u).filter(Boolean) ?? [];
-          const ownerMatches = (item: EvidenceDeskItemV2) => {
-            const recorded = item.attributes?.owner?.toLowerCase();
-            return recorded !== undefined && wanted.every(part => recorded.includes(part));
-          };
-          state.items.push(...result.items.filter(item => (status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item))));
-          if (status !== undefined && result.items.some(item => item.attributes?.status === undefined)) state.note = "some items do not record open or done; they are included";
-          if (owner !== undefined && state.items.length === 0 && result.items.length > 0) state.note = `no listed item records ${owner} as owner; owners shown are exact names from the records`;
         }
-        const page = state.items.slice(state.shown, state.shown + AGENTIC_ASK_LIST_PAGE_V1).map(item => register(item, true));
-        state.shown += page.length;
-        if (page.length > 0) retrievalProgress += 1;
-        const more = state.shown < state.items.length || state.cursor !== undefined;
-        const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
-          request.channel === undefined && request.since === undefined && request.until === undefined;
-        if (unfiltered && state.available && !more && !state.truncated && state.items.length === 0) exhaustivelyEmptySources.add(request.source);
-        if (!before.fetched || before.shown !== state.shown || before.cursor !== state.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: state.available && !more && !state.truncated });
-        const allNotes = [...notes, ...(state.note === undefined ? [] : [state.note]), ...(page.length === 0 ? ["nothing more to list"] : []), ...(!more && state.truncated ? ["more items exist than list can show; use search"] : [])];
-        return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => listing(entry, entry.item.text !== undefined)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
+        const apply = () => {
+          if (result !== undefined) {
+            observe(result);
+            currentState.available = currentState.available && result.notice === undefined;
+            if (!currentState.fetched || result.next_cursor !== currentState.cursor) retrievalProgress += 1;
+            currentState.fetched = true; currentState.cursor = result.next_cursor; currentState.truncated = result.truncated;
+            // A status filter applies only where an item records a status; approved actions usually record owner and
+            // due date but not completion, so an item without a status is kept (never silently dropped as "not open").
+            const statusOf = (item: EvidenceDeskItemV2) => item.attributes?.status === undefined ? null : statusGroup(item.attributes.status);
+            const wanted = owner?.toLowerCase().split(/\s+/u).filter(Boolean) ?? [];
+            const ownerMatches = (item: EvidenceDeskItemV2) => {
+              const recorded = item.attributes?.owner?.toLowerCase();
+              return recorded !== undefined && wanted.every(part => recorded.includes(part));
+            };
+            currentState.items.push(...result.items.filter(item => (status === undefined || statusOf(item) === null || statusOf(item) === status) && (owner === undefined || ownerMatches(item))));
+            if (status !== undefined && result.items.some(item => item.attributes?.status === undefined)) currentState.note = "some items do not record open or done; they are included";
+            if (owner !== undefined && currentState.items.length === 0 && result.items.length > 0) currentState.note = `no listed item records ${owner} as owner; owners shown are exact names from the records`;
+          }
+
+          const page = currentState.items.slice(currentState.shown, currentState.shown + AGENTIC_ASK_LIST_PAGE_V1).map(item => register(item));
+          currentState.shown += page.length;
+          if (page.length > 0) retrievalProgress += 1;
+          const more = currentState.shown < currentState.items.length || currentState.cursor !== undefined;
+          const unfiltered = request.kinds === undefined && status === undefined && owner === undefined &&
+            request.channel === undefined && request.since === undefined && request.until === undefined;
+          if (unfiltered && currentState.available && !more && !currentState.truncated && currentState.items.length === 0) exhaustivelyEmptySources.add(request.source);
+          if (!before.fetched || before.shown !== currentState.shown || before.cursor !== currentState.cursor) researchObservations.push({ operation: 'list', fingerprint: key, complete: currentState.available && !more && !currentState.truncated });
+          const allNotes = [...notes, ...(currentState.note === undefined ? [] : [currentState.note]), ...(page.length === 0 ? ["nothing more to list"] : []), ...(!more && currentState.truncated ? ["more items exist than list can show; use search"] : [])];
+          return { tool: "list", source: request.source, ...(request.channel === undefined ? {} : { channel: request.channel }), ...(request.since === undefined ? {} : { since: request.since }), items: page.map(entry => listing(entry)), more, ...(allNotes.length === 0 ? {} : { note: allNotes.join("; ") }) };
+        };
+        return admit === undefined ? apply() : admit(apply);
       };
-      const run = async (action: StepAction): Promise<ToolResult> => {
-        if (action.tool === "search") return search(action.args);
-        if (action.tool === "open") return open(action.args);
-        return list(action.args);
+      const run = async (action: StepAction, admit?: OrderedAdmission, signal?: AbortSignal): Promise<ToolResult> => {
+        if (action.tool === "search") return search(action.args, admit, signal);
+        if (action.tool === "open") return open(action.args, admit, signal);
+        return list(action.args, admit, signal);
+      };
+      /**
+       * Reads planned together have no model-visible dependency. Start their
+       * I/O together, then apply completed results in plan order so evidence
+       * ids, receipts and the next prompt stay deterministic. Only repeated
+       * lists with the same normalized selection depend on an earlier read.
+       */
+      const runReads = async (actions: readonly StepAction[]): Promise<readonly ToolResult[]> => {
+        const batchAbort = new AbortController();
+        const signal = AbortSignal.any([activeSignal, batchAbort.signal]);
+        let next = 0;
+        let stopped = false;
+        let failure: unknown;
+        const pending = new Map<number, { readonly apply: () => ToolResult; readonly resolve: (value: ToolResult) => void; readonly reject: (reason: unknown) => void }>();
+        const skipped = new Set<number>();
+        const advance = () => {
+          while (!stopped) {
+            const entry = pending.get(next);
+            if (entry === undefined) {
+              if (!skipped.delete(next)) return;
+              next += 1;
+              continue;
+            }
+            pending.delete(next); next += 1;
+            try { signal.throwIfAborted(); assertLive(); entry.resolve(entry.apply()); } catch (error) { stopped = true; failure = error; batchAbort.abort(error); entry.reject(error); }
+          }
+          for (const entry of pending.values()) entry.reject(failure);
+          pending.clear();
+        };
+        const admit = (index: number): OrderedAdmission => apply => new Promise<ToolResult>((resolve, reject) => {
+          if (stopped) { reject(failure); return; }
+          pending.set(index, { apply, resolve, reject });
+          advance();
+        });
+        const skip = (index: number) => {
+          if (stopped || index < next) return;
+          skipped.add(index); advance();
+        };
+        const fail = (error: unknown) => {
+          if (stopped) return;
+          stopped = true; failure = error; batchAbort.abort(error);
+          for (const entry of pending.values()) entry.reject(error);
+          pending.clear();
+        };
+        const listTasks = new Map<string, Promise<ToolResult>>();
+        const tasks = actions.map((action, index) => {
+          let key: string | undefined;
+          if (action.tool === 'list') {
+            const normalized = normalizeListArgs(action.args, requestDay, sourcesById, readSource);
+            if (!('error' in normalized)) {
+              const { notes: _notes, status, owner, ...request } = normalized;
+              key = JSON.stringify({ ...request, status: status ?? null, owner: owner?.toLowerCase() ?? null });
+            }
+          }
+          const previous = key === undefined ? undefined : listTasks.get(key);
+          const task = (async () => {
+            try {
+              if (previous !== undefined) await previous;
+              signal.throwIfAborted(); assertLive();
+              const value = await run(action, admit(index), signal);
+              skip(index);
+              return value;
+            } catch (error) {
+              fail(error);
+              throw error;
+            }
+          })();
+          if (key !== undefined) listTasks.set(key, task);
+          return task;
+        });
+        const settled = await Promise.allSettled(tasks);
+        if (stopped) throw failure;
+        const rejection = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+        if (rejection !== undefined) throw rejection.reason;
+        return Object.freeze(settled.map(result => (result as PromiseFulfilledResult<ToolResult>).value));
       };
 
       // ---- plan (parts and needs) -------------------------------------------
@@ -711,32 +836,42 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
       // ---- scratchpad ------------------------------------------------------
       const citable = (short: string): boolean => entryOf(short)?.full === true;
       const citedShorts = () => new Set(plan.flatMap(part => part.needs.flatMap(need => need.evidence)).filter(citable));
-      /** Opened full text first (cited, then most recent), then previews of everything else, within the context budget. */
+      let researchPromptEntries: readonly Entry[] = [];
+      /** Exact released bodies first when opened or packet-sized; previews are always explicitly incomplete. */
       const scratchpad = (budget: number) => {
         const cited = citedShorts();
         const openedEntries = [...entries.values()].filter(entry => entry.opened && entry.item.text !== undefined)
           .sort((left, right) => Number(cited.has(right.short)) - Number(cited.has(left.short)) || right.touched - left.touched);
-        const shown: Record<string, unknown>[] = []; const shownIds = new Set<string>(); let used = 0;
+        const shown: Record<string, unknown>[] = []; const shownIds = new Set<string>(); const read: Entry[] = []; let used = 0;
         for (const entry of openedEntries) {
-          const cost = bytes(entry.item.text) + 200;
+          const value = { ...describe(entry), text: entry.item.text };
+          const cost = bytes(JSON.stringify(value)) + 1;
           if (used + cost > budget) continue;
           used += cost; shownIds.add(entry.short);
-          shown.push({ ...describe(entry), text: entry.item.text });
+          shown.push(value); read.push(entry);
         }
         const seen: Record<string, unknown>[] = [];
         const rest = [...entries.values()].filter(entry => !shownIds.has(entry.short))
           .sort((left, right) => Number(cited.has(right.short)) - Number(cited.has(left.short)) || right.touched - left.touched);
         for (const entry of rest) {
           if (seen.length >= MAX_SEEN_ENTRIES) break;
-          const value = listing(entry, true);
-          const cost = bytes(JSON.stringify(value));
-          if (used + cost > budget) break;
+          const text = entry.item.text;
+          let value: Record<string, unknown> = text !== undefined && bytes(text) <= AGENTIC_ASK_PASSAGE_BYTES_V1
+            ? { ...describe(entry), text, full: true }
+            : { ...describe(entry), ...(text === undefined ? {} : { preview: queryPreview(text, entry.query), full: false }) };
+          let cost = bytes(JSON.stringify(value)) + 1;
+          if (used + cost > budget && text !== undefined) {
+            value = { ...describe(entry), preview: queryPreview(text, entry.query), full: false };
+            cost = bytes(JSON.stringify(value)) + 1;
+          }
+          if (used + cost > budget) continue;
+          if (value.full === true) read.push(entry);
           used += cost; seen.push(value);
         }
         seen.sort((left, right) => Number(String(left.id).slice(1)) - Number(String(right.id).slice(1)));
-        return { opened: shown, seen };
+        return { opened: shown, seen, read };
       };
-      const liveInPrompt = () => [...entries.values()].some(entry => ["slack_message", "ticket"].includes(entry.item.citation.kind));
+      const liveInPrompt = () => [...entries.values()].some(entry => !isRetainedPersonEvidenceCitationV1(entry.item.citation));
 
       // ---- model calls -----------------------------------------------------
       let generationStopped = false;
@@ -756,6 +891,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         calls += 1;
         if (recovery) repairs += 1;
         const modelInput: StructuredGenerationInput = Object.freeze({ model: options.generation.answer_model, system_prompt, user_prompt: JSON.stringify(user), schema, max_output_tokens: OUTPUT_TOKENS[role], timeout_ms: Math.max(1, Math.floor(Math.min(options.generation.timeout_ms, timeoutMs, remaining()))), signal: activeSignal });
+        // Only an admitted research call makes a complete body read. Retrieval,
+        // opening, and scratchpad construction alone cannot satisfy a need.
+        if (role === 'step') for (const entry of researchPromptEntries) {
+          if (!entry.full) evidenceNovelty += 1;
+          entry.full = true;
+        }
         invocationDigests.push(canonicalSha256({ role, model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms }));
         // Live-provider evidence must never reach runtime content capture.
         const contentSafe = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -814,7 +955,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         };
         return parse(await call(role, reason === null ? system : repairPrompt(system, reason), repairUser, schema, timeout, true));
       };
-      const audit = async (outcome: AgenticAskAuditEntryV1["outcome"], citations: number, result?: PersonAnswerResponseV4 | PersonAnswerResponseV5) => {
+      const audit = async (outcome: AgenticAskAuditEntryV1["outcome"], citations: number, result?: PersonAnswerResponseV4 | PersonAnswerResponseV5 | PersonAnswerResponseV6) => {
         const aggregate = (field: keyof StructuredGenerationUsageV1): number | null => {
           const values = generations.map(entry => entry.usage?.[field]);
           return values.length === 0 || values.some(value => typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) ? null : values.reduce<number>((total, value) => total + value!, 0);
@@ -846,7 +987,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
               observe(opened);
               const exact = opened.items.find(item => item.id === listed.id && item.text !== undefined);
               if (exact === undefined || used + bytes(exact.text) > stepBudget / 2) continue;
-              const entry = register(exact, false); entry.full = true; entry.opened = true; used += bytes(exact.text);
+              const entry = register(exact); entry.opened = true; used += bytes(exact.text);
             }
           }
         }
@@ -859,11 +1000,12 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           assertLive();
           // Leave room for the answer call and its possible repair.
           if (stepTimeout() < AGENTIC_ASK_MIN_STEP_MS_V1 || calls + 2 >= AGENTIC_ASK_MAX_MODEL_CALLS_V1) break;
-          const header = { question: input.question, ...context(), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
-          const pad = scratchpad(stepBudget - bytes(JSON.stringify(header)));
+          const header = { question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog, step: steps + 1, steps_left: AGENTIC_ASK_MAX_STEPS_V1 - steps - 1, plan: planView(), inventories: inventoryView(), last_results: results, searches_done: [...searchesRun] };
+          const pad = scratchpad(stepBudget - bytes(JSON.stringify({ ...header, opened: [], seen: [] })));
+          researchPromptEntries = pad.read;
           const user = { ...header, opened: pad.opened, seen: pad.seen };
           const openIds = [...entries.values()].map(entry => entry.short);
-          const finishAvailable = researchObservations.length > 0 || [...entries.values()].some(entry => entry.full);
+          const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
           const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable);
           let step: Step;
           try {
@@ -915,11 +1057,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           }
           const hadCitableEvidence = [...entries.values()].some(entry => entry.full);
           const before = hadCitableEvidence ? evidenceNovelty : retrievalProgress;
-          results = [];
-          for (const action of reads) {
-            assertLive();
-            results.push(await run(action));
-          }
+          results = [...await runReads(reads)];
           const catalogIsExhaustivelyEmpty = entries.size === 0 && sourceCatalog.length > 0 && sourceCatalog.every(source => {
             const normalized = readSource(source.source);
             return normalized !== undefined && exhaustivelyEmptySources.has(normalized);
@@ -962,7 +1100,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         if (!generationStopped && evidence.length > 0 && answerTimeout() >= AGENTIC_ASK_MIN_ANSWER_MS_V1 && calls < AGENTIC_ASK_MAX_MODEL_CALLS_V1) {
           selectedTicketCount = evidence.filter(entry => entry.item.citation.kind === "ticket").length;
           const user = {
-            question: input.question, ...context(), scope, source_catalog: sourceCatalog,
+            question: input.question, ...context(requestDay), scope, source_catalog: sourceCatalog,
             // Working hypotheses are not user requirements or evidence. The
             // writer assesses the original question against released text.
             evidence: evidence.map(entry => ({ ...describe(entry), text: entry.item.text })),
@@ -1015,7 +1153,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
         const anyEvidence = draft.statements.length > 0 || (draft.records?.length ?? 0) > 0;
         const outcome = !anyEvidence ? (incomplete ? "partial" as const : "not_found" as const) : draft.status === "answered" ? "answered" as const : "partial" as const;
         const result = Object.freeze({
-          schema_version: tickets ? 5 : 4, kind: tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk.scope, outcome,
+          schema_version: responseVersion, kind: responseVersion === 6 ? "echo-clean-person-answer-v6" : tickets ? "echo-clean-person-answer-v5" : "echo-clean-person-answer-v4", scope: options.desk.scope, outcome,
           parts: Object.freeze([Object.freeze({
             question, status: draft.status,
             statements: Object.freeze(draft.statements.map(value => Object.freeze({ text: value.text, citation_indexes: Object.freeze(value.citation_indexes), private: value.private }))),
@@ -1025,7 +1163,7 @@ function createAgenticAskCore(options: CreateAgenticAskV2Options, tickets: boole
           citations: Object.freeze(anyEvidence ? used.map(entry => Object.freeze({ citation: entry.item.citation, kind: entry.item.kind, label: entry.item.label, visibility: entry.item.visibility, ...(entry.item.ref === undefined ? {} : { ref: entry.item.ref }) })) : []),
           ...(notice.size === 0 ? {} : { notice: [...notice].join(" ") }),
         });
-        const validated = tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
+        const validated = responseVersion === 6 ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV6) : tickets ? compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV5) : compactAndValidateAgenticAskResponseV1(result as PersonAnswerResponseV4);
         // A failed answer call still ends in a response (records or not found); its span keeps the failure.
         const answerUsage = usageOf("answer", answerModelMs);
         report(answerUsage === null ? { stage: "answer", event: "skipped", elapsed_ms: 0 } : { stage: "answer", event: "succeeded", elapsed_ms: answerModelMs, generation_usage: answerUsage, retrieval: { citation_count: validated.citations.length } });

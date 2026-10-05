@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import type {
   AccountCommand, Answer, AnswerSource, AppStatus, ApprovedRecord, AskScope, Audience, ConnectedTool, ContextContent, DocumentText, Employee, Expect,
-  Extraction, Failure, FileHandle, ItemRef, ListItem, ListScope, Match, Member, ProjectChange, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef,
+  Extraction, Failure, FileHandle, ItemRef, ListItem, ListScope, Match, Member, ProjectChange, ProjectConfluenceMapping, ConfluenceSpace, ProjectJiraMapping, ProjectSummary, Receipt, RecordItem, RecordRef,
   RecordSection, Result, SourceEvidence, ToolAttempt,
 } from '../shared/protocol.js';
 import { MAX_CAPTURE_PROJECTS } from '../shared/protocol.js';
@@ -334,18 +334,27 @@ export interface ChangeState {
   confirmDismiss: boolean;
 }
 
-/** A project mapping is reloaded after an unconfirmed save. */
-export interface ProjectJiraSetting {
+/** Shared load/save state; an unconfirmed write must be reloaded before editing. */
+export interface ProjectToolSetting<Value> {
   seq: number;
   status: 'loading' | 'ready' | 'saving' | 'failed';
-  key: string;
-  value?: ProjectJiraMapping;
+  value?: Value;
   failure?: Failure;
   writeFailed?: boolean;
+}
+export interface ProjectJiraSetting extends ProjectToolSetting<ProjectJiraMapping> { key: string }
+export interface ProjectConfluenceSetting extends ProjectToolSetting<ProjectConfluenceMapping> {
+  spaces: readonly ConfluenceSpace[];
+  next: string | null;
+  selected: readonly string[];
+  loadingMore?: boolean;
+  /** The lead-only space catalog failed; the shared project mapping is still readable. */
+  pickerFailure?: Failure;
 }
 
 export interface ProjectSettingsState {
   jira?: ProjectJiraSetting;
+  confluence?: ProjectConfluenceSetting;
   project: ProjectSummary;
   menu: boolean;
   menuOrigin: 'header' | 'sidebar';
@@ -1280,7 +1289,7 @@ function changed(done: ChangeState): void {
 /** A project settings operation is unsettled until its exact receipt arrives. */
 export function projectSettingsBlocked(current: State = state): boolean {
   const status = current.projectSettings?.write?.status;
-  return status === 'sending' || status === 'unknown' || current.projectSettings?.jira?.status === 'saving';
+  return status === 'sending' || status === 'unknown' || activeProjectMapping(current.projectSettings)?.status === 'saving';
 }
 
 export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'header' | 'sidebar' = 'header'): void {
@@ -1289,7 +1298,7 @@ export function toggleProjectSettings(target?: ProjectSummary, menuOrigin: 'head
       (menuOrigin === 'header' && (state.ask || state.reader)) || projectSettingsBlocked()) return;
   const shown = state.projectSettings;
   set({ projectSettings: shown?.project.project_id === project.project_id ? {
-    ...shown, jira: undefined, menu: shown.menuOrigin !== menuOrigin || !shown.menu, menuOrigin, rename: null, confirm: null,
+    ...clearProjectMappings(shown), menu: shown.menuOrigin !== menuOrigin || !shown.menu, menuOrigin, rename: null, confirm: null,
   } : {
     project, menu: true, menuOrigin, rename: null, confirm: null, write: null,
   } });
@@ -1300,43 +1309,122 @@ export function closeProjectSettings(): void {
   if (settings && !projectSettingsBlocked()) set({ projectSettings: null });
 }
 
-/** Every load/save is scoped to this account, project and opening of the sheet. */
-export async function beginProjectJira(): Promise<void> {
+const PROJECT_MAPPING_TOOLS = ['jira', 'confluence'] as const;
+type MappingTool = typeof PROJECT_MAPPING_TOOLS[number];
+type MappingSetting<Tool extends MappingTool> = NonNullable<ProjectSettingsState[Tool]>;
+type MappingValue<Tool extends MappingTool> = NonNullable<MappingSetting<Tool>['value']>;
+function activeProjectMapping(settings: ProjectSettingsState | null): MappingSetting<MappingTool> | undefined {
+  return PROJECT_MAPPING_TOOLS.map(tool => settings?.[tool]).find(setting => setting !== undefined);
+}
+function clearProjectMappings(settings: ProjectSettingsState): ProjectSettingsState {
+  const cleared = { ...settings };
+  for (const tool of PROJECT_MAPPING_TOOLS) delete cleared[tool];
+  return cleared;
+}
+interface MappingAdapter<Tool extends MappingTool> {
+  readonly tool: Tool;
+  initial(seq: number): MappingSetting<Tool>;
+  read(account: Expect, project_id: string): Promise<Result<MappingValue<Tool>>>;
+  write(account: Expect, project_id: string, setting: MappingSetting<Tool>, remove: boolean, request_id: string): Promise<Result<MappingValue<Tool>>>;
+  accepted(setting: MappingSetting<Tool>, value: MappingValue<Tool>): MappingSetting<Tool>;
+  valid(setting: MappingSetting<Tool>): boolean;
+}
+
+const jiraMapping: MappingAdapter<'jira'> = {
+  tool: 'jira', initial: seq => ({ seq, status: 'loading', key: '' }),
+  read: (expect, project_id) => rpc('projects.jiraRead', { expect, project_id }),
+  write: (expect, project_id, setting, remove, request_id) => rpc('projects.jiraSet', { expect, project_id, request_id,
+    expected_revision: setting.value!.revision, jira_project: remove ? null : setting.key.trim() }),
+  accepted: (setting, value) => ({ seq: setting.seq, status: 'ready', key: value.mapping?.project_key ?? '', value }),
+  valid: setting => /^[A-Z][A-Z0-9_]{0,63}$/.test(setting.key.trim()) && setting.key.trim() !== setting.value?.mapping?.project_key,
+};
+const confluenceMapping: MappingAdapter<'confluence'> = {
+  tool: 'confluence', initial: seq => ({ seq, status: 'loading', spaces: [], next: null, selected: [] }),
+  read: (expect, project_id) => rpc('projects.confluenceRead', { expect, project_id }),
+  write: (expect, project_id, setting, remove, request_id) => rpc('projects.confluenceSet', { expect, project_id, request_id,
+    expected_revision: setting.value!.revision, space_ids: remove ? null : setting.selected }),
+  accepted: (setting, value) => ({ ...setting, status: 'ready', value, selected: value.mapping?.space_ids ?? [] }),
+  valid: setting => setting.pickerFailure === undefined && setting.selected.length > 0,
+};
+
+/** Every reply belongs to this account and this opening of the project sheet. */
+function mappingAt<Tool extends MappingTool>(tool: Tool, account: Expect, opening: number) {
+  const settings = state.projectSettings;
+  const setting = settings?.[tool];
+  return settings && setting?.seq === opening && expect()?.authority === account.authority && expect()?.membership_id === account.membership_id
+    ? { settings, setting: setting as MappingSetting<Tool> } : undefined;
+}
+function setMapping<Tool extends MappingTool>(settings: ProjectSettingsState, tool: Tool, setting: MappingSetting<Tool>): void {
+  set({ projectSettings: { ...settings, [tool]: setting } });
+}
+async function readProjectMapping<Tool extends MappingTool>(adapter: MappingAdapter<Tool>) {
   const settings = state.projectSettings;
   const account = expect();
   if (!settings || !account || projectSettingsBlocked()) return;
-  const opening = ++seq;
-  set({ projectSettings: { ...settings, menu: false, rename: null, confirm: null, jira: { seq: opening, status: 'loading', key: '' } } });
-  const result = await rpc('projects.jiraRead', { expect: account, project_id: settings.project.project_id });
-  if (expect()?.authority !== account.authority || expect()?.membership_id !== account.membership_id || state.projectSettings?.jira?.seq !== opening) return;
-  const current = state.projectSettings;
-  set({ projectSettings: { ...current, jira: result.ok
-    ? { seq: opening, status: 'ready', key: result.value.mapping?.project_key ?? '', value: result.value }
-    : { seq: opening, status: 'failed', key: '', failure: result.failure } } });
+  const initial = adapter.initial(++seq);
+  setMapping({ ...clearProjectMappings(settings), menu: false, rename: null, confirm: null }, adapter.tool, initial);
+  const result = await adapter.read(account, settings.project.project_id);
+  const current = mappingAt(adapter.tool, account, initial.seq);
+  if (!current) return;
+  const setting = result.ok ? adapter.accepted(initial, result.value) : { ...initial, status: 'failed' as const, failure: result.failure };
+  setMapping(current.settings, adapter.tool, setting);
+  if (!result.ok) { accountLost(result.failure); return; }
+  return { account, settings: current.settings, setting };
+}
+async function saveProjectMapping<Tool extends MappingTool>(adapter: MappingAdapter<Tool>, remove: boolean): Promise<void> {
+  const settings = state.projectSettings;
+  const setting = settings?.[adapter.tool] as MappingSetting<Tool> | undefined;
+  const account = expect();
+  if (!settings || !setting?.value || !account || settings.project.role !== 'lead' || setting.status !== 'ready' ||
+      (remove ? setting.value.mapping === null : !adapter.valid(setting))) return;
+  setMapping(settings, adapter.tool, { ...setting, status: 'saving' });
+  unresolvedChanged();
+  const result = await adapter.write(account, settings.project.project_id, setting, remove, crypto.randomUUID());
+  const current = mappingAt(adapter.tool, account, setting.seq);
+  if (!current) return;
+  setMapping(current.settings, adapter.tool, result.ok ? adapter.accepted(setting, result.value)
+    : { ...setting, status: 'failed', failure: result.failure, writeFailed: true });
+  unresolvedChanged();
   if (!result.ok) accountLost(result.failure);
 }
+
+export async function beginProjectJira(): Promise<void> { await readProjectMapping(jiraMapping); }
+export const saveProjectJira = (remove = false): Promise<void> => saveProjectMapping(jiraMapping, remove);
+export const saveProjectConfluence = (remove = false): Promise<void> => saveProjectMapping(confluenceMapping, remove);
 export function setProjectJira(key: string): void {
   const settings = state.projectSettings;
-  if (settings?.jira?.status === 'ready' && settings.project.role === 'lead') set({ projectSettings: { ...settings, jira: { ...settings.jira, key: key.toUpperCase() } } });
+  if (settings?.jira?.status === 'ready' && settings.project.role === 'lead') setMapping(settings, 'jira', { ...settings.jira, key: key.toUpperCase() });
 }
-export function projectJiraValid(setting: ProjectJiraSetting): boolean {
-  const key = setting.key.trim();
-  return setting.status === 'ready' && /^[A-Z][A-Z0-9_]{0,63}$/.test(key) && key !== setting.value?.mapping?.project_key;
+export const projectJiraValid = (setting: ProjectJiraSetting): boolean => setting.status === 'ready' && jiraMapping.valid(setting);
+
+/** Read the shared mapping first. Only leads need their personal space picker. */
+export async function beginProjectConfluence(): Promise<void> {
+  const loaded = await readProjectMapping(confluenceMapping);
+  if (!loaded || loaded.settings.project.role !== 'lead') return;
+  const spaces = await rpc('projects.confluenceSpaces', { expect: loaded.account });
+  const current = mappingAt('confluence', loaded.account, loaded.setting.seq);
+  if (!current) return;
+  setMapping(current.settings, 'confluence', spaces.ok
+    ? { ...current.setting, spaces: spaces.value.items, next: spaces.value.next_cursor }
+    : { ...current.setting, pickerFailure: spaces.failure });
+  if (!spaces.ok) accountLost(spaces.failure);
 }
-export async function saveProjectJira(remove = false): Promise<void> {
-  const settings = state.projectSettings;
-  const jira = settings?.jira;
-  const account = expect();
-  if (!settings || !jira?.value || !account || settings.project.role !== 'lead' || jira.status !== 'ready' || (remove ? jira.value.mapping === null : !projectJiraValid(jira))) return;
-  set({ projectSettings: { ...settings, jira: { ...jira, status: 'saving' } } });
-  unresolvedChanged();
-  const result = await rpc('projects.jiraSet', { expect: account, project_id: settings.project.project_id, request_id: crypto.randomUUID(), expected_revision: jira.value.revision, jira_project: remove ? null : jira.key.trim() });
-  if (expect()?.authority !== account.authority || expect()?.membership_id !== account.membership_id || state.projectSettings?.jira?.seq !== jira.seq) return;
-  const current = state.projectSettings;
-  set({ projectSettings: { ...current, jira: result.ok
-    ? { seq: jira.seq, status: 'ready', key: result.value.mapping?.project_key ?? '', value: result.value }
-    : { ...jira, status: 'failed', failure: result.failure, writeFailed: true } } });
-  unresolvedChanged();
+export function toggleProjectConfluenceSpace(id: string): void {
+  const settings = state.projectSettings; const setting = settings?.confluence;
+  if (!settings || !setting || setting.status !== 'ready' || settings.project.role !== 'lead' || !setting.spaces.some(space => space.id === id)) return;
+  const selected = setting.selected.includes(id) ? setting.selected.filter(value => value !== id) : [...setting.selected, id];
+  if (selected.length <= 20) setMapping(settings, 'confluence', { ...setting, selected });
+}
+export async function moreProjectConfluenceSpaces(): Promise<void> {
+  const settings = state.projectSettings; const setting = settings?.confluence; const account = expect();
+  if (!settings || !setting || !account || setting.status !== 'ready' || setting.next === null || setting.loadingMore) return;
+  setMapping(settings, 'confluence', { ...setting, loadingMore: true });
+  const result = await rpc('projects.confluenceSpaces', { expect: account, cursor: setting.next });
+  const current = mappingAt('confluence', account, setting.seq);
+  if (!current) return;
+  setMapping(current.settings, 'confluence', result.ok
+    ? { ...current.setting, spaces: [...current.setting.spaces, ...result.value.items.filter(space => !current.setting.spaces.some(old => old.id === space.id))], next: result.value.next_cursor, loadingMore: false }
+    : { ...current.setting, loadingMore: false, failure: result.failure });
   if (!result.ok) accountLost(result.failure);
 }
 
@@ -1353,7 +1441,7 @@ export function setProjectRename(name: string): void {
 
 export function cancelProjectSettingsAction(): void {
   const settings = state.projectSettings;
-  if (settings && !projectSettingsBlocked()) set({ projectSettings: { ...settings, rename: null, confirm: null, menu: false, jira: undefined } });
+  if (settings && !projectSettingsBlocked()) set({ projectSettings: { ...clearProjectMappings(settings), rename: null, confirm: null, menu: false } });
 }
 
 export function askProjectSetting(action: 'archive' | 'unarchive' | 'leave'): void {
@@ -2496,21 +2584,16 @@ export function chooseSource(group: number, focus: string | null = null): void {
   if (!sources || !source) return;
   set({ sources: { ...sources, open: group, focus, evidence: null } });
   if (source.kind === 'original') { void readEvidence(sources.gen, group); return; }
-  if (source.kind === 'slack' || source.kind === 'ticket') return;
+  if ('permalink' in source) return;
   const read = sources.records[source.record.record_sha256];
   if (!read || (!read.loading && 'failure' in read)) void readRecord(sources.gen, source.record, false);
 }
 
-/** Slack keeps its live messages: the person opens the cited permalink under Slack's own access checks. */
-export async function openSlackSource(index: number): Promise<boolean> {
+/** External providers check current access when the person opens a cited link. */
+export async function openExternalSource(index: number): Promise<boolean> {
   const source = answerSources()[index];
-  return !state.concealed && source?.kind === 'slack' && (await rpc('source.openSlack', { permalink: source.permalink })).ok;
-}
-
-/** Tickets open in the provider, which checks the person's access at that time. */
-export async function openTicketSource(index: number): Promise<boolean> {
-  const source = answerSources()[index];
-  return !state.concealed && source?.kind === 'ticket' && (await rpc('source.openTicket', { permalink: source.permalink })).ok;
+  return !state.concealed && source !== undefined && 'permalink' in source &&
+    (await rpc('source.openExternal', { kind: source.kind, permalink: source.permalink })).ok;
 }
 
 /** × on the pane: it closes, and forgets the passages it read. */
@@ -2747,7 +2830,7 @@ export function openCompose(): void {
 export function openCapture(): void {
   const current = state.compose;
   // New project stays in front, as Capture would open under it. Files dropped on it go into its project.
-  if (state.sheet?.kind === 'new-project' || state.projectSettings?.jira !== undefined) return;
+  if (state.sheet?.kind === 'new-project' || activeProjectMapping(state.projectSettings) !== undefined) return;
   set({ toast: null });
   setCompose(current ? { ...current, hidden: false } : fresh(null));
 }

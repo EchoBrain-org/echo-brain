@@ -128,20 +128,43 @@ Jira project or Slack channel needs a fresh rehearsal.
 
 The profile contains no Nango secret or Slack token. The Authority continues to
 read the existing `nango-secret-key`; the profile's Jira integration key is an
-ordinary Nango integration identifier, and `channel_id` names one public Slack
-channel. Granola keeps its existing organization-owned credential. Jira and
-Slack are read live through `verify-read`; only Granola can be captured.
-Jira and Slack capture requests are rejected before provider I/O and retain no
-new pointers, metadata or bodies. The historical V2 policy string stays unchanged
-so existing profile digests and sidecar bindings survive an ordinary release
-update without a reset. Existing retained rows are not purged by this change.
-With this profile selected, the owner's `person tools setup --tool slack` also asks for
-`channels:read` and `channels:history` on the same app. Jira's person connection
-sidecar is owned by the Authority runtime beside its retained state directory.
+ordinary Nango integration identifier. `channel_id` is historical and inert: the
+Slack bot only delivers approval DMs and reads no channel, but the field stays
+so the profile bytes, digest and sidecar bindings are unchanged. Granola keeps
+its existing organization-owned credential. Jira is read live through
+`verify-read`; only Granola can be captured. Jira and Slack capture requests
+are rejected before provider I/O and retain no new pointers, metadata or
+bodies. The historical V2 policy string stays unchanged so existing profile
+digests and sidecar bindings survive an ordinary release update without a
+reset. Existing retained rows are not purged by this change. Slack setup asks
+only for the four delivery scopes (`chat:write`, `im:write`, `im:history`,
+`users:read`). A bot token installed before that keeps the two retired channel
+scopes until the app is reinstalled from scratch; nothing uses them. Jira's
+person connection sidecar is owned by the Authority runtime beside its retained
+state directory.
+
+The committed EC2 runtime profile selects Confluence when the fixed staging
+connector profile is present. `ECHO_STAGING_CONFLUENCE_ASK_V1` reuses only its
+validated Atlassian Cloud ID and selects the independent Nango Cloud integration
+named `confluence`; it inherits no Jira project restriction or grant. Configure
+that integration with the [Confluence OAuth scopes](../../providers/confluence/README.md)
+before staging, then connect each Person through Tools. This selection changes
+through the normal reviewed runtime-profile release, without editing the fixed
+connector profile or host environment. Generic/local deployments remain
+unconfigured unless both nonsecret Cloud ID and Nango integration ID are
+supplied as Authority service arguments. Conflicting explicit flags refuse
+startup when the staging switch is enabled. The
+per-person Confluence connection and ECHO-project mapping database stores only
+provider references and mapping configuration, never page text. It is bound to
+the Authority lineage and that exact Cloud/integration selection. An ordinary
+restart on the same host retains it. Offline backup recovery deliberately
+refuses the database because an archived person-bound grant cannot be
+requalified: after that recovery, revoke or disconnect the old provider grant
+and reconnect through the restored owner's current session.
 
 The same fixed profile also admits the owner's explicitly invoked `verify-read`
 diagnostic through the [runner](../../services/organization-authority/README.md#staging-connector-rehearsal).
-It verifies one request-local Jira issue text or Slack message read and emits
+It verifies one request-local Jira issue text read and emits
 only hashes and a byte count. It changes no capture custody, retains no body,
 calls no model and enables no Ask source. It needs no profile rewrite or reset.
 
@@ -180,13 +203,12 @@ with one fresh rehearsal, in this order:
    eight-file onboarding input directory; the transfer runs `doctor` and
    `prepare` on the host. Then continue with `resume`.
 6. On the initial-owner machine, run `person tools setup --tool slack` with a
-   new configuration token and complete Slack consent, including the two
-   public-channel read scopes. Then link the owner with
+   new configuration token and complete Slack consent. Then link the owner with
    `person tools connect --tool slack` and complete Jira consent with
    `person tools connect --tool jira`.
 7. Save the exact profile object as the runner's local profile before the
    [staging connector runner](../../services/organization-authority/README.md#staging-connector-rehearsal)
-   Granola captures and live Jira/Slack read checks.
+   Granola captures and live Jira read checks.
 
 Check that directory before spending an AWS session on it:
 

@@ -30,6 +30,7 @@ import {
   type EmployeeRosterV1,
   type PersonAnswer,
   type PersonAnswerV5,
+  type PersonAnswerV6,
   type PersonEvidenceDeskV1,
   type PersonEvidenceOpenV1,
   type PersonEvidenceSearchV1,
@@ -666,6 +667,19 @@ export class PersonClient {
     validatePersonQueryText(question);
     if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
     return this.withReadSession((authority, token) => authority.askV4(token, question, scope, signal));
+  }
+
+  /** Uses all request-advertised live evidence sources. Falls back only when an older Authority has no V5 route. */
+  async askWithLiveSources(question: string, scope?: ProjectIdV1 | { readonly mine: true }, signal?: AbortSignal): Promise<PersonAnswerV6 | PersonAnswerV5> {
+    validatePersonQueryText(question);
+    if (typeof scope === 'string') validateProjectIdV1(scope, 'Ask project_id');
+    return this.withReadSession(async (authority, token) => {
+      try { return await authority.askV5(token, question, scope, signal); }
+      catch (error) {
+        if (!(error instanceof PersonAuthorityClientError) || error.status !== 404 || error.code !== 'not_found' || error.routeMatched) throw error;
+        return authority.askV4(token, question, scope, signal);
+      }
+    });
   }
 
   /** Each evidence invocation creates a new authenticated, scope-bound desk request. */

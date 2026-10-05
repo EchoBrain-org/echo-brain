@@ -43,7 +43,8 @@
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
     "@echo-brain/organization-authority-kernel": "0.0.0-dev.0",
-    "@echo-brain/organization-processing": "0.0.0-dev.0"
+    "@echo-brain/organization-processing": "0.0.0-dev.0",
+    "@echo-brain/provider-runtime": "0.0.0-dev.0"
   },
   "engines": {
     "node": "22.22.1",

@@ -1,0 +1,70 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/provider-runtime",
+  "workspace": true,
+  "boundary_root": "providers/shared",
+  "source_root": "providers/shared/src",
+  "package_json": "providers/shared/package.json",
+  "entry_points": [
+    "providers/shared/src/person-connection-store-v1.ts",
+    "providers/shared/src/nango-person-connection-v1.ts",
+    "providers/shared/src/person-connection-lifecycle-v1.ts",
+    "providers/shared/src/person-provider-v1.ts",
+    "providers/shared/src/person-provider-json-transport-v1.ts",
+    "providers/shared/src/atlassian-connection-verification-v1.ts",
+    "providers/shared/src/person-connection-http-application-v1.ts",
+    "providers/shared/src/bounded-json-response-v1.ts",
+    "providers/shared/src/atlassian-document-text-v1.ts",
+    "providers/shared/src/person-project-mapping-v1.ts"
+  ],
+  "owned_source_paths": [
+    "providers/shared/src/**"
+  ],
+  "allowed_internal_paths": [
+    "providers/shared/src/**"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-api",
+    "@echo-brain/organization-authority-kernel"
+  ],
+  "allowed_external_packages": [
+    "better-sqlite3"
+  ],
+  "allowed_node_builtins": [
+    "crypto"
+  ],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "shared-provider-connection-mechanics",
+      "from": "providers/shared/src/**",
+      "allowed_imports": [
+        "providers/shared/src/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-authority-kernel"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "crypto"
+      ]
+    }
+  ],
+  "component_index_contract": {
+    "canonical_components": [
+      {
+        "name": "Personal tool connection lifecycle",
+        "path": "providers/shared/src/person-connection-lifecycle-v1.ts",
+        "export": "createPersonConnectionLifecycleV1"
+      }
+    ],
+    "compatibility_entrypoints": [],
+    "retired_source_paths": []
+  }
+}

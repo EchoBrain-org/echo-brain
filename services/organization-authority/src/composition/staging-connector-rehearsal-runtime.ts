@@ -13,8 +13,6 @@ import { createGranolaMeetingSourceBundleV1 } from '@echo-brain/provider-granola
 import { createOpenRouterDecisionProcessorBundleV1 } from '@echo-brain/provider-openrouter/openrouter-decision-processor-bundle-v1';
 import { validateOrganizationAuthorityOrigin } from '@echo-brain/organization-api';
 import { createJiraPersonLiveEvidenceReaderV1 } from '@echo-brain/provider-jira/jira-person-live-evidence-reader-v1';
-import { SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 } from '@echo-brain/provider-slack-server/organization-control-plane/application/slack-integration-contracts';
-import { openSlackContextCaptureRuntimeV1, SlackContextCapturePreparationErrorV1 } from './slack-context-capture-runtime-v1.js';
 import Database from 'better-sqlite3';
 import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -34,6 +32,7 @@ import {
 } from './staging-connector-rehearsal-protocol.js';
 import { isActiveInitialOwnerV1, openConnectorRehearsalCaptureV1, type OpenedConnectorRehearsalCaptureV1 } from './connector-rehearsal-capture-v1.js';
 import { openJiraPersonLiveRuntimeV1, type JiraPersonLiveRuntimeSeamsV1, type OpenedJiraPersonLiveRuntimeV1 } from './jira-person-live-runtime-v1.js';
+import { JIRA_LIVE_CONNECTOR_V1 } from './person-live-connector-registry-v1.js';
 import {
   openOrganizationAuthorityService,
   type OrganizationAuthorityServiceConfig,
@@ -53,6 +52,8 @@ export interface StagingConnectorRehearsalSelection {
   /** Exact public host that the staging candidate is configured to serve. */
   readonly authority_host: string;
 }
+
+type PersonHttpRuntimeFactory = NonNullable<NonNullable<OrganizationAuthorityServiceDependencies['api']>['person_http_runtime_factory']>;
 
 export interface StagingConnectorRehearsalRuntimeDependenciesV1 extends OrganizationAuthorityServiceDependencies {
   /** Test seams only. The wrapper always owns the sidecar SQLite handle. */
@@ -193,9 +194,9 @@ function requireSelection(config: OrganizationAuthorityServiceConfig, selection:
       (config.jira_person_live !== undefined && (config.jira_person_live.enabled !== true ||
         config.jira_person_live.cloud_id !== profile.jira.cloud_id || config.jira_person_live.integration_id !== profile.jira.integration_key)) ||
       config.staging_synthetic_meetings_directory !== undefined || config.staging_synthetic_owner_email !== undefined ||
-      dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.api?.slack_live_runtime_factory !== undefined ||
-      dependencies.person_http_runtime_factory_with_slack !== undefined ||
-      config.slack_public_channel_context !== undefined) {
+      dependencies.api?.ticket_live_runtime_factory !== undefined || dependencies.api?.page_live_runtime_factory !== undefined || dependencies.api?.slack_live_runtime_factory !== undefined ||
+      (dependencies.api?.live_connectors?.length ?? 0) !== 0 ||
+      dependencies.api?.person_http_runtime_factory !== undefined) {
     throw new Error('Staging connector rehearsal selection is invalid');
   }
   return Object.freeze({ profile, profile_sha256: canonicalSha256(profile) });
@@ -236,7 +237,6 @@ export async function openStagingConnectorRehearsalService(
   let captures: OpenedConnectorRehearsalCaptureV1 | undefined;
   let jira: OpenedJiraPersonLiveRuntimeV1 | undefined;
   let fenceDatabase: Database.Database | undefined;
-  let slack: ReturnType<typeof openSlackContextCaptureRuntimeV1> | undefined;
   try {
     const sourceBundle = createGranolaMeetingSourceBundleV1({
       granola_credential_file: config.granola_credential_file,
@@ -265,7 +265,7 @@ export async function openStagingConnectorRehearsalService(
       return authorization;
     };
     let captureInFlight = false;
-    const verifyRead = async (tool: 'jira' | 'slack', access_token: string, callerSignal?: AbortSignal): Promise<StagingConnectorReadResultV1> => {
+    const verifyRead = async (access_token: string, callerSignal?: AbortSignal): Promise<StagingConnectorReadResultV1> => {
       const deadline = AbortSignal.timeout(15_000);
       const signal = AbortSignal.any([deadline, ...(callerSignal === undefined ? [] : [callerSignal])]);
       let phase: StagingConnectorReadPhaseV1 = 'local_authorization';
@@ -275,29 +275,19 @@ export async function openStagingConnectorRehearsalService(
           signal.throwIfAborted();
           const before = requireOwner(access_token);
           phase = 'connection';
-          let reader: PersonLiveEvidenceReaderV1;
-          let requireCurrent: () => void;
-          if (tool === 'jira') {
-            if (jira === undefined) unavailable();
-            if (!jira.application.captureStatus({ access_token }).connected) return refuse('connection_absent');
-            const connection = await jira.application.captureConnection({ access_token, signal });
-            signal.throwIfAborted();
-            requireCurrent = connection.require_current;
-            let requests = 0;
-            const transport = { binding: connection.transport.binding, request: (input: Parameters<typeof connection.transport.request>[0]) => {
-              signal.throwIfAborted(); requireCurrent();
-              if (++requests > 25) throw new AuthorityOperationError('quota_exceeded', 'Read proof request budget exceeded');
-              return connection.transport.request({ ...input, signal });
-            } };
-            phase = 'provider_verification';
-            reader = await createJiraPersonLiveEvidenceReaderV1({ binding: transport.binding, transport, project: selected.profile.jira.project, signal });
-          } else {
-            if (slack === undefined) unavailable();
-            phase = 'provider_verification';
-            const connection = await slack.create_reader({ access_token, signal });
-            reader = connection.reader;
-            requireCurrent = connection.require_current;
-          }
+          if (jira === undefined) unavailable();
+          if (!jira.application.captureStatus({ access_token }).connected) return refuse('connection_absent');
+          const connection = await jira.application.captureConnection({ access_token, signal });
+          signal.throwIfAborted();
+          const requireCurrent = connection.require_current;
+          let requests = 0;
+          const transport = { binding: connection.transport.binding, request: (input: Parameters<typeof connection.transport.request>[0]) => {
+            signal.throwIfAborted(); requireCurrent();
+            if (++requests > 25) throw new AuthorityOperationError('quota_exceeded', 'Read proof request budget exceeded');
+            return connection.transport.request({ ...input, signal });
+          } };
+          phase = 'provider_verification';
+          const reader: PersonLiveEvidenceReaderV1 = await createJiraPersonLiveEvidenceReaderV1({ binding: transport.binding, transport, project: selected.profile.jira.project, signal });
           signal.throwIfAborted(); requireCurrent();
           phase = 'inventory';
           const inventory = await reader.list({ limit: 1, signal });
@@ -325,10 +315,6 @@ export async function openStagingConnectorRehearsalService(
         }, signal);
       } catch (error) {
         if (signal.aborted) return refuse(deadline.aborted ? 'deadline_exceeded' : 'cancelled');
-        if (error instanceof SlackContextCapturePreparationErrorV1) {
-          phase = 'connection';
-          return refuse(error.reason === 'not_connected' ? 'connection_absent' : 'identity_unlinked');
-        }
         return refuse(error instanceof AuthorityOperationError && STAGING_CONNECTOR_READ_REASONS_V1.includes(error.code as StagingConnectorReadReasonV1)
           ? error.code as StagingConnectorReadReasonV1 : 'unavailable');
       }
@@ -350,7 +336,7 @@ export async function openStagingConnectorRehearsalService(
           if (captureInFlight) unavailable();
           captureInFlight = true;
           try {
-            const result = await verifyRead(request.tool, access_token, input.signal);
+            const result = await verifyRead(access_token, input.signal);
             return Object.freeze({ status: 200 as const, body: response({ schema_version: 2, kind: 'echo-staging-connector-rehearsal-receipt-v2', release_id: selection.release_id, profile_sha256: selected.profile_sha256, action: 'verify-read', tool: request.tool, result, qualified: false }) });
           } finally { captureInFlight = false; }
         }
@@ -368,7 +354,7 @@ export async function openStagingConnectorRehearsalService(
         } catch (_error) { unavailable(); } finally { captureInFlight = false; }
       },
     });
-    const openJira = (sessions: Parameters<NonNullable<OrganizationAuthorityServiceDependencies['person_http_runtime_factory_with_slack']>>[0], authorize_project?: PersonTicketProjectAuthorizationV1) => {
+    const openJira = (sessions: Parameters<PersonHttpRuntimeFactory>[0], authorize_project?: PersonTicketProjectAuthorizationV1) => {
       authenticate = input => sessions.authenticateAccess(input);
       // The rehearsal's owner/project restrictions apply to its diagnostics.
       // Live Ask authenticates each Person and uses their own Jira connection.
@@ -382,15 +368,8 @@ export async function openStagingConnectorRehearsalService(
       });
       return jira;
     };
-    const personFactory: NonNullable<OrganizationAuthorityServiceDependencies['person_http_runtime_factory_with_slack']> = (sessions, slackPorts) => {
+    const personFactory: PersonHttpRuntimeFactory = (sessions) => {
       if (jira === undefined) openJira(sessions);
-      slack = openSlackContextCaptureRuntimeV1({
-        state_directory: config.state_directory, initial_owner: owner,
-        channel_id: selected.profile.slack.channel_id, source_instance_id: 'staging-slack-context-v2',
-        profile_sha256: selected.profile_sha256, capability: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1,
-        authenticate_access: sessions,
-        slack: slackPorts,
-      });
       captures = openConnectorRehearsalCaptureV1({
         state_directory: config.state_directory,
         initial_owner: owner,
@@ -403,12 +382,11 @@ export async function openStagingConnectorRehearsalService(
         accept: (request: ProviderHttpRequestV1) => { requireOwner(bearer(request)); return jira!.connection_http.accept(request); },
       });
       return Object.freeze({ applications: Object.freeze([...(jiraAsk === undefined ? [ownerJira] : []), capturesApplication]),
-        close() { captures?.close(); slack?.close(); if (jiraAsk === undefined) jira?.close(); } });
+        close() { captures?.close(); if (jiraAsk === undefined) jira?.close(); } });
     };
-    runtime = await openOrganizationAuthorityService({ ...serviceConfig, slack_public_channel_context: SLACK_PUBLIC_CHANNEL_CONTEXT_CAPABILITY_V1 }, {
+    runtime = await openOrganizationAuthorityService(serviceConfig, {
       ...dependencies,
-      api: { ...dependencies.api, ...(jiraAsk === undefined ? {} : { ticket_live_runtime_factory: openJira }) },
-      person_http_runtime_factory_with_slack: personFactory,
+      api: { ...dependencies.api, person_http_runtime_factory: personFactory, ...(jiraAsk === undefined ? {} : { live_connectors: [{ ...JIRA_LIVE_CONNECTOR_V1, open: openJira }] }) },
       processing_adapter_overrides: granola === undefined ? dependencies.processing_adapter_overrides : {
         ...dependencies.processing_adapter_overrides,
         source: granola.source,
@@ -424,7 +402,7 @@ export async function openStagingConnectorRehearsalService(
       })(),
     });
   } catch (error) {
-    try { captures?.close(); slack?.close(); jira?.close(); fenceDatabase?.close(); } finally { sidecar.close(); }
+    try { captures?.close(); jira?.close(); fenceDatabase?.close(); } finally { sidecar.close(); }
     throw error;
   }
 }

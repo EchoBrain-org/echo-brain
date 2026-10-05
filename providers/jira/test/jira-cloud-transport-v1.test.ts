@@ -85,4 +85,27 @@ describe('bounded direct Jira Cloud transport', () => {
     const streaming = createJiraCloudTransportV1({ binding, fetch: async () => new Response(body, { headers: { 'content-type': 'application/json' } }) });
     await expect(streaming.request({ path: `${prefix}/myself`, signal: midway.signal })).rejects.toMatchObject({ name: 'AbortError' });
   });
+
+  it.each(['fetch', 'body'])('bounds a stalled %s with the shared deadline even when cancellation is ignored', async phase => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    let finishFetch!: (response: Response) => void;
+    const delayed = new Promise<Response>(resolve => { finishFetch = resolve; });
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    const body = new ReadableStream<Uint8Array>({ pull() { started(); }, cancel }, { highWaterMark: 0 });
+    const value = new Response(body, { headers: { 'content-type': 'application/json' } });
+    const fetch = vi.fn(() => phase === 'fetch' ? delayed : Promise.resolve(value));
+    try {
+      const pending = createJiraCloudTransportV1({ binding, fetch }).request({ path: `${prefix}/myself` });
+      if (phase === 'body') await reading;
+      deadline.abort(new DOMException('synthetic deadline', 'TimeoutError'));
+      await expect(pending).rejects.toMatchObject({ code: 'unavailable', message: 'Jira live evidence operation could not be completed' });
+      if (phase === 'fetch') { finishFetch(value); await Promise.resolve(); await Promise.resolve(); }
+      expect(timeout).toHaveBeenCalledExactlyOnceWith(15_000);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally { timeout.mockRestore(); }
+  });
 });
