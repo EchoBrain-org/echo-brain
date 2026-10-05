@@ -33,7 +33,8 @@ async function fixture(options: { selected?: readonly string[]; pages?: Page[]; 
   const audits: PersonLiveEvidenceReleaseV1<PersonPageCitationV1>[] = [];
   const state: {
     pages: Map<string, Page>; keys: Map<string, string>; denied: Set<string>; account: string; site: string; searchIds: string[];
-    list?: (call: Call) => unknown; searchNext?: string; authorizationCurrent: boolean; rejectAudit: boolean;
+    list?: (call: Call) => unknown; bulk?: (call: Call) => unknown;
+    searchNext?: string; authorizationCurrent: boolean; rejectAudit: boolean;
   } = { pages: new Map((options.pages ?? [page()]).map(value => [value.id, value])), keys: new Map([['42', 'ECHO'], ['43', '~personal:key']]),
     denied: new Set(), account: 'synthetic-account', site: ORIGIN, searchIds: ['123'], authorizationCurrent: true, rejectAudit: false };
   const fetch = vi.fn(async (raw: string, _init: RequestInit) => {
@@ -45,6 +46,9 @@ async function fixture(options: { selected?: readonly string[]; pages?: Page[]; 
     if (path === '/oauth/token/accessible-resources') return response([{ id: CLOUD, url: state.site, scopes: options.scopes ?? SCOPES }]);
     if (path === '/rest/api/user/current') return response({ accountId: state.account, type: 'known', accountType: 'atlassian' });
     if (path === '/api/v2/pages') {
+      const ids = call.query.get('id')?.split(',');
+      if (ids !== undefined) return response(state.bulk?.(call) ?? { results: [...state.pages.values()]
+        .filter(value => ids.includes(value.id) && !state.denied.has(`/api/v2/pages/${value.id}`)).map(value => metadata(value)) });
       if (state.list !== undefined) return response(state.list(call));
       const selected = call.query.get('space-id')?.split(',');
       return response({ results: [...state.pages.values()].filter(value => selected === undefined || selected.includes(value.spaceId)).map(value => metadata(value)) });
@@ -75,6 +79,28 @@ async function fixture(options: { selected?: readonly string[]; pages?: Page[]; 
 // Every operation below crosses the production audited release boundary; raw
 // reader outputs alone would miss citation, coordinate, digest and size defects.
 describe('Confluence live reader through the audited evidence source', () => {
+  it('can finish both release fences after a multi-step Ask discovers fifteen pages and opens three sections', async () => {
+    const f = await fixture({ pages: Array.from({ length: 15 }, (_, index) => page({ id: String(100 + index),
+      document: document('Gate readiness evidence. '.repeat(270)) })) });
+    // Reproduce the live failure: six research calls, one answer call, then
+    // the pre-audit and post-audit fences over every released citation.
+    await f.source.revalidate({});
+    const found = await f.source.list({ limit: 20 });
+    await f.source.revalidate({});
+    const opened = await f.source.open({ item: found.items[0]!.id });
+    expect(opened.items).toHaveLength(3);
+    await f.source.revalidate({});
+    await f.source.revalidate({});
+    await Promise.all(opened.items.slice(0, 2).map(item => f.source.open({ item: item.id })));
+    await f.source.revalidate({});
+    await f.source.revalidate({});
+    await f.source.revalidate({});
+    await f.source.revalidate({});
+    await expect(f.source.revalidate({})).resolves.toBeUndefined();
+    expect(f.calls.length).toBeLessThan(160);
+    expect(JSON.stringify(f.audits)).not.toContain('Gate readiness evidence.');
+  });
+
   it('lists, searches, opens, and revalidates a mapped page with the minimal granular resource grant', async () => {
     const f = await fixture({ selected: ['42'], scopes: ['read:page:confluence', 'read:space:confluence', 'read:content-details:confluence'] });
     const listed = await f.source.list({ limit: 20 });
@@ -187,8 +213,107 @@ describe('Confluence live reader through the audited evidence source', () => {
     const f = await fixture();
     await f.source.list({});
     await f.source.revalidate({});
-    expect(f.calls.some(call => call.path === '/api/v2/pages/123')).toBe(true);
+    expect(f.calls.some(call => call.path === '/api/v2/pages' && call.query.get('id') === '123')).toBe(true);
     expect(f.bodyCalls()).toEqual([]);
+  });
+
+  it('revalidates every released metadata page in bounded batches regardless of response order', async () => {
+    const pages = Array.from({ length: 107 }, (_, index) => page({ id: String(100 + index) }));
+    const f = await fixture({ pages });
+    f.state.list = call => {
+      const offset = Number(call.query.get('cursor') ?? '0');
+      return { results: pages.slice(offset, offset + 20).map(value => metadata(value)),
+        ...(offset + 20 >= pages.length ? {} : { _links: { next: `/api/v2/pages?cursor=${offset + 20}` } }) };
+    };
+    let cursor: string | undefined;
+    do { cursor = (await f.source.list({ limit: 20, ...(cursor === undefined ? {} : { cursor }) })).next_cursor; } while (cursor !== undefined);
+    f.state.bulk = call => ({ results: call.query.get('id')!.split(',').reverse().map(id => metadata(f.state.pages.get(id)!)) });
+    f.calls.length = 0;
+    await f.source.revalidate({});
+    const batches = f.calls.filter(call => call.query.has('id'));
+    expect(batches.map(call => call.query.get('id')!.split(',').length)).toEqual([50, 50, 7]);
+    expect(batches.flatMap(call => call.query.get('id')!.split(','))).toEqual(pages.map(value => value.id));
+    expect(f.bodyCalls()).toEqual([]);
+    expect(f.calls.some(call => /^\/api\/v2\/pages\/\d+$/.test(call.path))).toBe(false);
+  });
+
+  it.each(['missing', 'duplicate', 'unexpected', 'oversized', 'version', 'title', 'status', 'moved_space'] as const)(
+    'refuses a %s bulk metadata result without releasing another receipt', async change => {
+      const f = await fixture({ selected: ['42'], pages: [page(), page({ id: '124' })] });
+      await f.source.list({});
+      const before = f.audits.length;
+      let rows = [metadata(page()), metadata(page({ id: '124' }))];
+      let code = 'invalid_output';
+      if (change === 'missing') { rows = rows.slice(0, 1); code = 'not_found'; }
+      if (change === 'duplicate') rows[1] = rows[0]!;
+      if (change === 'unexpected') rows[1] = metadata(page({ id: '999' }));
+      if (change === 'oversized') rows.push(metadata(page({ id: '999' })));
+      if (change === 'version') { rows[0]!.version.number += 1; code = 'stale_access_state'; }
+      if (change === 'title') { rows[0]!.title = 'Changed title'; code = 'stale_access_state'; }
+      if (change === 'status') { rows[0]!.status = 'archived'; code = 'stale_access_state'; }
+      if (change === 'moved_space') { rows[0]!.spaceId = '999'; code = 'unauthorized'; }
+      f.state.bulk = () => ({ results: rows });
+      await expect(f.source.revalidate({})).rejects.toMatchObject({ code, message: 'Live evidence operation could not be completed' });
+      expect(f.audits).toHaveLength(before);
+    });
+
+  it('refuses the whole permission check when a previously discovered page is no longer visible', async () => {
+    const f = await fixture({ pages: [page(), page({ id: '124' })] });
+    await f.source.list({});
+    f.state.denied.add('/api/v2/pages/124');
+    await expect(f.source.revalidate({})).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.audits).toHaveLength(1);
+    expect(f.bodyCalls()).toEqual([]);
+  });
+
+  it('finishes a paginated bulk check with pinned selectors and only the opaque next cursor', async () => {
+    const f = await fixture({ pages: [page(), page({ id: '124' })] });
+    await f.source.list({});
+    f.state.bulk = call => call.query.has('cursor') ? { results: [metadata(page({ id: '124' }))] }
+      : { results: [metadata(page())], _links: { next: '/wiki/api/v2/pages?id=999&status=trashed&limit=250&cursor=next-batch-page' } };
+    f.calls.length = 0;
+    await f.source.revalidate({});
+    const batches = f.calls.filter(call => call.query.has('id'));
+    expect(batches).toHaveLength(2);
+    expect(batches[1]!.query.get('id')).toBe('123,124');
+    expect(batches[1]!.query.get('limit')).toBe('2');
+    expect(batches[1]!.query.getAll('status')).toEqual(['current', 'archived', 'deleted', 'trashed']);
+    expect(batches[1]!.query.get('cursor')).toBe('next-batch-page');
+  });
+
+  it.each(['foreign_url', 'empty', 'duplicate', 'repeated_cursor', 'complete_with_cursor'] as const)(
+    'refuses %s bulk pagination without an unbounded retry', async failure => {
+      const f = await fixture({ pages: [page(), page({ id: '124' }), page({ id: '125' })] });
+      await f.source.list({});
+      f.state.bulk = call => ({ results: failure === 'empty' ? [] : failure === 'complete_with_cursor'
+        ? [metadata(page()), metadata(page({ id: '124' })), metadata(page({ id: '125' }))]
+        : [metadata(page({ id: call.query.has('cursor') && failure === 'repeated_cursor' ? '124' : '123' }))],
+        _links: { next: failure === 'foreign_url' ? 'https://untrusted.invalid/api/v2/pages?cursor=x' : '/api/v2/pages?cursor=repeated' } });
+      f.calls.length = 0;
+      await expect(f.source.revalidate({})).rejects.toMatchObject({ code: 'invalid_output' });
+      expect(f.calls.filter(call => call.query.has('id')).length).toBeLessThanOrEqual(2);
+    });
+
+  it.each(['draft', 'historical'] as const)('keeps exact metadata revalidation for %s pages absent from the bulk status contract', async status => {
+    const f = await fixture({ pages: [page({ status })] });
+    await f.source.search({ query: 'requirements' });
+    f.calls.length = 0;
+    await f.source.revalidate({});
+    expect(f.calls.filter(call => call.path === '/api/v2/pages/123').map(call => call.query.get('status'))).toEqual([status]);
+    expect(f.calls.some(call => call.query.has('id'))).toBe(false);
+    expect(f.bodyCalls()).toEqual([]);
+  });
+
+  it('honors cancellation between bulk pages and checks the grant after metadata revalidation', async () => {
+    const f = await fixture({ pages: [page(), page({ id: '124' })] });
+    await f.source.list({});
+    const controller = new AbortController();
+    f.state.bulk = () => { controller.abort(); return { results: [metadata(page())], _links: { next: '/api/v2/pages?cursor=next' } }; };
+    f.calls.length = 0;
+    await expect(f.source.revalidate({ signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(f.calls.filter(call => call.query.has('id'))).toHaveLength(1);
+    f.state.bulk = () => { f.state.account = 'another-account'; return { results: [metadata(page()), metadata(page({ id: '124' }))] }; };
+    await expect(f.source.revalidate({})).rejects.toMatchObject({ code: 'unauthorized' });
   });
 
   it.each(['version', 'hash', 'permission', 'moved_space', 'account', 'site'] as const)('refuses released evidence when its %s changes', async change => {

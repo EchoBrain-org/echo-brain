@@ -12,6 +12,7 @@ const API_ORIGIN = 'https://api.atlassian.com';
 const ID = /^[1-9][0-9]{0,19}$/;
 const MAX_HANDLES = 512;
 const MAX_REQUESTS = 160;
+const REVALIDATION_BATCH_SIZE = 50;
 const LIST_STATUSES = Object.freeze(['current', 'archived', 'deleted', 'trashed']);
 const STATUSES = Object.freeze([...LIST_STATUSES, 'draft', 'historical']);
 const EMPTY_DIGEST = textDigest('');
@@ -187,6 +188,41 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
     const token = nextToken(links.next, path);
     return { pages, ...(token === undefined ? {} : { token }) };
   }
+  async function revalidateMetadata(groups: readonly (readonly Item[])[], signal?: AbortSignal): Promise<void> {
+    for (let offset = 0; offset < groups.length; offset += REVALIDATION_BATCH_SIZE) {
+      const batch = groups.slice(offset, offset + REVALIDATION_BATCH_SIZE);
+      const expected = new Map(batch.map(items => [items[0]!.page.id, items]));
+      const returned = new Set<string>();
+      const tokens = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        current(signal);
+        // GET /pages applies the asker's current permissions to this exact ID
+        // set. Never retrieve bodies merely to revalidate inventory metadata.
+        const response = confluenceRecord(await transport.request({ path: '/api/v2/pages',
+          query: { id: [...expected.keys()], limit: String(batch.length), status: LIST_STATUSES,
+            ...(cursor === undefined ? {} : { cursor }) }, signal }));
+        current(signal);
+        const rows = confluenceArray(response.results, batch.length);
+        for (const raw of rows) {
+          const page = metadata(raw);
+          const items = expected.get(page.id);
+          if (items === undefined || returned.has(page.id)) confluenceFailure('invalid_output');
+          inScope(page);
+          if (items.some(item => !samePage(item.page, page))) confluenceFailure('stale_access_state');
+          returned.add(page.id);
+        }
+        const links = response._links === undefined ? {} : confluenceRecord(response._links);
+        cursor = nextToken(links.next, '/api/v2/pages');
+        if (cursor !== undefined) {
+          // Each continuation must advance within the finite requested set.
+          if (rows.length === 0 || returned.size === expected.size || tokens.has(cursor)) confluenceFailure('invalid_output');
+          tokens.add(cursor);
+        }
+      } while (cursor !== undefined);
+      if (returned.size !== expected.size) confluenceFailure('not_found');
+    }
+  }
   await verify(options.signal);
   return Object.freeze({
     binding,
@@ -273,7 +309,15 @@ export async function createConfluencePersonLiveEvidenceReaderV1(options: {
         if (item === undefined) confluenceFailure('unauthorized');
         const values = grouped.get(item.page.id) ?? []; values.push(item); grouped.set(item.page.id, values);
       }
-      await parallel([...grouped.values()], async items => {
+      const metadataOnly: Item[][] = [];
+      const exactReads: Item[][] = [];
+      for (const items of grouped.values()) {
+        // The bulk endpoint does not accept draft/historical statuses. Opened
+        // bodies also keep their exact read and same-version digest check.
+        (items.every(item => item.text === undefined && LIST_STATUSES.includes(item.page.status)) ? metadataOnly : exactReads).push(items);
+      }
+      await revalidateMetadata(metadataOnly, input.signal);
+      await parallel(exactReads, async items => {
         const needsBody = items.some(item => item.text !== undefined);
         const page = await exact(items[0]!.page.id, needsBody, items[0]!.page.status, input.signal);
         const normalized = needsBody ? normalizeConfluencePageDocumentV1(page.document!) : undefined;

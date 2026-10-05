@@ -142,8 +142,8 @@ export function createRegisteredPersonLiveEvidenceDeskV2(base: EvidenceDeskPortV
       const checked = await base.revalidate(input);
       input.signal?.throwIfAborted();
       if (sources.size === 0) return checked;
-      for (const { source } of sources.values()) {
-        await source.revalidate(input);
+      for (const { source, descriptor } of sources.values()) {
+        await observePersonLiveEvidenceV1('evidence_revalidate', descriptor.kind === 'slack_message' ? 'slack' : descriptor.kind, () => source.revalidate(input));
         input.signal?.throwIfAborted();
       }
       // Local snapshots and original grants may change while a live reader awaits provider I/O.

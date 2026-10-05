@@ -50,13 +50,13 @@ function requestUrl(cloud: string, input: ConfluenceCloudRequestV1): URL {
     const allowed = key === 'limit' && (pageList || spaces || search) ||
       key === 'cursor' && (pageList || spaces || search) ||
       key === 'status' && (pageList || page) || key === 'body-format' && page ||
-      key === 'space-id' && path === '/api/v2/pages' ||
+      (key === 'space-id' || key === 'id') && path === '/api/v2/pages' ||
       (key === 'cql' || key === 'expand' || key === 'includeArchivedSpaces') && search;
     if (!allowed) confluenceFailure('invalid_request');
     if (value === undefined) continue;
-    if (key === 'space-id') {
+    if (key === 'space-id' || key === 'id') {
       const values = typeof value === 'string' ? [value] : value;
-      if (!Array.isArray(values) || values.length < 1 || values.length > 100 || new Set(values).size !== values.length ||
+      if (!Array.isArray(values) || values.length < 1 || values.length > (key === 'id' ? 250 : 100) || new Set(values).size !== values.length ||
           values.some(id => typeof id !== 'string' || !SPACE_ID.test(id))) confluenceFailure('invalid_request');
       // This endpoint documents the IDs as a comma-separated list.
       url.searchParams.set(key, values.join(','));
