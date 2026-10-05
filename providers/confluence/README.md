@@ -12,10 +12,13 @@ Atlassian documents the relevant APIs and grant behavior: [pages](https://develo
 
 ## Connection and Ask
 
-The reviewed Authority runtime profile must select both `--confluence-cloud-id`
-and `--confluence-nango-integration`. Configure the matching Nango Cloud
-Confluence OAuth integration and Atlassian callback/read scopes through the
-existing operator lane. The default deployment remains unconfigured.
+The reviewed Authority runtime profile selects both `--confluence-cloud-id`
+and `--confluence-nango-integration`. The staging EC2 overlay can instead select
+the fixed rehearsal's Atlassian cloud ID and the separate Nango integration
+`confluence`; it inherits no Jira project restriction or personal grant.
+Configure the matching Nango Cloud Confluence OAuth integration and Atlassian
+callback/read scopes through the existing operator lane. The generic local
+deployment remains unconfigured.
 
 The desktop **Tools** screen uses the same per-person connect, reconnect, cancel,
 status, and disconnect flow as Jira. The equivalent initial connection is
